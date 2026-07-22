@@ -174,12 +174,12 @@ describe('check-doc-sizes.mjs: package CLAUDE.md integration', () => {
     expect(out).not.toMatch(/grandfathered/);
   });
 
-  it.each([
-    'webapp',
-    'cloudflare-worker',
-    'chrome-extension',
-    'dev-tools',
-  ])('reports %s at the 20000 default', (packageName) => {
-    expect(out).toMatch(new RegExp(`ok: packages/${packageName}/CLAUDE\\.md is \\d+/20000 chars`));
-  });
+  it.each(['webapp', 'cloudflare-worker', 'chrome-extension', 'dev-tools'])(
+    'reports %s at the 20000 default',
+    (packageName) => {
+      expect(out).toMatch(
+        new RegExp(`ok: packages/${packageName}/CLAUDE\\.md is \\d+/20000 chars`)
+      );
+    }
+  );
 });

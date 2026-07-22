@@ -397,16 +397,16 @@ describe('decideWorkerGating', () => {
     ).toEqual({ worker: false, firstRelease: false });
   });
 
-  it.each([
-    'package.json',
-    'package-lock.json',
-  ])('deploys for genuine root metadata change %s', (file) => {
-    expect(WORKER_PATH_PREFIXES).toContain(file);
-    expect(decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: [file] })).toEqual({
-      worker: true,
-      firstRelease: false,
-    });
-  });
+  it.each(['package.json', 'package-lock.json'])(
+    'deploys for genuine root metadata change %s',
+    (file) => {
+      expect(WORKER_PATH_PREFIXES).toContain(file);
+      expect(decideWorkerGating({ lastTag: 'v1.0.0', changedFiles: [file] })).toEqual({
+        worker: true,
+        firstRelease: false,
+      });
+    }
+  );
 
   it.each(requiredPrefixes)('deploys for required prefix %s', (prefix) => {
     expect(WORKER_PATH_PREFIXES).toContain(prefix);

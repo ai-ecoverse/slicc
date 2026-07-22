@@ -183,15 +183,18 @@ describe('bedrock-camp built-in provider', () => {
     ['us.anthropic.claude-opus-4-9', 'xhigh'],
     ['us.anthropic.claude-sonnet-4-6', 'max'],
     ['us.anthropic.claude-sonnet-5', 'xhigh'],
-  ])('uses adaptive thinking for Opus/Sonnet ≥ 4.6 (%s -> effort=%s)', async (modelId, expectedEffort) => {
-    const payload = await capturePayload(baseModel({ id: modelId, name: modelId }), {
-      reasoning: 'xhigh',
-    });
-    expect(payload.additionalModelRequestFields).toEqual({
-      thinking: { type: 'adaptive', display: 'summarized' },
-      output_config: { effort: expectedEffort },
-    });
-  });
+  ])(
+    'uses adaptive thinking for Opus/Sonnet ≥ 4.6 (%s -> effort=%s)',
+    async (modelId, expectedEffort) => {
+      const payload = await capturePayload(baseModel({ id: modelId, name: modelId }), {
+        reasoning: 'xhigh',
+      });
+      expect(payload.additionalModelRequestFields).toEqual({
+        thinking: { type: 'adaptive', display: 'summarized' },
+        output_config: { effort: expectedEffort },
+      });
+    }
+  );
 
   it('keeps non-adaptive Claude 4.x models on thinking.type=enabled with interleaved beta', async () => {
     const payload = await capturePayload(

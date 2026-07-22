@@ -541,29 +541,32 @@ describe('slicc-permissions', () => {
       ['hid', /HID device/],
       ['serial', /serial port/],
       ['filesystem', /folder/],
-    ] as const)('auto-generates heading + one icon for kind=%s when no explicit heading is set', async (kind, expectedHeading) => {
-      const el = mount();
-      // Suppress the platform default fallback so navigator.* doesn't fire
-      // during this UI-only assertion. The Cancel click below resolves the
-      // promise without actually invoking the kind's picker.
-      el.providers = {
-        media: null,
-        screenshare: null,
-        usb: null,
-        hid: null,
-        serial: null,
-        filesystem: null,
-      };
-      const pending = el.prompt({ kinds: [kind], description: 'test' });
-      const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement;
-      const heading = panel.querySelector('.slicc-permissions__prompt-heading');
-      expect(heading?.textContent).toMatch(expectedHeading);
-      const icons = panel.querySelectorAll('.slicc-permissions__prompt-icon svg');
-      expect(icons.length).toBe(1);
-      // Close cleanly so the test exits without an orphan panel.
-      (panel.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
-      await pending;
-    });
+    ] as const)(
+      'auto-generates heading + one icon for kind=%s when no explicit heading is set',
+      async (kind, expectedHeading) => {
+        const el = mount();
+        // Suppress the platform default fallback so navigator.* doesn't fire
+        // during this UI-only assertion. The Cancel click below resolves the
+        // promise without actually invoking the kind's picker.
+        el.providers = {
+          media: null,
+          screenshare: null,
+          usb: null,
+          hid: null,
+          serial: null,
+          filesystem: null,
+        };
+        const pending = el.prompt({ kinds: [kind], description: 'test' });
+        const panel = el.querySelector('.slicc-permissions__prompt') as HTMLElement;
+        const heading = panel.querySelector('.slicc-permissions__prompt-heading');
+        expect(heading?.textContent).toMatch(expectedHeading);
+        const icons = panel.querySelectorAll('.slicc-permissions__prompt-icon svg');
+        expect(icons.length).toBe(1);
+        // Close cleanly so the test exits without an orphan panel.
+        (panel.querySelector('[part="prompt-cancel"]') as HTMLButtonElement).click();
+        await pending;
+      }
+    );
 
     it('joins multi-kind labels with commas + "and" in the auto-heading', async () => {
       const el = mount();

@@ -2301,32 +2301,29 @@ describe('Orchestrator handleMessage external-lick visibility', () => {
     expect(incoming[0].msg.channel).toBe('webhook');
   });
 
-  it.each([
-    ['cron'],
-    ['sprinkle'],
-    ['fswatch'],
-    ['session-reload'],
-    ['upgrade'],
-  ] as const)('fires onIncomingMessage once for %s channel', async (channel) => {
-    const incoming: ChannelMessage[] = [];
-    orch = await makeOrch((_jid, msg) => incoming.push(msg));
+  it.each([['cron'], ['sprinkle'], ['fswatch'], ['session-reload'], ['upgrade']] as const)(
+    'fires onIncomingMessage once for %s channel',
+    async (channel) => {
+      const incoming: ChannelMessage[] = [];
+      orch = await makeOrch((_jid, msg) => incoming.push(msg));
 
-    const msg: ChannelMessage = {
-      id: `${channel}-test-1`,
-      chatJid: cone.jid,
-      senderId: channel,
-      senderName: `${channel}:demo`,
-      content: `[${channel}]`,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: channel as ChannelMessage['channel'],
-    };
+      const msg: ChannelMessage = {
+        id: `${channel}-test-1`,
+        chatJid: cone.jid,
+        senderId: channel,
+        senderName: `${channel}:demo`,
+        content: `[${channel}]`,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: channel as ChannelMessage['channel'],
+      };
 
-    await orch.handleMessage(msg);
+      await orch.handleMessage(msg);
 
-    expect(incoming).toHaveLength(1);
-    expect(incoming[0].channel).toBe(channel);
-  });
+      expect(incoming).toHaveLength(1);
+      expect(incoming[0].channel).toBe(channel);
+    }
+  );
 
   it('does NOT fire onIncomingMessage from inside handleMessage for scoop-notify (avoids double-fire with upstream)', async () => {
     const incoming: ChannelMessage[] = [];
@@ -2990,63 +2987,66 @@ describe('Orchestrator.enqueueSudoRequest lick emission', () => {
     ['allow', 'confirmed'],
     ['always', 'confirmed'],
     ['deny', 'dismissed'],
-  ] as const)('resolveSudoRequestAndPersist (%s) flips the stored lick message + fires onMessageUpdate (%s)', async (decision, expectedState) => {
-    const onMessageUpdate = vi.fn();
-    const container =
-      typeof document !== 'undefined'
-        ? document.createElement('div')
-        : ({ appendChild: () => {} } as unknown as HTMLElement);
-    orch = new Orchestrator(container, {
-      onResponse: vi.fn(),
-      onResponseDone: vi.fn(),
-      onSendMessage: vi.fn(),
-      onStatusChange: vi.fn(),
-      onError: vi.fn(),
-      onIncomingMessage: vi.fn(),
-      onMessageUpdate,
-      getBrowserAPI: vi.fn(() => ({}) as any),
-    });
-    await orch.init();
+  ] as const)(
+    'resolveSudoRequestAndPersist (%s) flips the stored lick message + fires onMessageUpdate (%s)',
+    async (decision, expectedState) => {
+      const onMessageUpdate = vi.fn();
+      const container =
+        typeof document !== 'undefined'
+          ? document.createElement('div')
+          : ({ appendChild: () => {} } as unknown as HTMLElement);
+      orch = new Orchestrator(container, {
+        onResponse: vi.fn(),
+        onResponseDone: vi.fn(),
+        onSendMessage: vi.fn(),
+        onStatusChange: vi.fn(),
+        onError: vi.fn(),
+        onIncomingMessage: vi.fn(),
+        onMessageUpdate,
+        getBrowserAPI: vi.fn(() => ({}) as any),
+      });
+      await orch.init();
 
-    const emitEvent = vi.fn();
-    orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
+      const emitEvent = vi.fn();
+      orch.setLickManager({ emitEvent, setScoopExistenceResolver: vi.fn() } as any);
 
-    const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
-      kind: 'command',
-      detail: 'rm -rf /tmp/x',
-      suggestedPattern: 'rm *',
-    });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      const pendingDecision = orch.enqueueSudoRequest(testScoop.jid, {
+        kind: 'command',
+        detail: 'rm -rf /tmp/x',
+        suggestedPattern: 'rm *',
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-    const lickId = emitEvent.mock.calls[0][0].lickId as string;
+      const lickId = emitEvent.mock.calls[0][0].lickId as string;
 
-    // The stored sudo-request message starts pending and carries the lickId.
-    const { getMessagesForScoop } = await import('../../src/scoops/db.js');
-    const before = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
-    expect(before).toBeDefined();
-    expect(before?.lickState).toBe('pending');
+      // The stored sudo-request message starts pending and carries the lickId.
+      const { getMessagesForScoop } = await import('../../src/scoops/db.js');
+      const before = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+      expect(before).toBeDefined();
+      expect(before?.lickState).toBe('pending');
 
-    const result = await orch.resolveSudoRequestAndPersist(lickId, { decision });
-    expect(result.settled).toBe(true);
+      const result = await orch.resolveSudoRequestAndPersist(lickId, { decision });
+      expect(result.settled).toBe(true);
 
-    // onMessageUpdate fires once, locating the card by lickId with the
-    // settled state — the live-flip notification (parity: same callback
-    // backs standalone + extension through the shared bridge/client).
-    expect(onMessageUpdate).toHaveBeenCalledTimes(1);
-    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
-      messageId: `sudo-request-${lickId}`,
-      lickId,
-      lickState: expectedState,
-    });
+      // onMessageUpdate fires once, locating the card by lickId with the
+      // settled state — the live-flip notification (parity: same callback
+      // backs standalone + extension through the shared bridge/client).
+      expect(onMessageUpdate).toHaveBeenCalledTimes(1);
+      expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+        messageId: `sudo-request-${lickId}`,
+        lickId,
+        lickState: expectedState,
+      });
 
-    // The persisted message is updated in place (no new row appended).
-    const after = await getMessagesForScoop(cone.jid);
-    const flipped = after.filter((m) => m.lickId === lickId);
-    expect(flipped).toHaveLength(1);
-    expect(flipped[0].lickState).toBe(expectedState);
+      // The persisted message is updated in place (no new row appended).
+      const after = await getMessagesForScoop(cone.jid);
+      const flipped = after.filter((m) => m.lickId === lickId);
+      expect(flipped).toHaveLength(1);
+      expect(flipped[0].lickState).toBe(expectedState);
 
-    await pendingDecision;
-  });
+      await pendingDecision;
+    }
+  );
 
   it('does not throw when no lick manager is registered', async () => {
     const container =
@@ -3252,31 +3252,34 @@ describe('Orchestrator navigate-lick actionable resolution', () => {
   it.each([
     [true, 'confirmed'],
     [false, 'dismissed'],
-  ] as const)('handoff card flips when the human resolves the dip (accepted=%s → %s)', async (accepted, expectedState) => {
-    const onMessageUpdate = vi.fn();
-    orch = makeOrch(onMessageUpdate);
-    await orch.init();
+  ] as const)(
+    'handoff card flips when the human resolves the dip (accepted=%s → %s)',
+    async (accepted, expectedState) => {
+      const onMessageUpdate = vi.fn();
+      orch = makeOrch(onMessageUpdate);
+      await orch.init();
 
-    const lickId = orch.registerNavigateLick({
-      type: 'navigate',
-      timestamp: new Date().toISOString(),
-      body: { url: 'https://origin', verb: 'handoff', target: 'https://origin' },
-    } as any);
-    await saveNavigateMessage(lickId);
+      const lickId = orch.registerNavigateLick({
+        type: 'navigate',
+        timestamp: new Date().toISOString(),
+        body: { url: 'https://origin', verb: 'handoff', target: 'https://origin' },
+      } as any);
+      await saveNavigateMessage(lickId);
 
-    const ok = await orch.resolveNavigateHandoffByHuman(lickId, accepted);
-    expect(ok).toBe(true);
-    expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
-      messageId: `navigate-https://x-${lickId}`,
-      lickId,
-      lickState: expectedState,
-    });
-    const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
-    expect(after?.lickState).toBe(expectedState);
+      const ok = await orch.resolveNavigateHandoffByHuman(lickId, accepted);
+      expect(ok).toBe(true);
+      expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
+        messageId: `navigate-https://x-${lickId}`,
+        lickId,
+        lickState: expectedState,
+      });
+      const after = (await getMessagesForScoop(cone.jid)).find((m) => m.lickId === lickId);
+      expect(after?.lickState).toBe(expectedState);
 
-    // Idempotent: a second human resolution is a no-op (entry consumed).
-    expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
-  });
+      // Idempotent: a second human resolution is a no-op (entry consumed).
+      expect(await orch.resolveNavigateHandoffByHuman(lickId, accepted)).toBe(false);
+    }
+  );
 });
 
 describe('Orchestrator session-reload-lick actionable resolution', () => {

@@ -386,59 +386,56 @@ describe('npm-alias failure-path parity', () => {
     await fs.dispose();
   });
 
-  it.each([
-    ['ipk install pkg@99.99.99'],
-    ['npm install pkg@99.99.99'],
-    ['npm i pkg@99.99.99'],
-  ])('`%s` reports no matching version and installs nothing', async (cmd) => {
-    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
-    const { shell, fs } = await newShell();
-    const r = await shell.executeCommand(cmd);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toMatch(/no version satisfies|matching version/i);
-    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
-    expect(await fs.exists('/work/package.json')).toBe(false);
-    await fs.dispose();
-  });
+  it.each([['ipk install pkg@99.99.99'], ['npm install pkg@99.99.99'], ['npm i pkg@99.99.99']])(
+    '`%s` reports no matching version and installs nothing',
+    async (cmd) => {
+      sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+      const { shell, fs } = await newShell();
+      const r = await shell.executeCommand(cmd);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toMatch(/no version satisfies|matching version/i);
+      expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+      expect(await fs.exists('/work/package.json')).toBe(false);
+      await fs.dispose();
+    }
+  );
 
-  it.each([
-    ['ipk install pkg'],
-    ['npm install pkg'],
-    ['npm i pkg'],
-  ])('`%s` against a corrupt tarball reports cleanly and leaves no half-install', async (cmd) => {
-    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
-    sharedRegistry.current.tarballs = {
-      ...sharedRegistry.current.tarballs,
-      ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('not-valid-gzip-at-all'),
-    };
-    const { shell, fs } = await newShell();
-    const r = await shell.executeCommand(cmd);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toMatch(/gunzip|gzip|corrupt|decompress|magic/i);
-    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
-    expect(await fs.exists('/work/package.json')).toBe(false);
-    await fs.dispose();
-  });
+  it.each([['ipk install pkg'], ['npm install pkg'], ['npm i pkg']])(
+    '`%s` against a corrupt tarball reports cleanly and leaves no half-install',
+    async (cmd) => {
+      sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+      sharedRegistry.current.tarballs = {
+        ...sharedRegistry.current.tarballs,
+        ['https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz']: bytes('not-valid-gzip-at-all'),
+      };
+      const { shell, fs } = await newShell();
+      const r = await shell.executeCommand(cmd);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr).toMatch(/gunzip|gzip|corrupt|decompress|magic/i);
+      expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+      expect(await fs.exists('/work/package.json')).toBe(false);
+      await fs.dispose();
+    }
+  );
 
-  it.each([
-    ['ipk install pkg'],
-    ['npm install pkg'],
-    ['npm i pkg'],
-  ])('`%s` reports a network failure and keeps the shell responsive', async (cmd) => {
-    sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
-    sharedRegistry.current.networkFails = true;
-    const { shell, fs } = await newShell();
-    const r = await shell.executeCommand(cmd);
-    expect(r.exitCode).not.toBe(0);
-    expect(r.stderr.length).toBeGreaterThan(0);
-    expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
-    expect(await fs.exists('/work/package.json')).toBe(false);
+  it.each([['ipk install pkg'], ['npm install pkg'], ['npm i pkg']])(
+    '`%s` reports a network failure and keeps the shell responsive',
+    async (cmd) => {
+      sharedRegistry.current = buildRegistry([{ name: 'pkg', version: '1.0.0' }]);
+      sharedRegistry.current.networkFails = true;
+      const { shell, fs } = await newShell();
+      const r = await shell.executeCommand(cmd);
+      expect(r.exitCode).not.toBe(0);
+      expect(r.stderr.length).toBeGreaterThan(0);
+      expect(await fs.exists('/work/node_modules/pkg')).toBe(false);
+      expect(await fs.exists('/work/package.json')).toBe(false);
 
-    const followUp = await shell.executeCommand('echo ok');
-    expect(followUp.exitCode).toBe(0);
-    expect(followUp.stdout).toContain('ok');
-    await fs.dispose();
-  });
+      const followUp = await shell.executeCommand('echo ok');
+      expect(followUp.exitCode).toBe(0);
+      expect(followUp.stdout).toContain('ok');
+      await fs.dispose();
+    }
+  );
 
   it.each([
     ['ipk bogus', 'ipk'],

@@ -255,21 +255,21 @@ describe('resetNewSessionTmp', () => {
     expect(await vfs.readTextFile('/tmp/keep.txt')).toBe('preserve');
   });
 
-  it.each([
-    's3',
-    'da',
-  ] as const)('preserves %s mount contents while removing ordinary scratch entries', async (kind) => {
-    const vfs = await createVfs();
-    const { backend, remove } = createRemoteMountBackend(kind);
-    await vfs.mount(`/tmp/${kind}`, backend);
-    await vfs.writeFile('/tmp/scratch.txt', 'discard');
+  it.each(['s3', 'da'] as const)(
+    'preserves %s mount contents while removing ordinary scratch entries',
+    async (kind) => {
+      const vfs = await createVfs();
+      const { backend, remove } = createRemoteMountBackend(kind);
+      await vfs.mount(`/tmp/${kind}`, backend);
+      await vfs.writeFile('/tmp/scratch.txt', 'discard');
 
-    await resetNewSessionTmp(vfs);
+      await resetNewSessionTmp(vfs);
 
-    expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual([kind]);
-    expect(await vfs.readTextFile(`/tmp/${kind}/keep.txt`)).toBe('preserve');
-    expect(remove).not.toHaveBeenCalled();
-  });
+      expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual([kind]);
+      expect(await vfs.readTextFile(`/tmp/${kind}/keep.txt`)).toBe('preserve');
+      expect(remove).not.toHaveBeenCalled();
+    }
+  );
 
   it('recreates an absent /tmp directory', async () => {
     const vfs = await createVfs();
