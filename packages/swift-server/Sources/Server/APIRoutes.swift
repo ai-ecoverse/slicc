@@ -327,12 +327,39 @@ func registerAPIRoutes(
         return try jsonResponse(.object(["text": .string(secretInjector.scrub(text: text))]))
     }
 
+    // Fail-closed export redaction. Batch-replaces all known secret values
+    // (both real and masked forms) with stable anonymous markers for transcript
+    // export. Returns 400 for malformed input; 503 (without echoing input) on
+    // trusted-pipeline failure. Mirrors node-server's POST /api/secrets/redact-export.
+    router.post("/api/secrets/redact-export") { request, _ in
+        let payload: RedactExportPayload
+        do {
+            let body = try await collectBody(from: request)
+            payload = try decodeJSON(from: body, as: RedactExportPayload.self)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        guard let texts = payload.texts else {
+            return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+        }
+        do {
+            let result = secretInjector.redactForExport(texts: texts)
+            let jsonTexts = LickSystem.JSONValue.array(result.texts.map { .string($0) })
+            return try jsonResponse(.object([
+                "texts": jsonTexts,
+                "redactionCount": .number(Double(result.redactionCount)),
+            ]))
+        } catch {
+            return try jsonErrorResponse(status: .serviceUnavailable, message: "redaction-unavailable")
+        }
+    }
+
     // OAuth secret replicas — the webapp pushes provider access tokens here
     // so the fetch proxy can unmask them on outbound requests. Mirrors
     // packages/node-server/src/index.ts handlers around `/api/secrets/oauth-update`.
     // Routes are only registered when an OAuthSecretStore is wired in
     // (ServerCommand always wires one; tests that don't pass a store get
-    // 404s, matching the “endpoint absent” behavior).
+    // 404s, matching the "endpoint absent" behavior).
     if let oauthStore {
         router.post("/api/secrets/oauth-update") { request, context in
             let payload: OAuthUpdatePayload
@@ -553,6 +580,12 @@ private struct OAuthRelayPayload: Decodable {
 /// `typeof text !== 'string'` guard).
 private struct ScrubPayload: Decodable {
     let text: String?
+}
+
+/// Body of POST /api/secrets/redact-export. `texts` is optional so a missing
+/// key or a non-array value both surface as a 400.
+private struct RedactExportPayload: Decodable {
+    let texts: [String]?
 }
 
 /// Body of POST /api/secrets/oauth-update. Mirrors the TS payload shape

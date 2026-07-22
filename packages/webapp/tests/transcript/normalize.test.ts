@@ -46,9 +46,7 @@ const messages: AgentMessage[] = [
 
 describe('normalizeConversations', () => {
   it('preserves ordered public content and excludes reasoning', () => {
-    const result = normalizeConversations([
-      { id: 'cone', kind: 'cone', name: 'Sliccy', messages },
-    ]);
+    const result = normalizeConversations([{ id: 'cone', kind: 'cone', name: 'Sliccy', messages }]);
     expect(result.excludedReasoningBlocks).toBe(1);
     expect(JSON.stringify(result)).not.toContain('private chain');
     expect(result.conversations[0].messages[1].content).toEqual([
@@ -75,9 +73,7 @@ describe('normalizeConversations', () => {
   });
 
   it('assigns monotonically increasing sequence numbers', () => {
-    const result = normalizeConversations([
-      { id: 'conv-1', kind: 'cone', name: 'Mono', messages },
-    ]);
+    const result = normalizeConversations([{ id: 'conv-1', kind: 'cone', name: 'Mono', messages }]);
     const seqs = result.conversations[0].messages.map((m) => m.sequence);
     expect(seqs).toEqual([1, 2, 3]);
   });
@@ -89,7 +85,9 @@ describe('normalizeConversations', () => {
   it('converts numeric timestamps to ISO 8601 strings', () => {
     const result = normalizeConversations([
       {
-        id: 'c1', kind: 'cone', name: 'T',
+        id: 'c1',
+        kind: 'cone',
+        name: 'T',
         messages: [{ role: 'user', content: 'hi', timestamp: 1_000 }],
       },
     ]);
@@ -172,21 +170,19 @@ describe('normalizeConversations', () => {
     const result = normalizeConversations([
       { id: 'c1', kind: 'cone', name: 'T', messages: [userArr] },
     ]);
-    expect(result.conversations[0].messages[0].content).toEqual([
-      { type: 'text', text: 'hello' },
-    ]);
+    expect(result.conversations[0].messages[0].content).toEqual([{ type: 'text', text: 'hello' }]);
   });
 
   it('handles user string content (wraps in text block)', () => {
     const result = normalizeConversations([
       {
-        id: 'c1', kind: 'cone', name: 'T',
+        id: 'c1',
+        kind: 'cone',
+        name: 'T',
         messages: [{ role: 'user', content: 'hello', timestamp: 5 }],
       },
     ]);
-    expect(result.conversations[0].messages[0].content).toEqual([
-      { type: 'text', text: 'hello' },
-    ]);
+    expect(result.conversations[0].messages[0].content).toEqual([{ type: 'text', text: 'hello' }]);
   });
 
   // ---------------------------------------------------------------------------
@@ -277,9 +273,7 @@ describe('normalizeConversations', () => {
       { id: 'c1', kind: 'cone', name: 'T', messages: [twoThinking] },
     ]);
     expect(result.excludedReasoningBlocks).toBe(2);
-    expect(result.conversations[0].messages[0].content).toEqual([
-      { type: 'text', text: 'answer' },
-    ]);
+    expect(result.conversations[0].messages[0].content).toEqual([{ type: 'text', text: 'answer' }]);
   });
 
   // ---------------------------------------------------------------------------
@@ -396,9 +390,10 @@ describe('normalizeConversations', () => {
     const doc = makeTranscriptDocument({ text: 'custom text', toolInput: { x: 1 } });
     expect(doc.schemaVersion).toBe(1);
     expect(doc.privacy.reasoningExcluded).toBe(true);
-    expect(doc.conversations[0].messages[1].content[0]).toEqual(
-      { type: 'text', text: 'custom text' },
-    );
+    expect(doc.conversations[0].messages[1].content[0]).toEqual({
+      type: 'text',
+      text: 'custom text',
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -408,7 +403,9 @@ describe('normalizeConversations', () => {
   it('forwards createdAt from source to conversation', () => {
     const result = normalizeConversations([
       {
-        id: 'c1', kind: 'cone', name: 'T',
+        id: 'c1',
+        kind: 'cone',
+        name: 'T',
         createdAt: '2024-01-01T00:00:00.000Z',
         messages: [],
       },
@@ -419,7 +416,9 @@ describe('normalizeConversations', () => {
   it('forwards updatedAt from source to conversation', () => {
     const result = normalizeConversations([
       {
-        id: 'c1', kind: 'cone', name: 'T',
+        id: 'c1',
+        kind: 'cone',
+        name: 'T',
         updatedAt: '2024-06-15T12:00:00.000Z',
         messages: [],
       },
@@ -428,9 +427,7 @@ describe('normalizeConversations', () => {
   });
 
   it('omits createdAt and updatedAt when absent from source', () => {
-    const result = normalizeConversations([
-      { id: 'c1', kind: 'cone', name: 'T', messages: [] },
-    ]);
+    const result = normalizeConversations([{ id: 'c1', kind: 'cone', name: 'T', messages: [] }]);
     expect('createdAt' in result.conversations[0]).toBe(false);
     expect('updatedAt' in result.conversations[0]).toBe(false);
   });

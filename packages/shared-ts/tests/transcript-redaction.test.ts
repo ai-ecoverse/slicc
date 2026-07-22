@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { redactCredentialPatterns } from '@slicc/shared-ts';
+import { describe, expect, it } from 'vitest';
 
 describe('redactCredentialPatterns', () => {
   it('redacts deterministic credential patterns without generic entropy matching', () => {
@@ -50,8 +50,7 @@ describe('redactCredentialPatterns', () => {
   });
 
   it('redacts PEM private key blocks', () => {
-    const pem =
-      '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
     const result = redactCredentialPatterns(pem, 'r');
     expect(result.text).toContain('⟦REDACTED:private-key:r1⟧');
     expect(result.matches).toEqual([{ id: 'r1', category: 'private-key' }]);

@@ -10,12 +10,7 @@
 // Public types
 // ---------------------------------------------------------------------------
 
-export type CredentialCategory =
-  | 'api-key'
-  | 'bearer-token'
-  | 'jwt'
-  | 'private-key'
-  | 'password';
+export type CredentialCategory = 'api-key' | 'bearer-token' | 'jwt' | 'private-key' | 'password';
 
 export interface PatternRedactionResult {
   text: string;
@@ -122,7 +117,7 @@ function findExcluded(input: string): Range[] {
 export function redactCredentialPatterns(
   input: string,
   idPrefix: string,
-  firstId = 1,
+  firstId = 1
 ): PatternRedactionResult {
   const excluded = findExcluded(input);
   const claims: Claim[] = [];

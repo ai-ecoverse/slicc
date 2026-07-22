@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   SLICC_TRANSCRIPT_FORMAT,
   TRANSCRIPT_SCHEMA_VERSION,
-  validateTranscriptDocumentV1,
   type TranscriptDocumentV1,
+  validateTranscriptDocumentV1,
 } from '../src/transcript-export.js';
 
 const completeDocument = (): TranscriptDocumentV1 => ({
@@ -135,7 +135,7 @@ describe('TranscriptDocumentV1', () => {
     const content = msgs[0]['content'] as Array<Record<string, unknown>>;
     content[0]['type'] = 'reasoning';
     const expected =
-    'conversations[0].messages[0].content[0].type must be "text", "tool-call", or "attachment-ref"';
+      'conversations[0].messages[0].content[0].type must be "text", "tool-call", or "attachment-ref"';
     expect(validateTranscriptDocumentV1(bad)).toEqual({ ok: false, error: expected });
   });
 });
