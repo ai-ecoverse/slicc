@@ -56,11 +56,13 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
     source: String.raw`Bearer [A-Za-z0-9._~+/=!-]+`,
     flags: 'g',
   },
-  // Common API key prefixes: sk-live/test/prod/proj, xoxb/xoxp (Slack), AKIA (AWS), ghp_, hf_
+  // Common API key prefixes: sk-live/test/prod/proj, sk-ant- (Anthropic),
+  // xoxb/xoxp (Slack), AKIA (AWS), ghp_, hf_
   {
     category: 'api-key',
     source:
       String.raw`(?:sk-(?:live|test|prod|proj)-[A-Za-z0-9]{8,}` +
+      String.raw`|sk-ant-[A-Za-z0-9-]{8,}` +
       String.raw`|xoxb-[A-Za-z0-9-]{10,}|xoxp-[A-Za-z0-9-]{10,}` +
       String.raw`|AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{34})`,
     flags: 'g',

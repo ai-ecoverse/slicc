@@ -16,6 +16,13 @@ describe('redactCredentialPatterns', () => {
     expect(result.matches).toEqual([{ id: 'r1', category: 'api-key' }]);
   });
 
+  it('redacts raw Anthropic sk-ant- API keys', () => {
+    const result = redactCredentialPatterns('key: sk-ant-api03-abcdefghijklmnop', 'r');
+    expect(result.text).toContain('⟦REDACTED:api-key:r1⟧');
+    expect(result.text).not.toContain('sk-ant-');
+    expect(result.matches).toEqual([{ id: 'r1', category: 'api-key' }]);
+  });
+
   it('redacts password assignment patterns', () => {
     const result = redactCredentialPatterns('password=hunter2', 'r');
     expect(result.text).toContain('⟦REDACTED:password:r1⟧');
@@ -43,8 +50,9 @@ describe('redactCredentialPatterns', () => {
   });
 
   it('redacts PEM private key blocks', () => {
-    const input = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
-    const result = redactCredentialPatterns(input, 'r');
+    const pem =
+      '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
+    const result = redactCredentialPatterns(pem, 'r');
     expect(result.text).toContain('⟦REDACTED:private-key:r1⟧');
     expect(result.matches).toEqual([{ id: 'r1', category: 'private-key' }]);
   });
