@@ -15,3 +15,4 @@ export * from './sign-and-forward.js';
 export * from './sigv4.js';
 export * from './tray-signaling.js';
 export * from './tray-sync-protocol.js';
+export * from './transcript-export.js';

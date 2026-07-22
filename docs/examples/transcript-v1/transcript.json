@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "export": {
+    "id": "export-example-0001",
+    "generatedAt": "2026-07-22T12:00:00.000Z",
+    "producer": { "application": "slicc", "version": "5.65.2" },
+    "format": "slicc-transcript"
+  },
+  "session": {
+    "id": "session-example-0001",
+    "title": "Redacted example session",
+    "state": "active",
+    "createdAt": "2026-07-22T11:00:00.000Z",
+    "updatedAt": "2026-07-22T12:00:00.000Z",
+    "completeness": { "status": "complete", "missing": [] }
+  },
+  "privacy": {
+    "reasoningExcluded": true,
+    "excludedReasoningBlocks": 2,
+    "binaryAttachments": "included-unchanged",
+    "redactionCounts": { "token": 1, "credential": 1 },
+    "redactions": [
+      {
+        "id": "r1",
+        "category": "token",
+        "detector": "credential-pattern",
+        "target": {
+          "kind": "json",
+          "pointer": "/conversations/0/messages/0/content/0/text"
+        }
+      },
+      {
+        "id": "r2",
+        "category": "credential",
+        "detector": "known-secret",
+        "target": {
+          "kind": "attachment",
+          "attachmentId": "att-0001"
+        }
+      }
+    ]
+  },
+  "conversations": [
+    {
+      "id": "cone-main",
+      "kind": "cone",
+      "name": "Sliccy",
+      "createdAt": "2026-07-22T11:00:00.000Z",
+      "updatedAt": "2026-07-22T11:58:00.000Z",
+      "messages": [
+        {
+          "id": "cone-msg-000001",
+          "sequence": 1,
+          "role": "user",
+          "timestamp": "2026-07-22T11:00:00.000Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "Please read the attached config file. My API key is ⟦REDACTED:token:r1⟧."
+            }
+          ]
+        },
+        {
+          "id": "cone-msg-000002",
+          "sequence": 2,
+          "role": "assistant",
+          "timestamp": "2026-07-22T11:00:05.000Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "I have read the config file. The redacted credential has been removed for export."
+            },
+            {
+              "type": "attachment-ref",
+              "attachmentId": "att-0001"
+            }
+          ],
+          "model": {
+            "provider": "anthropic",
+            "id": "claude-opus-4-6",
+            "api": "messages"
+          },
+          "usage": {
+            "input": 250,
+            "output": 48,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 298,
+            "cost": {
+              "input": 0.00375,
+              "output": 0.00072,
+              "cacheRead": 0.0,
+              "cacheWrite": 0.0,
+              "total": 0.00447
+            }
+          },
+          "stopReason": "end_turn"
+        },
+        {
+          "id": "cone-msg-000003",
+          "sequence": 3,
+          "role": "user",
+          "timestamp": "2026-07-22T11:02:00.000Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "Thanks. Can you run a shell command to list files?"
+            }
+          ]
+        },
+        {
+          "id": "cone-msg-000004",
+          "sequence": 4,
+          "role": "assistant",
+          "timestamp": "2026-07-22T11:02:05.000Z",
+          "content": [
+            {
+              "type": "tool-call",
+              "id": "tool-call-001",
+              "name": "bash",
+              "input": { "command": "ls -la /workspace" }
+            }
+          ],
+          "model": {
+            "provider": "anthropic",
+            "id": "claude-opus-4-6",
+            "api": "messages"
+          },
+          "stopReason": "tool_use"
+        },
+        {
+          "id": "cone-msg-000005",
+          "sequence": 5,
+          "role": "tool-result",
+          "timestamp": "2026-07-22T11:02:06.000Z",
+          "toolCallId": "tool-call-001",
+          "content": [
+            {
+              "type": "text",
+              "text": "total 8\ndrwxr-xr-x 2 user user 4096 Jul 22 11:00 .\ndrwxr-xr-x 3 user user 4096 Jul 22 11:00 .."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scoop-worker-1",
+      "kind": "scoop",
+      "name": "file-analyzer",
+      "parentConversationId": "cone-main",
+      "createdAt": "2026-07-22T11:05:00.000Z",
+      "updatedAt": "2026-07-22T11:10:00.000Z",
+      "messages": [
+        {
+          "id": "scoop-msg-000001",
+          "sequence": 1,
+          "role": "user",
+          "timestamp": "2026-07-22T11:05:00.000Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "Analyze the workspace structure."
+            }
+          ]
+        },
+        {
+          "id": "scoop-msg-000002",
+          "sequence": 2,
+          "role": "assistant",
+          "timestamp": "2026-07-22T11:05:10.000Z",
+          "content": [
+            {
+              "type": "text",
+              "text": "The workspace appears to be empty. No files found to analyze."
+            }
+          ],
+          "model": {
+            "provider": "anthropic",
+            "id": "claude-opus-4-6",
+            "api": "messages"
+          },
+          "stopReason": "end_turn"
+        }
+      ]
+    }
+  ],
+  "delegations": [
+    {
+      "sourceConversationId": "cone-main",
+      "targetConversationId": "scoop-worker-1",
+      "toolCallId": "tool-call-001",
+      "timestamp": "2026-07-22T11:05:00.000Z"
+    }
+  ],
+  "attachments": [
+    {
+      "id": "att-0001",
+      "path": "attachments/att-0001.txt",
+      "originalName": "config.txt",
+      "mimeType": "text/plain",
+      "byteLength": 62,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sourceConversationId": "cone-main",
+      "sourceMessageId": "cone-msg-000001",
+      "handling": "text-redacted",
+      "present": true
+    }
+  ]
+}
