@@ -93,8 +93,16 @@ function performNudge(
     onDone?.();
   };
 
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => restore(true));
-  });
+  // rAF may be absent — a non-browser context, or (the common case) a test
+  // whose 500ms safety-net setTimeout fires AFTER the test tore down its jsdom
+  // global. Guard it so a missing rAF just falls through to the setTimeout
+  // ceiling below rather than throwing an unhandled `requestAnimationFrame is
+  // not a function` (which fails the whole vitest run — see #1603's merge-queue
+  // flake). In a real browser rAF is always present, so behavior is unchanged.
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => restore(true));
+    });
+  }
   setTimeout(() => restore(false), 100);
 }
