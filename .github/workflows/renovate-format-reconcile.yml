@@ -50,10 +50,13 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     # Only Renovate's own branch PRs (head in this repo → BOT_PAT push works)
-    # that carry the formatter-bump label added by renovate.json.
+    # that carry the formatter-bump label. Gate on the PR AUTHOR
+    # (pull_request.user.login), NOT github.actor: on a `labeled` event the actor
+    # is the human who added the label, so an actor gate would skip the manual
+    # "label an already-open Renovate PR to unblock it" path (e.g. #1602).
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor == 'renovate[bot]' &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
       contains(github.event.pull_request.labels.*.name, 'formatter-bump')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
