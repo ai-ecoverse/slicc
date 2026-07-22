@@ -8,6 +8,7 @@
  */
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import {
   SYNC_FS_NEED_NONCE_MSG,
@@ -27,6 +28,10 @@ import {
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import { registerTranscriptExportService } from '../../transcript/export-provider.js';
+import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
+import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
+import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
 import {
   guardedReload,
   installWorkerStaleAssetReloadListener,
@@ -37,6 +42,7 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import { SessionStore as UiSessionStore } from '../session-store.js';
 import type { ChatMessage } from '../types.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
@@ -1711,6 +1717,53 @@ export function attachWcClient(
       }
     })
     .catch((err) => log.error('WC sprinkle/tray wiring failed', err));
+
+  // Register the page-side transcript export service so commands on the page
+  // can call getTranscriptExportService() without hitting session-not-found.
+  // Teardown is identity-safe: a later re-registration won't be evicted.
+  {
+    const agentSessionStore = new AgentSessionStore();
+    const uiSessionStore = new UiSessionStore();
+    const pageService = new DefaultTranscriptExportService({
+      collection: {
+        listScoops: () => client.getScoops(),
+        isProcessing: (jid) => client.isProcessing(jid),
+        // Live agent messages are worker-side; fall back to persisted sessions.
+        getAgentMessages: () => null,
+        loadPersistedSessions: () => agentSessionStore.loadAll(),
+        loadUiChatSessions: async () => {
+          const ids = await uiSessionStore.list();
+          const sessions = await Promise.all(ids.map((id) => uiSessionStore.load(id)));
+          return sessions.filter((s): s is NonNullable<typeof s> => s !== null);
+        },
+        wait: (ms) => new Promise((res) => setTimeout(res, ms)),
+      },
+      knownSecrets: getStrictKnownSecretRedactor(),
+      snapshotStore: {
+        read: async (sessionId) => {
+          const { reader } = await openVfs();
+          return readSnapshot(reader, sessionId);
+        },
+        write: async (sessionId, snapshot) => {
+          const { writer } = await openVfs();
+          return writeSnapshot(writer, sessionId, snapshot);
+        },
+      },
+      vfs: {
+        readFile: async (path, opts) => (await openVfs()).reader.readFile(path, opts),
+        readDir: async (path) => (await openVfs()).reader.readDir(path),
+        stat: async (path) => (await openVfs()).reader.stat(path),
+      },
+      getActiveSessionInfo: () => {
+        const cone = client.getScoops().find((s) => s.isCone);
+        return { id: cone?.jid ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
+      },
+      version: __SLICC_VERSION__,
+    });
+    const teardown = registerTranscriptExportService(pageService);
+    // Clean up on page unload so a re-mount doesn't leave a stale registration.
+    window.addEventListener('unload', teardown, { once: true });
+  }
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
   void import('./wc-nav.js')

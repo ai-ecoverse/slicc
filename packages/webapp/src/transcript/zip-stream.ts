@@ -4,9 +4,10 @@
  * Uses fflate's streaming `Zip`, `ZipDeflate`, and `ZipPassThrough` API.
  * Production code never uses `zipSync`. The callback-based fflate API is
  * bridged to an `AsyncIterable<Uint8Array>` via an in-memory chunk queue.
- * An incremental SHA-256 (js-sha256) is updated in the `ondata` callback so
- * `completion` resolves with authoritative byte count and digest after the
- * final ZIP chunk is emitted.
+ *
+ * `completion` resolves only after the consumer has yielded every chunk
+ * (not when fflate fires the final callback), and rejects on abort or
+ * fflate error. Abort listeners are cleaned up on both normal and error exit.
  */
 
 import { type TranscriptDocumentV1, TranscriptExportError } from '@slicc/shared-ts';
@@ -30,12 +31,14 @@ export interface TranscriptZipResult {
 /**
  * Returns true only for safe bundle-relative paths.
  *
- * Rejects: absolute paths, path traversal (`..`), empty segments, null bytes.
+ * Rejects: absolute paths, backslashes (zip-slip on Windows unzippers),
+ * path traversal (`..`), empty segments, null bytes, and empty strings.
  */
 function isSafeBundlePath(path: string): boolean {
   if (!path) return false;
   if (path.startsWith('/')) return false;
   if (path.includes('\0')) return false;
+  if (path.includes('\\')) return false;
   for (const part of path.split('/')) {
     if (part === '' || part === '.' || part === '..') return false;
   }
@@ -96,19 +99,68 @@ function failQueue(q: ChunkQueue, err: Error): void {
   }
 }
 
-async function* drainQueue(q: ChunkQueue, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
-  while (true) {
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    if (q.error) throw q.error;
-    if (q.items.length > 0) {
-      yield q.items.shift()!;
-      continue;
+// ---------------------------------------------------------------------------
+// Generator — drains the queue and owns the public completion promise
+// ---------------------------------------------------------------------------
+
+/**
+ * Drain the chunk queue, yielding each chunk to the consumer.
+ *
+ * `completion` is resolved only after the last chunk has been yielded
+ * (not when fflate produces it). It rejects immediately when the signal
+ * fires (even if no further iteration happens) and on fflate errors.
+ * Abort listeners are removed in the `finally` block — no leaks.
+ */
+async function* drainQueue(
+  q: ChunkQueue,
+  signal: AbortSignal | undefined,
+  completionResolve: (result: { byteLength: number; sha256: string }) => void,
+  completionReject: (err: Error) => void,
+  getZipResult: () => { byteLength: number; sha256: string } | null
+): AsyncGenerator<Uint8Array> {
+  // Reject completion immediately when signal is pre-aborted.
+  if (signal?.aborted) {
+    completionReject(new TranscriptExportError('transfer-aborted'));
+    throw new TranscriptExportError('transfer-aborted');
+  }
+
+  // Abort listener: reject completion as soon as the signal fires,
+  // even if the generator is suspended between yields.
+  const handleAbort = (): void => {
+    completionReject(new TranscriptExportError('transfer-aborted'));
+  };
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  try {
+    while (true) {
+      if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+      if (q.error) throw q.error;
+      if (q.items.length > 0) {
+        yield q.items.shift()!;
+        continue;
+      }
+      if (q.done) break;
+      // Wait for enqueue/finish/fail or abort (whichever comes first).
+      await new Promise<void>((res) => {
+        q.wake = res;
+        // Wake the generator when abort fires so it can check signal.aborted.
+        if (signal) signal.addEventListener('abort', () => res(), { once: true });
+      });
     }
-    if (q.done) break;
-    // Nothing available yet — wait for the next enqueue/finish/fail call.
-    await new Promise<void>((res) => {
-      q.wake = res;
-    });
+    // All chunks consumed — now resolve completion with the zip digest.
+    const result = getZipResult();
+    if (result) {
+      completionResolve(result);
+    } else {
+      completionReject(new TranscriptExportError('schema-invalid'));
+    }
+  } catch (err) {
+    // completionReject may have been called by the abort listener or fflate
+    // already; calling it again is a no-op (Promise is already settled).
+    completionReject(err as Error);
+    throw err;
+  } finally {
+    signal?.removeEventListener('abort', handleAbort);
   }
 }
 
@@ -122,12 +174,11 @@ async function* drainQueue(q: ChunkQueue, signal?: AbortSignal): AsyncGenerator<
  * - `transcript.json` is compressed with DEFLATE level 6.
  * - Binary bundle files are stored without compression (ZipPassThrough).
  * - Text bundle files (identified by path extension) use DEFLATE.
- * - `completion` resolves with the authoritative byte count and SHA-256
- *   after the final ZIP chunk is emitted, regardless of when the caller
- *   drains `chunks`.
+ * - `completion` resolves only after the consumer reaches the final chunk
+ *   and rejects on abort or fflate error.
  *
  * Throws `TranscriptExportError('schema-invalid')` synchronously if any
- * bundle file path fails the safety check.
+ * bundle file path fails the safety check (including backslash traversal).
  */
 export function createTranscriptZip(
   document: TranscriptDocumentV1,
@@ -144,6 +195,7 @@ export function createTranscriptZip(
   const queue: ChunkQueue = { items: [], done: false, error: null, wake: null };
   const hasher = sha256.create();
   let byteLength = 0;
+  let zipResult: { byteLength: number; sha256: string } | null = null;
 
   let completionResolve!: (result: { byteLength: number; sha256: string }) => void;
   let completionReject!: (err: Error) => void;
@@ -155,6 +207,8 @@ export function createTranscriptZip(
   const zip = new Zip((err, data, final) => {
     if (err) {
       failQueue(queue, err);
+      // Early reject so callers waiting on completion see the error promptly
+      // even if they never iterate the chunks generator.
       completionReject(err);
       return;
     }
@@ -163,7 +217,8 @@ export function createTranscriptZip(
     enqueue(queue, data);
     if (final) {
       finishQueue(queue);
-      completionResolve({ byteLength, sha256: hasher.hex() });
+      // Store the result; the generator resolves completion after consuming.
+      zipResult = { byteLength, sha256: hasher.hex() };
     }
   });
 
@@ -187,13 +242,13 @@ export function createTranscriptZip(
     }
   }
 
-  // Signal end of archive. With synchronous ZipDeflate/ZipPassThrough, the
-  // final ondata callback fires here, resolving `completion` immediately.
+  // Signal end of archive. With synchronous ZipDeflate/ZipPassThrough, all
+  // ondata callbacks fire here — chunks are queued, zipResult is set.
   zip.end();
 
   return {
     filename: makeFilename(document),
-    chunks: drainQueue(queue, signal),
+    chunks: drainQueue(queue, signal, completionResolve, completionReject, () => zipResult),
     completion,
   };
 }

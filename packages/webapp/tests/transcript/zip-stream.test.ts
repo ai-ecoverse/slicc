@@ -3,10 +3,11 @@
  *
  * TDD RED phase: all tests written before production code exists.
  */
+
+import { TranscriptExportError } from '@slicc/shared-ts';
 import { strFromU8, unzipSync } from 'fflate';
 import { sha256 } from 'js-sha256';
 import { describe, expect, it } from 'vitest';
-import { TranscriptExportError } from '@slicc/shared-ts';
 import { createTranscriptZip } from '../../src/transcript/zip-stream.js';
 import { makeTranscriptDocument } from './fixtures.js';
 
@@ -162,6 +163,26 @@ describe('createTranscriptZip — path safety', () => {
     ).toThrow(TranscriptExportError);
   });
 
+  it('rejects bundle paths containing backslashes (zip-slip on Windows unzippers)', () => {
+    const document = makeTranscriptDocument();
+    // Backslash-only traversal
+    expect(() =>
+      createTranscriptZip(document, new Map([['attachments\\..\\evil.bin', bytes([1])]]))
+    ).toThrow(TranscriptExportError);
+    // Backslash path component
+    expect(() =>
+      createTranscriptZip(document, new Map([['attachments\\secret.bin', bytes([1])]]))
+    ).toThrow(TranscriptExportError);
+  });
+
+  it('rejects zip-slip paths with mixed separators', () => {
+    const document = makeTranscriptDocument();
+    // Mixed backslash + forward-slash traversal
+    expect(() =>
+      createTranscriptZip(document, new Map([['attachments/..\\evil.bin', bytes([1])]]))
+    ).toThrow(TranscriptExportError);
+  });
+
   it('accepts safe nested paths', async () => {
     const document = makeTranscriptDocument();
     const result = createTranscriptZip(
@@ -179,32 +200,83 @@ describe('createTranscriptZip — path safety', () => {
 // ---------------------------------------------------------------------------
 
 describe('createTranscriptZip — cancellation', () => {
-  it('throws transfer-aborted when signal is already aborted at iteration start', async () => {
+  it('chunks throws transfer-aborted when signal is already aborted (pre-abort)', async () => {
     const controller = new AbortController();
     controller.abort();
 
     const document = makeTranscriptDocument();
     const result = createTranscriptZip(document, new Map(), controller.signal);
+    // Suppress the completion rejection so it doesn't become an unhandled rejection.
+    result.completion.catch(() => undefined);
 
     await expect(collectChunks(result.chunks)).rejects.toMatchObject({
       code: 'transfer-aborted',
     });
   });
 
-  it('completion does not resolve normally when aborted', async () => {
+  it('completion rejects with transfer-aborted on pre-abort (not just chunks)', async () => {
     const controller = new AbortController();
     controller.abort();
 
     const document = makeTranscriptDocument();
     const result = createTranscriptZip(document, new Map(), controller.signal);
 
-    // Drain the generator (will throw) — completion may still resolve because
-    // the synchronous zip path resolves it before iteration starts.
-    // The key invariant: no chunks after abort.
-    try {
-      await collectChunks(result.chunks);
-    } catch (err) {
-      expect((err as TranscriptExportError).code).toBe('transfer-aborted');
-    }
+    // Observe both concurrently — completion rejects as soon as the generator
+    // starts (the abort listener fires first). Awaiting them sequentially would
+    // leave completion unobserved for a tick and trigger an unhandled-rejection.
+    const [chunksOutcome, completionOutcome] = await Promise.allSettled([
+      collectChunks(result.chunks),
+      result.completion,
+    ]);
+
+    expect(chunksOutcome.status).toBe('rejected');
+    expect((chunksOutcome as PromiseRejectedResult).reason).toMatchObject({
+      code: 'transfer-aborted',
+    });
+    expect(completionOutcome.status).toBe('rejected');
+    expect((completionOutcome as PromiseRejectedResult).reason).toMatchObject({
+      code: 'transfer-aborted',
+    });
+  });
+
+  it('completion rejects when signal aborts during consumption (mid-stream)', async () => {
+    const controller = new AbortController();
+
+    const document = makeTranscriptDocument();
+    const result = createTranscriptZip(document, new Map(), controller.signal);
+
+    // Abort after createTranscriptZip returns but before the consumer finishes.
+    controller.abort();
+
+    // Observe both promises concurrently so neither is ever unobserved
+    // (an unobserved rejected promise would trigger a vitest unhandled-rejection warning).
+    const [chunksOutcome, completionOutcome] = await Promise.allSettled([
+      collectChunks(result.chunks),
+      result.completion,
+    ]);
+
+    expect(chunksOutcome.status).toBe('rejected');
+    expect((chunksOutcome as PromiseRejectedResult).reason).toMatchObject({
+      code: 'transfer-aborted',
+    });
+    expect(completionOutcome.status).toBe('rejected');
+    expect((completionOutcome as PromiseRejectedResult).reason).toMatchObject({
+      code: 'transfer-aborted',
+    });
+  });
+
+  it('completion resolves only after all chunks are consumed (normal path)', async () => {
+    const document = makeTranscriptDocument();
+    const result = createTranscriptZip(
+      document,
+      new Map([['attachments/a.bin', bytes([1, 2, 3])]])
+    );
+
+    // Collect all chunks THEN await completion.
+    const archive = await collectChunks(result.chunks);
+    const completion = await result.completion;
+
+    expect(completion.byteLength).toBe(archive.length);
+    expect(completion.sha256).toBe(sha256(archive));
   });
 });
