@@ -85,8 +85,12 @@ export interface WcNavDeps {
   refs: WcShellRefs;
   client: OffscreenClient;
   log: BootStageLogger;
-  /** Called when the user picks "Export transcript" from the avatar menu. */
-  onExportTranscript?: () => void;
+  /**
+   * Called when the user picks "Export transcript" from the avatar menu.
+   * Returns a Promise; `wireWcNav` uses it to disable the menu item while
+   * the export is in-flight and restore it once the export completes.
+   */
+  onExportTranscript?: () => Promise<void>;
 }
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
@@ -197,11 +201,18 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     isExtension && !isDetachedSelf
       ? [{ id: 'popout', label: 'Pop out into a tab', icon: 'external-link' }]
       : [];
+  // Disable the export menu item while a download is in-flight.
+  let exportInFlight = false;
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
       { id: 'settings', label: 'Account settings…', icon: 'settings' },
       { id: 'theme', label: 'Theme settings…', icon: 'palette' },
-      { id: 'export-transcript', label: 'Export transcript', icon: 'download' },
+      {
+        id: 'export-transcript',
+        label: 'Export transcript',
+        icon: 'download',
+        disabled: exportInFlight || undefined,
+      },
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -230,7 +241,14 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     }
     if (id === 'settings') openSettings();
     if (id === 'theme') openTheme();
-    if (id === 'export-transcript') onExportTranscript?.();
+    if (id === 'export-transcript' && onExportTranscript) {
+      exportInFlight = true;
+      syncMenuItems();
+      void onExportTranscript().finally(() => {
+        exportInFlight = false;
+        syncMenuItems();
+      });
+    }
   });
 
   // No connected accounts → the model pill reads "Add AI" and clicking it

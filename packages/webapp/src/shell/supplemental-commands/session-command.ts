@@ -11,6 +11,7 @@
  */
 
 import { TranscriptExportError } from '@slicc/shared-ts';
+import { sha256 } from 'js-sha256';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getTranscriptExportService } from '../../transcript/export-provider.js';
@@ -28,33 +29,51 @@ interface ParsedExportArgs {
 
 type ParseResult = { ok: true; args: ParsedExportArgs } | { ok: false; stderr: string };
 
+const USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
+
 function parseExportArgs(args: readonly string[]): ParseResult {
   let sessionId: string | null = null;
   let outputPath: string | null = null;
   const rest = args.slice(1); // drop the 'export' subcommand token
 
   for (let i = 0; i < rest.length; i++) {
-    const flag = rest[i];
+    const flag = rest[i]!;
     if (flag === '--id') {
+      if (sessionId !== null) {
+        return { ok: false, stderr: `session export: duplicate flag --id\n${USAGE}` };
+      }
       const val = rest[i + 1];
       if (!val || val.startsWith('-')) {
         return {
           ok: false,
-          stderr: `session export: --id requires a value\n`,
+          stderr: `session export: --id requires a value\n${USAGE}`,
         };
       }
       sessionId = val;
       i++;
     } else if (flag === '--output') {
+      if (outputPath !== null) {
+        return { ok: false, stderr: `session export: duplicate flag --output\n${USAGE}` };
+      }
       const val = rest[i + 1];
       if (!val || val.startsWith('-')) {
         return {
           ok: false,
-          stderr: `session export: --output requires a path\n`,
+          stderr: `session export: --output requires a path\n${USAGE}`,
         };
       }
       outputPath = val;
       i++;
+    } else if (flag.startsWith('-')) {
+      return {
+        ok: false,
+        stderr: `session export: unknown flag ${flag}\n${USAGE}`,
+      };
+    } else {
+      return {
+        ok: false,
+        stderr: `session export: unexpected argument ${JSON.stringify(flag)}\n${USAGE}`,
+      };
     }
   }
 
@@ -74,18 +93,25 @@ async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array
     byteLength += chunk.byteLength;
   }
 
-  const completion = await result.completion;
-  if (completion.byteLength !== byteLength) {
-    throw new TranscriptExportError('transfer-corrupt');
-  }
-
-  // Merge chunks into a single buffer
+  // Merge chunks into a single buffer before verification
   const merged = new Uint8Array(byteLength);
   let offset = 0;
   for (const chunk of chunks) {
     merged.set(chunk, offset);
     offset += chunk.byteLength;
   }
+
+  const completion = await result.completion;
+  if (completion.byteLength !== byteLength) {
+    throw new TranscriptExportError('transfer-corrupt');
+  }
+
+  // SHA-256 content integrity check — catches corruption that byteLength alone cannot.
+  const actualSha256 = sha256(merged);
+  if (actualSha256 !== completion.sha256) {
+    throw new TranscriptExportError('transfer-corrupt');
+  }
+
   return merged;
 }
 
@@ -117,13 +143,13 @@ export function createSessionCommand(): Command {
     const selector: TranscriptSessionSelector =
       sessionId != null ? { kind: 'frozen', sessionId } : { kind: 'active' };
 
-    const resolvedId = sessionId ?? `session-${Date.now()}`;
-    const resolvedOutput = outputPath ?? `/workspace/slicc-transcript-${resolvedId}.zip`;
-
     try {
       const service = getTranscriptExportService();
       const result = await service.export(selector, {});
       const bytes = await collectAndVerify(result);
+      // Resolve default output from the service-returned filename so active
+      // sessions get their real session id, not a client-side timestamp.
+      const resolvedOutput = outputPath ?? `/workspace/${result.filename}`;
       await ctx.fs.writeFile(resolvedOutput, bytes);
       return { stdout: `exported ${resolvedOutput}\n`, stderr: '', exitCode: 0 };
     } catch (err) {

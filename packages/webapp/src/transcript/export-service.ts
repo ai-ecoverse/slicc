@@ -416,8 +416,13 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
     onProgress?: (p: TranscriptExportProgress) => void
   ): Promise<SnapshotResult> {
     // Find the sessions index entry for this sessionId.
+    // For legacy entries that predate the sessionId field, fall back to
+    // matching by filename so they reach the partial-export path rather
+    // than throwing session-not-found.
     const index = await readSessionsIndex(this.deps.vfs);
-    const entry = index.find((e) => e.sessionId === sessionId);
+    const entry = index.find(
+      (e) => e.sessionId === sessionId || (!e.sessionId && e.filename === sessionId)
+    );
     if (!entry) throw new TranscriptExportError('session-not-found');
 
     // Read the markdown file.
