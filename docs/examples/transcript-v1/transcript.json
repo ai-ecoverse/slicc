@@ -18,7 +18,7 @@
     "reasoningExcluded": true,
     "excludedReasoningBlocks": 2,
     "binaryAttachments": "included-unchanged",
-    "redactionCounts": { "token": 1, "credential": 1 },
+    "redactionCounts": { "token": 1, "credential": 1, "filename": 1 },
     "redactions": [
       {
         "id": "r1",
@@ -36,6 +36,15 @@
         "target": {
           "kind": "attachment",
           "attachmentId": "att-0001"
+        }
+      },
+      {
+        "id": "r3",
+        "category": "filename",
+        "detector": "pre-obfuscated",
+        "target": {
+          "kind": "json",
+          "pointer": "/attachments/0/originalName"
         }
       }
     ]
@@ -196,10 +205,10 @@
     {
       "id": "att-0001",
       "path": "attachments/att-0001.txt",
-      "originalName": "config.txt",
+      "originalName": "⟦REDACTED:filename:r3⟧",
       "mimeType": "text/plain",
-      "byteLength": 62,
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "byteLength": 77,
+      "sha256": "bded4fa0280d54cf6f99d309defd54ef603fe6b0f5aa7d0f621fd0c76eeec7a7",
       "sourceConversationId": "cone-main",
       "sourceMessageId": "cone-msg-000001",
       "handling": "text-redacted",
