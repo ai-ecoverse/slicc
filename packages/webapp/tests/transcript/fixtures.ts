@@ -18,7 +18,7 @@ import {
 
 /** Returns a minimal usage object. Defaults: input=1, output=1, totalTokens=2, all costs=0. */
 export function makeUsage(
-  overrides: { input?: number; output?: number; totalTokens?: number } = {},
+  overrides: { input?: number; output?: number; totalTokens?: number } = {}
 ): {
   input: number;
   output: number;
@@ -98,7 +98,7 @@ interface MakeTranscriptDocumentOptions {
 
 /** Returns a complete, valid TranscriptDocumentV1 for schema-level tests. */
 export function makeTranscriptDocument(
-  overrides: MakeTranscriptDocumentOptions = {},
+  overrides: MakeTranscriptDocumentOptions = {}
 ): TranscriptDocumentV1 {
   const { toolInput = { command: 'ls' }, text = 'Done.' } = overrides;
   return {

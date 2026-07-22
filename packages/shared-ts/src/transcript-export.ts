@@ -112,9 +112,7 @@ export interface TranscriptRedaction {
   id: string;
   category: string;
   detector: 'known-secret' | 'credential-pattern' | 'pre-obfuscated';
-  target:
-    | { kind: 'json'; pointer: string }
-    | { kind: 'attachment'; attachmentId: string };
+  target: { kind: 'json'; pointer: string } | { kind: 'attachment'; attachmentId: string };
 }
 
 export interface TranscriptExportProgress {
@@ -200,7 +198,7 @@ function enumError(label: string, allowed: readonly string[]): string {
 function validateEnum(
   value: unknown,
   allowed: readonly string[],
-  label: string,
+  label: string
 ): TranscriptValidationResult {
   if (typeof value !== 'string' || !(allowed as string[]).includes(value)) {
     return { ok: false, error: enumError(label, allowed) };
@@ -212,7 +210,7 @@ function validateEnum(
 function validateArray(
   items: unknown[],
   validator: (item: unknown, path: string) => TranscriptValidationResult,
-  basePath: string,
+  basePath: string
 ): TranscriptValidationResult {
   for (let i = 0; i < items.length; i++) {
     const result = validator(items[i], `${basePath}[${i}]`);
@@ -235,7 +233,7 @@ function validateMessage(msg: unknown, path: string): TranscriptValidationResult
   const roleResult = validateEnum(
     msg['role'],
     ['user', 'assistant', 'tool-result'],
-    `${path}.role`,
+    `${path}.role`
   );
   if (!roleResult.ok) return roleResult;
   if (typeof msg['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
@@ -288,11 +286,7 @@ function validateAttachment(att: unknown, path: string): TranscriptValidationRes
   if (typeof att['sourceMessageId'] !== 'string') {
     return { ok: false, error: `${path}.sourceMessageId must be a string` };
   }
-  return validateEnum(
-    att['handling'],
-    ['text-redacted', 'binary-unchanged'],
-    `${path}.handling`,
-  );
+  return validateEnum(att['handling'], ['text-redacted', 'binary-unchanged'], `${path}.handling`);
 }
 
 function validateRedaction(red: unknown, path: string): TranscriptValidationResult {
@@ -304,7 +298,7 @@ function validateRedaction(red: unknown, path: string): TranscriptValidationResu
   const detectorResult = validateEnum(
     red['detector'],
     ['known-secret', 'credential-pattern', 'pre-obfuscated'],
-    `${path}.detector`,
+    `${path}.detector`
   );
   if (!detectorResult.ok) return detectorResult;
   const target = red['target'];
@@ -355,7 +349,7 @@ function validateSession(session: unknown): TranscriptValidationResult {
   const compResult = validateEnum(
     completeness['status'],
     ['complete', 'partial'],
-    'session.completeness.status',
+    'session.completeness.status'
   );
   if (!compResult.ok) return compResult;
   if (!Array.isArray(completeness['missing'])) {
