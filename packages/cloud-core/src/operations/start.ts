@@ -121,6 +121,112 @@ export async function reserveConeStart(
   return { reservationId };
 }
 
+// Update or append the sandbox's registry placeholder depending on whether
+// we have a reservation. If reservationId is provided, swap it for the real
+// sandboxId; otherwise append a new placeholder as before.
+//
+// The placeholder ensures concurrent /list-cones calls see the cone in the
+// registry (pass 1) instead of treating it as an orphan (pass 2). The empty
+// joinUrl means the dashboard hides the Open button until pollCloudStatus
+// completes and the entry is updated below. State is 'reserved' until poll
+// completes. Returns the (possibly swapped) active registry key.
+async function persistSandboxPlaceholder(
+  deps: StartConeDeps,
+  opts: StartConeOpts,
+  handle: SandboxHandle,
+  createdAt: string
+): Promise<string> {
+  if (opts.reservationId) {
+    // Remove the reservation entry and append the real one
+    await deps.registry.remove(opts.reservationId);
+    const placeholder: ConeEntry = {
+      substrate: deps.substrate.id,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'reserved',
+      joinUrl: '',
+      metadata: opts.metadata,
+    };
+    await deps.registry.append(placeholder);
+  } else {
+    // Legacy path: no reservation, append directly
+    const placeholder: ConeEntry = {
+      substrate: deps.substrate.id,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'reserved',
+      joinUrl: '',
+    };
+    await deps.registry.append(placeholder);
+  }
+  return handle.sandboxId;
+}
+
+// Poll /tmp/slicc-join.json until the leader is ready, surfacing boot
+// diagnostics (tail of /tmp/slicc-stderr.log) in the thrown error on timeout.
+// Spec failure mode #7.
+async function pollUntilReady(
+  handle: SandboxHandle,
+  opts: StartConeOpts,
+  minUpdatedAt: string
+): Promise<Awaited<ReturnType<typeof pollCloudStatus>>> {
+  try {
+    return await pollCloudStatus(handle, {
+      timeoutMs: opts.pollTimeoutMs ?? 60_000,
+      intervalMs: opts.pollIntervalMs ?? 500,
+      minUpdatedAt,
+    });
+  } catch (pollErr) {
+    const stderr = await tailStderr(handle, 50);
+    throw new CloudError(
+      'SANDBOX_NOT_READY',
+      `${pollErr instanceof Error ? pollErr.message : String(pollErr)}\n` +
+        `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`,
+      { sandboxId: handle.sandboxId }
+    );
+  }
+}
+
+// Best-effort cleanup after a failed start: remove whichever registry entry
+// is currently active, and kill the real sandbox if one was created. Both
+// steps are independently best-effort — failures are logged, not rethrown,
+// so the original error always propagates to the caller.
+async function cleanupFailedStart(
+  deps: StartConeDeps,
+  activeRegistryId: string | undefined,
+  handle: SandboxHandle | undefined
+): Promise<void> {
+  if (activeRegistryId) {
+    try {
+      await deps.registry.remove(activeRegistryId);
+    } catch (cleanupErr) {
+      const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      console.warn('[cloud-core] start cleanup', {
+        phase: 'registry-remove',
+        sandboxId: activeRegistryId,
+        err: msg,
+      });
+    }
+  }
+  // Always kill the real sandbox if it was created (handle exists at this point)
+  if (handle) {
+    try {
+      await handle.kill();
+    } catch (cleanupErr) {
+      const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      console.warn('[cloud-core] start cleanup', {
+        phase: 'handle-kill',
+        sandboxId: handle.sandboxId,
+        err: msg,
+      });
+    }
+  }
+}
+
 export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promise<StartResult> {
   const safeSecrets = filterSecretsEnv(opts.envContents);
 
@@ -158,45 +264,7 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     const minUpdatedAt = new Date(Date.now() - 5_000).toISOString();
     const createdAt = new Date().toISOString();
 
-    // Update or append placeholder depending on whether we have a reservation.
-    // If reservationId is provided, update it to the real sandboxId and remove the old entry.
-    // Otherwise, append a new placeholder as before.
-    //
-    // The placeholder ensures concurrent /list-cones calls see the cone in the registry
-    // (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
-    // means the dashboard hides the Open button until pollCloudStatus completes
-    // and the entry is updated below. State is 'reserved' until poll completes.
-    if (opts.reservationId) {
-      // Remove the reservation entry and append the real one
-      await deps.registry.remove(opts.reservationId);
-      const placeholder: ConeEntry = {
-        substrate: deps.substrate.id,
-        sandboxId: handle.sandboxId,
-        name: opts.name,
-        createdAt,
-        lastSeen: createdAt,
-        state: 'reserved',
-        joinUrl: '',
-        metadata: opts.metadata,
-      };
-      await deps.registry.append(placeholder);
-      // After swapping, the real sandboxId is the active registry key.
-      activeRegistryId = handle.sandboxId;
-    } else {
-      // Legacy path: no reservation, append directly
-      const placeholder: ConeEntry = {
-        substrate: deps.substrate.id,
-        sandboxId: handle.sandboxId,
-        name: opts.name,
-        createdAt,
-        lastSeen: createdAt,
-        state: 'reserved',
-        joinUrl: '',
-      };
-      await deps.registry.append(placeholder);
-      // The newly-appended sandboxId is the active registry key.
-      activeRegistryId = handle.sandboxId;
-    }
+    activeRegistryId = await persistSandboxPlaceholder(deps, opts, handle, createdAt);
 
     // Two-layer secrets bootstrap (see Plan B):
     //   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN if the file
@@ -213,23 +281,7 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       await handle.writeFile('/slicc/cone-config.json', opts.coneConfigJson);
     }
 
-    let status: Awaited<ReturnType<typeof pollCloudStatus>>;
-    try {
-      status = await pollCloudStatus(handle, {
-        timeoutMs: opts.pollTimeoutMs ?? 60_000,
-        intervalMs: opts.pollIntervalMs ?? 500,
-        minUpdatedAt,
-      });
-    } catch (pollErr) {
-      // Surface boot diagnostics before tearing down. Spec failure mode #7.
-      const stderr = await tailStderr(handle, 50);
-      throw new CloudError(
-        'SANDBOX_NOT_READY',
-        `${pollErr instanceof Error ? pollErr.message : String(pollErr)}\n` +
-          `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`,
-        { sandboxId: handle.sandboxId }
-      );
-    }
+    const status = await pollUntilReady(handle, opts, minUpdatedAt);
 
     // Promote the placeholder to a fully-populated running entry.
     await deps.registry.update(handle.sandboxId, {
@@ -246,32 +298,7 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       joinUrl: status.joinUrl,
     };
   } catch (err) {
-    // Best-effort cleanup: remove whichever registry entry is currently active.
-    if (activeRegistryId) {
-      try {
-        await deps.registry.remove(activeRegistryId);
-      } catch (cleanupErr) {
-        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.warn('[cloud-core] start cleanup', {
-          phase: 'registry-remove',
-          sandboxId: activeRegistryId,
-          err: msg,
-        });
-      }
-    }
-    // Always kill the real sandbox if it was created (handle exists at this point)
-    if (handle) {
-      try {
-        await handle.kill();
-      } catch (cleanupErr) {
-        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.warn('[cloud-core] start cleanup', {
-          phase: 'handle-kill',
-          sandboxId: handle.sandboxId,
-          err: msg,
-        });
-      }
-    }
+    await cleanupFailedStart(deps, activeRegistryId, handle);
     throw err;
   }
 }

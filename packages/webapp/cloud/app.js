@@ -476,6 +476,133 @@ function addSecretRow() {
   if (container) container.appendChild(makeSecretRow());
 }
 
+// Render the "Connected accounts:" header + one delete checkbox per
+// account, appended into the manage panel. No-op when idx has none.
+function appendManageAccountsSection(panel, idx) {
+  if (!idx?.accountProviderIds?.length) return;
+
+  const accountsHeader = document.createElement('div');
+  accountsHeader.textContent = 'Connected accounts:';
+  accountsHeader.style.marginTop = '10px';
+  accountsHeader.style.fontWeight = 'bold';
+  panel.appendChild(accountsHeader);
+
+  for (const providerId of idx.accountProviderIds) {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'delete-account-checkbox';
+    checkbox.dataset.providerId = providerId;
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(' Delete ' + providerId));
+    panel.appendChild(label);
+    panel.appendChild(document.createElement('br'));
+  }
+}
+
+// Render the "Secrets:" header + one delete checkbox per secret name,
+// appended into the manage panel. No-op when idx has none.
+function appendManageSecretsSection(panel, idx) {
+  if (!idx?.secretNames?.length) return;
+
+  const secretsHeader = document.createElement('div');
+  secretsHeader.textContent = 'Secrets:';
+  secretsHeader.style.marginTop = '10px';
+  secretsHeader.style.fontWeight = 'bold';
+  panel.appendChild(secretsHeader);
+
+  for (const name of idx.secretNames) {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'delete-secret-checkbox';
+    checkbox.dataset.secretName = name;
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(' Delete ' + name));
+    panel.appendChild(label);
+    panel.appendChild(document.createElement('br'));
+  }
+}
+
+// Render the "Add secret:" header, row container, and "Add secret row"
+// button, appended into the manage panel.
+function appendManageAddSecretSection(panel) {
+  const addSecretHeader = document.createElement('div');
+  addSecretHeader.textContent = 'Add secret:';
+  addSecretHeader.style.marginTop = '10px';
+  addSecretHeader.style.fontWeight = 'bold';
+  panel.appendChild(addSecretHeader);
+
+  const addSecretContainer = document.createElement('div');
+  addSecretContainer.className = 'add-secret-rows';
+  panel.appendChild(addSecretContainer);
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Add secret row';
+  addBtn.addEventListener('click', () => addSecretContainer.appendChild(makeSecretRow()));
+  panel.appendChild(addBtn);
+}
+
+// Click handler for the manage panel's "Apply on resume" button: gathers the
+// model/account/secret edits from the panel's form controls, assembles a
+// cone-config delta, and posts it to /api/cloud/resume.
+async function applyManagePanelChanges(panel, modelSelect, sandboxId) {
+  try {
+    const newModel = modelSelect.value || '';
+
+    // Gather delete sets
+    const deleteProviderIds = Array.from(
+      panel.querySelectorAll('.delete-account-checkbox:checked')
+    ).map((el) => el.dataset.providerId);
+
+    const deleteSecretNames = Array.from(
+      panel.querySelectorAll('.delete-secret-checkbox:checked')
+    ).map((el) => el.dataset.secretName);
+
+    // Gather new secret rows
+    const upsertSecretRows = Array.from(panel.querySelectorAll('.add-secret-rows .secret-row')).map(
+      (row) => ({
+        name: row.querySelector('.s-name')?.value || '',
+        value: row.querySelector('.s-value')?.value || '',
+        domains: row.querySelector('.s-domains')?.value || '',
+      })
+    );
+
+    // Read all accounts from localStorage and offer to re-send all of them.
+    // For simplicity, we'll let the user re-send all currently connected
+    // accounts. In a more refined UX, we could show checkboxes for each account.
+    const upsertAccounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
+
+    // Same warn-don't-block surface as create: assembleDelta drops
+    // credential-less accounts / domain-less secrets, so tell the user.
+    const dropWarnings = bundleDropWarnings({
+      selectedProviderIds: upsertAccounts.map((a) => a.providerId),
+      allAccounts: upsertAccounts,
+      secretRows: upsertSecretRows,
+    });
+    if (dropWarnings.length > 0) showToast(dropWarnings.join(' '));
+
+    const coneConfigDelta = assembleDelta({
+      model: newModel,
+      upsertAccounts,
+      upsertSecretRows,
+      deleteProviderIds,
+      deleteSecretNames,
+    });
+
+    await api('/api/cloud/resume', {
+      method: 'POST',
+      body: JSON.stringify({ sandboxId, coneConfigDelta }),
+    });
+
+    showToast('Configuration updated - will apply on next resume');
+    panel.remove();
+    await refreshList();
+  } catch (e) {
+    showToast('Apply failed: ' + e.message);
+  }
+}
+
 async function showManagePanel(li, sandboxId) {
   try {
     const data = await api('/api/cloud/cone-config?sandboxId=' + encodeURIComponent(sandboxId), {
@@ -509,63 +636,9 @@ async function showManagePanel(li, sandboxId) {
     );
     panel.appendChild(modelSelect);
 
-    // Account list with delete toggles
-    if (idx?.accountProviderIds?.length) {
-      const accountsHeader = document.createElement('div');
-      accountsHeader.textContent = 'Connected accounts:';
-      accountsHeader.style.marginTop = '10px';
-      accountsHeader.style.fontWeight = 'bold';
-      panel.appendChild(accountsHeader);
-
-      for (const providerId of idx.accountProviderIds) {
-        const label = document.createElement('label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'delete-account-checkbox';
-        checkbox.dataset.providerId = providerId;
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(' Delete ' + providerId));
-        panel.appendChild(label);
-        panel.appendChild(document.createElement('br'));
-      }
-    }
-
-    // Secrets list with delete toggles
-    if (idx?.secretNames?.length) {
-      const secretsHeader = document.createElement('div');
-      secretsHeader.textContent = 'Secrets:';
-      secretsHeader.style.marginTop = '10px';
-      secretsHeader.style.fontWeight = 'bold';
-      panel.appendChild(secretsHeader);
-
-      for (const name of idx.secretNames) {
-        const label = document.createElement('label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'delete-secret-checkbox';
-        checkbox.dataset.secretName = name;
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(' Delete ' + name));
-        panel.appendChild(label);
-        panel.appendChild(document.createElement('br'));
-      }
-    }
-
-    // Add secret section
-    const addSecretHeader = document.createElement('div');
-    addSecretHeader.textContent = 'Add secret:';
-    addSecretHeader.style.marginTop = '10px';
-    addSecretHeader.style.fontWeight = 'bold';
-    panel.appendChild(addSecretHeader);
-
-    const addSecretContainer = document.createElement('div');
-    addSecretContainer.className = 'add-secret-rows';
-    panel.appendChild(addSecretContainer);
-
-    const addBtn = document.createElement('button');
-    addBtn.textContent = 'Add secret row';
-    addBtn.addEventListener('click', () => addSecretContainer.appendChild(makeSecretRow()));
-    panel.appendChild(addBtn);
+    appendManageAccountsSection(panel, idx);
+    appendManageSecretsSection(panel, idx);
+    appendManageAddSecretSection(panel);
 
     // Reconnect button
     const reconnectBtn = document.createElement('button');
@@ -580,64 +653,9 @@ async function showManagePanel(li, sandboxId) {
     const applyBtn = document.createElement('button');
     applyBtn.textContent = 'Apply on resume';
     applyBtn.style.marginTop = '10px';
-    applyBtn.addEventListener('click', async () => {
-      try {
-        const newModel = modelSelect.value || '';
-
-        // Gather delete sets
-        const deleteProviderIds = Array.from(
-          panel.querySelectorAll('.delete-account-checkbox:checked')
-        ).map((el) => el.dataset.providerId);
-
-        const deleteSecretNames = Array.from(
-          panel.querySelectorAll('.delete-secret-checkbox:checked')
-        ).map((el) => el.dataset.secretName);
-
-        // Gather new secret rows
-        const upsertSecretRows = Array.from(
-          panel.querySelectorAll('.add-secret-rows .secret-row')
-        ).map((row) => ({
-          name: row.querySelector('.s-name')?.value || '',
-          value: row.querySelector('.s-value')?.value || '',
-          domains: row.querySelector('.s-domains')?.value || '',
-        }));
-
-        // Read all accounts from localStorage and offer to re-send all of them
-        const allAccounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
-
-        // For simplicity, we'll let the user re-send all currently connected accounts
-        // In a more refined UX, we could show checkboxes for each account
-        const upsertAccounts = allAccounts;
-
-        // Same warn-don't-block surface as create: assembleDelta drops
-        // credential-less accounts / domain-less secrets, so tell the user.
-        const dropWarnings = bundleDropWarnings({
-          selectedProviderIds: upsertAccounts.map((a) => a.providerId),
-          allAccounts: upsertAccounts,
-          secretRows: upsertSecretRows,
-        });
-        if (dropWarnings.length > 0) showToast(dropWarnings.join(' '));
-
-        const coneConfigDelta = assembleDelta({
-          model: newModel,
-          upsertAccounts,
-          upsertSecretRows,
-          deleteProviderIds,
-          deleteSecretNames,
-        });
-
-        await api('/api/cloud/resume', {
-          method: 'POST',
-          body: JSON.stringify({ sandboxId, coneConfigDelta }),
-        });
-
-        showToast('Configuration updated - will apply on next resume');
-        panel.remove();
-        await refreshList();
-      } catch (e) {
-        showToast('Apply failed: ' + e.message);
-      }
-    });
+    applyBtn.addEventListener('click', () =>
+      applyManagePanelChanges(panel, modelSelect, sandboxId)
+    );
     panel.appendChild(applyBtn);
 
     // Close button

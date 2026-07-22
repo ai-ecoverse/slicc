@@ -278,7 +278,6 @@
     },
     {
       "includes": [
-        "packages/webapp/cloud/app.js",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
         "packages/webapp/src/ui/sprinkle-bridge.ts"
@@ -295,8 +294,6 @@
       "includes": [
         "packages/cherry/src/cdp-host-handlers.ts",
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/cloud-core/src/operations/list.ts",
-        "packages/cloud-core/src/operations/start.ts",
         "packages/cloudflare-worker/src/cloud/auth.ts",
         "packages/webapp/providers/xai-grok-sanitize.ts",
         "packages/webapp/src/core/image-processor.ts",
