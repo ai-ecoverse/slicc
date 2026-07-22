@@ -11,11 +11,10 @@
  */
 
 import {
+  type TranscriptDocumentV1,
   TranscriptExportError,
   validateTranscriptDocumentV1,
-  type TranscriptDocumentV1,
 } from '@slicc/shared-ts';
-import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 
@@ -94,11 +93,7 @@ async function removeDir(vfs: WritableVfsClient, dir: string): Promise<void> {
   }
 }
 
-async function copyDir(
-  vfs: WritableVfsClient,
-  srcDir: string,
-  dstDir: string
-): Promise<void> {
+async function copyDir(vfs: WritableVfsClient, srcDir: string, dstDir: string): Promise<void> {
   await ensureDir(vfs, dstDir);
   const entries = await (vfs as unknown as LocalVfsClient).readDir(srcDir);
   for (const entry of entries) {

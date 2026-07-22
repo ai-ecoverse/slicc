@@ -267,7 +267,9 @@ function buildScoopRecord(
   visiblePaths: string[] | undefined,
   writablePaths: string[] | undefined,
   allowedCommands: string[] | undefined,
-  thinkingLevel: ThinkingLevel | undefined
+  thinkingLevel: ThinkingLevel | undefined,
+  /** JID of the scoop (cone) that invoked scoop_scoop; recorded for delegation-chain reconstruction. */
+  parentJid: string
 ): Omit<RegisteredScoop, 'jid'> {
   return {
     name,
@@ -286,6 +288,9 @@ function buildScoopRecord(
       ...(thinkingLevel ? { thinkingLevel } : {}),
     },
     configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    // Record the creating scoop's JID. originToolCallId is intentionally absent:
+    // ToolDefinition.execute does not receive the tool-call ID.
+    parentJid,
   };
 }
 
@@ -348,7 +353,8 @@ async function executeScoopScoop(
       visiblePaths,
       writablePaths,
       allowedCommands,
-      parsed.level
+      parsed.level,
+      config.scoop.jid
     );
     const newScoop = await config.onScoopScoop!(record);
     log.info('Scoop created', { name, folder });

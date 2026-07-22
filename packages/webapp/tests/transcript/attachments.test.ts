@@ -15,20 +15,18 @@
  *  - SHA-256 matches exported bytes
  */
 
-import { describe, expect, it, vi } from 'vitest';
-import type { ChatMessage } from '../../src/scoops/chat-types.js';
-import {
-  attachmentHandling,
-  processTranscriptAttachments,
-  type AttachmentProcessingInput,
-} from '../../src/transcript/attachments.js';
-import type { KnownSecretBatchRedactor } from '../../src/transcript/redact.js';
-import { makeTranscriptDocument } from './fixtures.js';
 import {
   SLICC_TRANSCRIPT_FORMAT,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptDocumentV1,
 } from '@slicc/shared-ts';
+import { describe, expect, it, vi } from 'vitest';
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
+import {
+  attachmentHandling,
+  processTranscriptAttachments,
+} from '../../src/transcript/attachments.js';
+import type { KnownSecretBatchRedactor } from '../../src/transcript/redact.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,9 +120,7 @@ function makeDocWithImageRefs(convId: string, imageCount: number): TranscriptDoc
   };
 }
 
-function makeUiUserMessage(
-  attachments: NonNullable<ChatMessage['attachments']>
-): ChatMessage {
+function makeUiUserMessage(attachments: NonNullable<ChatMessage['attachments']>): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: 'user',
@@ -148,15 +144,12 @@ describe('attachmentHandling', () => {
     ['image/jpeg', 'img.jpg', 'binary-unchanged'],
     ['video/webm', 'video.webm', 'binary-unchanged'],
     ['application/pdf', 'doc.pdf', 'binary-unchanged'],
-    ['application/octet-stream', 'data.ts', 'text-redacted'],  // text ext
-    ['application/octet-stream', 'script.js', 'text-redacted'],  // text ext
-    ['application/octet-stream', 'data.bin', 'binary-unchanged'],  // binary ext
-  ] as const)(
-    'classifies (%s, %s) → %s',
-    (mimeType, name, expected) => {
-      expect(attachmentHandling(mimeType, name)).toBe(expected);
-    }
-  );
+    ['application/octet-stream', 'data.ts', 'text-redacted'], // text ext
+    ['application/octet-stream', 'script.js', 'text-redacted'], // text ext
+    ['application/octet-stream', 'data.bin', 'binary-unchanged'], // binary ext
+  ] as const)('classifies (%s, %s) → %s', (mimeType, name, expected) => {
+    expect(attachmentHandling(mimeType, name)).toBe(expected);
+  });
 
   it('classifies yaml extensions as text-redacted', () => {
     expect(attachmentHandling('application/octet-stream', 'config.yaml')).toBe('text-redacted');
@@ -557,10 +550,24 @@ describe('processTranscriptAttachments — duplicate source data', () => {
     };
 
     const uiMsg1 = makeUiUserMessage([
-      { id: 'att-a', name: 'photo.png', mimeType: 'image/png', size: bytes.length, kind: 'image', data: b64 },
+      {
+        id: 'att-a',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: bytes.length,
+        kind: 'image',
+        data: b64,
+      },
     ]);
     const uiMsg2 = makeUiUserMessage([
-      { id: 'att-b', name: 'photo.png', mimeType: 'image/png', size: bytes.length, kind: 'image', data: b64 },
+      {
+        id: 'att-b',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: bytes.length,
+        kind: 'image',
+        data: b64,
+      },
     ]);
     const chatMessages = new Map([[convId, [uiMsg1, uiMsg2] as readonly ChatMessage[]]]);
     const result = await processTranscriptAttachments({
@@ -570,12 +577,8 @@ describe('processTranscriptAttachments — duplicate source data', () => {
     });
 
     // Both TranscriptAttachment entries should reference the same bundle path
-    const att1 = result.document.attachments.find((a) =>
-      a.sourceMessageId === msg1Id
-    );
-    const att2 = result.document.attachments.find((a) =>
-      a.sourceMessageId === msg2Id
-    );
+    const att1 = result.document.attachments.find((a) => a.sourceMessageId === msg1Id);
+    const att2 = result.document.attachments.find((a) => a.sourceMessageId === msg2Id);
     expect(att1).toBeDefined();
     expect(att2).toBeDefined();
     expect(att1!.path).toBe(att2!.path);
@@ -673,7 +676,14 @@ describe('processTranscriptAttachments — association mismatch', () => {
     // UI only has 1 user message (mismatch with 2 normalized user messages)
     const bytes = new Uint8Array([1, 2, 3]);
     const uiMsg = makeUiUserMessage([
-      { id: 'att-1', name: 'img.png', mimeType: 'image/png', size: 3, kind: 'image', data: base64Encode(bytes) },
+      {
+        id: 'att-1',
+        name: 'img.png',
+        mimeType: 'image/png',
+        size: 3,
+        kind: 'image',
+        data: base64Encode(bytes),
+      },
     ]);
     const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
     const result = await processTranscriptAttachments({
@@ -783,15 +793,17 @@ describe('processTranscriptAttachments — opaque names', () => {
 
     let imgSeed = 10;
     const makeImgMsg = (name: string): ChatMessage =>
-      makeUiUserMessage([{
-        id: crypto.randomUUID(),
-        name,
-        mimeType: 'image/png',
-        size: 3,
-        kind: 'image',
-        // Distinct bytes per call so dedup doesn't collapse them.
-        data: base64Encode(new Uint8Array([imgSeed++, imgSeed++, imgSeed++])),
-      }]);
+      makeUiUserMessage([
+        {
+          id: crypto.randomUUID(),
+          name,
+          mimeType: 'image/png',
+          size: 3,
+          kind: 'image',
+          // Distinct bytes per call so dedup doesn't collapse them.
+          data: base64Encode(new Uint8Array([imgSeed++, imgSeed++, imgSeed++])),
+        },
+      ]);
 
     const chatMessages = new Map([
       [convId, [makeImgMsg('first.png'), makeImgMsg('second.jpeg')] as readonly ChatMessage[]],
@@ -804,5 +816,131 @@ describe('processTranscriptAttachments — opaque names', () => {
     const paths = [...result.bundleFiles.keys()].sort();
     expect(paths[0]).toMatch(/^attachments\/att-0001\.\w+$/);
     expect(paths[1]).toMatch(/^attachments\/att-0002\.\w+$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix: missing attachment files must escalate document completeness (task-5-review Fix 4)
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — missing file escalates document to partial', () => {
+  it('marks document partial with attachment-file-missing when image data is absent', async () => {
+    const convId = 'conv-missing-partial';
+    const doc = makeDocWithImageRefs(convId, 1);
+    // UI message has a slot for the user but no attachment data
+    const uiMsg: ChatMessage = {
+      id: 'm-partial-1',
+      role: 'user',
+      content: 'hi',
+      timestamp: 1000,
+      // No attachments — triggers attachment-file-missing
+    };
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+
+    // Attachment is still recorded with present=false
+    const att = result.document.attachments[0];
+    expect(att?.present).toBe(false);
+    expect(att?.missingReason).toBe('attachment-file-missing');
+
+    // Document completeness must be partial with attachment-file-missing reason
+    expect(result.document.session.completeness.status).toBe('partial');
+    expect(result.document.session.completeness.missing).toContain('attachment-file-missing');
+  });
+
+  it('retains present:false metadata alongside the partial status', async () => {
+    const convId = 'conv-missing-meta';
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg: ChatMessage = { id: 'm2', role: 'user', content: 'hi', timestamp: 1 };
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    // Both conditions must hold simultaneously
+    expect(result.document.attachments[0]?.present).toBe(false);
+    expect(result.document.session.completeness.status).toBe('partial');
+  });
+
+  it('does not add missing attachment to bundleFiles even when partial', async () => {
+    const convId = 'conv-missing-bundle';
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg: ChatMessage = { id: 'm3', role: 'user', content: 'hi', timestamp: 1 };
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.bundleFiles.size).toBe(0);
+    expect(result.document.session.completeness.status).toBe('partial');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix: Phase 1 / Phase 2 provably disjoint — no duplicate attachment/ref
+// (task-5-review Fix 2: kind='file'+data overlap)
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — Phase 1/Phase 2 disjoint (kind=file+data)', () => {
+  it('kind=file+data attachment handled by Phase 1 is not re-added by Phase 2', async () => {
+    const convId = 'conv-file-data-disjoint';
+    const msgId = `${convId}-msg-000001`;
+    // Document has an attachment-ref for the file (normalizer produced it).
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msgId}-img-0` }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const fileBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF header
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'fa-1',
+        name: 'report.pdf',
+        mimeType: 'application/pdf',
+        size: fileBytes.length,
+        kind: 'file',
+        data: base64Encode(fileBytes),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+
+    // Only one attachment should appear — the Phase 1 ref; Phase 2 must skip it.
+    expect(result.document.attachments).toHaveLength(1);
+    expect(result.document.attachments[0]?.id).toBe(`${msgId}-img-0`);
+
+    // Only one bundle file.
+    expect(result.bundleFiles.size).toBe(1);
+
+    // No duplicate attachment-ref blocks in the message.
+    const conv = result.document.conversations[0]!;
+    const msg = conv.messages[0]!;
+    const refs = msg.content.filter((b) => b.type === 'attachment-ref');
+    expect(refs).toHaveLength(1);
   });
 });

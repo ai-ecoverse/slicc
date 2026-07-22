@@ -12,13 +12,12 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
-import { FsError } from '../../src/fs/types.js';
+import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
+  readSnapshot,
   type SanitizedTranscriptSnapshot,
   writeSnapshot,
-  readSnapshot,
 } from '../../src/transcript/snapshot-store.js';
 import { makeTranscriptDocument } from './fixtures.js';
 
@@ -43,9 +42,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join('');
 }
 
-function makeSnapshot(
-  attachments: [string, Uint8Array][] = []
-): SanitizedTranscriptSnapshot {
+function makeSnapshot(attachments: [string, Uint8Array][] = []): SanitizedTranscriptSnapshot {
   const doc = makeTranscriptDocument();
   return {
     document: doc,
