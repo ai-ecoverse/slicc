@@ -36,8 +36,8 @@
 ### Cloudflare Worker lifecycle
 
 - `packages/cloudflare-worker/src/cloud/cloud-sessions-do.ts`: remove start/resume cap enforcement while retaining atomic reservations.
-- `packages/cloudflare-worker/src/cloud/caps.ts`: delete the cap subsystem.
-- `packages/cloudflare-worker/tests/caps.test.ts`: delete obsolete cap tests.
+- packages/cloudflare-worker/src/cloud/caps.ts: delete the cap subsystem.
+- packages/cloudflare-worker/tests/caps.test.ts: delete obsolete cap tests.
 - `packages/cloudflare-worker/tests/cloud-sessions-do.test.ts`: prove distinct concurrent starts/resumes succeed and same-cone duplication remains blocked.
 - `packages/cloudflare-worker/tests/cloud-handlers.test.ts`: replace the obsolete `CAP_EXCEEDED` pass-through case with a still-valid cloud error.
 
@@ -285,8 +285,8 @@ git commit -m "refactor(cloud): remove start reservation caps"
 
 **Files:**
 
-- Delete: `packages/cloudflare-worker/src/cloud/caps.ts`
-- Delete: `packages/cloudflare-worker/tests/caps.test.ts`
+- Delete: packages/cloudflare-worker/src/cloud/caps.ts
+- Delete: packages/cloudflare-worker/tests/caps.test.ts
 - Modify: `packages/cloudflare-worker/src/cloud/cloud-sessions-do.ts:1-415`
 - Modify: `packages/cloudflare-worker/tests/cloud-sessions-do.test.ts:160-365`
 - Modify: `packages/cloudflare-worker/tests/cloud-handlers.test.ts:69-79`
@@ -482,7 +482,7 @@ const precheck = await this.state.blockConcurrencyWhile(async () => {
 });
 ```
 
-Delete `packages/cloudflare-worker/src/cloud/caps.ts` and `packages/cloudflare-worker/tests/caps.test.ts` with `trash`, not `rm`:
+Delete packages/cloudflare-worker/src/cloud/caps.ts and packages/cloudflare-worker/tests/caps.test.ts with `trash`, not `rm`:
 
 ```bash
 trash packages/cloudflare-worker/src/cloud/caps.ts
