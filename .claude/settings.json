@@ -1,5 +1,16 @@
 {
   "permissions": {
     "deny": ["Read(./providers.json)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git push*)",
+        "hook": {
+          "type": "message",
+          "message": "STOP: Before pushing, run the verifying-before-push gates. At minimum: npm run lint && npm run typecheck && npm run test && node packages/dev-tools/tools/check-touched-exemptions.mjs. Read the verifying-before-push skill for the full pass."
+        }
+      }
+    ]
   }
 }

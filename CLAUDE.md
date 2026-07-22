@@ -122,7 +122,7 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 
 Three primary floats: standalone CLI (Express + Chrome), Chrome extension (thin bridge, no bundled engine), and Electron. Plus hosted-leader (cloud via e2b sandbox) and Cherry (embedded follower iframe). See [`docs/architecture.md`](docs/architecture.md) for the full per-float description and the [float topology diagram](docs/architecture-diagram.png).
 
-Each package `CLAUDE.md` is the authoritative source for its subsystem internals. Shell command reference: [`docs/shell-reference.md`](docs/shell-reference.md). Build targets and `tsc --noEmit` invocations: [`docs/verification.md`](docs/verification.md).
+Each package `CLAUDE.md` is the authoritative source for its subsystem internals. Shell command reference: [`docs/shell-reference.md`](docs/shell-reference.md). Verification commands and CI gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md).
 
 ## Key Conventions
 
@@ -155,7 +155,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Verification
 
-Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`docs/verification.md`](docs/verification.md). CI runs these gates in `.github/workflows/ci.yml`.
+Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md). CI runs these gates in `.github/workflows/ci.yml`.
 
 ## Developer Agent Skills (.agents/skills/)
 
@@ -169,6 +169,7 @@ discovery channel — read the referenced skill when the moment matches.
 - Handing work off to SLICC → use `slicc-handoff`
 - Smoke-testing a build in a controlled browser → use `cdp-smoke-test`
 - Writing or updating SLICC tests → use `writing-slicc-tests`
+- Committing, pushing, opening or updating a PR, or diagnosing verification CI failures → use `verifying-before-push`
 
 ## Automated PR Review Checklist
 
