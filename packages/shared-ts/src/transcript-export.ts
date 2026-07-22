@@ -181,39 +181,63 @@ export class TranscriptExportError extends Error {
 export type TranscriptValidationResult = { ok: true } | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------
-// Validator helpers — never throw for untrusted input
+// Validator primitives — never throw for untrusted input
 // ---------------------------------------------------------------------------
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function validateContentBlock(
-  block: unknown,
-  path: string,
+/** Build a human-readable "must be" enum error string. */
+function enumError(label: string, allowed: readonly string[]): string {
+  const quoted = allowed.map((v) => `"${v}"`);
+  const last = quoted[quoted.length - 1] as string;
+  if (quoted.length === 2) return `${label} must be ${quoted[0]} or ${last}`;
+  return `${label} must be ${quoted.slice(0, -1).join(', ')}, or ${last}`;
+}
+
+/** Verify `value` is one of the allowed string literals. */
+function validateEnum(
+  value: unknown,
+  allowed: readonly string[],
+  label: string,
 ): TranscriptValidationResult {
-  if (!isObj(block)) return { ok: false, error: `${path} must be a non-null object` };
-  const t = block['type'];
-  if (t !== 'text' && t !== 'tool-call' && t !== 'attachment-ref') {
-    return {
-      ok: false,
-      error: `${path}.type must be "text", "tool-call", or "attachment-ref"`,
-    };
+  if (typeof value !== 'string' || !(allowed as string[]).includes(value)) {
+    return { ok: false, error: enumError(label, allowed) };
   }
   return { ok: true };
 }
 
+/** Validate every item in a pre-confirmed array. */
+function validateArray(
+  items: unknown[],
+  validator: (item: unknown, path: string) => TranscriptValidationResult,
+  basePath: string,
+): TranscriptValidationResult {
+  for (let i = 0; i < items.length; i++) {
+    const result = validator(items[i], `${basePath}[${i}]`);
+    if (!result.ok) return result;
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Content-block / message / conversation validators
+// ---------------------------------------------------------------------------
+
+function validateContentBlock(block: unknown, path: string): TranscriptValidationResult {
+  if (!isObj(block)) return { ok: false, error: `${path} must be a non-null object` };
+  return validateEnum(block['type'], ['text', 'tool-call', 'attachment-ref'], `${path}.type`);
+}
+
 function validateMessage(msg: unknown, path: string): TranscriptValidationResult {
   if (!isObj(msg)) return { ok: false, error: `${path} must be a non-null object` };
-
-  const role = msg['role'];
-  if (role !== 'user' && role !== 'assistant' && role !== 'tool-result') {
-    return {
-      ok: false,
-      error: `${path}.role must be "user", "assistant", or "tool-result"`,
-    };
-  }
-
+  const roleResult = validateEnum(
+    msg['role'],
+    ['user', 'assistant', 'tool-result'],
+    `${path}.role`,
+  );
+  if (!roleResult.ok) return roleResult;
   if (typeof msg['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
   if (typeof msg['sequence'] !== 'number') {
     return { ok: false, error: `${path}.sequence must be a number` };
@@ -221,41 +245,29 @@ function validateMessage(msg: unknown, path: string): TranscriptValidationResult
   if (typeof msg['timestamp'] !== 'string') {
     return { ok: false, error: `${path}.timestamp must be a string` };
   }
-
   const content = msg['content'];
   if (!Array.isArray(content)) return { ok: false, error: `${path}.content must be an array` };
-  for (let i = 0; i < content.length; i++) {
-    const result = validateContentBlock(content[i], `${path}.content[${i}]`);
-    if (!result.ok) return result;
-  }
-
-  return { ok: true };
+  return validateArray(content, validateContentBlock, `${path}.content`);
 }
 
 function validateConversation(conv: unknown, path: string): TranscriptValidationResult {
   if (!isObj(conv)) return { ok: false, error: `${path} must be a non-null object` };
-
   if (typeof conv['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
   if (typeof conv['name'] !== 'string') {
     return { ok: false, error: `${path}.name must be a string` };
   }
-
-  const kind = conv['kind'];
-  if (kind !== 'cone' && kind !== 'scoop') {
-    return { ok: false, error: `${path}.kind must be "cone" or "scoop"` };
-  }
-
+  const kindResult = validateEnum(conv['kind'], ['cone', 'scoop'], `${path}.kind`);
+  if (!kindResult.ok) return kindResult;
   const messages = conv['messages'];
   if (!Array.isArray(messages)) {
     return { ok: false, error: `${path}.messages must be an array` };
   }
-  for (let i = 0; i < messages.length; i++) {
-    const result = validateMessage(messages[i], `${path}.messages[${i}]`);
-    if (!result.ok) return result;
-  }
-
-  return { ok: true };
+  return validateArray(messages, validateMessage, `${path}.messages`);
 }
+
+// ---------------------------------------------------------------------------
+// Attachment / redaction validators
+// ---------------------------------------------------------------------------
 
 function validateAttachment(att: unknown, path: string): TranscriptValidationResult {
   if (!isObj(att)) return { ok: false, error: `${path} must be a non-null object` };
@@ -264,16 +276,23 @@ function validateAttachment(att: unknown, path: string): TranscriptValidationRes
       return { ok: false, error: `${path}.${field} must be a string` };
     }
   }
-  for (const field of ['byteLength']) {
-    if (typeof att[field] !== 'number') {
-      return { ok: false, error: `${path}.${field} must be a number` };
-    }
+  if (typeof att['byteLength'] !== 'number') {
+    return { ok: false, error: `${path}.byteLength must be a number` };
   }
-  const handling = att['handling'];
-  if (handling !== 'text-redacted' && handling !== 'binary-unchanged') {
-    return { ok: false, error: `${path}.handling must be "text-redacted" or "binary-unchanged"` };
+  if (typeof att['present'] !== 'boolean') {
+    return { ok: false, error: `${path}.present must be a boolean` };
   }
-  return { ok: true };
+  if (typeof att['sourceConversationId'] !== 'string') {
+    return { ok: false, error: `${path}.sourceConversationId must be a string` };
+  }
+  if (typeof att['sourceMessageId'] !== 'string') {
+    return { ok: false, error: `${path}.sourceMessageId must be a string` };
+  }
+  return validateEnum(
+    att['handling'],
+    ['text-redacted', 'binary-unchanged'],
+    `${path}.handling`,
+  );
 }
 
 function validateRedaction(red: unknown, path: string): TranscriptValidationResult {
@@ -282,48 +301,22 @@ function validateRedaction(red: unknown, path: string): TranscriptValidationResu
   if (typeof red['category'] !== 'string') {
     return { ok: false, error: `${path}.category must be a string` };
   }
-  const detector = red['detector'];
-  if (
-    detector !== 'known-secret' &&
-    detector !== 'credential-pattern' &&
-    detector !== 'pre-obfuscated'
-  ) {
-    return {
-      ok: false,
-      error: `${path}.detector must be "known-secret", "credential-pattern", or "pre-obfuscated"`,
-    };
-  }
+  const detectorResult = validateEnum(
+    red['detector'],
+    ['known-secret', 'credential-pattern', 'pre-obfuscated'],
+    `${path}.detector`,
+  );
+  if (!detectorResult.ok) return detectorResult;
   const target = red['target'];
   if (!isObj(target)) return { ok: false, error: `${path}.target must be a non-null object` };
-  const kind = target['kind'];
-  if (kind !== 'json' && kind !== 'attachment') {
-    return { ok: false, error: `${path}.target.kind must be "json" or "attachment"` };
-  }
-  return { ok: true };
+  return validateEnum(target['kind'], ['json', 'attachment'], `${path}.target.kind`);
 }
 
 // ---------------------------------------------------------------------------
-// Public validator
+// Top-level section validators (extracted to keep main function within CC ≤ 8)
 // ---------------------------------------------------------------------------
 
-/**
- * Runtime validator for `TranscriptDocumentV1`.
- *
- * Checks all required discriminators, arrays, scalar types, and the invariant
- * `reasoningExcluded === true`. Never throws for untrusted input.
- */
-export function validateTranscriptDocumentV1(value: unknown): TranscriptValidationResult {
-  if (!isObj(value)) {
-    return { ok: false, error: 'document must be a non-null object' };
-  }
-
-  // schemaVersion
-  if (value['schemaVersion'] !== 1) {
-    return { ok: false, error: 'schemaVersion must equal 1' };
-  }
-
-  // export
-  const exp = value['export'];
+function validateExport(exp: unknown): TranscriptValidationResult {
   if (!isObj(exp)) return { ok: false, error: 'export must be a non-null object' };
   if (typeof exp['id'] !== 'string') return { ok: false, error: 'export.id must be a string' };
   if (typeof exp['generatedAt'] !== 'string') {
@@ -342,9 +335,10 @@ export function validateTranscriptDocumentV1(value: unknown): TranscriptValidati
   if (typeof producer['version'] !== 'string') {
     return { ok: false, error: 'export.producer.version must be a string' };
   }
+  return { ok: true };
+}
 
-  // session
-  const session = value['session'];
+function validateSession(session: unknown): TranscriptValidationResult {
   if (!isObj(session)) return { ok: false, error: 'session must be a non-null object' };
   if (typeof session['id'] !== 'string') {
     return { ok: false, error: 'session.id must be a string' };
@@ -352,27 +346,25 @@ export function validateTranscriptDocumentV1(value: unknown): TranscriptValidati
   if (typeof session['title'] !== 'string') {
     return { ok: false, error: 'session.title must be a string' };
   }
-  const state = session['state'];
-  if (state !== 'active' && state !== 'frozen') {
-    return { ok: false, error: 'session.state must be "active" or "frozen"' };
-  }
+  const stateResult = validateEnum(session['state'], ['active', 'frozen'], 'session.state');
+  if (!stateResult.ok) return stateResult;
   const completeness = session['completeness'];
   if (!isObj(completeness)) {
     return { ok: false, error: 'session.completeness must be a non-null object' };
   }
-  const compStatus = completeness['status'];
-  if (compStatus !== 'complete' && compStatus !== 'partial') {
-    return {
-      ok: false,
-      error: 'session.completeness.status must be "complete" or "partial"',
-    };
-  }
+  const compResult = validateEnum(
+    completeness['status'],
+    ['complete', 'partial'],
+    'session.completeness.status',
+  );
+  if (!compResult.ok) return compResult;
   if (!Array.isArray(completeness['missing'])) {
     return { ok: false, error: 'session.completeness.missing must be an array' };
   }
+  return { ok: true };
+}
 
-  // privacy
-  const privacy = value['privacy'];
+function validatePrivacy(privacy: unknown): TranscriptValidationResult {
   if (!isObj(privacy)) return { ok: false, error: 'privacy must be a non-null object' };
   if (privacy['reasoningExcluded'] !== true) {
     return { ok: false, error: 'privacy.reasoningExcluded must be true' };
@@ -390,35 +382,48 @@ export function validateTranscriptDocumentV1(value: unknown): TranscriptValidati
   if (!Array.isArray(redactions)) {
     return { ok: false, error: 'privacy.redactions must be an array' };
   }
-  for (let i = 0; i < redactions.length; i++) {
-    const result = validateRedaction(redactions[i], `privacy.redactions[${i}]`);
-    if (!result.ok) return result;
-  }
+  return validateArray(redactions, validateRedaction, 'privacy.redactions');
+}
 
-  // conversations
-  const conversations = value['conversations'];
+function validateTopLevelArrays(doc: Record<string, unknown>): TranscriptValidationResult {
+  const conversations = doc['conversations'];
   if (!Array.isArray(conversations)) {
     return { ok: false, error: 'conversations must be an array' };
   }
-  for (let i = 0; i < conversations.length; i++) {
-    const result = validateConversation(conversations[i], `conversations[${i}]`);
-    if (!result.ok) return result;
-  }
-
-  // delegations
-  if (!Array.isArray(value['delegations'])) {
+  const convsResult = validateArray(conversations, validateConversation, 'conversations');
+  if (!convsResult.ok) return convsResult;
+  if (!Array.isArray(doc['delegations'])) {
     return { ok: false, error: 'delegations must be an array' };
   }
-
-  // attachments
-  const attachments = value['attachments'];
+  const attachments = doc['attachments'];
   if (!Array.isArray(attachments)) {
     return { ok: false, error: 'attachments must be an array' };
   }
-  for (let i = 0; i < attachments.length; i++) {
-    const result = validateAttachment(attachments[i], `attachments[${i}]`);
-    if (!result.ok) return result;
-  }
+  return validateArray(attachments, validateAttachment, 'attachments');
+}
 
-  return { ok: true };
+// ---------------------------------------------------------------------------
+// Public validator
+// ---------------------------------------------------------------------------
+
+/**
+ * Runtime validator for `TranscriptDocumentV1`.
+ *
+ * Checks all required discriminators, arrays, scalar types, and the invariant
+ * `reasoningExcluded === true`. Never throws for untrusted input.
+ */
+export function validateTranscriptDocumentV1(value: unknown): TranscriptValidationResult {
+  if (!isObj(value)) {
+    return { ok: false, error: 'document must be a non-null object' };
+  }
+  if (value['schemaVersion'] !== 1) {
+    return { ok: false, error: 'schemaVersion must equal 1' };
+  }
+  const exportResult = validateExport(value['export']);
+  if (!exportResult.ok) return exportResult;
+  const sessionResult = validateSession(value['session']);
+  if (!sessionResult.ok) return sessionResult;
+  const privacyResult = validatePrivacy(value['privacy']);
+  if (!privacyResult.ok) return privacyResult;
+  return validateTopLevelArrays(value);
 }

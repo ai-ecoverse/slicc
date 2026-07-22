@@ -61,7 +61,7 @@ describe('TranscriptDocumentV1', () => {
     expect(validateTranscriptDocumentV1(completeDocument())).toEqual({ ok: true });
   });
 
-  it('rejects reasoning content and unsupported schema versions', () => {
+  it('rejects unsupported schema versions', () => {
     const bad = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
     bad['schemaVersion'] = 2;
     expect(validateTranscriptDocumentV1(bad)).toEqual({
