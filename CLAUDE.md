@@ -145,16 +145,28 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Documentation
 
-| Tier            | File                                   | Update when...                              |
-| --------------- | -------------------------------------- | ------------------------------------------- |
-| Public          | `README.md`                            | User-facing behavior changes                |
-| Development     | `CLAUDE.md` files                      | Developer conventions, architecture, builds |
-| Agent reference | `docs/`                                | Detailed tools, commands, and patterns      |
-| Agent skills    | `vfs-root/workspace/skills/*/SKILL.md` | Shell command changes (agent system prompt) |
+| Tier                   | File                                   | Update when...                                                                       |
+| ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| Public                 | `README.md`                            | User-facing behavior changes                                                         |
+| Development            | `CLAUDE.md` files                      | Developer conventions, architecture, builds                                          |
+| Agent reference        | `docs/`                                | Detailed tools, commands, and patterns                                               |
+| Agent skills           | `vfs-root/workspace/skills/*/SKILL.md` | Shell command changes (agent system prompt)                                          |
+| Developer agent skills | `.agents/skills/*/SKILL.md`            | A repo procedure (verification, feature wiring, test patterns, ops runbooks) changes |
 
 ### Verification
 
 Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`docs/verification.md`](docs/verification.md). CI runs these gates in `.github/workflows/ci.yml`.
+
+## Developer Agent Skills (.agents/skills/)
+
+Developer-facing skills for agents maintaining this repo. Each is a `SKILL.md`
+loaded into the system prompt by skill-aware harnesses (Claude Code, pi).
+For harnesses that only read AGENTS.md (Codex, Copilot), this router is the
+discovery channel — read the referenced skill when the moment matches.
+
+- Recording a UI demo for a PR → use `demo-recording`
+- Handing work off to SLICC → use `slicc-handoff`
+- Smoke-testing a build in a controlled browser → use `cdp-smoke-test`
 
 ## Automated PR Review Checklist
 
