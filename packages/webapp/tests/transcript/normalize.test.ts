@@ -1,7 +1,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { describe, expect, it } from 'vitest';
 import { normalizeConversations } from '../../src/transcript/normalize.js';
-import { makeAgentMessages, makeTranscriptDocument } from './fixtures.js';
+import { makeAgentMessages, makeTranscriptDocument, makeUsage } from './fixtures.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -88,7 +88,10 @@ describe('normalizeConversations', () => {
 
   it('converts numeric timestamps to ISO 8601 strings', () => {
     const result = normalizeConversations([
-      { id: 'c1', kind: 'cone', name: 'T', messages: [{ role: 'user', content: 'hi', timestamp: 1_000 }] },
+      {
+        id: 'c1', kind: 'cone', name: 'T',
+        messages: [{ role: 'user', content: 'hi', timestamp: 1_000 }],
+      },
     ]);
     expect(result.conversations[0].messages[0].timestamp).toBe(new Date(1_000).toISOString());
   });
@@ -176,7 +179,10 @@ describe('normalizeConversations', () => {
 
   it('handles user string content (wraps in text block)', () => {
     const result = normalizeConversations([
-      { id: 'c1', kind: 'cone', name: 'T', messages: [{ role: 'user', content: 'hello', timestamp: 5 }] },
+      {
+        id: 'c1', kind: 'cone', name: 'T',
+        messages: [{ role: 'user', content: 'hello', timestamp: 5 }],
+      },
     ]);
     expect(result.conversations[0].messages[0].content).toEqual([
       { type: 'text', text: 'hello' },
@@ -236,7 +242,7 @@ describe('normalizeConversations', () => {
       api: 'anthropic-messages',
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: makeUsage(),
       stopReason: 'stop',
       timestamp: 20,
     };
@@ -263,7 +269,7 @@ describe('normalizeConversations', () => {
       api: 'anthropic-messages',
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: makeUsage(),
       stopReason: 'stop',
       timestamp: 25,
     };
@@ -277,12 +283,12 @@ describe('normalizeConversations', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Source / channel envelopes
+  // Source / channel: normalizer must not fabricate UI-only fields
   // ---------------------------------------------------------------------------
 
-  it('forwards source and channel from tool-result messages', () => {
-    // Tool results don't have source/channel in the Pi type, so this tests
-    // that when they are not present, we don't emit undefined fields.
+  it('does not fabricate source or channel fields absent from Pi message types', () => {
+    // Pi AgentMessage subtypes carry no source/channel. The normalizer must
+    // not invent undefined fields on any output message.
     const result = normalizeConversations([
       { id: 'c1', kind: 'cone', name: 'T', messages: messages.slice(2, 3) },
     ]);
@@ -340,7 +346,7 @@ describe('normalizeConversations', () => {
       api: 'anthropic-messages',
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: makeUsage(),
       stopReason: 'stop',
       timestamp: 30,
     };
@@ -362,7 +368,7 @@ describe('normalizeConversations', () => {
       api: 'anthropic-messages',
       provider: 'anthropic',
       model: 'claude-sonnet-4-6',
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: makeUsage({ input: 0, output: 0, totalTokens: 0 }),
       stopReason: 'error',
       errorMessage: 'upstream timeout',
       timestamp: 40,
@@ -390,6 +396,66 @@ describe('normalizeConversations', () => {
     const doc = makeTranscriptDocument({ text: 'custom text', toolInput: { x: 1 } });
     expect(doc.schemaVersion).toBe(1);
     expect(doc.privacy.reasoningExcluded).toBe(true);
-    expect(doc.conversations[0].messages[1].content[0]).toEqual({ type: 'text', text: 'custom text' });
+    expect(doc.conversations[0].messages[1].content[0]).toEqual(
+      { type: 'text', text: 'custom text' },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // createdAt / updatedAt timing metadata forwarding
+  // ---------------------------------------------------------------------------
+
+  it('forwards createdAt from source to conversation', () => {
+    const result = normalizeConversations([
+      {
+        id: 'c1', kind: 'cone', name: 'T',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        messages: [],
+      },
+    ]);
+    expect(result.conversations[0].createdAt).toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('forwards updatedAt from source to conversation', () => {
+    const result = normalizeConversations([
+      {
+        id: 'c1', kind: 'cone', name: 'T',
+        updatedAt: '2024-06-15T12:00:00.000Z',
+        messages: [],
+      },
+    ]);
+    expect(result.conversations[0].updatedAt).toBe('2024-06-15T12:00:00.000Z');
+  });
+
+  it('omits createdAt and updatedAt when absent from source', () => {
+    const result = normalizeConversations([
+      { id: 'c1', kind: 'cone', name: 'T', messages: [] },
+    ]);
+    expect('createdAt' in result.conversations[0]).toBe(false);
+    expect('updatedAt' in result.conversations[0]).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Thinking-only assistant message (empty-content edge case)
+  // ---------------------------------------------------------------------------
+
+  it('produces empty content array for assistant with only thinking blocks', () => {
+    const thinkingOnly: AgentMessage = {
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'chain of thought' }],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      usage: makeUsage(),
+      stopReason: 'stop',
+      timestamp: 50,
+    };
+    const result = normalizeConversations([
+      { id: 'c1', kind: 'cone', name: 'T', messages: [thinkingOnly] },
+    ]);
+    const msg = result.conversations[0].messages[0];
+    expect(msg.content).toEqual([]);
+    expect(result.excludedReasoningBlocks).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('chain of thought');
   });
 });
