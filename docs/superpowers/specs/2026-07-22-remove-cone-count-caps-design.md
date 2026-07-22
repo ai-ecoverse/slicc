@@ -108,12 +108,12 @@ and existing internal-error handling.
 Keep the current independent per-user token buckets unchanged:
 
 | Operation | Burst capacity | Refill rate |
-| --- | ---: | ---: |
-| Start | 30 | 30/hour |
-| Resume | 30 | 30/hour |
-| List | 60 | 60/minute |
-| Pause | 60 | 60/minute |
-| Kill | 60 | 60/minute |
+| --------- | -------------: | ----------: |
+| Start     |             30 |     30/hour |
+| Resume    |             30 |     30/hour |
+| List      |             60 |   60/minute |
+| Pause     |             60 |   60/minute |
+| Kill      |             60 |   60/minute |
 
 A full Start or Resume bucket permits 30 immediate requests. The refill rate
 applies after tokens are consumed; it does not serialize valid parallel lab
