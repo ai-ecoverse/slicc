@@ -7,15 +7,21 @@
  * instantiated with mock deps and the output ZIP is verified via fflate's
  * unzipSync.
  */
-import { strFromU8, unzipSync } from 'fflate';
-import { describe, expect, it, vi, type MockedFunction } from 'vitest';
+
 import { TranscriptExportError, type TranscriptExportProgress } from '@slicc/shared-ts';
+import { strFromU8, unzipSync } from 'fflate';
+import { sha256 } from 'js-sha256';
+import { describe, expect, it, type MockedFunction, vi } from 'vitest';
+import type { TranscriptCollectionDeps } from '../../src/transcript/collect.js';
+import {
+  getTranscriptExportService,
+  registerTranscriptExportService,
+} from '../../src/transcript/export-provider.js';
 import {
   DefaultTranscriptExportService,
   type ExportServiceDeps,
 } from '../../src/transcript/export-service.js';
 import type { SanitizedTranscriptSnapshot } from '../../src/transcript/snapshot-store.js';
-import type { TranscriptCollectionDeps } from '../../src/transcript/collect.js';
 import { makeTranscriptDocument } from './fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -44,16 +50,19 @@ function makeFailingRedactor() {
  */
 function makeCollectionDeps(): TranscriptCollectionDeps {
   return {
-    listScoops: vi.fn(() => [
-      {
-        jid: 'jid-cone',
-        isCone: true,
-        name: 'Sliccy',
-        folder: undefined,
-        parentJid: undefined,
-        originToolCallId: undefined,
-      },
-    ] as any),
+    listScoops: vi.fn(
+      () =>
+        [
+          {
+            jid: 'jid-cone',
+            isCone: true,
+            name: 'Sliccy',
+            folder: undefined,
+            parentJid: undefined,
+            originToolCallId: undefined,
+          },
+        ] as any
+    ),
     isProcessing: vi.fn(() => false),
     getAgentMessages: vi.fn(() => []),
     loadPersistedSessions: vi.fn(async () => []),
@@ -83,10 +92,7 @@ function makeSnapshotStoreWith(snapshot: SanitizedTranscriptSnapshot) {
  * - Returns the given index JSON for /sessions/index.json
  * - Returns the given markdown for session markdown paths
  */
-function makeVfs(options: {
-  indexJson?: string;
-  sessionMarkdown?: Map<string, string>;
-} = {}) {
+function makeVfs(options: { indexJson?: string; sessionMarkdown?: Map<string, string> } = {}) {
   const { indexJson = '[]', sessionMarkdown = new Map<string, string>() } = options;
   return {
     readFile: vi.fn(async (path: string, _opts?: unknown): Promise<string | Uint8Array> => {
@@ -109,7 +115,10 @@ async function collectChunks(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Ar
 }
 
 /** Build a minimal frozen archive markdown that parseFrozenArchive can parse. */
-function makeArchiveMarkdown(title: string, messages: Array<{ role: string; content: string }>): string {
+function makeArchiveMarkdown(
+  title: string,
+  messages: Array<{ role: string; content: string }>
+): string {
   const frozenAt = '2024-01-01T00:00:00.000Z';
   const dataBlock = JSON.stringify(
     messages.map((m, i) => ({
@@ -130,7 +139,9 @@ function makeArchiveMarkdown(title: string, messages: Array<{ role: string; cont
     `---\n\n` +
     `<!-- slicc:session-data\n${dataBlock}\n-->\n\n` +
     `# ${title}\n\n` +
-    messages.map((m) => `## ${m.role === 'user' ? 'User' : 'Assistant'}\n\n${m.content}`).join('\n\n')
+    messages
+      .map((m) => `## ${m.role === 'user' ? 'User' : 'Assistant'}\n\n${m.content}`)
+      .join('\n\n')
   );
 }
 
@@ -181,12 +192,7 @@ describe('DefaultTranscriptExportService — active path', () => {
     const phases: string[] = [];
     await svc.export({ kind: 'active' }, { onProgress: (p) => phases.push(p.phase) });
     // Phases must be ordered (no going back)
-    const PHASE_ORDER = [
-      'waiting-for-conversations',
-      'collecting',
-      'redacting',
-      'packaging',
-    ];
+    const PHASE_ORDER = ['waiting-for-conversations', 'collecting', 'redacting', 'packaging'];
     let lastIdx = -1;
     for (const phase of phases) {
       const idx = PHASE_ORDER.indexOf(phase);
@@ -204,32 +210,33 @@ describe('DefaultTranscriptExportService — active path', () => {
     const deps = makeDeps({ knownSecrets: makeFailingRedactor() });
     // Inject an attachment so redaction is triggered
     const collection = makeCollectionDeps();
-    (collection.loadUiChatSessions as MockedFunction<typeof collection.loadUiChatSessions>)
-      .mockResolvedValue([
-        {
-          id: 'session-cone',
-          messages: [
-            {
-              id: 'msg-1',
-              role: 'user' as const,
-              content: 'hi',
-              timestamp: 1_000,
-              attachments: [
-                {
-                  id: 'att-1',
-                  name: 'secret.txt',
-                  mimeType: 'text/plain',
-                  size: 6,
-                  kind: 'text' as const,
-                  text: 'secret',
-                },
-              ],
-            },
-          ],
-          createdAt: 1_000,
-          updatedAt: 2_000,
-        },
-      ] as any);
+    (
+      collection.loadUiChatSessions as MockedFunction<typeof collection.loadUiChatSessions>
+    ).mockResolvedValue([
+      {
+        id: 'session-cone',
+        messages: [
+          {
+            id: 'msg-1',
+            role: 'user' as const,
+            content: 'hi',
+            timestamp: 1_000,
+            attachments: [
+              {
+                id: 'att-1',
+                name: 'secret.txt',
+                mimeType: 'text/plain',
+                size: 6,
+                kind: 'text' as const,
+                text: 'secret',
+              },
+            ],
+          },
+        ],
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ] as any);
     const deps2 = makeDeps({ knownSecrets: makeFailingRedactor(), collection });
 
     await expect(
@@ -247,7 +254,9 @@ describe('DefaultTranscriptExportService — active path', () => {
     const collection: TranscriptCollectionDeps = {
       ...makeCollectionDeps(),
       isProcessing: vi.fn(() => true), // Forces a poll loop
-      wait: vi.fn(async () => { /* signal check handled in collect.ts */ }),
+      wait: vi.fn(async () => {
+        /* signal check handled in collect.ts */
+      }),
     };
 
     const deps = makeDeps({ collection });
@@ -323,7 +332,10 @@ describe('DefaultTranscriptExportService — new-frozen path', () => {
       ),
     };
 
-    const deps = makeDeps({ snapshotStore: makeSnapshotStoreWith(snapshot), knownSecrets: redactor });
+    const deps = makeDeps({
+      snapshotStore: makeSnapshotStoreWith(snapshot),
+      knownSecrets: redactor,
+    });
     const svc = new DefaultTranscriptExportService(deps);
     const result = await svc.export({ kind: 'frozen', sessionId: 'any-id' });
 
@@ -585,6 +597,36 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
 // ---------------------------------------------------------------------------
 
 describe('DefaultTranscriptExportService — progress', () => {
+  it('emits collecting BEFORE collection begins (not after)', async () => {
+    // Track whether `collecting` fires before collection runs.
+    const collectingFiredBeforeCollection = false;
+    let collectionCalled = false;
+
+    const collection = makeCollectionDeps();
+    const listScoopsMock = vi.fn(() => [] as any);
+    collection.listScoops = listScoopsMock;
+
+    const deps = makeDeps({ collection });
+    const svc = new DefaultTranscriptExportService(deps);
+    const phases: TranscriptExportProgress['phase'][] = [];
+
+    await svc.export(
+      { kind: 'active' },
+      {
+        onProgress: (p) => {
+          phases.push(p.phase);
+          if (p.phase === 'collecting') {
+            // At the moment 'collecting' fires, collection must not have started yet.
+            collectionCalled = listScoopsMock.mock.calls.length > 0;
+          }
+        },
+      }
+    );
+    expect(phases).toContain('collecting');
+    // 'collecting' must fire before listScoops is called by the collector.
+    expect(collectionCalled).toBe(false);
+  });
+
   it('emits waiting-for-conversations before collecting', async () => {
     const deps = makeDeps();
     const svc = new DefaultTranscriptExportService(deps);
@@ -614,5 +656,128 @@ describe('DefaultTranscriptExportService — progress', () => {
       expect(redactIdx).toBeLessThan(packageIdx);
     }
     expect(phases).toContain('packaging');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-redaction metadata consistency tests (H3 regression)
+// ---------------------------------------------------------------------------
+
+describe('DefaultTranscriptExportService — re-redaction metadata', () => {
+  it('recomputes byteLength and sha256 after re-redacting stored text attachment', async () => {
+    const storedDoc = makeTranscriptDocument();
+    storedDoc.session.state = 'frozen';
+    // Stale metadata: 11 bytes / old hash — will be wrong after redaction expands the text.
+    storedDoc.attachments = [
+      {
+        id: 'att-001',
+        path: 'attachments/att-0001.txt',
+        originalName: 'notes.txt',
+        mimeType: 'text/plain',
+        byteLength: 11,
+        sha256: 'old-stale-hash-that-must-not-survive',
+        sourceConversationId: 'cone',
+        sourceMessageId: 'cone-msg-000001',
+        handling: 'text-redacted',
+        present: true,
+      },
+    ];
+
+    const originalText = 'hello world';
+    const textBytes = new TextEncoder().encode(originalText); // 11 bytes
+    const snapshot: SanitizedTranscriptSnapshot = {
+      document: storedDoc,
+      attachments: new Map([['attachments/att-0001.txt', textBytes]]),
+    };
+
+    // Redactor only modifies the known attachment text so enum values are preserved.
+    const sentinel = '\u27e6REDACTED:secret:r1\u27e7';
+    const redactor = {
+      redact: vi.fn(async (texts: readonly string[]) =>
+        texts.map((t) => (t === originalText ? sentinel : t))
+      ),
+    };
+
+    const deps = makeDeps({
+      snapshotStore: makeSnapshotStoreWith(snapshot),
+      knownSecrets: redactor,
+    });
+    const svc = new DefaultTranscriptExportService(deps);
+    const result = await svc.export({ kind: 'frozen', sessionId: 'any-id' });
+
+    const archive = await collectChunks(result.chunks);
+    const files = unzipSync(archive);
+    const doc = JSON.parse(strFromU8(files['transcript.json']!)) as {
+      attachments: Array<{ id: string; byteLength: number; sha256: string; path: string }>;
+    };
+    const att = doc.attachments[0]!;
+
+    const expectedBytes = new TextEncoder().encode(sentinel);
+    const expectedHash = sha256(expectedBytes);
+
+    // byteLength in transcript.json must match the re-encoded zip entry.
+    expect(att.byteLength).toBe(expectedBytes.length);
+    expect(att.byteLength).not.toBe(11); // must NOT be the stale value
+
+    // sha256 in transcript.json must match the actual zip entry bytes.
+    expect(att.sha256).toBe(expectedHash);
+    expect(att.sha256).not.toBe('old-stale-hash-that-must-not-survive');
+
+    // Cross-check: the zip entry itself must have the same length.
+    const zipEntry = files['attachments/att-0001.txt']!;
+    expect(zipEntry.byteLength).toBe(att.byteLength);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration / teardown tests (export-provider seam)
+// ---------------------------------------------------------------------------
+
+describe('registerTranscriptExportService / getTranscriptExportService', () => {
+  it('getTranscriptExportService returns the registered service', () => {
+    const svc = new DefaultTranscriptExportService(makeDeps());
+    const teardown = registerTranscriptExportService(svc);
+    try {
+      expect(getTranscriptExportService()).toBe(svc);
+    } finally {
+      teardown();
+    }
+  });
+
+  it('teardown clears the registered service', () => {
+    const svc = new DefaultTranscriptExportService(makeDeps());
+    const teardown = registerTranscriptExportService(svc);
+    teardown();
+    expect(() => getTranscriptExportService()).toThrow(TranscriptExportError);
+  });
+
+  it('stale teardown does not evict a newer registration', () => {
+    const svc1 = new DefaultTranscriptExportService(makeDeps());
+    const svc2 = new DefaultTranscriptExportService(makeDeps());
+    const teardown1 = registerTranscriptExportService(svc1);
+    // Override with a newer registration.
+    const teardown2 = registerTranscriptExportService(svc2);
+    // Calling the OLD teardown must NOT clear svc2.
+    teardown1();
+    expect(getTranscriptExportService()).toBe(svc2);
+    // Clean up.
+    teardown2();
+  });
+
+  it('throws session-not-found when no service is registered', () => {
+    // Ensure no leftover registration from other tests.
+    let teardown: (() => void) | null = null;
+    try {
+      // Try to get a live service and tear it down first.
+      getTranscriptExportService();
+    } catch {
+      // Expected: no service registered.
+    }
+    // Ensure we start clean by registering and immediately tearing down.
+    const tmp = new DefaultTranscriptExportService(makeDeps());
+    teardown = registerTranscriptExportService(tmp);
+    teardown();
+    teardown = null;
+    expect(() => getTranscriptExportService()).toThrow(TranscriptExportError);
   });
 });

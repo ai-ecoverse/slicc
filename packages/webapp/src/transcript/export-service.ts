@@ -190,6 +190,62 @@ function rebuildBundleFiles(
 }
 
 // ---------------------------------------------------------------------------
+// Helpers — recompute attachment metadata after re-redaction
+// ---------------------------------------------------------------------------
+
+/**
+ * Recompute `byteLength` and `sha256` for text-redacted attachments from
+ * the freshly re-encoded bytes in `bundleFiles`. Binary attachments are
+ * unchanged and their stored metadata remains correct.
+ *
+ * Uses `crypto.subtle.digest` for consistency with `attachments.ts`.
+ */
+async function patchTextAttachmentMetadata(
+  attachments: TranscriptDocumentV1['attachments'],
+  bundleFiles: Map<string, Uint8Array>
+): Promise<TranscriptDocumentV1['attachments']> {
+  return Promise.all(
+    attachments.map(async (att) => {
+      if (!att.present || !att.path || att.handling !== 'text-redacted') return att;
+      const bytes = bundleFiles.get(att.path);
+      if (!bytes) return att;
+      const buf = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      ) as ArrayBuffer;
+      const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+      const sha256Hex = Array.from(new Uint8Array(hashBuf))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      return { ...att, byteLength: bytes.length, sha256: sha256Hex };
+    })
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — parse frontmatter timestamps from legacy markdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `createdAt` and `updatedAt` unix-ms timestamps from a markdown
+ * archive's YAML frontmatter. Returns only the fields that are actually
+ * present; callers spread the result so absent fields are omitted.
+ */
+function parseFrontmatterTimestamps(
+  markdown: string
+): Partial<{ createdAt: string; updatedAt: string }> {
+  const fmMatch = markdown.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fmMatch) return {};
+  const fm = fmMatch[1];
+  const result: Partial<{ createdAt: string; updatedAt: string }> = {};
+  const caMp = fm.match(/^createdAt:\s*(\d+)\s*$/m);
+  const uaMp = fm.match(/^updatedAt:\s*(\d+)\s*$/m);
+  if (caMp) result.createdAt = new Date(Number(caMp[1])).toISOString();
+  if (uaMp) result.updatedAt = new Date(Number(uaMp[1])).toISOString();
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // DefaultTranscriptExportService
 // ---------------------------------------------------------------------------
 
@@ -261,10 +317,9 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
     onProgress?: (p: TranscriptExportProgress) => void
   ): Promise<SnapshotResult> {
     onProgress?.({ phase: 'waiting-for-conversations' });
+    onProgress?.({ phase: 'collecting' });
 
     const collected = await collectActiveTranscriptSources(this.deps.collection, signal);
-
-    onProgress?.({ phase: 'collecting' });
 
     const normalized = normalizeConversations(collected.sources);
     const { id, title } = this.deps.getActiveSessionInfo();
@@ -340,7 +395,15 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       snapshot.attachments
     );
 
-    return { document: redactedDocument, bundleFiles };
+    // Recompute byteLength and sha256 for text-redacted attachments so that
+    // transcript.json metadata matches the re-encoded ZIP entries. Binary
+    // attachments are unchanged and already carry correct metadata.
+    const patchedAttachments = await patchTextAttachmentMetadata(
+      redactedDocument.attachments,
+      bundleFiles
+    );
+
+    return { document: { ...redactedDocument, attachments: patchedAttachments }, bundleFiles };
   }
 
   // ---------------------------------------------------------------------------
@@ -374,6 +437,10 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
     // Build a partial TranscriptDocumentV1 from UI ChatMessages.
     const convId = 'legacy-cone';
     const transcriptMessages = buildTranscriptMessages(messages, convId);
+    // Extract createdAt/updatedAt from the frontmatter when available;
+    // schema fields are optional — do not invent timestamps.
+    const legacyTimestamps = parseFrontmatterTimestamps(markdown);
+
     const document: TranscriptDocumentV1 = {
       schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
       export: {
@@ -387,6 +454,7 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
         title,
         state: 'frozen',
         ...(entry.frozenAt ? { frozenAt: entry.frozenAt } : {}),
+        ...legacyTimestamps,
         completeness: {
           status: 'partial',
           missing: ['complete-snapshot-unavailable', 'canonical-agent-history-unavailable'],
