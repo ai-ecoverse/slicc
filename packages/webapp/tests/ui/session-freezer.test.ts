@@ -45,6 +45,7 @@ import {
   enrichPendingSession,
   freezeConeSession,
   listPendingEnrichments,
+  markSnapshotUnavailable,
   parseFrozenArchive,
   readSessionsIndex,
 } from '../../src/ui/session-freezer.js';
@@ -1964,7 +1965,9 @@ describe('freezeConeSession — sessionId generation', () => {
       vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
       mode: 'quick',
     });
-    const index = await readSessionsIndex(vfs as unknown as Parameters<typeof readSessionsIndex>[0]);
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
     expect(index[0]!.sessionId).toBe(result!.sessionId);
   });
 
@@ -2003,17 +2006,25 @@ describe('freezeConeSession — sessionId generation', () => {
     expect(updated).not.toBeNull();
     expect(updated!.sessionId).toBe(originalSessionId);
     // Index also has the preserved sessionId
-    const index = await readSessionsIndex(vfs as unknown as Parameters<typeof readSessionsIndex>[0]);
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
     expect(index[0]!.sessionId).toBe(originalSessionId);
   });
 
   it('two sequential freezes produce distinct sessionIds', async () => {
-    const makeStore = () => makeFakeStore({
-      id: 'session-cone',
-      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
-      createdAt: 0,
-      updatedAt: 1,
-    });
+    const makeStore = () =>
+      makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('a'),
+          assistantMessage('b'),
+          userMessage('c'),
+          assistantMessage('d'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      });
     const vfs1 = makeFakeVfs();
     const vfs2 = makeFakeVfs();
     const r1 = await freezeConeSession({
@@ -2027,5 +2038,114 @@ describe('freezeConeSession — sessionId generation', () => {
       mode: 'quick',
     });
     expect(r1!.sessionId).not.toBe(r2!.sessionId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markSnapshotUnavailable — concurrency regression (task-5-review Fix 3)
+// Proves the read-modify-write executes atomically inside indexWriteChain:
+// two concurrent index writers cannot interleave their reads and writes.
+// ---------------------------------------------------------------------------
+
+describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => {
+  it('sets completeSnapshotUnavailable on the pending entry', async () => {
+    const vfs = makeFakeVfs();
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    expect(frozen).not.toBeNull();
+    const filename = frozen!.filename;
+
+    await markSnapshotUnavailable(
+      vfs as unknown as Parameters<typeof markSnapshotUnavailable>[0],
+      filename
+    );
+
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index).toHaveLength(1);
+    expect(index[0]!.completeSnapshotUnavailable).toBe(true);
+    // filename is unchanged — mark only sets the flag
+    expect(index[0]!.filename).toBe(filename);
+  });
+
+  it('concurrent mark + freeze produce no duplicate entries', async () => {
+    // Both markSnapshotUnavailable and freezeConeSession write to the same
+    // index file via indexWriteChain. Running them concurrently must still
+    // produce exactly two entries (one per session) — not a clobbered index.
+    const vfs1 = makeFakeVfs();
+    const store1 = makeFakeStore({
+      id: 'session-1',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const store2 = makeFakeStore({
+      id: 'session-2',
+      messages: [userMessage('x'), assistantMessage('y'), userMessage('z'), assistantMessage('w')],
+      createdAt: 2,
+      updatedAt: 3,
+    });
+
+    // Freeze first session to get a filename to mark.
+    const frozen1 = await freezeConeSession({
+      sessionStore: store1,
+      vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    expect(frozen1).not.toBeNull();
+
+    // Race: mark session-1 and freeze session-2 concurrently.
+    // Both serialize through indexWriteChain; the index must hold 2 entries.
+    const markPromise = markSnapshotUnavailable(
+      vfs1 as unknown as Parameters<typeof markSnapshotUnavailable>[0],
+      frozen1!.filename
+    );
+    const freezePromise = freezeConeSession({
+      sessionStore: store2,
+      vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    await Promise.all([markPromise, freezePromise]);
+
+    const index = await readSessionsIndex(
+      vfs1 as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    // No entries dropped — serialization ensured both writes landed.
+    expect(index).toHaveLength(2);
+    const marked = index.find((e) => e.filename === frozen1!.filename);
+    expect(marked?.completeSnapshotUnavailable).toBe(true);
+  });
+
+  it('is a no-op when filename is not in the index', async () => {
+    const vfs = makeFakeVfs();
+    // Should not throw even if the entry is absent.
+    await expect(
+      markSnapshotUnavailable(
+        vfs as unknown as Parameters<typeof markSnapshotUnavailable>[0],
+        'non-existent-file.md'
+      )
+    ).resolves.not.toThrow();
+  });
+
+  it('does not throw when the index file does not exist yet', async () => {
+    const vfs = makeFakeVfs();
+    // No sessions/index.json written — should return silently.
+    await expect(
+      markSnapshotUnavailable(
+        vfs as unknown as Parameters<typeof markSnapshotUnavailable>[0],
+        'pending-abc.md'
+      )
+    ).resolves.toBeUndefined();
   });
 });

@@ -1070,13 +1070,15 @@ async function replaceIndexEntry(
  * Called after `captureCompleteSnapshot` fails so the UI knows the full
  * sanitized transcript bundle was not produced. Best-effort — write failures
  * are swallowed by the caller.
+ *
+ * The entire read-modify-write executes inside `indexWriteChain` so a
+ * concurrent enrichment rename cannot interleave between the read and write.
  */
 export async function markSnapshotUnavailable(
   vfs: WritableVfsClient,
   filename: string
 ): Promise<void> {
-  await replaceIndexEntry(vfs, filename, await (async () => {
-    // Load the current entry, add the flag, write back.
+  const run = async (): Promise<void> => {
     let existing: FrozenSessionIndexEntry[] = [];
     try {
       const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
@@ -1084,15 +1086,22 @@ export async function markSnapshotUnavailable(
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
     } catch {
-      // No index yet.
+      // No index yet — nothing to mark.
+      return;
     }
     const entry = existing.find((e) => e.filename === filename);
-    if (!entry) {
-      // Entry not in index — nothing to update.
-      throw new Error(`entry not found: ${filename}`);
-    }
-    return { ...entry, completeSnapshotUnavailable: true };
-  })());
+    if (!entry) return; // Entry not found — nothing to update.
+    const updated = existing.map((e) =>
+      e.filename === filename ? { ...e, completeSnapshotUnavailable: true } : e
+    );
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
 }
 
 /**

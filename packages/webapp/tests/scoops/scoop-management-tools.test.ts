@@ -807,3 +807,28 @@ describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools'
     expect(result.content).toContain('No pending sudo requests');
   });
 });
+
+// ---------------------------------------------------------------------------
+// parentJid propagation from cone's JID to created scoops (Fix: task-5-review P1)
+// ---------------------------------------------------------------------------
+
+describe('scoop_scoop — parentJid propagation from cone', () => {
+  it('passes the cone jid as parentJid on the created scoop record', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+
+    await tool.execute({ name: 'worker' });
+
+    expect(onScoopScoop).toHaveBeenCalledOnce();
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.parentJid).toBe(cone.jid);
+  });
+
+  it('does not set originToolCallId on the created scoop record (not available in ToolDefinition)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+
+    await tool.execute({ name: 'worker' });
+
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.originToolCallId).toBeUndefined();
+  });
+});
