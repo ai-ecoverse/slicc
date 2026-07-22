@@ -27,9 +27,6 @@
     "BLOCKED_EMAILS": "",
     "REQUIRE_OWNER_ORG": "false",
     "ADMIN_USER_IDS": "",
-    // Cloud cone concurrency caps
-    "CONE_CAP_RUNNING": "1",
-    "CONE_CAP_PAUSED": "5",
     // OAuth relay allowlist for remote origins (staging/preview deploys)
     "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev",
     // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)
@@ -85,9 +82,6 @@
         "BLOCKED_EMAILS": "",
         "REQUIRE_OWNER_ORG": "false",
         "ADMIN_USER_IDS": "",
-        // Cloud cone concurrency caps
-        "CONE_CAP_RUNNING": "1",
-        "CONE_CAP_PAUSED": "5",
         // OAuth relay allowlist for remote origins (staging/preview deploys)
         "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai",
         // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)

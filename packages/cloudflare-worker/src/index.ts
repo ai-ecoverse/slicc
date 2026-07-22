@@ -60,8 +60,6 @@ export interface WorkerEnv {
   BLOCKED_EMAILS?: string;
   REQUIRE_OWNER_ORG?: string;
   ADMIN_USER_IDS?: string;
-  CONE_CAP_RUNNING?: string;
-  CONE_CAP_PAUSED?: string;
   ALLOWED_CLOUD_DASHBOARD_ORIGINS?: string;
   /**
    * Space-separated origins permitted to frame the `?cherry=1` SPA. Empty/unset = deny.

@@ -179,7 +179,7 @@ describe('GET /api/cloud/config', () => {
     expect(body.imsRelayUrl).toBe('https://www.sliccy.ai/auth/callback');
   });
 
-  it('includes capRunning and capPaused from env', async () => {
+  it('omits retired cone cap fields', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url =
         typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
@@ -191,30 +191,11 @@ describe('GET /api/cloud/config', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     });
-    const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {
-      CONE_CAP_RUNNING: '3',
-      CONE_CAP_PAUSED: '10',
-    });
-    const body = (await res.json()) as Record<string, number>;
-    expect(body.capRunning).toBe(3);
-    expect(body.capPaused).toBe(10);
-  });
 
-  it('defaults capRunning to 1 and capPaused to 5 when env vars not set', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url =
-        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes('/v1/config')) {
-        return new Response(
-          JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }),
-          { status: 200 }
-        );
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
     const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {});
-    const body = (await res.json()) as Record<string, number>;
-    expect(body.capRunning).toBe(1);
-    expect(body.capPaused).toBe(5);
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty('capRunning');
+    expect(body).not.toHaveProperty('capPaused');
   });
 });

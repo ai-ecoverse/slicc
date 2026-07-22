@@ -235,22 +235,7 @@ function renderCones(cones) {
 
   const running = cones.filter((c) => c.state === 'running' || c.state === 'reserved').length;
   const paused = cones.filter((c) => c.state === 'paused').length;
-  const capRunning = CONFIG.capRunning ?? 1;
-  const capPaused = CONFIG.capPaused ?? 5;
-  document.getElementById('cap-info').textContent =
-    `${running} running · ${paused} paused (cap: ${capRunning}/${capPaused})`;
-
-  const btn = document.getElementById('create-btn');
-  const runningCapHit = running >= capRunning;
-  const pausedCapHit = paused >= capPaused;
-  btn.disabled = runningCapHit || pausedCapHit;
-  if (runningCapHit) {
-    btn.title = `Cap reached (${running}/${capRunning} running). Pause or kill another first.`;
-  } else if (pausedCapHit) {
-    btn.title = `Paused cap reached (${paused}/${capPaused}). Resume or kill a paused cone first.`;
-  } else {
-    btn.title = '';
-  }
+  document.getElementById('cone-counts').textContent = `${running} running · ${paused} paused`;
 }
 
 function readAccounts() {

@@ -447,7 +447,7 @@ button:focus-visible {
   font-size: 12px;
 }
 
-.cap-info {
+.cone-counts {
   font-size: 12px;
   color: var(--muted);
   text-align: right;

@@ -11,8 +11,6 @@ export interface CloudEnv {
   ALLOWED_EMAIL_DOMAIN: string;
   BLOCKED_EMAILS: string;
   REQUIRE_OWNER_ORG: string;
-  CONE_CAP_RUNNING: string;
-  CONE_CAP_PAUSED: string;
 }
 
 // Loose typing — version-independent from @cloudflare/workers-types

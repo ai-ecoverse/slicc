@@ -56,8 +56,6 @@ export function makeCloudEnv(overrides: Partial<CloudEnv> = {}): CloudEnv {
     ALLOWED_EMAIL_DOMAIN: 'adobe.com',
     BLOCKED_EMAILS: '',
     REQUIRE_OWNER_ORG: 'false',
-    CONE_CAP_RUNNING: '1',
-    CONE_CAP_PAUSED: '5',
     ...overrides,
   };
 }

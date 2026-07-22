@@ -26,7 +26,6 @@ the built SLICC webapp as static assets to browser visitors.
 | `src/cloud/cloud-sessions-do.ts`                                                       | `CloudSessionsDurableObject` — per-user state for `/api/cloud/*`                                                    |
 | `src/cloud/handlers.ts`, `handler-signout.ts`, `handler-admin.ts`, `handler-config.ts` | HTTP handlers for `/api/cloud/*`                                                                                    |
 | `src/cloud/auth.ts`, `auth-cache.ts`, `auth-middleware.ts`                             | IMS bearer auth: extraction, verification, caching, and middleware                                                  |
-| `src/cloud/caps.ts`                                                                    | `checkCapsForRun` — per-user cone cap enforcement (`CONE_CAP_RUNNING`, `CONE_CAP_PAUSED`)                           |
 | `src/cloud/local-registry.ts`                                                          | `Registry` backed by DO storage — worker counterpart of node-server's `FileRegistry`                                |
 | `src/cloud/error-envelope.ts`                                                          | `errorResponse`/`okResponse` JSON helpers for `/api/cloud/*` replies                                                |
 | `src/cloud/proxy-config.ts`                                                            | Adobe LLM proxy `/v1/config` sync — keeps dashboard popup in sync                                                   |
@@ -187,7 +186,7 @@ Web feature shipped via Plan D. All `/api/cloud/*` require
 | `GET /cloud`                  | Dashboard SPA (CSP-enforced)                                                |
 | `GET /auth/cloud-callback`    | IMS popup callback (HTML)                                                   |
 | `GET /auth/cloud-callback.js` | IMS popup callback (JS, served inline by worker)                            |
-| `POST /api/cloud/start`       | Start a new cone (auth + cap-checked); optional `coneConfig` bundle         |
+| `POST /api/cloud/start`       | Start a new cone (auth-checked); optional `coneConfig` bundle               |
 | `GET /api/cloud/list`         | Per-user cone list (reconciled with e2b per call)                           |
 | `GET /api/cloud/cone-config`  | `?sandboxId=<id>`: names-only config index (model + account + secret names) |
 | `POST /api/cloud/pause`       | Pause a cone                                                                |
@@ -213,6 +212,10 @@ flows:
 - **DO index:** `CloudSessionsDurableObject` persists a **names-only** `coneConfigIndex`
   per cone — never values.
 
+E2B is the sandbox-capacity authority; the worker does not impose separate running or
+paused cone-count limits. Per-user endpoint token buckets in `src/cloud/rate-limit.ts`
+remain the abuse-protection boundary.
+
 ### Wrangler Config (cloud)
 
 Vars in `wrangler.jsonc`:
@@ -221,7 +224,6 @@ Vars in `wrangler.jsonc`:
 - `ALLOWED_EMAIL_DOMAIN` — CSV, default `adobe.com`. Set to `*` to allow any domain.
 - `BLOCKED_EMAILS` — CSV denylist.
 - `REQUIRE_OWNER_ORG` — `true` for expansion to any ownerOrg-holder.
-- `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` — per-user caps (default 1 / 5).
 - `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
 
 Secrets (`wrangler secret put`): `E2B_API_KEY` (Adobe team key; worker-only).
