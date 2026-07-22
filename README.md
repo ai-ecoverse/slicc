@@ -197,5 +197,5 @@ If you want to go deeper, the detailed docs live here:
 - [Shell reference](docs/shell-reference.md)
 - [Secrets](docs/secrets.md)
 - [Mounts (local + S3 / R2 / DA)](docs/mounts.md)
-- [Adding features](docs/adding-features.md)
+- [Adding features](.agents/skills/adding-slicc-features/SKILL.md)
 - [Electron notes](docs/electron.md)

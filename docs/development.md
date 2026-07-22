@@ -544,13 +544,15 @@ packages/cloudflare-worker/src/
 packages/vfs-root/
                    Bundled default skills, sprinkles, and workspace
 
+.agents/skills/adding-slicc-features/SKILL.md
+                   How to extend SLICC
+
 docs/
   development.md   This file
   testing.md       Pointer → .agents/skills/writing-slicc-tests/SKILL.md
   architecture.md  Detailed architecture breakdown
   tools-reference.md  Agent tool surface reference
   shell-reference.md  Shell commands and .jsh scripts
-  adding-features.md  How to extend SLICC
   pitfalls.md      Dual-mode gotchas and solutions
   urls.md          URL scheme reference
   electron.md      Electron float guide

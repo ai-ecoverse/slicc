@@ -142,4 +142,4 @@ When implementing one of the gaps reported by the sync script:
 8. Run `node packages/dev-tools/tools/playwright-cli-sync.mjs` — it should no longer
    list the command as a gap
 
-See `docs/adding-features.md §4` for the handler implementation pattern.
+See [the `adding-slicc-features` skill §4](../.agents/skills/adding-slicc-features/SKILL.md#4-extend-browser-automation-shell-commands) for the handler implementation pattern.

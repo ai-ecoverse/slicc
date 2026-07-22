@@ -6,18 +6,18 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 ## Task Routing
 
-| I need to...                      | Read this                                                                               |
-| --------------------------------- | --------------------------------------------------------------------------------------- |
-| Understand the architecture       | [architecture.md](./architecture.md) ([diagram](./architecture-diagram.png))            |
-| Add a shell command               | [shell-reference.md](./shell-reference.md) + [adding-features.md](./adding-features.md) |
-| Add an agent tool                 | [tools-reference.md](./tools-reference.md) + [adding-features.md](./adding-features.md) |
-| Write tests                       | [writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md)                   |
-| Build, run, or debug              | [development.md](./development.md)                                                      |
-| Run or debug Electron mode        | [electron.md](./electron.md) + [development.md](./development.md)                       |
-| Avoid breaking the extension      | [pitfalls.md](./pitfalls.md)                                                            |
-| Review a PR (or tune the bots)    | [review-patterns.md](./review-patterns.md)                                              |
-| Add a UI panel or skill           | [adding-features.md](./adding-features.md)                                              |
-| Add a provider (API key or OAuth) | [adding-features.md](./adding-features.md)                                              |
+| I need to...                      | Read this                                                                                                                    |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Understand the architecture       | [architecture.md](./architecture.md) ([diagram](./architecture-diagram.png))                                                 |
+| Add a shell command               | [shell-reference.md](./shell-reference.md) + [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)       |
+| Add an agent tool                 | [tools-reference.md](./tools-reference.md) + [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)       |
+| Write tests                       | [writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md)                                                        |
+| Build, run, or debug              | [development.md](./development.md)                                                                                           |
+| Run or debug Electron mode        | [electron.md](./electron.md) + [development.md](./development.md)                                                            |
+| Avoid breaking the extension      | [pitfalls.md](./pitfalls.md)                                                                                                 |
+| Review a PR (or tune the bots)    | [review-patterns.md](./review-patterns.md)                                                                                   |
+| Add a UI panel or skill           | [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)                                                    |
+| Add a provider (API key or OAuth) | [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md)                                                    |
 
 ## Layer Quick Reference
 

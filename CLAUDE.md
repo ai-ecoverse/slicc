@@ -164,6 +164,7 @@ loaded into the system prompt by skill-aware harnesses (Claude Code, pi).
 For harnesses that only read AGENTS.md (Codex, Copilot), this router is the
 discovery channel — read the referenced skill when the moment matches.
 
+- Adding or changing a SLICC feature surface → use `adding-slicc-features`
 - Deploying or debugging the Cloudflare tray hub worker → use `deploying-tray-worker`
 - Recording a UI demo for a PR → use `demo-recording`
 - Handing work off to SLICC → use `slicc-handoff`

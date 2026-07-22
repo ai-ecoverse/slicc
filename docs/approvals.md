@@ -429,7 +429,7 @@ hosted-leader float.
 
 `packages/webapp/src/tools/tool-ui.ts` exposes the shared "show HTML, await
 user click" primitive that agent-driven commands use to acquire a gesture in
-chat. See [`docs/adding-features.md` §14](./adding-features.md#14-add-interactive-tool-ui-approval-dialogs-forms)
+chat. See the [`adding-slicc-features` skill §14](../.agents/skills/adding-slicc-features/SKILL.md#14-add-interactive-tool-ui-approval-dialogs-forms)
 for the API and HTML conventions.
 
 ### Files
