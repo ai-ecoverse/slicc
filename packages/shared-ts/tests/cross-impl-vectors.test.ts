@@ -53,12 +53,10 @@ const PINNED = [
 ];
 
 describe('cross-implementation mask vectors', () => {
-  it.each(PINNED)('mask($sessionId, $name) is stable', async ({
-    sessionId,
-    name,
-    value,
-    expected,
-  }) => {
-    expect(await mask(sessionId, name, value)).toBe(expected);
-  });
+  it.each(PINNED)(
+    'mask($sessionId, $name) is stable',
+    async ({ sessionId, name, value, expected }) => {
+      expect(await mask(sessionId, name, value)).toBe(expected);
+    }
+  );
 });

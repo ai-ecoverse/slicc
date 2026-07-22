@@ -69,27 +69,25 @@ describe('openPickerPopup', () => {
     delete (globalThis as unknown as { chrome?: unknown }).chrome;
   });
 
-  it.each<PickerKind>([
-    'directory',
-    'usb-device',
-    'serial-port',
-    'hid-device',
-  ])('opens picker-popup.html with kind=%s and resolves on matching message', async (kind) => {
-    const promise = openPickerPopup(kind, [], `req-${kind}`);
-    expect(createCalls).toHaveLength(1);
-    expect(createCalls[0].url).toContain('picker-popup.html');
-    expect(createCalls[0].url).toContain(`kind=${encodeURIComponent(kind)}`);
-    expect(createCalls[0].url).toContain(`requestId=req-${kind}`);
-    listeners[0]({
-      source: 'picker-popup',
-      kind,
-      requestId: `req-${kind}`,
-      granted: true,
-      info: { vendorId: 1, productId: 2 },
-    });
-    const result = await promise;
-    expect(result).toMatchObject({ granted: true, info: { vendorId: 1, productId: 2 } });
-  });
+  it.each<PickerKind>(['directory', 'usb-device', 'serial-port', 'hid-device'])(
+    'opens picker-popup.html with kind=%s and resolves on matching message',
+    async (kind) => {
+      const promise = openPickerPopup(kind, [], `req-${kind}`);
+      expect(createCalls).toHaveLength(1);
+      expect(createCalls[0].url).toContain('picker-popup.html');
+      expect(createCalls[0].url).toContain(`kind=${encodeURIComponent(kind)}`);
+      expect(createCalls[0].url).toContain(`requestId=req-${kind}`);
+      listeners[0]({
+        source: 'picker-popup',
+        kind,
+        requestId: `req-${kind}`,
+        granted: true,
+        info: { vendorId: 1, productId: 2 },
+      });
+      const result = await promise;
+      expect(result).toMatchObject({ granted: true, info: { vendorId: 1, productId: 2 } });
+    }
+  );
 
   it('encodes filters as JSON in the URL', async () => {
     const filters = [{ vendorId: 0x2e8a, productId: 0x0003 }];

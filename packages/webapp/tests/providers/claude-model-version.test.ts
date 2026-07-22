@@ -98,23 +98,21 @@ describe('claudeSupportsNativeXhighEffort', () => {
     expect(claudeSupportsNativeXhighEffort(id)).toBe(true);
   });
 
-  it.each([
-    ['claude-opus-4-6'],
-    ['claude-sonnet-4-6'],
-    ['claude-sonnet-4-7'],
-    ['gpt-4o'],
-  ])('returns false for %s', (id) => {
-    expect(claudeSupportsNativeXhighEffort(id)).toBe(false);
-  });
+  it.each([['claude-opus-4-6'], ['claude-sonnet-4-6'], ['claude-sonnet-4-7'], ['gpt-4o']])(
+    'returns false for %s',
+    (id) => {
+      expect(claudeSupportsNativeXhighEffort(id)).toBe(false);
+    }
+  );
 });
 
 describe('claudeSupportsMaxEffort', () => {
-  it.each([
-    ['claude-opus-4-6'],
-    ['claude-sonnet-4-6'],
-  ])('returns true for %s (xhigh → max clamp)', (id) => {
-    expect(claudeSupportsMaxEffort(id)).toBe(true);
-  });
+  it.each([['claude-opus-4-6'], ['claude-sonnet-4-6']])(
+    'returns true for %s (xhigh → max clamp)',
+    (id) => {
+      expect(claudeSupportsMaxEffort(id)).toBe(true);
+    }
+  );
 
   it.each([
     ['claude-opus-4-5'],
@@ -129,13 +127,12 @@ describe('claudeSupportsMaxEffort', () => {
 });
 
 describe('claudeRejectsTemperature', () => {
-  it.each([
-    ['claude-opus-4-7'],
-    ['claude-opus-4-8'],
-    ['claude-opus-4-9'],
-  ])('returns true for Opus ≥ 4.7 (%s)', (id) => {
-    expect(claudeRejectsTemperature(id)).toBe(true);
-  });
+  it.each([['claude-opus-4-7'], ['claude-opus-4-8'], ['claude-opus-4-9']])(
+    'returns true for Opus ≥ 4.7 (%s)',
+    (id) => {
+      expect(claudeRejectsTemperature(id)).toBe(true);
+    }
+  );
 
   it.each([
     ['claude-opus-4-6'],

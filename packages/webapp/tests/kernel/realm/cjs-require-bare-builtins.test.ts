@@ -42,28 +42,26 @@ describe('m4: nested package require of a browser-unavailable built-in', () => {
     expect(out.stderr).not.toContain('ipk install');
   });
 
-  it.each([
-    'http',
-    'net',
-    'dns',
-    'tls',
-  ])('a package that internally requires %s hard-fails with the built-in-unavailable message', async (builtin) => {
-    const ctx = makeCtx({
-      files: {
-        '/workspace/node_modules/usesbuiltin/package.json': JSON.stringify({
-          name: 'usesbuiltin',
-          version: '1.0.0',
-          main: 'index.js',
-        }),
-        '/workspace/node_modules/usesbuiltin/index.js': `const m = require('${builtin}'); module.exports = () => m;`,
-      },
-    });
-    const out = await runCode("const u = require('usesbuiltin'); u();", ctx);
-    expect(out.exitCode).toBe(1);
-    expect(out.stderr).toContain('not available in the browser');
-    expect(out.stderr).toContain(builtin);
-    expect(out.stderr).not.toContain('Cannot find module');
-  });
+  it.each(['http', 'net', 'dns', 'tls'])(
+    'a package that internally requires %s hard-fails with the built-in-unavailable message',
+    async (builtin) => {
+      const ctx = makeCtx({
+        files: {
+          '/workspace/node_modules/usesbuiltin/package.json': JSON.stringify({
+            name: 'usesbuiltin',
+            version: '1.0.0',
+            main: 'index.js',
+          }),
+          '/workspace/node_modules/usesbuiltin/index.js': `const m = require('${builtin}'); module.exports = () => m;`,
+        },
+      });
+      const out = await runCode("const u = require('usesbuiltin'); u();", ctx);
+      expect(out.exitCode).toBe(1);
+      expect(out.stderr).toContain('not available in the browser');
+      expect(out.stderr).toContain(builtin);
+      expect(out.stderr).not.toContain('Cannot find module');
+    }
+  );
 
   it('a package that internally requires an unavailable built-in LOADS fine until it is actually requested', async () => {
     // Importing the package must not fail at graph-build time — only the actual
