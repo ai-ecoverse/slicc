@@ -39,6 +39,15 @@ export interface NormalizedTranscript {
 }
 
 // ---------------------------------------------------------------------------
+// Internal type aliases
+// ---------------------------------------------------------------------------
+
+/** Widened user content type used for safe casting from Pi's narrower union. */
+type UserContentRaw =
+  | string
+  | Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+
+// ---------------------------------------------------------------------------
 // Internal result shape for per-message normalizers
 // ---------------------------------------------------------------------------
 
@@ -168,7 +177,7 @@ function normalizeUser(
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
   const content = normalizeUserContent(
-    message.content as string | Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
+    message.content as UserContentRaw,
     id,
   );
   const normalized: TranscriptMessage = {
@@ -245,27 +254,14 @@ function normalizeMessage(
   conversationId: string,
   sequence: number,
 ): MessageNormalizeResult {
-  const m = message as { role: string };
-  if (m.role === 'user') {
-    return normalizeUser(
-      message as Extract<AgentMessage, { role: 'user' }>,
-      conversationId,
-      sequence,
-    );
+  if (message.role === 'user') {
+    return normalizeUser(message, conversationId, sequence);
   }
-  if (m.role === 'assistant') {
-    return normalizeAssistant(
-      message as Extract<AgentMessage, { role: 'assistant' }>,
-      conversationId,
-      sequence,
-    );
+  if (message.role === 'assistant') {
+    return normalizeAssistant(message, conversationId, sequence);
   }
-  if (m.role === 'toolResult') {
-    return normalizeToolResult(
-      message as Extract<AgentMessage, { role: 'toolResult' }>,
-      conversationId,
-      sequence,
-    );
+  if (message.role === 'toolResult') {
+    return normalizeToolResult(message, conversationId, sequence);
   }
   // Unknown roles (e.g. custom AgentMessages) are dropped.
   return { message: null, excludedReasoningBlocks: 0 };
@@ -275,7 +271,9 @@ function normalizeMessage(
 // Delegation builder
 // ---------------------------------------------------------------------------
 
-function buildDelegations(sources: readonly TranscriptConversationSource[]): TranscriptDelegation[] {
+function buildDelegations(
+  sources: readonly TranscriptConversationSource[],
+): TranscriptDelegation[] {
   const delegations: TranscriptDelegation[] = [];
   for (const source of sources) {
     if (!source.parentConversationId) continue;
@@ -311,6 +309,8 @@ export function normalizeConversations(
       ...(source.parentConversationId
         ? { parentConversationId: source.parentConversationId }
         : {}),
+      ...(source.createdAt ? { createdAt: source.createdAt } : {}),
+      ...(source.updatedAt ? { updatedAt: source.updatedAt } : {}),
       messages,
     } satisfies TranscriptConversation;
   });

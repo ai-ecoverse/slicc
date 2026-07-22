@@ -13,6 +13,32 @@ import {
 } from '@slicc/shared-ts';
 
 // ---------------------------------------------------------------------------
+// Usage fixture helper
+// ---------------------------------------------------------------------------
+
+/** Returns a minimal usage object. Defaults: input=1, output=1, totalTokens=2, all costs=0. */
+export function makeUsage(
+  overrides: { input?: number; output?: number; totalTokens?: number } = {},
+): {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+} {
+  const { input = 1, output = 1, totalTokens = 2 } = overrides;
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // AgentMessage fixtures
 // ---------------------------------------------------------------------------
 
