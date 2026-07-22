@@ -54,6 +54,7 @@ import { scoopColor } from './wc-scoop-color.js';
 
 export { scoopColor } from './wc-scoop-color.js';
 
+import type { FrozenSession } from '../session-freezer.js';
 import {
   enrichFreezerIcons,
   FREEZER_TINT,
@@ -397,6 +398,11 @@ interface FreezerRailHandles {
   refreshFreezer(): void;
   /** Thaw a frozen session by archive filename (URL `ctx=freezer:<file>`). */
   openFrozen(slug: string): Promise<void>;
+  /**
+   * Returns the `sessionId` of the currently viewed frozen session, or
+   * `null` when the thread is showing an active scoop rather than a thaw.
+   */
+  getViewedFrozenSessionId(): string | null;
 }
 
 /**
@@ -408,9 +414,15 @@ interface FreezerRailHandles {
  */
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: freezer wiring is sequential (rail refresh + new-session freeze + thaw + follower relay); extracting more helpers would obscure the order
 function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
-  const { refs, openVfs, client, getController, getSelected, selectScoop, clearSelection, log } =
-    deps;
+  const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
   let frozenEntries: FrozenSessionIndexEntry[] = [];
+  /** sessionId of the currently-viewed frozen session, or null for live view. */
+  let currentFrozenSessionId: string | null = null;
+  /** Wrap selectScoop to clear frozen-view tracking when returning to a live scoop. */
+  const selectScoop = (scoop: Parameters<FreezerRailDeps['selectScoop']>[0]): void => {
+    currentFrozenSessionId = null;
+    deps.selectScoop(scoop);
+  };
 
   // Monotonic guard: boot fires several overlapping refreshes (attach-time,
   // scoop-list ready, kernel-worker-ready) and a lost early RPC fails LATE —
@@ -479,6 +491,22 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           '../new-session.js'
         );
         if (action !== 'erase') {
+          // Capture a sanitized snapshot AFTER the Markdown archive write,
+          // BEFORE clearing. Non-blocking: failure marks the entry but never
+          // blocks New Session. No raw fallback on error.
+          const captureCompleteSnapshot = async (frozen: FrozenSession): Promise<void> => {
+            const { getTranscriptExportService } = await import(
+              '../../transcript/export-provider.js'
+            );
+            const svc = getTranscriptExportService();
+            await svc.captureFrozen({
+              sessionId: frozen.sessionId ?? frozen.archive.id,
+              title: frozen.archive.title,
+              frozenAt: frozen.archive.frozenAt,
+              createdAt: frozen.archive.createdAt,
+              updatedAt: frozen.archive.updatedAt,
+            });
+          };
           if (action === 'save') {
             // Write-first + race: the durable archive lands before any LLM
             // call, and this resolves at min(LLM-done, race window) so the
@@ -487,6 +515,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
             // refreshes the rail when the late rename/icon land.
             await runNewSessionFreeze({
               vfs: writer,
+              captureCompleteSnapshot,
               onProgress: (fraction) => {
                 const el = freezerNew();
                 if (!el) return;
@@ -498,7 +527,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           } else {
             // Quick-freeze: durable archive with heuristic title, no LLM
             // enrichment (the entry stays pending-*.md forever).
-            await runNewSessionFreezeQuick({ vfs: writer });
+            await runNewSessionFreezeQuick({ vfs: writer, captureCompleteSnapshot });
           }
         }
         await resetNewSessionTmp(writer);
@@ -563,6 +592,8 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       // stale-asset replay, which must see `freezer:…` here — not a stale `cone`
       // from a prior view — so a thaw can never consume/replay a dropped turn.
       refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
+      // Track the frozen session's stable id for the export callback.
+      currentFrozenSessionId = entry?.sessionId ?? null;
       getController()?.loadMessages(messages);
       refs.thread.setAttribute('accent', FREEZER_TINT);
       // Frost mood: crystallizing shader + ice-blue accent across the frame.
@@ -587,7 +618,11 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     if (slug) void openFrozen(slug);
   });
 
-  return { refreshFreezer, openFrozen };
+  return {
+    refreshFreezer,
+    openFrozen,
+    getViewedFrozenSessionId: () => currentFrozenSessionId,
+  };
 }
 
 /** Page-side VFS handles routed through the worker's `VfsRpcHost`. */
@@ -1644,7 +1679,7 @@ export function attachWcClient(
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
-  const { refreshFreezer, openFrozen } = wireFreezerRail({
+  const { refreshFreezer, openFrozen, getViewedFrozenSessionId } = wireFreezerRail({
     refs,
     openVfs,
     client,
@@ -1766,8 +1801,37 @@ export function attachWcClient(
   }
 
   // Nav: model picker + avatar menu (settings dialog, legacy-UI escape hatch).
+  // Duplicate-click guard: only one export may be in-flight at a time.
+  let exportInFlight = false;
+  const onExportTranscript = (): void => {
+    if (exportInFlight) return;
+    exportInFlight = true;
+    void (async () => {
+      try {
+        const [{ getTranscriptExportService }, { transcriptZipToBlob, downloadTranscriptBlob }] =
+          await Promise.all([
+            import('../../transcript/export-provider.js'),
+            import('./wc-transcript-export.js'),
+          ]);
+        const frozenSessionId = getViewedFrozenSessionId();
+        const selector =
+          frozenSessionId != null
+            ? { kind: 'frozen' as const, sessionId: frozenSessionId }
+            : { kind: 'active' as const };
+        const service = getTranscriptExportService();
+        const result = await service.export(selector, {});
+        const { filename } = result;
+        const blob = await transcriptZipToBlob(result);
+        await downloadTranscriptBlob(blob, filename);
+      } catch (err) {
+        log.error('Transcript export failed', err);
+      } finally {
+        exportInFlight = false;
+      }
+    })();
+  };
   void import('./wc-nav.js')
-    .then(({ wireWcNav }) => wireWcNav({ refs, client, log }))
+    .then(({ wireWcNav }) => wireWcNav({ refs, client, log, onExportTranscript }))
     .catch((err) => log.error('WC nav wiring failed', err));
 
   // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the
