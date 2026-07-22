@@ -414,13 +414,38 @@ export class RemoteTerminalView {
    * loop can unblock (readline has no `abortRead`). Extracted from the
    * loop body so the abort promise's closure isn't re-created inline on
    * every iteration.
+   *
+   * Preserves unterminated output from the previous command. `readline.read`
+   * anchors the prompt at the current row and issues a carriage-return + line
+   * clear before drawing, which erases anything the last `terminal-output`
+   * event wrote without a trailing newline (`echo -n ABC`, `cat` on a file
+   * missing its final `\n`, …). If the cursor isn't already at column 0, emit
+   * the zsh-style reverse-video `%` marker followed by `\r\n` so the partial
+   * line survives and the marker signals it was unterminated.
+   *
+   * `terminal.write()` queues into the parser and updates `cursorX`
+   * asynchronously, so the cursor check has to run inside an empty-write
+   * flush callback — otherwise pending `terminal-output` bytes from the
+   * previous command may not have been parsed yet and `cursorX` reads stale.
    */
   private readNextLine(): Promise<string> {
-    if (!this.readline) return Promise.reject(new Error('readline not mounted'));
+    const terminal = this.terminal;
+    const readline = this.readline;
+    if (!terminal || !readline) {
+      return Promise.reject(new Error('terminal not mounted'));
+    }
     const aborted = new Promise<never>((_resolve, reject) => {
       this.abortPromptLoop = reject;
     });
-    return Promise.race([this.readline.read(PROMPT), aborted]);
+    const read = new Promise<string>((resolve, reject) => {
+      terminal.write('', () => {
+        if (terminal.buffer.active.cursorX > 0) {
+          terminal.write('\x1b[7m%\x1b[0m\r\n');
+        }
+        readline.read(PROMPT).then(resolve, reject);
+      });
+    });
+    return Promise.race([read, aborted]);
   }
 
   /**
