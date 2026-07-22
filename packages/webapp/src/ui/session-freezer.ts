@@ -63,6 +63,13 @@ export interface FrozenSessionIndexEntry {
   /** Count of messages in the frozen session. */
   messageCount: number;
   /**
+   * Stable opaque identifier for the frozen session. Generated with
+   * `crypto.randomUUID()` before the quick filename is assigned and
+   * retained through title and filename rewrites. Legacy entries without
+   * this field continue to use `filename` as their lookup key.
+   */
+  sessionId?: string;
+  /**
    * Lucide icon name for the freezer rail card (LLM-picked from the title,
    * best-effort). Absent on quick-frozen / legacy entries — the rail's lazy
    * enrichment backfills it; the card falls back to its snowflake.
@@ -76,6 +83,12 @@ export interface FrozenSessionIndexEntry {
    * + renames the file to the canonical `<timestamp>-<slug>.md` form.
    */
   pendingEnrichment?: boolean;
+  /**
+   * Set to `true` when the `captureCompleteSnapshot` hook failed during
+   * freeze. The Markdown archive is still present; only the full sanitized
+   * transcript bundle was not produced.
+   */
+  completeSnapshotUnavailable?: true;
 }
 
 export interface FrozenSession extends FrozenSessionIndexEntry {
@@ -282,12 +295,16 @@ async function writeFrozenArchive(
   icon?: string
 ): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
+  // sessionId is generated BEFORE the filename so it is stable across
+  // enrichment renames from `pending-…md` to the canonical slug form.
+  const sessionId = crypto.randomUUID();
   const filename =
     mode === 'quick'
       ? `pending-${pendingShortId()}.md`
       : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
   const indexEntry: FrozenSessionIndexEntry = {
     filename,
+    sessionId,
     title,
     frozenAt,
     messageCount: session.messages.length,
@@ -922,12 +939,15 @@ async function commitEnrichedArchive(
 
   // Carry a freshly-picked icon (single-click "save" path) or preserve an
   // existing one; absent on the boot pass, where the rail backfills lazily.
+  // Preserve sessionId across the rename so the snapshot data directory
+  // remains reachable without knowing the current filename.
   const resolvedIcon = icon ?? entry.icon;
   const updatedEntry: FrozenSessionIndexEntry = {
     filename: newFilename,
     title: newTitle,
     frozenAt: entry.frozenAt,
     messageCount: entry.messageCount,
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
   };
   try {
@@ -1042,6 +1062,37 @@ async function replaceIndexEntry(
     () => undefined
   );
   return next;
+}
+
+/**
+ * Mark a frozen session's index entry with `completeSnapshotUnavailable: true`.
+ *
+ * Called after `captureCompleteSnapshot` fails so the UI knows the full
+ * sanitized transcript bundle was not produced. Best-effort — write failures
+ * are swallowed by the caller.
+ */
+export async function markSnapshotUnavailable(
+  vfs: WritableVfsClient,
+  filename: string
+): Promise<void> {
+  await replaceIndexEntry(vfs, filename, await (async () => {
+    // Load the current entry, add the flag, write back.
+    let existing: FrozenSessionIndexEntry[] = [];
+    try {
+      const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
+    } catch {
+      // No index yet.
+    }
+    const entry = existing.find((e) => e.filename === filename);
+    if (!entry) {
+      // Entry not in index — nothing to update.
+      throw new Error(`entry not found: ${filename}`);
+    }
+    return { ...entry, completeSnapshotUnavailable: true };
+  })());
 }
 
 /**

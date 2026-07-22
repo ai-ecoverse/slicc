@@ -86,6 +86,18 @@ export class SessionStore {
     });
   }
 
+  /** Load all sessions in a single readonly transaction. */
+  async loadAll(): Promise<readonly SessionData[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.getAll();
+      request.onsuccess = () => resolve((request.result as SessionData[]) ?? []);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   /** List all session IDs and metadata (without full message history). */
   async list(): Promise<Array<{ id: string; updatedAt: number }>> {
     const db = await this.getDB();

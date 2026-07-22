@@ -1921,3 +1921,111 @@ describe('freezeConeSession — dictation marker handling', () => {
     expect(thawed[3].content).toBe('done');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 5: sessionId generation and persistence
+// ---------------------------------------------------------------------------
+
+describe('freezeConeSession — sessionId generation', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({ restructured: false, reason: 'no-llm' });
+  });
+
+  it('generates a sessionId on each freeze', async () => {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    expect(result).not.toBeNull();
+    expect(typeof result!.sessionId).toBe('string');
+    expect(result!.sessionId!.length).toBeGreaterThan(0);
+  });
+
+  it('sessionId is recorded in the index entry', async () => {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    const index = await readSessionsIndex(vfs as unknown as Parameters<typeof readSessionsIndex>[0]);
+    expect(index[0]!.sessionId).toBe(result!.sessionId);
+  });
+
+  it('sessionId is preserved through enrichment rename', async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- bullet')
+      .mockResolvedValueOnce('Enriched Title');
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    expect(frozen).not.toBeNull();
+    const originalSessionId = frozen!.sessionId!;
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: frozen!.filename,
+        sessionId: originalSessionId,
+        title: 'heuristic',
+        frozenAt: frozen!.frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(updated!.sessionId).toBe(originalSessionId);
+    // Index also has the preserved sessionId
+    const index = await readSessionsIndex(vfs as unknown as Parameters<typeof readSessionsIndex>[0]);
+    expect(index[0]!.sessionId).toBe(originalSessionId);
+  });
+
+  it('two sequential freezes produce distinct sessionIds', async () => {
+    const makeStore = () => makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('a'), assistantMessage('b'), userMessage('c'), assistantMessage('d')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs1 = makeFakeVfs();
+    const vfs2 = makeFakeVfs();
+    const r1 = await freezeConeSession({
+      sessionStore: makeStore(),
+      vfs: vfs1 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    const r2 = await freezeConeSession({
+      sessionStore: makeStore(),
+      vfs: vfs2 as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    expect(r1!.sessionId).not.toBe(r2!.sessionId);
+  });
+});
