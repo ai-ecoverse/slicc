@@ -184,6 +184,108 @@ describe('runNewSessionFreeze — write-first + race', () => {
   });
 });
 
+describe('runNewSessionFreeze — captureCompleteSnapshot hook', () => {
+  beforeEach(() => {
+    mockGetApiKey.mockReset().mockReturnValue('k');
+    mockResolveCurrentModel.mockReset().mockReturnValue(fakeModel);
+    mockInit.mockReset().mockResolvedValue(undefined);
+    mockFreezeConeSession.mockReset().mockResolvedValue(pending);
+    mockEnrichPendingSession.mockReset().mockResolvedValue(null);
+    mockPickLucideIcon.mockClear();
+  });
+
+  it('calls captureCompleteSnapshot with the frozen session after Markdown write', async () => {
+    const captureCompleteSnapshot = vi.fn(async (_frozen: FrozenSession) => {});
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      captureCompleteSnapshot,
+    });
+    expect(captureCompleteSnapshot).toHaveBeenCalledOnce();
+    // Verify it was called with the pending frozen entry.
+    expect(captureCompleteSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: pending.filename })
+    );
+    // Session still returned regardless
+    expect(result).not.toBeNull();
+  });
+
+  it('does not call captureCompleteSnapshot when nothing was archived', async () => {
+    mockFreezeConeSession.mockResolvedValue(null);
+    const captureCompleteSnapshot = vi.fn(async () => {});
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      captureCompleteSnapshot,
+    });
+    expect(result).toBeNull();
+    expect(captureCompleteSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('regression: captureCompleteSnapshot failure does not block New Session', async () => {
+    const captureCompleteSnapshot = vi.fn(async () => {
+      throw new Error('snapshot pipeline failed');
+    });
+    // Should not throw — New Session always proceeds
+    await expect(
+      runNewSessionFreeze({
+        vfs: {} as never,
+        enrichmentRaceMs: 10,
+        captureCompleteSnapshot,
+      })
+    ).resolves.not.toThrow();
+    expect(captureCompleteSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('returns frozen session even when captureCompleteSnapshot fails', async () => {
+    mockEnrichPendingSession.mockResolvedValue(null);
+    const captureCompleteSnapshot = vi.fn(async () => {
+      const err = new Error('pipeline fail') as Error & { code: string };
+      err.code = 'redaction-unavailable';
+      throw err;
+    });
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      captureCompleteSnapshot,
+    });
+    // The Markdown archive entry is still returned
+    expect(result).not.toBeNull();
+    expect(result?.filename).toBe(pending.filename);
+  });
+
+  it('sets completeSnapshotUnavailable on the frozen session when hook fails', async () => {
+    mockEnrichPendingSession.mockResolvedValue(null);
+    const captureCompleteSnapshot = vi.fn(async () => {
+      throw new Error('snapshot failed');
+    });
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      captureCompleteSnapshot,
+    });
+    expect(result?.completeSnapshotUnavailable).toBe(true);
+  });
+
+  it('captureCompleteSnapshot is called before enrichment starts', async () => {
+    const callOrder: string[] = [];
+    const captureCompleteSnapshot = vi.fn(async () => {
+      callOrder.push('snapshot');
+    });
+    mockEnrichPendingSession.mockImplementation(async () => {
+      callOrder.push('enrich');
+      return null;
+    });
+    await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      captureCompleteSnapshot,
+    });
+    // snapshot hook runs synchronously before enrichment (which starts as a promise)
+    expect(callOrder[0]).toBe('snapshot');
+  });
+});
+
 describe('resetNewSessionTmp', () => {
   let dbCounter = 0;
 

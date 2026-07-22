@@ -1,0 +1,808 @@
+/**
+ * Tests for attachments.ts — attachment classifier, extraction, and bundle building.
+ *
+ * Covers:
+ *  - attachmentHandling() pure classifier
+ *  - Inline image data (base64 decode → binary-unchanged)
+ *  - Text attachment content (text-redacted)
+ *  - Binary attachment bytes (binary-unchanged)
+ *  - Duplicate source data → same opaque bundle path reused
+ *  - Missing/absent attachments → attachment-file-missing
+ *  - Association mismatch → attachment-association-unavailable (partial)
+ *  - Opaque name format: att-0001.ext
+ *  - Exact binary bytes preserved
+ *  - Sanitized text bytes (after redaction)
+ *  - SHA-256 matches exported bytes
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+import type { ChatMessage } from '../../src/scoops/chat-types.js';
+import {
+  attachmentHandling,
+  processTranscriptAttachments,
+  type AttachmentProcessingInput,
+} from '../../src/transcript/attachments.js';
+import type { KnownSecretBatchRedactor } from '../../src/transcript/redact.js';
+import { makeTranscriptDocument } from './fixtures.js';
+import {
+  SLICC_TRANSCRIPT_FORMAT,
+  TRANSCRIPT_SCHEMA_VERSION,
+  type TranscriptDocumentV1,
+} from '@slicc/shared-ts';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function noOpRedactor(): KnownSecretBatchRedactor {
+  return {
+    async redact(texts) {
+      return texts;
+    },
+  };
+}
+
+function secretRedactor(secret: string, replacement: string): KnownSecretBatchRedactor {
+  return {
+    async redact(texts) {
+      return texts.map((t) => t.replaceAll(secret, replacement));
+    },
+  };
+}
+
+function failingRedactor(): KnownSecretBatchRedactor {
+  return {
+    async redact() {
+      throw new Error('redaction service unavailable');
+    },
+  };
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const buf = bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  ) as ArrayBuffer;
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function base64Encode(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/** Build a minimal document with one conversation and one user message containing N image refs */
+function makeDocWithImageRefs(convId: string, imageCount: number): TranscriptDocumentV1 {
+  const msgId = `${convId}-msg-000001`;
+  const content = Array.from({ length: imageCount }, (_, k) => ({
+    type: 'attachment-ref' as const,
+    attachmentId: `${msgId}-img-${k}`,
+  }));
+  return {
+    schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+    export: {
+      id: 'exp-001',
+      generatedAt: '2024-01-01T00:00:00.000Z',
+      producer: { application: 'slicc', version: '0.0.0-test' },
+      format: SLICC_TRANSCRIPT_FORMAT,
+    },
+    session: {
+      id: 'sess-001',
+      title: 'Test session',
+      state: 'active',
+      completeness: { status: 'complete', missing: [] },
+    },
+    privacy: {
+      reasoningExcluded: true,
+      excludedReasoningBlocks: 0,
+      binaryAttachments: 'included-unchanged',
+      redactionCounts: {},
+      redactions: [],
+    },
+    conversations: [
+      {
+        id: convId,
+        kind: 'cone',
+        name: 'Sliccy',
+        messages: [
+          {
+            id: msgId,
+            sequence: 1,
+            role: 'user',
+            timestamp: new Date(1000).toISOString(),
+            content,
+          },
+        ],
+      },
+    ],
+    delegations: [],
+    attachments: [],
+  };
+}
+
+function makeUiUserMessage(
+  attachments: NonNullable<ChatMessage['attachments']>
+): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: 'user',
+    content: 'user message',
+    timestamp: 1000,
+    attachments,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// attachmentHandling — pure classifier
+// ---------------------------------------------------------------------------
+
+describe('attachmentHandling', () => {
+  it.each([
+    ['text/plain', 'readme.txt', 'text-redacted'],
+    ['text/markdown', 'notes.md', 'text-redacted'],
+    ['text/html', 'page.html', 'text-redacted'],
+    ['application/json', 'data.json', 'text-redacted'],
+    ['image/png', 'photo.png', 'binary-unchanged'],
+    ['image/jpeg', 'img.jpg', 'binary-unchanged'],
+    ['video/webm', 'video.webm', 'binary-unchanged'],
+    ['application/pdf', 'doc.pdf', 'binary-unchanged'],
+    ['application/octet-stream', 'data.ts', 'text-redacted'],  // text ext
+    ['application/octet-stream', 'script.js', 'text-redacted'],  // text ext
+    ['application/octet-stream', 'data.bin', 'binary-unchanged'],  // binary ext
+  ] as const)(
+    'classifies (%s, %s) → %s',
+    (mimeType, name, expected) => {
+      expect(attachmentHandling(mimeType, name)).toBe(expected);
+    }
+  );
+
+  it('classifies yaml extensions as text-redacted', () => {
+    expect(attachmentHandling('application/octet-stream', 'config.yaml')).toBe('text-redacted');
+    expect(attachmentHandling('application/octet-stream', 'config.yml')).toBe('text-redacted');
+  });
+
+  it('classifies tsx/jsx as text-redacted', () => {
+    expect(attachmentHandling('application/octet-stream', 'Component.tsx')).toBe('text-redacted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — inline image data
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — inline image data', () => {
+  const convId = 'conv-images';
+  const imageBytes = new Uint8Array([255, 0, 128, 64, 32]);
+  const b64 = base64Encode(imageBytes);
+
+  it('extracts base64 image data and stores as binary-unchanged bytes', async () => {
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-1',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: imageBytes.length,
+        kind: 'image',
+        data: b64,
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    // Bundle file should have the image bytes
+    const bundleEntry = [...result.bundleFiles.entries()].find(([k]) => k.includes('att-0001'));
+    expect(bundleEntry).toBeDefined();
+    expect(Array.from(bundleEntry![1])).toEqual(Array.from(imageBytes));
+  });
+
+  it('generates opaque name att-0001.png for first image', async () => {
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-1',
+        name: 'my-photo-original.png',
+        mimeType: 'image/png',
+        size: 4,
+        kind: 'image',
+        data: base64Encode(new Uint8Array([1, 2, 3, 4])),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.bundleFiles.has('attachments/att-0001.png')).toBe(true);
+  });
+
+  it('computes correct SHA-256 for binary image bytes', async () => {
+    const doc = makeDocWithImageRefs(convId, 1);
+    const bytes = new Uint8Array([10, 20, 30, 40, 50]);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-1',
+        name: 'image.jpg',
+        mimeType: 'image/jpeg',
+        size: bytes.length,
+        kind: 'image',
+        data: base64Encode(bytes),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    const transcriptAtt = result.document.attachments[0];
+    expect(transcriptAtt).toBeDefined();
+    const expectedHash = await sha256Hex(bytes);
+    expect(transcriptAtt!.sha256).toBe(expectedHash);
+  });
+
+  it('marks image attachment as handling=binary-unchanged', async () => {
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-1',
+        name: 'shot.png',
+        mimeType: 'image/png',
+        size: 2,
+        kind: 'image',
+        data: base64Encode(new Uint8Array([0, 1])),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.document.attachments[0]?.handling).toBe('binary-unchanged');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — text file attachments
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — text file attachments', () => {
+  it('redacts text attachment content', async () => {
+    const convId = 'conv-text';
+    // Use a document with a text attachment-ref (not from image — we add it via UI messages)
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'attached file content' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const secret = 'SECRET_TOKEN_ABC';
+    const textContent = `file content with ${secret} embedded`;
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-text-1',
+        name: 'config.json',
+        mimeType: 'application/json',
+        size: textContent.length,
+        kind: 'text',
+        text: textContent,
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: secretRedactor(secret, '⟦REDACTED:secret:r1⟧'),
+    });
+
+    // Bundle should have the redacted text encoded as UTF-8 bytes
+    const bundleEntry = [...result.bundleFiles.entries()].find(([k]) => k.includes('att-0001'));
+    expect(bundleEntry).toBeDefined();
+    const text = new TextDecoder().decode(bundleEntry![1]);
+    expect(text).toContain('⟦REDACTED:secret:r1⟧');
+    expect(text).not.toContain(secret);
+  });
+
+  it('marks text attachment as handling=text-redacted', async () => {
+    const convId = 'conv-text2';
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'with file' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-t',
+        name: 'notes.md',
+        mimeType: 'text/markdown',
+        size: 10,
+        kind: 'text',
+        text: 'my notes',
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.document.attachments[0]?.handling).toBe('text-redacted');
+  });
+
+  it('computes correct SHA-256 for redacted text bytes', async () => {
+    const convId = 'conv-sha';
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'hello' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const textContent = 'clean text no secrets';
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-sha',
+        name: 'data.txt',
+        mimeType: 'text/plain',
+        size: textContent.length,
+        kind: 'text',
+        text: textContent,
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    const att = result.document.attachments[0];
+    const bundleBytes = result.bundleFiles.get(att!.path)!;
+    const expectedHash = await sha256Hex(bundleBytes);
+    expect(att!.sha256).toBe(expectedHash);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — binary files
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — binary files', () => {
+  it('preserves exact binary bytes for binary-unchanged attachments', async () => {
+    const convId = 'conv-binary';
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'with binary' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xde, 0xad, 0xbe, 0xef]);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-bin',
+        name: 'data.bin',
+        mimeType: 'application/octet-stream',
+        size: binaryBytes.length,
+        kind: 'file',
+        data: base64Encode(binaryBytes),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    const bundleEntry = [...result.bundleFiles.entries()].find(([k]) => k.includes('att-0001'));
+    expect(bundleEntry).toBeDefined();
+    expect(Array.from(bundleEntry![1])).toEqual(Array.from(binaryBytes));
+  });
+
+  it('does not call redactor for binary-unchanged attachments', async () => {
+    const convId = 'conv-binary-no-redact';
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'hi' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const redact = vi.fn(async (texts: readonly string[]) => texts);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-bin2',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: 4,
+        kind: 'file',
+        data: base64Encode(new Uint8Array([1, 2, 3, 4])),
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: { redact },
+    });
+    // redact may be called for the document, but NOT for binary attachment content specifically
+    const allTexts = redact.mock.calls.flatMap((c) => [...c[0]]);
+    expect(allTexts).not.toContain(base64Encode(new Uint8Array([1, 2, 3, 4])));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — duplicate sources
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — duplicate source data', () => {
+  it('assigns the same opaque bundle path for duplicate inline image data', async () => {
+    const convId = 'conv-dup';
+    // Two user messages, each with the same image
+    const bytes = new Uint8Array([9, 8, 7, 6]);
+    const b64 = base64Encode(bytes);
+    const msg1Id = `${convId}-msg-000001`;
+    const msg2Id = `${convId}-msg-000003`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msg1Id,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg1Id}-img-0` }],
+            },
+            {
+              id: `${convId}-msg-000002`,
+              sequence: 2,
+              role: 'assistant',
+              timestamp: new Date(2000).toISOString(),
+              content: [{ type: 'text', text: 'ok' }],
+            },
+            {
+              id: msg2Id,
+              sequence: 3,
+              role: 'user',
+              timestamp: new Date(3000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg2Id}-img-0` }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const uiMsg1 = makeUiUserMessage([
+      { id: 'att-a', name: 'photo.png', mimeType: 'image/png', size: bytes.length, kind: 'image', data: b64 },
+    ]);
+    const uiMsg2 = makeUiUserMessage([
+      { id: 'att-b', name: 'photo.png', mimeType: 'image/png', size: bytes.length, kind: 'image', data: b64 },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg1, uiMsg2] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+
+    // Both TranscriptAttachment entries should reference the same bundle path
+    const att1 = result.document.attachments.find((a) =>
+      a.sourceMessageId === msg1Id
+    );
+    const att2 = result.document.attachments.find((a) =>
+      a.sourceMessageId === msg2Id
+    );
+    expect(att1).toBeDefined();
+    expect(att2).toBeDefined();
+    expect(att1!.path).toBe(att2!.path);
+    // Only one file in the bundle for the deduped attachment
+    const paths = new Set(result.bundleFiles.keys());
+    expect(paths.size).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — missing attachments
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — missing attachments', () => {
+  it('marks attachment as present=false and missingReason when UI data unavailable', async () => {
+    const convId = 'conv-missing';
+    // Image ref exists in doc, but UI message has no attachments
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg: ChatMessage = {
+      id: 'm1',
+      role: 'user',
+      content: 'user msg',
+      timestamp: 1000,
+      // No attachments
+    };
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    const att = result.document.attachments[0];
+    expect(att?.present).toBe(false);
+    expect(att?.missingReason).toBe('attachment-file-missing');
+  });
+
+  it('does not add missing attachment bytes to bundleFiles', async () => {
+    const convId = 'conv-missing2';
+    const doc = makeDocWithImageRefs(convId, 1);
+    const uiMsg: ChatMessage = { id: 'm1', role: 'user', content: 'hi', timestamp: 1 };
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.bundleFiles.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — association mismatch
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — association mismatch', () => {
+  it('marks document partial with attachment-association-unavailable when user message counts diverge', async () => {
+    const convId = 'conv-mismatch';
+    // Doc has 2 user messages with image refs
+    const msg1Id = `${convId}-msg-000001`;
+    const msg2Id = `${convId}-msg-000003`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msg1Id,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg1Id}-img-0` }],
+            },
+            {
+              id: `${convId}-msg-000002`,
+              sequence: 2,
+              role: 'assistant',
+              timestamp: new Date(2000).toISOString(),
+              content: [{ type: 'text', text: 'ok' }],
+            },
+            {
+              id: msg2Id,
+              sequence: 3,
+              role: 'user',
+              timestamp: new Date(3000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg2Id}-img-0` }],
+            },
+          ],
+        },
+      ],
+    };
+
+    // UI only has 1 user message (mismatch with 2 normalized user messages)
+    const bytes = new Uint8Array([1, 2, 3]);
+    const uiMsg = makeUiUserMessage([
+      { id: 'att-1', name: 'img.png', mimeType: 'image/png', size: 3, kind: 'image', data: base64Encode(bytes) },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    expect(result.document.session.completeness.status).toBe('partial');
+    expect(result.document.session.completeness.missing).toContain(
+      'attachment-association-unavailable'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — redaction failure
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — redaction failure', () => {
+  it('throws attachment-unreadable when redaction fails for a text attachment', async () => {
+    const convId = 'conv-fail';
+    const msgId = `${convId}-msg-000001`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'text', text: 'with file' }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'att-fail',
+        name: 'config.json',
+        mimeType: 'application/json',
+        size: 5,
+        kind: 'text',
+        text: 'data',
+      },
+    ]);
+    const chatMessages = new Map([[convId, [uiMsg] as readonly ChatMessage[]]]);
+    await expect(
+      processTranscriptAttachments({
+        document: doc,
+        chatMessagesByConversation: chatMessages,
+        knownSecrets: failingRedactor(),
+      })
+    ).rejects.toMatchObject({ code: 'attachment-unreadable' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// processTranscriptAttachments — opaque name format
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — opaque names', () => {
+  it('uses att-NNNN.ext format with zero-padded index', async () => {
+    const convId = 'conv-opaque';
+    // Two user messages, each with one image ref
+    const msg1Id = `${convId}-msg-000001`;
+    const msg2Id = `${convId}-msg-000003`;
+    const doc: TranscriptDocumentV1 = {
+      ...makeDocWithImageRefs(convId, 0),
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msg1Id,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg1Id}-img-0` }],
+            },
+            {
+              id: `${convId}-msg-000002`,
+              sequence: 2,
+              role: 'assistant',
+              timestamp: new Date(2000).toISOString(),
+              content: [{ type: 'text', text: 'ok' }],
+            },
+            {
+              id: msg2Id,
+              sequence: 3,
+              role: 'user',
+              timestamp: new Date(3000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: `${msg2Id}-img-0` }],
+            },
+          ],
+        },
+      ],
+    };
+
+    let imgSeed = 10;
+    const makeImgMsg = (name: string): ChatMessage =>
+      makeUiUserMessage([{
+        id: crypto.randomUUID(),
+        name,
+        mimeType: 'image/png',
+        size: 3,
+        kind: 'image',
+        // Distinct bytes per call so dedup doesn't collapse them.
+        data: base64Encode(new Uint8Array([imgSeed++, imgSeed++, imgSeed++])),
+      }]);
+
+    const chatMessages = new Map([
+      [convId, [makeImgMsg('first.png'), makeImgMsg('second.jpeg')] as readonly ChatMessage[]],
+    ]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: chatMessages,
+      knownSecrets: noOpRedactor(),
+    });
+    const paths = [...result.bundleFiles.keys()].sort();
+    expect(paths[0]).toMatch(/^attachments\/att-0001\.\w+$/);
+    expect(paths[1]).toMatch(/^attachments\/att-0002\.\w+$/);
+  });
+});
