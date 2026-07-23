@@ -42,11 +42,25 @@ export const BRIDGE_WS_URL = `ws://localhost:${BRIDGE_PORT}/cdp`;
 
 /** Default fixture the harness loads when nothing else is wired. Points
  *  at the reference scenario consumed by `reference-scenario.test.ts`;
- *  override via `FAKE_LLM_FIXTURE` when a test needs different turns. */
-const DEFAULT_FAKE_LLM_FIXTURE = resolve(
+ *  override via `FAKE_LLM_FIXTURE` when a test needs different turns.
+ *
+ *  Short-name form: `FAKE_LLM_FIXTURE=transcript-export` expands to
+ *  `packages/webapp/tests/e2e/fake-llm/fixtures/transcript-export.json`
+ *  so callers do not need to type the full path. */
+const FIXTURES_DIR = resolve(
   repoRoot,
-  'packages/webapp/tests/e2e/fake-llm/fixtures/reference-scenario.json'
+  'packages/webapp/tests/e2e/fake-llm/fixtures'
 );
+const DEFAULT_FAKE_LLM_FIXTURE = resolve(FIXTURES_DIR, 'reference-scenario.json');
+
+/** Resolve FAKE_LLM_FIXTURE to an absolute path.
+ *  A bare name (no path separators, no .json) is looked up in FIXTURES_DIR. */
+function resolveFixturePath(value: string): string {
+  if (value.includes('/') || value.includes('\\') || value.endsWith('.json')) {
+    return resolve(repoRoot, value);
+  }
+  return resolve(FIXTURES_DIR, `${value}.json`);
+}
 
 export default defineConfig({
   testDir: '.',
@@ -90,7 +104,9 @@ export default defineConfig({
       env: {
         FAKE_LLM_PORT: String(FAKE_LLM_PORT),
         FAKE_LLM_HOST: '127.0.0.1',
-        FAKE_LLM_FIXTURE: process.env['FAKE_LLM_FIXTURE'] ?? DEFAULT_FAKE_LLM_FIXTURE,
+        FAKE_LLM_FIXTURE: process.env['FAKE_LLM_FIXTURE']
+          ? resolveFixturePath(process.env['FAKE_LLM_FIXTURE'])
+          : DEFAULT_FAKE_LLM_FIXTURE,
       },
     },
   ],

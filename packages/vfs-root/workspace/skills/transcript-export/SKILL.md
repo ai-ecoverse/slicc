@@ -86,14 +86,15 @@ Text attachments (MIME type `text/*`) are redacted inline. Binary attachments
 
 ## Error codes
 
-| Code                    | Meaning                                                         |
-| ----------------------- | --------------------------------------------------------------- |
-| `permission-denied`     | User denied a follower export request (Cherry / follower flow). |
-| `redaction-unavailable` | The redactor could not initialize; export aborted.              |
-| `session-not-found`     | The requested frozen session ID does not exist.                 |
-| `transfer-aborted`      | Export was cancelled mid-stream (abort signal or disconnect).   |
-| `transfer-corrupt`      | The ZIP bytes do not match the completion receipt checksum.     |
-| `schema-invalid`        | The transcript document failed v1 schema validation.            |
+| Code                    | Meaning                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `permission-denied`     | User denied a follower export request (Cherry / follower flow).                |
+| `redaction-unavailable` | The redactor could not initialize; export aborted.                             |
+| `session-not-found`     | The requested frozen session ID does not exist.                                |
+| `transfer-aborted`      | Export was cancelled mid-stream (abort signal or disconnect).                  |
+| `transfer-corrupt`      | The ZIP bytes do not match the completion receipt checksum.                    |
+| `schema-invalid`        | The transcript document failed v1 schema validation.                           |
+| `attachment-unreadable` | A text attachment could not be decoded or redacted; export aborted for safety. |
 
 ## Finding frozen session IDs
 

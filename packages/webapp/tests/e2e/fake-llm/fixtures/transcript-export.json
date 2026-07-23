@@ -3,19 +3,31 @@
   "turns": [
     {
       "whenUserMessageMatches": "export",
-      "content": "I'll run the export scenario and capture the credential-shaped string in a tool call.",
+      "content": "Running the credential check and spawning a verification scoop.",
       "tool_calls": [
         {
           "name": "bash",
           "arguments": {
             "command": "echo 'integration_token=sk-1234abcd5678efgh9012ijkl3456mnop'"
           }
+        },
+        {
+          "name": "scoop_scoop",
+          "arguments": {
+            "name": "verifier",
+            "prompt": "verify-export-scoop"
+          }
         }
       ]
     },
     {
-      "content": "Done. The credential-shaped token appeared in the command output and should be redacted in any export."
+      "whenUserMessageMatches": "verify-export-scoop",
+      "content": "Verification complete."
+    },
+    {
+      "whenUserMessageMatches": "export",
+      "content": "Done. The credential-shaped token appeared and the scoop verified the export."
     }
   ],
-  "onOverflow": "error"
+  "onOverflow": "repeat-last"
 }

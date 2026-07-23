@@ -279,18 +279,16 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
 ## Key Conventions
 
-- **Two type systems**: legacy tool definitions in `tools/`, pi-compatible tools in `core/`;
-  bridge through `tool-adapter.ts`.
-- **Logging**: `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`.
+- **Two type systems**: legacy `tools/` + pi-compatible `core/`; bridge via `tool-adapter.ts`.
+- **Logging**: `createLogger('namespace')` (`core/logger.ts`).
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and extension. The
   thin extension runs no dynamic code itself — all JS execution (realms, WASM, sprinkles/dips)
   runs in the hosted leader tab / kernel worker.
 - **Model IDs**: use pi-ai aliases such as `claude-opus-4-6`, not dated snapshot names.
-- **Provider composition**: providers auto-discovered from pi-ai plus
-  `packages/webapp/src/providers/built-in/`; external configs in `packages/webapp/providers/`;
-  build-time filtering in `packages/dev-tools/providers.build.json`. Three-layer merge:
-  pi-ai → `modelOverrides` (static) → `getModelIds()` (dynamic).
+- **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` + `providers/`;
+  three-layer merge: pi-ai → `modelOverrides` → `getModelIds()`. Build filtering:
+  `packages/dev-tools/providers.build.json`.
 - **Adobe `X-Session-Id` invariant**: every LLM call to the Adobe proxy must attach the
   `X-Session-Id` header (`scoop-context.ts` wires it for both the agent `streamFn` and
   compaction `headers`). New LLM call sites — `streamSimple`/`completeSimple` callers or
@@ -347,9 +345,9 @@ See `docs/secrets.md` for OAuth bootstrap, silent renewal, and per-provider extr
 
 - `packages/chrome-extension/CLAUDE.md` — extension runtime constraints
 - `packages/node-server/CLAUDE.md` — CLI/Electron float
-- `packages/shared-ts/CLAUDE.md` — secret masking primitives
 - `docs/architecture.md` — repo-wide file maps and deeper subsystem inventories
 - `docs/shell-reference.md` — command-by-command shell behavior
 - `docs/mounts.md` — mount setup, architecture, and error patterns
 - `docs/secrets.md` — secrets storage, masking, and domain-scoped injection
 - `docs/kernel/process-model.md` — kernel process model, signals, `/proc`, sync-fs bridge
+- `docs/transcript-export.md` — ZIP format, privacy guarantees, approval, Cherry SDK

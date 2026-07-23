@@ -321,15 +321,15 @@ Any export can be cancelled via `AbortSignal`. On cancellation:
 
 ### Stable error codes
 
-| Code                    | Cause                                                                          | Retry?                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `permission-denied`     | User denied the approval dialog.                                               | Only after a new approval.                                              |
-| `redaction-unavailable` | Redactor failed to initialize.                                                 | Not useful — log and report.                                            |
-| `session-not-found`     | The export service is not registered, or the frozen session ID does not exist. | Wait for boot to complete, or check the session ID.                     |
-| `transfer-aborted`      | Cancelled or disconnected mid-stream.                                          | Retry from start — no partial resume.                                   |
-| `transfer-corrupt`      | Byte length or SHA-256 mismatch.                                               | Retry from start — the entire transfer must be re-run.                  |
-| `schema-invalid`        | The assembled transcript failed v1 validation.                                 | Report as a bug.                                                        |
-| `attachment-unreadable` | A referenced attachment file is missing from the VFS.                          | Export still succeeds with `present: false` in the attachment metadata. |
+| Code                    | Cause                                                                          | Retry?                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `permission-denied`     | User denied the approval dialog.                                               | Only after a new approval.                                                                                                       |
+| `redaction-unavailable` | Redactor failed to initialize.                                                 | Not useful — log and report.                                                                                                     |
+| `session-not-found`     | The export service is not registered, or the frozen session ID does not exist. | Wait for boot to complete, or check the session ID.                                                                              |
+| `transfer-aborted`      | Cancelled or disconnected mid-stream.                                          | Retry from start — no partial resume.                                                                                            |
+| `transfer-corrupt`      | Byte length or SHA-256 mismatch.                                               | Retry from start — the entire transfer must be re-run.                                                                           |
+| `schema-invalid`        | The assembled transcript failed v1 validation.                                 | Report as a bug.                                                                                                                 |
+| `attachment-unreadable` | A text attachment could not be decoded or redacted (fail-closed safety guard). | Do not retry — report as a bug. Binary or missing files do NOT throw this error; they complete as partial with `present: false`. |
 
 ### Retry semantics
 
