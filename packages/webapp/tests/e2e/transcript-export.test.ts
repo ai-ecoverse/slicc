@@ -57,7 +57,7 @@ const EXPORT_MODEL = 'fake-exporter';
 /** Credential pattern the fixture embeds in a bash tool-call argument. The
  *  export service's credential-pattern redactor must replace this with
  *  a ⟦REDACTED:…⟧ token. */
-const CREDENTIAL_PATTERN = 'sk-1234abcd5678efgh9012ijkl3456mnop';
+const CREDENTIAL_PATTERN = 'sk-proj-1234abcd5678efgh9012ijkl3456mnop';
 
 /** Known binary bytes seeded into the cone session before export.
  *  PNG magic header — deterministic and easily identified in the ZIP.

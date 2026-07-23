@@ -5,10 +5,15 @@ import { fileURLToPath } from 'url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
+function resolvePort(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : fallback;
+}
+
 /** Fixed port for the fake OpenAI-compatible LLM webServer.
  *  Pinned so `seedLocalLlmProvider` can derive a stable baseUrl
  *  without a global setup step. */
-export const FAKE_LLM_PORT = 5781;
+export const FAKE_LLM_PORT = resolvePort('SLICC_E2E_FAKE_LLM_PORT', 5781);
 
 /**
  * Standalone-topology ports. node-server no longer serves the UI (the static
@@ -19,9 +24,9 @@ export const FAKE_LLM_PORT = 5781;
  * target stays {@link CDP_PORT}, matching the `--remote-debugging-port` the
  * CDP-binding scenarios launch Playwright Chrome with.
  */
-export const WRANGLER_PORT = 8787;
-export const BRIDGE_PORT = 5710;
-export const CDP_PORT = 9222;
+export const WRANGLER_PORT = resolvePort('SLICC_E2E_WRANGLER_PORT', 8787);
+export const BRIDGE_PORT = resolvePort('SLICC_E2E_BRIDGE_PORT', 5710);
+export const CDP_PORT = resolvePort('SLICC_E2E_CDP_PORT', 9222);
 
 /**
  * Fixed per-process bridge token shared between node-server (`SLICC_BRIDGE_TOKEN`
