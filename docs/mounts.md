@@ -40,7 +40,7 @@ Credentials never reach the agent. Where they live depends on which deployment y
 | Sliccstart (macOS native)    | macOS Keychain (service `ai.sliccy.slicc`) | Sliccstart Settings → Secrets (form UI)              |
 | Chrome extension             | `chrome.storage.local`                     | Right-click extension icon → **Options** (form UI)   |
 
-In all three, the credential channel is server-side / SW-side: the browser bundle never holds an `access_key_id`. The agent's `bash`, `node -e`, and `javascript` tools run in CSP-locked contexts (just-bash / the QuickJS sandbox / sandbox iframes) with no access to the storage backend.
+In all three, the credential channel is server-side / SW-side: the browser bundle never holds an `access_key_id`. The agent's `bash`, `node -e`, and `javascript` tools run in isolated contexts (just-bash / the kernel worker's DedicatedWorker JS realm) with no `chrome.*` API access and no access to the storage backend.
 
 ### CLI: edit `~/.slicc/secrets.env`
 

@@ -48,27 +48,36 @@ also resolves to it.
 
 Sync methods (backed by `SyncFsCache` — in-memory snapshot, standalone only):
 
-| Method                               | Notes                                     |
-| ------------------------------------ | ----------------------------------------- |
-| `readFileSync(path, opts?)`          |                                           |
-| `writeFileSync(path, data)`          |                                           |
-| `existsSync(path)`                   |                                           |
-| `mkdirSync(path, {recursive?})`      |                                           |
-| `statSync(path)`                     | Returns `{isFile(), isDirectory(), size}` |
-| `readdirSync(path)`                  |                                           |
-| `rmSync(path, {recursive?, force?})` |                                           |
-| `copyFileSync(src, dest)`            |                                           |
-| `mkdtempSync(prefix)`                |                                           |
-| `unlinkSync(path)`                   |                                           |
-| `renameSync(oldPath, newPath)`       |                                           |
+| Method                               | Notes                                                 |
+| ------------------------------------ | ----------------------------------------------------- |
+| `readFileSync(path, opts?)`          |                                                       |
+| `writeFileSync(path, data)`          |                                                       |
+| `appendFileSync(path, data)`         |                                                       |
+| `truncateSync(path, len?)`           |                                                       |
+| `existsSync(path)`                   |                                                       |
+| `accessSync(path)`                   | Throws ENOENT if missing                              |
+| `mkdirSync(path, {recursive?})`      |                                                       |
+| `statSync(path)`                     | Returns `{isFile(), isDirectory(), size}`             |
+| `lstatSync(path)`                    | Identical to `statSync` — the VFS has no symlinks     |
+| `realpathSync(path)`                 | Lexical resolution + existence check (no symlinks)    |
+| `readdirSync(path)`                  |                                                       |
+| `rmSync(path, {recursive?, force?})` |                                                       |
+| `rmdirSync(path, {recursive?})`      | ENOTDIR on a non-directory                            |
+| `copyFileSync(src, dest)`            |                                                       |
+| `cpSync(src, dest)`                  | Recursive tree copy                                   |
+| `chmodSync(path)`                    | No-op (VFS has no mode bits); keeps ENOENT-on-missing |
+| `mkdtempSync(prefix)`                |                                                       |
+| `unlinkSync(path)`                   |                                                       |
+| `renameSync(oldPath, newPath)`       |                                                       |
 
 The sync cache is populated from a VFS snapshot before user code runs and
 flushed back on completion. Files exceeding 1 MB are marked `truncated` and
 throw `ENOSYNC` on sync read (use the async API for large files).
 
 **Not available:** `watch`, `watchFile`, `createReadStream`, `createWriteStream`,
-`chmod`, `chown`, `lstat`, `symlink`, `readlink`, `realpath`, `Dirent`-returning
-readdir.
+`chown`, `symlink`, `readlink`, `Dirent`-returning readdir. `lstat`, `realpath`,
+and `chmod` exist only as the sync variants above — they have no async
+counterparts.
 
 ### `path`
 
@@ -78,19 +87,20 @@ Full POSIX path module: `join`, `resolve`, `dirname`, `basename`, `extname`,
 
 ### `crypto`
 
-| API                      | Notes                                 |
-| ------------------------ | ------------------------------------- |
-| `randomBytes(size)`      | Returns Uint8Array                    |
-| `randomFillSync(buffer)` |                                       |
-| `randomUUID()`           |                                       |
-| `getRandomValues(array)` |                                       |
-| `createHash(alg)`        | md5, sha1, sha256, sha512 (pure JS)   |
-| `webcrypto`              | Re-exports `globalThis.crypto`        |
-| `subtle`                 | Re-exports `globalThis.crypto.subtle` |
+| API                      | Notes                                                                |
+| ------------------------ | -------------------------------------------------------------------- |
+| `randomBytes(size)`      | Returns Uint8Array                                                   |
+| `randomFillSync(buffer)` |                                                                      |
+| `randomUUID()`           |                                                                      |
+| `getRandomValues(array)` |                                                                      |
+| `createHash(alg)`        | md5, sha1, sha256 only (pure JS: `js-md5` / `js-sha1` / `js-sha256`) |
+| `webcrypto`              | Re-exports `globalThis.crypto`                                       |
+| `subtle`                 | Re-exports `globalThis.crypto.subtle`                                |
 
 **Not available:** `createCipheriv`, `createDecipheriv`, `createSign`,
 `createVerify`, `createHmac`, `createDiffieHellman`, `pbkdf2`, `scrypt`,
-`generateKeyPair`.
+`generateKeyPair`. `createHash('sha512')` throws
+(`Digest method not supported`) — use `crypto.subtle.digest('SHA-512', …)`.
 
 ### `child_process`
 
@@ -110,8 +120,13 @@ and `exit`/`close`/`error` events.
 
 ### `process`
 
-`env`, `cwd()`, `exit(code?)`, `stdout`, `stderr`, `stdin`, `argv`,
-`platform` (`'browser'`), `arch` (`'wasm'`), `version`, `pid`.
+`env`, `cwd()`, `exit(code?)` (throws `NodeExitError` to unwind the stack),
+`stdout`, `stderr`, `stdin`, and `argv` (with a non-enumerable
+`argv.parseFlags()` helper).
+
+**Not available:** `platform`, `arch`, `version`, `pid`, `on()`,
+`nextTick()`, `hrtime`. (Source: `createProcessShim` in
+`realm-node-shims.ts` — the shim object has exactly the keys listed above.)
 
 ### `buffer`
 
@@ -120,14 +135,21 @@ Re-exports the global `Buffer` polyfill. Available as both
 
 ### `assert` / `assert/strict`
 
-Full assertion module: `ok`, `fail`, `equal`, `notEqual`, `strictEqual`,
-`notStrictEqual`, `deepEqual`, `deepStrictEqual`, `throws`, `doesNotThrow`,
-`rejects`, `doesNotReject`, `match`, `doesNotMatch`, `ifError`.
+`ok`, `fail`, `equal`, `notEqual`, `strictEqual`, `notStrictEqual`,
+`deepEqual`, `deepStrictEqual`, `notDeepEqual`, `notDeepStrictEqual`,
+`throws`, `doesNotThrow`, plus the `AssertionError` class and the `strict`
+self-reference.
+
+**Not available:** `rejects`, `doesNotReject`, `match`, `doesNotMatch`,
+`ifError`.
 
 ### `util`
 
-`promisify`, `inspect`, `inherits`, `types` (isDate, isRegExp, isPromise,
-etc.), `format`, `deprecate`, `TextEncoder`, `TextDecoder`.
+`promisify` (with `promisify.custom`), `inspect` (with `inspect.custom`),
+`inherits`, `format`, `formatWithOptions`.
+
+**Not available:** `types`, `deprecate`, `callbackify`,
+`TextEncoder` / `TextDecoder` (use the globals).
 
 ### `events`
 

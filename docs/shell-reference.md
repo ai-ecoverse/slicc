@@ -8,7 +8,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 SLICC uses `just-bash` (a pure-TypeScript Bash interpreter; see `packages/webapp/package.json` for the pinned version) as its core shell runtime. The interpreter itself is plain JavaScript — not WASM. This provides the standard Unix builtins (cd, ls, cat, grep, find, sed, awk, head, tail, etc.) plus ~50 custom supplemental commands registered by `packages/webapp/src/shell/supplemental-commands/index.ts` and `packages/webapp/src/shell/almost-bash-shell-headless.ts`, and any auto-discovered `.jsh` script commands on the VFS.
 
-WASM enters only for specific runtime-heavy commands, which fetch and cache their binaries on demand: `python3` (Pyodide), `sqlite3` (sql.js), the `node -e` / `javascript` sandbox (QuickJS), `convert` (ImageMagick), `ffmpeg`, `biome`, and `esbuild`. The `AlmostBashShell` / `AlmostBashShellHeadless` classes cover the whole shell, not just the WASM-backed commands.
+WASM enters only for specific runtime-heavy commands, which fetch and cache their binaries on demand: `python3` (Pyodide), `sqlite3` (sql.js), `convert` (ImageMagick), `ffmpeg`, `biome`, and `esbuild`. The `node -e` / `javascript` / `.jsh` sandbox is **not** WASM: scripts run as native JavaScript in the kernel's DedicatedWorker JS realm (V8 in Chrome), with user code compiled to an `AsyncFunction` body — see `packages/webapp/src/kernel/realm/realm-factory.ts` and `realm-module-system.ts` (`runUserCode`). The `AlmostBashShell` / `AlmostBashShellHeadless` classes cover the whole shell, not just the WASM-backed commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
