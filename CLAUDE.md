@@ -140,7 +140,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 - Add or update tests for behavior changes.
 - TypeScript tests live in `packages/*/tests/`, mirrored by subsystem.
-- See `docs/testing.md` for patterns and command selection.
+- See `.agents/skills/writing-slicc-tests/SKILL.md` for test patterns and command selection.
 - **Coverage thresholds are enforced in CI.** Floors live in `coverage-thresholds.json` and are raised automatically by the nightly ratchet (`packages/dev-tools/tools/coverage-ratchet.mjs`). Never hand-lower these values. TypeScript: `npm run test:coverage:<package>`; Swift: `packages/dev-tools/tools/swift-coverage-check.sh`.
 
 ### Documentation
@@ -167,6 +167,7 @@ discovery channel — read the referenced skill when the moment matches.
 - Recording a UI demo for a PR → use `demo-recording`
 - Handing work off to SLICC → use `slicc-handoff`
 - Smoke-testing a build in a controlled browser → use `cdp-smoke-test`
+- Writing or updating SLICC tests → use `writing-slicc-tests`
 
 ## Automated PR Review Checklist
 
