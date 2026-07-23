@@ -10,13 +10,14 @@
  * `KnownSecretBatchRedactor`). Binary attachments are copied unchanged.
  * Both kinds get opaque `att-NNNN.ext` bundle paths and SHA-256 hashes.
  *
- * Attachment metadata (originalName) is redacted via `knownSecrets` +
- * credential-pattern scanning before being stored in the document.
- * Binary deduplication uses full SHA-256 (not unsafe first-64-bytes sampling).
+ * Attachment metadata (originalName, mimeType) is included in the document
+ * passed to `redactTranscript` so it is redacted in a single pass alongside
+ * the conversation content, producing accurate privacy.redactions/counts.
+ * No deduplication — each attachment-ref gets its own bundle entry so that
+ * byte identity is guaranteed without SHA-256 collision assumptions.
  */
 
 import {
-  redactCredentialPatterns,
   type TranscriptAttachment,
   type TranscriptCompletenessReason,
   type TranscriptContentBlock,
@@ -104,10 +105,43 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join('');
 }
 
-function assignOpaquePath(index: number, originalName: string): string {
+/** Allowlisted MIME → file extension map. Derived from MIME, not user filename (safe). */
+const MIME_EXT_MAP: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/svg+xml': '.svg',
+  'image/bmp': '.bmp',
+  'application/pdf': '.pdf',
+  'application/zip': '.zip',
+  'application/gzip': '.gz',
+  'application/json': '.json',
+  'text/plain': '.txt',
+  'text/markdown': '.md',
+  'text/csv': '.csv',
+  'text/html': '.html',
+  'text/xml': '.xml',
+  'application/xml': '.xml',
+};
+
+/**
+ * Derive a safe file extension from MIME type using an allowlist.
+ * Falls back to `.txt` for text-redacted or `.bin` for binary-unchanged.
+ * Never exposes the original filename — no credential leakage even when
+ * the filename contains a secret pattern.
+ */
+function mimeToExtension(mimeType: string, handling: 'text-redacted' | 'binary-unchanged'): string {
+  return MIME_EXT_MAP[mimeType] ?? (handling === 'text-redacted' ? '.txt' : '.bin');
+}
+
+function assignOpaquePath(
+  index: number,
+  mimeType: string,
+  handling: 'text-redacted' | 'binary-unchanged'
+): string {
   const num = String(index + 1).padStart(4, '0');
-  const dotIdx = originalName.lastIndexOf('.');
-  const ext = dotIdx !== -1 ? originalName.slice(dotIdx) : '';
+  const ext = mimeToExtension(mimeType, handling);
   return `attachments/att-${num}${ext}`;
 }
 
@@ -419,29 +453,75 @@ function collectFileAttachments(
 }
 
 // ---------------------------------------------------------------------------
-// Metadata redaction: redact originalName values before storing in document
+// Phase 3: assemble raw attachment records, redact document, build bundle
+//
+// Raw TranscriptAttachment records (with unredacted originalName/mimeType)
+// are included in the document BEFORE calling redactTranscript so that a
+// single redaction pass covers both conversation content and attachment
+// metadata.  privacy.redactions/counts then reflect secret-shaped
+// originalName and MIME metadata correctly.
+//
+// No SHA-256 deduplication: each attachment-ref gets its own bundle entry,
+// guaranteeing byte identity without collision assumptions.
 // ---------------------------------------------------------------------------
 
-async function redactAttachmentNames(
-  names: string[],
-  knownSecrets: KnownSecretBatchRedactor,
-  signal: AbortSignal | undefined
-): Promise<string[]> {
-  if (names.length === 0) return [];
-  let afterKnown: readonly string[];
-  try {
-    afterKnown = await knownSecrets.redact(names, signal);
-  } catch (err) {
-    if (err instanceof TranscriptExportError) throw err;
-    throw new TranscriptExportError('attachment-unreadable');
+/**
+ * Build raw (pre-redaction) TranscriptAttachment records from pending entries.
+ * Pre-assigns opaque paths (MIME-derived). Accumulates partial reasons for
+ * missing entries. sha256/byteLength are placeholder zeroes — patched later.
+ */
+function buildRawAttachments(
+  allPending: PendingAttachment[],
+  partialReasons: Set<TranscriptCompletenessReason>
+): { rawAttachments: TranscriptAttachment[]; textMap: Map<string, string> } {
+  const textMap = new Map<string, string>();
+  let idx = 0;
+  const opaquePaths = new Map<string, string>();
+  for (const p of allPending) {
+    if (p.handling === 'text-redacted' && p.rawText !== undefined) {
+      textMap.set(p.attachmentId, p.rawText);
+    }
+    if (p.present) {
+      opaquePaths.set(p.attachmentId, assignOpaquePath(idx++, p.mimeType, p.handling));
+    }
   }
-  if (afterKnown.length !== names.length) throw new TranscriptExportError('attachment-unreadable');
-  return afterKnown.map((name) => redactCredentialPatterns(name, 'mdr', 1).text);
+  const rawAttachments: TranscriptAttachment[] = allPending.map((p) => {
+    if (!p.present) {
+      if (p.missingReason === 'attachment-association-unavailable') {
+        partialReasons.add('attachment-association-unavailable');
+      } else if (p.missingReason === 'attachment-file-missing') {
+        partialReasons.add('attachment-file-missing');
+      }
+      return {
+        id: p.attachmentId,
+        path: '',
+        originalName: p.originalName,
+        mimeType: p.mimeType,
+        byteLength: 0,
+        sha256: '',
+        sourceConversationId: p.sourceConversationId,
+        sourceMessageId: p.sourceMessageId,
+        handling: p.handling,
+        present: false,
+        missingReason:
+          p.missingReason === 'attachment-file-missing' ? 'attachment-file-missing' : undefined,
+      };
+    }
+    return {
+      id: p.attachmentId,
+      path: opaquePaths.get(p.attachmentId)!,
+      originalName: p.originalName,
+      mimeType: p.mimeType,
+      byteLength: 0, // placeholder — patched after redaction
+      sha256: '', // placeholder — patched after redaction
+      sourceConversationId: p.sourceConversationId,
+      sourceMessageId: p.sourceMessageId,
+      handling: p.handling,
+      present: true,
+    };
+  });
+  return { rawAttachments, textMap };
 }
-
-// ---------------------------------------------------------------------------
-// Phase 3: redact document, build bundle with SHA-256-based dedup
-// ---------------------------------------------------------------------------
 
 async function redactAndBuildBundle(
   allPending: PendingAttachment[],
@@ -452,22 +532,20 @@ async function redactAndBuildBundle(
 ): Promise<{
   redactedDocument: TranscriptDocumentV1;
   bundleFiles: Map<string, Uint8Array>;
-  transcriptAttachments: TranscriptAttachment[];
 }> {
-  // Build text map for document redaction.
-  const textMap = new Map<string, string>();
-  for (const p of allPending) {
-    if (p.handling === 'text-redacted' && p.rawText !== undefined) {
-      textMap.set(p.attachmentId, p.rawText);
-    }
-  }
+  const { rawAttachments, textMap } = buildRawAttachments(allPending, partialReasons);
 
-  // Redact the document (conversations, delegations, etc.). Rethrow any
-  // TranscriptExportError (e.g. redaction-unavailable) unchanged.
+  // Redact the full document including attachment metadata in a single pass.
+  // Rethrow any TranscriptExportError (e.g. redaction-unavailable) unchanged.
   let redactedDocument: TranscriptDocumentV1;
   let redactedText: Map<string, string>;
   try {
-    const res = await redactTranscript(document, textMap, knownSecrets, signal);
+    const res = await redactTranscript(
+      { ...document, attachments: rawAttachments },
+      textMap,
+      knownSecrets,
+      signal
+    );
     redactedDocument = res.document;
     redactedText = res.textAttachments;
   } catch (err) {
@@ -475,87 +553,26 @@ async function redactAndBuildBundle(
     throw new TranscriptExportError('attachment-unreadable');
   }
 
-  // Redact originalName values (metadata) separately before storing.
-  const nameInputs = allPending.map((p) => p.originalName);
-  const redactedNames = await redactAttachmentNames(nameInputs, knownSecrets, signal);
-
-  // Build bundle with full SHA-256-based dedup (replaces unsafe first-64-bytes key).
+  // Build bundle files and patch sha256/byteLength (no dedup — each ref gets its own entry).
   const bundleFiles = new Map<string, Uint8Array>();
-  const transcriptAttachments: TranscriptAttachment[] = [];
-  const dedupeByHash = new Map<string, string>(); // sha256 → opaquePath
-  let idx = 0;
+  const patchedAttachments = await Promise.all(
+    redactedDocument.attachments.map(async (att, i) => {
+      if (!att.present || !att.path) return att;
+      const p = allPending[i]!;
+      const bytes =
+        p.handling === 'text-redacted'
+          ? new TextEncoder().encode(redactedText.get(p.attachmentId) ?? p.rawText ?? '')
+          : p.rawBytes!;
+      const hash = await sha256Hex(bytes);
+      bundleFiles.set(att.path, bytes);
+      return { ...att, byteLength: bytes.length, sha256: hash };
+    })
+  );
 
-  for (let i = 0; i < allPending.length; i++) {
-    const p = allPending[i]!;
-    const redactedName = redactedNames[i] ?? p.originalName;
-
-    if (!p.present) {
-      transcriptAttachments.push({
-        id: p.attachmentId,
-        path: '',
-        originalName: redactedName,
-        mimeType: p.mimeType,
-        byteLength: 0,
-        sha256: '',
-        sourceConversationId: p.sourceConversationId,
-        sourceMessageId: p.sourceMessageId,
-        handling: p.handling,
-        present: false,
-        missingReason:
-          p.missingReason === 'attachment-file-missing' ? 'attachment-file-missing' : undefined,
-      });
-      if (p.missingReason === 'attachment-association-unavailable') {
-        partialReasons.add('attachment-association-unavailable');
-      } else if (p.missingReason === 'attachment-file-missing') {
-        partialReasons.add('attachment-file-missing');
-      }
-      continue;
-    }
-
-    // Compute final bytes.
-    const bytes =
-      p.handling === 'text-redacted'
-        ? new TextEncoder().encode(redactedText.get(p.attachmentId) ?? p.rawText ?? '')
-        : p.rawBytes!;
-
-    // SHA-256-based dedup (safe: full content hash, no sampling).
-    const hash = await sha256Hex(bytes);
-    const existingPath = dedupeByHash.get(hash);
-
-    if (existingPath !== undefined) {
-      transcriptAttachments.push({
-        id: p.attachmentId,
-        path: existingPath,
-        originalName: redactedName,
-        mimeType: p.mimeType,
-        byteLength: bytes.length,
-        sha256: hash,
-        sourceConversationId: p.sourceConversationId,
-        sourceMessageId: p.sourceMessageId,
-        handling: p.handling,
-        present: true,
-      });
-      continue;
-    }
-
-    const opaquePath = assignOpaquePath(idx++, p.originalName);
-    bundleFiles.set(opaquePath, bytes);
-    dedupeByHash.set(hash, opaquePath);
-    transcriptAttachments.push({
-      id: p.attachmentId,
-      path: opaquePath,
-      originalName: redactedName,
-      mimeType: p.mimeType,
-      byteLength: bytes.length,
-      sha256: hash,
-      sourceConversationId: p.sourceConversationId,
-      sourceMessageId: p.sourceMessageId,
-      handling: p.handling,
-      present: true,
-    });
-  }
-
-  return { redactedDocument, bundleFiles, transcriptAttachments };
+  return {
+    redactedDocument: { ...redactedDocument, attachments: patchedAttachments },
+    bundleFiles,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -566,10 +583,11 @@ async function redactAndBuildBundle(
  * Process all attachments in the document:
  *  1. Resolve existing `attachment-ref` blocks (all roles) from canonical Pi data or UI.
  *  2. Walk UI ChatMessage.attachments for additional text/binary files.
- *  3. Redact text attachments and attachment metadata (originalName) via KnownSecretBatchRedactor.
- *  4. Copy binary bytes unchanged.
- *  5. Assign opaque `att-NNNN.ext` names and compute full SHA-256 hashes for dedup.
- *  6. Populate `document.attachments[]` and return bundle files.
+ *  3. Assemble raw TranscriptAttachment records and include them in the document.
+ *  4. Redact document + attachment metadata (originalName, mimeType) in a single pass.
+ *  5. Copy binary bytes unchanged; re-encode redacted text as UTF-8.
+ *  6. Assign opaque `att-NNNN.ext` names (MIME-derived, allowlisted) and SHA-256 hashes.
+ *  7. Populate `document.attachments[]` and return bundle files.
  *
  * Throws `TranscriptExportError('redaction-unavailable')` on redaction failure.
  * Throws `TranscriptExportError('attachment-unreadable')` on decode/read failure.
@@ -637,8 +655,8 @@ export async function processTranscriptAttachments(
     };
   }
 
-  // Phase 3: redact and build bundle.
-  const { redactedDocument, bundleFiles, transcriptAttachments } = await redactAndBuildBundle(
+  // Phase 3: assemble raw attachment metadata, redact in one pass, build bundle.
+  const { redactedDocument, bundleFiles } = await redactAndBuildBundle(
     allPending,
     workingDoc,
     partialReasons,
@@ -646,7 +664,8 @@ export async function processTranscriptAttachments(
     signal
   );
 
-  // Assemble final document with completeness and attachments[].
+  // Assemble final document with updated completeness.
+  // Attachments are already set in redactedDocument.attachments.
   const existingMissing = redactedDocument.session.completeness.missing.filter(
     (r) => !partialReasons.has(r as TranscriptCompletenessReason)
   );
@@ -660,7 +679,6 @@ export async function processTranscriptAttachments(
         missing: allMissing,
       },
     },
-    attachments: transcriptAttachments,
   };
 
   return { document: finalDocument, bundleFiles };
