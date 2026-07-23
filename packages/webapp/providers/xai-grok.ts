@@ -20,6 +20,7 @@
 
 import type {
   Api,
+  AssistantMessageEvent,
   Context,
   Model,
   ProviderHeaders,
@@ -84,6 +85,7 @@ function envModelFilter(): string | null {
 }
 
 const XAI_MODELS: XaiModelConfig[] = resolveModels(envModelFilter());
+type ApiProviderRegistration = Parameters<typeof registerApiProvider>[0];
 
 // ── PKCE helpers ───────────────────────────────────────────────────
 
@@ -211,7 +213,7 @@ async function getValidAccessToken(): Promise<string> {
 
 // ── Stream functions ───────────────────────────────────────────────
 
-function makeErrorOutput(model: Model<Api>, error: unknown) {
+function makeErrorOutput(model: Model<Api>, error: unknown): AssistantMessageEvent {
   return {
     type: 'error' as const,
     reason: 'error' as const,
@@ -285,7 +287,7 @@ const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamO
         '[xai-grok] Stream error:',
         error instanceof Error ? error.message : String(error)
       );
-      stream.push(makeErrorOutput(model, error) as any);
+      stream.push(makeErrorOutput(model, error));
       stream.end();
     }
   })();
@@ -319,7 +321,7 @@ const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleSt
         '[xai-grok] Stream error:',
         error instanceof Error ? error.message : String(error)
       );
-      stream.push(makeErrorOutput(model, error) as any);
+      stream.push(makeErrorOutput(model, error));
       stream.end();
     }
   })();
@@ -434,8 +436,8 @@ export const config: ProviderConfig = {
 export function register(): void {
   registerApiProvider({
     api: XAI_API,
-    stream: streamXai as any,
-    streamSimple: streamSimpleXai as any,
+    stream: streamXai as ApiProviderRegistration['stream'],
+    streamSimple: streamSimpleXai as ApiProviderRegistration['streamSimple'],
   });
 }
 
