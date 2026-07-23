@@ -1,6 +1,6 @@
 import type { SecureFetch } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
-import { createNodeFetchAdapter } from '../../src/shell/supplemental-commands/node-fetch-adapter.js';
+import { createNodeFetchAdapter } from '../../../src/shell/supplemental-commands/node-fetch-adapter.js';
 
 const okResult = (
   overrides: Partial<{
@@ -382,8 +382,6 @@ describe('createNodeFetchAdapter', () => {
       fetch('https://api.example.com/x', {
         method: 'POST',
         body: stream as unknown as BodyInit,
-        // @ts-expect-error duplex is required for stream bodies in some envs
-        duplex: 'half',
       })
     ).rejects.toThrow(/ReadableStream request bodies are not supported/);
   });
