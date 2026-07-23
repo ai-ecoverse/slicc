@@ -47,12 +47,16 @@ Run every command in order:
 
 ```bash
 npm run verify                         # Lint gate (mirrors CI lint job)
+node packages/dev-tools/tools/check-touched-exemptions.mjs  # NOT in npm run verify — easy to miss
 npm run typecheck
 npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
 npm run build
 npm run build -w @slicc/chrome-extension
 ```
+
+The `check-touched-exemptions.mjs` gate runs right after lint because it catches
+complexity debt that lint alone misses. See the section below for details.
 
 ## Lint
 
