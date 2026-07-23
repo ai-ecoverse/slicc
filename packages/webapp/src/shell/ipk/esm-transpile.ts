@@ -42,7 +42,7 @@ export interface CreateEsmTranspileOptions {
   /**
    * VFS context threaded into the default `getEsbuild` / `getTypeScript`
    * loaders so the browser branch can read the ipk-installed
-   * `esbuild-wasm` / `typescript` packages from VFS `node_modules`.
+   * `esbuild-wasm` / `typescript@6.0.3` packages from VFS `node_modules`.
    * Ignored when both loaders are supplied, and unused under Node
    * runtime (where the bundled wrappers are used directly). The
    * `IpkResolutionContext` shape is a structural superset of

@@ -1,5 +1,6 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
+import { resetTypeScriptForTests } from '../../../src/shell/supplemental-commands/shared.js';
 import {
   _resetTstHarnessForTests,
   createTestCommand,
@@ -282,5 +283,20 @@ test('uses local add', ({ is }) => {
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('test - run');
+  });
+
+  it('surfaces the pinned TypeScript 6 install command in a browser float', async () => {
+    resetTypeScriptForTests();
+    vi.stubGlobal('process', undefined);
+    try {
+      const ctx = createMockCtx();
+      await ctx.fs.writeFile('/workspace/example.test.ts', 'export {};');
+      const result = await createTestCommand().execute([], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
   });
 });

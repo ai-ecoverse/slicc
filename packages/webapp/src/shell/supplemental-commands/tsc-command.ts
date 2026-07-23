@@ -1,8 +1,8 @@
 /**
  * `tsc` shell command — thin built-in surface that drives the
- * `typescript` package loaded from VFS `node_modules` via the shared
+ * TypeScript 6 package loaded from VFS `node_modules` via the shared
  * `getTypeScript()` ipk loader in `shared.ts`. Inert until the user
- * runs `ipk add typescript`; without the package, the loader throws
+ * runs `ipk add typescript@6.0.3`; without the package, the loader throws
  * the canonical guidance error which this command surfaces verbatim.
  * ZERO network in the not-installed path — there is no CDN fallback
  * anywhere on this code path.
@@ -30,13 +30,14 @@ import {
   basename,
   dirname,
   getTypeScript,
+  TYPESCRIPT_VFS_INSTALL_COMMAND,
   type TypeScriptIpkContext,
   type TypeScriptModule,
 } from './shared.js';
 
 /**
  * Build a {@link TypeScriptIpkContext} from a command's `ctx` so
- * `getTypeScript` can locate the ipk-installed `typescript` in the
+ * `getTypeScript` can locate the ipk-installed TypeScript 6 compiler in the
  * VFS `node_modules`. Mirrors `createIpkContextFromCtx` in
  * `esbuild-command.ts` / `biome-command.ts` so every float wires the
  * loader the same way.
@@ -67,7 +68,7 @@ export interface ParsedTscArgs {
   showVersion: boolean;
 }
 
-const HELP_TEXT = `tsc - thin wrapper over the ipk-loaded typescript package
+const HELP_TEXT = `tsc - thin wrapper over the ipk-loaded TypeScript 6 package
 
 Usage:
   tsc [options] [files...]
@@ -87,7 +88,7 @@ Notes:
 
 Install:
   Inert until the backing package is installed in node_modules:
-    ipk add typescript
+    ${TYPESCRIPT_VFS_INSTALL_COMMAND}
   Then \`tsc --version\` and the transpile commands above. There is no
   bundled binary, no CDN fallback; a missing package exits non-zero
   with a clear \`ipk add\` hint.
@@ -365,7 +366,7 @@ async function prepareTscRun(
     ts = await getTypeScript(createIpkContextFromCtx(ctx));
   } catch (err) {
     // `getTypeScript` already emits the canonical
-    // "run `ipk add typescript`" guidance when nothing is installed;
+    // Pinned TypeScript 6 install guidance when nothing is installed;
     // surface it verbatim.
     return {
       done: {

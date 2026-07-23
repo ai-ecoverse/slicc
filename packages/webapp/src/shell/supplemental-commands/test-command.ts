@@ -508,7 +508,7 @@ async function prepareTestRun(
     ts = await getTypeScript(createIpkContextFromCtx(ctx));
   } catch (err) {
     // `getTypeScript` already emits the canonical
-    // "run `ipk add typescript`" guidance when nothing is installed;
+    // Pinned TypeScript 6 install guidance when nothing is installed;
     // surface it verbatim.
     return {
       done: {
