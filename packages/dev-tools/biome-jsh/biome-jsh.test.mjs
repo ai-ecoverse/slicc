@@ -108,4 +108,16 @@ describe.skipIf(!BIOME_BIN)('biome-jsh CLI (integration)', () => {
     expect(result.stdout.trim()).toBe('');
     expect(result.status).toBe(0);
   });
+
+  it('format on an unformattable .jsh surfaces the failure and exits non-zero', () => {
+    // A genuine syntax error the async wrapper cannot rescue: Biome cannot
+    // format it, so `format --write` must NOT report success silently.
+    const broken = 'const x = ;\nreturn x;\n';
+    writeFileSync(join(dir, 'broken.jsh'), broken);
+
+    const write = runCli(dir, ['format', '--write', 'broken.jsh']);
+    expect(write.status).not.toBe(0);
+    // The invalid source is left unchanged, not silently "formatted".
+    expect(readFileSync(join(dir, 'broken.jsh'), 'utf8')).toBe(broken);
+  });
 });

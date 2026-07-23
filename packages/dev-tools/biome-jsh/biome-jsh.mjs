@@ -138,16 +138,21 @@ function walkDirectory(dir, out) {
 function formatWrapped(bin, source, dir, tempBase, tempPath) {
   const wrapped = wrapJshForBiome(source);
   writeFileSync(tempPath, wrapped);
-  runBiome(bin, ['format', '--write', tempBase], dir);
+  const fmt = runBiome(bin, ['format', '--write', tempBase], dir);
+  // A non-zero status means Biome could not format (parse error, bad config);
+  // the temp is left unchanged, so surface it rather than reporting success.
+  if (fmt.status !== 0) return { safe: source, changed: false, failed: true, stderr: fmt.stderr };
   const formattedWrapped = readFileSync(tempPath, 'utf8');
-  // Unchanged (already formatted) or biome aborted on a parse error → no diff.
-  if (formattedWrapped === wrapped) return { safe: source, changed: false };
+  // Unchanged (already formatted) → no diff.
+  if (formattedWrapped === wrapped) return { safe: source, changed: false, failed: false };
   const candidate = unwrapFormattedJsh(formattedWrapped);
   writeFileSync(tempPath, wrapJshForBiome(candidate));
-  runBiome(bin, ['format', '--write', tempBase], dir);
+  const reFmt = runBiome(bin, ['format', '--write', tempBase], dir);
+  if (reFmt.status !== 0)
+    return { safe: source, changed: false, failed: true, stderr: reFmt.stderr };
   const reFormatted = readFileSync(tempPath, 'utf8');
   const safe = reFormatted === formattedWrapped ? candidate : source;
-  return { safe, changed: safe !== source };
+  return { safe, changed: safe !== source, failed: false };
 }
 
 function processWrappedCheck(bin, file) {
@@ -168,8 +173,14 @@ function processWrappedCheck(bin, file) {
       out.errorCount++;
       out.lines.push(makeStderrLines(lint.stderr));
     }
-    const { safe } = formatWrapped(bin, source, dir, tempBase, tempPath);
-    if (safe !== source) {
+    const fmt = formatWrapped(bin, source, dir, tempBase, tempPath);
+    if (fmt.failed) {
+      out.lines.push(
+        formatGithubAnnotation(makeErrorAnnotation(file, 'Biome could not format this file'))
+      );
+      out.lines.push(makeStderrLines(fmt.stderr));
+      out.errorCount++;
+    } else if (fmt.safe !== source) {
       out.lines.push(
         formatGithubAnnotation(
           makeErrorAnnotation(file, 'File is not formatted (run: biome-jsh format --write)')
@@ -189,12 +200,16 @@ function processWrappedFormat(bin, file, write) {
   const tempBase = tempName(file);
   const tempPath = join(dir, tempBase);
   try {
-    const { safe, changed } = formatWrapped(bin, source, dir, tempBase, tempPath);
+    const { safe, changed, failed, stderr } = formatWrapped(bin, source, dir, tempBase, tempPath);
+    if (failed) {
+      process.stderr.write(`biome-jsh: ${file}: ${makeStderrLines(stderr)}\n`);
+      return { stdout: '', changed: false, failed: true };
+    }
     if (write) {
       if (changed) writeFileSync(file, safe);
-      return { stdout: '', changed };
+      return { stdout: '', changed, failed: false };
     }
-    return { stdout: safe, changed };
+    return { stdout: safe, changed, failed: false };
   } finally {
     safeUnlink(tempPath);
   }
@@ -214,7 +229,11 @@ function processPlainCheck(bin, file) {
 function processPlainFormat(bin, file, write) {
   const dir = dirname(file);
   if (write) {
-    runBiome(bin, ['format', '--write', basename(file)], dir);
+    const r = runBiome(bin, ['format', '--write', basename(file)], dir);
+    if (r.status !== 0) {
+      process.stderr.write(`biome-jsh: ${file}: ${makeStderrLines(r.stderr)}\n`);
+      return { stdout: '', failed: true };
+    }
     return { stdout: '' };
   }
   // Biome 2.x `format` (no --write) prints a diff, not the formatted content,
@@ -226,7 +245,11 @@ function processPlainFormat(bin, file, write) {
   const tempPath = join(dir, tempBase);
   try {
     writeFileSync(tempPath, source);
-    runBiome(bin, ['format', '--write', tempBase], dir);
+    const r = runBiome(bin, ['format', '--write', tempBase], dir);
+    if (r.status !== 0) {
+      process.stderr.write(`biome-jsh: ${file}: ${makeStderrLines(r.stderr)}\n`);
+      return { stdout: '', failed: true };
+    }
     return { stdout: readFileSync(tempPath, 'utf8') };
   } finally {
     safeUnlink(tempPath);
@@ -282,14 +305,16 @@ function runCheck(bin, files, missing) {
 
 function runFormat(bin, files, write, hadMissing) {
   const stdoutChunks = [];
+  let failed = 0;
   for (const file of files) {
     const r = shouldWrapForBiome(file)
       ? processWrappedFormat(bin, file, write)
       : processPlainFormat(bin, file, write);
-    if (!write && r.stdout) stdoutChunks.push(r.stdout);
+    if (r.failed) failed += 1;
+    else if (!write && r.stdout) stdoutChunks.push(r.stdout);
   }
   if (!write && stdoutChunks.length > 0) process.stdout.write(stdoutChunks.join(''));
-  process.exitCode = hadMissing ? 1 : 0;
+  process.exitCode = hadMissing || failed > 0 ? 1 : 0;
 }
 
 function main() {
