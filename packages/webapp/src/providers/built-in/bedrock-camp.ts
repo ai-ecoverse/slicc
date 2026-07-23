@@ -838,8 +838,9 @@ function handleStreamError(
   stream: AssistantMessageEventStream
 ): void {
   for (const block of output.content) {
-    delete (block as Record<string, unknown>).index;
-    delete (block as Record<string, unknown>).partialJson;
+    const mutableBlock = block as { index?: unknown; partialJson?: unknown };
+    delete mutableBlock.index;
+    delete mutableBlock.partialJson;
   }
   output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
   output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);

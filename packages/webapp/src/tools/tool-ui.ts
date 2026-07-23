@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import type { AgentToolResult } from '../core/types.js';
 
 const log = createLogger('tool-ui');
 
@@ -216,15 +217,8 @@ class ToolUIRegistry {
 // Global singleton registry
 export const toolUIRegistry = new ToolUIRegistry();
 
-interface ToolUiDoneContent {
-  type: 'tool_ui_done';
-  requestId: string;
-}
-
 /** Type for the onUpdate callback from AgentTool. */
-type OnUpdateCallback = (partialResult: {
-  content: Array<ToolUIContent | ToolUiDoneContent>;
-}) => void;
+type OnUpdateCallback = (partialResult: AgentToolResult<unknown>) => void;
 
 /**
  * Show interactive UI from a tool execution.
@@ -292,7 +286,7 @@ export async function showToolUI(
           html: request.html,
         },
       ],
-    });
+    } as unknown as AgentToolResult<unknown>);
   } else {
     log.warn('showToolUI called without onUpdate callback — UI may not render');
   }
@@ -307,7 +301,7 @@ export async function showToolUI(
             requestId: id,
           },
         ],
-      });
+      } as unknown as AgentToolResult<unknown>);
     }
   });
 }
