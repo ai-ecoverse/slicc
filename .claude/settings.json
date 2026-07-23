@@ -1,5 +1,18 @@
 {
   "permissions": {
     "deny": ["Read(./providers.json)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/pre-push-reminder.mjs"
+          }
+        ]
+      }
+    ]
   }
 }
