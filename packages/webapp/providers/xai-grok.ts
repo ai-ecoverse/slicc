@@ -12,10 +12,9 @@
  * accounts.x.ai rejects non-Grok-CLI loopback flows. `referrer=slicc` is
  * informational attribution.
  *
- * Model catalog, sanitizer, and typed errors are adapted from the
- * actively-maintained stnly/pi-grok extension (MIT). The OAuth transport
- * uses slicc's CDP interception since the webapp / extension floats can't
- * bind 127.0.0.1.
+ * Model catalog and API quirks come from pi-ai's built-in xAI provider. The
+ * OAuth transport uses slicc's CDP interception since the webapp / extension
+ * floats can't bind 127.0.0.1.
  */
 
 import type {
@@ -26,12 +25,14 @@ import type {
   ProviderHeaders,
   ProviderStreamOptions,
   SimpleStreamOptions,
-  StreamOptions,
 } from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
+  getModels,
   registerApiProvider,
+  streamOpenAICompletions,
   streamOpenAIResponses,
+  streamSimpleOpenAICompletions,
   streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai/compat';
 import type {
@@ -41,8 +42,6 @@ import type {
 } from '../src/providers/types.js';
 import { getAccounts, saveOAuthAccount } from '../src/ui/provider-settings.js';
 import { XaiErrorCode, XaiOAuthError } from './xai-grok-errors.js';
-import { resolveModels, toModelMetadata, type XaiModelConfig } from './xai-grok-models.js';
-import { sanitizePayload } from './xai-grok-sanitize.js';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -67,25 +66,51 @@ const XAI_OAUTH_SCOPE = 'openid profile email offline_access grok-cli:access api
 const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
 const XAI_REDIRECT_PATTERN = 'http://127.0.0.1:56121/*';
 const XAI_API_BASE_URL = 'https://api.x.ai/v1';
-// pi-ai's actual responses-API name — used when we delegate to
-// `streamOpenAIResponses` after auth + payload sanitization.
-const OPENAI_RESPONSES_API: Api = 'openai-responses';
 // The api slicc tags each model with after `provider-settings.ts` rewrites
-// `api: 'openai'` from `toModelMetadata()` to `${providerId}-${apiType}`.
+// `api: 'openai'` from `getModelIds()` to `${providerId}-${apiType}`.
 // We register our streams under this name so the agent loop routes Grok
-// turns to *us* (OAuth + sanitization), not to pi-ai's stock OpenAI path.
+// turns to *us* for OAuth injection, not to pi-ai's stock OpenAI path.
 // Same indirection trick as `built-in/local-llm.ts`.
 const XAI_API: Api = `${PROVIDER_ID}-openai` as Api;
 
 // ── Models ─────────────────────────────────────────────────────────
 
-function envModelFilter(): string | null {
-  if (typeof process === 'undefined') return null;
-  return process.env?.PI_XAI_OAUTH_MODELS ?? null;
+type NativeXaiModel = Model<'openai-completions'> | Model<'openai-responses'>;
+
+function getNativeXaiModels(): Model<Api>[] {
+  return getModels('xai') as Model<Api>[];
 }
 
-const XAI_MODELS: XaiModelConfig[] = resolveModels(envModelFilter());
 type ApiProviderRegistration = Parameters<typeof registerApiProvider>[0];
+
+function toModelMetadata(model: Model<Api>) {
+  return {
+    id: model.id,
+    name: model.name,
+    api: 'openai' as const,
+    reasoning: model.reasoning,
+    input: model.input,
+    context_window: model.contextWindow,
+    max_tokens: model.maxTokens,
+    compat: model.compat,
+    thinkingLevelMap: model.thinkingLevelMap,
+  };
+}
+
+function resolveNativeXaiModel(model: Model<Api>): NativeXaiModel {
+  const nativeModel = getNativeXaiModels().find((candidate) => candidate.id === model.id);
+  if (!nativeModel) {
+    throw new Error(`xAI model "${model.id}" is not registered by pi-ai`);
+  }
+  if (nativeModel.api !== 'openai-responses' && nativeModel.api !== 'openai-completions') {
+    throw new Error(`Unsupported pi-ai API "${nativeModel.api}" for xAI model "${model.id}"`);
+  }
+  return {
+    ...model,
+    ...nativeModel,
+    baseUrl: XAI_API_BASE_URL,
+  } as NativeXaiModel;
+}
 
 // ── PKCE helpers ───────────────────────────────────────────────────
 
@@ -239,18 +264,6 @@ function makeErrorOutput(model: Model<Api>, error: unknown): AssistantMessageEve
 }
 
 /**
- * Build the pi-ai onPayload hook that runs {@link sanitizePayload} just
- * before the request is serialized. Mutates the payload in place so the
- * change is invisible to the rest of the pipeline.
- */
-function makePayloadSanitizer(modelId: string, sessionId?: string) {
-  return (payload: unknown): unknown => {
-    if (!payload || typeof payload !== 'object') return payload;
-    return sanitizePayload(payload as Record<string, unknown>, modelId, sessionId);
-  };
-}
-
-/**
  * xAI routes requests with the same `x-grok-conv-id` to the same backend
  * shard for prompt-cache locality. Mirror stnly/pi-grok and tag every
  * stream with the slicc session ID when one is available.
@@ -269,17 +282,16 @@ const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamO
     try {
       const accessToken = await getValidAccessToken();
       const sessionId = (options as { sessionId?: string }).sessionId;
-      const proxyModel = {
-        ...model,
-        baseUrl: XAI_API_BASE_URL,
-        api: OPENAI_RESPONSES_API,
-      } as Model<'openai-responses'>;
-      const inner = streamOpenAIResponses(proxyModel, context, {
+      const nativeModel = resolveNativeXaiModel(model);
+      const forwardedOptions = {
         ...options,
         apiKey: accessToken,
         headers: withGrokConvHeader(options.headers, sessionId),
-        onPayload: makePayloadSanitizer(model.id, sessionId),
-      });
+      };
+      const inner =
+        nativeModel.api === 'openai-responses'
+          ? streamOpenAIResponses(nativeModel, context, forwardedOptions)
+          : streamOpenAICompletions(nativeModel, context, forwardedOptions);
       for await (const event of inner) stream.push(event);
       stream.end();
     } catch (error) {
@@ -300,20 +312,16 @@ const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleSt
     try {
       const accessToken = await getValidAccessToken();
       const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
-      const proxyModel = {
-        ...model,
-        baseUrl: XAI_API_BASE_URL,
-        api: OPENAI_RESPONSES_API,
-      } as Model<'openai-responses'>;
-      const innerOptions: SimpleStreamOptions & {
-        onPayload?: StreamOptions['onPayload'];
-      } = {
+      const nativeModel = resolveNativeXaiModel(model);
+      const forwardedOptions: SimpleStreamOptions = {
         ...options,
         apiKey: accessToken,
         headers: withGrokConvHeader(options?.headers, sessionId),
-        onPayload: makePayloadSanitizer(model.id, sessionId),
       };
-      const inner = streamSimpleOpenAIResponses(proxyModel, context, innerOptions);
+      const inner =
+        nativeModel.api === 'openai-responses'
+          ? streamSimpleOpenAIResponses(nativeModel, context, forwardedOptions)
+          : streamSimpleOpenAICompletions(nativeModel, context, forwardedOptions);
       for await (const event of inner) stream.push(event);
       stream.end();
     } catch (error) {
@@ -334,20 +342,13 @@ export const config: ProviderConfig = {
   id: PROVIDER_ID,
   name: 'xAI Grok (SuperGrok OAuth)',
   description:
-    'Grok via xAI OAuth — uses your SuperGrok subscription, no API key needed. Default model is Grok Heavy.',
+    'Grok via xAI OAuth — uses your SuperGrok subscription, no API key needed. Default model is Grok 4.5.',
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'grok-4.20-multi-agent-0309',
+  defaultModelId: 'grok-4.5',
   oauthTokenDomains: ['api.x.ai', '*.x.ai', 'auth.x.ai', 'accounts.x.ai'],
-  getModelIds: () =>
-    XAI_MODELS.map((m) => {
-      const meta = toModelMetadata(m);
-      // thinkingLevelMap is a Model<Api> field, but the metadata layer
-      // forwards arbitrary extra keys through to provider-settings.ts,
-      // which spreads them onto the model record.
-      return m.thinkingLevelMap ? { ...meta, thinkingLevelMap: m.thinkingLevelMap } : meta;
-    }),
+  getModelIds: () => getNativeXaiModels().map(toModelMetadata),
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,
