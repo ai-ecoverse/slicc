@@ -33,6 +33,31 @@ export interface TokenResponse {
   expires_in?: number;
 }
 
+async function parseTokenResponse(res: Response): Promise<TokenResponse> {
+  let body: Record<string, unknown>;
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Token exchange failed (HTTP ${res.status}): non-JSON response`);
+  }
+
+  if (!res.ok && res.status !== 200) {
+    const msg =
+      (body.error_description as string) ??
+      (body.error as string) ??
+      `Token exchange failed (HTTP ${res.status})`;
+    throw new Error(msg);
+  }
+
+  // GitHub returns 200 even for errors — check for error field
+  if (body.error) {
+    const msg = (body.error_description as string) ?? (body.error as string);
+    throw new Error(msg);
+  }
+
+  return body as unknown as TokenResponse;
+}
+
 /**
  * Exchange an OAuth authorization code for tokens via the worker's
  * generic token broker (`POST /oauth/token`).
@@ -58,28 +83,25 @@ export async function exchangeOAuthCode(opts: {
     }),
   });
 
-  let body: Record<string, unknown>;
-  try {
-    body = (await res.json()) as Record<string, unknown>;
-  } catch {
-    throw new Error(`Token exchange failed (HTTP ${res.status}): non-JSON response`);
-  }
+  return parseTokenResponse(res);
+}
 
-  if (!res.ok && res.status !== 200) {
-    const msg =
-      (body.error_description as string) ??
-      (body.error as string) ??
-      `Token exchange failed (HTTP ${res.status})`;
-    throw new Error(msg);
-  }
+/** Refresh OAuth tokens via the worker's generic token broker. */
+export async function refreshOAuthToken(opts: {
+  provider: string;
+  refreshToken: string;
+}): Promise<TokenResponse> {
+  const url = `${getWorkerBaseUrl()}/oauth/token`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: opts.provider,
+      refresh_token: opts.refreshToken,
+    }),
+  });
 
-  // GitHub returns 200 even for errors — check for error field
-  if (body.error) {
-    const msg = (body.error_description as string) ?? (body.error as string);
-    throw new Error(msg);
-  }
-
-  return body as unknown as TokenResponse;
+  return parseTokenResponse(res);
 }
 
 /**

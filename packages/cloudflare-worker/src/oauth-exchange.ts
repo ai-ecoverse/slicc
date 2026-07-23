@@ -73,7 +73,12 @@ export async function handleOAuthToken(
 ): Promise<Response> {
   const cors = oauthCorsHeaders(request);
 
-  let body: { provider?: string; code?: string; redirect_uri?: string };
+  let body: {
+    provider?: string;
+    code?: string;
+    refresh_token?: string;
+    redirect_uri?: string;
+  };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -84,7 +89,7 @@ export async function handleOAuthToken(
     );
   }
 
-  const { provider, code, redirect_uri } = body;
+  const { provider, code, refresh_token, redirect_uri } = body;
 
   if (!provider) {
     return jsonResponse(
@@ -103,7 +108,7 @@ export async function handleOAuthToken(
   }
   const def = OAUTH_PROVIDERS[provider];
 
-  if (!code) {
+  if (!code && !refresh_token) {
     return jsonResponse(
       { error: 'invalid_request', error_description: 'Missing "code" field' },
       400,
@@ -124,19 +129,26 @@ export async function handleOAuthToken(
   }
 
   // OAuth 2.0 spec requires application/x-www-form-urlencoded for token exchange
+  const tokenParams = new URLSearchParams({
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
+  });
+  if (code) {
+    tokenParams.set('code', code);
+    tokenParams.set('grant_type', 'authorization_code');
+    if (redirect_uri) tokenParams.set('redirect_uri', redirect_uri);
+  } else if (refresh_token) {
+    tokenParams.set('refresh_token', refresh_token);
+    tokenParams.set('grant_type', 'refresh_token');
+  }
+
   const upstream = await fetchImpl(def.tokenEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
     },
-    body: new URLSearchParams({
-      client_id: creds.clientId,
-      client_secret: creds.clientSecret,
-      code,
-      grant_type: 'authorization_code',
-      ...(redirect_uri ? { redirect_uri } : {}),
-    }),
+    body: tokenParams,
   });
 
   const responseBody = await upstream.text();

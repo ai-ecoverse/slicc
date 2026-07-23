@@ -13,7 +13,7 @@ const mockFetch = vi.fn<typeof fetch>();
 vi.stubGlobal('fetch', mockFetch);
 
 // Import after stubs are in place
-const { exchangeOAuthCode, revokeOAuthToken } = await import(
+const { exchangeOAuthCode, refreshOAuthToken, revokeOAuthToken } = await import(
   '../../src/providers/oauth-code-exchange.js'
 );
 
@@ -117,6 +117,52 @@ describe('exchangeOAuthCode', () => {
     await expect(
       exchangeOAuthCode({ provider: 'github', code: 'c', redirectUri: 'r' })
     ).rejects.toThrow('non-JSON response');
+  });
+});
+
+describe('refreshOAuthToken', () => {
+  it('calls the worker /oauth/token endpoint with the refresh token', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: 'gho_refreshed',
+          refresh_token: 'ghr_rotated',
+          expires_in: 28_800,
+        }),
+        { status: 200 }
+      )
+    );
+
+    const result = await refreshOAuthToken({
+      provider: 'github',
+      refreshToken: 'ghr_existing',
+    });
+
+    expect(result).toEqual({
+      access_token: 'gho_refreshed',
+      refresh_token: 'ghr_rotated',
+      expires_in: 28_800,
+    });
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('https://www.sliccy.ai/oauth/token');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string)).toEqual({
+      provider: 'github',
+      refresh_token: 'ghr_existing',
+    });
+  });
+
+  it('throws on an OAuth error returned with HTTP 200', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: 'bad_refresh_token', error_description: 'Refresh expired.' }),
+        { status: 200 }
+      )
+    );
+
+    await expect(
+      refreshOAuthToken({ provider: 'github', refreshToken: 'ghr_expired' })
+    ).rejects.toThrow('Refresh expired.');
   });
 });
 
