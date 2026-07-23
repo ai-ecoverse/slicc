@@ -312,7 +312,6 @@
         "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts",
         "packages/webapp/src/shell/supplemental-commands/models-command.ts",
         "packages/webapp/src/shell/supplemental-commands/oauth-domain-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/oauth-token-command.ts",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
         "packages/webapp/src/shell/supplemental-commands/ps-command.ts",
         "packages/webapp/src/shell/supplemental-commands/screencapture-command.ts",
