@@ -546,7 +546,7 @@ packages/vfs-root/
 
 docs/
   development.md   This file
-  testing.md       Test patterns and conventions
+  testing.md       Pointer → .agents/skills/writing-slicc-tests/SKILL.md
   architecture.md  Detailed architecture breakdown
   tools-reference.md  Agent tool surface reference
   shell-reference.md  Shell commands and .jsh scripts

@@ -10,22 +10,34 @@ Use these patterns, conventions, and procedures when writing tests for SLICC.
 
 ## Quick Reference
 
-| Command                                                      | Purpose                                      |
-| ------------------------------------------------------------ | -------------------------------------------- |
-| `npm run test`                                               | Run all tests once; fail fast on first error |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run a single test file                       |
-| `npx vitest run packages/webapp/tests/fs/`                   | Run all tests in a directory                 |
-| `npx vitest run --reporter=verbose`                          | Show full stack traces                       |
-| `npm run test:coverage:<package>`                            | Check a TypeScript package's coverage floor  |
-| `packages/dev-tools/tools/swift-coverage-check.sh`           | Check Swift package coverage floors          |
-| `npm run test:e2e`                                           | Run Playwright and fake-LLM E2E tests        |
+| Command                                                                 | Purpose                                     |
+| ----------------------------------------------------------------------- | ------------------------------------------- |
+| `npm run test`                                                          | Run Node-mode Vitest projects               |
+| `npm test -w @slicc/webcomponents`                                      | Run Chromium browser-mode component tests   |
+| `npm test -w @ai-ecoverse/spoon`                                        | Run Chromium launcher tests                 |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`            | Run a single test file                      |
+| `npx vitest run packages/webapp/tests/fs/`                              | Run all tests in a directory                |
+| `npx vitest run --reporter=verbose`                                     | Show full stack traces                      |
+| `npm run test:coverage:<package>`                                       | Check a TypeScript package's coverage floor |
+| `./packages/dev-tools/tools/swift-coverage-check.sh <pkg-dir> <bundle>` | Check Swift package coverage floors         |
+| `npm run test:server-integration`                                       | Node-server integration tests               |
+| `npm run test:e2e`                                                      | Run Playwright and fake-LLM E2E tests       |
 
 ## Set Up the Framework
 
 - **Framework**: Vitest with `globals: true`, `environment: node`
 - **Convention**: `foo.test.ts` in `packages/*/tests/` mirroring the `src/` structure
-- **Test count**: 1513 tests across 84 files
 - **Import fake-indexeddb** when VirtualFS is used: `import 'fake-indexeddb/auto'`
+
+**Note:** `npm run test` runs the default Node-mode Vitest projects only. It does
+not include:
+
+- **Browser-mode suites**: `npm test -w @slicc/webcomponents` and `npm test -w @ai-ecoverse/spoon` (real Chromium via `@vitest/browser`)
+- **Server integration**: `npm run test:server-integration`
+- **Playwright E2E**: `npm run test:e2e`
+
+When changing web components or DOM rendering, run the browser-mode suites — they
+require automated tests, not just manual verification.
 
 ## Set Up VirtualFS Tests
 
@@ -337,7 +349,6 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 
 ## Manually Verify These Categories
 
-- **DOM rendering**: UI panels (ChatPanel, TerminalPanel, FilePanel)
 - **just-bash runtime**: the shell interpreter itself (covered by tool tests)
 - **Chrome API**: DebuggerClient, service workers — EXCEPT
   state-machine and lifecycle-reconciliation logic (e.g., the
@@ -346,6 +357,10 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
   `packages/chrome-extension/tests/service-worker-leader-tab.test.ts`
   for the established mock pattern.
 - **xterm.js**: Terminal rendering (manually verified)
+
+**Web components and DOM rendering** are covered by browser-mode Vitest suites
+(`@slicc/webcomponents`, `@ai-ecoverse/spoon`). Changes to those packages require
+automated browser tests, not just manual verification.
 
 For skipped categories, ensure **manual verification in both CLI and extension modes** before committing.
 
@@ -371,22 +386,34 @@ then `coverage-gate.mjs`, which reads the package's floors from
 
 ### Check Swift Packages
 
-Run `packages/dev-tools/tools/swift-coverage-check.sh`, which executes
-`swift test --enable-code-coverage` followed by `xcrun llvm-cov report`. `Tests/` and
-`.build` paths are excluded; the **TOTAL row** is checked against the
+Run `packages/dev-tools/tools/swift-coverage-check.sh <package-dir> <test-bundle-name>`,
+which executes `swift test --enable-code-coverage` followed by `xcrun llvm-cov report`.
+`Tests/` and `.build` paths are excluded; the **TOTAL row** is checked against the
 lines/functions/regions floors from `coverage-thresholds.json` (passed explicitly or
 read from the file). The `swift-launcher` floor stays low because most of the bundle is
 SwiftUI views that resist unit tests.
 
+Both arguments are **required**:
+
+```bash
+./packages/dev-tools/tools/swift-coverage-check.sh \
+  packages/swift-server SliccServerPackageTests
+
+./packages/dev-tools/tools/swift-coverage-check.sh \
+  packages/swift-launcher SliccstartPackageTests
+```
+
 ## Run Tests
 
-| Command                                                      | Purpose                                      |
-| ------------------------------------------------------------ | -------------------------------------------- |
-| `npm run test`                                               | Run all tests once; fail fast on first error |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file                         |
-| `npx vitest run packages/webapp/tests/fs/`                   | Run all tests in directory                   |
-| `npx vitest run --reporter=verbose`                          | Verbose output with full stack traces        |
-| `npx vitest run --reporter=dot`                              | Minimal output (one `.` per test)            |
+| Command                                                      | Purpose                                   |
+| ------------------------------------------------------------ | ----------------------------------------- |
+| `npm run test`                                               | Run Node-mode Vitest projects             |
+| `npm test -w @slicc/webcomponents`                           | Run Chromium browser-mode component tests |
+| `npm test -w @ai-ecoverse/spoon`                             | Run Chromium launcher tests               |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file                      |
+| `npx vitest run packages/webapp/tests/fs/`                   | Run all tests in directory                |
+| `npx vitest run --reporter=verbose`                          | Verbose output with full stack traces     |
+| `npx vitest run --reporter=dot`                              | Minimal output (one `.` per test)         |
 
 ## Organize Test Files
 
@@ -553,44 +580,54 @@ assertions after each phase:
   URLs enumerates Pages A/B/C with their three distinct titles
   (sorted for a stable assertion).
 
-Boilerplate, lightly abbreviated from
-`reference-scenario.test.ts`:
+Boilerplate from `reference-scenario.test.ts` (note: uses `gotoLeader`,
+not `page.goto('/')`, and resets the fixture cursor before each attempt):
 
 ```typescript
 import { expect, test } from '@playwright/test';
 import {
   readCdpPageState,
+  resetFakeLlm,
   seedLocalLlmProvider,
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
-import { seedSkipSwReload, waitForSW } from './helpers.js';
+import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 // Binds Chrome's CDP at the default port the helper probes AND the
 // port the `node-server --serve-only --cdp-port=9222` proxy expects.
-// Run this file serially when other specs also touch 9222.
 test.use({ launchOptions: { args: ['--remote-debugging-port=9222'] } });
-test.describe.configure({ mode: 'serial' });
 
-test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {
-  await seedLocalLlmProvider(page, { modelId: 'fake-coder-reference' });
-  await seedSkipSwReload(page);
-  await page.goto('/');
-  await waitForSW(page);
-  await page.waitForSelector('slicc-input-card');
-  await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
+test.describe('my scenario', () => {
+  // Rewind the fake-LLM turn cursor before every attempt so Playwright
+  // retries don't resume mid-fixture and fail with fixture_overflow.
+  test.beforeEach(async () => {
+    await resetFakeLlm();
+  });
 
-  // Drive one phase at a time so per-phase assertions can interleave.
-  await submitUserMessage(page, 'open the reference page');
-  await waitForTurnComplete(page);
-  await expect(page.locator('slicc-chat-thread')).toContainText('Done. Page A is open.');
-  await expect
-    .poll(async () =>
-      (await readCdpPageState({ filter: (t) => t.type === 'page' })).map((t) => t.title)
-    )
-    .toContain('FAKE LLM REFERENCE TARGET');
+  test('scripted tool calls drive CDP navigations', async ({ page }) => {
+    await seedLocalLlmProvider(page, { modelId: 'fake-coder-reference' });
+    await seedSkipSwReload(page);
+    // MUST use gotoLeader — it appends ?bridge=ws://…/cdp&bridgeToken=…
+    // so the page-realm BrowserAPI dials the node-server CDP bridge.
+    // page.goto('/') will NOT connect the agent to CDP.
+    await gotoLeader(page);
+    await waitForSW(page);
+    await page.waitForSelector('slicc-input-card');
+    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
 
-  // Phases 2 and 3 follow the same submit + wait + assert pattern.
+    // Drive one phase at a time so per-phase assertions can interleave.
+    await submitUserMessage(page, 'open the reference page');
+    await waitForTurnComplete(page);
+    await expect(page.locator('slicc-chat-thread')).toContainText('Done. Page A is open.');
+    await expect
+      .poll(async () =>
+        (await readCdpPageState({ filter: (t) => t.type === 'page' })).map((t) => t.title)
+      )
+      .toContain('FAKE LLM REFERENCE TARGET');
+
+    // Phases 2 and 3 follow the same submit + wait + assert pattern.
+  });
 });
 ```
 
