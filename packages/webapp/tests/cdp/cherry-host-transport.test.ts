@@ -51,10 +51,12 @@ describe('CherryHostTransport', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      // Host SDK speaking cherry v2 — fails the structural validator, but
+      // Host SDK speaking a different cherry version — fails the structural validator, but
       // must be diagnosed as skew (and fail fast), not eaten as noise.
-      h.inbound({ cherry: 2, channelId: hello.channelId, kind: 'handshake.welcome' });
-      await expect(p).rejects.toThrow(/version mismatch \(peer v2, ours v1\)/);
+      h.inbound({ cherry: CHERRY_PROTOCOL_VERSION + 1, channelId: hello.channelId, kind: 'handshake.welcome' });
+      await expect(p).rejects.toThrow(
+        new RegExp(`version mismatch \\(peer v${CHERRY_PROTOCOL_VERSION + 1}`)
+      );
     } finally {
       warnSpy.mockRestore();
     }
@@ -71,7 +73,7 @@ describe('CherryHostTransport', () => {
       h.transport.testReceive({
         origin: 'https://evil.example',
         source: {} as MessageEventSource,
-        data: { cherry: 2, channelId: hello.channelId, kind: 'handshake.welcome' },
+        data: { cherry: CHERRY_PROTOCOL_VERSION + 1, channelId: hello.channelId, kind: 'handshake.welcome' },
       } as MessageEvent);
     } finally {
       warnSpy.mockRestore();

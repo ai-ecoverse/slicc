@@ -32,7 +32,9 @@ describe('isCherryEnvelope', () => {
   });
 
   it('rejects a wrong protocol version', () => {
-    expect(isCherryEnvelope({ ...validEnvelope(), cherry: 2 })).toBe(false);
+    expect(isCherryEnvelope({ ...validEnvelope(), cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(
+      false
+    );
   });
 
   it('rejects a non-string channelId', () => {
@@ -50,12 +52,15 @@ describe('isCherryEnvelope', () => {
 
 describe('isCherryVersionMismatch', () => {
   it('detects an envelope-shaped message with a different version', () => {
-    expect(isCherryVersionMismatch({ ...validEnvelope(), cherry: 2 })).toBe(true);
+    expect(
+      isCherryVersionMismatch({ ...validEnvelope(), cherry: CHERRY_PROTOCOL_VERSION + 1 })
+    ).toBe(true);
   });
   it('is false for the current version and for noise', () => {
     expect(isCherryVersionMismatch(validEnvelope())).toBe(false);
     expect(isCherryVersionMismatch(null)).toBe(false);
-    expect(isCherryVersionMismatch({ cherry: 2 })).toBe(false);
+    // Only version number — missing channelId and kind → not a mismatch
+    expect(isCherryVersionMismatch({ cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(false);
   });
 });
 

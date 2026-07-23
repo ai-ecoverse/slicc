@@ -7,7 +7,7 @@
  * per-mount channelId nonce — before any synthetic CDP is acted on.
  */
 
-export const CHERRY_PROTOCOL_VERSION = 1;
+export const CHERRY_PROTOCOL_VERSION = 2;
 
 export interface CherryHandshakeHello {
   cherry: typeof CHERRY_PROTOCOL_VERSION;
@@ -101,6 +101,71 @@ export interface CherrySliccEvent {
   detail?: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// Session export envelopes (host → iframe and iframe → host)
+// ---------------------------------------------------------------------------
+
+/** Host → iframe: initiate a transcript export for the given session. */
+export interface CherrySessionExportRequest {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.request';
+  requestId: string;
+  /** `'active'` (default) or a frozen session ID. */
+  sessionId?: 'active' | string;
+}
+
+/** Host → iframe: cancel an in-flight export (AbortSignal fired). */
+export interface CherrySessionExportCancel {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.cancel';
+  requestId: string;
+}
+
+/**
+ * Iframe → host: incremental progress update.
+ * All fields are JSON-cloneable; no Blob or binary here.
+ */
+export interface CherrySessionExportProgress {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.progress';
+  requestId: string;
+  phase:
+    | 'waiting-for-conversations'
+    | 'collecting'
+    | 'redacting'
+    | 'packaging'
+    | 'transferring'
+    | 'complete';
+  processedBytes?: number;
+  estimatedBytes?: number;
+}
+
+/**
+ * Iframe → host: the verified application/zip Blob.
+ * Blob is the only non-JSON-cloneable field; all other envelopes are
+ * JSON-cloneable and may be structured-cloned through any postMessage bridge.
+ */
+export interface CherrySessionExportResponse {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.response';
+  requestId: string;
+  /** Verified application/zip. Reject if blob.type !== 'application/zip'. */
+  blob: Blob;
+}
+
+/** Iframe → host: the export failed with a terminal error code. */
+export interface CherrySessionExportError {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.error';
+  requestId: string;
+  code: string;
+}
+
 export type CherryEnvelope =
   | CherryHandshakeHello
   | CherryHandshakeWelcome
@@ -110,7 +175,12 @@ export type CherryEnvelope =
   | CherryPermissionRequest
   | CherryPermissionResponse
   | CherryHostEvent
-  | CherrySliccEvent;
+  | CherrySliccEvent
+  | CherrySessionExportRequest
+  | CherrySessionExportCancel
+  | CherrySessionExportProgress
+  | CherrySessionExportResponse
+  | CherrySessionExportError;
 
 const KINDS = new Set<CherryEnvelope['kind']>([
   'handshake.hello',
@@ -122,6 +192,11 @@ const KINDS = new Set<CherryEnvelope['kind']>([
   'permission.response',
   'host.event',
   'slicc.event',
+  'session.export.request',
+  'session.export.cancel',
+  'session.export.progress',
+  'session.export.response',
+  'session.export.error',
 ]);
 
 export function isCherryEnvelope(value: unknown): value is CherryEnvelope {
