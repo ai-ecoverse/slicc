@@ -52,6 +52,7 @@ const HELP = `biome-jsh - a jsh-aware Biome runner
 
 Usage:
   biome-jsh check  [paths...]          Lint + format-check (--reporter=github)
+  biome-jsh lint   [paths...]          Lint only, no format-check (--reporter=github)
   biome-jsh format [paths...]          Print formatted output to stdout
   biome-jsh format --write [paths...]  Format files in place
 
@@ -99,7 +100,7 @@ function parseArgs(argv) {
     if (arg === '-h' || arg === '--help') parsed.help = true;
     else if (arg === '-v' || arg === '--version') parsed.version = true;
     else if (arg === '--write') parsed.write = true;
-    else if (parsed.subcommand === null && (arg === 'check' || arg === 'format'))
+    else if (parsed.subcommand === null && (arg === 'check' || arg === 'lint' || arg === 'format'))
       parsed.subcommand = arg;
     else if (arg.startsWith('-')) fail(`unknown option: ${arg}`);
     else parsed.paths.push(arg);
@@ -155,7 +156,7 @@ function formatWrapped(bin, source, dir, tempBase, tempPath) {
   return { safe, changed: safe !== source, failed: false };
 }
 
-function processWrappedCheck(bin, file) {
+function processWrappedLint(bin, file) {
   const dir = dirname(file);
   const source = readFileSync(file, 'utf8');
   const tempBase = tempName(file);
@@ -173,6 +174,19 @@ function processWrappedCheck(bin, file) {
       out.errorCount++;
       out.lines.push(makeStderrLines(lint.stderr));
     }
+  } finally {
+    safeUnlink(tempPath);
+  }
+  return out;
+}
+
+function processWrappedCheck(bin, file) {
+  const out = processWrappedLint(bin, file);
+  const dir = dirname(file);
+  const source = readFileSync(file, 'utf8');
+  const tempBase = tempName(file);
+  const tempPath = join(dir, tempBase);
+  try {
     const fmt = formatWrapped(bin, source, dir, tempBase, tempPath);
     if (fmt.failed) {
       out.lines.push(
@@ -218,6 +232,17 @@ function processWrappedFormat(bin, file, write) {
 function processPlainCheck(bin, file) {
   const dir = dirname(file);
   const result = runBiome(bin, ['check', '--reporter=github', basename(file)], dir);
+  const remapped = remapGithubOutput(result.stdout, file, 0);
+  if (result.status !== 0 && remapped.errorCount === 0 && remapped.warningCount === 0) {
+    remapped.errorCount++;
+    remapped.lines.push(makeStderrLines(result.stderr));
+  }
+  return remapped;
+}
+
+function processPlainLint(bin, file) {
+  const dir = dirname(file);
+  const result = runBiome(bin, ['lint', '--reporter=github', basename(file)], dir);
   const remapped = remapGithubOutput(result.stdout, file, 0);
   if (result.status !== 0 && remapped.errorCount === 0 && remapped.warningCount === 0) {
     remapped.errorCount++;
@@ -284,14 +309,14 @@ function fail(message) {
   process.exit(2);
 }
 
-function runCheck(bin, files, missing) {
+// Shared reporter for `check`/`lint`: run a per-file processor, aggregate the
+// github annotations + counts, and set the exit code (1 if any errors).
+function runReport(bin, files, missing, wrappedFn, plainFn) {
   const outLines = [];
   let errorCount = missing.length;
   let warningCount = 0;
   for (const file of files) {
-    const r = shouldWrapForBiome(file)
-      ? processWrappedCheck(bin, file)
-      : processPlainCheck(bin, file);
+    const r = shouldWrapForBiome(file) ? wrappedFn(bin, file) : plainFn(bin, file);
     outLines.push(...r.lines);
     errorCount += r.errorCount;
     warningCount += r.warningCount;
@@ -301,6 +326,14 @@ function runCheck(bin, files, missing) {
     `biome-jsh: ${files.length} file(s), ${errorCount} error(s), ${warningCount} warning(s)\n`
   );
   process.exitCode = errorCount > 0 ? 1 : 0;
+}
+
+function runCheck(bin, files, missing) {
+  runReport(bin, files, missing, processWrappedCheck, processPlainCheck);
+}
+
+function runLint(bin, files, missing) {
+  runReport(bin, files, missing, processWrappedLint, processPlainLint);
 }
 
 function runFormat(bin, files, write, hadMissing) {
@@ -329,13 +362,14 @@ function main() {
     process.stdout.write(v.stdout || v.stderr);
     return;
   }
-  if (!parsed.subcommand) fail('missing subcommand (expected check or format)');
+  if (!parsed.subcommand) fail('missing subcommand (expected check, lint, or format)');
   if (parsed.paths.length === 0) fail('no files or directories specified');
 
   const { files, missing } = expandPaths(parsed.paths);
   for (const m of missing) process.stderr.write(`biome-jsh: ${m}: no such file or directory\n`);
 
   if (parsed.subcommand === 'check') runCheck(bin, files, missing);
+  else if (parsed.subcommand === 'lint') runLint(bin, files, missing);
   else runFormat(bin, files, parsed.write, missing.length > 0);
 }
 
