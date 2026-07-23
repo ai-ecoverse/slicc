@@ -4,6 +4,7 @@ import {
   createIpkContextFromCtx,
   createVfsPlugin,
   inferLoader,
+  matchesExternal,
   parseEsbuildArgs,
 } from '../../../src/shell/supplemental-commands/esbuild-command.js';
 import { createEsbuildMockCtx as createMockCtx } from '../helpers/esbuild-mock-ctx.js';
@@ -68,12 +69,46 @@ describe('parseEsbuildArgs', () => {
     expect(parsed.entries).toEqual(['src/index.ts']);
   });
 
+  it('parses repeatable externals, platform, defines, banners, footers, and tree shaking', () => {
+    const parsed = parseEsbuildArgs([
+      '--external:fs',
+      '--external:sliccy:*',
+      '--platform=node',
+      '--define:DEBUG=false',
+      '--define:VERSION="1=2"',
+      '--banner:js=/* start */',
+      '--footer:js=/* end */',
+      '--tree-shaking=false',
+      'entry.js',
+    ]);
+    expect(parsed.external).toEqual(['fs', 'sliccy:*']);
+    expect(parsed.platform).toBe('node');
+    expect(parsed.define).toEqual({ DEBUG: 'false', VERSION: '"1=2"' });
+    expect(parsed.banner).toEqual({ js: '/* start */' });
+    expect(parsed.footer).toEqual({ js: '/* end */' });
+    expect(parsed.treeShaking).toBe(false);
+  });
+
+  it('parses space-form --platform and bare --tree-shaking', () => {
+    const parsed = parseEsbuildArgs(['--platform', 'neutral', '--tree-shaking', 'entry.js']);
+    expect(parsed.platform).toBe('neutral');
+    expect(parsed.treeShaking).toBe(true);
+    expect(parseEsbuildArgs(['--tree-shaking=true', 'entry.js']).treeShaking).toBe(true);
+  });
+
+  it('rejects an invalid --platform value', () => {
+    expect(() => parseEsbuildArgs(['--platform=deno', 'a.js'])).toThrow(
+      '--platform must be one of browser|node|neutral'
+    );
+  });
+
   it('treats bare --sourcemap as boolean-true', () => {
     expect(parseEsbuildArgs(['--sourcemap', 'a.js']).sourcemap).toBe(true);
   });
 
   it('rejects unknown long options', () => {
     expect(() => parseEsbuildArgs(['--frobnicate', 'a.js'])).toThrow(/unknown option/);
+    expect(() => parseEsbuildArgs(['--alias:old=new', 'a.js'])).toThrow(/unknown option/);
   });
 
   it('captures --version and --help', () => {
@@ -94,6 +129,27 @@ describe('inferLoader', () => {
   });
 });
 
+describe('matchesExternal', () => {
+  it('matches exact specifiers and anchored wildcard patterns', () => {
+    expect(matchesExternal('fs', ['fs'])).toBe(true);
+    expect(matchesExternal('pkg/subpath', ['pkg'])).toBe(true);
+    expect(matchesExternal('@scope/pkg/subpath', ['@scope/pkg'])).toBe(true);
+    expect(matchesExternal('pkg-extra/subpath', ['pkg'])).toBe(false);
+    expect(matchesExternal('sliccy:fs', ['sliccy:*'])).toBe(true);
+    expect(matchesExternal('other:sliccy:fs', ['sliccy:*'])).toBe(false);
+  });
+
+  it('keeps exact VFS external patterns exact', () => {
+    expect(matchesExternal('./vendor.js/nested', ['./vendor.js'])).toBe(false);
+    expect(matchesExternal('/workspace/vendor.js/nested', ['/workspace/vendor.js'])).toBe(false);
+  });
+
+  it('escapes regex metacharacters in patterns', () => {
+    expect(matchesExternal('@scope/pkg.js', ['@scope/pkg.*'])).toBe(true);
+    expect(matchesExternal('@scope/pkgXjs', ['@scope/pkg.*'])).toBe(false);
+  });
+});
+
 describe('createIpkContextFromCtx', () => {
   it('adapts the ctx.fs surface into a ModuleReader + readBytes', async () => {
     const ctx = createMockCtx();
@@ -109,7 +165,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
   it("surfaces a 'run ipk install' error for an uninstalled bare specifier", async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     const collected: { errors: { text: string }[] } = { errors: [] };
     type ResolveCb = (a: { path: string; importer?: string; namespace?: string }) => Promise<{
       path?: string;
@@ -135,7 +191,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
   it('marks node: / data: imports as external', async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     type ResolveCb = (a: { path: string; importer?: string; namespace?: string }) => Promise<{
       path?: string;
       external?: boolean;
@@ -153,6 +209,100 @@ describe('createVfsPlugin bare specifier resolution', () => {
     const cb: ResolveCb = resolveCb;
     const res = await cb({ path: 'node:fs', importer: '/workspace/entry.ts' });
     expect(res.external).toBe(true);
+  });
+
+  it('never externalizes entry points but still externalizes matching imports', async () => {
+    const ctx = createMockCtx();
+    const ipk = createIpkContextFromCtx(ctx);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, ['*'], null);
+    type ResolveCb = (a: { path: string; importer?: string; kind: string }) => Promise<{
+      path?: string;
+      external?: boolean;
+    }>;
+    let resolveCb: ResolveCb | null = null;
+    plugin.setup({
+      onResolve(_filter: { filter: RegExp }, cb: ResolveCb) {
+        resolveCb = cb;
+      },
+      onLoad: () => {},
+    } as unknown as Parameters<typeof plugin.setup>[0]);
+    if (!resolveCb) throw new Error('onResolve callback not registered');
+    const entry = await (resolveCb as ResolveCb)({
+      path: '/workspace/entry.ts',
+      kind: 'entry-point',
+    });
+    const imported = await (resolveCb as ResolveCb)({
+      path: 'external-dependency',
+      importer: '/workspace/entry.ts',
+      kind: 'import-statement',
+    });
+    expect(entry).toEqual({ path: '/workspace/entry.ts' });
+    expect(imported).toEqual({ path: 'external-dependency', external: true });
+  });
+
+  it.each([
+    ['browser', '/workspace/node_modules/conditional/browser.js'],
+    ['node', '/workspace/node_modules/conditional/node.js'],
+    ['neutral', '/workspace/node_modules/conditional/import.js'],
+  ] as const)('uses %s conditions for IPK package exports', async (platform, expectedPath) => {
+    const packageDir = '/workspace/node_modules/conditional';
+    const files = new Map([
+      [
+        `${packageDir}/package.json`,
+        JSON.stringify({
+          exports: {
+            browser: './browser.js',
+            node: './node.js',
+            import: './import.js',
+            default: './default.js',
+          },
+        }),
+      ],
+      [`${packageDir}/browser.js`, 'export default "browser";'],
+      [`${packageDir}/node.js`, 'export default "node";'],
+      [`${packageDir}/import.js`, 'export default "import";'],
+      [`${packageDir}/default.js`, 'export default "default";'],
+    ]);
+    const directories = new Set(['/workspace/node_modules', packageDir]);
+    const ctx = createMockCtx({
+      fs: {
+        exists: async (path) => files.has(path) || directories.has(path),
+        readFile: async (path) => {
+          const contents = files.get(path);
+          if (contents === undefined) throw new Error(`ENOENT: ${path}`);
+          return contents;
+        },
+        stat: async (path) => ({
+          isFile: files.has(path),
+          isDirectory: directories.has(path),
+          isSymbolicLink: false,
+          mode: directories.has(path) ? 0o755 : 0o644,
+          size: files.get(path)?.length ?? 0,
+          mtime: new Date(0),
+        }),
+      },
+    });
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx), [], platform);
+    type ResolveCb = (args: {
+      path: string;
+      importer?: string;
+      kind: string;
+    }) => Promise<{ path?: string; errors?: { text: string }[] }>;
+    let resolveCb: ResolveCb | null = null;
+    plugin.setup({
+      onResolve(_filter: { filter: RegExp }, cb: ResolveCb) {
+        resolveCb = cb;
+      },
+      onLoad: () => {},
+    } as unknown as Parameters<typeof plugin.setup>[0]);
+    if (!resolveCb) throw new Error('onResolve callback not registered');
+    const result = await (resolveCb as ResolveCb)({
+      path: 'conditional',
+      importer: '/workspace/entry.js',
+      kind: 'import-statement',
+    });
+    expect(result.errors).toBeUndefined();
+    expect(result.path).toBe(expectedPath);
   });
 });
 
@@ -180,6 +330,15 @@ describe('createEsbuildCommand (mocked wasm loader)', () => {
     const result = await createEsbuildCommand().execute(['--frobnicate', 'a.js'], createMockCtx());
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain('unknown option');
+  });
+
+  it('returns exit 2 with a clear error for an invalid platform', async () => {
+    const result = await createEsbuildCommand().execute(
+      ['--platform=deno', 'a.js'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('--platform must be one of browser|node|neutral');
   });
 
   it('rejects multiple entries without --bundle', async () => {
@@ -210,6 +369,29 @@ describe('createEsbuildCommand (mocked wasm loader)', () => {
       const result = await createEsbuildCommand().execute(['a.ts'], ctx);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('OUT;');
+    });
+
+    it('forwards transform-safe build options', async () => {
+      esb.transform.mockResolvedValue({ code: 'OUT;', warnings: [] });
+      const ctx = createMockCtx();
+      await ctx.fs.writeFile('/workspace/a.ts', 'DEBUG;');
+      const result = await createEsbuildCommand().execute(
+        ['a.ts', '--platform=node', '--define:DEBUG=false', '--tree-shaking=false'],
+        ctx
+      );
+      expect(result.exitCode).toBe(0);
+      expect(esb.transform).toHaveBeenCalledWith(
+        'DEBUG;',
+        expect.objectContaining({
+          platform: 'node',
+          define: { DEBUG: 'false' },
+          treeShaking: false,
+        })
+      );
+      const opts = esb.transform.mock.calls[0][1];
+      expect(opts).not.toHaveProperty('external');
+      expect(opts).not.toHaveProperty('banner');
+      expect(opts).not.toHaveProperty('footer');
     });
 
     it('errors when the transform entry does not exist', async () => {
@@ -297,6 +479,40 @@ describe('createEsbuildCommand (mocked wasm loader)', () => {
       expect(result.stdout).toBe('BUNDLED;');
     });
 
+    it('forwards external, platform, define, tree-shaking, banner, and footer options', async () => {
+      esb.build.mockResolvedValue({
+        errors: [],
+        warnings: [],
+        outputFiles: [{ path: '/out.js', text: 'BUNDLED;' }],
+      });
+      const ctx = createMockCtx();
+      await ctx.fs.writeFile('/workspace/entry.ts', 'x');
+      const result = await createEsbuildCommand().execute(
+        [
+          '--bundle',
+          'entry.ts',
+          '--external:fs',
+          '--platform=node',
+          '--define:DEBUG=false',
+          '--tree-shaking',
+          '--banner:js=/* start */',
+          '--footer:js=/* end */',
+        ],
+        ctx
+      );
+      expect(result.exitCode).toBe(0);
+      expect(esb.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          external: ['fs'],
+          platform: 'node',
+          define: { DEBUG: 'false' },
+          treeShaking: true,
+          banner: { js: '/* start */' },
+          footer: { js: '/* end */' },
+        })
+      );
+    });
+
     it('writes --outfile plus extra output files', async () => {
       esb.build.mockResolvedValue({
         errors: [],
@@ -376,7 +592,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
 
   function wirePlugin(ctx: ReturnType<typeof createMockCtx>) {
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     let resolveCb: ResolveCb | null = null;
     let loadCb: LoadCb | null = null;
     const build = {
