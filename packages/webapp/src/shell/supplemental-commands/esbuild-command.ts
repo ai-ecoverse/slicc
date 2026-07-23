@@ -75,12 +75,22 @@ Modes:
 Output:
   --outfile <path>          Write the bundled / transformed output to <path>
   --format=<iife|cjs|esm>   Output format (default: esm)
+  --platform=<browser|node|neutral>
+                            Target platform
   --minify                  Enable all minification passes
+  --tree-shaking[=true|false]
+                            Enable or disable tree shaking
   --sourcemap[=inline|external|linked|both]
                             Emit source maps
   --target=<csv>            Comma-separated target list (e.g. es2020,chrome100)
   --loader=<loader>         Force loader for stdin / single-file transform
                             (js, ts, jsx, tsx, json, text, base64, dataurl)
+  --define:<key>=<value>    Substitute a global identifier (repeatable)
+
+Bundle-only:
+  --external:<pattern>      Keep matching imports external; supports * (repeatable)
+  --banner:<type>=<value>   Prepend content to an output type
+  --footer:<type>=<value>   Append content to an output type
 
 Module resolution:
   - Local paths (./foo, /workspace/bar) read from the VFS.
@@ -104,11 +114,18 @@ export interface ParsedEsbuildArgs {
   sourcemap: BuildOptions['sourcemap'] | null;
   target: string[] | null;
   loader: Loader | null;
+  external: string[];
+  platform: 'browser' | 'node' | 'neutral' | null;
+  define: Record<string, string>;
+  banner: Record<string, string>;
+  footer: Record<string, string>;
+  treeShaking: boolean | null;
   showHelp: boolean;
   showVersion: boolean;
 }
 
 const VALID_FORMATS = new Set(['iife', 'cjs', 'esm']);
+const VALID_PLATFORMS = new Set(['browser', 'node', 'neutral']);
 const VALID_SOURCEMAPS = new Set(['linked', 'inline', 'external', 'both']);
 
 const BOOLEAN_FLAGS: Record<string, keyof ParsedEsbuildArgs> = {
@@ -192,6 +209,14 @@ function applyValuedFlag(
     out.format = value as 'iife' | 'cjs' | 'esm';
     return advance;
   }
+  if (token.key === '--platform') {
+    const { value, advance } = takeValue(token, args, i);
+    if (!VALID_PLATFORMS.has(value)) {
+      throw new Error(`esbuild: --platform must be one of browser|node|neutral (got "${value}")`);
+    }
+    out.platform = value as 'browser' | 'node' | 'neutral';
+    return advance;
+  }
   if (token.key === '--target') {
     const { value, advance } = takeValue(token, args, i);
     out.target = value
@@ -208,6 +233,19 @@ function applyValuedFlag(
   return -1;
 }
 
+function applyColonAssignment(
+  arg: string,
+  prefix: '--define:' | '--banner:' | '--footer:',
+  target: Record<string, string>
+): boolean {
+  if (!arg.startsWith(prefix)) return false;
+  const assignment = arg.slice(prefix.length);
+  const eq = assignment.indexOf('=');
+  if (eq < 1) throw new Error(`esbuild: ${prefix.slice(0, -1)} requires <key>=<value>`);
+  target[assignment.slice(0, eq)] = assignment.slice(eq + 1);
+  return true;
+}
+
 export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
   const out: ParsedEsbuildArgs = {
     entries: [],
@@ -219,6 +257,12 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
     sourcemap: null,
     target: null,
     loader: null,
+    external: [],
+    platform: null,
+    define: {},
+    banner: {},
+    footer: {},
+    treeShaking: null,
     showHelp: false,
     showVersion: false,
   };
@@ -230,7 +274,30 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
       (out[boolKey] as boolean) = true;
       continue;
     }
+    if (arg.startsWith('--external:')) {
+      out.external.push(arg.slice('--external:'.length));
+      continue;
+    }
+    if (
+      applyColonAssignment(arg, '--define:', out.define) ||
+      applyColonAssignment(arg, '--banner:', out.banner) ||
+      applyColonAssignment(arg, '--footer:', out.footer)
+    ) {
+      continue;
+    }
     const token = tokenize(arg);
+    if (token.key === '--tree-shaking') {
+      if (token.inlineValue === null) {
+        out.treeShaking = true;
+      } else if (token.inlineValue === 'true' || token.inlineValue === 'false') {
+        out.treeShaking = token.inlineValue === 'true';
+      } else {
+        throw new Error(
+          `esbuild: --tree-shaking must be true or false (got "${token.inlineValue}")`
+        );
+      }
+      continue;
+    }
     if (token.key === '--sourcemap') {
       i += applySourcemap(out, token, args, i);
       continue;
@@ -272,12 +339,17 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
 export function createVfsPlugin(
   fs: CommandContext['fs'],
   cwd: string,
-  ipk: IpkResolutionContext
+  ipk: IpkResolutionContext,
+  externals: string[]
 ): Plugin {
   return {
     name: 'slicc-vfs',
     setup(build) {
       build.onResolve({ filter: /.*/ }, async (args) => {
+        if (matchesExternal(args.path, externals)) {
+          return { path: args.path, external: true };
+        }
+
         // `node:` / `data:` / etc. — mark external; esbuild emits an
         // import without trying to load bytes. Real bundling of node
         // builtins is out of scope for the browser float.
@@ -286,11 +358,7 @@ export function createVfsPlugin(
         }
 
         // Relative / absolute VFS path.
-        if (
-          args.path.startsWith('./') ||
-          args.path.startsWith('../') ||
-          args.path.startsWith('/')
-        ) {
+        if (isVfsPath(args.path)) {
           const importerDir = args.importer?.startsWith('/') ? dirname(args.importer) : cwd;
           const resolved = fs.resolvePath(importerDir, args.path);
           const withExt = await resolveWithExtensions(fs, resolved);
@@ -300,16 +368,7 @@ export function createVfsPlugin(
         // Bare specifier — resolve from ipk-installed node_modules.
         // No network fallback: a missing dep is surfaced as an
         // esbuild error pointing the user at the exact `ipk add`.
-        const importerDir = args.importer?.startsWith('/') ? dirname(args.importer) : ipk.fromDir;
-        try {
-          const result = await ipkResolve(args.path, importerDir, ipk.reader);
-          if (result.type === 'file') return { path: result.path };
-          // `node:` / `sliccy:` schemes that survived the prefix check.
-          return { path: args.path, external: true };
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : String(err);
-          return { errors: [{ text: reason }] };
-        }
+        return resolveBareSpecifier(args.path, args.importer, ipk);
       });
 
       // VFS load (default namespace).
@@ -320,6 +379,35 @@ export function createVfsPlugin(
       });
     },
   };
+}
+
+export function matchesExternal(path: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    if (path === pattern) return true;
+    if (!pattern.includes('*')) return false;
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('*', '.*');
+    return new RegExp(`^${escaped}$`).test(path);
+  });
+}
+
+function isVfsPath(path: string): boolean {
+  return path.startsWith('./') || path.startsWith('../') || path.startsWith('/');
+}
+
+async function resolveBareSpecifier(
+  path: string,
+  importer: string | undefined,
+  ipk: IpkResolutionContext
+): Promise<{ path?: string; external?: boolean; errors?: { text: string }[] }> {
+  const importerDir = importer?.startsWith('/') ? dirname(importer) : ipk.fromDir;
+  try {
+    const result = await ipkResolve(path, importerDir, ipk.reader);
+    if (result.type === 'file') return { path: result.path };
+    return { path, external: true };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { errors: [{ text: reason }] };
+  }
 }
 
 /**
@@ -486,6 +574,9 @@ async function runTransform(
     ...(parsed.minify ? { minify: true } : {}),
     ...(parsed.sourcemap ? { sourcemap: parsed.sourcemap } : {}),
     ...(parsed.target ? { target: parsed.target } : {}),
+    ...(parsed.platform ? { platform: parsed.platform } : {}),
+    ...(Object.keys(parsed.define).length > 0 ? { define: parsed.define } : {}),
+    ...(parsed.treeShaking !== null ? { treeShaking: parsed.treeShaking } : {}),
   };
 
   try {
@@ -542,11 +633,9 @@ async function runBundle(
     entryPoints,
     bundle: true,
     write: false,
-    plugins: [createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx))],
+    plugins: [createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx), parsed.external)],
     format: parsed.format ?? 'esm',
-    ...(parsed.minify ? { minify: true } : {}),
-    ...(parsed.sourcemap ? { sourcemap: parsed.sourcemap } : {}),
-    ...(parsed.target ? { target: parsed.target } : {}),
+    ...buildOptionOverrides(parsed),
   };
 
   try {
@@ -589,4 +678,18 @@ async function runBundle(
       exitCode: 1,
     };
   }
+}
+
+function buildOptionOverrides(parsed: ParsedEsbuildArgs): BuildOptions {
+  return {
+    ...(parsed.minify ? { minify: true } : {}),
+    ...(parsed.sourcemap ? { sourcemap: parsed.sourcemap } : {}),
+    ...(parsed.target ? { target: parsed.target } : {}),
+    ...(parsed.external.length > 0 ? { external: parsed.external } : {}),
+    ...(parsed.platform ? { platform: parsed.platform } : {}),
+    ...(Object.keys(parsed.define).length > 0 ? { define: parsed.define } : {}),
+    ...(Object.keys(parsed.banner).length > 0 ? { banner: parsed.banner } : {}),
+    ...(Object.keys(parsed.footer).length > 0 ? { footer: parsed.footer } : {}),
+    ...(parsed.treeShaking !== null ? { treeShaking: parsed.treeShaking } : {}),
+  };
 }
