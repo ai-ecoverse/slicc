@@ -126,15 +126,27 @@ describe('createNodeFetchAdapter', () => {
     expect(opts.body).toBe('grant_type=refresh_token&client_id=GWS_CLIENT_ID_MASKED');
   });
 
-  it('decodes Uint8Array body as UTF-8 text', async () => {
+  it.each([
+    ['Uint8Array', (bytes: Uint8Array) => bytes as BodyInit],
+    ['ArrayBuffer', (bytes: Uint8Array) => bytes.buffer as BodyInit],
+    [
+      'ArrayBufferView',
+      (bytes: Uint8Array) =>
+        new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) as BodyInit,
+    ],
+  ])('encodes %s body as latin1 and defaults its Content-Type', async (_name, makeBody) => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
 
-    const bytes = new TextEncoder().encode('hello body');
-    await fetch('https://api.example.com/x', { method: 'POST', body: bytes });
+    const bytes = new Uint8Array([0x00, 0x7f, 0x80, 0xff]);
+    await fetch('https://api.example.com/x', { method: 'POST', body: makeBody(bytes) });
 
-    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as { body: string };
-    expect(opts.body).toBe('hello body');
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      body: string;
+      headers: Record<string, string>;
+    };
+    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.headers['Content-Type']).toBe('application/octet-stream');
   });
 
   it('strips bodies on GET / HEAD per fetch semantics', async () => {
@@ -205,13 +217,24 @@ describe('createNodeFetchAdapter', () => {
     expect(await resp.text()).toBe('');
   });
 
-  it('rejects Blob and FormData bodies with a clear message', async () => {
+  it('encodes Blob bodies as latin1', async () => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
+    const bytes = new Uint8Array([0x00, 0x80, 0xff]);
 
-    await expect(
-      fetch('https://api.example.com/x', { method: 'POST', body: new Blob(['x']) })
-    ).rejects.toThrow(/Blob request bodies are not supported/);
+    await fetch('https://api.example.com/x', { method: 'POST', body: new Blob([bytes]) });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      body: string;
+      headers: Record<string, string>;
+    };
+    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.headers['Content-Type']).toBe('application/octet-stream');
+  });
+
+  it('rejects FormData bodies with a clear message', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
 
     const fd = new FormData();
     fd.set('a', 'b');
@@ -257,6 +280,25 @@ describe('createNodeFetchAdapter', () => {
     expect(opts.headers['content-type']).toBe('text/plain');
     expect(opts.headers['authorization']).toBe('Bearer from-request');
     expect(opts.body).toBe('from-request-body');
+  });
+
+  it('encodes a binary Request body as latin1 and defaults its Content-Type', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+    const bytes = new Uint8Array([0x00, 0x7f, 0x80, 0xff]);
+    const request = new Request('https://api.example.com/request', {
+      method: 'POST',
+      body: bytes,
+    });
+
+    await fetch(request);
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      body: string;
+      headers: Record<string, string>;
+    };
+    expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
+    expect(opts.headers['Content-Type']).toBe('application/octet-stream');
   });
 
   it('lets init override method, headers, and body from a Request input', async () => {
