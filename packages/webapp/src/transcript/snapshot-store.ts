@@ -51,6 +51,26 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join('');
 }
 
+/**
+ * Guard against path-traversal attacks via malicious sessionId values.
+ *
+ * Allows UUIDs, legacy filename-based IDs (alphanumeric, dash, underscore,
+ * and dot — but NOT dot-dot sequences or leading dots), and empty-string
+ * is always rejected. Slashes, backslashes, and NUL bytes are rejected.
+ */
+function assertSafeSessionId(sessionId: string): void {
+  if (
+    sessionId.length === 0 ||
+    /[/\\\x00]/.test(sessionId) ||
+    sessionId === '..' ||
+    sessionId === '.' ||
+    sessionId.includes('..') ||
+    !/^[a-zA-Z0-9._-]+$/.test(sessionId)
+  ) {
+    throw new TranscriptExportError('session-not-found');
+  }
+}
+
 function sessionDir(sessionId: string): string {
   return `${SESSIONS_DATA_DIR}/${sessionId}`;
 }
@@ -130,21 +150,31 @@ export async function writeSnapshot(
   sessionId: string,
   snapshot: SanitizedTranscriptSnapshot
 ): Promise<void> {
+  assertSafeSessionId(sessionId);
   const tmp = tmpDir(sessionId);
   const dst = sessionDir(sessionId);
 
+  // Reject attachment bytes not declared in document.attachments.
+  // Production attachment processing always registers entries; undeclared bytes
+  // indicate a bug in the caller, not missing data.
+  const attByPath = new Map(
+    snapshot.document.attachments
+      .filter((a) => a.present && a.path)
+      .map((a) => [a.path, a] as const)
+  );
+  for (const [relPath] of snapshot.attachments) {
+    if (!attByPath.has(relPath)) {
+      throw new TranscriptExportError('schema-invalid');
+    }
+  }
+
+  // Clear stale destination so retries cannot leave orphaned files.
+  await removeDir(vfs, dst);
   await ensureDir(vfs, tmp);
 
   try {
     // Compute or update SHA-256 hashes for all bundle files and merge into
-    // document.attachments[]. Entries already present in the document are
-    // updated; new paths (from test fixtures or incremental builds) are appended.
-    const attByPath = new Map(
-      snapshot.document.attachments
-        .filter((a) => a.present && a.path)
-        .map((a) => [a.path, a] as const)
-    );
-
+    // document.attachments[].
     const allAttachments = [...snapshot.document.attachments];
 
     for (const [relPath, bytes] of snapshot.attachments) {
@@ -155,20 +185,6 @@ export async function writeSnapshot(
         if (idx !== -1) {
           allAttachments[idx] = { ...existing, sha256: hash, byteLength: bytes.length };
         }
-      } else {
-        // Register attachment not yet in document.attachments (e.g. test fixtures).
-        allAttachments.push({
-          id: `snap-${relPath}`,
-          path: relPath,
-          originalName: relPath.split('/').pop() ?? relPath,
-          mimeType: 'application/octet-stream',
-          byteLength: bytes.length,
-          sha256: hash,
-          sourceConversationId: '',
-          sourceMessageId: '',
-          handling: 'binary-unchanged',
-          present: true,
-        });
       }
     }
 
@@ -231,6 +247,7 @@ export async function readSnapshot(
   vfs: LocalVfsClient,
   sessionId: string
 ): Promise<SanitizedTranscriptSnapshot> {
+  assertSafeSessionId(sessionId);
   const dir = sessionDir(sessionId);
   const docPath = `${dir}/${DOCUMENT_FILENAME}`;
 
@@ -239,9 +256,7 @@ export async function readSnapshot(
   try {
     const raw = await vfs.readFile(docPath, { encoding: 'utf-8' });
     docJson = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === 'ENOENT') throw new TranscriptExportError('session-not-found');
+  } catch {
     throw new TranscriptExportError('session-not-found');
   }
 

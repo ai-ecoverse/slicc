@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { redactCredentialPatterns } from '@slicc/shared-ts';
+import { describe, expect, it } from 'vitest';
 
 describe('redactCredentialPatterns', () => {
   it('redacts deterministic credential patterns without generic entropy matching', () => {
@@ -50,8 +50,7 @@ describe('redactCredentialPatterns', () => {
   });
 
   it('redacts PEM private key blocks', () => {
-    const pem =
-      '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
     const result = redactCredentialPatterns(pem, 'r');
     expect(result.text).toContain('⟦REDACTED:private-key:r1⟧');
     expect(result.matches).toEqual([{ id: 'r1', category: 'private-key' }]);
@@ -71,5 +70,30 @@ describe('redactCredentialPatterns', () => {
     expect(result.matches[0]?.id).toBe('r1');
     expect(result.matches[1]?.id).toBe('r2');
     expect(result.nextId).toBe(3);
+  });
+
+  it('does NOT redact embedded keyword substrings like footoken=value', () => {
+    // \b word boundary prevents matching 'token' inside 'footoken'
+    const result = redactCredentialPatterns('footoken=value', 'r');
+    expect(result.text).toBe('footoken=value');
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it('does NOT redact mypassword=hunter2 (embedded prefix)', () => {
+    const result = redactCredentialPatterns('mypassword=hunter2', 'r');
+    expect(result.text).toBe('mypassword=hunter2');
+    expect(result.matches).toHaveLength(0);
+  });
+
+  it('DOES redact standalone token=value at word boundary', () => {
+    const result = redactCredentialPatterns('config token=abc123', 'r');
+    expect(result.text).toContain('\u27E6REDACTED:password:r1\u27E7');
+    expect(result.matches).toHaveLength(1);
+  });
+
+  it('DOES redact password=hunter2 at word boundary', () => {
+    const result = redactCredentialPatterns('password=hunter2', 'r');
+    expect(result.text).toContain('\u27E6REDACTED:password:r1\u27E7');
+    expect(result.matches).toHaveLength(1);
   });
 });
