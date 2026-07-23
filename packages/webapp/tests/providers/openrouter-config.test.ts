@@ -29,6 +29,22 @@ vi.mock('../../src/ui/provider-settings.js', async (importOriginal) => ({
   saveOAuthAccount: mocks.saveOAuthAccount,
 }));
 
+// Keep the discovery assertion focused on the OpenRouter override. Loading every
+// unrelated provider here instruments their unexercised implementations.
+vi.mock('../../src/providers/built-in/azure-ai-foundry.js', () => ({ config: undefined }));
+vi.mock('../../src/providers/built-in/azure-openai.js', () => ({ config: undefined }));
+vi.mock('../../src/providers/built-in/bedrock-camp.js', () => ({ config: undefined }));
+vi.mock('../../src/providers/built-in/local-llm.js', () => ({ config: undefined }));
+vi.mock('../../providers/adobe.js', () => ({ config: undefined }));
+vi.mock('../../providers/cerebras.js', () => ({ config: undefined }));
+vi.mock('../../providers/github-copilot.js', () => ({ config: undefined }));
+vi.mock('../../providers/github.js', () => ({ config: undefined }));
+vi.mock('../../providers/openai-codex.js', () => ({ config: undefined }));
+vi.mock('../../providers/xai-grok-errors.js', () => ({ config: undefined }));
+vi.mock('../../providers/xai-grok-models.js', () => ({ config: undefined }));
+vi.mock('../../providers/xai-grok-sanitize.js', () => ({ config: undefined }));
+vi.mock('../../providers/xai-grok.js', () => ({ config: undefined }));
+
 vi.mock('../../providers/openrouter-models.js', () => ({
   config: undefined,
   fetchModels: mocks.fetchModels,
