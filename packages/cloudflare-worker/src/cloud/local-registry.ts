@@ -5,19 +5,27 @@ interface PersistedState {
   sessions: ConeEntry[];
 }
 
-interface StorageLike {
+interface StorageTransactionLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+}
+
+interface StorageLike extends StorageTransactionLike {
+  transaction<T>(closure: (txn: StorageTransactionLike) => Promise<T>): Promise<T>;
 }
 
 export class LocalRegistry implements Registry {
   constructor(private readonly storage: StorageLike) {}
 
-  private async readAll(): Promise<ConeEntry[]> {
-    return (await this.storage.get<PersistedState>('state'))?.sessions ?? [];
+  private async readAll(storage: StorageTransactionLike = this.storage): Promise<ConeEntry[]> {
+    return (await storage.get<PersistedState>('state'))?.sessions ?? [];
   }
-  private async writeAll(sessions: ConeEntry[]): Promise<void> {
-    await this.storage.put('state', { sessions });
+
+  private async mutate(mutator: (sessions: ConeEntry[]) => ConeEntry[]): Promise<void> {
+    await this.storage.transaction(async (txn) => {
+      const sessions = await this.readAll(txn);
+      await txn.put('state', { sessions: mutator(sessions) });
+    });
   }
 
   async list(): Promise<ConeEntry[]> {
@@ -28,21 +36,22 @@ export class LocalRegistry implements Registry {
     return all.find((c) => c.sandboxId === query || c.name === query) ?? null;
   }
   async append(entry: ConeEntry): Promise<void> {
-    const all = await this.readAll();
-    const i = all.findIndex((c) => c.sandboxId === entry.sandboxId);
-    if (i >= 0) all[i] = { ...all[i]!, ...entry };
-    else all.push(entry);
-    await this.writeAll(all);
+    await this.mutate((all) => {
+      const i = all.findIndex((c) => c.sandboxId === entry.sandboxId);
+      if (i >= 0) all[i] = { ...all[i]!, ...entry };
+      else all.push(entry);
+      return all;
+    });
   }
   async update(sandboxId: string, patch: Partial<ConeEntry>): Promise<void> {
-    const all = await this.readAll();
-    const i = all.findIndex((c) => c.sandboxId === sandboxId);
-    if (i < 0) throw new Error(`entry not found: ${sandboxId}`);
-    all[i] = { ...all[i]!, ...patch };
-    await this.writeAll(all);
+    await this.mutate((all) => {
+      const i = all.findIndex((c) => c.sandboxId === sandboxId);
+      if (i < 0) throw new Error(`entry not found: ${sandboxId}`);
+      all[i] = { ...all[i]!, ...patch };
+      return all;
+    });
   }
   async remove(sandboxId: string): Promise<void> {
-    const all = await this.readAll();
-    await this.writeAll(all.filter((c) => c.sandboxId !== sandboxId));
+    await this.mutate((all) => all.filter((c) => c.sandboxId !== sandboxId));
   }
 }

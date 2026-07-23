@@ -216,6 +216,10 @@ E2B is the sandbox-capacity authority; the worker does not impose separate runni
 paused cone-count limits. Per-user endpoint token buckets in `src/cloud/rate-limit.ts`
 remain the abuse-protection boundary.
 
+`LocalRegistry` keeps the existing `{ sessions: ConeEntry[] }` storage schema and wraps
+its append, update, and remove read-modify-write operations in Durable Object storage
+transactions. Slow E2B create/connect/poll work remains outside `blockConcurrencyWhile`.
+
 ### Wrangler Config (cloud)
 
 Vars in `wrangler.jsonc`:

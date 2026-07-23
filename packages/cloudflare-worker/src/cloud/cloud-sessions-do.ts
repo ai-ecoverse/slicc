@@ -21,10 +21,14 @@ interface DoEnv {
   __SUBSTRATE_FACTORY__?: () => SandboxSubstrate;
 }
 
+interface DurableObjectStorageTransactionLike {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+}
+
 interface DurableObjectStateLike {
-  storage: {
-    get<T>(key: string): Promise<T | undefined>;
-    put<T>(key: string, value: T): Promise<void>;
+  storage: DurableObjectStorageTransactionLike & {
+    transaction<T>(closure: (txn: DurableObjectStorageTransactionLike) => Promise<T>): Promise<T>;
   };
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
 }

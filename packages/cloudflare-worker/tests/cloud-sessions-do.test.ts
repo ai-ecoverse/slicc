@@ -26,6 +26,7 @@ class FakeSubstrate implements SandboxSubstrate {
   readonly id = 'e2b' as const;
   readonly sandboxes = new Map<string, FakeSandbox>();
   readonly createdTemplates: string[] = [];
+  readonly killedSandboxIds: string[] = [];
   private nextId = 1;
   /** If set, connect() will throw this error. Used to test rollback logic. */
   connectError?: Error;
@@ -105,6 +106,7 @@ class FakeSubstrate implements SandboxSubstrate {
       },
       kill: async () => {
         sb.state = 'dead';
+        this.killedSandboxIds.push(sandboxId);
         this.sandboxes.delete(sandboxId);
       },
       getInfo: async (): Promise<SandboxInfo> => ({
@@ -140,20 +142,53 @@ class FakeSubstrate implements SandboxSubstrate {
   }
 }
 
+interface TestStorageTransaction {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+}
+
+function cloneStored<T>(value: T): T {
+  return value === undefined ? value : structuredClone(value);
+}
+
+function makeTransactionRunner(storage: Map<string, unknown>) {
+  let tail = Promise.resolve();
+  return async <T>(fn: (txn: TestStorageTransaction) => Promise<T>): Promise<T> => {
+    const previous = tail;
+    let release!: () => void;
+    tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await fn({
+        get: async <U>(key: string) => cloneStored(storage.get(key) as U | undefined),
+        put: async <U>(key: string, value: U) => {
+          storage.set(key, cloneStored(value));
+        },
+      });
+    } finally {
+      release();
+    }
+  };
+}
+
 function makeFakeState() {
   const storage = new Map<string, unknown>();
   const lockQueue: Array<() => void> = [];
+  const transaction = makeTransactionRunner(storage);
   let locked = false;
 
   const state = {
     storage: {
-      get: async <T>(k: string): Promise<T | undefined> => storage.get(k) as T | undefined,
-      put: async <T>(k: string, v: T): Promise<void> => {
-        storage.set(k, v);
+      get: async <T>(key: string): Promise<T | undefined> =>
+        cloneStored(storage.get(key) as T | undefined),
+      put: async <T>(key: string, value: T): Promise<void> => {
+        storage.set(key, cloneStored(value));
       },
+      transaction,
     },
     blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => {
-      // Serialize access: wait for lock, run fn, release lock
       while (locked) {
         await new Promise<void>((resolve) => lockQueue.push(resolve));
       }
@@ -220,6 +255,102 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       }
     );
   });
+}
+
+interface ReadWaiter {
+  value: unknown;
+  resolve: (value: unknown) => void;
+}
+
+interface WriteWaiter {
+  key: string;
+  value: unknown;
+  resolve: () => void;
+}
+
+class InterleavingStorage {
+  readonly values = new Map<string, unknown>();
+  private readonly transaction: ReturnType<typeof makeTransactionRunner>;
+  private readWaiters: ReadWaiter[] = [];
+  private writeWaiters: WriteWaiter[] = [];
+  private interleavedRounds = 0;
+  private phase: 'read' | 'write' = 'read';
+
+  constructor() {
+    this.transaction = makeTransactionRunner(this.values);
+  }
+
+  beginInterleaving(rounds: number): void {
+    this.interleavedRounds = rounds;
+  }
+
+  async get<T>(key: string): Promise<T | undefined> {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const value = cloneStored(this.values.get(key));
+    if (this.interleavedRounds === 0 || this.phase !== 'read') {
+      return value as T | undefined;
+    }
+    return new Promise<T | undefined>((resolve) => {
+      this.readWaiters.push({ value, resolve: (stored) => resolve(stored as T | undefined) });
+      if (this.readWaiters.length === 2) {
+        const waiters = this.readWaiters;
+        this.readWaiters = [];
+        this.phase = 'write';
+        for (const waiter of waiters) waiter.resolve(waiter.value);
+      }
+    });
+  }
+
+  async put<T>(key: string, value: T): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (this.interleavedRounds === 0 || this.phase !== 'write') {
+      this.values.set(key, cloneStored(value));
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.writeWaiters.push({ key, value: cloneStored(value), resolve });
+      if (this.writeWaiters.length === 2) this.commitWriteRound();
+    });
+  }
+
+  async runTransaction<T>(fn: (txn: TestStorageTransaction) => Promise<T>): Promise<T> {
+    return this.transaction(fn);
+  }
+
+  private commitWriteRound(): void {
+    const waiters = this.writeWaiters;
+    this.writeWaiters = [];
+    for (const waiter of waiters) this.values.set(waiter.key, waiter.value);
+    this.interleavedRounds--;
+    this.phase = 'read';
+    for (const waiter of waiters) waiter.resolve();
+  }
+}
+
+function makeInterleavingState() {
+  const storage = new InterleavingStorage();
+  const lockQueue: Array<() => void> = [];
+  let locked = false;
+  return {
+    storage,
+    state: {
+      storage: {
+        get: storage.get.bind(storage),
+        put: storage.put.bind(storage),
+        transaction: storage.runTransaction.bind(storage),
+      },
+      blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => {
+        while (locked) await new Promise<void>((resolve) => lockQueue.push(resolve));
+        locked = true;
+        try {
+          return await fn();
+        } finally {
+          locked = false;
+          lockQueue.shift()?.();
+        }
+      },
+    },
+  };
 }
 
 describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
@@ -403,6 +534,60 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
         .map((sandbox) => sandbox.name)
         .sort()
     ).toEqual(['first', 'second']);
+  });
+
+  it('preserves both starts across concurrent registry read-modify-write interleaving', async () => {
+    const substrate = new FakeSubstrate();
+    const { state, storage } = makeInterleavingState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+    const bothEntered = deferred<void>();
+    const entered: string[] = [];
+    const originalCreate = substrate.create.bind(substrate);
+    substrate.create = async (opts: CreateOpts) => {
+      entered.push(opts.name ?? '');
+      if (entered.length === 2) {
+        storage.beginInterleaving(2);
+        bothEntered.resolve();
+      }
+      await withTimeout(bothEntered.promise, 2000, 'both starts should enter create phase');
+      return originalCreate(opts);
+    };
+
+    const responses = await withTimeout(
+      Promise.all([
+        call(do_, '/start-cone', {
+          bearer: 'b1',
+          userId: 'u1',
+          workerOrigin: 'https://w',
+          name: 'first-rmw',
+        }),
+        call(do_, '/start-cone', {
+          bearer: 'b2',
+          userId: 'u1',
+          workerOrigin: 'https://w',
+          name: 'second-rmw',
+        }),
+      ]),
+      2000,
+      'both interleaved starts should resolve'
+    );
+
+    const bodies = await Promise.all(
+      responses.map(async (response) => ({
+        status: response.status,
+        body: (await response.json()) as { message?: string },
+      }))
+    );
+    expect(substrate.killedSandboxIds).toEqual([]);
+    expect(bodies).toEqual([
+      expect.objectContaining({ status: 200 }),
+      expect.objectContaining({ status: 200 }),
+    ]);
+    expect(
+      Array.from(substrate.sandboxes.values())
+        .map((sandbox) => sandbox.name)
+        .sort()
+    ).toEqual(['first-rmw', 'second-rmw']);
   });
 
   it('returns NAME_TAKEN for a concurrent same-name start while the first create is in flight', async () => {
