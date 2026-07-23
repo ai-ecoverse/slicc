@@ -1,7 +1,7 @@
 ---
 name: adding-slicc-features
 description: |
-  Use when adding a SLICC shell command, dedicated tool, provider, lick, sprinkle/dip, scoop capability, UI panel, interactive approval, or runtime skill wiring; when `command not found`, a tool/skill is undiscovered, a follower action is dropped, OAuth reports `session expired` or `401 invalid x-api-key`, or `playwright-cli-sync` reports a command gap. Covers exact file paths, code interfaces, registration patterns, and the cross-reference checklist (test, SKILL.md update, follower handler, AGENTS.md).
+  Use when adding a SLICC shell command, dedicated tool, provider, scoop capability, UI panel, interactive approval, or runtime skill wiring; when `command not found`, a tool/skill is undiscovered, a follower action is dropped, OAuth reports `session expired` or `401 invalid x-api-key`, or `playwright-cli-sync` reports a command gap. Covers exact file paths, code interfaces, registration patterns, and the cross-reference checklist (test, SKILL.md update, follower handler, AGENTS.md).
 ---
 
 # adding-slicc-features
@@ -537,160 +537,32 @@ describe('my_special_tool', () => {
 
 **When**: To add a new tab or section in the UI (e.g., a settings panel, network monitor).
 
+> **Architecture note:** The legacy `Layout`/`ChatPanel` UI was removed during the
+> web-components migration. The current UI shell is built on `@slicc/webcomponents`
+> (see `packages/webcomponents/`). New panels are web components mounted via the
+> `wc-shell.ts` / `wc-live.ts` controllers in `packages/webapp/src/ui/wc/`.
+
 **Files to create/modify**:
 
-- Create: `packages/webapp/src/ui/my-panel.ts`
-- Modify: `packages/webapp/src/ui/main.ts`
+- Create: `packages/webcomponents/src/my-panel.ts` (web component)
+- Modify: `packages/webcomponents/src/index.ts` (register the element)
+- Modify: `packages/webapp/src/ui/wc/wc-live.ts` (mount and wire the panel)
 
-**Implementation**:
+The `@slicc/webcomponents` library provides the UI primitives (Storybook +
+`@vitest/browser` for testing). The `packages/webapp/src/ui/wc/` controllers
+handle mounting, scoop lifecycle events, and leader/follower behavior.
 
-```typescript
-// packages/webapp/src/ui/my-panel.ts
-export class MyPanel {
-  private container: HTMLElement;
-  private contentEl!: HTMLElement;
+**Test pattern**: Web component tests use `@vitest/browser` (real Chromium):
 
-  constructor(container: HTMLElement) {
-    this.container = container;
-    this.render();
-  }
-
-  private render(): void {
-    this.container.className = 'my-panel';
-
-    const header = document.createElement('div');
-    header.className = 'my-panel__header';
-    header.textContent = 'My Panel';
-    this.container.appendChild(header);
-
-    this.contentEl = document.createElement('div');
-    this.contentEl.className = 'my-panel__content';
-    this.container.appendChild(this.contentEl);
-  }
-
-  setSelectedScoop(jid: string | null): void {
-    // Called when scoop changes
-    this.refresh();
-  }
-
-  async refresh(): Promise<void> {
-    // Update panel content
-    this.contentEl.textContent = 'Loading...';
-
-    try {
-      // Fetch data
-      const data = await this.fetchData();
-      this.contentEl.textContent = JSON.stringify(data);
-    } catch (err) {
-      this.contentEl.textContent = `Error: ${err}`;
-    }
-  }
-
-  private async fetchData(): Promise<unknown> {
-    // Your logic
-    return {};
-  }
-}
+```bash
+npm test -w @slicc/webcomponents  # browser-mode Vitest
 ```
 
-**Wire into Layout** (Standalone mode):
+**Reference files**:
 
-```typescript
-// packages/webapp/src/ui/layout.ts
-import { MyPanel } from './my-panel.js';
-
-export interface LayoutPanels {
-  chat: ChatPanel;
-  terminal: TerminalPanel;
-  fileBrowser: FileBrowserPanel;
-  memory: MemoryPanel;
-  myPanel: MyPanel; // Add new panel
-  scoops: ScoopsPanel;
-}
-
-export class Layout {
-  private myPanelContainer!: HTMLElement;
-
-  constructor(root: HTMLElement, isExtension = false) {
-    // ... existing code ...
-  }
-
-  private createSplitLayout(): void {
-    // ... existing code ...
-
-    // Create my-panel in bottom section
-    this.myPanelContainer = document.createElement('div');
-    this.panels.myPanel = new MyPanel(this.myPanelContainer);
-  }
-
-  setSelectedScoop(scoop: RegisteredScoop | null): void {
-    // ... existing code ...
-    this.panels.myPanel.setSelectedScoop(scoop?.jid ?? null);
-  }
-}
-```
-
-**Wire into Layout** (Extension/Tabbed mode):
-
-```typescript
-// packages/webapp/src/ui/layout.ts — in createTabbedLayout()
-const tabIds: TabId[] = ['chat', 'terminal', 'files', 'memory', 'myPanel'];
-
-// Create tab button and container
-const myPanelBtn = document.createElement('button');
-myPanelBtn.className = 'layout__tab-btn';
-myPanelBtn.textContent = 'My Panel';
-tabsContainer.appendChild(myPanelBtn);
-
-const myPanelContainer = document.createElement('div');
-myPanelContainer.className = 'layout__tab-content';
-this.tabContainers.set('myPanel', myPanelContainer);
-this.panels.myPanel = new MyPanel(myPanelContainer);
-```
-
-**CSS**:
-
-```css
-/* packages/webapp/src/ui/styles.css */
-.my-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-.my-panel__header {
-  padding: 10px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  font-weight: bold;
-}
-
-.my-panel__content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-}
-```
-
-**Test pattern**:
-
-Panel tests are DOM-heavy; test interactions and state manually in extension/standalone mode rather than in vitest:
-
-```typescript
-// packages/webapp/tests/ui/my-panel.test.ts — only test non-DOM logic
-import { describe, it, expect, vi } from 'vitest';
-
-describe('MyPanel', () => {
-  it('should initialize', () => {
-    const container = document.createElement('div');
-    const panel = new MyPanel(container);
-    expect(container.querySelector('.my-panel')).toBeDefined();
-  });
-});
-```
-
-**Reference file**: `packages/webapp/src/ui/wc/wc-live.ts`
+- `packages/webcomponents/src/` — existing web component implementations
+- `packages/webapp/src/ui/wc/wc-live.ts` — leader UI shell wiring
+- `packages/webapp/src/ui/wc/wc-follower.ts` — follower UI shell wiring
 
 ---
 
@@ -884,11 +756,16 @@ export const config: ProviderConfig = {
         `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
       : (corpConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
+    // Generate a cryptographic state nonce to prevent CSRF/token substitution.
+    // The launcher round-trips it through the IdP; we reject responses without it.
+    const state = crypto.randomUUID();
+
     const params = new URLSearchParams({
       client_id: corpConfig.clientId,
       response_type: 'token',
       redirect_uri: redirectUri,
       scope: 'openid profile',
+      state,
     });
     const authorizeUrl = `https://sso.mycorp.com/authorize?${params}`;
 
@@ -896,8 +773,10 @@ export const config: ProviderConfig = {
     const redirectUrl = await launcher(authorizeUrl);
     if (!redirectUrl) return; // User cancelled or timed out
 
-    // Extract token from redirect URL (provider-specific: implicit grant has token in fragment)
+    // Extract token from redirect URL (implicit grant has token in fragment).
+    // Verify the state parameter matches to prevent login CSRF.
     const fragment = new URLSearchParams(redirectUrl.slice(redirectUrl.indexOf('#') + 1));
+    if (fragment.get('state') !== state) return; // State mismatch — reject
     const accessToken = fragment.get('access_token');
     if (!accessToken) return;
 
@@ -1084,7 +963,7 @@ npm run build -w @slicc/chrome-extension
 
 ---
 
-## 14. Add Interactive Tool UI (Approval Dialogs, Forms)
+## 9. Add Interactive Tool UI (Approval Dialogs, Forms)
 
 **When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context. For the broader gate-pattern context (sudo, device gates, OS capture gates), see [`docs/approvals.md`](../../../docs/approvals.md).
 
@@ -1110,11 +989,17 @@ async function execute(args: string[]): Promise<ShellResult> {
   const toolContext = getToolExecutionContext();
 
   if (toolContext) {
-    // Agent-driven: show approval UI
+    // Agent-driven: show approval UI.
+    // IMPORTANT: escape dynamic values before interpolating into HTML to prevent
+    // injection — a crafted path could spoof the approval surface.
+    const safePath = targetPath.replace(
+      /[&<>"']/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c
+    );
     const result = await showToolUIFromContext({
       html: `
         <div class="tool-ui">
-          <p>The agent wants to access <code>${targetPath}</code></p>
+          <p>The agent wants to access <code>${safePath}</code></p>
           <div class="tool-ui__actions">
             <button class="tool-ui__btn tool-ui__btn--primary" data-action="approve">
               Approve
