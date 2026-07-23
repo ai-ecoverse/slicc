@@ -9,7 +9,7 @@
  * module-correct URL through the transpile (so `new URL(rel, import.meta.url)`
  * resolves against the module's own VFS path).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createEntryTranspile,
   createEsmTranspile,
@@ -18,6 +18,7 @@ import {
 } from '../../../src/shell/ipk/esm-transpile.js';
 import { buildModuleGraph } from '../../../src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
+import { resetTypeScriptForTests } from '../../../src/shell/supplemental-commands/shared.js';
 
 function makeReader(files: Record<string, string>): ModuleReader {
   const dirs = new Set<string>(['/']);
@@ -188,6 +189,25 @@ describe('createEsmTranspile() — typescript fallback path', () => {
     const exp = evalCjs(cjs);
     expect((exp.default as () => string)()).toBe('file:///app/node_modules/pkg/index.mjs');
     expect((exp.asset as () => string)()).toBe('file:///app/node_modules/pkg/d.txt');
+  });
+
+  it('surfaces the pinned TypeScript 6 install command when the browser fallback is absent', async () => {
+    resetTypeScriptForTests();
+    vi.stubGlobal('process', undefined);
+    try {
+      const transpile = createEsmTranspile({
+        loadEsbuild: async () => {
+          throw new Error('esbuild unavailable');
+        },
+        ipk: { reader: makeReader({}), readBytes: async () => new Uint8Array(), fromDir: '/app' },
+      });
+      await expect(transpile({ source: ESM_SRC, path: PATH, kind: 'esm' })).rejects.toThrow(
+        /ipk add typescript@6\.0\.3/
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
   });
 });
 

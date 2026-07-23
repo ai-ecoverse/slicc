@@ -1,8 +1,8 @@
 /**
  * `tsc` shell command — thin built-in surface that drives the
- * `typescript` package loaded from VFS `node_modules` via the shared
+ * TypeScript 6 package loaded from VFS `node_modules` via the shared
  * `getTypeScript()` ipk loader in `shared.ts`. Inert until the user
- * runs `ipk add typescript`; without the package, the loader throws
+ * runs `ipk add typescript@6.0.3`; without the package, the loader throws
  * the canonical guidance error which this command surfaces verbatim.
  * ZERO network in the not-installed path — there is no CDN fallback
  * anywhere on this code path.
@@ -30,13 +30,14 @@ import {
   basename,
   dirname,
   getTypeScript,
+  TYPESCRIPT_VFS_INSTALL_COMMAND,
   type TypeScriptIpkContext,
   type TypeScriptModule,
 } from './shared.js';
 
 /**
  * Build a {@link TypeScriptIpkContext} from a command's `ctx` so
- * `getTypeScript` can locate the ipk-installed `typescript` in the
+ * `getTypeScript` can locate the ipk-installed TypeScript 6 compiler in the
  * VFS `node_modules`. Mirrors `createIpkContextFromCtx` in
  * `esbuild-command.ts` / `biome-command.ts` so every float wires the
  * loader the same way.
@@ -67,7 +68,7 @@ export interface ParsedTscArgs {
   showVersion: boolean;
 }
 
-const HELP_TEXT = `tsc - thin wrapper over the ipk-loaded typescript package
+const HELP_TEXT = `tsc - thin wrapper over the ipk-loaded TypeScript 6 package
 
 Usage:
   tsc [options] [files...]
@@ -87,7 +88,7 @@ Notes:
 
 Install:
   Inert until the backing package is installed in node_modules:
-    ipk add typescript
+    ${TYPESCRIPT_VFS_INSTALL_COMMAND}
   Then \`tsc --version\` and the transpile commands above. There is no
   bundled binary, no CDN fallback; a missing package exits non-zero
   with a clear \`ipk add\` hint.
@@ -205,7 +206,10 @@ export async function loadTsconfig(
   };
 }
 
-function diagnosticToString(ts: TypeScriptModule, diag: import('typescript').Diagnostic): string {
+function diagnosticToString(
+  ts: TypeScriptModule,
+  diag: import('typescript-js').Diagnostic
+): string {
   const text = ts.flattenDiagnosticMessageText(diag.messageText, '\n');
   if (diag.file && typeof diag.start === 'number') {
     const { line, character } = diag.file.getLineAndCharacterOfPosition(diag.start);
@@ -217,7 +221,7 @@ function diagnosticToString(ts: TypeScriptModule, diag: import('typescript').Dia
 function inferScriptKind(
   ts: TypeScriptModule,
   fileName: string
-): import('typescript').ScriptKind | undefined {
+): import('typescript-js').ScriptKind | undefined {
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.tsx')) return ts.ScriptKind.TSX;
   if (lower.endsWith('.jsx')) return ts.ScriptKind.JSX;
@@ -228,7 +232,7 @@ function inferScriptKind(
 
 interface TranspileOneResult {
   outputText: string;
-  diagnostics: import('typescript').Diagnostic[];
+  diagnostics: import('typescript-js').Diagnostic[];
 }
 
 function transpileOne(
@@ -239,7 +243,7 @@ function transpileOne(
   reportDiagnostics: boolean
 ): TranspileOneResult {
   const result = ts.transpileModule(source, {
-    compilerOptions: compilerOptions as import('typescript').CompilerOptions,
+    compilerOptions: compilerOptions as import('typescript-js').CompilerOptions,
     fileName,
     reportDiagnostics,
   });
@@ -362,7 +366,7 @@ async function prepareTscRun(
     ts = await getTypeScript(createIpkContextFromCtx(ctx));
   } catch (err) {
     // `getTypeScript` already emits the canonical
-    // "run `ipk add typescript`" guidance when nothing is installed;
+    // Pinned TypeScript 6 install guidance when nothing is installed;
     // surface it verbatim.
     return {
       done: {

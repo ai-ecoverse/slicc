@@ -1,6 +1,9 @@
 import type { IFileSystem } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
-import { tryLoadTypeScriptSourceFromNodeModules } from '../../../src/shell/supplemental-commands/shared.js';
+import {
+  resetTypeScriptForTests,
+  tryLoadTypeScriptSourceFromNodeModules,
+} from '../../../src/shell/supplemental-commands/shared.js';
 import {
   createIpkContextFromCtx,
   createTscCommand,
@@ -160,7 +163,7 @@ describe('createTscCommand', () => {
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('tsc - thin wrapper');
-    expect(result.stdout).toContain('ipk add typescript');
+    expect(result.stdout).toContain('ipk add typescript@6.0.3');
   });
 
   it('transpiles a single .ts file to a sibling .js', async () => {
@@ -203,11 +206,10 @@ describe('createTscCommand', () => {
 
 describe('install-required guidance (browser branch)', () => {
   // Vitest runs under Node so `getTypeScript`'s Node fallback always loads the
-  // bundled `typescript` — exercise the browser-branch resolver helper
-  // directly to pin the null-when-absent / source-when-installed behavior.
-  // (The command's end-to-end guidance path is exercised manually per the
-  // task's verification plan — see the spec note.)
-  it('tryLoadTypeScriptSourceFromNodeModules returns null when typescript is absent', async () => {
+  // aliased TypeScript 6 package — exercise the browser-branch resolver helper
+  // directly to pin the null-when-absent / source-when-installed behavior,
+  // then stub the runtime for the command's browser-only guidance path.
+  it('tryLoadTypeScriptSourceFromNodeModules returns null when TypeScript is absent', async () => {
     const ctx = createMockCtx();
     const result = await tryLoadTypeScriptSourceFromNodeModules(createIpkContextFromCtx(ctx));
     expect(result).toBeNull();
@@ -227,13 +229,40 @@ describe('install-required guidance (browser branch)', () => {
     expect(result).toContain("version: '6.0.3'");
   });
 
-  it('help text includes the `ipk add typescript` hint (zero network)', () => {
+  it('returns null for the TypeScript 7 package shape without lib/typescript.js', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/package.json',
+      JSON.stringify({ name: 'typescript', version: '7.0.2', main: 'lib/version.cjs' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/lib/version.cjs',
+      "module.exports = '7.0.2';"
+    );
+    const result = await tryLoadTypeScriptSourceFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toBeNull();
+  });
+
+  it('surfaces the pinned TypeScript 6 install command when the browser compiler is absent', async () => {
+    resetTypeScriptForTests();
+    vi.stubGlobal('process', undefined);
+    try {
+      const result = await createTscCommand().execute(['--version'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
+  });
+
+  it('help text includes the pinned TypeScript 6 hint (zero network)', () => {
     // The HELP_TEXT is the canonical user-facing surface for the install
     // requirement. The command always emits it on `--help`, even when
     // typescript is absent.
     const cmd = createTscCommand();
     return cmd.execute(['--help'], createMockCtx()).then((res) => {
-      expect(res.stdout).toMatch(/ipk add typescript/);
+      expect(res.stdout).toContain('ipk add typescript@6.0.3');
       expect(res.stdout).not.toMatch(/unpkg|jsdelivr|esm\.sh|https?:\/\//);
     });
   });
