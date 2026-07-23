@@ -29,6 +29,12 @@ const SUPERSEDE_REDIRECT_DELAY_MS = 1000;
 
 export interface TrayDataChannelLike {
   readyState?: string;
+  /**
+   * Bytes queued in the underlying SCTP transport. Only present on real
+   * RTCDataChannel instances; test doubles may omit it. The export-chunk
+   * sender uses this for backpressure — when absent, backpressure is skipped.
+   */
+  bufferedAmount?: number;
   addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void;
   addEventListener(type: 'message', listener: (event: { data: string }) => void): void;
   send(data: string): void;

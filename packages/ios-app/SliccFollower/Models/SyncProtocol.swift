@@ -3,7 +3,7 @@ import Foundation
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-let traySyncProtocolVersion = 1
+let traySyncProtocolVersion = 2
 
 // MARK: - AgentEvent
 
@@ -303,6 +303,15 @@ enum LeaderToFollowerMessage: Codable {
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
+        // Transcript export response variants — iOS never requests exports;
+        // decode these to `.unknown` so the tray session is not torn down.
+        case "transcript.export.pending",
+             "transcript.export.denied",
+             "transcript.export.start",
+             "transcript.export.chunk",
+             "transcript.export.complete",
+             "transcript.export.error":
+            self = .unknown(type: type)
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
