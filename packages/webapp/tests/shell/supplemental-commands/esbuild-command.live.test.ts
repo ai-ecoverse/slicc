@@ -63,4 +63,18 @@ describeHeavy('esbuild command live wasm', () => {
     expect(result.stdout).toContain('require("pkg/subpath")');
     expect(result.stdout).toContain('require("@scope/pkg/subpath")');
   });
+
+  it('does not externalize the entry point when a wildcard external matches imports', async () => {
+    resetEsbuildForTests();
+    const cmd = createEsbuildCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/entry.js',
+      'import value from "external-dependency"; export const marker = "ENTRY_MARKER"; export default value;'
+    );
+    const result = await cmd.execute(['entry.js', '--bundle', '--format=cjs', '--external:*'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ENTRY_MARKER');
+    expect(result.stdout).toContain('require("external-dependency")');
+  });
 });

@@ -211,11 +211,11 @@ describe('createVfsPlugin bare specifier resolution', () => {
     expect(res.external).toBe(true);
   });
 
-  it('marks a matched external before bare-specifier resolution', async () => {
+  it('never externalizes entry points but still externalizes matching imports', async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, ['sliccy:*'], null);
-    type ResolveCb = (a: { path: string; importer?: string }) => Promise<{
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, ['*'], null);
+    type ResolveCb = (a: { path: string; importer?: string; kind: string }) => Promise<{
       path?: string;
       external?: boolean;
     }>;
@@ -227,11 +227,17 @@ describe('createVfsPlugin bare specifier resolution', () => {
       onLoad: () => {},
     } as unknown as Parameters<typeof plugin.setup>[0]);
     if (!resolveCb) throw new Error('onResolve callback not registered');
-    const res = await (resolveCb as ResolveCb)({
-      path: 'sliccy:fs',
-      importer: '/workspace/entry.ts',
+    const entry = await (resolveCb as ResolveCb)({
+      path: '/workspace/entry.ts',
+      kind: 'entry-point',
     });
-    expect(res).toEqual({ path: 'sliccy:fs', external: true });
+    const imported = await (resolveCb as ResolveCb)({
+      path: 'external-dependency',
+      importer: '/workspace/entry.ts',
+      kind: 'import-statement',
+    });
+    expect(entry).toEqual({ path: '/workspace/entry.ts' });
+    expect(imported).toEqual({ path: 'external-dependency', external: true });
   });
 
   it.each([

@@ -347,7 +347,7 @@ export function createVfsPlugin(
     name: 'slicc-vfs',
     setup(build) {
       build.onResolve({ filter: /.*/ }, async (args) => {
-        if (matchesExternal(args.path, externals)) {
+        if (args.kind !== 'entry-point' && matchesExternal(args.path, externals)) {
           return { path: args.path, external: true };
         }
 
