@@ -235,9 +235,12 @@ function bytesToBase64(data: Uint8Array): string {
 
 /**
  * Wait until the channel's bufferedAmount drops below `threshold`.
- * Polls every 25 ms so tests don't need a real RTCDataChannel;
- * cancels immediately on AbortSignal.
- * When the channel has no bufferedAmount (test double), returns immediately.
+ * Uses 25 ms polling regardless of channel type. The real RTCDataChannel
+ * `bufferedamountlow` event would be ~25× more responsive, but adding
+ * cancellable listener cleanup requires `removeEventListener` on
+ * `TrayDataChannelLike` — deferred as future work. For test doubles that
+ * expose `bufferedAmount = 0`, the while-loop body never executes. For test
+ * doubles with no `bufferedAmount` property, returns immediately.
  */
 async function waitForBufferedAmountLow(
   channel: { bufferedAmount?: number },
@@ -259,6 +262,13 @@ interface ConnectedFollower {
   connectedAt?: string;
   lastActivity: number;
   floatType: FloatType;
+  /**
+   * For Cherry followers (`runtime === CHERRY_RUNTIME_TAG`): the URL origin
+   * of the host page derived from the first cherry target in targets.advertise.
+   * Populated when `targets.advertise` arrives; absent for non-Cherry followers
+   * or when the target URL is malformed.
+   */
+  hostOrigin?: string;
   /**
    * The scoop this follower has currently selected for viewing.
    * Defaults to the leader's active scoop until the follower sends `scoops.select`.
@@ -924,6 +934,21 @@ export class LeaderSyncManager {
     }
     this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
     this.registry.setTargets(message.runtimeId, message.targets);
+
+    // Derive Cherry host origin from the first cherry-kind target URL.
+    // Stored for the approval dialog; never accepted from the request payload.
+    const follower = this.followers.get(bootstrapId);
+    if (follower && follower.runtime === CHERRY_RUNTIME_TAG) {
+      const cherryTarget = message.targets.find((t) => t.kind === 'cherry');
+      if (cherryTarget) {
+        try {
+          follower.hostOrigin = new URL(cherryTarget.url).origin;
+        } catch {
+          // Malformed URL — omit hostOrigin
+        }
+      }
+    }
+
     this.broadcastTargetRegistry();
   }
 
@@ -1045,7 +1070,7 @@ export class LeaderSyncManager {
         void this.handleTranscriptExportRequest(bootstrapId, message.requestId, message.selector);
         break;
       case 'transcript.export.cancel':
-        this.handleTranscriptExportCancel(message.requestId);
+        this.handleTranscriptExportCancel(bootstrapId, message.requestId);
         break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
@@ -1104,16 +1129,34 @@ export class LeaderSyncManager {
     requestId: string,
     selector: TranscriptExportSelector
   ): Promise<void> {
-    // One-use guard: if we already have an in-flight export with this requestId, ignore.
-    if (this.activeExports.has(requestId)) {
-      log.warn('Duplicate transcript export request, ignoring', { bootstrapId, requestId });
+    // One-use guard (owner-aware): only the originating follower's duplicate is blocked.
+    // A different follower with a coincidentally colliding requestId is allowed through.
+    const existingEntry = this.activeExports.get(requestId);
+    if (existingEntry?.bootstrapId === bootstrapId) {
+      log.warn('Duplicate transcript export request from same follower, ignoring', {
+        bootstrapId,
+        requestId,
+      });
       return;
     }
+
     const follower = this.followers.get(bootstrapId);
     if (!follower) return;
 
     const { requestTranscriptExportApproval, createTranscriptExport } = this.options;
     if (!requestTranscriptExportApproval || !createTranscriptExport) {
+      follower.sync.send({ type: 'transcript.export.denied', requestId });
+      return;
+    }
+
+    // Per-follower concurrency cap: at most one approved or pending export per follower.
+    // Auto-deny additional requests without opening approval or leaking metadata.
+    const hasInFlight = [...this.activeExports.values()].some((e) => e.bootstrapId === bootstrapId);
+    if (hasInFlight) {
+      log.warn('Follower already has an in-flight export; denying duplicate', {
+        bootstrapId,
+        requestId,
+      });
       follower.sync.send({ type: 'transcript.export.denied', requestId });
       return;
     }
@@ -1133,6 +1176,9 @@ export class LeaderSyncManager {
       approved = await requestTranscriptExportApproval({
         requestId,
         followerLabel,
+        // Derived from connected state via targets.advertise — never from request payload.
+        // Only populated for Cherry followers; omitted for non-Cherry runtimes.
+        hostOrigin: follower.hostOrigin,
         selector,
       });
     } catch (err) {
@@ -1162,10 +1208,12 @@ export class LeaderSyncManager {
     void this.streamTranscriptExport(bootstrapId, requestId, selector, abort);
   }
 
-  private handleTranscriptExportCancel(requestId: string): void {
+  private handleTranscriptExportCancel(bootstrapId: string, requestId: string): void {
     const entry = this.activeExports.get(requestId);
-    if (!entry) return;
-    log.info('Transcript export cancelled by follower', { requestId });
+    // Owner-aware guard: only the originating follower may cancel its own export.
+    // A different follower knowing (or guessing) the requestId cannot abort it.
+    if (!entry || entry.bootstrapId !== bootstrapId) return;
+    log.info('Transcript export cancelled by follower', { requestId, bootstrapId });
     entry.abort.abort();
     this.activeExports.delete(requestId);
   }
@@ -1224,8 +1272,9 @@ export class LeaderSyncManager {
     const { sha256: sha256Lib } = await import('js-sha256');
     const hasher = sha256Lib.create();
     let chunkIndex = 0;
+    let leaderByteCount = 0;
 
-    const aborted = await this.sendExportChunks(
+    const streamError = await this.sendExportChunks(
       bootstrapId,
       requestId,
       result.chunks,
@@ -1239,10 +1288,14 @@ export class LeaderSyncManager {
       },
       (n) => {
         chunkIndex = n;
+      },
+      (n) => {
+        leaderByteCount = n;
       }
     );
-    if (aborted) {
-      sendErr('transfer-aborted');
+    if (streamError) {
+      // Stream iteration failed — not a user abort.
+      sendErr('transfer-corrupt');
       return;
     }
 
@@ -1267,13 +1320,27 @@ export class LeaderSyncManager {
       this.activeExports.delete(requestId);
       return;
     }
+
+    // Verify the service's reported byte count matches what the leader actually sent.
+    // Both should equal the raw ZIP byte count; a mismatch indicates a service bug
+    // or a corrupted stream before the follower ever validates.
+    if (completion.byteLength !== leaderByteCount) {
+      log.warn('Transcript export byte count mismatch between service and leader stream', {
+        requestId,
+        serviceByteLength: completion.byteLength,
+        leaderByteCount,
+      });
+      sendErr('transfer-corrupt');
+      return;
+    }
+
     const done = this.followers.get(bootstrapId);
     if (done) {
       done.sync.send({
         type: 'transcript.export.complete',
         requestId,
         chunks: chunkIndex,
-        byteLength: completion.byteLength,
+        byteLength: leaderByteCount,
         sha256: hasher.hex(),
       });
     }
@@ -1282,8 +1349,12 @@ export class LeaderSyncManager {
 
   /**
    * Iterate the ZIP chunk iterable, base64-encode each slice (≤32 KiB), apply
-   * backpressure, and call `onSlice` per slice. Returns true on error/abort
-   * (caller should send an error), false when the stream completed normally.
+   * backpressure, and call `onSlice` per slice.
+   *
+   * Returns `true` when a stream error occurred (caller should send
+   * `transfer-corrupt`); `false` when the stream completed normally OR was
+   * aborted via signal/disconnect (caller distinguishes via
+   * `abort.signal.aborted` or `activeExports.has(requestId)`).
    */
   private async sendExportChunks(
     bootstrapId: string,
@@ -1292,23 +1363,28 @@ export class LeaderSyncManager {
     hasher: { update(data: Uint8Array): void },
     abort: AbortController,
     onSlice: (index: number, slice: string) => boolean,
-    setCount: (n: number) => void
+    setCount: (n: number) => void,
+    setBytes: (n: number) => void
   ): Promise<boolean> {
     const sync = this.followers.get(bootstrapId)?.sync;
     if (!sync) return true;
     let idx = 0;
+    let byteCount = 0;
     try {
       for await (const raw of chunks) {
         if (abort.signal.aborted || !this.activeExports.has(requestId)) {
           setCount(idx);
+          setBytes(byteCount);
           return false;
         }
         hasher.update(raw);
+        byteCount += raw.byteLength;
         const b64 = bytesToBase64(raw);
         let off = 0;
         while (off < b64.length) {
           if (abort.signal.aborted || !this.activeExports.has(requestId)) {
             setCount(idx);
+            setBytes(byteCount);
             return false;
           }
           await waitForBufferedAmountLow(
@@ -1318,12 +1394,14 @@ export class LeaderSyncManager {
           );
           if (abort.signal.aborted || !this.activeExports.has(requestId)) {
             setCount(idx);
+            setBytes(byteCount);
             return false;
           }
           const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
           off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX;
           if (!onSlice(idx, slice)) {
             setCount(idx);
+            setBytes(byteCount);
             return true;
           }
           idx++;
@@ -1332,6 +1410,7 @@ export class LeaderSyncManager {
     } catch (streamErr) {
       if (abort.signal.aborted) {
         setCount(idx);
+        setBytes(byteCount);
         return false;
       }
       log.warn('Error streaming transcript export chunks', {
@@ -1339,9 +1418,11 @@ export class LeaderSyncManager {
         error: streamErr instanceof Error ? streamErr.message : String(streamErr),
       });
       setCount(idx);
+      setBytes(byteCount);
       return true;
     }
     setCount(idx);
+    setBytes(byteCount);
     return false;
   }
 
