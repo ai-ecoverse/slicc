@@ -32,10 +32,17 @@ export interface TranscriptConversationSource {
 // Public output contract
 // ---------------------------------------------------------------------------
 
+export interface CanonicalImageEntry {
+  data: string;
+  mimeType: string;
+}
+
 export interface NormalizedTranscript {
   conversations: TranscriptConversation[];
   delegations: TranscriptDelegation[];
   excludedReasoningBlocks: number;
+  /** Base64 image data from assistant and tool-result Pi content blocks, keyed by attachmentId. */
+  canonicalImages: Map<string, CanonicalImageEntry>;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +61,7 @@ type UserContentRaw =
 interface MessageNormalizeResult {
   message: TranscriptMessage | null;
   excludedReasoningBlocks: number;
+  images: Map<string, CanonicalImageEntry>;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +117,8 @@ function normalizeUserContent(
 
 /**
  * Normalizes assistant content blocks, excluding thinking blocks.
- * Returns the normalized content and a count of excluded reasoning blocks.
+ * Returns the normalized content, a count of excluded reasoning blocks,
+ * and canonical image data keyed by attachmentId.
  */
 function normalizeAssistantContent(
   content: Array<{
@@ -123,8 +132,13 @@ function normalizeAssistantContent(
     mimeType?: string;
   }>,
   msgId: string
-): { blocks: TranscriptContentBlock[]; excluded: number } {
+): {
+  blocks: TranscriptContentBlock[];
+  excluded: number;
+  images: Map<string, CanonicalImageEntry>;
+} {
   const blocks: TranscriptContentBlock[] = [];
+  const images = new Map<string, CanonicalImageEntry>();
   let excluded = 0;
   let imgIndex = 0;
   for (const block of content) {
@@ -140,30 +154,39 @@ function normalizeAssistantContent(
         input: block.arguments ?? {},
       });
     } else if (block.type === 'image') {
-      blocks.push(imageToAttachmentRef(msgId, imgIndex++));
+      const ref = imageToAttachmentRef(msgId, imgIndex++);
+      blocks.push(ref);
+      if (block.data && block.mimeType) {
+        images.set(ref.attachmentId, { data: block.data, mimeType: block.mimeType });
+      }
     }
   }
-  return { blocks, excluded };
+  return { blocks, excluded, images };
 }
 
 /**
  * Normalizes tool-result content blocks.
- * Images become attachment-refs.
+ * Images become attachment-refs with data captured in returned images map.
  */
 function normalizeToolResultContent(
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
   msgId: string
-): TranscriptContentBlock[] {
+): { blocks: TranscriptContentBlock[]; images: Map<string, CanonicalImageEntry> } {
   const blocks: TranscriptContentBlock[] = [];
+  const images = new Map<string, CanonicalImageEntry>();
   let imgIndex = 0;
   for (const block of content) {
     if (block.type === 'text') {
       if (block.text) blocks.push({ type: 'text', text: block.text });
     } else if (block.type === 'image') {
-      blocks.push(imageToAttachmentRef(msgId, imgIndex++));
+      const ref = imageToAttachmentRef(msgId, imgIndex++);
+      blocks.push(ref);
+      if (block.data && block.mimeType) {
+        images.set(ref.attachmentId, { data: block.data, mimeType: block.mimeType });
+      }
     }
   }
-  return blocks;
+  return { blocks, images };
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +207,7 @@ function normalizeUser(
     timestamp: new Date(message.timestamp).toISOString(),
     content,
   };
-  return { message: normalized, excludedReasoningBlocks: 0 };
+  return { message: normalized, excludedReasoningBlocks: 0, images: new Map() };
 }
 
 function normalizeAssistant(
@@ -193,7 +216,7 @@ function normalizeAssistant(
   sequence: number
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
-  const { blocks, excluded } = normalizeAssistantContent(
+  const { blocks, excluded, images } = normalizeAssistantContent(
     message.content as Array<{
       type: string;
       text?: string;
@@ -217,7 +240,7 @@ function normalizeAssistant(
     stopReason: message.stopReason,
     ...(message.errorMessage ? { error: message.errorMessage } : {}),
   };
-  return { message: normalized, excludedReasoningBlocks: excluded };
+  return { message: normalized, excludedReasoningBlocks: excluded, images };
 }
 
 function normalizeToolResult(
@@ -226,7 +249,7 @@ function normalizeToolResult(
   sequence: number
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
-  const content = normalizeToolResultContent(
+  const { blocks: content, images } = normalizeToolResultContent(
     message.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>,
     id
   );
@@ -239,7 +262,7 @@ function normalizeToolResult(
     toolCallId: message.toolCallId,
     isError: message.isError,
   };
-  return { message: normalized, excludedReasoningBlocks: 0 };
+  return { message: normalized, excludedReasoningBlocks: 0, images };
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +284,7 @@ function normalizeMessage(
     return normalizeToolResult(message, conversationId, sequence);
   }
   // Unknown roles (e.g. custom AgentMessages) are dropped.
-  return { message: null, excludedReasoningBlocks: 0 };
+  return { message: null, excludedReasoningBlocks: 0, images: new Map() };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,10 +315,12 @@ export function normalizeConversations(
   sources: readonly TranscriptConversationSource[]
 ): NormalizedTranscript {
   let excludedReasoningBlocks = 0;
+  const canonicalImages = new Map<string, CanonicalImageEntry>();
   const conversations = sources.map((source) => {
     const messages = source.messages.flatMap((message, index) => {
       const normalized = normalizeMessage(message, source.id, index + 1);
       excludedReasoningBlocks += normalized.excludedReasoningBlocks;
+      for (const [id, entry] of normalized.images) canonicalImages.set(id, entry);
       return normalized.message ? [normalized.message] : [];
     });
     return {
@@ -313,5 +338,6 @@ export function normalizeConversations(
     conversations,
     delegations: buildDelegations(sources),
     excludedReasoningBlocks,
+    canonicalImages,
   };
 }

@@ -297,6 +297,7 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       document,
       chatMessagesByConversation: collected.chatMessagesByConversation,
       knownSecrets: this.deps.knownSecrets,
+      canonicalImages: normalized.canonicalImages,
       signal,
     });
 
@@ -332,6 +333,7 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       document,
       chatMessagesByConversation: collected.chatMessagesByConversation,
       knownSecrets: this.deps.knownSecrets,
+      canonicalImages: normalized.canonicalImages,
       signal,
     });
   }
