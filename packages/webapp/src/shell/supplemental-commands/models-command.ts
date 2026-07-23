@@ -1,4 +1,3 @@
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
@@ -20,39 +19,6 @@ interface AAModelData {
 interface AACacheData {
   fetchedAt: number;
   models: AAModelData[];
-}
-
-interface AAModelCreator {
-  slug?: unknown;
-}
-
-interface AAModelEvaluations {
-  artificial_analysis_intelligence_index?: unknown;
-  artificial_analysis_coding_index?: unknown;
-}
-
-interface AAModelResponse {
-  slug?: unknown;
-  name?: unknown;
-  model_creator?: AAModelCreator;
-  evaluations?: AAModelEvaluations;
-  median_output_tokens_per_second?: unknown;
-}
-
-function toNumberOrNull(value: unknown): number | null {
-  return typeof value === 'number' ? value : null;
-}
-
-function toAAModelData(raw: unknown): AAModelData {
-  const model = (raw ?? {}) as AAModelResponse;
-  return {
-    slug: typeof model.slug === 'string' ? model.slug : '',
-    name: typeof model.name === 'string' ? model.name : '',
-    creator_slug: typeof model.model_creator?.slug === 'string' ? model.model_creator.slug : '',
-    intelligence_index: toNumberOrNull(model.evaluations?.artificial_analysis_intelligence_index),
-    coding_index: toNumberOrNull(model.evaluations?.artificial_analysis_coding_index),
-    speed_tps: toNumberOrNull(model.median_output_tokens_per_second),
-  };
 }
 
 async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAModelData[]> {
@@ -94,7 +60,7 @@ async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAMod
   }
   if (result.status < 200 || result.status >= 300) return [];
 
-  let body: unknown;
+  let body: any;
   try {
     const bodyText = new TextDecoder().decode(result.body);
     body = JSON.parse(bodyText);
@@ -102,11 +68,15 @@ async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAMod
     return [];
   }
 
-  const bodyObj =
-    typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
-  const itemsRaw = Array.isArray(body) ? body : (bodyObj.data ?? bodyObj.models ?? []);
-  const items = Array.isArray(itemsRaw) ? itemsRaw : [];
-  const models: AAModelData[] = items.map(toAAModelData);
+  const items: any[] = Array.isArray(body) ? body : (body?.data ?? body?.models ?? []);
+  const models: AAModelData[] = items.map((m: any) => ({
+    slug: m.slug ?? '',
+    name: m.name ?? '',
+    creator_slug: m.model_creator?.slug ?? '',
+    intelligence_index: m.evaluations?.artificial_analysis_intelligence_index ?? null,
+    coding_index: m.evaluations?.artificial_analysis_coding_index ?? null,
+    speed_tps: m.median_output_tokens_per_second ?? null,
+  }));
 
   // Save to cache
   if (vfs && models.length > 0) {
@@ -263,7 +233,7 @@ interface ModelInfo {
 }
 
 function toModelInfo(
-  m: Model<Api>,
+  m: any,
   providerId: string,
   activeModelId: string,
   activeProvider: string,
@@ -382,7 +352,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
       }
       providerIds = [explicitProvider];
     } else if (allMode) {
-      providerIds = [...new Set(accounts.map((account) => account.providerId))];
+      providerIds = [...new Set(accounts.map((a: any) => a.providerId))];
     } else {
       providerIds = [selectedProvider];
     }
@@ -399,7 +369,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
         continue;
       }
       let models = rawModels
-        .map((model) => toModelInfo(model, pid, activeId, activeProvider, aaModels))
+        .map((m: any) => toModelInfo(m, pid, activeId, activeProvider, aaModels))
         .sort((a: ModelInfo, b: ModelInfo) => b.cost.input - a.cost.input);
 
       if (!allVersions) {

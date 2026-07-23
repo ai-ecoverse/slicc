@@ -23,8 +23,7 @@ declare const chrome: {
   runtime: { getURL?: (path: string) => string };
 };
 
-const byId = <T extends HTMLElement = HTMLElement>(id: string): T =>
-  document.getElementById(id) as T;
+const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 interface ElProps {
   class?: string;
@@ -64,7 +63,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 function showToast(msg: string, isError = false): void {
-  const t = byId('toast');
+  const t = $('toast');
   t.textContent = msg;
   t.classList.toggle('error', isError);
   t.classList.add('show');
@@ -74,7 +73,7 @@ function showToast(msg: string, isError = false): void {
 const storage: StorageArea = chrome.storage.local;
 
 async function renderList(): Promise<void> {
-  const container = byId('list');
+  const container = $('list');
   container.replaceChildren();
   let entries: SecretEntry[];
   try {
@@ -150,14 +149,14 @@ function setupTabs(): void {
 
 async function onSaveS3(): Promise<void> {
   const result = await saveS3Profile(storage, {
-    profile: (byId('s3-profile') as HTMLInputElement).value.trim(),
-    accessKey: (byId('s3-key') as HTMLInputElement).value.trim(),
-    secretKey: (byId('s3-secret') as HTMLInputElement).value,
-    region: (byId('s3-region') as HTMLInputElement).value.trim() || undefined,
-    endpoint: (byId('s3-endpoint') as HTMLInputElement).value.trim() || undefined,
-    pathStyle: (byId('s3-pathstyle') as HTMLSelectElement).value === 'true',
+    profile: ($('s3-profile') as HTMLInputElement).value.trim(),
+    accessKey: ($('s3-key') as HTMLInputElement).value.trim(),
+    secretKey: ($('s3-secret') as HTMLInputElement).value,
+    region: ($('s3-region') as HTMLInputElement).value.trim() || undefined,
+    endpoint: ($('s3-endpoint') as HTMLInputElement).value.trim() || undefined,
+    pathStyle: ($('s3-pathstyle') as HTMLSelectElement).value === 'true',
     domains:
-      (byId('s3-domains') as HTMLInputElement).value
+      ($('s3-domains') as HTMLInputElement).value
         .trim()
         .split(',')
         .map((d) => d.trim())
@@ -167,7 +166,7 @@ async function onSaveS3(): Promise<void> {
     showToast(result.error ?? 'Failed', true);
     return;
   }
-  const profileName = (byId('s3-profile') as HTMLInputElement).value.trim();
+  const profileName = ($('s3-profile') as HTMLInputElement).value.trim();
   showToast(`Saved profile "${profileName}"`);
   clearS3Form();
   renderList();
@@ -175,16 +174,16 @@ async function onSaveS3(): Promise<void> {
 
 function clearS3Form(): void {
   ['s3-profile', 's3-key', 's3-secret', 's3-region', 's3-endpoint', 's3-domains'].forEach((id) => {
-    (byId(id) as HTMLInputElement).value = '';
+    ($(id) as HTMLInputElement).value = '';
   });
-  (byId('s3-pathstyle') as HTMLSelectElement).value = '';
+  ($('s3-pathstyle') as HTMLSelectElement).value = '';
 }
 
 async function onSaveCustom(): Promise<void> {
   const result = await saveCustomSecret(storage, {
-    name: (byId('c-name') as HTMLInputElement).value.trim(),
-    value: (byId('c-value') as HTMLInputElement).value,
-    domains: (byId('c-domains') as HTMLInputElement).value
+    name: ($('c-name') as HTMLInputElement).value.trim(),
+    value: ($('c-value') as HTMLInputElement).value,
+    domains: ($('c-domains') as HTMLInputElement).value
       .trim()
       .split(',')
       .map((d) => d.trim())
@@ -194,7 +193,7 @@ async function onSaveCustom(): Promise<void> {
     showToast(result.error ?? 'Failed', true);
     return;
   }
-  const name = (byId('c-name') as HTMLInputElement).value.trim();
+  const name = ($('c-name') as HTMLInputElement).value.trim();
   showToast(`Saved "${name}"`);
   clearCustomForm();
   renderList();
@@ -202,7 +201,7 @@ async function onSaveCustom(): Promise<void> {
 
 function clearCustomForm(): void {
   ['c-name', 'c-value', 'c-domains'].forEach((id) => {
-    (byId(id) as HTMLInputElement).value = '';
+    ($(id) as HTMLInputElement).value = '';
   });
 }
 
@@ -221,7 +220,7 @@ import {
 } from '@slicc/shared-ts';
 
 function renderOAuthExtras(): void {
-  const container = byId('od-list');
+  const container = $('od-list');
   container.replaceChildren();
   const store = readOAuthExtras(localStorage);
   const providers = Object.keys(store).sort();
@@ -281,8 +280,8 @@ function renderOAuthExtras(): void {
 }
 
 function onAddOAuthExtra(): void {
-  const provider = (byId('od-provider') as HTMLInputElement).value.trim();
-  const domain = (byId('od-domain') as HTMLInputElement).value.trim();
+  const provider = ($('od-provider') as HTMLInputElement).value.trim();
+  const domain = ($('od-domain') as HTMLInputElement).value.trim();
   if (!provider) {
     showToast('Provider is required', true);
     return;
@@ -300,7 +299,7 @@ function onAddOAuthExtra(): void {
     return;
   }
   showToast(`Added ${domain} to ${provider}`);
-  (byId('od-domain') as HTMLInputElement).value = '';
+  ($('od-domain') as HTMLInputElement).value = '';
   renderOAuthExtras();
 }
 
@@ -308,13 +307,13 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   renderList();
   renderOAuthExtras();
-  byId('refreshBtn').addEventListener('click', () => {
+  $('refreshBtn').addEventListener('click', () => {
     renderList();
     renderOAuthExtras();
   });
-  byId('s3-save').addEventListener('click', onSaveS3);
-  byId('s3-clear').addEventListener('click', clearS3Form);
-  byId('c-save').addEventListener('click', onSaveCustom);
-  byId('c-clear').addEventListener('click', clearCustomForm);
-  byId('od-add').addEventListener('click', onAddOAuthExtra);
+  $('s3-save').addEventListener('click', onSaveS3);
+  $('s3-clear').addEventListener('click', clearS3Form);
+  $('c-save').addEventListener('click', onSaveCustom);
+  $('c-clear').addEventListener('click', clearCustomForm);
+  $('od-add').addEventListener('click', onAddOAuthExtra);
 });

@@ -48,7 +48,6 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 type MagickModule = Awaited<ReturnType<typeof getMagick>>;
 type MagickImage = Parameters<Parameters<MagickModule['ImageMagick']['read']>[1]>[0];
-type MagickOutputFormat = Parameters<MagickImage['write']>[0];
 
 const HELP_TEXT = `usage: convert [input] [operations...] [output]
 
@@ -204,7 +203,7 @@ async function processImage(
   // names, producing a "UTF-8 text with CRLF terminators"
   // garbage file). Symptom only surfaces in extension/
   // offscreen mode because of allocator timing differences.
-  const outputFormat = inferFormat(outputPath) as MagickOutputFormat;
+  const outputFormat = inferFormat(outputPath) as any; // MagickFormat type
   image.write(outputFormat, (data: Uint8Array) => {
     outputData = new Uint8Array(data);
   });

@@ -123,18 +123,18 @@ export function adaptTool(
   tool: ToolDefinition,
   pmConfig?: ToolAdapterProcessConfig,
   secretsConfig?: ToolAdapterSecretsConfig
-): AgentTool<unknown> {
+): AgentTool<any> {
   return {
     name: tool.name,
     label: tool.name,
     description: tool.description,
-    parameters: tool.inputSchema,
+    parameters: tool.inputSchema as any,
     async execute(
       toolCallId: string,
       params: unknown,
       signal?: AbortSignal,
-      onUpdate?: (partialResult: AgentToolResult<unknown>) => void
-    ): Promise<AgentToolResult<unknown>> {
+      onUpdate?: (partialResult: AgentToolResult<any>) => void
+    ): Promise<AgentToolResult<any>> {
       // Push execution context so shell commands can show UI if needed
       let ctx: ToolExecutionContext | undefined;
       if (onUpdate) {
@@ -267,7 +267,7 @@ export function adaptTools(
   tools: ToolDefinition[],
   pmConfig?: ToolAdapterProcessConfig,
   secretsConfig?: ToolAdapterSecretsConfig
-): AgentTool<unknown>[] {
+): AgentTool<any>[] {
   return tools.map((t) => adaptTool(t, pmConfig, secretsConfig));
 }
 
