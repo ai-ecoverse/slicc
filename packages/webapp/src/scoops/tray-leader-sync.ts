@@ -11,6 +11,7 @@ import type {
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
 } from '@slicc/shared-ts';
+import { TranscriptExportError } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -1253,7 +1254,9 @@ export class LeaderSyncManager {
         requestId,
         error: createErr instanceof Error ? createErr.message : String(createErr),
       });
-      sendErr('session-not-found');
+      const code: TranscriptExportErrorCode =
+        createErr instanceof TranscriptExportError ? createErr.code : 'session-not-found';
+      sendErr(code);
       return;
     }
 
@@ -1334,6 +1337,17 @@ export class LeaderSyncManager {
       return;
     }
 
+    // Cross-check leader-computed SHA-256 against the service's reported digest.
+    // Both cover the same raw ZIP bytes; a mismatch indicates a service/stream bug.
+    const leaderSha = hasher.hex();
+    if (completion.sha256 !== leaderSha) {
+      log.warn('Transcript export SHA-256 mismatch between service and leader stream', {
+        requestId,
+      });
+      sendErr('transfer-corrupt');
+      return;
+    }
+
     const done = this.followers.get(bootstrapId);
     if (done) {
       done.sync.send({
@@ -1341,7 +1355,7 @@ export class LeaderSyncManager {
         requestId,
         chunks: chunkIndex,
         byteLength: leaderByteCount,
-        sha256: hasher.hex(),
+        sha256: leaderSha,
       });
     }
     this.activeExports.delete(requestId);

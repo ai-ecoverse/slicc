@@ -31,6 +31,20 @@ type ParseResult = { ok: true; args: ParsedExportArgs } | { ok: false; stderr: s
 
 const USAGE = 'usage: session export [--id <id>] [--output <path>]\n';
 
+/**
+ * Reject --output paths that could escape VFS containment.
+ * Allows normal absolute VFS paths; rejects NUL, backslash, and dot-segment traversal.
+ */
+function validateOutputPath(path: string): { ok: true } | { ok: false; reason: string } {
+  if (path.includes('\x00')) return { ok: false, reason: 'path must not contain NUL bytes' };
+  if (path.includes('\\')) return { ok: false, reason: 'path must not contain backslashes' };
+  const segments = path.split('/');
+  for (const seg of segments) {
+    if (seg === '..') return { ok: false, reason: 'path must not contain ".."/traversal segments' };
+  }
+  return { ok: true };
+}
+
 function parseExportArgs(args: readonly string[]): ParseResult {
   let sessionId: string | null = null;
   let outputPath: string | null = null;
@@ -139,6 +153,17 @@ export function createSessionCommand(): Command {
     }
 
     const { sessionId, outputPath } = parsed.args;
+
+    if (outputPath !== null) {
+      const pathCheck = validateOutputPath(outputPath);
+      if (!pathCheck.ok) {
+        return {
+          stdout: '',
+          stderr: `session export: --output ${pathCheck.reason}\n${USAGE}`,
+          exitCode: 1,
+        };
+      }
+    }
 
     const selector: TranscriptSessionSelector =
       sessionId != null ? { kind: 'frozen', sessionId } : { kind: 'active' };

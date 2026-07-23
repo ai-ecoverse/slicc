@@ -10,12 +10,7 @@
 // Public types
 // ---------------------------------------------------------------------------
 
-export type CredentialCategory =
-  | 'api-key'
-  | 'bearer-token'
-  | 'jwt'
-  | 'private-key'
-  | 'password';
+export type CredentialCategory = 'api-key' | 'bearer-token' | 'jwt' | 'private-key' | 'password';
 
 export interface PatternRedactionResult {
   text: string;
@@ -67,10 +62,11 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
       String.raw`|AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{34})`,
     flags: 'g',
   },
-  // password/passwd/token/secret/api_key keyword assignments
+  // password/passwd/token/secret/api_key keyword assignments.
+  // \b before the keyword prevents matching embedded substrings like footoken=value.
   {
     category: 'password',
-    source: String.raw`(?:password|passwd|token|secret|api_key)\s*[=:]\s*\S+`,
+    source: String.raw`\b(?:password|passwd|token|secret|api_key)\s*[=:]\s*\S+`,
     flags: 'gi',
   },
 ];
@@ -122,7 +118,7 @@ function findExcluded(input: string): Range[] {
 export function redactCredentialPatterns(
   input: string,
   idPrefix: string,
-  firstId = 1,
+  firstId = 1
 ): PatternRedactionResult {
   const excluded = findExcluded(input);
   const claims: Claim[] = [];

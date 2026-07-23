@@ -12,6 +12,7 @@
  */
 
 import 'fake-indexeddb/auto';
+import type { TranscriptAttachment } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
@@ -42,10 +43,28 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join('');
 }
 
+function makeAttachmentEntry(relPath: string, bytes: Uint8Array): TranscriptAttachment {
+  return {
+    id: `att-${relPath.replace(/\//g, '-')}`,
+    path: relPath,
+    originalName: relPath.split('/').pop() ?? relPath,
+    mimeType: relPath.endsWith('.bin') ? 'application/octet-stream' : 'text/plain',
+    byteLength: bytes.byteLength,
+    sha256: '', // updated by writeSnapshot
+    sourceConversationId: 'cone',
+    sourceMessageId: 'cone-msg-000001',
+    handling: 'binary-unchanged',
+    present: true,
+  };
+}
+
 function makeSnapshot(attachments: [string, Uint8Array][] = []): SanitizedTranscriptSnapshot {
   const doc = makeTranscriptDocument();
+  const registeredAttachments: TranscriptAttachment[] = attachments.map(([relPath, bytes]) =>
+    makeAttachmentEntry(relPath, bytes)
+  );
   return {
-    document: doc,
+    document: { ...doc, attachments: registeredAttachments },
     attachments: new Map(attachments),
   };
 }
@@ -256,5 +275,139 @@ describe('sessionId stability across enrichment', () => {
     // Read with the same sessionId always works
     const read = await readSnapshot(vfs, sessionId);
     expect(read.document.schemaVersion).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sessionId path traversal guard (I-2)
+// ---------------------------------------------------------------------------
+
+describe('assertSafeSessionId — path traversal guard', () => {
+  it('rejects session-not-found for path traversal: ../', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, '../other-session')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for traversal with dotdot', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, 'valid-..-..-etc-passwd')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for slash in sessionId', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, 'foo/bar')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for backslash in sessionId', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, 'foo\\bar')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for NUL byte in sessionId', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, 'foo\x00bar')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for empty sessionId', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, '')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('rejects session-not-found for dotdot segment alone', async () => {
+    const vfs = await createVfs();
+    await expect(readSnapshot(vfs, '..')).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('accepts valid UUID sessionId and makes no VFS calls on guard failure', async () => {
+    const vfs = await createVfs();
+    const uuid = '550e8400-e29b-41d4-a716-446655440000';
+    // Should fail with session-not-found (no such session) not schema-invalid or crash
+    await expect(readSnapshot(vfs, uuid)).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+  });
+
+  it('writeSnapshot rejects traversal without making VFS calls', async () => {
+    const vfs = await createVfs();
+    const writeSpy: string[] = [];
+    const origWrite = vfs.writeFile.bind(vfs);
+    vfs.writeFile = async (path: string, content: string | Uint8Array) => {
+      writeSpy.push(path);
+      return origWrite(path, content);
+    };
+    await expect(writeSnapshot(vfs, '../etc/passwd', makeSnapshot())).rejects.toMatchObject({
+      code: 'session-not-found',
+    });
+    expect(writeSpy).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeSnapshot — stale destination cleanup (M-3)
+// ---------------------------------------------------------------------------
+
+describe('writeSnapshot — stale destination cleanup', () => {
+  it('clears stale destination before writing so no orphaned files remain on retry', async () => {
+    const vfs = await createVfs();
+    const sessionId = 'sess-stale-001';
+    const bytes1 = new Uint8Array([1, 2, 3]);
+    const bytes2 = new Uint8Array([4, 5, 6]);
+
+    // First write: two attachments
+    const snap1 = makeSnapshot([
+      ['attachments/att-0001.bin', bytes1],
+      ['attachments/att-0002.bin', bytes2],
+    ]);
+    await writeSnapshot(vfs, sessionId, snap1);
+
+    // Second write: only one attachment
+    const snap2 = makeSnapshot([['attachments/att-0001.bin', bytes1]]);
+    await writeSnapshot(vfs, sessionId, snap2);
+
+    // att-0002.bin should no longer exist — stale file cleared on retry
+    await expect(
+      vfs.stat(`/sessions/data/${sessionId}/attachments/att-0002.bin`)
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeSnapshot — undeclared attachment bytes (M-5)
+// ---------------------------------------------------------------------------
+
+describe('writeSnapshot — undeclared attachment bytes', () => {
+  it('throws schema-invalid when attachment bytes are not declared in document.attachments', async () => {
+    const vfs = await createVfs();
+    const sessionId = 'sess-undecl-001';
+    const doc = makeTranscriptDocument(); // attachments: []
+    const snapshot: SanitizedTranscriptSnapshot = {
+      document: doc, // no declared attachments
+      attachments: new Map([['attachments/att-0001.bin', new Uint8Array([1, 2, 3])]]),
+    };
+    await expect(writeSnapshot(vfs, sessionId, snapshot)).rejects.toMatchObject({
+      code: 'schema-invalid',
+    });
+  });
+
+  it('succeeds when all attachment bytes are declared in document.attachments', async () => {
+    const vfs = await createVfs();
+    const sessionId = 'sess-decl-001';
+    const bytes = new Uint8Array([7, 8, 9]);
+    const snapshot = makeSnapshot([['attachments/att-0001.bin', bytes]]);
+    await expect(writeSnapshot(vfs, sessionId, snapshot)).resolves.toBeUndefined();
   });
 });

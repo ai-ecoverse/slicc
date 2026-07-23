@@ -290,4 +290,49 @@ describe('session command', () => {
       expect(result.stderr).toContain('duplicate');
     });
   });
+
+  describe('export subcommand — --output path validation (M-4)', () => {
+    it('rejects --output path containing NUL byte', async () => {
+      const result = await createSessionCommand().execute(
+        ['export', '--output', '/workspace/foo\x00bar.zip'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('session export:');
+      expect(result.stderr).toContain('NUL');
+    });
+
+    it('rejects --output path containing backslash', async () => {
+      const result = await createSessionCommand().execute(
+        ['export', '--output', '/workspace/foo\\bar.zip'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('session export:');
+      expect(result.stderr).toContain('backslash');
+    });
+
+    it('rejects --output path containing .. traversal segment', async () => {
+      const result = await createSessionCommand().execute(
+        ['export', '--output', '/workspace/../secret.zip'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('session export:');
+      expect(result.stderr).toContain('..');
+    });
+
+    it('accepts a normal absolute VFS path', async () => {
+      const zipBytes = Uint8Array.from([1, 2, 3]);
+      const service = makeService(zipBytes);
+      teardown = registerTranscriptExportService(service);
+      const writeFile = vi.fn(async () => undefined);
+      const result = await createSessionCommand().execute(
+        ['export', '--output', '/workspace/my-export.zip'],
+        mockCommandContext({ fs: { writeFile } })
+      );
+      expect(result.exitCode).toBe(0);
+      expect(writeFile).toHaveBeenCalledWith('/workspace/my-export.zip', expect.any(Uint8Array));
+    });
+  });
 });

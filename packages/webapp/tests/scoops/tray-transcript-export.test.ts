@@ -5,6 +5,7 @@
  * RED phase: all tests should FAIL until the implementation lands.
  */
 import 'fake-indexeddb/auto';
+import { sha256 as sha256Lib } from 'js-sha256';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
@@ -100,10 +101,10 @@ function makeZipResult(
 }
 
 function computeSha256(chunks: Uint8Array[]): string {
-  // Simple deterministic placeholder — real impl uses js-sha256
-  let n = 0;
-  for (const c of chunks) n += c.byteLength;
-  return 'a'.repeat(64 - n.toString(16).length) + n.toString(16);
+  // Compute the real SHA-256 so the leader's js-sha256 cross-check passes.
+  const hasher = sha256Lib.create();
+  for (const c of chunks) hasher.update(c);
+  return hasher.hex();
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,16 @@ function createLeaderManager(overrides?: Partial<LeaderSyncManagerOptions>): {
 
 // ---------------------------------------------------------------------------
 // Tests: protocol types exist
+// ---------------------------------------------------------------------------
+// Module-level follower factory (usable in all describe blocks)
+// ---------------------------------------------------------------------------
+
+function makeFollower(): { follower: FollowerSyncManager; ch: FakeChannel } {
+  const ch = new FakeChannel();
+  const follower = new FollowerSyncManager(ch);
+  return { follower, ch };
+}
+
 // ---------------------------------------------------------------------------
 
 describe('TranscriptExportSelector type', () => {
@@ -532,7 +543,25 @@ describe('Follower: transcript export reassembly', () => {
       sha256: 'bad-digest',
     });
 
-    await expect(blobPromise).rejects.toThrow();
+    // Must reject with transfer-corrupt specifically (not a generic error)
+    await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-corrupt' });
+
+    // Cleanup: no lingering request entry
+    // A subsequent export on the same follower must work (verifies cleanup)
+    const blobPromise2 = follower.requestTranscriptExport(
+      { kind: 'active' },
+      new AbortController().signal
+    );
+    // Follower must send a new request (proves no state lock)
+    await vi.waitFor(
+      () => ch.parseSentFollower().filter((m) => m.type === 'transcript.export.request').length >= 2
+    );
+    const req2 = ch
+      .parseSentFollower()
+      .filter((m) => m.type === 'transcript.export.request')
+      .at(-1) as { requestId: string } | undefined;
+    ch.simulateLeaderMessage({ type: 'transcript.export.denied', requestId: req2!.requestId });
+    await expect(blobPromise2).rejects.toMatchObject({ code: 'permission-denied' });
   });
 
   it('rejects on chunk count mismatch', async () => {
@@ -818,7 +847,11 @@ describe('Security: cross-follower cancel attack', () => {
       createTranscriptExport: vi.fn().mockResolvedValue({
         filename: 'a.zip',
         chunks: slowGen(),
-        completion: Promise.resolve({ byteLength: 3, sha256: 'a'.repeat(64) }),
+        // Use real SHA-256 so the leader's cross-check passes and complete is sent
+        completion: Promise.resolve({
+          byteLength: 3,
+          sha256: computeSha256([new Uint8Array([1, 2, 3])]),
+        }),
       }),
     });
     const chA = new FakeChannel();
@@ -1377,5 +1410,207 @@ describe('Leader: backpressure polling', () => {
     // No complete message should arrive
     await new Promise((r) => setTimeout(r, 100));
     expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: I-1 — createTranscriptExport error code propagation
+// ---------------------------------------------------------------------------
+
+describe('Leader: createTranscriptExport error code propagation (I-1)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('propagates redaction-unavailable when createTranscriptExport throws it', async () => {
+    const { TranscriptExportError } = await import('@slicc/shared-ts');
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi
+        .fn()
+        .mockRejectedValue(new TranscriptExportError('redaction-unavailable')),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'redact-fail-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const errMsg = ch.parseSentLeader().find((m) => m.type === 'transcript.export.error') as
+      | { code: string }
+      | undefined;
+    // Must NOT silently degrade to session-not-found
+    expect(errMsg!.code).toBe('redaction-unavailable');
+  });
+
+  it('uses session-not-found for non-TranscriptExportError failures', async () => {
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockRejectedValue(new Error('unexpected disk error')),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'generic-fail-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const errMsg = ch.parseSentLeader().find((m) => m.type === 'transcript.export.error') as
+      | { code: string }
+      | undefined;
+    expect(errMsg!.code).toBe('session-not-found');
+  });
+
+  it('abort remains silent: no error message when aborted before createTranscriptExport resolves', async () => {
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockImplementation(
+        (_sel: unknown, signal: AbortSignal) =>
+          new Promise<never>((_res, rej) => {
+            signal.addEventListener('abort', () => rej(new Error('aborted')));
+          })
+      ),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'abort-silent-req',
+      selector: { kind: 'active' },
+    });
+
+    // pending is sent immediately; wait for it before cancelling
+    await vi.waitFor(() => {
+      expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.pending')).toBe(true);
+    });
+
+    // Cancel before createTranscriptExport resolves
+    ch.simulateMessage({
+      type: 'transcript.export.cancel',
+      requestId: 'abort-silent-req',
+    });
+
+    await new Promise((r) => setTimeout(r, 80));
+
+    // No error message should be sent when aborted cleanly
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: Finding 4 — leader SHA-256 vs service digest cross-check
+// ---------------------------------------------------------------------------
+
+describe('Leader: SHA-256 cross-check against service digest (Finding 4)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('sends transfer-corrupt when service sha256 mismatches leader-computed hash', async () => {
+    const data = new Uint8Array(10).fill(0xab);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi
+        .fn()
+        .mockResolvedValue(makeZipResult([data], { sha256: 'wrong-sha256-from-service' })),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'sha-mismatch-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(
+          ch
+            .parseSentLeader()
+            .some(
+              (m) => m.type === 'transcript.export.error' || m.type === 'transcript.export.complete'
+            )
+        ).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const errMsg = ch.parseSentLeader().find((m) => m.type === 'transcript.export.error') as
+      | { code: string }
+      | undefined;
+    expect(errMsg).toBeDefined();
+    expect(errMsg!.code).toBe('transfer-corrupt');
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: I-3 — follower runtime code validation
+// ---------------------------------------------------------------------------
+
+describe('Follower: runtime error code validation (I-3)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('coerces unknown wire code to transfer-corrupt', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    await vi.waitFor(() => {
+      expect(ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')).toBe(true);
+    });
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.error',
+      requestId,
+      code: 'not-a-real-error-code' as never,
+    });
+
+    // Unknown code must become transfer-corrupt
+    await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-corrupt' });
+  });
+
+  it('passes through valid known error codes unchanged', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    await vi.waitFor(() => {
+      expect(ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')).toBe(true);
+    });
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.error',
+      requestId,
+      code: 'redaction-unavailable',
+    });
+
+    await expect(blobPromise).rejects.toMatchObject({ code: 'redaction-unavailable' });
   });
 });

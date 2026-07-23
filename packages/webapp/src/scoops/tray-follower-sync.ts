@@ -8,7 +8,7 @@ import type {
   TranscriptExportProgress,
   TranscriptExportSelector,
 } from '@slicc/shared-ts';
-import { TranscriptExportError } from '@slicc/shared-ts';
+import { TranscriptExportError, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -1441,6 +1441,13 @@ export class FollowerSyncManager implements AgentHandle {
     if (!entry) return;
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
-    entry.reject(new TranscriptExportError(code));
+    // Runtime-validate wire code; unknown values from a version-skewed or
+    // misbehaving leader become transfer-corrupt (same as Cherry guard).
+    const safeCode: TranscriptExportErrorCode = VALID_EXPORT_ERROR_CODES.has(
+      code as TranscriptExportErrorCode
+    )
+      ? (code as TranscriptExportErrorCode)
+      : 'transfer-corrupt';
+    entry.reject(new TranscriptExportError(safeCode));
   }
 }
