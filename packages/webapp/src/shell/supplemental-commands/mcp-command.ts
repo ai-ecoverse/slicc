@@ -1007,10 +1007,13 @@ async function defaultRedirectUri(): Promise<string> {
   // Both the authorize URL and the token-exchange redirect_uri must use
   // the same value (RFC 6749 §10.6).
   if (isExtensionRealm()) {
-    const chromeApi = chrome as any;
+    const chromeApi = chrome as unknown as {
+      identity?: { getRedirectURL?: (path?: string) => string };
+      runtime?: { id?: string };
+    };
     return (
       chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
-      `https://${chromeApi.runtime.id}.chromiumapp.org/mcp-callback`
+      `https://${chromeApi.runtime?.id ?? ''}.chromiumapp.org/mcp-callback`
     );
   }
   // CLI / standalone webapp: the popup→postMessage + /api/oauth-result
