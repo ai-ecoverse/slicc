@@ -148,6 +148,75 @@ describe('oauth-token command', () => {
     expect(mockOnOAuthLogin).toHaveBeenCalled();
   });
 
+  it('silently renews an expired token without triggering login', async () => {
+    const onSilentRenew = vi.fn(async () => 'fresh-token');
+    const onOAuthLogin = vi.fn();
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+      onSilentRenew,
+    });
+    mockGetOAuthAccountInfo
+      .mockReturnValueOnce({ token: 'expired-token', expired: true })
+      .mockReturnValueOnce({
+        token: 'fresh-token',
+        maskedValue: 'masked-fresh-token',
+        expired: false,
+      });
+
+    const result = await createOAuthTokenCommand().execute(['github'], createMockCtx());
+
+    expect(result).toEqual({ stdout: 'masked-fresh-token\n', stderr: '', exitCode: 0 });
+    expect(onSilentRenew).toHaveBeenCalledTimes(1);
+    expect(onOAuthLogin).not.toHaveBeenCalled();
+    expect(mockCreateOAuthLauncher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['returns null', vi.fn(async () => null)],
+    [
+      'throws',
+      vi.fn(async () => {
+        throw new Error('refresh failed');
+      }),
+    ],
+  ])('falls back to login when silent renewal %s', async (_description, onSilentRenew) => {
+    const onOAuthLogin = vi.fn(async () => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'interactive-token',
+        maskedValue: 'masked-interactive-token',
+        expired: false,
+      });
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+      onSilentRenew,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'expired-token', expired: true });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(['github'], createMockCtx());
+
+    expect(result).toEqual({
+      stdout: 'masked-interactive-token\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    expect(onSilentRenew).toHaveBeenCalledTimes(1);
+    expect(onOAuthLogin).toHaveBeenCalledTimes(1);
+  });
+
   it('returns error when provider not found', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue(undefined);
 
@@ -388,6 +457,7 @@ describe('oauth-token command', () => {
   });
 
   it('--scope bypasses valid token cache and triggers login with scopes', async () => {
+    const onSilentRenew = vi.fn(async () => 'silently-renewed-token');
     const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'scoped-token',
@@ -404,6 +474,7 @@ describe('oauth-token command', () => {
       requiresBaseUrl: false,
       isOAuth: true,
       onOAuthLogin: mockOnOAuthLogin,
+      onSilentRenew,
     });
     // Valid token exists — normally would return immediately
     mockGetOAuthAccountInfo.mockReturnValue({
@@ -418,6 +489,7 @@ describe('oauth-token command', () => {
     expect(result.stdout).toBe('masked-scoped-token\n');
     // Login was triggered despite valid token
     expect(mockOnOAuthLogin).toHaveBeenCalled();
+    expect(onSilentRenew).not.toHaveBeenCalled();
     // Scopes were passed through as the third argument
     expect(mockOnOAuthLogin).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), {
       scopes: 'repo,models:read',
