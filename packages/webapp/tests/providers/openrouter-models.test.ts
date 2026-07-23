@@ -147,6 +147,16 @@ describe('OpenRouter catalog loading', () => {
     );
   });
 
+  it('rejects a successful response without a model array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ data: null }) })
+    );
+    await expect(fetchModels()).rejects.toThrow(
+      'Failed to fetch OpenRouter models: response did not contain a data array'
+    );
+  });
+
   it('fetches, caches, and prioritizes the in-memory live catalog', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
