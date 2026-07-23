@@ -12,7 +12,7 @@ import {
 import { bundleIndex, type ConeConfigDelta, imsTokenExpiry } from '@slicc/cloud-core/cone-config';
 import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
-import { LocalRegistry } from './local-registry.js';
+import { LocalRegistry, type StorageTransactionLike } from './local-registry.js';
 
 interface DoEnv {
   E2B_API_KEY: string;
@@ -21,14 +21,9 @@ interface DoEnv {
   __SUBSTRATE_FACTORY__?: () => SandboxSubstrate;
 }
 
-interface DurableObjectStorageTransactionLike {
-  get<T>(key: string): Promise<T | undefined>;
-  put<T>(key: string, value: T): Promise<void>;
-}
-
 interface DurableObjectStateLike {
-  storage: DurableObjectStorageTransactionLike & {
-    transaction<T>(closure: (txn: DurableObjectStorageTransactionLike) => Promise<T>): Promise<T>;
+  storage: StorageTransactionLike & {
+    transaction<T>(closure: (txn: StorageTransactionLike) => Promise<T>): Promise<T>;
   };
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
 }

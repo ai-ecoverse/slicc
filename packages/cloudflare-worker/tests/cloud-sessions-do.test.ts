@@ -8,6 +8,7 @@ import type {
 } from '@slicc/cloud-core';
 import { describe, expect, it } from 'vitest';
 import { CloudSessionsDurableObject } from '../src/cloud/cloud-sessions-do.js';
+import { LocalRegistry } from '../src/cloud/local-registry.js';
 
 // Substrate states only — 'reserved' is a registry-only state, never reported
 // by the substrate (e2b). Mirrors SandboxSummary.state in cloud-core.
@@ -536,7 +537,7 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     ).toEqual(['first', 'second']);
   });
 
-  it('preserves both starts across concurrent registry read-modify-write interleaving', async () => {
+  it('preserves both concurrent starts with transactional registry mutations', async () => {
     const substrate = new FakeSubstrate();
     const { state, storage } = makeInterleavingState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
@@ -740,19 +741,20 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const { state } = makeFakeState();
     const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
 
-    // Pre-populate registry with paused entry so listCones doesn't fail
-    const entry = {
+    // Pre-populate the registry through LocalRegistry so the seed matches the
+    // real `state` key / `{ sessions: [...] }` schema production reads and
+    // writes (not an ad hoc legacy-looking key the rollback never touches).
+    const registry = new LocalRegistry(state.storage);
+    await registry.append({
       sandboxId: 's-fail',
       substrate: 'e2b',
       name: 'fail',
       createdAt: new Date().toISOString(),
       lastSeen: new Date().toISOString(),
-      state: 'paused' as const,
+      state: 'paused',
       joinUrl: 'https://w/join/s-fail',
       metadata: { userId: 'u1', name: 'fail' },
-    };
-    await state.storage.put('cloud-sessions-list', [entry.sandboxId]);
-    await state.storage.put(`cloud-sessions:s-fail`, entry);
+    });
 
     const res = await call(do_, '/resume-cone', {
       bearer: 'b',
@@ -764,8 +766,8 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     // Should fail with substrate error
     expect(res.status).toBe(500);
 
-    // Check that registry entry rolled back to 'paused', not stuck in 'reserved'
-    const finalEntry = await state.storage.get<typeof entry>('cloud-sessions:s-fail');
+    // Check that the real registry entry rolled back to 'paused', not stuck in 'reserved'
+    const finalEntry = await registry.findByNameOrId('s-fail');
     expect(finalEntry?.state).toBe('paused');
   });
 

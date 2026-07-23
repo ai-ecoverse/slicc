@@ -5,7 +5,7 @@ interface PersistedState {
   sessions: ConeEntry[];
 }
 
-interface StorageTransactionLike {
+export interface StorageTransactionLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
 }
