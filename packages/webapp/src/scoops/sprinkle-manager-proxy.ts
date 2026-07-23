@@ -18,6 +18,9 @@ interface Sprinkle {
 }
 
 const TIMEOUT = 8000;
+interface ChromeRuntimeApi {
+  sendMessage(message: unknown): Promise<unknown>;
+}
 
 /** Pending request callbacks, keyed by request ID. */
 const pendingRequests = new Map<
@@ -62,11 +65,8 @@ export function createSprinkleManagerProxy(): SprinkleManager {
       pendingRequests.set(id, { resolve, reject, timer });
 
       // Broadcast the request — panel will pick it up via OffscreenClient
-      (chrome as any).runtime
-        .sendMessage({
-          source: 'offscreen',
-          payload: { type: 'sprinkle-op', id, op, ...args },
-        })
+      (chrome as unknown as { runtime: ChromeRuntimeApi }).runtime
+        .sendMessage({ source: 'offscreen', payload: { type: 'sprinkle-op', id, op, ...args } })
         .catch(() => {
           pendingRequests.delete(id);
           clearTimeout(timer);
