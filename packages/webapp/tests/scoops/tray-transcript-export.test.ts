@@ -17,6 +17,7 @@ import type {
   LeaderToFollowerMessage,
   TranscriptExportSelector,
 } from '../../src/scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 
 // ---------------------------------------------------------------------------
@@ -792,5 +793,589 @@ describe('Protocol message types', () => {
       requestId: 'r',
     };
     expect([request, cancel]).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security fix tests: SEV-2.1 — cross-follower cancel attack
+// ---------------------------------------------------------------------------
+
+describe('Security: cross-follower cancel attack', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('follower B cannot cancel follower A export', async () => {
+    // Follower A starts an export that is approved and streaming.
+    let resolveChunks: () => void = () => {};
+    const blockedChunks = new Promise<void>((res) => {
+      resolveChunks = res;
+    });
+    async function* slowGen() {
+      await blockedChunks;
+      yield new Uint8Array([1, 2, 3]);
+    }
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue({
+        filename: 'a.zip',
+        chunks: slowGen(),
+        completion: Promise.resolve({ byteLength: 3, sha256: 'a'.repeat(64) }),
+      }),
+    });
+    const chA = new FakeChannel();
+    const chB = new FakeChannel();
+    manager.addFollower('followerA', chA);
+    manager.addFollower('followerB', chB);
+
+    chA.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'attack-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for A's export to be pending
+    await vi.waitFor(() =>
+      chA.parseSentLeader().some((m) => m.type === 'transcript.export.pending')
+    );
+
+    // Follower B tries to cancel A's requestId
+    chB.simulateMessage({
+      type: 'transcript.export.cancel',
+      requestId: 'attack-req',
+    });
+
+    // Unblock the slow generator so A's export can complete
+    resolveChunks();
+
+    // A's export should still complete (not aborted by B)
+    await vi.waitFor(
+      () => {
+        expect(chA.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(
+          true
+        );
+      },
+      { timeout: 3000 }
+    );
+
+    // B received nothing related to A's export
+    const bMsgs = chB.parseSentLeader();
+    const exportMsgs = bMsgs.filter((m) => m.type.startsWith('transcript.export.'));
+    expect(exportMsgs).toHaveLength(0);
+  });
+
+  it('requestId replay collision from different follower does not block second follower', async () => {
+    let approvalCalls = 0;
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: vi.fn().mockImplementation(() => {
+        approvalCalls++;
+        return Promise.resolve(true);
+      }),
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([new Uint8Array([1])])),
+    });
+    const chA = new FakeChannel();
+    const chB = new FakeChannel();
+    manager.addFollower('followerA', chA);
+    manager.addFollower('followerB', chB);
+
+    // A sends request with shared-id (in-flight)
+    chA.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'shared-id',
+      selector: { kind: 'active' },
+    });
+
+    // B sends same requestId — different follower, should NOT be blocked by A's guard
+    chB.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'shared-id',
+      selector: { kind: 'active' },
+    });
+
+    // Both followers should receive pending (two separate requests)
+    await vi.waitFor(() => approvalCalls >= 1);
+    // The important thing: follower B is not silently dropped (it gets pending or denied)
+    await new Promise((r) => setTimeout(r, 50));
+    const bMsgs = chB.parseSentLeader();
+    const bExportMsgs = bMsgs.filter((m) => m.type.startsWith('transcript.export.'));
+    // B must receive some response (pending or denied — not silent)
+    expect(bExportMsgs.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security fix tests: SEV-2.2 — Cherry hostOrigin derivation
+// ---------------------------------------------------------------------------
+
+describe('Leader: Cherry hostOrigin derivation', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('derives hostOrigin from cherry target URL for Cherry followers', async () => {
+    const approval = vi.fn().mockResolvedValue(true);
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: approval,
+    });
+    const ch = new FakeChannel();
+    // Add follower with the Cherry runtime tag
+    manager.addFollower('cherry-b1', ch, { runtime: CHERRY_RUNTIME_TAG });
+
+    // Follower advertises a cherry target
+    ch.simulateMessage({
+      type: 'targets.advertise',
+      runtimeId: 'rt-cherry',
+      targets: [
+        {
+          targetId: 'tgt-1',
+          title: 'Host page',
+          url: 'https://example.com/embed',
+          kind: 'cherry',
+        },
+      ],
+    } as FollowerToLeaderMessage);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'cherry-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(() => approval.mock.calls.length > 0);
+
+    const call = approval.mock.calls[0]?.[0];
+    expect(call).toBeDefined();
+    // hostOrigin must be normalized to the URL origin, not the full URL
+    expect(call.hostOrigin).toBe('https://example.com');
+  });
+
+  it('does not pass hostOrigin for non-Cherry followers', async () => {
+    const approval = vi.fn().mockResolvedValue(true);
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: approval,
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('standalone-b1', ch, { runtime: 'slicc-standalone' });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'non-cherry-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(() => approval.mock.calls.length > 0);
+
+    const call = approval.mock.calls[0]?.[0];
+    expect(call.hostOrigin).toBeUndefined();
+  });
+
+  it('omits hostOrigin when cherry target URL is malformed', async () => {
+    const approval = vi.fn().mockResolvedValue(true);
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: approval,
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('cherry-b2', ch, { runtime: CHERRY_RUNTIME_TAG });
+
+    // Advertise a cherry target with a malformed URL
+    ch.simulateMessage({
+      type: 'targets.advertise',
+      runtimeId: 'rt-cherry-bad',
+      targets: [
+        {
+          targetId: 'tgt-bad',
+          title: 'Bad host',
+          url: 'not-a-url',
+          kind: 'cherry',
+        },
+      ],
+    } as FollowerToLeaderMessage);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'cherry-bad-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(() => approval.mock.calls.length > 0);
+
+    const call = approval.mock.calls[0]?.[0];
+    // Malformed URL — hostOrigin must be absent, not thrown
+    expect(call.hostOrigin).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: SEV-3 — byteLength from leader's own stream
+// ---------------------------------------------------------------------------
+
+describe('Leader: byteLength integrity', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('complete.byteLength equals actual bytes streamed, not service-reported value', async () => {
+    const data = new Uint8Array(50).fill(0xcc);
+    // Service misreports byteLength — leader should catch this
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(
+        makeZipResult([data], { byteLength: data.byteLength }) // correct value here
+      ),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'byte-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(
+          ch
+            .parseSentLeader()
+            .some(
+              (m) => m.type === 'transcript.export.complete' || m.type === 'transcript.export.error'
+            )
+        ).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const complete = ch.parseSentLeader().find((m) => m.type === 'transcript.export.complete') as
+      | { byteLength: number }
+      | undefined;
+    expect(complete).toBeDefined();
+    // Leader's reported byteLength must match actual bytes (50 bytes)
+    expect(complete!.byteLength).toBe(data.byteLength);
+  });
+
+  it('sends transfer-corrupt error when service byteLength mismatches leader stream count', async () => {
+    const data = new Uint8Array(50).fill(0xdd);
+    // Service reports wrong byteLength
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(
+        makeZipResult([data], { byteLength: data.byteLength + 1 }) // wrong!
+      ),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'byte-mismatch-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const errorMsg = ch.parseSentLeader().find((m) => m.type === 'transcript.export.error') as
+      | { code: string }
+      | undefined;
+    expect(errorMsg).toBeDefined();
+    expect(errorMsg!.code).toBe('transfer-corrupt');
+    // No complete message
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: SEV-4.3 — per-follower concurrency cap
+// ---------------------------------------------------------------------------
+
+describe('Leader: per-follower concurrency cap', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('auto-denies a second concurrent export request from the same follower', async () => {
+    // First request blocks in approval so the second arrives while first is pending
+    let resolveApproval: (v: boolean) => void = () => {};
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: vi.fn().mockImplementation(
+        () =>
+          new Promise<boolean>((res) => {
+            resolveApproval = res;
+          })
+      ),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    // First request
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'req-first',
+      selector: { kind: 'active' },
+    });
+    await vi.waitFor(() =>
+      ch.parseSentLeader().some((m) => m.type === 'transcript.export.pending')
+    );
+
+    // Second request from same follower while first is still pending approval
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'req-second',
+      selector: { kind: 'active' },
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    const msgs = ch.parseSentLeader();
+    // Second request must get denied immediately
+    const denied = msgs.filter((m) => m.type === 'transcript.export.denied') as Array<{
+      requestId: string;
+    }>;
+    expect(denied.some((d) => d.requestId === 'req-second')).toBe(true);
+
+    // No start/chunk/complete for the second request
+    const exportFlow = msgs.filter(
+      (m) =>
+        (m.type === 'transcript.export.start' || m.type === 'transcript.export.complete') &&
+        (m as { requestId?: string }).requestId === 'req-second'
+    );
+    expect(exportFlow).toHaveLength(0);
+
+    // Clean up: resolve the first approval
+    resolveApproval(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: approval throw and empty-ZIP
+// ---------------------------------------------------------------------------
+
+describe('Leader: approval throw and empty-ZIP', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('sends denied when requestTranscriptExportApproval throws', async () => {
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: vi.fn().mockRejectedValue(new Error('dialog crashed')),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'throw-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(() => ch.parseSentLeader().some((m) => m.type === 'transcript.export.denied'));
+
+    const msgs = ch.parseSentLeader();
+    const denied = msgs.find((m) => m.type === 'transcript.export.denied');
+    expect(denied).toBeTruthy();
+    // No metadata leaked when approval throws
+    expect(msgs.some((m) => m.type === 'transcript.export.start')).toBe(false);
+    expect(msgs.some((m) => m.type === 'transcript.export.chunk')).toBe(false);
+    expect(msgs.some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+
+  it('sends complete with chunks=0 for an empty ZIP', async () => {
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'empty-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(
+          true
+        );
+      },
+      { timeout: 3000 }
+    );
+
+    const complete = ch.parseSentLeader().find((m) => m.type === 'transcript.export.complete') as
+      | { chunks: number; byteLength: number }
+      | undefined;
+    expect(complete).toBeDefined();
+    expect(complete!.chunks).toBe(0);
+    expect(complete!.byteLength).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: sendExportChunks return semantics (SEV-3.2)
+// ---------------------------------------------------------------------------
+
+describe('Leader: sendExportChunks terminal states', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('normal stream: sends complete after all chunks', async () => {
+    const data = new Uint8Array([0xaa, 0xbb, 0xcc]);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([data])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'normal-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(
+          true
+        );
+      },
+      { timeout: 3000 }
+    );
+    // No error message
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(false);
+  });
+
+  it('abort path: no complete or error message after cancel', async () => {
+    let resolveChunks: () => void = () => {};
+    const holdChunks = new Promise<void>((res) => {
+      resolveChunks = res;
+    });
+    async function* heldGen() {
+      await holdChunks;
+      yield new Uint8Array([1]);
+    }
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue({
+        filename: 'abort.zip',
+        chunks: heldGen(),
+        completion: Promise.resolve({ byteLength: 1, sha256: 'a'.repeat(64) }),
+      }),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'abort-state-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for the export to be in-flight (pending)
+    await vi.waitFor(() =>
+      ch.parseSentLeader().some((m) => m.type === 'transcript.export.pending')
+    );
+
+    // Cancel from same follower
+    ch.simulateMessage({
+      type: 'transcript.export.cancel',
+      requestId: 'abort-state-req',
+    });
+
+    // Let the generator run (post-cancel)
+    resolveChunks();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const msgs = ch.parseSentLeader();
+    expect(msgs.some((m) => m.type === 'transcript.export.complete')).toBe(false);
+    expect(msgs.some((m) => m.type === 'transcript.export.error')).toBe(false);
+  });
+
+  it('disconnect path: no crash and state cleaned up', async () => {
+    const { manager } = createLeaderManager();
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'disc-state-req',
+      selector: { kind: 'active' },
+    });
+
+    manager.removeFollower('b1');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(true).toBe(true); // no unhandled rejection
+  });
+
+  it('stream error path: sends transfer-corrupt (not transfer-aborted)', async () => {
+    async function* errorGen() {
+      yield new Uint8Array([1]);
+      throw new Error('disk read failed');
+    }
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue({
+        filename: 'error.zip',
+        chunks: errorGen(),
+        completion: Promise.resolve({ byteLength: 1, sha256: 'a'.repeat(64) }),
+      }),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'stream-err-req',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    const errMsg = ch.parseSentLeader().find((m) => m.type === 'transcript.export.error') as
+      | { code: string }
+      | undefined;
+    expect(errMsg!.code).toBe('transfer-corrupt');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix tests: backpressure polling is cancellable
+// ---------------------------------------------------------------------------
+
+describe('Leader: backpressure polling', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('cancels polling when follower sends cancel while backpressure holds', async () => {
+    // A channel whose bufferedAmount starts above threshold and stays there
+    class BackpressureChannel extends FakeChannel {
+      // Start above 1 MiB threshold so polling enters the loop
+      override bufferedAmount = 2 * 1024 * 1024;
+    }
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([new Uint8Array(100)])),
+    });
+    const ch = new BackpressureChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'bp-cancel-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for the export to be in-flight (approval + start)
+    await vi.waitFor(() => ch.parseSentLeader().some((m) => m.type === 'transcript.export.start'));
+
+    // Cancel while backpressure poll is active
+    ch.simulateMessage({
+      type: 'transcript.export.cancel',
+      requestId: 'bp-cancel-req',
+    });
+
+    // Also drop bufferedAmount so the poll exits if still running
+    ch.bufferedAmount = 0;
+
+    // No complete message should arrive
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
   });
 });

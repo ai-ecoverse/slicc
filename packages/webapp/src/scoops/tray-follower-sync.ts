@@ -210,7 +210,6 @@ export class FollowerSyncManager implements AgentHandle {
       reject: (err: Error) => void;
       chunks: Uint8Array[];
       nextExpectedIndex: number;
-      duplicate: boolean;
       signal: AbortSignal;
       onAbort: () => void;
     }
@@ -1371,7 +1370,6 @@ export class FollowerSyncManager implements AgentHandle {
         reject,
         chunks: [],
         nextExpectedIndex: 0,
-        duplicate: false,
         signal,
         onAbort,
       });
@@ -1403,7 +1401,6 @@ export class FollowerSyncManager implements AgentHandle {
         expected: entry.nextExpectedIndex,
         got: index,
       });
-      entry.duplicate = true;
       entry.signal.removeEventListener('abort', entry.onAbort);
       this.activeExportRequests.delete(requestId);
       this.sync.send({ type: 'transcript.export.cancel', requestId });
