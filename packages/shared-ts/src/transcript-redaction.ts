@@ -45,11 +45,11 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
       '-----END [A-Z ]* PRIVATE KEY-----',
     flags: 'g',
   },
-  // Bearer authorization header value
+  // Bearer authorization header value — case-insensitive so "bearer", "Bearer", and "BEARER" all match.
   {
     category: 'bearer-token',
     source: 'Bearer [A-Za-z0-9._~+/=!-]+',
-    flags: 'g',
+    flags: 'gi',
   },
   // Common API key prefixes: sk-live/test/prod/proj, sk-ant- (Anthropic),
   // xoxb/xoxp (Slack), AKIA (AWS), ghp_, hf_

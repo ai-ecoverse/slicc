@@ -51,12 +51,16 @@ function isSafeBundlePath(path: string): boolean {
 
 function makeFilename(document: TranscriptDocumentV1): string {
   const date = document.export.generatedAt.slice(0, 10);
+  // First 8 hex chars of the export UUID make filenames collision-safe when the
+  // same session is exported multiple times on the same day. Not a security
+  // token — purely a disambiguation suffix.
+  const exportIdSlice = document.export.id.slice(0, 8);
   const slug = document.session.title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 48);
-  return `slicc-${date}-${slug || 'transcript'}.zip`;
+    .slice(0, 40);
+  return `slicc-${date}-${slug || 'transcript'}-${exportIdSlice}.zip`;
 }
 
 // ---------------------------------------------------------------------------

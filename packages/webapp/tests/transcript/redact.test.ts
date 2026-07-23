@@ -1,4 +1,4 @@
-import { TranscriptExportError } from '@slicc/shared-ts';
+import { redactCredentialPatterns, TranscriptExportError } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import { redactTranscript } from '../../src/transcript/redact.js';
 import { makeTranscriptDocument } from './fixtures.js';
@@ -179,5 +179,55 @@ describe('redactTranscript', () => {
     // sentinel is a string leaf in privacy.redactions[0].id — it reaches
     // knownSecrets only if the privacy subtree is walked. Must stay absent.
     expect(allTexts).not.toContain(sentinel);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bearer-token case-insensitive detection (wave 2, item 5)
+// ---------------------------------------------------------------------------
+
+describe('redactCredentialPatterns — bearer-token case-insensitive', () => {
+  it('redacts title-case Bearer token', () => {
+    const { text, matches } = redactCredentialPatterns('Auth: Bearer abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts lowercase bearer token', () => {
+    const { text, matches } = redactCredentialPatterns('bearer abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts uppercase BEARER token', () => {
+    const { text, matches } = redactCredentialPatterns('BEARER abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts mixed-case bEaReR token', () => {
+    const { text, matches } = redactCredentialPatterns('bEaReR myToken.abc', 'r', 1);
+    expect(text).not.toContain('myToken.abc');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts bearer token inside a larger string', () => {
+    const { text } = redactCredentialPatterns(
+      'Authorization: BEARER tok_abc123 and other data',
+      'r',
+      1
+    );
+    expect(text).not.toContain('tok_abc123');
+    expect(text).toContain('other data');
+  });
+
+  it('redacts bearer token in redactTranscript end-to-end', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: 'BEARER secret-token-xyz' });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    expect(JSON.stringify(result.document)).not.toContain('secret-token-xyz');
+    expect(result.document.privacy.redactions.some((r) => r.category === 'bearer-token')).toBe(
+      true
+    );
   });
 });

@@ -1,9 +1,13 @@
 /**
  * Active transcript collection.
  *
- * Waits for all scoops to reach a completed-turn boundary (none processing),
- * then joins canonical agent-sessions with UI browser-coding-agent metadata
- * to build the complete input for normalization and redaction.
+ * Waits for all scoops to reach a stable completed-turn boundary — none
+ * processing — then loads persisted and UI chat sessions concurrently.
+ * After loading, it verifies that the snapshot is still stable: same scoop
+ * membership and processing states as before the load. If the state changed
+ * during the async I/O (e.g. a new scoop joined or an agent resumed), the
+ * whole cycle retries. This ensures no mid-turn document is ever returned as
+ * "complete". The retry is signal-aware and does not add a global lock.
  */
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
@@ -46,37 +50,27 @@ function uiSessionId(scoop: RegisteredScoop): string {
   return scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
+/**
+ * Compute a stable string signature of the current scoop list + processing
+ * states. Two signatures are equal iff the scoop membership and per-scoop
+ * processing flags are identical. Used to detect mid-load state changes.
+ */
+function computeSnapshotSignature(
+  scoops: readonly RegisteredScoop[],
+  deps: TranscriptCollectionDeps
+): string {
+  return scoops.map((s) => `${s.jid}:${deps.isProcessing(s.jid) ? '1' : '0'}`).join(',');
+}
 
 /**
- * Collect transcript sources from all active scoops.
- *
- * Polls every 50 ms while any scoop is processing, then loads persisted
- * sessions (fallback for live) and UI chat sessions (for attachments and
- * chatMessagesByConversation). Throws `transfer-aborted` if the signal fires.
+ * Assemble the result from stable scoop + store data.
  */
-export async function collectActiveTranscriptSources(
-  deps: TranscriptCollectionDeps,
-  signal?: AbortSignal
-): Promise<CollectedTranscriptInput> {
-  const scoops = deps.listScoops();
-
-  // Wait until every scoop has reached a completed-turn boundary.
-  while (scoops.some((s) => deps.isProcessing(s.jid))) {
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-    await deps.wait(POLL_INTERVAL_MS, signal);
-    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
-  }
-
-  // Load both stores concurrently.
-  const [persistedSessions, uiSessions] = await Promise.all([
-    deps.loadPersistedSessions(),
-    deps.loadUiChatSessions(),
-  ]);
-
-  // Build lookup maps.
+function assembleResult(
+  scoops: readonly RegisteredScoop[],
+  persistedSessions: readonly SessionData[],
+  uiSessions: readonly Session[],
+  deps: TranscriptCollectionDeps
+): CollectedTranscriptInput {
   const persistedByJid = new Map<string, SessionData>();
   for (const session of persistedSessions) {
     persistedByJid.set(session.id, session);
@@ -87,12 +81,10 @@ export async function collectActiveTranscriptSources(
     uiSessionById.set(session.id, session);
   }
 
-  // Assemble sources and chatMessages map in scoop order.
   const sources: TranscriptConversationSource[] = [];
   const chatMessagesByConversation = new Map<string, readonly ChatMessage[]>();
 
   for (const scoop of scoops) {
-    // Prefer live agent messages; fall back to persisted session.
     const liveMessages = deps.getAgentMessages(scoop.jid);
     const messages: readonly AgentMessage[] =
       liveMessages ?? persistedByJid.get(scoop.jid)?.messages ?? [];
@@ -108,7 +100,6 @@ export async function collectActiveTranscriptSources(
     };
     sources.push(source);
 
-    // Map UI session messages to this JID.
     const sid = uiSessionId(scoop);
     const uiSession = uiSessionById.get(sid);
     if (uiSession) {
@@ -117,4 +108,62 @@ export async function collectActiveTranscriptSources(
   }
 
   return { sources, chatMessagesByConversation };
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect transcript sources from all active scoops.
+ *
+ * Polls every 50 ms while any scoop is processing, then loads persisted
+ * sessions (fallback for live) and UI chat sessions (for attachments and
+ * chatMessagesByConversation) concurrently. After loading, verifies that the
+ * scoop membership and processing states did not change during the async I/O.
+ * If they changed, retries the whole cycle. Throws `transfer-aborted` if the
+ * signal fires.
+ *
+ * This prevents returning a mid-turn snapshot: no scoop may start (or stop)
+ * processing between the stability check and the store reads completing.
+ */
+export async function collectActiveTranscriptSources(
+  deps: TranscriptCollectionDeps,
+  signal?: AbortSignal
+): Promise<CollectedTranscriptInput> {
+  // Retry until a stable completed-turn boundary is confirmed, or signal fires.
+  // Each iteration: poll → snapshot → load → verify. If the snapshot changed
+  // during the load, the next iteration re-polls from a fresh scoop list.
+  while (true) {
+    const scoops = deps.listScoops();
+
+    // Poll until every scoop has reached a completed-turn boundary.
+    while (scoops.some((s) => deps.isProcessing(s.jid))) {
+      if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+      await deps.wait(POLL_INTERVAL_MS, signal);
+      if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+    }
+
+    // Capture snapshot signature before the async store reads.
+    const signatureBefore = computeSnapshotSignature(scoops, deps);
+
+    // Load both stores concurrently.
+    const [persistedSessions, uiSessions] = await Promise.all([
+      deps.loadPersistedSessions(),
+      deps.loadUiChatSessions(),
+    ]);
+
+    if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
+
+    // Re-read scoop list and processing states; verify they match the pre-load snapshot.
+    // If any scoop joined, left, or changed processing state during the load, retry.
+    const afterScoops = deps.listScoops();
+    const signatureAfter = computeSnapshotSignature(afterScoops, deps);
+
+    if (signatureBefore === signatureAfter) {
+      // Stable boundary confirmed — assemble and return.
+      return assembleResult(afterScoops, persistedSessions, uiSessions, deps);
+    }
+    // State changed during load — retry from the top.
+  }
 }
