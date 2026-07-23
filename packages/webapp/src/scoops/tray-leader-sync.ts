@@ -220,6 +220,21 @@ export function selectTeleportPool<
 // Transcript export helpers (module-level, pure functions)
 // ---------------------------------------------------------------------------
 
+interface SendExportChunksCtx {
+  bootstrapId: string;
+  requestId: string;
+  chunks: AsyncIterable<Uint8Array>;
+  hasher: { update(data: Uint8Array): void };
+  abort: AbortController;
+  onSlice: (index: number, slice: string) => boolean;
+}
+
+interface SendExportChunksResult {
+  streamError: boolean;
+  chunkCount: number;
+  byteLength: number;
+}
+
 /**
  * Encode a Uint8Array to base64. Uses the browser btoa path for small arrays
  * and a chunked approach for large ones to avoid stack overflows from large
@@ -1274,28 +1289,24 @@ export class LeaderSyncManager {
 
     const { sha256: sha256Lib } = await import('js-sha256');
     const hasher = sha256Lib.create();
-    let chunkIndex = 0;
-    let leaderByteCount = 0;
 
-    const streamError = await this.sendExportChunks(
+    const {
+      streamError,
+      chunkCount: chunkIndex,
+      byteLength: leaderByteCount,
+    } = await this.sendExportChunks({
       bootstrapId,
       requestId,
-      result.chunks,
+      chunks: result.chunks,
       hasher,
       abort,
-      (idx, slice) => {
+      onSlice: (idx, slice) => {
         const f = this.followers.get(bootstrapId);
         if (!f) return false;
         f.sync.send({ type: 'transcript.export.chunk', requestId, index: idx, data: slice });
         return true;
       },
-      (n) => {
-        chunkIndex = n;
-      },
-      (n) => {
-        leaderByteCount = n;
-      }
-    );
+    });
     if (streamError) {
       // Stream iteration failed — not a user abort.
       sendErr('transfer-corrupt');
@@ -1363,43 +1374,31 @@ export class LeaderSyncManager {
 
   /**
    * Iterate the ZIP chunk iterable, base64-encode each slice (≤32 KiB), apply
-   * backpressure, and call `onSlice` per slice.
+   * backpressure, and call `ctx.onSlice` per slice.
    *
-   * Returns `true` when a stream error occurred (caller should send
-   * `transfer-corrupt`); `false` when the stream completed normally OR was
-   * aborted via signal/disconnect (caller distinguishes via
-   * `abort.signal.aborted` or `activeExports.has(requestId)`).
+   * Returns a result object: `streamError` is true when a stream error occurred
+   * (caller should send `transfer-corrupt`); false when completed normally OR
+   * aborted (caller distinguishes via `abort.signal.aborted` or
+   * `activeExports.has(requestId)`). `chunkCount` and `byteLength` reflect the
+   * totals processed regardless of terminal state.
    */
-  private async sendExportChunks(
-    bootstrapId: string,
-    requestId: string,
-    chunks: AsyncIterable<Uint8Array>,
-    hasher: { update(data: Uint8Array): void },
-    abort: AbortController,
-    onSlice: (index: number, slice: string) => boolean,
-    setCount: (n: number) => void,
-    setBytes: (n: number) => void
-  ): Promise<boolean> {
+  private async sendExportChunks(ctx: SendExportChunksCtx): Promise<SendExportChunksResult> {
+    const { bootstrapId, requestId, chunks, hasher, abort, onSlice } = ctx;
     const sync = this.followers.get(bootstrapId)?.sync;
-    if (!sync) return true;
+    if (!sync) return { streamError: true, chunkCount: 0, byteLength: 0 };
     let idx = 0;
     let byteCount = 0;
     try {
       for await (const raw of chunks) {
         if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-          setCount(idx);
-          setBytes(byteCount);
-          return false;
+          return { streamError: false, chunkCount: idx, byteLength: byteCount };
         }
         hasher.update(raw);
         byteCount += raw.byteLength;
         const b64 = bytesToBase64(raw);
-        let off = 0;
-        while (off < b64.length) {
+        for (let off = 0; off < b64.length; off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX) {
           if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-            setCount(idx);
-            setBytes(byteCount);
-            return false;
+            return { streamError: false, chunkCount: idx, byteLength: byteCount };
           }
           await waitForBufferedAmountLow(
             sync,
@@ -1407,37 +1406,26 @@ export class LeaderSyncManager {
             abort.signal
           );
           if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-            setCount(idx);
-            setBytes(byteCount);
-            return false;
+            return { streamError: false, chunkCount: idx, byteLength: byteCount };
           }
           const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
-          off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX;
           if (!onSlice(idx, slice)) {
-            setCount(idx);
-            setBytes(byteCount);
-            return true;
+            return { streamError: true, chunkCount: idx, byteLength: byteCount };
           }
           idx++;
         }
       }
     } catch (streamErr) {
       if (abort.signal.aborted) {
-        setCount(idx);
-        setBytes(byteCount);
-        return false;
+        return { streamError: false, chunkCount: idx, byteLength: byteCount };
       }
       log.warn('Error streaming transcript export chunks', {
         requestId,
         error: streamErr instanceof Error ? streamErr.message : String(streamErr),
       });
-      setCount(idx);
-      setBytes(byteCount);
-      return true;
+      return { streamError: true, chunkCount: idx, byteLength: byteCount };
     }
-    setCount(idx);
-    setBytes(byteCount);
-    return false;
+    return { streamError: false, chunkCount: idx, byteLength: byteCount };
   }
 
   /**

@@ -1295,6 +1295,16 @@ export class FollowerSyncManager implements AgentHandle {
       case 'transcript.export.error':
         this.handleExportError(message.requestId, message.code);
         break;
+      default: {
+        // Exhaustiveness guard: a new export message variant fails compile here
+        // until this dispatcher decides. At runtime this means a version-skewed
+        // leader — log and discard, never throw.
+        const unknown = unhandledProtocolMessage(message);
+        log.warn('Unknown transcript export leader message — skewed leader?', {
+          type: unknown.type,
+        });
+        break;
+      }
     }
   }
 

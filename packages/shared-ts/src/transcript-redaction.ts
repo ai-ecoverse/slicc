@@ -40,15 +40,15 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
   {
     category: 'private-key',
     source:
-      String.raw`-----BEGIN [A-Z ]* PRIVATE KEY-----` +
+      '-----BEGIN [A-Z ]* PRIVATE KEY-----' +
       String.raw`[\s\S]*?` +
-      String.raw`-----END [A-Z ]* PRIVATE KEY-----`,
+      '-----END [A-Z ]* PRIVATE KEY-----',
     flags: 'g',
   },
   // Bearer authorization header value
   {
     category: 'bearer-token',
-    source: String.raw`Bearer [A-Za-z0-9._~+/=!-]+`,
+    source: 'Bearer [A-Za-z0-9._~+/=!-]+',
     flags: 'g',
   },
   // Common API key prefixes: sk-live/test/prod/proj, sk-ant- (Anthropic),
@@ -56,10 +56,10 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
   {
     category: 'api-key',
     source:
-      String.raw`(?:sk-(?:live|test|prod|proj)-[A-Za-z0-9]{8,}` +
-      String.raw`|sk-ant-[A-Za-z0-9-]{8,}` +
-      String.raw`|xoxb-[A-Za-z0-9-]{10,}|xoxp-[A-Za-z0-9-]{10,}` +
-      String.raw`|AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{34})`,
+      '(?:sk-(?:live|test|prod|proj)-[A-Za-z0-9]{8,}' +
+      '|sk-ant-[A-Za-z0-9-]{8,}' +
+      '|xoxb-[A-Za-z0-9-]{10,}|xoxp-[A-Za-z0-9-]{10,}' +
+      '|AKIA[A-Z0-9]{16}|ghp_[A-Za-z0-9]{36}|hf_[A-Za-z0-9]{34})',
     flags: 'g',
   },
   // password/passwd/token/secret/api_key keyword assignments.
@@ -72,7 +72,7 @@ const PATTERNS: ReadonlyArray<PatternDef> = [
 ];
 
 // Matches existing ⟦REDACTED:...⟧ markers — these ranges are excluded from scanning
-const MARKER_SOURCE = String.raw`⟦REDACTED:[^⟧]*⟧`;
+const MARKER_SOURCE = '⟦REDACTED:[^⟧]*⟧';
 
 // ---------------------------------------------------------------------------
 // Internal types
