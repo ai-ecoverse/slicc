@@ -22,6 +22,7 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';
+import { FsError } from '../fs/types.js';
 import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import {
@@ -368,8 +369,8 @@ export class SudoManager {
         const raw = await this.fs.readFile(GRANTED_FILE, { encoding: 'utf-8' });
         existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       }
-    } catch {
-      existing = '';
+    } catch (err) {
+      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
     }
     try {
       await this.fs.mkdir(SUDOERS_D_DIR, { recursive: true });
