@@ -18,6 +18,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import { isTextContentType } from '../proxied-fetch.js';
 
 /**
  * Build a `globalThis.fetch`-shaped function from a just-bash `SecureFetch`.
@@ -46,40 +47,15 @@ export function createNodeFetchAdapter(secureFetch: SecureFetch): typeof globalT
     // on top so explicit init values win — mirroring the browser fetch spec.
     const headers = mergeHeaders(request?.headers, init?.headers);
 
-    // Body: prefer init.body when explicitly provided. When init.body is
-    // omitted but a Request was passed, read the Request's body so prebuilt
-    // Request objects with auth bodies still go through the proxy intact.
-    let body: string | undefined;
-    let bodyForContentType: BodyInit | null | undefined;
-    if (init && 'body' in init && init.body !== undefined) {
-      body = encodeBody(init.body, method);
-      bodyForContentType = init.body;
-    } else if (request && method !== 'GET' && method !== 'HEAD') {
-      const buf = await request.arrayBuffer();
-      body =
-        buf.byteLength === 0 ? undefined : new TextDecoder('utf-8').decode(new Uint8Array(buf));
-      bodyForContentType = undefined; // Content-Type already on request.headers
-    } else {
-      body = undefined;
-      bodyForContentType = undefined;
-    }
-
-    // Real fetch sets `Content-Type: application/x-www-form-urlencoded;
-    // charset=UTF-8` automatically when the body is a URLSearchParams and no
-    // Content-Type is explicitly set. Without this, OAuth token POSTs land
-    // with the wrong Content-Type and get rejected with `invalid_request`.
-    if (
-      bodyForContentType instanceof URLSearchParams &&
-      headers &&
-      !hasHeader(headers, 'content-type')
-    ) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+    const encoded = await resolveRequestBody(init, request, method, headers);
+    if (encoded.defaultContentType && !hasHeader(headers, 'content-type')) {
+      headers['Content-Type'] = encoded.defaultContentType;
     }
 
     const result = await secureFetch(url, {
       method,
       headers,
-      body,
+      body: encoded.body,
     });
 
     const responseHeaders = new Headers();
@@ -183,38 +159,77 @@ function mergeHeaders(
 
 /** Case-insensitive presence check for a header name in a record. */
 function hasHeader(headers: Record<string, string>, name: string): boolean {
+  return getHeader(headers, name) !== undefined;
+}
+
+/** Case-insensitive lookup that lets later merged header entries win. */
+function getHeader(headers: Record<string, string>, name: string): string | undefined {
   const lower = name.toLowerCase();
-  for (const k of Object.keys(headers)) {
-    if (k.toLowerCase() === lower) return true;
+  let value: string | undefined;
+  for (const [key, candidate] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) value = candidate;
   }
-  return false;
+  return value;
+}
+
+interface EncodedRequestBody {
+  body?: string;
+  defaultContentType?: string;
+}
+
+/** Encode an init or Request body and select the fetch-compatible default Content-Type. */
+async function resolveRequestBody(
+  init: RequestInit | undefined,
+  request: Request | null,
+  method: string,
+  headers: Record<string, string>
+): Promise<EncodedRequestBody> {
+  if (init && 'body' in init && init.body !== undefined) {
+    const defaultContentType = getDefaultContentType(init.body, method);
+    return { body: await encodeBody(init.body, method), defaultContentType };
+  }
+
+  if (request && method !== 'GET' && method !== 'HEAD') {
+    const hadBody = request.body !== null;
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    const contentType = getHeader(headers, 'content-type') ?? '';
+    const isBinary = hadBody && (!contentType || !isTextContentType(contentType));
+    return {
+      body:
+        bytes.byteLength === 0
+          ? undefined
+          : isBinary
+            ? bytesToLatin1(bytes)
+            : new TextDecoder('utf-8').decode(bytes),
+      defaultContentType: isBinary ? 'application/octet-stream' : undefined,
+    };
+  }
+
+  return {};
 }
 
 /**
  * SecureFetch's body type is `string | undefined`, so we coerce common
- * BodyInit shapes (URLSearchParams, ArrayBuffer, typed arrays) into a
- * string. Streaming bodies (Blob, FormData, ReadableStream) throw — they
- * aren't compatible with the proxy contract on the wire today.
+ * BodyInit shapes into a string. Binary shapes use the proxy's latin1
+ * convention (one character per byte). FormData and ReadableStream remain
+ * unsupported because they require multipart or streaming wire semantics.
  */
-function encodeBody(body: BodyInit | null | undefined, method: string): string | undefined {
+async function encodeBody(
+  body: BodyInit | null | undefined,
+  method: string
+): Promise<string | undefined> {
   if (body == null) return undefined;
   if (method === 'GET' || method === 'HEAD') return undefined;
   if (typeof body === 'string') return body;
   if (body instanceof URLSearchParams) return body.toString();
-  if (body instanceof Uint8Array) return new TextDecoder('utf-8').decode(body);
-  if (body instanceof ArrayBuffer) {
-    return new TextDecoder('utf-8').decode(new Uint8Array(body));
-  }
+  if (body instanceof Uint8Array) return bytesToLatin1(body);
+  if (body instanceof ArrayBuffer) return bytesToLatin1(new Uint8Array(body));
   if (ArrayBuffer.isView(body)) {
     const view = body as ArrayBufferView;
-    return new TextDecoder('utf-8').decode(
-      new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
-    );
+    return bytesToLatin1(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   }
   if (typeof Blob !== 'undefined' && body instanceof Blob) {
-    throw new Error(
-      'node fetch shim: Blob request bodies are not supported (use a string, Uint8Array, or URLSearchParams)'
-    );
+    return bytesToLatin1(new Uint8Array(await body.arrayBuffer()));
   }
   if (typeof FormData !== 'undefined' && body instanceof FormData) {
     throw new Error(
@@ -230,6 +245,36 @@ function encodeBody(body: BodyInit | null | undefined, method: string): string |
   // refuse explicitly instead of silently sending "[object Foo]" through
   // the proxy, which would never match an upstream API contract.
   throw new Error(
-    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, or URLSearchParams`
+    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, or URLSearchParams`
   );
+}
+
+function isRawBinaryBody(body: BodyInit | null | undefined): boolean {
+  return (
+    body instanceof Uint8Array ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body) ||
+    (typeof Blob !== 'undefined' && body instanceof Blob)
+  );
+}
+
+function getDefaultContentType(
+  body: BodyInit | null | undefined,
+  method: string
+): string | undefined {
+  if (body instanceof URLSearchParams) {
+    return 'application/x-www-form-urlencoded;charset=UTF-8';
+  }
+  if (method === 'GET' || method === 'HEAD' || !isRawBinaryBody(body)) return undefined;
+  if (typeof Blob !== 'undefined' && body instanceof Blob && body.type) return body.type;
+  return 'application/octet-stream';
+}
+
+function bytesToLatin1(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let latin1 = '';
+  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+    latin1 += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return latin1;
 }

@@ -13,10 +13,10 @@ import type { RealmRpcClient } from './realm-rpc.js';
 import type { TabHandle } from './realm-types.js';
 import { createWsObserverApi } from './realm-ws-observer.js';
 
-export function serializeRequestInit(
+export async function serializeRequestInit(
   init: RequestInit | undefined,
   input: string | URL | Request
-): RequestInit | undefined {
+): Promise<RequestInit | undefined> {
   if (!init && !(input instanceof Request)) return undefined;
   const fromRequest = input instanceof Request ? input : null;
   const method = (init?.method ?? fromRequest?.method ?? 'GET').toUpperCase();
@@ -37,10 +37,64 @@ export function serializeRequestInit(
     });
   }
   let body: string | undefined;
+  let defaultContentType: string | undefined;
   if (init?.body !== undefined && init?.body !== null && init?.body !== '') {
-    body = typeof init.body === 'string' ? init.body : String(init.body);
+    const serialized = await serializeRequestBody(init.body);
+    body = serialized.body;
+    defaultContentType = serialized.defaultContentType;
+  }
+  if (
+    defaultContentType &&
+    !Object.keys(headers).some((name) => name.toLowerCase() === 'content-type')
+  ) {
+    headers['Content-Type'] = defaultContentType;
   }
   return { method, headers, body };
+}
+
+async function serializeRequestBody(
+  body: BodyInit
+): Promise<{ body: string; defaultContentType?: string }> {
+  if (typeof body === 'string' || body instanceof URLSearchParams) {
+    return { body: body.toString() };
+  }
+  if (body instanceof Blob) {
+    return {
+      body: bytesToLatin1(new Uint8Array(await body.arrayBuffer())),
+      defaultContentType: body.type || 'application/octet-stream',
+    };
+  }
+  if (body instanceof ArrayBuffer) {
+    return {
+      body: bytesToLatin1(new Uint8Array(body)),
+      defaultContentType: 'application/octet-stream',
+    };
+  }
+  if (ArrayBuffer.isView(body)) {
+    const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    return { body: bytesToLatin1(bytes), defaultContentType: 'application/octet-stream' };
+  }
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    throw new Error(
+      'node fetch shim: FormData request bodies are not supported (post raw application/x-www-form-urlencoded with URLSearchParams instead)'
+    );
+  }
+  if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+    throw new Error(
+      'node fetch shim: ReadableStream request bodies are not supported (collect into a Uint8Array or string before calling fetch)'
+    );
+  }
+  throw new Error(
+    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, or URLSearchParams`
+  );
+}
+
+function bytesToLatin1(bytes: Uint8Array): string {
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return chunks.join('');
 }
 
 // ---------------------------------------------------------------------------
