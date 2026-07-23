@@ -30,16 +30,29 @@ describe('serializeRequestInit', () => {
     expect(Array.from(getFetchBodyBytes(serialized?.body as string))).toEqual(expectedBytes);
   });
 
-  it('preserves a caller-provided binary Content-Type case-insensitively', async () => {
+  it.each([
+    ['image/png', 'image/png'],
+    ['', 'application/octet-stream'],
+  ])('defaults a Blob with type %j to %s', async (type, contentType) => {
+    const serialized = await serializeRequestInit(
+      { body: new Blob([new Uint8Array(expectedBytes)], { type }) },
+      '/upload'
+    );
+
+    expect(serialized?.headers).toEqual({ 'Content-Type': contentType });
+    expect(Array.from(getFetchBodyBytes(serialized?.body as string))).toEqual(expectedBytes);
+  });
+
+  it('preserves a caller-provided Blob Content-Type case-insensitively', async () => {
     const serialized = await serializeRequestInit(
       {
-        headers: { 'content-type': 'image/png' },
-        body: new Uint8Array(expectedBytes),
+        headers: { 'CONTENT-TYPE': 'application/custom' },
+        body: new Blob([new Uint8Array(expectedBytes)], { type: 'image/png' }),
       },
       '/upload'
     );
 
-    expect(serialized?.headers).toEqual({ 'content-type': 'image/png' });
+    expect(serialized?.headers).toEqual({ 'CONTENT-TYPE': 'application/custom' });
   });
 
   it('leaves string and URLSearchParams bodies unchanged', async () => {

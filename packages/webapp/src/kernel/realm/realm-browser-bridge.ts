@@ -37,31 +37,42 @@ export async function serializeRequestInit(
     });
   }
   let body: string | undefined;
-  let isBinaryBody = false;
+  let defaultContentType: string | undefined;
   if (init?.body !== undefined && init?.body !== null && init?.body !== '') {
     const serialized = await serializeRequestBody(init.body);
     body = serialized.body;
-    isBinaryBody = serialized.isBinary;
+    defaultContentType = serialized.defaultContentType;
   }
-  if (isBinaryBody && !Object.keys(headers).some((name) => name.toLowerCase() === 'content-type')) {
-    headers['Content-Type'] = 'application/octet-stream';
+  if (
+    defaultContentType &&
+    !Object.keys(headers).some((name) => name.toLowerCase() === 'content-type')
+  ) {
+    headers['Content-Type'] = defaultContentType;
   }
   return { method, headers, body };
 }
 
-async function serializeRequestBody(body: BodyInit): Promise<{ body: string; isBinary: boolean }> {
+async function serializeRequestBody(
+  body: BodyInit
+): Promise<{ body: string; defaultContentType?: string }> {
   if (typeof body === 'string' || body instanceof URLSearchParams) {
-    return { body: body.toString(), isBinary: false };
+    return { body: body.toString() };
   }
   if (body instanceof Blob) {
-    return { body: bytesToLatin1(new Uint8Array(await body.arrayBuffer())), isBinary: true };
+    return {
+      body: bytesToLatin1(new Uint8Array(await body.arrayBuffer())),
+      defaultContentType: body.type || 'application/octet-stream',
+    };
   }
   if (body instanceof ArrayBuffer) {
-    return { body: bytesToLatin1(new Uint8Array(body)), isBinary: true };
+    return {
+      body: bytesToLatin1(new Uint8Array(body)),
+      defaultContentType: 'application/octet-stream',
+    };
   }
   if (ArrayBuffer.isView(body)) {
     const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
-    return { body: bytesToLatin1(bytes), isBinary: true };
+    return { body: bytesToLatin1(bytes), defaultContentType: 'application/octet-stream' };
   }
   if (typeof FormData !== 'undefined' && body instanceof FormData) {
     throw new Error(

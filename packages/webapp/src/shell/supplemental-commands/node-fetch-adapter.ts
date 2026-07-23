@@ -185,12 +185,7 @@ async function resolveRequestBody(
   headers: Record<string, string>
 ): Promise<EncodedRequestBody> {
   if (init && 'body' in init && init.body !== undefined) {
-    const defaultContentType =
-      init.body instanceof URLSearchParams
-        ? 'application/x-www-form-urlencoded;charset=UTF-8'
-        : method !== 'GET' && method !== 'HEAD' && isRawBinaryBody(init.body)
-          ? 'application/octet-stream'
-          : undefined;
+    const defaultContentType = getDefaultContentType(init.body, method);
     return { body: await encodeBody(init.body, method), defaultContentType };
   }
 
@@ -261,6 +256,18 @@ function isRawBinaryBody(body: BodyInit | null | undefined): boolean {
     ArrayBuffer.isView(body) ||
     (typeof Blob !== 'undefined' && body instanceof Blob)
   );
+}
+
+function getDefaultContentType(
+  body: BodyInit | null | undefined,
+  method: string
+): string | undefined {
+  if (body instanceof URLSearchParams) {
+    return 'application/x-www-form-urlencoded;charset=UTF-8';
+  }
+  if (method === 'GET' || method === 'HEAD' || !isRawBinaryBody(body)) return undefined;
+  if (typeof Blob !== 'undefined' && body instanceof Blob && body.type) return body.type;
+  return 'application/octet-stream';
 }
 
 function bytesToLatin1(bytes: Uint8Array): string {

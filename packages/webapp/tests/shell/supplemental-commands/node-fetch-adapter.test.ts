@@ -217,19 +217,41 @@ describe('createNodeFetchAdapter', () => {
     expect(await resp.text()).toBe('');
   });
 
-  it('encodes Blob bodies as latin1', async () => {
+  it.each([
+    ['image/png', 'image/png'],
+    ['', 'application/octet-stream'],
+  ])('encodes a Blob with type %j as latin1 and defaults to %s', async (type, contentType) => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
     const bytes = new Uint8Array([0x00, 0x80, 0xff]);
 
-    await fetch('https://api.example.com/x', { method: 'POST', body: new Blob([bytes]) });
+    await fetch('https://api.example.com/x', {
+      method: 'POST',
+      body: new Blob([bytes], { type }),
+    });
 
     const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
       body: string;
       headers: Record<string, string>;
     };
     expect(Array.from(opts.body, (char) => char.charCodeAt(0))).toEqual(Array.from(bytes));
-    expect(opts.headers['Content-Type']).toBe('application/octet-stream');
+    expect(opts.headers['Content-Type']).toBe(contentType);
+  });
+
+  it('preserves a caller-provided Content-Type for a Blob case-insensitively', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    await fetch('https://api.example.com/x', {
+      method: 'POST',
+      headers: { 'CONTENT-TYPE': 'application/custom' },
+      body: new Blob(['data'], { type: 'image/png' }),
+    });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(opts.headers).toEqual({ 'CONTENT-TYPE': 'application/custom' });
   });
 
   it('rejects FormData bodies with a clear message', async () => {
