@@ -120,4 +120,32 @@ describe.skipIf(!BIOME_BIN)('biome-jsh CLI (integration)', () => {
     // The invalid source is left unchanged, not silently "formatted".
     expect(readFileSync(join(dir, 'broken.jsh'), 'utf8')).toBe(broken);
   });
+
+  it('lint checks lint rules but skips formatting (unlike check)', () => {
+    // Unformatted but lint-clean: `check` flags "not formatted"; `lint` doesn't.
+    const messy = 'const x=1\nawait Promise.resolve()\nif(x){return x}\n';
+    writeFileSync(join(dir, 'messy.jsh'), messy);
+
+    const lint = runCli(dir, ['lint', 'messy.jsh']);
+    expect(lint.stdout).not.toMatch(/not formatted/i);
+    expect(lint.status).toBe(0);
+
+    const check = runCli(dir, ['check', 'messy.jsh']);
+    expect(check.stdout).toMatch(/not formatted/i);
+    expect(check.status).toBe(1);
+  });
+
+  it('lint still catches a real lint error, mapped to the real line', () => {
+    const body = 'const x = 1;\nif (x == 2) {\n\tawait Promise.resolve();\n}\nreturn x;\n';
+    writeFileSync(join(dir, 'lint.jsh'), body);
+
+    const result = runCli(dir, ['lint', 'lint.jsh']);
+    const annotation = result.stdout
+      .split('\n')
+      .map(parseGithubAnnotation)
+      .find((a) => a?.fields.title.includes('noDoubleEquals'));
+    expect(annotation).toBeTruthy();
+    expect(annotation.fields.line).toBe('2');
+    expect(result.status).toBe(1);
+  });
 });

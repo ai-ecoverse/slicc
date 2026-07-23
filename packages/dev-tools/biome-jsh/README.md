@@ -34,14 +34,16 @@ path); this CLI is the binary path.
 
 ```sh
 biome-jsh check  [paths...]           # lint + format-check (github reporter)
+biome-jsh lint   [paths...]           # lint only, no format-check
 biome-jsh format [paths...]           # print formatted output to stdout
 biome-jsh format --write [paths...]   # format files in place
 ```
 
 Paths may be files or directories (walked recursively; `node_modules` and
 `.git` skipped). `check` exits non-zero when any file has an error or is not
-formatted, and emits GitHub Actions annotations on stdout so CI surfaces them
-inline.
+formatted; `lint` skips the format-check (useful for repos that don't enforce
+formatting on legacy files). Both emit GitHub Actions annotations on stdout so
+CI surfaces them inline.
 
 ```sh
 biome-jsh check skills/
