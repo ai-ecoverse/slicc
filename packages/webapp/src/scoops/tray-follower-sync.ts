@@ -3,7 +3,11 @@
  * and provides an AgentHandle for the follower's ChatPanel.
  */
 
-import type { TranscriptExportErrorCode, TranscriptExportSelector } from '@slicc/shared-ts';
+import type {
+  TranscriptExportErrorCode,
+  TranscriptExportProgress,
+  TranscriptExportSelector,
+} from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -208,6 +212,7 @@ export class FollowerSyncManager implements AgentHandle {
       nextExpectedIndex: number;
       signal: AbortSignal;
       onAbort: () => void;
+      onProgress?: (progress: TranscriptExportProgress) => void;
     }
   >();
 
@@ -1262,14 +1267,18 @@ export class FollowerSyncManager implements AgentHandle {
     switch (message.type) {
       case 'transcript.export.pending':
         log.debug('Transcript export pending', { requestId: message.requestId });
+        this.activeExportRequests.get(message.requestId)?.onProgress?.({
+          phase: 'collecting',
+        });
         break;
       case 'transcript.export.denied':
         this.handleExportDenied(message.requestId);
         break;
       case 'transcript.export.start':
-        log.debug('Transcript export start', {
-          requestId: message.requestId,
-          filename: message.filename,
+        // Log without filename to avoid leaking session title before leader approval.
+        log.debug('Transcript export start', { requestId: message.requestId });
+        this.activeExportRequests.get(message.requestId)?.onProgress?.({
+          phase: 'packaging',
         });
         break;
       case 'transcript.export.chunk':
@@ -1293,10 +1302,15 @@ export class FollowerSyncManager implements AgentHandle {
    * Request a transcript export from the leader.
    * Returns a Promise<Blob> with the verified ZIP, or rejects with
    * TranscriptExportError on denial, corruption, or abort.
+   *
+   * @param onProgress Optional callback invoked as the leader advances through
+   *   export phases. Phases are forwarded without leaking filename, sha256,
+   *   or byte counts until the verified Blob is returned.
    */
   async requestTranscriptExport(
     selector: TranscriptExportSelector,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onProgress?: (progress: TranscriptExportProgress) => void
   ): Promise<Blob> {
     const requestId = `te-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise<Blob>((resolve, reject) => {
@@ -1323,6 +1337,7 @@ export class FollowerSyncManager implements AgentHandle {
         nextExpectedIndex: 0,
         signal,
         onAbort,
+        onProgress,
       });
 
       this.sync.send({
@@ -1365,6 +1380,10 @@ export class FollowerSyncManager implements AgentHandle {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     entry.chunks.push(bytes);
     entry.nextExpectedIndex++;
+    // Forward transferring progress (byte count only; no filename or sha256).
+    let processedBytes = 0;
+    for (const c of entry.chunks) processedBytes += c.byteLength;
+    entry.onProgress?.({ phase: 'transferring', processedBytes });
   }
 
   private async handleExportComplete(

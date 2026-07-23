@@ -1,3 +1,4 @@
+import { TranscriptExportError } from '@slicc/shared-ts';
 import { createLogger } from '../../core/logger.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -544,6 +545,16 @@ export async function mountWcUiFollower(
   if (isCherry && prelude.cherryTransport) {
     prelude.cherryTransport.onHostEvent = (name, detail) =>
       follower.currentSync?.sendCherryHostEvent(name, detail);
+    // Wire host-initiated export requests to the follower tray export path.
+    // The verified Blob from FollowerSyncManager is returned directly — no
+    // rebuild or rehash; only the phase is forwarded (no filename/sha256/size).
+    // requestId is used by CherryHostTransport for envelope routing, not here.
+    // sessionId selects the target session; only 'active' is supported today.
+    prelude.cherryTransport.onExportRequest = (_requestId, _sessionId, signal, onProgress) => {
+      const sync = follower.currentSync;
+      if (!sync) return Promise.reject(new TranscriptExportError('transfer-aborted'));
+      return sync.requestTranscriptExport({ kind: 'active' }, signal, onProgress);
+    };
   }
 
   // Task 4: Navigate-lick watcher for non-cherry follower. Capture its stop fn

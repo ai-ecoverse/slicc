@@ -5,6 +5,7 @@
 
 import { mountSliccImpl } from './mount.js';
 import type { SliccTheme } from './theme-types.js';
+import type { ExportSessionOptions } from './transcript-types.js';
 
 export type { SliccTheme, ThemeComponent, ThemeComponents } from './theme-types.js';
 export type {
@@ -121,7 +122,7 @@ export interface SliccHandle {
    * `TranscriptExportError` on denial, abort, or corruption. Requires the
    * handshake to have completed; calling before handshake rejects immediately.
    */
-  exportSession(options?: import('./transcript-types.js').ExportSessionOptions): Promise<Blob>;
+  exportSession(options?: ExportSessionOptions): Promise<Blob>;
   /** Tear down the channel, reject all pending exports, and remove the iframe. */
   destroy(): void;
 }

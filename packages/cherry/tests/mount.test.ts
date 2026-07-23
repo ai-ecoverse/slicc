@@ -621,6 +621,35 @@ describe('exportSession', () => {
     handle.destroy();
   });
 
+  it('maps unknown session.export.error code to transfer-corrupt (M-1 runtime guard)', async () => {
+    const posted: Array<{ kind?: string; requestId?: string }> = [];
+    const handle = mountSliccImpl({
+      container: document.createElement('div'),
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 2,
+      channelId: 'ch-unknown-code',
+      kind: 'handshake.hello',
+    } as never);
+    const promise = handle.exportSession();
+    const request = posted.find((e) => e.kind === 'session.export.request');
+    await handle.__test_receive({
+      cherry: 2,
+      channelId: 'ch-unknown-code',
+      kind: 'session.export.error',
+      requestId: request?.requestId,
+      code: 'permission_denied', // underscore, not dash — not a valid code
+    } as never);
+    const err = await promise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TranscriptExportError);
+    expect((err as TranscriptExportError).code).toBe('transfer-corrupt');
+    handle.destroy();
+  });
+
   it('rejects with transfer-corrupt when blob.type is not application/zip', async () => {
     const posted: Array<{ kind?: string; requestId?: string }> = [];
     const handle = mountSliccImpl({
