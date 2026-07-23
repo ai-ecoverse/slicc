@@ -17,6 +17,10 @@ npx wrangler whoami
 # Build the UI required by the hub worker.
 npm run build -w @slicc/webapp
 
+# Upload assets to R2 BEFORE deploying (mandatory gate).
+node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs \
+  --bucket slicc-asset-archive-staging --dir dist/ui/assets
+
 # Deploy the staging hub and preview workers as a pair.
 cd packages/cloudflare-worker
 npx wrangler deploy --config wrangler.jsonc --env staging
@@ -164,8 +168,11 @@ Edit token**), it MUST keep every scope below — dropping any one wedges releas
 - **Account → Workers Scripts → Edit** — deploy the worker script + Static Assets.
 - **Account → Workers R2 Storage → Edit** (R2 Object Read & Write) on **both** buckets
   (`slicc-asset-archive`, `slicc-asset-archive-staging`).
-- **Zone → Workers Routes → Edit** _and_ **Zone → Zone → Read** for the `sliccy.ai`
-  zone — reconcile the `www.sliccy.ai/*` + `*.sliccy.now/*` routes on deploy.
+- **Zone → Workers Routes → Edit** _and_ **Zone → Zone → Read** for **all three
+  zones**: `sliccy.ai` (hub: `www.sliccy.ai/*`), `sliccy.now` (preview prod:
+  `*.sliccy.now/*`), and `sliccy.dev` (preview staging: `*.sliccy.dev/*`).
+  Alternatively, grant an **All Zones** resource scope for both Workers Routes
+  and Zone Read.
 
 > ⚠️ **Incident (2026-07-13):** granting R2 to this token dropped its
 > **Zone/Workers-Routes** scope. The worker script still deployed, but `wrangler deploy`
@@ -333,27 +340,40 @@ npx wrangler login   # interactive — pick "AEM Demo" in the browser
 | Main hub | `wrangler.jsonc`         | `slicc-tray-hub-staging` | `*.workers.dev` (API + UI) |
 | Preview  | `wrangler-preview.jsonc` | `slicc-preview-staging`  | `*.sliccy.dev/*`           |
 
-```bash
-cd packages/cloudflare-worker
-npx wrangler deploy --config wrangler.jsonc --env staging
-npx wrangler deploy --config wrangler-preview.jsonc --env staging
-```
-
-### Provide the required UI assets
+### Provide the required UI assets first
 
 The hub worker serves the webapp via Cloudflare Workers Static Assets from `dist/ui/`.
 A bare worktree only has `electron-overlay-entry.js` — the staging deploy will succeed
 but every page load returns 404.
 
-**Fix:** symlink the main repo's built UI into the worktree before deploying:
+**From a worktree**, symlink the main repo's built UI before deploying:
 
 ```bash
 trash dist/ui
 ln -s /path/to/main-repo/dist/ui dist/ui
 ```
 
-If the main repo doesn't have a build either, run `npm run build -w @slicc/webapp` there
-first.
+**From the main repo**, build the UI:
+
+```bash
+npm run build -w @slicc/webapp
+```
+
+### Upload assets to R2, then deploy
+
+The R2 upload gate **must** run before the first `wrangler deploy` attempt (see
+"Run the upload gate before every deploy" above). Then deploy both workers as a pair:
+
+```bash
+# From the repository root:
+node packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs \
+  --bucket slicc-asset-archive-staging --dir dist/ui/assets
+
+cd packages/cloudflare-worker
+npx wrangler deploy --config wrangler.jsonc --env staging
+npx wrangler deploy --config wrangler-preview.jsonc --env staging
+cd -  # return to repo root
+```
 
 ### Test `serve` against staging
 
