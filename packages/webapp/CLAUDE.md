@@ -89,13 +89,12 @@ See `docs/mounts.md`.
 ### Shell
 
 - Path: `packages/webapp/src/shell/`
-- `almost-bash-shell.ts` hosts the just-bash runtime.
-- `script-catalog.ts` — shared `.jsh`/`.bsh` discovery service, cache-invalidated by
-  `FsWatcher`; bypasses cache for mounted trees where external changes are invisible to the
-  watcher.
-- `supplemental-commands/` — all built-in commands. See `docs/shell-reference.md` for the
-  authoritative per-command reference and `supplemental-commands/agent-command.ts` for scoop
-  delegation details.
+- `almost-bash-shell.ts` — just-bash runtime host.
+- `script-catalog.ts` — shared `.jsh`/`.bsh` discovery for the shell and `which`; its
+  `FsWatcher` cache is bypassed for mounted trees where external changes are invisible.
+- `supplemental-commands/` — built-ins (see `docs/shell-reference.md`).
+  `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser
+  `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API.
 - `jsh-discovery.ts` / `bsh-discovery.ts` — raw VFS scans backing the shared catalog.
 - `vfs-adapter.ts` — bridges shell calls into VFS; forwards `canWrite` (duck-typed for
   both `VirtualFS` and `RestrictedFS`).

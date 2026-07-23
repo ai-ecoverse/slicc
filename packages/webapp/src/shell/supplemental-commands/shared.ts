@@ -23,7 +23,7 @@ type InitSqlJs = (options?: { locateFile?: (file: string) => string }) => Promis
 
 const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 
-export type TypeScriptModule = typeof import('typescript');
+export type TypeScriptModule = typeof import('typescript-js');
 
 export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
   if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {
@@ -227,11 +227,11 @@ const TYPESCRIPT_NOT_INSTALLED =
   'typescript is not installed in node_modules: run `ipk add typescript` (no network fallback)';
 
 /**
- * Lazy singleton for the `typescript` package. Pure JS (no WASM init).
+ * Lazy singleton for the classic TypeScript JS compiler API. Pure JS (no WASM init).
  *
  * Node runtime (vitest, build tooling): falls back to the
- * locally-installed `typescript` npm dependency via dynamic
- * `import('typescript')`. The `/* @vite-ignore *\/` comment keeps the
+ * locally-installed `typescript-js` npm alias via dynamic
+ * `import('typescript-js')`. The `/* @vite-ignore *\/` comment keeps the
  * heavy module OUT of the browser bundle while leaving the Node path
  * functional for tests and the realm host's transpile fallback.
  *
@@ -256,10 +256,10 @@ export async function getTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScr
 
 async function loadTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptModule> {
   if (isNodeRuntime()) {
-    // `/* @vite-ignore */` keeps `typescript` out of the browser bundle
+    // `/* @vite-ignore */` keeps `typescript-js` out of the browser bundle
     // while Node (vitest/build tooling) still resolves it from local
     // node_modules at runtime.
-    const mod = await import(/* @vite-ignore */ 'typescript');
+    const mod = await import(/* @vite-ignore */ 'typescript-js');
     return ((mod as { default?: TypeScriptModule }).default ?? mod) as TypeScriptModule;
   }
   if (!ipk) throw new Error(TYPESCRIPT_NOT_INSTALLED);
