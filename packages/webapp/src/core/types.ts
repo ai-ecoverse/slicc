@@ -27,7 +27,7 @@ export interface ToolCall {
   type: 'toolCall';
   id: string;
   name: string;
-  arguments: Record<string, any>;
+  arguments: Record<string, unknown>;
 }
 
 // ─── Message Types ──────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ export interface AgentTool<TDetails = unknown> extends Tool {
   label: string;
   execute: (
     toolCallId: string,
-    params: Record<string, any>,
+    params: Record<string, unknown>,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
