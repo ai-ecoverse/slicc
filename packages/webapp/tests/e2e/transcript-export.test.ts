@@ -2,33 +2,38 @@
 /**
  * Transcript export E2E test.
  *
- * Two test surfaces:
+ * Boots the leader app against the fake-LLM fixture (`transcript-export.json`),
+ * submits a user message, seeds a binary attachment into the UI session store,
+ * triggers the avatar-menu export action, intercepts the Playwright download,
+ * and validates the ZIP:
  *
- *   1. Local export — boots the leader app against the fake-LLM fixture
- *      (`transcript-export.json`), submits a user message, triggers the
- *      avatar-menu export action, intercepts the Playwright download,
- *      and validates the ZIP: magic bytes, transcript.json v1 shape,
- *      cone conversation present, credential redacted, reasoning absent.
+ *   - ZIP magic bytes and document schema v1.
+ *   - Cone conversation present with messages.
+ *   - Scoop conversation present (spawned by the `scoop_scoop` fixture turn).
+ *   - Credential-shaped value absent (replaced by the redactor).
+ *   - Reasoning absent (no `type: 'reasoning'` content blocks).
+ *   - Binary attachment present with exact byte identity.
  *
- *   2. Cherry transport integration (protocol-level) — tests the
- *      request → approve → progress → Blob protocol message shapes
- *      and the `TranscriptExportError` class in Node.js context using
- *      the Cherry SDK's public types. Exercises every branch of the
- *      error-code lookup guard (M-1 task-8 fix). Does not require a
- *      browser page — runs purely in the Playwright test process.
+ * Cherry transport integration tests live in the correct package:
+ *   packages/cherry/tests/mount.test.ts — exportSession describe block
+ *   packages/webapp/tests/cdp/cherry-host-transport.test.ts — CherryHostTransport
+ * Those tests use the real mountSliccImpl/__test_receive seams and cover the
+ * full protocol (request→progress→response, unknown code M-1 guard, abort,
+ * concurrent exports, stale/untrusted envelopes) without any DOM environment.
  *
  * Run: FAKE_LLM_FIXTURE=transcript-export npm run test:e2e -- transcript-export.test.ts
  *
- * The local-export scenario requires the full E2E environment (built
- * webapp + wrangler + node-server + Playwright Chrome). The Cherry
- * protocol test is self-contained and always passes.
+ * Requires the full E2E environment: built webapp (dist/ui) + wrangler dev +
+ * node-server thin bridge + Playwright Chrome. The three `webServer` entries in
+ * playwright.config.ts start them automatically; no manual steps are needed.
  *
- * Pre-conditions verified:
- *   - fake-llm fixture produces a credential-shaped string in an
- *     assistant tool-call argument (triggers the credential-pattern
- *     redactor in export-service.ts).
- *   - The fixture has no reasoning content (reasoningExcluded == true
- *     and excludedReasoningBlocks == 0).
+ * Fixture notes:
+ *   - The fake-LLM fixture produces a bash tool call with a credential-shaped
+ *     string (triggers the credential-pattern redactor in export-service.ts)
+ *     AND a `scoop_scoop` call (spawns a real scoop named "verifier").
+ *   - The fixture has no reasoning content (reasoningExcluded == true, count 0).
+ *   - A known 8-byte binary buffer is injected into the cone UI session in IDB
+ *     before export; the export service includes it unchanged in attachments/.
  */
 
 import * as fs from 'node:fs';
@@ -49,10 +54,16 @@ import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const EXPORT_MODEL = 'fake-exporter';
 
-/** Credential pattern the fixture embeds in a tool-call argument. The
+/** Credential pattern the fixture embeds in a bash tool-call argument. The
  *  export service's credential-pattern redactor must replace this with
  *  a ⟦REDACTED:…⟧ token. */
 const CREDENTIAL_PATTERN = 'sk-1234abcd5678efgh9012ijkl3456mnop';
+
+/** Known binary bytes seeded into the cone session before export.
+ *  PNG magic header — deterministic and easily identified in the ZIP.
+ *  The export service copies binary attachments unchanged; the test
+ *  verifies the ZIP bytes match exactly. */
+const BINARY_FIXTURE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,21 +79,80 @@ function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * Inject a synthetic binary MessageAttachment onto the first user message in
+ * the `session-cone` UI session (IndexedDB `browser-coding-agent` / `sessions`
+ * store). The export service's Phase-2 attachment walk picks up `kind='file'`
+ * attachments whose `data` field is set, copies the bytes unchanged into the
+ * ZIP bundle, and records them in `transcript.json`'s `attachments[]` array.
+ *
+ * Must be called after `waitForTurnComplete` so the session-cone record exists.
+ */
+async function seedBinaryAttachment(
+  page: import('@playwright/test').Page,
+  b64: string
+): Promise<void> {
+  await page.evaluate(
+    async (args: { b64: string }) => {
+      await new Promise<void>((resolve, reject) => {
+        const req = indexedDB.open('browser-coding-agent', 1);
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('sessions', 'readwrite');
+          const store = tx.objectStore('sessions');
+          const getReq = store.get('session-cone');
+          getReq.onsuccess = () => {
+            const session = getReq.result as
+              | { id: string; messages: Array<{ role: string; attachments?: unknown[] }> }
+              | undefined;
+            if (!session?.messages?.length) {
+              // Session not yet written — resolve silently; attachment will be absent.
+              resolve();
+              return;
+            }
+            const firstUserMsg = session.messages.find((m) => m.role === 'user');
+            if (!firstUserMsg) {
+              resolve();
+              return;
+            }
+            if (!firstUserMsg.attachments) firstUserMsg.attachments = [];
+            firstUserMsg.attachments.push({
+              id: 'e2e-binary-fixture',
+              name: 'fixture.bin',
+              mimeType: 'application/octet-stream',
+              size: 8,
+              kind: 'file',
+              data: args.b64,
+            });
+            const putReq = store.put(session);
+            putReq.onsuccess = () => resolve();
+            putReq.onerror = () => reject(putReq.error);
+          };
+          getReq.onerror = () => reject(getReq.error);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    },
+    { b64 }
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Local export E2E scenario
+// Transcript export — local ZIP download
 // ---------------------------------------------------------------------------
 
 test.describe('transcript export — local ZIP download', () => {
   test.beforeEach(async () => {
+    // resetFakeLlm() contacts the fake-LLM server started by the `webServer`
+    // entry in playwright.config.ts. If the server is not running (i.e. the
+    // Playwright webServer failed to start), this throws ECONNREFUSED and the
+    // test fails with a clear diagnostic — not silently skipped.
     await resetFakeLlm();
   });
 
-  test.use({
-    // The export download is intercepted at the Playwright level.
-    // No CDP binding is required for this scenario.
-  });
-
-  test('exports ZIP with redacted credential and valid v1 transcript', async ({ page }) => {
+  test('exports ZIP: cone + scoop conversations, binary unchanged, credential redacted', async ({
+    page,
+  }) => {
     // ── 1. Boot the leader with the fake exporter model ──────────────────
     expect(FAKE_LLM_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
 
@@ -91,30 +161,35 @@ test.describe('transcript export — local ZIP download', () => {
     await gotoLeader(page);
     await waitForSW(page);
 
-    // Wait for the cone to finish bootstrapping (welcome turn).
     await page.waitForSelector('slicc-input-card');
     await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
       timeout: 20_000,
     });
 
-    // ── 2. Submit user message → fake-LLM fixture produces tool call ──────
-    // The fixture turn emits a bash tool call with CREDENTIAL_PATTERN in
-    // the command argument, simulating a session that captured a
-    // credential-shaped string in the agent history.
+    // ── 2. Submit user message ─────────────────────────────────────────────
+    // The fixture turn emits:
+    //   (a) a bash tool call with CREDENTIAL_PATTERN in the command argument
+    //   (b) a scoop_scoop call that spawns a "verifier" scoop with prompt
+    //       "verify-export-scoop"
+    // The fake-LLM server serves the scoop's LLM call from a turn matched on
+    // "verify-export-scoop". The fixture uses onOverflow:'repeat-last' so any
+    // ordering between the scoop and cone continuation is safe.
     await submitUserMessage(page, 'run the export scenario');
     await waitForTurnComplete(page, { mustObserveTurnRise: true });
 
-    // Confirm the tool call output landed in the thread.
     await expect(page.locator('slicc-chat-thread')).toContainText(
       'credential-shaped token appeared'
     );
 
-    // ── 3. Trigger the "Export transcript" UI action ────────────────────
-    // The avatar-menu handler in wc-nav.ts listens for `slicc-avatar-action`
-    // on the <slicc-avatar-menu> element. Dispatch it directly; the handler
-    // calls onExportTranscript → downloadTranscriptBlob → anchor click, which
-    // Playwright intercepts as a download event.
-    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    // ── 3. Seed binary attachment into the cone UI session ─────────────────
+    // Injected after the turn so session-cone is already written by the WC
+    // shell's chat controller. The export service's Phase-2 attachment walk
+    // reads kind='file' attachments with data set and copies bytes unchanged.
+    const binaryB64 = Buffer.from(BINARY_FIXTURE_BYTES).toString('base64');
+    await seedBinaryAttachment(page, binaryB64);
+
+    // ── 4. Trigger the "Export transcript" UI action ───────────────────────
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
     await page.evaluate(() => {
       const menu = document.querySelector('slicc-avatar-menu');
       if (!menu) throw new Error('slicc-avatar-menu not found in DOM');
@@ -126,62 +201,67 @@ test.describe('transcript export — local ZIP download', () => {
         })
       );
     });
+
+    // The export service waits for any in-flight scoop (collectActiveTranscriptSources
+    // polls until isProcessing returns false for all scoops). Allow generous timeout.
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/\.zip$/);
 
-    // ── 4. Read the downloaded ZIP from disk ───────────────────────────
+    // ── 5. Read the downloaded ZIP ────────────────────────────────────────
     const filePath = await download.path();
     expect(filePath).not.toBeNull();
     const zipBytes = fs.readFileSync(filePath!);
 
-    // Verify ZIP magic bytes (PK\x03\x04).
+    // ZIP magic bytes (PK\x03\x04).
     expect(zipBytes[0]).toBe(0x50); // P
     expect(zipBytes[1]).toBe(0x4b); // K
     expect(zipBytes[2]).toBe(0x03);
     expect(zipBytes[3]).toBe(0x04);
 
-    // ── 5. Parse and validate the ZIP contents ────────────────────────
+    // ── 6. Parse ZIP entries ──────────────────────────────────────────────
     const entries = unzip(zipBytes);
     const entryNames = Object.keys(entries);
     expect(entryNames).toContain('transcript.json');
 
-    // ── 6. Validate transcript.json ───────────────────────────────────
+    // ── 7. Validate transcript.json ───────────────────────────────────────
     const transcriptJson = JSON.parse(decode(entries['transcript.json']!)) as Record<
       string,
       unknown
     >;
 
-    // Schema version 1.
     expect(transcriptJson['schemaVersion']).toBe(1);
 
-    // Export metadata.
     const exportMeta = transcriptJson['export'] as Record<string, unknown>;
     expect(exportMeta['format']).toBe('slicc-transcript');
     expect((exportMeta['producer'] as Record<string, unknown>)['application']).toBe('slicc');
 
-    // Session state.
     const session = transcriptJson['session'] as Record<string, unknown>;
     expect(['active', 'frozen']).toContain(session['state']);
 
-    // Privacy invariants.
     const privacy = transcriptJson['privacy'] as Record<string, unknown>;
     expect(privacy['reasoningExcluded']).toBe(true);
     expect(privacy['binaryAttachments']).toBe('included-unchanged');
 
-    // ── 7. Cone conversation present ──────────────────────────────────
+    // ── 8. Cone conversation present ──────────────────────────────────────
     const conversations = transcriptJson['conversations'] as Array<Record<string, unknown>>;
     const cone = conversations.find((c) => c['kind'] === 'cone');
     expect(cone).toBeDefined();
-    expect((cone?.['messages'] as unknown[]).length).toBeGreaterThan(0);
+    expect((cone!['messages'] as unknown[]).length).toBeGreaterThan(0);
 
-    // ── 8. Credential-shaped value absent ────────────────────────────
-    // The raw CREDENTIAL_PATTERN must not appear anywhere in transcript.json.
-    // The redactor replaces it with ⟦REDACTED:credential-pattern:…⟧.
+    // ── 9. Scoop conversation present ─────────────────────────────────────
+    // The fixture spawns a "verifier" scoop via scoop_scoop. The export
+    // service (collectActiveTranscriptSources) waits until all scoops finish,
+    // then includes each scoop conversation in conversations[] with kind:'scoop'.
+    const scoop = conversations.find((c) => c['kind'] === 'scoop');
+    expect(scoop).toBeDefined();
+    expect((scoop!['messages'] as unknown[]).length).toBeGreaterThan(0);
+
+    // ── 10. Credential-shaped value absent ────────────────────────────────
+    // The raw CREDENTIAL_PATTERN must not appear in transcript.json.
     const transcriptText = decode(entries['transcript.json']!);
     expect(transcriptText).not.toContain(CREDENTIAL_PATTERN);
 
-    // ── 9. Reasoning absent ──────────────────────────────────────────
-    // No content block of type 'reasoning' may appear in any message.
+    // ── 11. Reasoning absent ─────────────────────────────────────────────
     const allMessages = conversations.flatMap(
       (c) => (c['messages'] as Array<Record<string, unknown>>) ?? []
     );
@@ -191,143 +271,16 @@ test.describe('transcript export — local ZIP download', () => {
         expect(block['type']).not.toBe('reasoning');
       }
     }
-  });
-});
 
-// ---------------------------------------------------------------------------
-// Cherry transport integration — protocol-level (Node.js, no DOM)
-// ---------------------------------------------------------------------------
-
-/**
- * Tests the protocol message shapes and error-code guards for the Cherry
- * host ↔ follower transcript-export protocol. Runs in the Playwright test
- * process (Node.js) without a browser page.
- *
- * This is a unit-level integration test of the wire contract — it verifies
- * that the shapes match what `mount.ts` sends/receives and that the
- * `TranscriptExportError` class behaves correctly for every error code.
- */
-test.describe('Cherry transcript export — protocol-level integration', () => {
-  test('TranscriptExportError carries the correct code for all error variants', async () => {
-    // Import the Cherry SDK error class (from built dist).
-    const { TranscriptExportError } = await import('@ai-ecoverse/cherry');
-
-    const errorCodes = [
-      'permission-denied',
-      'redaction-unavailable',
-      'session-not-found',
-      'transfer-aborted',
-      'transfer-corrupt',
-      'schema-invalid',
-      'attachment-unreadable',
-    ] as const;
-
-    for (const code of errorCodes) {
-      const err = new TranscriptExportError(code);
-      expect(err.code).toBe(code);
-      expect(err.name).toBe('TranscriptExportError');
-      expect(err.message).toBe(code);
-      expect(err).toBeInstanceOf(Error);
-    }
-  });
-
-  test('protocol request→progress→response message shapes are well-formed', async () => {
-    // Verify the structural shape of each envelope kind used in the
-    // session.export.* protocol (mirroring what mount.ts sends/receives).
-
-    const channelId = 'cherry-test-abc';
-    const requestId = 'req-001';
-
-    // ── session.export.request ────────────────────────────────────────
-    const request = {
-      kind: 'session.export.request' as const,
-      channelId,
-      requestId,
-      sessionId: 'active' as const,
-    };
-    expect(request.kind).toBe('session.export.request');
-    expect(request.sessionId).toBe('active');
-
-    // ── session.export.progress ───────────────────────────────────────
-    const progress = {
-      kind: 'session.export.progress' as const,
-      channelId,
-      requestId,
-      phase: 'packaging' as const,
-      processedBytes: 2048,
-      estimatedBytes: 8192,
-    };
-    expect(progress.kind).toBe('session.export.progress');
-    expect(progress.processedBytes).toBeLessThanOrEqual(progress.estimatedBytes);
-
-    // ── session.export.response ───────────────────────────────────────
-    const mockZipBase64 = 'UEsDBBQA'; // minimal base64 ZIP start
-    const response = {
-      kind: 'session.export.response' as const,
-      channelId,
-      requestId,
-      data: mockZipBase64,
-      byteLength: 6,
-      sha256: 'abc123',
-    };
-    expect(response.kind).toBe('session.export.response');
-    expect(typeof response.data).toBe('string');
-    expect(response.byteLength).toBeGreaterThan(0);
-
-    // ── session.export.error ──────────────────────────────────────────
-    const errorEnvelope = {
-      kind: 'session.export.error' as const,
-      channelId,
-      requestId,
-      code: 'permission-denied',
-    };
-    expect(errorEnvelope.kind).toBe('session.export.error');
-
-    // ── session.export.cancel ─────────────────────────────────────────
-    const cancel = {
-      kind: 'session.export.cancel' as const,
-      channelId,
-      requestId,
-    };
-    expect(cancel.kind).toBe('session.export.cancel');
-  });
-
-  test('unknown error code from follower maps to transfer-corrupt (M-1 guard)', async () => {
-    // Reproduces the M-1 fix from task-8: an unknown error code sent
-    // by the follower must not be passed through as-is (that could leak
-    // an unvalidated string as an error code). mount.ts falls back to
-    // 'transfer-corrupt', signaling the blob should be discarded.
-    const { TranscriptExportError } = await import('@ai-ecoverse/cherry');
-
-    const VALID_EXPORT_CODES = new Set<string>([
-      'permission-denied',
-      'redaction-unavailable',
-      'session-not-found',
-      'transfer-aborted',
-      'transfer-corrupt',
-      'schema-invalid',
-      'attachment-unreadable',
-    ]);
-
-    // Simulate the guard in mount.ts handleExportError().
-    const unknownCode = 'some-unexpected-code-from-follower';
-    const resolvedCode = VALID_EXPORT_CODES.has(unknownCode) ? unknownCode : 'transfer-corrupt';
-    expect(resolvedCode).toBe('transfer-corrupt');
-
-    const err = new TranscriptExportError(resolvedCode as 'transfer-corrupt');
-    expect(err.code).toBe('transfer-corrupt');
-  });
-
-  test('AbortSignal cancellation produces a transfer-aborted error', async () => {
-    const { TranscriptExportError } = await import('@ai-ecoverse/cherry');
-
-    // Simulate a cancelled export.
-    const controller = new AbortController();
-    controller.abort();
-
-    // After abort, the pending export would be settled with transfer-aborted.
-    const err = new TranscriptExportError('transfer-aborted');
-    expect(err.code).toBe('transfer-aborted');
-    expect(controller.signal.aborted).toBe(true);
+    // ── 12. Binary attachment present with exact byte identity ────────────
+    // The seedBinaryAttachment helper injected BINARY_FIXTURE_BYTES (base64
+    // encoded) as a kind='file' MessageAttachment on the first user message.
+    // The export service reads these bytes from the IDB attachment record and
+    // copies them unchanged into attachments/. The test verifies the ZIP entry
+    // contains exactly the bytes we seeded — no corruption, no re-encoding.
+    const attachmentEntries = entryNames.filter((n) => n.startsWith('attachments/'));
+    expect(attachmentEntries.length).toBeGreaterThanOrEqual(1);
+    const attachmentBytes = entries[attachmentEntries[0]!]!;
+    expect(Array.from(attachmentBytes)).toEqual(Array.from(BINARY_FIXTURE_BYTES));
   });
 });
