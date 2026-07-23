@@ -14,14 +14,14 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { showToolUIFromContext } from '../../tools/tool-ui.js';
+import { stdinAsText } from '../just-bash-compat.js';
+import type { SprinkleManagerHandle } from '../sprinkle-manager-handle.js';
 import {
   clearSprinkleRoute,
   getAllSprinkleRoutes,
   getSprinkleRoute,
   setSprinkleRoute,
-} from '../../ui/sprinkle-bridge.js';
-import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
-import { stdinAsText } from '../just-bash-compat.js';
+} from '../sprinkle-routes.js';
 
 type Result = { stdout: string; stderr: string; exitCode: number };
 
@@ -46,9 +46,9 @@ function sprinkleHelp(): Result {
   };
 }
 
-function getSprinkleManager(): SprinkleManager | null {
+function getSprinkleManager(): SprinkleManagerHandle | null {
   const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
-  return (mgr as SprinkleManager) ?? null;
+  return (mgr as SprinkleManagerHandle) ?? null;
 }
 
 async function handleChat(args: string[], ctx: CommandContext): Promise<Result> {
@@ -70,7 +70,7 @@ async function handleChat(args: string[], ctx: CommandContext): Promise<Result> 
   return { stdout: JSON.stringify(result) + '\n', stderr: '', exitCode: 0 };
 }
 
-async function handleList(mgr: SprinkleManager): Promise<Result> {
+async function handleList(mgr: SprinkleManagerHandle): Promise<Result> {
   await mgr.refresh();
   const sprinkles = mgr.available();
   if (sprinkles.length === 0) {
@@ -84,7 +84,7 @@ async function handleList(mgr: SprinkleManager): Promise<Result> {
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
-async function handleOpen(mgr: SprinkleManager, args: string[]): Promise<Result> {
+async function handleOpen(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
   const name = args[1];
   if (!name) return { stdout: '', stderr: 'sprinkle open: name required\n', exitCode: 1 };
   try {
@@ -99,14 +99,14 @@ async function handleOpen(mgr: SprinkleManager, args: string[]): Promise<Result>
   }
 }
 
-function handleClose(mgr: SprinkleManager, args: string[]): Result {
+function handleClose(mgr: SprinkleManagerHandle, args: string[]): Result {
   const name = args[1];
   if (!name) return { stdout: '', stderr: 'sprinkle close: name required\n', exitCode: 1 };
   mgr.close(name);
   return { stdout: `Sprinkle "${name}" closed.\n`, stderr: '', exitCode: 0 };
 }
 
-async function handleReload(mgr: SprinkleManager, args: string[]): Promise<Result> {
+async function handleReload(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
   const name = args[1];
   if (!name) return { stdout: '', stderr: 'sprinkle reload: name required\n', exitCode: 1 };
   try {
@@ -121,7 +121,7 @@ async function handleReload(mgr: SprinkleManager, args: string[]): Promise<Resul
   }
 }
 
-async function handleRefresh(mgr: SprinkleManager): Promise<Result> {
+async function handleRefresh(mgr: SprinkleManagerHandle): Promise<Result> {
   await mgr.refresh();
   const count = mgr.available().length;
   return {
@@ -169,7 +169,7 @@ function handleRoute(args: string[]): Result {
   };
 }
 
-function handleSend(mgr: SprinkleManager, args: string[]): Result {
+function handleSend(mgr: SprinkleManagerHandle, args: string[]): Result {
   const name = args[1];
   if (!name) return { stdout: '', stderr: 'sprinkle send: name required\n', exitCode: 1 };
   const jsonStr = args.slice(2).join(' ');

@@ -7,6 +7,7 @@ import { createLogger } from '../core/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import type { SprinkleManagerHandle } from '../shell/sprinkle-manager-handle.js';
 import {
   type CaptureScreenResult,
   SprinkleBridge,
@@ -277,7 +278,7 @@ const WATCHER_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
  */
 const REFRESH_COOLDOWN_MS = 250;
 
-export class SprinkleManager {
+export class SprinkleManager implements SprinkleManagerHandle {
   private fs: VirtualFS;
   private bridge: SprinkleBridge;
   private callbacks: SprinkleManagerCallbacks;
