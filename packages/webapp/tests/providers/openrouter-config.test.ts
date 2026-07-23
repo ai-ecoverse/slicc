@@ -109,6 +109,18 @@ describe('OpenRouter OAuth hooks', () => {
     expect(order).toEqual(['login', 'stored', 'refresh', 'success']);
   });
 
+  it('reports OAuth success when the best-effort model refresh rejects', async () => {
+    const launcher = vi.fn();
+    const onSuccess = vi.fn();
+    mocks.loginIntercepted.mockResolvedValue(undefined);
+    mocks.fetchModels.mockRejectedValue(new Error('catalog unavailable'));
+
+    await expect(config.onOAuthLoginIntercepted!(launcher, onSuccess)).resolves.toBeUndefined();
+
+    expect(mocks.fetchModels).toHaveBeenCalledOnce();
+    expect(onSuccess).toHaveBeenCalledOnce();
+  });
+
   it('clears the stored OAuth token on logout', async () => {
     await config.onOAuthLogout!();
     expect(mocks.saveOAuthAccount).toHaveBeenCalledWith({
