@@ -3,19 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   fetchModels: vi.fn(),
-  filterModels: vi.fn((models: unknown[]) => models),
   getApiKeyForProvider: vi.fn<() => string | null>(() => 'stored-oauth-key'),
-  loadCache: vi.fn<() => unknown[]>(() => []),
-  loadFilterPatterns: vi.fn<() => string[]>(() => ['*']),
+  getCatalog: vi.fn<() => unknown[]>(() => []),
   loginIntercepted: vi.fn(),
   registerApiProvider: vi.fn(),
   saveOAuthAccount: vi.fn(),
   streamOpenAICompletions: vi.fn(),
   streamSimpleOpenAICompletions: vi.fn(),
-  toModelMetadata: vi.fn((model: { id: string; name: string }) => ({
-    ...model,
-    api: 'openai' as const,
-  })),
 }));
 
 vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => ({
@@ -38,10 +32,7 @@ vi.mock('../../src/ui/provider-settings.js', async (importOriginal) => ({
 vi.mock('../../providers/openrouter-models.js', () => ({
   config: undefined,
   fetchModels: mocks.fetchModels,
-  filterModels: mocks.filterModels,
-  loadCache: mocks.loadCache,
-  loadFilterPatterns: mocks.loadFilterPatterns,
-  toModelMetadata: mocks.toModelMetadata,
+  getCatalog: mocks.getCatalog,
 }));
 
 vi.mock('../../providers/openrouter-oauth.js', () => ({
@@ -57,10 +48,7 @@ import { registerProviders } from '../../src/providers/index.js';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiKeyForProvider.mockReturnValue('stored-oauth-key');
-  mocks.loadCache.mockReturnValue([]);
-  mocks.loadFilterPatterns.mockReturnValue(['*']);
-  mocks.filterModels.mockImplementation((models) => models);
-  mocks.toModelMetadata.mockImplementation((model) => ({ ...model, api: 'openai' }));
+  mocks.getCatalog.mockReturnValue([]);
 });
 
 describe('OpenRouter provider config', () => {
@@ -78,20 +66,14 @@ describe('OpenRouter provider config', () => {
     expect(Object.hasOwn(OPENROUTER_MODELS, config.defaultModelId!)).toBe(true);
   });
 
-  it('maps only the filtered cached catalog and stays empty before refresh', () => {
-    expect(config.getModelIds!()).toEqual([]);
-
-    const cached = [
-      { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
-      { id: 'openai/gpt-5.4', name: 'GPT-5.4' },
+  it('delegates synchronous model discovery to the catalog module', () => {
+    const catalog = [
+      { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', api: 'openai' },
     ];
-    mocks.loadCache.mockReturnValue(cached);
-    mocks.loadFilterPatterns.mockReturnValue(['anthropic/*']);
-    mocks.filterModels.mockReturnValue([cached[0]]);
+    mocks.getCatalog.mockReturnValue(catalog);
 
-    expect(config.getModelIds!()).toEqual([{ ...cached[0], api: 'openai' }]);
-    expect(mocks.filterModels).toHaveBeenLastCalledWith(cached, ['anthropic/*']);
-    expect(mocks.toModelMetadata).toHaveBeenCalledWith(cached[0]);
+    expect(config.getModelIds!()).toEqual(catalog);
+    expect(mocks.getCatalog).toHaveBeenCalledOnce();
   });
 
   it('exposes model refresh for hosted account prewarming', async () => {

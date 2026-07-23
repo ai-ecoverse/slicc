@@ -26,13 +26,7 @@ import type {
   ProviderConfig,
 } from '../src/providers/types.js';
 import { saveOAuthAccount } from '../src/ui/provider-settings.js';
-import {
-  fetchModels,
-  filterModels,
-  loadCache,
-  loadFilterPatterns,
-  toModelMetadata,
-} from './openrouter-models.js';
+import { fetchModels, getCatalog } from './openrouter-models.js';
 import { loginIntercepted } from './openrouter-oauth.js';
 
 const PROVIDER_ID = 'openrouter';
@@ -87,8 +81,7 @@ export const config: ProviderConfig = {
   isOAuth: true,
   defaultModelId: 'anthropic/claude-sonnet-4.6',
   oauthTokenDomains: ['openrouter.ai', '*.openrouter.ai'],
-  getModelIds: () =>
-    filterModels(loadCache(), loadFilterPatterns()).map((model) => toModelMetadata(model)),
+  getModelIds: getCatalog,
   refreshModels: async () => {
     await fetchModels();
   },
