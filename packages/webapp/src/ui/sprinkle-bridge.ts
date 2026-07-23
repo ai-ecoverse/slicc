@@ -27,6 +27,7 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
 export interface CaptureScreenResult {
@@ -826,22 +827,183 @@ export class SprinkleBridge {
     return value;
   }
 
+  /**
+   * Handle the `slicc.lick()` call from a sprinkle. Constructs a
+   * LickEvent and forwards it to the lick handler.
+   */
+  private createLickHandler(
+    sprinkleName: string
+  ): (event: { action: string; data?: unknown } | string) => void {
+    return (event) => {
+      const action = typeof event === 'string' ? event : event.action;
+      const data = typeof event === 'string' ? undefined : event.data;
+      const lickEvent: LickEvent = {
+        type: 'sprinkle',
+        sprinkleName,
+        targetScoop: getSprinkleRoute(sprinkleName),
+        timestamp: new Date().toISOString(),
+        body: { action, data },
+      };
+      this.lickHandler(lickEvent);
+    };
+  }
+
+  /**
+   * Capture a sprinkle DOM element or its child as a PNG data URL.
+   * Uses SVG foreignObject trick + canvas rendering to capture styled content.
+   */
+  private createScreenshotHandler(
+    container: HTMLElement | undefined
+  ): (selector?: string) => Promise<string> {
+    return async (selector) => {
+      if (!container) return '';
+      const target = selector ? container.querySelector<HTMLElement>(selector) : container;
+      if (!target) throw new Error('Element not found: ' + (selector || 'container'));
+      const rect = target.getBoundingClientRect();
+      const w = Math.ceil(rect.width);
+      const h = Math.ceil(rect.height);
+      if (w === 0 || h === 0) throw new Error('Element has zero dimensions');
+      const canvas = document.createElement('canvas');
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext('2d')!;
+      ctx.scale(dpr, dpr);
+      const clone = (target as HTMLElement).cloneNode(true) as HTMLElement;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
+      return new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = () => reject(new Error('Screenshot rendering failed'));
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      });
+    };
+  }
+
+  /**
+   * Build the `slicc.agent()` sprinkle helper that spawns a scoop and
+   * returns its final message. Wraps the `agent` shell command.
+   */
+  private createAgentHandler(
+    sprinkleName: string
+  ): (prompt: string, opts?: SprinkleAgentOptions) => Promise<SprinkleAgentResult> {
+    return async (prompt, opts) => {
+      const cwd = opts?.cwd ?? '.';
+      const allowed = opts?.allowedCommands ?? '*';
+      // Flags precede positionals — the `agent` parser treats the
+      // third positional as the prompt verbatim, so any flags must
+      // come first.
+      const parts = ['agent'];
+      if (opts?.model) parts.push('--model', shellQuote(opts.model));
+      if (opts?.thinking) parts.push('--thinking', shellQuote(opts.thinking));
+      if (opts?.readOnly) parts.push('--read-only', shellQuote(opts.readOnly));
+      parts.push(shellQuote(cwd), shellQuote(allowed), shellQuote(prompt));
+      const result = await this.runExec(parts.join(' '));
+      // `agent` writes its final message to stdout on success and the
+      // error text to stderr on failure; fold them into a single
+      // `stdout` field so the sprinkle always sees the relevant text.
+      return { stdout: result.stdout || result.stderr, exitCode: result.exitCode };
+    };
+  }
+
+  /**
+   * Build the `slicc.hid` device API object for a sprinkle.
+   */
+  private createHidApi(sprinkleName: string): SprinkleHidApi {
+    return {
+      list: () => this.hidOp(sprinkleName, 'list', []) as Promise<HidDeviceInfo[]>,
+      request: (filters?: HidDeviceFilter[]) =>
+        this.hidOp(sprinkleName, 'request', [filters ?? []]) as Promise<HidDeviceInfo[]>,
+      open: async (handle: string) => {
+        await this.hidOp(sprinkleName, 'open', [handle]);
+      },
+      close: async (handle: string) => {
+        await this.hidOp(sprinkleName, 'close', [handle]);
+      },
+      sendReport: async (handle: string, reportId: number, data: Uint8Array) => {
+        await this.hidOp(sprinkleName, 'sendReport', [handle, reportId, data]);
+      },
+      on: (event: 'inputreport', cb: SprinkleHidInputReportListener) => {
+        if (event !== 'inputreport') return;
+        const key = `${sprinkleName}:hid:inputreport`;
+        let set = this.listeners.get(key);
+        if (!set) {
+          set = new Set();
+          this.listeners.set(key, set);
+        }
+        set.add(cb as unknown as UpdateCallback);
+      },
+      off: (event: 'inputreport', cb: SprinkleHidInputReportListener) => {
+        if (event !== 'inputreport') return;
+        this.listeners
+          .get(`${sprinkleName}:hid:inputreport`)
+          ?.delete(cb as unknown as UpdateCallback);
+      },
+    };
+  }
+
+  /**
+   * Build the `slicc.serial` device API object for a sprinkle.
+   */
+  private createSerialApi(sprinkleName: string): SprinkleSerialApi {
+    return {
+      list: () => this.serialOp(sprinkleName, 'list', []) as Promise<SerialDeviceInfo[]>,
+      request: (filters?: SerialFilter[]) =>
+        this.serialOp(sprinkleName, 'request', [filters ?? []]) as Promise<SerialDeviceInfo>,
+      open: async (handle: string, options: SerialOpenOptions) => {
+        await this.serialOp(sprinkleName, 'open', [handle, options]);
+      },
+      close: async (handle: string) => {
+        await this.serialOp(sprinkleName, 'close', [handle]);
+      },
+    };
+  }
+
+  /**
+   * Build the `slicc.usb` device API object for a sprinkle.
+   */
+  private createUsbApi(sprinkleName: string): SprinkleUsbApi {
+    return {
+      list: () => this.usbOp(sprinkleName, 'list', []) as Promise<UsbDeviceInfo[]>,
+      request: (filters?: UsbDeviceFilter[]) =>
+        this.usbOp(sprinkleName, 'request', [filters ?? []]) as Promise<UsbDeviceInfo>,
+      open: async (handle: string) => {
+        await this.usbOp(sprinkleName, 'open', [handle]);
+      },
+      close: async (handle: string) => {
+        await this.usbOp(sprinkleName, 'close', [handle]);
+      },
+    };
+  }
+
+  /**
+   * Build the `slicc.http.client()` factory for a sprinkle.
+   */
+  private createHttpClient(config: SprinkleHttpClientConfig): SprinkleHttpClient {
+    const make = (method: string) => (path: string, opts?: SprinkleHttpRequestOpts) =>
+      this.jshDispatch('http', [
+        config,
+        method,
+        path,
+        opts ?? null,
+      ]) as Promise<SprinkleHttpResponse>;
+    return {
+      get: make('get'),
+      post: make('post'),
+      put: make('put'),
+      patch: make('patch'),
+      delete: make('delete'),
+    };
+  }
+
   /** Create a bridge API for a specific sprinkle. */
   createAPI(sprinkleName: string): SprinkleBridgeAPI {
     const api: SprinkleBridgeAPI = {
       name: sprinkleName,
-      lick: (event: { action: string; data?: unknown } | string) => {
-        const action = typeof event === 'string' ? event : event.action;
-        const data = typeof event === 'string' ? undefined : event.data;
-        const lickEvent: LickEvent = {
-          type: 'sprinkle',
-          sprinkleName,
-          targetScoop: getSprinkleRoute(sprinkleName),
-          timestamp: new Date().toISOString(),
-          body: { action, data },
-        };
-        this.lickHandler(lickEvent);
-      },
+      lick: this.createLickHandler(sprinkleName),
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
@@ -875,32 +1037,9 @@ export class SprinkleBridge {
       rm: async (path: string) => {
         await this.fs.rm(path);
       },
-      screenshot: async (selector?: string) => {
-        const container = api._container;
-        if (!container) return '';
-        const target = selector ? container.querySelector<HTMLElement>(selector) : container;
-        if (!target) throw new Error('Element not found: ' + (selector || 'container'));
-        const rect = target.getBoundingClientRect();
-        const w = Math.ceil(rect.width);
-        const h = Math.ceil(rect.height);
-        if (w === 0 || h === 0) throw new Error('Element has zero dimensions');
-        const canvas = document.createElement('canvas');
-        const dpr = window.devicePixelRatio || 1;
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
-        const ctx = canvas.getContext('2d')!;
-        ctx.scale(dpr, dpr);
-        const clone = (target as HTMLElement).cloneNode(true) as HTMLElement;
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
-        return new Promise<string>((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => {
-            ctx.drawImage(img, 0, 0);
-            resolve(canvas.toDataURL('image/png'));
-          };
-          img.onerror = () => reject(new Error('Screenshot rendering failed'));
-          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-        });
+      screenshot: (selector?: string) => {
+        const handler = this.createScreenshotHandler(api._container);
+        return handler(selector);
       },
       setState: (data: unknown) => {
         try {
@@ -933,22 +1072,7 @@ export class SprinkleBridge {
       fetch: (url: string, init?: SprinkleFetchInit) =>
         this.jshDispatch('fetch', [url, init ?? null]) as Promise<Response>,
       http: {
-        client: (config: SprinkleHttpClientConfig): SprinkleHttpClient => {
-          const make = (method: string) => (path: string, opts?: SprinkleHttpRequestOpts) =>
-            this.jshDispatch('http', [
-              config,
-              method,
-              path,
-              opts ?? null,
-            ]) as Promise<SprinkleHttpResponse>;
-          return {
-            get: make('get'),
-            post: make('post'),
-            put: make('put'),
-            patch: make('patch'),
-            delete: make('delete'),
-          };
-        },
+        client: (config: SprinkleHttpClientConfig) => this.createHttpClient(config),
       },
       browser: {
         findTab: (query) => this.jshDispatch('browser', ['findTab', query]),
@@ -961,58 +1085,9 @@ export class SprinkleBridge {
           this.jshDispatch('browser', ['localStorage', tab, key]) as Promise<string | null>,
         fetch: (tab, url, opts) => this.jshDispatch('browser', ['fetch', tab, url, opts ?? {}]),
       },
-      hid: {
-        list: () => this.hidOp(sprinkleName, 'list', []) as Promise<HidDeviceInfo[]>,
-        request: (filters?: HidDeviceFilter[]) =>
-          this.hidOp(sprinkleName, 'request', [filters ?? []]) as Promise<HidDeviceInfo[]>,
-        open: async (handle: string) => {
-          await this.hidOp(sprinkleName, 'open', [handle]);
-        },
-        close: async (handle: string) => {
-          await this.hidOp(sprinkleName, 'close', [handle]);
-        },
-        sendReport: async (handle: string, reportId: number, data: Uint8Array) => {
-          await this.hidOp(sprinkleName, 'sendReport', [handle, reportId, data]);
-        },
-        on: (event: 'inputreport', cb: SprinkleHidInputReportListener) => {
-          if (event !== 'inputreport') return;
-          const key = `${sprinkleName}:hid:inputreport`;
-          let set = this.listeners.get(key);
-          if (!set) {
-            set = new Set();
-            this.listeners.set(key, set);
-          }
-          set.add(cb as unknown as UpdateCallback);
-        },
-        off: (event: 'inputreport', cb: SprinkleHidInputReportListener) => {
-          if (event !== 'inputreport') return;
-          this.listeners
-            .get(`${sprinkleName}:hid:inputreport`)
-            ?.delete(cb as unknown as UpdateCallback);
-        },
-      },
-      serial: {
-        list: () => this.serialOp(sprinkleName, 'list', []) as Promise<SerialDeviceInfo[]>,
-        request: (filters?: SerialFilter[]) =>
-          this.serialOp(sprinkleName, 'request', [filters ?? []]) as Promise<SerialDeviceInfo>,
-        open: async (handle: string, options: SerialOpenOptions) => {
-          await this.serialOp(sprinkleName, 'open', [handle, options]);
-        },
-        close: async (handle: string) => {
-          await this.serialOp(sprinkleName, 'close', [handle]);
-        },
-      },
-      usb: {
-        list: () => this.usbOp(sprinkleName, 'list', []) as Promise<UsbDeviceInfo[]>,
-        request: (filters?: UsbDeviceFilter[]) =>
-          this.usbOp(sprinkleName, 'request', [filters ?? []]) as Promise<UsbDeviceInfo>,
-        open: async (handle: string) => {
-          await this.usbOp(sprinkleName, 'open', [handle]);
-        },
-        close: async (handle: string) => {
-          await this.usbOp(sprinkleName, 'close', [handle]);
-        },
-      },
+      hid: this.createHidApi(sprinkleName),
+      serial: this.createSerialApi(sprinkleName),
+      usb: this.createUsbApi(sprinkleName),
       readFileBinary: async (path: string) =>
         base64ToU8(
           ((await this.jshDispatch('readFileBinary', [path])) as { base64: string }).base64
@@ -1025,23 +1100,7 @@ export class SprinkleBridge {
       _jsh: (op: string, args: unknown[]) => this.jshDispatch(op, args),
       _device: (channel: 'hid' | 'serial' | 'usb', op: string, args: unknown[]) =>
         this.deviceOp(sprinkleName, channel, op, args),
-      agent: async (prompt: string, opts?: SprinkleAgentOptions) => {
-        const cwd = opts?.cwd ?? '.';
-        const allowed = opts?.allowedCommands ?? '*';
-        // Flags precede positionals — the `agent` parser treats the
-        // third positional as the prompt verbatim, so any flags must
-        // come first.
-        const parts = ['agent'];
-        if (opts?.model) parts.push('--model', shellQuote(opts.model));
-        if (opts?.thinking) parts.push('--thinking', shellQuote(opts.thinking));
-        if (opts?.readOnly) parts.push('--read-only', shellQuote(opts.readOnly));
-        parts.push(shellQuote(cwd), shellQuote(allowed), shellQuote(prompt));
-        const result = await this.runExec(parts.join(' '));
-        // `agent` writes its final message to stdout on success and the
-        // error text to stderr on failure; fold them into a single
-        // `stdout` field so the sprinkle always sees the relevant text.
-        return { stdout: result.stdout || result.stderr, exitCode: result.exitCode };
-      },
+      agent: this.createAgentHandler(sprinkleName),
     };
     return api;
   }
@@ -1090,49 +1149,4 @@ export class SprinkleBridge {
       this.hidSubs.delete(sprinkleName);
     }
   }
-}
-
-// ── Sprinkle → scoop routing config (localStorage-backed) ──
-
-const SPRINKLE_ROUTES_KEY = 'slicc-sprinkle-routes';
-
-function loadRoutes(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(SPRINKLE_ROUTES_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveRoutes(routes: Record<string, string>): void {
-  try {
-    localStorage.setItem(SPRINKLE_ROUTES_KEY, JSON.stringify(routes));
-  } catch {
-    /* localStorage full */
-  }
-}
-
-/** Get the target scoop for a sprinkle, or undefined (→ cone). */
-export function getSprinkleRoute(sprinkleName: string): string | undefined {
-  return loadRoutes()[sprinkleName];
-}
-
-/** Set the target scoop for a sprinkle's lick events. */
-export function setSprinkleRoute(sprinkleName: string, scoop: string): void {
-  const routes = loadRoutes();
-  routes[sprinkleName] = scoop;
-  saveRoutes(routes);
-}
-
-/** Clear the target scoop for a sprinkle (reverts to cone). */
-export function clearSprinkleRoute(sprinkleName: string): void {
-  const routes = loadRoutes();
-  delete routes[sprinkleName];
-  saveRoutes(routes);
-}
-
-/** Get all sprinkle → scoop routes. */
-export function getAllSprinkleRoutes(): Record<string, string> {
-  return loadRoutes();
 }
