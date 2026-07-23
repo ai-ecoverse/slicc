@@ -817,3 +817,190 @@ describe('registerTranscriptExportService / getTranscriptExportService', () => {
     expect(() => getTranscriptExportService()).toThrow(TranscriptExportError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P0/P1 Integration: vfsReader wired in production call sites (Fix 1)
+// ---------------------------------------------------------------------------
+
+describe('DefaultTranscriptExportService — vfsReader wired for VFS path attachments', () => {
+  /** Build a VFS that returns specific file bytes for a known path. */
+  function makeVfsWithFile(filePath: string, fileBytes: Uint8Array) {
+    return {
+      readFile: vi.fn(async (path: string, opts?: { encoding?: string }) => {
+        if (path === '/sessions/index.json') return '[]';
+        if (path === filePath) {
+          // encoding:'binary' → return Uint8Array
+          if (opts?.encoding === 'binary') return fileBytes;
+          return new TextDecoder().decode(fileBytes);
+        }
+        const err = Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+        throw err;
+      }),
+      readDir: vi.fn(async () => []),
+    };
+  }
+
+  /**
+   * Build collection deps where the cone has one Pi user message and the
+   * corresponding UI session (id='session-cone') has a path-only file attachment.
+   * Both must be wired because Phase 2 matches normalized user messages to UI
+   * user messages by ordinal — normalized messages come from Pi agent messages.
+   */
+  function makeCollectionWithPathAttachment(filePath: string): TranscriptCollectionDeps {
+    const base = makeCollectionDeps();
+    // Provide one Pi user message so the normalizer produces a user message.
+    (base.getAgentMessages as ReturnType<typeof vi.fn>).mockImplementation(() => [
+      { role: 'user', content: 'see attached', timestamp: 1_000 } as any,
+    ]);
+    // UI session for the cone (uiSessionId returns 'session-cone' for isCone=true).
+    (base.loadUiChatSessions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 'session-cone',
+        messages: [
+          {
+            id: 'msg-path-1',
+            role: 'user' as const,
+            content: 'see attached',
+            timestamp: 1_000,
+            attachments: [
+              {
+                id: 'att-path-1',
+                name: 'report.zip',
+                mimeType: 'application/zip',
+                size: 4,
+                kind: 'file' as const,
+                path: filePath,
+                // no data field — path-only
+              },
+            ],
+          },
+        ],
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ] as any);
+    return base;
+  }
+
+  it('buildActiveSnapshot resolves path-only file attachment via vfs.readFile', async () => {
+    const filePath = '/tmp/report.zip';
+    const fileBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]); // ZIP magic
+
+    const vfs = makeVfsWithFile(filePath, fileBytes);
+    const collection = makeCollectionWithPathAttachment(filePath);
+    const deps = makeDeps({ vfs: vfs as any, collection });
+    const svc = new DefaultTranscriptExportService(deps);
+
+    const result = await svc.export({ kind: 'active' });
+    const archive = await collectChunks(result.chunks);
+    const files = unzipSync(archive);
+
+    // Verify the attachment file is present in the ZIP.
+    const attKey = Object.keys(files).find((k) => k.startsWith('attachments/'));
+    expect(attKey).toBeDefined();
+    expect(Array.from(files[attKey!]!)).toEqual(Array.from(fileBytes));
+
+    // Verify vfs.readFile was called for the attachment path.
+    const calls = (vfs.readFile as ReturnType<typeof vi.fn>).mock.calls;
+    const binaryCall = calls.find(
+      (c: unknown[]) =>
+        c[0] === filePath && (c[1] as { encoding?: string } | undefined)?.encoding === 'binary'
+    );
+    expect(binaryCall).toBeDefined();
+
+    // Verify attachment metadata is present and correct.
+    const doc = JSON.parse(strFromU8(files['transcript.json']!));
+    const att = doc.attachments.find((a: { path: string }) => a.path?.startsWith('attachments/'));
+    expect(att).toBeDefined();
+    expect(att.present).toBe(true);
+    expect(att.byteLength).toBe(fileBytes.length);
+  });
+
+  it('captureFrozen resolves path-only file attachment via vfs.readFile', async () => {
+    const filePath = '/tmp/frozen-report.zip';
+    const fileBytes = new Uint8Array([0x50, 0x4b, 0x05, 0x06]); // ZIP end-of-central-dir
+
+    const vfs = makeVfsWithFile(filePath, fileBytes);
+    const collection = makeCollectionWithPathAttachment(filePath);
+    const snapshotStore = makeEmptySnapshotStore();
+    const deps = makeDeps({ vfs: vfs as any, collection, snapshotStore });
+    const svc = new DefaultTranscriptExportService(deps);
+
+    await svc.captureFrozen({
+      sessionId: 'sess-frozen-vfs',
+      title: 'VFS Frozen',
+      frozenAt: '2024-06-01T12:00:00.000Z',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+
+    // Snapshot must have been written with the attachment bytes.
+    expect(snapshotStore.write).toHaveBeenCalledOnce();
+    const [, snapshot] = (snapshotStore.write as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const attPath = [...snapshot.attachments.keys()].find((k: string) =>
+      k.startsWith('attachments/')
+    );
+    expect(attPath).toBeDefined();
+    expect(Array.from(snapshot.attachments.get(attPath)!)).toEqual(Array.from(fileBytes));
+
+    // Attachment metadata present and valid.
+    const att = snapshot.document.attachments.find((a: { path: string }) =>
+      a.path?.startsWith('attachments/')
+    );
+    expect(att).toBeDefined();
+    expect(att.present).toBe(true);
+    expect(att.byteLength).toBe(fileBytes.length);
+  });
+
+  it('export produces partial when vfs.readFile throws for path-only attachment', async () => {
+    const filePath = '/tmp/missing.zip';
+    const vfs = makeVfs(); // no file registered — readFile throws ENOENT
+
+    const base = makeCollectionDeps();
+    // Provide Pi user message so normalizer creates a user message for Phase 2 to match.
+    (base.getAgentMessages as ReturnType<typeof vi.fn>).mockImplementation(() => [
+      { role: 'user', content: 'see attached', timestamp: 1_000 } as any,
+    ]);
+    (base.loadUiChatSessions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 'session-cone',
+        messages: [
+          {
+            id: 'msg-m',
+            role: 'user' as const,
+            content: 'see attached',
+            timestamp: 1_000,
+            attachments: [
+              {
+                id: 'att-m',
+                name: 'missing.zip',
+                mimeType: 'application/zip',
+                size: 0,
+                kind: 'file' as const,
+                path: filePath,
+              },
+            ],
+          },
+        ],
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ] as any);
+
+    const deps = makeDeps({ vfs: vfs as any, collection: base });
+    const svc = new DefaultTranscriptExportService(deps);
+    const result = await svc.export({ kind: 'active' });
+    const archive = await collectChunks(result.chunks);
+    const files = unzipSync(archive);
+    const doc = JSON.parse(strFromU8(files['transcript.json']!));
+
+    // Document must be partial with attachment-file-missing.
+    expect(doc.session.completeness.status).toBe('partial');
+    expect(doc.session.completeness.missing).toContain('attachment-file-missing');
+    // Attachment metadata exists with present:false.
+    const att = doc.attachments[0];
+    expect(att).toBeDefined();
+    expect(att.present).toBe(false);
+    expect(att.missingReason).toBe('attachment-file-missing');
+  });
+});

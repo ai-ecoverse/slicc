@@ -298,6 +298,7 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       chatMessagesByConversation: collected.chatMessagesByConversation,
       knownSecrets: this.deps.knownSecrets,
       canonicalImages: normalized.canonicalImages,
+      vfsReader: (path) => this.readBinaryFromVfs(path),
       signal,
     });
 
@@ -334,6 +335,7 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       chatMessagesByConversation: collected.chatMessagesByConversation,
       knownSecrets: this.deps.knownSecrets,
       canonicalImages: normalized.canonicalImages,
+      vfsReader: (path) => this.readBinaryFromVfs(path),
       signal,
     });
   }
@@ -498,7 +500,26 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
       document,
       chatMessagesByConversation,
       knownSecrets: this.deps.knownSecrets,
+      vfsReader: (path) => this.readBinaryFromVfs(path),
       signal,
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — VFS binary reader with runtime Uint8Array validation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read a file from the VFS as raw bytes.
+   * `readFile` with `encoding: 'binary'` always returns `Uint8Array` at runtime,
+   * but the type signature is `string | Uint8Array`.  The runtime check ensures
+   * we never silently pass a string into binary attachment processing.
+   */
+  private async readBinaryFromVfs(path: string): Promise<Uint8Array> {
+    const raw = await this.deps.vfs.readFile(path, { encoding: 'binary' });
+    if (!(raw instanceof Uint8Array)) {
+      throw new TranscriptExportError('attachment-unreadable');
+    }
+    return raw;
   }
 }
