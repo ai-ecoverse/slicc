@@ -108,6 +108,7 @@
 ### Task 1: Public Transcript Contract and JSON Schema
 
 **Files:**
+
 - Create: **packages/shared-ts/src/transcript-export.ts**
 - Create: **packages/shared-ts/tests/transcript-export.test.ts**
 - Create: **docs/schemas/slicc-transcript-v1.schema.json**
@@ -116,6 +117,7 @@
 - Modify: `packages/shared-ts/src/index.ts`
 
 **Interfaces:**
+
 - Produces: `TranscriptDocumentV1`, `TranscriptConversation`, `TranscriptMessage`, `TranscriptContentBlock`, `TranscriptAttachment`, `TranscriptDelegation`, `TranscriptRedaction`, `TranscriptExportErrorCode`, `TranscriptExportProgress`, `validateTranscriptDocumentV1(value)`.
 - Consumed by: every later task.
 
@@ -296,9 +298,7 @@ export interface TranscriptRedaction {
   id: string;
   category: string;
   detector: 'known-secret' | 'credential-pattern' | 'pre-obfuscated';
-  target:
-    | { kind: 'json'; pointer: string }
-    | { kind: 'attachment'; attachmentId: string };
+  target: { kind: 'json'; pointer: string } | { kind: 'attachment'; attachmentId: string };
 }
 
 export interface TranscriptExportProgress {
@@ -418,11 +418,13 @@ git commit -m "feat(shared-ts): define transcript export schema"
 ### Task 2: Pure Canonical Message Normalizer
 
 **Files:**
+
 - Create: **packages/webapp/src/transcript/normalize.ts**
 - Create: **packages/webapp/tests/transcript/fixtures.ts**
 - Create: **packages/webapp/tests/transcript/normalize.test.ts**
 
 **Interfaces:**
+
 - Consumes: `TranscriptDocumentV1` message/conversation types from Task 1 and Pi `AgentMessage[]`.
 - Produces:
 
@@ -500,9 +502,7 @@ const messages: AgentMessage[] = [
 ];
 
 it('preserves ordered public content and excludes reasoning', () => {
-  const result = normalizeConversations([
-    { id: 'cone', kind: 'cone', name: 'Sliccy', messages },
-  ]);
+  const result = normalizeConversations([{ id: 'cone', kind: 'cone', name: 'Sliccy', messages }]);
   expect(result.excludedReasoningBlocks).toBe(1);
   expect(JSON.stringify(result)).not.toContain('private chain');
   expect(result.conversations[0].messages[1].content).toEqual([
@@ -547,9 +547,7 @@ export function normalizeConversations(
       kind: source.kind,
       name: source.name,
       ...(source.folder ? { folder: source.folder } : {}),
-      ...(source.parentConversationId
-        ? { parentConversationId: source.parentConversationId }
-        : {}),
+      ...(source.parentConversationId ? { parentConversationId: source.parentConversationId } : {}),
       messages,
     } satisfies TranscriptConversation;
   });
@@ -586,6 +584,7 @@ git commit -m "feat(webapp): normalize canonical transcript messages"
 ### Task 3: Credential Pattern Redactor and JSON Walker
 
 **Files:**
+
 - Create: **packages/shared-ts/src/transcript-redaction.ts**
 - Create: **packages/shared-ts/tests/transcript-redaction.test.ts**
 - Modify: `packages/shared-ts/src/index.ts`
@@ -593,6 +592,7 @@ git commit -m "feat(webapp): normalize canonical transcript messages"
 - Create: **packages/webapp/tests/transcript/redact.test.ts**
 
 **Interfaces:**
+
 - Produces:
 
 ```typescript
@@ -672,12 +672,7 @@ Expected: FAIL because scanner and walker modules do not exist.
 Export:
 
 ```typescript
-export type CredentialCategory =
-  | 'api-key'
-  | 'bearer-token'
-  | 'jwt'
-  | 'private-key'
-  | 'password';
+export type CredentialCategory = 'api-key' | 'bearer-token' | 'jwt' | 'private-key' | 'password';
 
 export interface PatternRedactionResult {
   text: string;
@@ -735,6 +730,7 @@ git commit -m "feat: redact transcript credential patterns"
 ### Task 4: Fail-Closed Known-Secret Batch Redaction Across Floats
 
 **Files:**
+
 - Modify: `packages/shared-ts/src/secrets-pipeline.ts`
 - Modify: `packages/shared-ts/tests/secrets-pipeline.test.ts`
 - Create: **packages/webapp/src/transcript/strict-secret-client.ts**
@@ -749,6 +745,7 @@ git commit -m "feat: redact transcript credential patterns"
 - Modify: `packages/swift-server/Tests/SecretAPIRoutesTests.swift`
 
 **Interfaces:**
+
 - Consumes: `KnownSecretBatchRedactor` from Task 3.
 - Produces: `getStrictKnownSecretRedactor(): KnownSecretBatchRedactor` and trusted-realm
   `redactForExport(texts)` methods/endpoints.
@@ -880,6 +877,7 @@ git commit -m "feat: add fail-closed transcript secret redaction"
 ### Task 5: Active Collection, Attachments, and Frozen Snapshot Storage
 
 **Files:**
+
 - Modify: `packages/webapp/src/core/session.ts`
 - Modify: `packages/webapp/src/scoops/types.ts`
 - Modify: `packages/webapp/src/scoops/agent-bridge.ts`
@@ -895,6 +893,7 @@ git commit -m "feat: add fail-closed transcript secret redaction"
 - Modify: `packages/webapp/tests/ui/new-session.test.ts`
 
 **Interfaces:**
+
 - Consumes: normalizer and redactor from Tasks 2–4.
 - Produces:
 
@@ -1002,9 +1001,10 @@ verifies timestamp/content when available, and marks the export partial with
 Attachment processing uses these exact decisions:
 
 ```typescript
-export function attachmentHandling(mimeType: string, name: string):
-  | 'text-redacted'
-  | 'binary-unchanged' {
+export function attachmentHandling(
+  mimeType: string,
+  name: string
+): 'text-redacted' | 'binary-unchanged' {
   const textMime = mimeType.startsWith('text/') || mimeType === 'application/json';
   const textName = /\.(?:txt|md|json|csv|xml|ya?ml|js|mjs|cjs|ts|tsx|css|html)$/i.test(name);
   return textMime || textName ? 'text-redacted' : 'binary-unchanged';
@@ -1067,6 +1067,7 @@ git commit -m "feat(webapp): capture complete transcript snapshots"
 ### Task 6: Streaming ZIP Packager and Export Service
 
 **Files:**
+
 - Create: **packages/webapp/src/transcript/zip-stream.ts**
 - Create: **packages/webapp/src/transcript/export-service.ts**
 - Create: **packages/webapp/src/transcript/export-provider.ts**
@@ -1074,13 +1075,12 @@ git commit -m "feat(webapp): capture complete transcript snapshots"
 - Create: **packages/webapp/tests/transcript/export-service.test.ts**
 
 **Interfaces:**
+
 - Consumes: collector, redactor, attachment processor, snapshot store, and public validator.
 - Produces:
 
 ```typescript
-export type TranscriptSessionSelector =
-  | { kind: 'active' }
-  | { kind: 'frozen'; sessionId: string };
+export type TranscriptSessionSelector = { kind: 'active' } | { kind: 'frozen'; sessionId: string };
 
 export interface TranscriptZipResult {
   filename: string;
@@ -1236,6 +1236,7 @@ git commit -m "feat(webapp): stream transcript export bundles"
 ### Task 7: Shell Command, Freeze Hook, and Local UI Download
 
 **Files:**
+
 - Create: **packages/webapp/src/shell/supplemental-commands/session-command.ts**
 - Create: **packages/webapp/tests/shell/supplemental-commands/session-command.test.ts**
 - Modify: `packages/webapp/src/shell/supplemental-commands/index.ts`
@@ -1246,6 +1247,7 @@ git commit -m "feat(webapp): stream transcript export bundles"
 - Modify: `packages/webapp/src/ui/new-session.ts`
 
 **Interfaces:**
+
 - Consumes: `getTranscriptExportService()` and `TranscriptZipResult`.
 - Produces: `session export` and local **Export transcript** action.
 
@@ -1374,6 +1376,7 @@ git commit -m "feat(webapp): expose local transcript export"
 ### Task 8: Leader Approval and Tray Chunk Transfer
 
 **Files:**
+
 - Modify: `packages/shared-ts/src/tray-sync-protocol.ts`
 - Modify: `packages/webapp/src/scoops/tray-sync-protocol-corpus.ts`
 - Modify: `packages/webapp/src/scoops/tray-leader-sync.ts`
@@ -1388,6 +1391,7 @@ git commit -m "feat(webapp): expose local transcript export"
 - Modify: `packages/ios-app/SliccFollower/Tests/SliccFollowerTests/SyncProtocolTests.swift`
 
 **Interfaces:**
+
 - Consumes: transcript export service and Blob helper.
 - Produces: tray request/approval/progress/chunk/cancel/complete protocol.
 
@@ -1511,6 +1515,7 @@ git commit -m "feat: transfer approved transcript exports to followers"
 ### Task 9: Cherry Host Export API and Mirrored Protocol
 
 **Files:**
+
 - Modify: `packages/cherry/src/index.ts`
 - Modify: `packages/cherry/src/mount.ts`
 - Modify: `packages/cherry/src/protocol.ts`
@@ -1520,6 +1525,7 @@ git commit -m "feat: transfer approved transcript exports to followers"
 - Modify: `packages/webapp/tests/cdp/cherry-host-protocol.test.ts`
 
 **Interfaces:**
+
 - Consumes: verified follower Blob and progress from Task 8.
 - Produces:
 
@@ -1598,11 +1604,14 @@ both files. Blob is allowed only on `session.export.response`; all other payload
 Maintain:
 
 ```typescript
-const pendingExports = new Map<string, {
-  resolve: (blob: Blob) => void;
-  reject: (error: TranscriptExportError) => void;
-  onProgress?: (progress: TranscriptExportProgress) => void;
-}>();
+const pendingExports = new Map<
+  string,
+  {
+    resolve: (blob: Blob) => void;
+    reject: (error: TranscriptExportError) => void;
+    onProgress?: (progress: TranscriptExportProgress) => void;
+  }
+>();
 ```
 
 Require completed handshake before posting. Generate request IDs with `crypto.randomUUID()`. Attach
@@ -1644,6 +1653,7 @@ git commit -m "feat(cherry): request approved transcript exports"
 ### Task 10: Documentation, Security Regression, and Full Verification
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `packages/webapp/CLAUDE.md`
 - Modify: `packages/cherry/CLAUDE.md`
@@ -1662,6 +1672,7 @@ git commit -m "feat(cherry): request approved transcript exports"
 - Create: **packages/webapp/tests/e2e/fake-llm/fixtures/transcript-export.json**
 
 **Interfaces:**
+
 - Consumes: completed feature.
 - Produces: public documentation, agent command knowledge, cross-runtime review guidance, final evidence.
 

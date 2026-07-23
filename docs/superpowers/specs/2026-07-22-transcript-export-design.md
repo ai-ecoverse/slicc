@@ -330,7 +330,7 @@ The host-side primitive is:
 
 ```ts
 interface ExportSessionOptions {
-  sessionId?: "active" | string;
+  sessionId?: 'active' | string;
   signal?: AbortSignal;
   onProgress?: (progress: TranscriptExportProgress) => void;
 }

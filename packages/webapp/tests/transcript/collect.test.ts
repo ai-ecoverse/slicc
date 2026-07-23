@@ -48,9 +48,7 @@ const scoop: RegisteredScoop = {
   addedAt: '2024-01-01T00:00:00.000Z',
 };
 
-const coneMessages: readonly AgentMessage[] = [
-  { role: 'user', content: 'hello', timestamp: 1000 },
-];
+const coneMessages: readonly AgentMessage[] = [{ role: 'user', content: 'hello', timestamp: 1000 }];
 
 const scoopMessages: readonly AgentMessage[] = [
   { role: 'user', content: 'scoop task', timestamp: 2000 },
@@ -190,7 +188,7 @@ describe('collectActiveTranscriptSources — source assembly', () => {
     const result = await collectActiveTranscriptSources({
       listScoops: () => [cone],
       isProcessing: () => false,
-      getAgentMessages: () => coneMessages,  // live
+      getAgentMessages: () => coneMessages, // live
       loadPersistedSessions: async () => [persisted],
       loadUiChatSessions: async () => [],
       wait: noop,
@@ -212,7 +210,7 @@ describe('collectActiveTranscriptSources — source assembly', () => {
     const result = await collectActiveTranscriptSources({
       listScoops: () => [cone],
       isProcessing: () => false,
-      getAgentMessages: () => null,  // no live messages
+      getAgentMessages: () => null, // no live messages
       loadPersistedSessions: async () => [persisted],
       loadUiChatSessions: async () => [],
       wait: noop,
@@ -271,7 +269,7 @@ describe('collectActiveTranscriptSources — source assembly', () => {
       isProcessing: () => false,
       getAgentMessages: () => coneMessages,
       loadPersistedSessions: async () => [],
-      loadUiChatSessions: async () => [],  // no UI sessions
+      loadUiChatSessions: async () => [], // no UI sessions
       wait: noop,
     });
     expect(result.chatMessagesByConversation.has(cone.jid)).toBe(false);

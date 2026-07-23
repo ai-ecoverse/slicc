@@ -47,10 +47,7 @@ export const BRIDGE_WS_URL = `ws://localhost:${BRIDGE_PORT}/cdp`;
  *  Short-name form: `FAKE_LLM_FIXTURE=transcript-export` expands to
  *  `packages/webapp/tests/e2e/fake-llm/fixtures/transcript-export.json`
  *  so callers do not need to type the full path. */
-const FIXTURES_DIR = resolve(
-  repoRoot,
-  'packages/webapp/tests/e2e/fake-llm/fixtures'
-);
+const FIXTURES_DIR = resolve(repoRoot, 'packages/webapp/tests/e2e/fake-llm/fixtures');
 const DEFAULT_FAKE_LLM_FIXTURE = resolve(FIXTURES_DIR, 'reference-scenario.json');
 
 /** Resolve FAKE_LLM_FIXTURE to an absolute path.
