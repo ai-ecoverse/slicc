@@ -7,10 +7,23 @@ import {
   isCherryEnvelope,
   isCherryVersionMismatch,
 } from './protocol.js';
+import {
+  type ExportSessionOptions,
+  TranscriptExportError,
+  type TranscriptExportProgress,
+} from './transcript-types.js';
 
 interface CdpResponseShape {
   result?: Record<string, unknown>;
   error?: { code: number; message: string };
+}
+
+interface PendingExport {
+  resolve: (blob: Blob) => void;
+  reject: (error: TranscriptExportError) => void;
+  onProgress?: (progress: TranscriptExportProgress) => void;
+  onAbort: () => void;
+  signal?: AbortSignal;
 }
 
 export interface CherrySliccHandle extends SliccHandle {
@@ -40,8 +53,6 @@ function buildWelcomeEnvelope(
     showTimestamps: true,
     ...options.features,
   };
-  // JSON.stringify can throw on cyclic/non-serializable theme objects — a
-  // malformed theme must not take down the whole handshake.
   let themeJson: string | undefined;
   if (options.theme) {
     try {
@@ -61,23 +72,141 @@ function buildWelcomeEnvelope(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Export lifecycle helpers (module-level; take pendingExports as parameter)
+// ---------------------------------------------------------------------------
+
+function settlePending(
+  pending: Map<string, PendingExport>,
+  requestId: string,
+  outcome: { resolve: Blob } | { reject: TranscriptExportError }
+): void {
+  const entry = pending.get(requestId);
+  if (!entry) return;
+  entry.signal?.removeEventListener('abort', entry.onAbort);
+  pending.delete(requestId);
+  if ('resolve' in outcome) entry.resolve(outcome.resolve);
+  else entry.reject(outcome.reject);
+}
+
+function rejectAllPending(
+  pending: Map<string, PendingExport>,
+  code: TranscriptExportError['code']
+): void {
+  for (const [id, entry] of pending) {
+    entry.signal?.removeEventListener('abort', entry.onAbort);
+    entry.reject(new TranscriptExportError(code));
+    pending.delete(id);
+  }
+}
+
+function handleExportProgress(
+  pending: Map<string, PendingExport>,
+  env: Extract<CherryEnvelope, { kind: 'session.export.progress' }>
+): void {
+  pending.get(env.requestId)?.onProgress?.({
+    phase: env.phase,
+    processedBytes: env.processedBytes,
+    estimatedBytes: env.estimatedBytes,
+  });
+}
+
+function handleExportResponse(
+  pending: Map<string, PendingExport>,
+  env: Extract<CherryEnvelope, { kind: 'session.export.response' }>
+): void {
+  if (!(env.blob instanceof Blob) || env.blob.type !== 'application/zip') {
+    settlePending(pending, env.requestId, {
+      reject: new TranscriptExportError('transfer-corrupt'),
+    });
+    return;
+  }
+  settlePending(pending, env.requestId, { resolve: env.blob });
+}
+
+function handleExportError(
+  pending: Map<string, PendingExport>,
+  env: Extract<CherryEnvelope, { kind: 'session.export.error' }>
+): void {
+  settlePending(pending, env.requestId, {
+    reject: new TranscriptExportError(env.code as TranscriptExportError['code']),
+  });
+}
+
+async function dispatchCdp(
+  env: Extract<CherryEnvelope, { kind: 'cdp.request' }>,
+  hostHandler: ReturnType<typeof createCdpHostHandler>,
+  onPermissionRequest?: (domain: string) => boolean | Promise<boolean>
+): Promise<CdpResponseShape> {
+  const domain = env.method.split('.')[0] ?? env.method;
+  try {
+    const granted = onPermissionRequest ? await onPermissionRequest(domain) : true;
+    if (!granted) {
+      return { error: { code: -32601, message: `Cherry: permission denied for ${domain}` } };
+    }
+    return { result: await hostHandler(env.method, env.params ?? {}) };
+  } catch (err) {
+    if (err instanceof CherryUnsupportedError)
+      return { error: { code: err.code, message: err.message } };
+    return { error: { code: -32000, message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export session factory — captures post + channelId reference via getter
+// ---------------------------------------------------------------------------
+
+function buildExportSession(
+  pending: Map<string, PendingExport>,
+  post: (env: CherryEnvelope) => void,
+  getChannelId: () => string | null
+): (opts?: ExportSessionOptions) => Promise<Blob> {
+  return function exportSession(opts?) {
+    const channelId = getChannelId();
+    if (channelId === null) return Promise.reject(new TranscriptExportError('transfer-aborted'));
+    const signal = opts?.signal;
+    if (signal?.aborted) return Promise.reject(new TranscriptExportError('transfer-aborted'));
+    const requestId = crypto.randomUUID();
+    return new Promise<Blob>((resolve, reject) => {
+      const onAbort = () => {
+        if (!pending.has(requestId)) return;
+        pending.delete(requestId);
+        post({
+          cherry: CHERRY_PROTOCOL_VERSION,
+          channelId,
+          kind: 'session.export.cancel',
+          requestId,
+        });
+        reject(new TranscriptExportError('transfer-aborted'));
+      };
+      pending.set(requestId, { resolve, reject, onProgress: opts?.onProgress, onAbort, signal });
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const env: Extract<CherryEnvelope, { kind: 'session.export.request' }> = {
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId,
+        kind: 'session.export.request',
+        requestId,
+      };
+      if (opts?.sessionId !== undefined) (env as { sessionId?: string }).sessionId = opts.sessionId;
+      post(env);
+    });
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Mount
+// ---------------------------------------------------------------------------
+
 export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandle {
   const sdkCreatedIframe = !options.iframe;
   const iframe = options.iframe ?? document.createElement('iframe');
   const src = new URL(options.sliccOrigin);
-  // Normalize to the bare origin (drops any trailing slash / path / query the
-  // caller passed in `sliccOrigin`, e.g. "http://localhost:8787/"). This must
-  // match `MessageEvent.origin` on inbound postMessages, which browsers NEVER
-  // report with a trailing slash — using the raw string here made the
-  // `acceptEnvelope` allowlist check fail silently on a trailing slash,
-  // surfacing only as an opaque 30s handshake timeout.
+  // Normalize to bare origin — MessageEvent.origin never carries a trailing slash.
   const sliccOrigin = src.origin;
   src.searchParams.set('cherry', '1');
-  if (options.uiOnly) src.searchParams.set('ui-only', '1'); // appended AFTER cherry=1
+  if (options.uiOnly) src.searchParams.set('ui-only', '1');
   iframe.src = src.toString();
   if (sdkCreatedIframe) {
-    // Only style + append an iframe the SDK created; a caller-provided iframe is
-    // placed and sized by the caller (e.g. the spoon launcher's shadow DOM).
     iframe.style.border = '0';
     iframe.style.width = '100%';
     iframe.style.height = '100%';
@@ -85,11 +214,11 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
   }
 
   let channelId: string | null = null;
+  const pending = new Map<string, PendingExport>();
   const hostHandler = createCdpHostHandler({
     capabilities: options.capabilities,
     onOpenUrl: options.hooks?.onOpenUrl,
   });
-
   const post = (env: CherryEnvelope) => {
     if (options.__test_post) {
       options.__test_post(env);
@@ -97,40 +226,19 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     }
     iframe.contentWindow?.postMessage(env, sliccOrigin);
   };
-
-  const dispatchCdp = async (
-    env: Extract<CherryEnvelope, { kind: 'cdp.request' }>
-  ): Promise<CdpResponseShape> => {
-    const domain = env.method.split('.')[0] ?? env.method;
-    try {
-      const granted = options.hooks?.onPermissionRequest
-        ? await options.hooks.onPermissionRequest(domain)
-        : true;
-      if (!granted) {
-        return { error: { code: -32601, message: `Cherry: permission denied for ${domain}` } };
-      }
-      const result = await hostHandler(env.method, env.params ?? {});
-      return { result };
-    } catch (err) {
-      if (err instanceof CherryUnsupportedError) {
-        return { error: { code: err.code, message: err.message } };
-      }
-      return {
-        error: { code: -32000, message: err instanceof Error ? err.message : String(err) },
-      };
-    }
-  };
+  const exportSession = buildExportSession(pending, post, () => channelId);
 
   const handleEnvelope = async (env: CherryEnvelope): Promise<CdpResponseShape | undefined> => {
     switch (env.kind) {
       case 'handshake.hello': {
+        rejectAllPending(pending, 'transfer-aborted');
         channelId = env.channelId;
         post(buildWelcomeEnvelope(channelId, options));
         options.hooks?.onHandshakeComplete?.();
         return undefined;
       }
       case 'cdp.request': {
-        const resp = await dispatchCdp(env);
+        const resp = await dispatchCdp(env, hostHandler, options.hooks?.onPermissionRequest);
         post({
           cherry: CHERRY_PROTOCOL_VERSION,
           channelId: channelId!,
@@ -148,46 +256,31 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         }
         return undefined;
       }
+      case 'session.export.progress':
+        handleExportProgress(pending, env);
+        return undefined;
+      case 'session.export.response':
+        handleExportResponse(pending, env);
+        return undefined;
+      case 'session.export.error':
+        handleExportError(pending, env);
+        return undefined;
       default:
         return undefined;
     }
   };
 
-  /** True when the message passes origin + source (factors 1-2) of the gate. */
-  const passesTrustFactors = (event: MessageEvent): boolean =>
-    [sliccOrigin].includes(event.origin) && event.source === iframe.contentWindow;
-
-  /**
-   * Detect a re-hello: a well-formed handshake.hello from a trusted peer
-   * (origin + source match) carrying a channelId that differs from the pinned
-   * one. This happens when the iframe reloads (host-page re-render, follower
-   * stale-chunk recovery, crashed renderer restore) — the new page boots a
-   * fresh CherryHostTransport and mints a new channelId.
-   *
-   * Security: a re-hello from the same origin + WindowProxy is equivalent in
-   * power to the initial hello — the trust basis is identical (the browser
-   * guarantees WindowProxy identity across same-origin navigations). Accepting
-   * it does NOT weaken factors 1-2; it only relaxes factor 3 for this specific
-   * envelope kind so the re-pin code in handleEnvelope is reachable.
-   */
-  const isReHello = (event: MessageEvent): boolean =>
+  const passesTrust = (ev: MessageEvent) =>
+    ev.origin === sliccOrigin && ev.source === iframe.contentWindow;
+  const isReHello = (ev: MessageEvent) =>
     channelId !== null &&
-    passesTrustFactors(event) &&
-    isCherryEnvelope(event.data) &&
-    event.data.kind === 'handshake.hello' &&
-    event.data.channelId !== channelId;
-
-  // Shared catch handler for handleEnvelope rejections. handleEnvelope already
-  // converts cdp.request failures into a posted cdp.response.error. A reject
-  // here means a handshake/event handler threw unexpectedly — log so it doesn't
-  // vanish as a silent 30s leader timeout.
-  const onEnvelopeError = (err: unknown) => {
-    console.error('[cherry] envelope handling failed', err);
-  };
+    passesTrust(ev) &&
+    isCherryEnvelope(ev.data) &&
+    ev.data.kind === 'handshake.hello' &&
+    ev.data.channelId !== channelId;
+  const onEnvelopeError = (err: unknown) => console.error('[cherry] envelope handling failed', err);
 
   const onMessage = (event: MessageEvent) => {
-    // Accept a re-hello from a reloaded iframe before the standard gate —
-    // the standard gate would reject it because channelId changed.
     if (isReHello(event)) {
       console.info('[cherry] re-hello from reloaded iframe — re-handshaking', {
         oldChannelId: channelId,
@@ -196,7 +289,6 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
       void handleEnvelope(event.data as CherryEnvelope).catch(onEnvelopeError);
       return;
     }
-
     if (
       !acceptEnvelope(event, {
         allowOrigins: [sliccOrigin],
@@ -204,19 +296,12 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         channelId,
       })
     ) {
-      // A version-skewed follower fails `isCherryEnvelope` itself — without
-      // this distinct log the skew is indistinguishable from the 30s timeout.
       if (isCherryVersionMismatch(event.data)) {
         console.warn('[cherry] protocol version mismatch — update the older side', {
           peerVersion: event.data.cherry,
           ourVersion: CHERRY_PROTOCOL_VERSION,
-          origin: event.origin,
         });
       } else if (isCherryEnvelope(event.data)) {
-        // A well-formed cherry envelope that still fails the gate is almost
-        // always a misconfiguration (wrong sliccOrigin, source/channel mismatch).
-        // Surface it — otherwise it manifests downstream as an opaque 30s
-        // handshake/CDP timeout. Non-cherry postMessage noise stays silent.
         console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
           origin: event.origin,
           expectedOrigin: sliccOrigin,
@@ -235,17 +320,13 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         console.warn('[cherry] emitHostEvent dropped before handshake completed', { name });
         return;
       }
-      post({
-        cherry: CHERRY_PROTOCOL_VERSION,
-        channelId,
-        kind: 'host.event',
-        name,
-        detail,
-      });
+      post({ cherry: CHERRY_PROTOCOL_VERSION, channelId, kind: 'host.event', name, detail });
     },
+    exportSession,
     destroy() {
       window.removeEventListener('message', onMessage);
-      if (sdkCreatedIframe) iframe.remove(); // never remove a caller-provided iframe
+      rejectAllPending(pending, 'transfer-aborted');
+      if (sdkCreatedIframe) iframe.remove();
     },
     testReceive: (env) => handleEnvelope(env),
   };
