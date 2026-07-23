@@ -342,3 +342,129 @@ describe('TranscriptCollectionDeps interface', () => {
     expect(result.chatMessagesByConversation.size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: snapshot stability / mid-load retry (wave 2, item 3)
+// ---------------------------------------------------------------------------
+
+describe('collectActiveTranscriptSources — snapshot stability', () => {
+  it('retries when a new scoop joins during the async load', async () => {
+    let loadCount = 0;
+    // First load: scoops list changes between before/after (simulated by
+    // having listScoops return a different result on second call)
+    let scoopList: readonly (typeof cone)[] = [cone];
+    const extraScoop: RegisteredScoop = {
+      ...scoop,
+      jid: 'extra-jid',
+      folder: 'extra',
+      name: 'Extra',
+    };
+
+    const loadPersistedSessions = vi.fn(async () => {
+      loadCount++;
+      if (loadCount === 1) {
+        // First load: mutate the scoop list to simulate a join mid-load
+        scoopList = [cone, extraScoop];
+      }
+      return [] as readonly import('../../src/core/types.js').SessionData[];
+    });
+
+    const result = await collectActiveTranscriptSources({
+      listScoops: () => scoopList,
+      isProcessing: () => false,
+      getAgentMessages: () => null,
+      loadPersistedSessions,
+      loadUiChatSessions: async () => [],
+      wait: async () => {},
+    });
+
+    // Must have retried at least once
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    // Result must use the stable snapshot from the second pass
+    expect(result.sources.map((s) => s.id)).toContain('extra-jid');
+  });
+
+  it('retries when a scoop starts processing during the async load', async () => {
+    // Simulate: stable before load, processing starts mid-load, then stops again.
+    // Phase 0: not processing → signature stable before load
+    // Phase 1 (inside load): still not processing, but after load the after-check
+    //   detects processing=true (agent resumed between before and after)
+    // Phase 2: retry → now processing=false again → stable
+    let phase = 0;
+    let loadCount = 0;
+
+    const result = await collectActiveTranscriptSources({
+      listScoops: () => [cone],
+      isProcessing: (_jid) => {
+        // Return true only during the after-check of the first load (phase 1)
+        return phase === 1;
+      },
+      getAgentMessages: () => coneMessages,
+      loadPersistedSessions: vi.fn(async () => {
+        loadCount++;
+        if (loadCount === 1) {
+          // Advance to phase 1 after the first load so the after-check sees processing=true
+          phase = 1;
+        } else {
+          // Second load: phase 2 → not processing
+          phase = 2;
+        }
+        return [] as readonly import('../../src/core/types.js').SessionData[];
+      }),
+      loadUiChatSessions: async () => [],
+      wait: async () => {
+        // Polling in the retry: phase 1 → clear processing so poll exits
+        if (phase === 1) phase = 2;
+      },
+    });
+
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    expect(result.sources).toHaveLength(1);
+  });
+
+  it('returns immediately when snapshot is stable on first load', async () => {
+    let loadCount = 0;
+    const result = await collectActiveTranscriptSources({
+      listScoops: () => [cone],
+      isProcessing: () => false,
+      getAgentMessages: () => coneMessages,
+      loadPersistedSessions: vi.fn(async () => {
+        loadCount++;
+        return [] as readonly import('../../src/core/types.js').SessionData[];
+      }),
+      loadUiChatSessions: async () => [],
+      wait: async () => {},
+    });
+
+    expect(loadCount).toBe(1);
+    expect(result.sources).toHaveLength(1);
+  });
+
+  it('aborts during retry if signal fires', async () => {
+    const controller = new AbortController();
+    let loadCount = 0;
+
+    const loadPersistedSessions = vi.fn(async () => {
+      loadCount++;
+      // Abort on the first load — before re-check
+      controller.abort();
+      return [] as readonly import('../../src/core/types.js').SessionData[];
+    });
+
+    await expect(
+      collectActiveTranscriptSources(
+        {
+          listScoops: () => [cone],
+          isProcessing: () => false,
+          getAgentMessages: () => null,
+          loadPersistedSessions,
+          loadUiChatSessions: async () => [],
+          wait: async () => {},
+        },
+        controller.signal
+      )
+    ).rejects.toMatchObject({ code: 'transfer-aborted' });
+
+    expect(loadCount).toBeGreaterThanOrEqual(1);
+  });
+});

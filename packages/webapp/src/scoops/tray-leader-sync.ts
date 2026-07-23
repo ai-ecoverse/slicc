@@ -381,14 +381,21 @@ export class LeaderSyncManager {
   private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
 
   /**
-   * In-flight transcript export requests: requestId → { bootstrapId, abortController }.
-   * Keyed by requestId (not bootstrapId) to support one export per request.
+   * In-flight transcript export requests keyed by composite `${bootstrapId}:${requestId}`.
+   * The composite key prevents cross-follower collisions when two followers happen to
+   * choose the same requestId. Wire messages still use requestId only; `exportKey()` builds
+   * the composite key from the bootstrapId known from the established connection.
    * Cleared on deny/cancel/complete/error/disconnect.
    */
   private readonly activeExports = new Map<
     string,
     { bootstrapId: string; abort: AbortController }
   >();
+
+  /** Build the composite map key from follower identity and wire request ID. */
+  private static exportKey(bootstrapId: string, requestId: string): string {
+    return `${bootstrapId}:${requestId}`;
+  }
 
   /** Max payload per chunk message: 32 KiB of base64 text. */
   private static readonly EXPORT_CHUNK_B64_MAX = 32 * 1024;
@@ -487,10 +494,10 @@ export class LeaderSyncManager {
     }
 
     // Abort any in-flight transcript exports for this follower
-    for (const [requestId, entry] of this.activeExports) {
+    for (const [key, entry] of this.activeExports) {
       if (entry.bootstrapId === bootstrapId) {
         entry.abort.abort();
-        this.activeExports.delete(requestId);
+        this.activeExports.delete(key);
       }
     }
 
@@ -1145,10 +1152,12 @@ export class LeaderSyncManager {
     requestId: string,
     selector: TranscriptExportSelector
   ): Promise<void> {
-    // One-use guard (owner-aware): only the originating follower's duplicate is blocked.
-    // A different follower with a coincidentally colliding requestId is allowed through.
-    const existingEntry = this.activeExports.get(requestId);
-    if (existingEntry?.bootstrapId === bootstrapId) {
+    // Composite key: ${bootstrapId}:${requestId}. Prevents cross-follower collisions
+    // when two different followers happen to choose the same requestId.
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+
+    // One-use guard: same follower+requestId pair is a duplicate.
+    if (this.activeExports.has(key)) {
       log.warn('Duplicate transcript export request from same follower, ignoring', {
         bootstrapId,
         requestId,
@@ -1179,7 +1188,7 @@ export class LeaderSyncManager {
 
     // Register in-flight state with AbortController before the async approval
     const abort = new AbortController();
-    this.activeExports.set(requestId, { bootstrapId, abort });
+    this.activeExports.set(key, { bootstrapId, abort });
 
     // Derive follower identity from connected state (never trust request payload)
     const followerLabel = labelForFollower(follower.floatType, follower.runtime);
@@ -1207,16 +1216,16 @@ export class LeaderSyncManager {
 
     // Re-fetch follower — might have disconnected during approval dialog
     const stillConnected = this.followers.get(bootstrapId);
-    if (!this.activeExports.has(requestId) || !stillConnected) {
+    if (!this.activeExports.has(key) || !stillConnected) {
       // Cancelled or disconnected during approval
-      this.activeExports.delete(requestId);
+      this.activeExports.delete(key);
       return;
     }
 
     if (!approved) {
       // Send denied — NO metadata about the transcript
       stillConnected.sync.send({ type: 'transcript.export.denied', requestId });
-      this.activeExports.delete(requestId);
+      this.activeExports.delete(key);
       return;
     }
 
@@ -1225,13 +1234,14 @@ export class LeaderSyncManager {
   }
 
   private handleTranscriptExportCancel(bootstrapId: string, requestId: string): void {
-    const entry = this.activeExports.get(requestId);
-    // Owner-aware guard: only the originating follower may cancel its own export.
-    // A different follower knowing (or guessing) the requestId cannot abort it.
-    if (!entry || entry.bootstrapId !== bootstrapId) return;
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+    const entry = this.activeExports.get(key);
+    // Owner-aware guard: composite key already encodes bootstrapId, so only the
+    // originating follower's key exists. Guard against a missing entry anyway.
+    if (!entry) return;
     log.info('Transcript export cancelled by follower', { requestId, bootstrapId });
     entry.abort.abort();
-    this.activeExports.delete(requestId);
+    this.activeExports.delete(key);
   }
 
   /**
@@ -1245,16 +1255,17 @@ export class LeaderSyncManager {
     selector: TranscriptExportSelector,
     abort: AbortController
   ): Promise<void> {
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
     const { createTranscriptExport } = this.options;
     const follower = this.followers.get(bootstrapId);
     if (!follower || !createTranscriptExport) {
-      this.activeExports.delete(requestId);
+      this.activeExports.delete(key);
       return;
     }
     const sendErr = (code: TranscriptExportErrorCode): void => {
       const f = this.followers.get(bootstrapId);
       if (f) f.sync.send({ type: 'transcript.export.error', requestId, code });
-      this.activeExports.delete(requestId);
+      this.activeExports.delete(key);
     };
 
     let result: TranscriptZipResult;
@@ -1262,7 +1273,7 @@ export class LeaderSyncManager {
       result = await createTranscriptExport(selector, abort.signal);
     } catch (createErr) {
       if (abort.signal.aborted) {
-        this.activeExports.delete(requestId);
+        this.activeExports.delete(key);
         return;
       }
       log.warn('createTranscriptExport failed', {
@@ -1275,13 +1286,13 @@ export class LeaderSyncManager {
       return;
     }
 
-    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-      this.activeExports.delete(requestId);
+    if (abort.signal.aborted || !this.activeExports.has(key)) {
+      this.activeExports.delete(key);
       return;
     }
     const sync = this.followers.get(bootstrapId)?.sync;
     if (!sync) {
-      this.activeExports.delete(requestId);
+      this.activeExports.delete(key);
       return;
     }
 
@@ -1313,8 +1324,8 @@ export class LeaderSyncManager {
       return;
     }
 
-    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-      this.activeExports.delete(requestId);
+    if (abort.signal.aborted || !this.activeExports.has(key)) {
+      this.activeExports.delete(key);
       return;
     }
 
@@ -1323,15 +1334,15 @@ export class LeaderSyncManager {
       completion = await result.completion;
     } catch {
       if (abort.signal.aborted) {
-        this.activeExports.delete(requestId);
+        this.activeExports.delete(key);
         return;
       }
       sendErr('transfer-aborted');
       return;
     }
 
-    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
-      this.activeExports.delete(requestId);
+    if (abort.signal.aborted || !this.activeExports.has(key)) {
+      this.activeExports.delete(key);
       return;
     }
 
@@ -1369,7 +1380,7 @@ export class LeaderSyncManager {
         sha256: leaderSha,
       });
     }
-    this.activeExports.delete(requestId);
+    this.activeExports.delete(key);
   }
 
   /**
@@ -1379,25 +1390,26 @@ export class LeaderSyncManager {
    * Returns a result object: `streamError` is true when a stream error occurred
    * (caller should send `transfer-corrupt`); false when completed normally OR
    * aborted (caller distinguishes via `abort.signal.aborted` or
-   * `activeExports.has(requestId)`). `chunkCount` and `byteLength` reflect the
+   * `activeExports.has(key)`). `chunkCount` and `byteLength` reflect the
    * totals processed regardless of terminal state.
    */
   private async sendExportChunks(ctx: SendExportChunksCtx): Promise<SendExportChunksResult> {
     const { bootstrapId, requestId, chunks, hasher, abort, onSlice } = ctx;
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
     const sync = this.followers.get(bootstrapId)?.sync;
     if (!sync) return { streamError: true, chunkCount: 0, byteLength: 0 };
     let idx = 0;
     let byteCount = 0;
     try {
       for await (const raw of chunks) {
-        if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+        if (abort.signal.aborted || !this.activeExports.has(key)) {
           return { streamError: false, chunkCount: idx, byteLength: byteCount };
         }
         hasher.update(raw);
         byteCount += raw.byteLength;
         const b64 = bytesToBase64(raw);
         for (let off = 0; off < b64.length; off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX) {
-          if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+          if (abort.signal.aborted || !this.activeExports.has(key)) {
             return { streamError: false, chunkCount: idx, byteLength: byteCount };
           }
           await waitForBufferedAmountLow(
@@ -1405,7 +1417,7 @@ export class LeaderSyncManager {
             LeaderSyncManager.EXPORT_BACKPRESSURE_THRESHOLD,
             abort.signal
           );
-          if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+          if (abort.signal.aborted || !this.activeExports.has(key)) {
             return { streamError: false, chunkCount: idx, byteLength: byteCount };
           }
           const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);

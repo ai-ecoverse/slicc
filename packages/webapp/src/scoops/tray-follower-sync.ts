@@ -372,6 +372,14 @@ export class FollowerSyncManager implements AgentHandle {
     this.cdpChunkBuffers.clear();
     for (const transport of this.remoteTransports.values()) transport.disconnect();
     this.remoteTransports.clear();
+    // Reject all in-flight transcript export requests with transfer-aborted.
+    // Remove each AbortSignal listener to avoid listener leaks, then clear
+    // retained chunk buffers so no Uint8Array memory hangs after disconnect.
+    for (const [, entry] of this.activeExportRequests) {
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      entry.reject(new TranscriptExportError('transfer-aborted'));
+    }
+    this.activeExportRequests.clear();
   }
 
   /** Advertise local browser targets to the leader. */

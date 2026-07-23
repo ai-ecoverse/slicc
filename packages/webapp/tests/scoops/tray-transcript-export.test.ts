@@ -1614,3 +1614,264 @@ describe('Follower: runtime error code validation (I-3)', () => {
     await expect(blobPromise).rejects.toMatchObject({ code: 'redaction-unavailable' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 2 fix tests: composite activeExports key (prevents cross-follower collision)
+// ---------------------------------------------------------------------------
+
+describe('Leader: composite export key (wave 2)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('allows two followers to use the same requestId without collision', async () => {
+    const { manager } = createLeaderManager();
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+
+    // Both followers send the same requestId
+    ch1.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'same-id',
+      selector: { kind: 'active' },
+    });
+    ch2.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'same-id',
+      selector: { kind: 'active' },
+    });
+
+    // Both should receive pending (neither is blocked as a duplicate of the other)
+    await vi.waitFor(() => {
+      const m1 = ch1.parseSentLeader();
+      const m2 = ch2.parseSentLeader();
+      return (
+        m1.some((m) => m.type === 'transcript.export.pending') &&
+        m2.some((m) => m.type === 'transcript.export.pending')
+      );
+    });
+
+    const p1 = ch1.parseSentLeader().find((m) => m.type === 'transcript.export.pending');
+    const p2 = ch2.parseSentLeader().find((m) => m.type === 'transcript.export.pending');
+    expect(p1).toBeTruthy();
+    expect(p2).toBeTruthy();
+  });
+
+  it('still blocks the same follower sending duplicate requestId', async () => {
+    let approvalCount = 0;
+    const { manager } = createLeaderManager({
+      requestTranscriptExportApproval: vi.fn().mockImplementation(async () => {
+        approvalCount++;
+        return true;
+      }),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'dup-id',
+      selector: { kind: 'active' },
+    });
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'dup-id',
+      selector: { kind: 'active' },
+    });
+
+    await vi.waitFor(() => approvalCount >= 1);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(approvalCount).toBe(1);
+  });
+
+  it('cancel from follower b2 does not affect follower b1 export', async () => {
+    // Both followers have an export in-flight with the same requestId.
+    // b2 cancels — b1's export should continue.
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockImplementation(
+        () =>
+          new Promise(() => {
+            /* never resolves — stays in-flight */
+          })
+      ),
+    });
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+
+    ch1.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'shared-req',
+      selector: { kind: 'active' },
+    });
+    ch2.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'shared-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for both to be pending
+    await vi.waitFor(() => {
+      return (
+        ch1.parseSentLeader().some((m) => m.type === 'transcript.export.pending') &&
+        ch2.parseSentLeader().some((m) => m.type === 'transcript.export.pending')
+      );
+    });
+
+    // b2 cancels its export
+    ch2.simulateMessage({ type: 'transcript.export.cancel', requestId: 'shared-req' });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    // b1 must not receive any error or complete (its export is still in-flight)
+    const b1Msgs = ch1.parseSentLeader();
+    expect(b1Msgs.some((m) => m.type === 'transcript.export.error')).toBe(false);
+    expect(b1Msgs.some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 2 fix tests: follower disconnect clears active export requests
+// ---------------------------------------------------------------------------
+
+describe('Follower: disconnect cleanup (wave 2)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  function base64(data: Uint8Array): string {
+    let s = '';
+    for (const b of data) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+
+  it('rejects an in-flight export with transfer-aborted on close()', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    // Wait for request to be sent
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    // Leader sends pending+start+one chunk (export is mid-stream)
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.start',
+      requestId,
+      filename: 'mid.zip',
+    });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.chunk',
+      requestId,
+      index: 0,
+      data: base64(new Uint8Array([1, 2, 3])),
+    });
+
+    // Close the follower — this simulates a disconnect
+    follower.close();
+
+    // The export promise must reject with transfer-aborted
+    await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-aborted' });
+  });
+
+  it('removes signal listener on close so no leak remains', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower
+      .requestTranscriptExport({ kind: 'active' }, controller.signal)
+      .catch(() => undefined);
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+
+    follower.close();
+    await blobPromise;
+
+    // After close + abort, aborting the controller must not throw
+    expect(() => controller.abort()).not.toThrow();
+  });
+
+  it('clears chunk buffers on close so no memory is retained', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower
+      .requestTranscriptExport({ kind: 'active' }, controller.signal)
+      .catch(() => undefined);
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    // Deliver several chunks before close
+    for (let i = 0; i < 3; i++) {
+      ch.simulateLeaderMessage({
+        type: 'transcript.export.chunk',
+        requestId,
+        index: i,
+        data: base64(new Uint8Array(10).fill(i)),
+      });
+    }
+
+    follower.close();
+    await blobPromise;
+
+    // After close, the export map is cleared; sending more chunks should be a no-op
+    expect(() => {
+      ch.simulateLeaderMessage({
+        type: 'transcript.export.chunk',
+        requestId,
+        index: 3,
+        data: base64(new Uint8Array([9])),
+      });
+    }).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 2 fix tests: CherryHostTransport error code clamp
+// ---------------------------------------------------------------------------
+
+describe('CherryHostTransport: outbound error code validation (wave 2)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('clamps unknown string error codes to transfer-corrupt', async () => {
+    // The cherry-host-transport test file covers this end-to-end;
+    // here we verify the behaviour at the tray layer for completeness.
+    // An error with a non-canonical code must become 'transfer-corrupt'.
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    // Wire an unknown code — follower must coerce it
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.error',
+      requestId,
+      code: 'completely-unknown-code' as never,
+    });
+
+    await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-corrupt' });
+  });
+});

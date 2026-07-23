@@ -1,8 +1,8 @@
 # Transcript Export
 
-SLICC can package any session — active or archived — into a signed, redacted ZIP bundle called
-a **transcript bundle**. The bundle is portable, self-describing, and schema-validated before
-it is written.
+SLICC can package any session — active or archived — into an integrity-verified, redacted ZIP
+bundle called a **transcript bundle**. The bundle is portable, self-describing, and
+schema-validated before it is written.
 
 This document is the **single authoritative reference** for the bundle format, privacy
 guarantees, supported access paths, and operational semantics. Other docs link here instead of
@@ -13,11 +13,16 @@ duplicating these details.
 ## ZIP layout
 
 ```
-slicc-transcript-<session-id>.zip
+slicc-<date>-<title-slug>-<export-id-prefix>.zip
 ├── transcript.json        # v1 document (see schema below)
 └── attachments/           # only when binary attachments exist
-    └── <sha256>.<ext>     # original bytes, copied unchanged
+    └── att-NNNN.<ext>     # opaque sequential name, original bytes copied unchanged
 ```
+
+The ZIP filename embeds the export date, a URL-safe title slug (up to 40 chars), and the first
+8 hex characters of the export UUID so that repeated exports of the same session on the same
+day produce distinct filenames. The bundle is SHA-256 – integrity-verified but not digitally
+signed.
 
 **`transcript.json`** is always present and follows the `TranscriptDocumentV1` schema at:
 `packages/shared-ts/src/transcript-export.ts` — `schemaVersion: 1`.

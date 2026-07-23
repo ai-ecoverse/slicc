@@ -280,3 +280,43 @@ describe('createTranscriptZip — cancellation', () => {
     expect(completion.sha256).toBe(sha256(archive));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Filename collision-safety tests (wave 2, item 4)
+// ---------------------------------------------------------------------------
+
+describe('createTranscriptZip — filename collision-safety', () => {
+  it('includes export ID prefix so same-day exports have unique names', () => {
+    const base = makeTranscriptDocument();
+    // Two documents with different export IDs simulate separate export invocations.
+    const doc1 = {
+      ...base,
+      export: { ...base.export, id: 'aaaaaaaa-0000-0000-0000-000000000001' },
+    };
+    const doc2 = {
+      ...base,
+      export: { ...base.export, id: 'bbbbbbbb-0000-0000-0000-000000000002' },
+    };
+    const r1 = createTranscriptZip(doc1, new Map());
+    const r2 = createTranscriptZip(doc2, new Map());
+    // Both should be .zip files
+    expect(r1.filename).toMatch(/\.zip$/);
+    expect(r2.filename).toMatch(/\.zip$/);
+    // Different export IDs → different filenames
+    expect(r1.filename).not.toBe(r2.filename);
+    // Each filename embeds its own export ID prefix
+    expect(r1.filename).toContain('aaaaaaaa');
+    expect(r2.filename).toContain('bbbbbbbb');
+  });
+
+  it('filename contains the first 8 chars of the export ID', () => {
+    const base = makeTranscriptDocument();
+    const exportId = 'cafecafe-1234-5678-abcd-ef0123456789';
+    const doc = { ...base, export: { ...base.export, id: exportId } };
+    const { filename } = createTranscriptZip(doc, new Map());
+    // The export ID prefix (8 chars before the first dash) must appear in the filename
+    const idPrefix = exportId.slice(0, 8); // 'cafecafe'
+    expect(filename).toContain(idPrefix);
+    expect(filename).toMatch(/\.zip$/);
+  });
+});

@@ -10,7 +10,7 @@
  * and implements the postMessage backhaul.
  */
 
-import type { TranscriptExportProgress } from '@slicc/shared-ts';
+import { type TranscriptExportProgress, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
 import {
   acceptEnvelope,
@@ -459,7 +459,13 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       .catch((err: unknown) => {
         this.pendingHostExports.delete(requestId);
         const maybeCode = (err as Record<string, unknown>)?.code;
-        const code = typeof maybeCode === 'string' ? maybeCode : 'transfer-corrupt';
+        // Clamp to a canonical error code so the host SDK always receives a
+        // well-typed value. An unknown or non-string code falls back to
+        // 'transfer-corrupt', which is the generic "something went wrong" sentinel.
+        const code =
+          typeof maybeCode === 'string' && VALID_EXPORT_ERROR_CODES.has(maybeCode as never)
+            ? maybeCode
+            : 'transfer-corrupt';
         this.postExportError(requestId, code);
       });
   }
