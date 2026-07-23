@@ -2,14 +2,15 @@
 
 ## Summary
 
-Redeploy PR #1626's full cloud path to the shared staging environment and test
+Deploy PR #1626's full cloud path to the shared staging environment and test
 removal of SLICC's running and paused cone-count limits against real E2B
 sandboxes.
 
-Use the existing serialized `Worker Staging Deploy` workflow rather than a
-manual deployment. Treat staging as a forward-only shared integration target:
-recover from failures by retrying the current SHA or deploying a newer fix,
-never by replaying an older deployment as rollback.
+First wire the staging Worker to the `slicc-staging` E2B alias. Push that newer
+PR SHA and use the automatically triggered, serialized `Worker Staging Deploy`
+workflow rather than a manual deployment. Treat staging as a forward-only
+shared integration target: recover from failures by retrying the current SHA or
+deploying a newer fix, never by replaying an older deployment as rollback.
 
 ## Scope
 
@@ -19,6 +20,7 @@ Deploy and validate:
 - Static webapp assets used by the staging `/cloud` dashboard.
 - Staging Worker secrets.
 - E2B template alias `adobe-experience-manager/slicc-staging`.
+- Staging-only Worker template selection through `SLICC_E2B_TEMPLATE_NAME`.
 - Authenticated cloud start, pause, resume, list, and kill behavior.
 
 The preview Worker is excluded. PR #1626 does not change preview behavior, and
@@ -32,6 +34,13 @@ and E2B template deployment. A later Renovate staging run `29973254053`
 overwrote the two shared staging singletons, so #1626 is no longer guaranteed to
 be live.
 
+The current staging Worker omits a template override, so its portal-created
+cones still default to the production `slicc` alias even though the workflow
+publishes `slicc-staging`. True end-to-end validation requires a prerequisite
+PR change: add optional `SLICC_E2B_TEMPLATE_NAME` Worker/DO configuration, set it
+to `slicc-staging` only in Wrangler's staging vars, and pass it to `startCone`.
+Production remains unchanged because an absent override falls back to `slicc`.
+
 The local E2B CLI is authenticated as `catalan@adobe.com` and targets the
 `Adobe Experience Manager` team (`c5b04852-7176-48d8-8d37-cd103a7c7545`).
 
@@ -44,8 +53,8 @@ Before rerunning #1626:
 2. Confirm no `worker-staging.yml` run is queued or in progress.
 3. Record the current active staging deployment SHA, deployment ID, URL, and
    E2B `slicc-staging` build ID/timestamp for provenance and diagnosis.
-4. Confirm PR #1626 still points to the expected SHA and the E2B CLI targets the
-   Adobe Experience Manager team.
+4. Confirm PR #1626's head includes the approved template-selection change and
+   the E2B CLI targets the Adobe Experience Manager team.
 
 The workflow's global concurrency group serializes deployments, but it does not
 reserve staging after a run finishes. Recheck active provenance before each
@@ -54,12 +63,27 @@ results cannot be attributed to #1626.
 
 ## Deployment
 
-Rerun the existing PR workflow:
+Implement and verify the staging-template prerequisite:
+
+- Add optional `SLICC_E2B_TEMPLATE_NAME` to Worker and Durable Object env types.
+- Pass the trimmed value from `CloudSessionsDurableObject.startConeOp` to
+  `startCone`; empty or missing values remain undefined and use `slicc`.
+- Set `SLICC_E2B_TEMPLATE_NAME` to `slicc-staging` only in Wrangler staging
+  vars.
+- Test production fallback, staging override, and empty-value fallback.
+- Document production/staging alias behavior.
+
+Push the newer PR SHA. The cloud-worker path change automatically triggers a new
+serialized `Worker Staging Deploy` run. Record its run ID and watch it with:
 
 ```bash
-gh run rerun 29953267621
-gh run watch 29953267621 --exit-status
+RUN_ID="$(gh run list --workflow worker-staging.yml --branch feat-relax-e2b-limits \
+  --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$RUN_ID" --exit-status
 ```
+
+Do not rerun the old `29953267621` deployment: it predates the staging-template
+wiring and would move staging to an integration-incomplete SHA.
 
 Require success for:
 
@@ -75,10 +99,11 @@ Require success for:
 
 After the run:
 
-1. Verify the newest successful GitHub `staging` deployment SHA is #1626's SHA.
+1. Verify the newest successful GitHub `staging` deployment SHA is the new
+   #1626 head SHA.
 2. Capture the deployment `environment_url`.
 3. Verify `slicc-staging` has a new E2B build ID and an `updatedAt` later than
-   the rerun start.
+   the workflow start.
 4. Confirm no later staging run is queued or active.
 
 ## Validation
@@ -89,7 +114,7 @@ identifiable and removable.
 ### Provenance and unauthenticated checks
 
 - Active GitHub staging deployment matches #1626.
-- E2B `slicc-staging` build was produced during the rerun window.
+- E2B `slicc-staging` build was produced during the deployment window.
 - `GET /cloud` returns `200` HTML with CSP.
 - `GET /api/cloud/config` returns `200` with neither `capRunning` nor
   `capPaused`.
@@ -171,7 +196,7 @@ There is no staging rollback. The workflow publishes the E2B template before
 the Worker, so a failed run can leave mixed provenance. Treat that state as
 invalid and fix forward:
 
-- Transient workflow failure: rerun the current #1626 SHA.
+- Transient workflow failure: rerun the current #1626 workflow run/SHA.
 - Code or configuration failure: push a fix and deploy the newer PR SHA.
 - Another PR supersedes staging: stop testing, clean up, and acquire a new test
   window later.
@@ -194,6 +219,7 @@ Testing is complete when:
 
 - GitHub staging deployment matches the tested #1626 SHA.
 - `slicc-staging` was built during the deployment window.
+- A portal-created test cone reports E2B template name `slicc-staging`.
 - Worker/R2 smoke passes.
 - Two near-concurrent starts succeed.
 - A start succeeds with five paused cones.
