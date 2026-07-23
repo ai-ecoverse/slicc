@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { VirtualFS } from '../../../src/fs/index.js';
+import { FsError, VirtualFS } from '../../../src/fs/index.js';
 import type { ShellSudoConfig } from '../../../src/shell/almost-bash-shell-headless.js';
 import { AlmostBashShell } from '../../../src/shell/index.js';
 import { parseSudoers } from '../../../src/shell/sudo/sudoers.js';
@@ -57,6 +57,28 @@ describe('AlmostBashShell command-level sudo enforcement', () => {
     expect(result.exitCode).toBe(0);
     const granted = (await fs.readFile('/etc/sudoers.d/granted')) as string;
     expect(granted).toContain('NOPASSWD Cmnd  touch /workspace/gated*');
+  });
+
+  it('preserves prior grants when fallback persistence reads fail with EIO', async () => {
+    const grantedPath = '/etc/sudoers.d/granted';
+    const priorGrant = 'NOPASSWD Cmnd  git push*\n';
+    await fs.mkdir('/etc/sudoers.d', { recursive: true });
+    await fs.writeFile(grantedPath, priorGrant);
+    const broker = brokerReturning({ decision: 'always', pattern: 'touch /workspace/gated*' });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+    const originalReadFile = fs.readFile.bind(fs);
+    const readSpy = vi.spyOn(fs, 'readFile').mockImplementation(async (path, options) => {
+      if (path === grantedPath) throw new FsError('EIO', 'transient read failure', path);
+      return originalReadFile(path, options);
+    });
+    const writeSpy = vi.spyOn(fs, 'writeFile');
+
+    const result = await shell.executeCommand('touch /workspace/gated.txt');
+
+    expect(result.exitCode).toBe(0);
+    expect(writeSpy.mock.calls.some(([path]) => path === grantedPath)).toBe(false);
+    readSpy.mockRestore();
+    expect(await originalReadFile(grantedPath, { encoding: 'utf-8' })).toBe(priorGrant);
   });
 
   it('reuses a persisted NOPASSWD grant without re-prompting', async () => {
