@@ -98,8 +98,10 @@ function overlaps(a: Range, b: Range): boolean {
 
 function findExcluded(input: string): Range[] {
   const excluded: Range[] = [];
-  for (const m of input.matchAll(new RegExp(MARKER_SOURCE, 'g'))) {
-    excluded.push({ start: m.index!, end: m.index! + m[0].length });
+  for (const match of input.matchAll(new RegExp(MARKER_SOURCE, 'g'))) {
+    const start = match.index;
+    if (start === undefined) continue;
+    excluded.push({ start, end: start + match[0].length });
   }
   return excluded;
 }
@@ -125,8 +127,10 @@ export function redactCredentialPatterns(
   let nextId = firstId;
 
   for (const { category, source, flags } of PATTERNS) {
-    for (const m of input.matchAll(new RegExp(source, flags))) {
-      const range: Range = { start: m.index!, end: m.index! + m[0].length };
+    for (const match of input.matchAll(new RegExp(source, flags))) {
+      const start = match.index;
+      if (start === undefined) continue;
+      const range: Range = { start, end: start + match[0].length };
       const blocked =
         excluded.some((e) => overlaps(e, range)) || claims.some((c) => overlaps(c, range));
       if (blocked) continue;
