@@ -15,7 +15,7 @@ interface CdpResponseShape {
 
 export interface CherrySliccHandle extends SliccHandle {
   /** Test seam: feed a parsed envelope as if it arrived via postMessage. */
-  __test_receive(env: CherryEnvelope): Promise<CdpResponseShape | undefined>;
+  testReceive(env: CherryEnvelope): Promise<CdpResponseShape | undefined>;
 }
 
 /** `mountSliccImpl` accepts an optional `__test_post` seam to capture outbound envelopes in tests. */
@@ -247,6 +247,6 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
       window.removeEventListener('message', onMessage);
       if (sdkCreatedIframe) iframe.remove(); // never remove a caller-provided iframe
     },
-    __test_receive: (env) => handleEnvelope(env),
+    testReceive: (env) => handleEnvelope(env),
   };
 }

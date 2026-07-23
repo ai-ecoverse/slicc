@@ -28,7 +28,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=X',
     });
     // Drive a cdp.request for a denied domain through the test seam.
-    const res = await handle.__test_receive({
+    const res = await handle.testReceive({
       kind: 'cdp.request',
       id: 7,
       method: 'Page.navigate',
@@ -53,7 +53,7 @@ describe('mountSliccImpl', () => {
       hooks: { onPermissionRequest },
       joinToken: 'https://app.example/join?t=X',
     });
-    const res = await handle.__test_receive({
+    const res = await handle.testReceive({
       kind: 'cdp.request',
       id: 9,
       method: 'Page.navigate',
@@ -78,12 +78,12 @@ describe('mountSliccImpl', () => {
       __test_post: (env) => posted.push(env as never),
     });
     // Establish the channelId so the cdp.response can be posted.
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-err',
       kind: 'handshake.hello',
     } as never);
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-err',
       kind: 'cdp.request',
@@ -106,7 +106,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=PRE',
       __test_post: (env) => posted.push(env),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-1',
       kind: 'handshake.hello',
@@ -131,7 +131,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=X',
     });
     expect(onHandshakeComplete).not.toHaveBeenCalled();
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-hc',
       kind: 'handshake.hello',
@@ -139,7 +139,7 @@ describe('mountSliccImpl', () => {
     expect(onHandshakeComplete).toHaveBeenCalledTimes(1);
     // A second hello should not re-fire (channelId already pinned in practice,
     // but the hook fires per hello dispatch).
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-hc',
       kind: 'handshake.hello',
@@ -158,7 +158,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=X',
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-host',
       kind: 'handshake.hello',
@@ -188,7 +188,7 @@ describe('mountSliccImpl', () => {
       theme,
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-theme',
       kind: 'handshake.hello',
@@ -208,7 +208,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=X',
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-no-theme',
       kind: 'handshake.hello',
@@ -229,7 +229,7 @@ describe('mountSliccImpl', () => {
       effortLevel: 'low',
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-effort',
       kind: 'handshake.hello',
@@ -249,7 +249,7 @@ describe('mountSliccImpl', () => {
       joinToken: 'https://app.example/join?t=X',
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-no-effort',
       kind: 'handshake.hello',
@@ -274,7 +274,7 @@ describe('mountSliccImpl', () => {
     });
     const iframe = container.querySelector('iframe')!;
     expect(iframe.src).toBe('https://app.example/?cherry=1');
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'ch-slash',
       kind: 'handshake.hello',

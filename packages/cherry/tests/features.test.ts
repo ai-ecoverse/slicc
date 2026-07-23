@@ -16,7 +16,7 @@ describe('cherry features', () => {
     });
 
     // Simulate the iframe sending handshake.hello
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'cherry-test-123',
       kind: 'handshake.hello',
@@ -51,7 +51,7 @@ describe('cherry features', () => {
       __test_post: (env) => posted.push(env),
     });
 
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 1,
       channelId: 'cherry-test-456',
       kind: 'handshake.hello',
