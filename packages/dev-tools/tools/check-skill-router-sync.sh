@@ -45,7 +45,7 @@ awk '
 
 shopt -s nullglob
 skill_files=("$AGENT_SKILLS"/*/SKILL.md)
-for skill_file in "${skill_files[@]}"; do
+for skill_file in ${skill_files[@]+"${skill_files[@]}"}; do
   basename "$(dirname "$skill_file")"
 done | sort -u >"$ACTUAL_SKILLS"
 
@@ -74,7 +74,7 @@ if [[ -s "$MISSING_FROM_DISK" ]]; then
   sed 's/^/  - /' "$MISSING_FROM_DISK" >&2
 fi
 
-for skill_file in "${skill_files[@]}"; do
+for skill_file in ${skill_files[@]+"${skill_files[@]}"}; do
   name="$(basename "$(dirname "$skill_file")")"
   if [[ ! -e "$CLAUDE_SKILLS/$name" && ! -L "$CLAUDE_SKILLS/$name" ]]; then
     STATUS=1
@@ -83,7 +83,13 @@ for skill_file in "${skill_files[@]}"; do
 done
 
 claude_entries=("$CLAUDE_SKILLS"/*)
-for entry in "${claude_entries[@]}"; do
+# ${arr[@]+"${arr[@]}"} guards an empty array under `set -u` on bash < 4.4 (the
+# macOS release runner ships bash 3.2), where a bare "${arr[@]}" is a fatal
+# "unbound variable" error. Without the guard, an empty .claude/skills aborts
+# here — after STATUS=1 was set for a missing skill — before the final
+# `exit 1`, and the EXIT trap's `rm` then reset the exit code to 0, so the
+# check silently passed when it should have failed.
+for entry in ${claude_entries[@]+"${claude_entries[@]}"}; do
   name="$(basename "$entry")"
   canonical="$AGENT_SKILLS/$name"
   if [[ ! -d "$canonical" || ! -f "$canonical/SKILL.md" ]]; then
