@@ -8,7 +8,7 @@
         {
           "name": "bash",
           "arguments": {
-            "command": "echo 'integration_token=sk-1234abcd5678efgh9012ijkl3456mnop'"
+            "command": "echo 'integration_token=sk-proj-1234abcd5678efgh9012ijkl3456mnop'"
           }
         },
         {
