@@ -75,6 +75,14 @@ describe('prepareRequestBody — binary content-type preservation', () => {
     expect(Array.from(out)).toEqual(Array.from(packBytes));
   });
 
+  it('matches an uppercase binary Content-Type header and preserves arbitrary bytes', async () => {
+    const body = bytesToLatin1(packBytes);
+    const result = prepareRequestBody(body, { 'CONTENT-TYPE': 'application/octet-stream' });
+    expect(result).toBeInstanceOf(Blob);
+    const out = await blobBytes(result as Blob);
+    expect(Array.from(out)).toEqual(Array.from(packBytes));
+  });
+
   it('multipart/form-data still returns a Blob (pre-existing behavior)', async () => {
     const body = bytesToLatin1(packBytes);
     const result = prepareRequestBody(body, {
