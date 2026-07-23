@@ -53,6 +53,43 @@ type FollowerCorpus = {
 };
 
 export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
+  // Transcript export response variants (leader → follower)
+  // iOS decodes these to `.unknown` — it never requests exports
+  'transcript.export.pending': {
+    ios: 'unknown',
+    message: { type: 'transcript.export.pending', requestId: 'te-1' },
+  },
+  'transcript.export.denied': {
+    ios: 'unknown',
+    message: { type: 'transcript.export.denied', requestId: 'te-1' },
+  },
+  'transcript.export.start': {
+    ios: 'unknown',
+    message: {
+      type: 'transcript.export.start',
+      requestId: 'te-1',
+      filename: 'slicc-transcript.zip',
+      estimatedBytes: 1024,
+    },
+  },
+  'transcript.export.chunk': {
+    ios: 'unknown',
+    message: { type: 'transcript.export.chunk', requestId: 'te-1', index: 0, data: 'AQID' },
+  },
+  'transcript.export.complete': {
+    ios: 'unknown',
+    message: {
+      type: 'transcript.export.complete',
+      requestId: 'te-1',
+      chunks: 1,
+      byteLength: 3,
+      sha256: 'a'.repeat(64),
+    },
+  },
+  'transcript.export.error': {
+    ios: 'unknown',
+    message: { type: 'transcript.export.error', requestId: 'te-1', code: 'session-not-found' },
+  },
   snapshot: {
     ios: 'decoded',
     message: {
@@ -253,6 +290,20 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
 };
 
 export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
+  // Transcript export request variants (follower → leader)
+  // iOS never originates these — its decoder throws
+  'transcript.export.request': {
+    ios: 'undecodable',
+    message: {
+      type: 'transcript.export.request',
+      requestId: 'te-2',
+      selector: { kind: 'active' },
+    },
+  },
+  'transcript.export.cancel': {
+    ios: 'undecodable',
+    message: { type: 'transcript.export.cancel', requestId: 'te-2' },
+  },
   user_message: {
     ios: 'decoded',
     message: { type: 'user_message', text: 'hello from follower', messageId: 'f-1' },
@@ -398,7 +449,7 @@ export function buildCorpusDocument(): {
       .map(({ ios, message }) => ({ type: message.type, ios, message: message as unknown }))
       .sort((a, b) => a.type.localeCompare(b.type));
   return {
-    traySyncProtocolVersion: 1,
+    traySyncProtocolVersion: 2,
     // Mapped-type-enforced variant counts; the Swift suite asserts the entry
     // arrays match so a truncated/stale JSON copy fails loudly.
     leaderVariantCount: Object.keys(LEADER_TO_FOLLOWER_CORPUS).length,

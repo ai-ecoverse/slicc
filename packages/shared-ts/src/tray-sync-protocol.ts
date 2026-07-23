@@ -33,6 +33,7 @@
  */
 
 import type { AgentEvent, ChatMessage, LickEvent, MessageAttachment } from './agent-wire-types.js';
+import type { TranscriptExportErrorCode } from './transcript-export.js';
 
 /**
  * Runtime tag a cherry follower connects with (`StartPageFollowerTrayOptions.runtime`).
@@ -51,7 +52,18 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 1;
+export const TRAY_SYNC_PROTOCOL_VERSION = 2;
+
+// ---------------------------------------------------------------------------
+// Transcript export selector
+// ---------------------------------------------------------------------------
+
+/**
+ * Which transcript the follower is requesting.
+ * - `active`: the leader's current in-session transcript.
+ * - `frozen`: a specific archived session identified by `sessionId`.
+ */
+export type TranscriptExportSelector = { kind: 'active' } | { kind: 'frozen'; sessionId: string };
 
 /**
  * Additive version handshake, sent by BOTH sides as their first message on
@@ -70,6 +82,24 @@ export interface TraySyncHelloMessage {
 // ---------------------------------------------------------------------------
 
 export type LeaderToFollowerMessage =
+  // Transcript export (leader → follower)
+  | { type: 'transcript.export.pending'; requestId: string }
+  | { type: 'transcript.export.denied'; requestId: string }
+  | {
+      type: 'transcript.export.start';
+      requestId: string;
+      filename: string;
+      estimatedBytes?: number;
+    }
+  | { type: 'transcript.export.chunk'; requestId: string; index: number; data: string }
+  | {
+      type: 'transcript.export.complete';
+      requestId: string;
+      chunks: number;
+      byteLength: number;
+      sha256: string;
+    }
+  | { type: 'transcript.export.error'; requestId: string; code: TranscriptExportErrorCode }
   | { type: 'snapshot'; messages: ChatMessage[]; scoopJid: string }
   | {
       type: 'snapshot_chunk';
@@ -133,6 +163,9 @@ export type LeaderToFollowerMessage =
   | { type: 'pong' };
 
 export type FollowerToLeaderMessage =
+  // Transcript export (follower → leader)
+  | { type: 'transcript.export.request'; requestId: string; selector: TranscriptExportSelector }
+  | { type: 'transcript.export.cancel'; requestId: string }
   | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }

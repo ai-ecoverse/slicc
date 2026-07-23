@@ -30,6 +30,7 @@ export type {
   RemoteTargetInfo,
   ScoopSummary,
   SprinkleSummary,
+  TranscriptExportSelector,
   TrayFsRequest,
   TrayFsResponse,
   TrayFsResponseData,
@@ -311,6 +312,11 @@ export class TraySyncChannel<
 
   get isOpen(): boolean {
     return !this.closed && this.channel.readyState === 'open';
+  }
+
+  /** Bytes queued in the underlying channel; undefined when the channel is a test double. */
+  get bufferedAmount(): number | undefined {
+    return this.channel.bufferedAmount;
   }
 }
 

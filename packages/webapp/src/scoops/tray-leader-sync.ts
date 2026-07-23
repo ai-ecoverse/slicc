@@ -5,6 +5,8 @@
 
 import type {
   LeaderToWorkerControlMessage,
+  TranscriptExportErrorCode,
+  TranscriptExportSelector,
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
@@ -18,6 +20,7 @@ import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
@@ -124,6 +127,26 @@ export interface LeaderSyncManagerOptions {
    * Wired by buildSyncManager to leaderTray.sendControlMessage.
    */
   sendControl: (msg: LeaderToWorkerControlMessage) => void;
+  /**
+   * Called when a follower requests a transcript export. The leader shows an
+   * approval dialog and resolves true (allow) or false (deny). Derive follower
+   * identity from connected state; never trust the request payload for it.
+   */
+  requestTranscriptExportApproval?: (request: {
+    requestId: string;
+    followerLabel: string;
+    hostOrigin?: string;
+    selector: TranscriptExportSelector;
+    estimatedBytes?: number;
+  }) => Promise<boolean>;
+  /**
+   * Create a TranscriptZipResult for a follower-requested export.
+   * The AbortSignal is cancelled on deny/cancel/disconnect/error.
+   */
+  createTranscriptExport?: (
+    selector: TranscriptExportSelector,
+    signal: AbortSignal
+  ) => Promise<TranscriptZipResult>;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -190,6 +213,41 @@ export function selectTeleportPool<
     if (opts.requireNetwork) return t.capabilities?.network === true;
     return true;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Transcript export helpers (module-level, pure functions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a Uint8Array to base64. Uses the browser btoa path for small arrays
+ * and a chunked approach for large ones to avoid stack overflows from large
+ * spread arguments to String.fromCharCode.
+ */
+function bytesToBase64(data: Uint8Array): string {
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < data.length; i += CHUNK) {
+    binary += String.fromCharCode(...data.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Wait until the channel's bufferedAmount drops below `threshold`.
+ * Polls every 25 ms so tests don't need a real RTCDataChannel;
+ * cancels immediately on AbortSignal.
+ * When the channel has no bufferedAmount (test double), returns immediately.
+ */
+async function waitForBufferedAmountLow(
+  channel: { bufferedAmount?: number },
+  threshold: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (typeof channel.bufferedAmount !== 'number') return;
+  while (!signal.aborted && channel.bufferedAmount > threshold) {
+    await new Promise<void>((res) => setTimeout(res, 25));
+  }
 }
 
 interface ConnectedFollower {
@@ -296,6 +354,22 @@ export class LeaderSyncManager {
   private readonly previewLickLastEmitAt = new Map<string, number>();
   private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
 
+  /**
+   * In-flight transcript export requests: requestId → { bootstrapId, abortController }.
+   * Keyed by requestId (not bootstrapId) to support one export per request.
+   * Cleared on deny/cancel/complete/error/disconnect.
+   */
+  private readonly activeExports = new Map<
+    string,
+    { bootstrapId: string; abort: AbortController }
+  >();
+
+  /** Max payload per chunk message: 32 KiB of base64 text. */
+  private static readonly EXPORT_CHUNK_B64_MAX = 32 * 1024;
+
+  /** Backpressure threshold: pause when bufferedAmount exceeds 1 MiB. */
+  private static readonly EXPORT_BACKPRESSURE_THRESHOLD = 1024 * 1024;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -384,6 +458,14 @@ export class LeaderSyncManager {
     }
     if (this.registry.hasChanged()) {
       this.broadcastTargetRegistry();
+    }
+
+    // Abort any in-flight transcript exports for this follower
+    for (const [requestId, entry] of this.activeExports) {
+      if (entry.bootstrapId === bootstrapId) {
+        entry.abort.abort();
+        this.activeExports.delete(requestId);
+      }
     }
 
     log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
@@ -959,6 +1041,12 @@ export class LeaderSyncManager {
       case 'fs.response':
         this.handleFsResponse(message.requestId, message.response);
         break;
+      case 'transcript.export.request':
+        void this.handleTranscriptExportRequest(bootstrapId, message.requestId, message.selector);
+        break;
+      case 'transcript.export.cancel':
+        this.handleTranscriptExportCancel(message.requestId);
+        break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
@@ -1005,6 +1093,256 @@ export class LeaderSyncManager {
         break;
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transcript export (leader side)
+  // ---------------------------------------------------------------------------
+
+  private async handleTranscriptExportRequest(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector
+  ): Promise<void> {
+    // One-use guard: if we already have an in-flight export with this requestId, ignore.
+    if (this.activeExports.has(requestId)) {
+      log.warn('Duplicate transcript export request, ignoring', { bootstrapId, requestId });
+      return;
+    }
+    const follower = this.followers.get(bootstrapId);
+    if (!follower) return;
+
+    const { requestTranscriptExportApproval, createTranscriptExport } = this.options;
+    if (!requestTranscriptExportApproval || !createTranscriptExport) {
+      follower.sync.send({ type: 'transcript.export.denied', requestId });
+      return;
+    }
+
+    // Register in-flight state with AbortController before the async approval
+    const abort = new AbortController();
+    this.activeExports.set(requestId, { bootstrapId, abort });
+
+    // Derive follower identity from connected state (never trust request payload)
+    const followerLabel = labelForFollower(follower.floatType, follower.runtime);
+
+    // Send pending immediately to unblock the follower's UI
+    follower.sync.send({ type: 'transcript.export.pending', requestId });
+
+    let approved = false;
+    try {
+      approved = await requestTranscriptExportApproval({
+        requestId,
+        followerLabel,
+        selector,
+      });
+    } catch (err) {
+      log.warn('requestTranscriptExportApproval threw', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      approved = false;
+    }
+
+    // Re-fetch follower — might have disconnected during approval dialog
+    const stillConnected = this.followers.get(bootstrapId);
+    if (!this.activeExports.has(requestId) || !stillConnected) {
+      // Cancelled or disconnected during approval
+      this.activeExports.delete(requestId);
+      return;
+    }
+
+    if (!approved) {
+      // Send denied — NO metadata about the transcript
+      stillConnected.sync.send({ type: 'transcript.export.denied', requestId });
+      this.activeExports.delete(requestId);
+      return;
+    }
+
+    // Approved: create export and stream chunks
+    void this.streamTranscriptExport(bootstrapId, requestId, selector, abort);
+  }
+
+  private handleTranscriptExportCancel(requestId: string): void {
+    const entry = this.activeExports.get(requestId);
+    if (!entry) return;
+    log.info('Transcript export cancelled by follower', { requestId });
+    entry.abort.abort();
+    this.activeExports.delete(requestId);
+  }
+
+  /**
+   * Stream a ZIP result over the data channel with bounded backpressure.
+   * Each raw-bytes slice is base64-encoded and split so each message carries
+   * at most EXPORT_CHUNK_B64_MAX bytes of base64 text.
+   */
+  private async streamTranscriptExport(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector,
+    abort: AbortController
+  ): Promise<void> {
+    const { createTranscriptExport } = this.options;
+    const follower = this.followers.get(bootstrapId);
+    if (!follower || !createTranscriptExport) {
+      this.activeExports.delete(requestId);
+      return;
+    }
+    const sendErr = (code: TranscriptExportErrorCode): void => {
+      const f = this.followers.get(bootstrapId);
+      if (f) f.sync.send({ type: 'transcript.export.error', requestId, code });
+      this.activeExports.delete(requestId);
+    };
+
+    let result: TranscriptZipResult;
+    try {
+      result = await createTranscriptExport(selector, abort.signal);
+    } catch (createErr) {
+      if (abort.signal.aborted) {
+        this.activeExports.delete(requestId);
+        return;
+      }
+      log.warn('createTranscriptExport failed', {
+        requestId,
+        error: createErr instanceof Error ? createErr.message : String(createErr),
+      });
+      sendErr('session-not-found');
+      return;
+    }
+
+    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+      this.activeExports.delete(requestId);
+      return;
+    }
+    const sync = this.followers.get(bootstrapId)?.sync;
+    if (!sync) {
+      this.activeExports.delete(requestId);
+      return;
+    }
+
+    sync.send({ type: 'transcript.export.start', requestId, filename: result.filename });
+
+    const { sha256: sha256Lib } = await import('js-sha256');
+    const hasher = sha256Lib.create();
+    let chunkIndex = 0;
+
+    const aborted = await this.sendExportChunks(
+      bootstrapId,
+      requestId,
+      result.chunks,
+      hasher,
+      abort,
+      (idx, slice) => {
+        const f = this.followers.get(bootstrapId);
+        if (!f) return false;
+        f.sync.send({ type: 'transcript.export.chunk', requestId, index: idx, data: slice });
+        return true;
+      },
+      (n) => {
+        chunkIndex = n;
+      }
+    );
+    if (aborted) {
+      sendErr('transfer-aborted');
+      return;
+    }
+
+    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+      this.activeExports.delete(requestId);
+      return;
+    }
+
+    let completion: { byteLength: number; sha256: string };
+    try {
+      completion = await result.completion;
+    } catch {
+      if (abort.signal.aborted) {
+        this.activeExports.delete(requestId);
+        return;
+      }
+      sendErr('transfer-aborted');
+      return;
+    }
+
+    if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+      this.activeExports.delete(requestId);
+      return;
+    }
+    const done = this.followers.get(bootstrapId);
+    if (done) {
+      done.sync.send({
+        type: 'transcript.export.complete',
+        requestId,
+        chunks: chunkIndex,
+        byteLength: completion.byteLength,
+        sha256: hasher.hex(),
+      });
+    }
+    this.activeExports.delete(requestId);
+  }
+
+  /**
+   * Iterate the ZIP chunk iterable, base64-encode each slice (≤32 KiB), apply
+   * backpressure, and call `onSlice` per slice. Returns true on error/abort
+   * (caller should send an error), false when the stream completed normally.
+   */
+  private async sendExportChunks(
+    bootstrapId: string,
+    requestId: string,
+    chunks: AsyncIterable<Uint8Array>,
+    hasher: { update(data: Uint8Array): void },
+    abort: AbortController,
+    onSlice: (index: number, slice: string) => boolean,
+    setCount: (n: number) => void
+  ): Promise<boolean> {
+    const sync = this.followers.get(bootstrapId)?.sync;
+    if (!sync) return true;
+    let idx = 0;
+    try {
+      for await (const raw of chunks) {
+        if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+          setCount(idx);
+          return false;
+        }
+        hasher.update(raw);
+        const b64 = bytesToBase64(raw);
+        let off = 0;
+        while (off < b64.length) {
+          if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+            setCount(idx);
+            return false;
+          }
+          await waitForBufferedAmountLow(
+            sync,
+            LeaderSyncManager.EXPORT_BACKPRESSURE_THRESHOLD,
+            abort.signal
+          );
+          if (abort.signal.aborted || !this.activeExports.has(requestId)) {
+            setCount(idx);
+            return false;
+          }
+          const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
+          off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX;
+          if (!onSlice(idx, slice)) {
+            setCount(idx);
+            return true;
+          }
+          idx++;
+        }
+      }
+    } catch (streamErr) {
+      if (abort.signal.aborted) {
+        setCount(idx);
+        return false;
+      }
+      log.warn('Error streaming transcript export chunks', {
+        requestId,
+        error: streamErr instanceof Error ? streamErr.message : String(streamErr),
+      });
+      setCount(idx);
+      return true;
+    }
+    setCount(idx);
+    return false;
   }
 
   /**

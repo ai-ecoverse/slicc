@@ -560,16 +560,54 @@ export async function mountWcUiFollower(
   // Task 6 (switch-out): Minimal follower nav menu + tray-leave listener.
   // (wireWcNav needs a worker client; a follower has none, so we set the
   // menu items directly.)
-  boot.refs.avatarMenu.items = [
-    { kind: 'separator' },
-    { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
-  ];
+  // Task 8: add "Export transcript" to the follower avatar menu.
+  let exportInFlight = false;
+  const syncFollowerMenuItems = (): void => {
+    boot.refs.avatarMenu.items = [
+      { kind: 'separator' },
+      {
+        id: 'export-transcript',
+        label: exportInFlight ? 'Exporting…' : 'Export transcript',
+        icon: 'download',
+        disabled: exportInFlight || undefined,
+      },
+      { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
+    ];
+  };
+  syncFollowerMenuItems();
+
   boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (id === 'tray-stop') {
       window.dispatchEvent(
         new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
       );
+      return;
+    }
+    if (id === 'export-transcript' && !exportInFlight) {
+      exportInFlight = true;
+      syncFollowerMenuItems();
+      const sync = follower.currentSync;
+      if (!sync) {
+        exportInFlight = false;
+        syncFollowerMenuItems();
+        return;
+      }
+      const abort = new AbortController();
+      void sync
+        .requestTranscriptExport({ kind: 'active' }, abort.signal)
+        .then(async (blob) => {
+          const { downloadTranscriptBlob } = await import('./wc-transcript-export.js');
+          const filename = `slicc-transcript-${new Date().toISOString().slice(0, 10)}.zip`;
+          await downloadTranscriptBlob(blob, filename);
+        })
+        .catch((err) => {
+          log.error('follower transcript export failed', { error: String(err) });
+        })
+        .finally(() => {
+          exportInFlight = false;
+          syncFollowerMenuItems();
+        });
     }
   });
 

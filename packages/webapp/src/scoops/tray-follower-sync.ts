@@ -3,6 +3,8 @@
  * and provides an AgentHandle for the follower's ChatPanel.
  */
 
+import type { TranscriptExportErrorCode, TranscriptExportSelector } from '@slicc/shared-ts';
+import { TranscriptExportError } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -192,6 +194,24 @@ export class FollowerSyncManager implements AgentHandle {
   private cacheEpoch = 0;
   /** Per-requestId epoch stamp captured at `fetchSprinkleContent` time. */
   private readonly fetchEpoch = new Map<string, number>();
+
+  /**
+   * In-flight transcript export requests keyed by requestId.
+   * Tracks the resolver/rejecter and the received chunks.
+   */
+  private readonly activeExportRequests = new Map<
+    string,
+    {
+      resolve: (blob: Blob) => void;
+      reject: (err: Error) => void;
+      chunks: Uint8Array[];
+      nextExpectedIndex: number;
+      duplicate: boolean;
+      signal: AbortSignal;
+      onAbort: () => void;
+    }
+  >();
+
   constructor(
     channel: TrayDataChannelLike,
     private readonly options: FollowerSyncManagerOptions = {}
@@ -688,27 +708,9 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
 
-      case 'sprinkles.list': {
-        log.info('Sprinkles list received from leader', {
-          sprinkleCount: message.sprinkles.length,
-        });
-        // Treat every list broadcast as a content invalidation barrier.
-        // The leader has no per-file change signal today; broadcasts are
-        // periodic (~5 s default), so a stable `.shtml` re-invalidates
-        // its cache on every tick. This is conservative — the trade-off
-        // is cache effectiveness during steady state in exchange for
-        // never serving stale content to the user when the leader's
-        // file actually changed. Bumping `cacheEpoch` ALSO discards any
-        // in-flight fetch's content reply that arrives AFTER this
-        // barrier — see `handleSprinkleContent`. Without that, a late
-        // pre-barrier reply could poison the cache for the post-barrier
-        // world.
-        this.sprinkleContentCache.clear();
-        this.cacheEpoch++;
-        this.latestSprinkles = message.sprinkles;
-        this.options.onSprinklesList?.(message.sprinkles);
+      case 'sprinkles.list':
+        this.handleSprinklesList(message.sprinkles);
         break;
-      }
 
       case 'sprinkle.content':
         this.handleSprinkleContent(message);
@@ -728,6 +730,15 @@ export class FollowerSyncManager implements AgentHandle {
         this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
 
+      // Transcript export messages — all routed to the export sub-handler
+      case 'transcript.export.pending':
+      case 'transcript.export.denied':
+      case 'transcript.export.start':
+      case 'transcript.export.chunk':
+      case 'transcript.export.complete':
+      case 'transcript.export.error':
+        this.handleExportLeaderMessage(message);
+        break;
       case 'ping':
         this.keepalive.receivePing();
         this.sync.send({ type: 'pong' });
@@ -776,6 +787,20 @@ export class FollowerSyncManager implements AgentHandle {
   private handleScoopsList(scoops: ScoopSummary[], activeScoopJid: string): void {
     log.info('Scoops list received from leader', { scoopCount: scoops.length });
     this.options.onScoopsList?.(scoops, activeScoopJid);
+  }
+
+  /**
+   * Handle a `sprinkles.list` broadcast from the leader.
+   * Every list arrival is a content-invalidation barrier: clears the cache and
+   * bumps `cacheEpoch` so late pre-barrier fetch replies don’t poison the
+   * post-barrier world (see `handleSprinkleContent`).
+   */
+  private handleSprinklesList(sprinkles: SprinkleSummary[]): void {
+    log.info('Sprinkles list received from leader', { sprinkleCount: sprinkles.length });
+    this.sprinkleContentCache.clear();
+    this.cacheEpoch++;
+    this.latestSprinkles = sprinkles;
+    this.options.onSprinklesList?.(sprinkles);
   }
 
   /**
@@ -1215,5 +1240,191 @@ export class FollowerSyncManager implements AgentHandle {
       this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
       this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transcript export (follower side)
+  // ---------------------------------------------------------------------------
+
+  private handleExportLeaderMessage(
+    message: Extract<
+      LeaderToFollowerMessage,
+      {
+        type:
+          | 'transcript.export.pending'
+          | 'transcript.export.denied'
+          | 'transcript.export.start'
+          | 'transcript.export.chunk'
+          | 'transcript.export.complete'
+          | 'transcript.export.error';
+      }
+    >
+  ): void {
+    switch (message.type) {
+      case 'transcript.export.pending':
+        log.debug('Transcript export pending', { requestId: message.requestId });
+        break;
+      case 'transcript.export.denied':
+        this.handleExportDenied(message.requestId);
+        break;
+      case 'transcript.export.start':
+        log.debug('Transcript export start', {
+          requestId: message.requestId,
+          filename: message.filename,
+        });
+        break;
+      case 'transcript.export.chunk':
+        this.handleExportChunk(message.requestId, message.index, message.data);
+        break;
+      case 'transcript.export.complete':
+        void this.handleExportComplete(
+          message.requestId,
+          message.chunks,
+          message.byteLength,
+          message.sha256
+        );
+        break;
+      case 'transcript.export.error':
+        this.handleExportError(message.requestId, message.code);
+        break;
+    }
+  }
+
+  /**
+   * Request a transcript export from the leader.
+   * Returns a Promise<Blob> with the verified ZIP, or rejects with
+   * TranscriptExportError on denial, corruption, or abort.
+   */
+  async requestTranscriptExport(
+    selector: TranscriptExportSelector,
+    signal: AbortSignal
+  ): Promise<Blob> {
+    const requestId = `te-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<Blob>((resolve, reject) => {
+      const onAbort = (): void => {
+        const entry = this.activeExportRequests.get(requestId);
+        if (!entry) return;
+        // Send cancel to leader
+        this.sync.send({ type: 'transcript.export.cancel', requestId });
+        this.activeExportRequests.delete(requestId);
+        reject(new TranscriptExportError('transfer-aborted'));
+      };
+
+      if (signal.aborted) {
+        reject(new TranscriptExportError('transfer-aborted'));
+        return;
+      }
+
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      this.activeExportRequests.set(requestId, {
+        resolve,
+        reject,
+        chunks: [],
+        nextExpectedIndex: 0,
+        duplicate: false,
+        signal,
+        onAbort,
+      });
+
+      this.sync.send({
+        type: 'transcript.export.request',
+        requestId,
+        selector,
+      });
+    });
+  }
+
+  private handleExportDenied(requestId: string): void {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+    entry.reject(new TranscriptExportError('permission-denied'));
+  }
+
+  private handleExportChunk(requestId: string, index: number, data: string): void {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+
+    // Reject duplicate indices immediately
+    if (index !== entry.nextExpectedIndex) {
+      log.warn('Transcript export chunk duplicate or gap', {
+        requestId,
+        expected: entry.nextExpectedIndex,
+        got: index,
+      });
+      entry.duplicate = true;
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      this.activeExportRequests.delete(requestId);
+      this.sync.send({ type: 'transcript.export.cancel', requestId });
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // Decode base64 chunk and store
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    entry.chunks.push(bytes);
+    entry.nextExpectedIndex++;
+  }
+
+  private async handleExportComplete(
+    requestId: string,
+    expectedChunks: number,
+    expectedByteLength: number,
+    expectedSha256: string
+  ): Promise<void> {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+
+    // Verify chunk count
+    if (entry.chunks.length !== expectedChunks) {
+      log.warn('Transcript export chunk count mismatch', {
+        requestId,
+        expected: expectedChunks,
+        got: entry.chunks.length,
+      });
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // Reassemble and verify byte length
+    let totalBytes = 0;
+    for (const c of entry.chunks) totalBytes += c.byteLength;
+    if (totalBytes !== expectedByteLength) {
+      log.warn('Transcript export byte length mismatch', {
+        requestId,
+        expected: expectedByteLength,
+        got: totalBytes,
+      });
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // Verify SHA-256
+    const { sha256 } = await import('js-sha256');
+    const hasher = sha256.create();
+    for (const c of entry.chunks) hasher.update(c);
+    if (hasher.hex() !== expectedSha256) {
+      log.warn('Transcript export SHA-256 mismatch', { requestId });
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // All checks passed — assemble Blob
+    const blob = new Blob(entry.chunks as Uint8Array<ArrayBuffer>[], { type: 'application/zip' });
+    entry.resolve(blob);
+  }
+
+  private handleExportError(requestId: string, code: TranscriptExportErrorCode): void {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+    entry.reject(new TranscriptExportError(code));
   }
 }
