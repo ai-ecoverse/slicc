@@ -124,13 +124,26 @@ function handleExportResponse(
   settlePending(pending, env.requestId, { resolve: env.blob });
 }
 
+const VALID_EXPORT_CODES = new Set<TranscriptExportError['code']>([
+  'permission-denied',
+  'redaction-unavailable',
+  'session-not-found',
+  'transfer-aborted',
+  'transfer-corrupt',
+  'schema-invalid',
+  'attachment-unreadable',
+]);
+
 function handleExportError(
   pending: Map<string, PendingExport>,
   env: Extract<CherryEnvelope, { kind: 'session.export.error' }>
 ): void {
-  settlePending(pending, env.requestId, {
-    reject: new TranscriptExportError(env.code as TranscriptExportError['code']),
-  });
+  const code: TranscriptExportError['code'] = VALID_EXPORT_CODES.has(
+    env.code as TranscriptExportError['code']
+  )
+    ? (env.code as TranscriptExportError['code'])
+    : 'transfer-corrupt';
+  settlePending(pending, env.requestId, { reject: new TranscriptExportError(code) });
 }
 
 async function dispatchCdp(

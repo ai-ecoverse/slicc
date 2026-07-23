@@ -89,6 +89,58 @@ describe('isCherryEnvelope', () => {
       })
     ).toBe(true);
   });
+
+  // Malformed export envelopes — L-2 guard tests
+  it('rejects export kinds with an empty requestId', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.request',
+        requestId: '',
+      })
+    ).toBe(false);
+  });
+  it('rejects export kinds with a missing requestId', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.cancel',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.progress without phase', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.progress',
+        requestId: 'req-1',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.response without a Blob', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.response',
+        requestId: 'req-1',
+        blob: 'not-a-blob',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.error without a code', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.error',
+        requestId: 'req-1',
+      })
+    ).toBe(false);
+  });
 });
 
 describe('isCherryVersionMismatch', () => {

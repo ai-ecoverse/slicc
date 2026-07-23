@@ -153,6 +153,7 @@
       <div class="row">
         <label>export</label>
         <button id="exportBtn" disabled>Export active transcript</button>
+        <button id="cancelExportBtn" disabled>Cancel export</button>
         <span class="hint"
           >Calls <code>handle.exportSession()</code>, logs progress phases, and downloads the
           returned zip. Does not log transcript content or byte contents.</span
@@ -286,6 +287,8 @@
       const destroyBtn = document.getElementById('destroyBtn');
       const emitBtn = document.getElementById('emitBtn');
       const exportBtn = document.getElementById('exportBtn');
+      const cancelExportBtn = document.getElementById('cancelExportBtn');
+      let activeExportController = null;
 
       mountBtn.addEventListener('click', () => {
         if (handle) return;
@@ -386,7 +389,9 @@
       exportBtn.addEventListener('click', async () => {
         if (!handle) return;
         exportBtn.disabled = true;
+        cancelExportBtn.disabled = false;
         const controller = new AbortController();
+        activeExportController = controller;
         log('export: requesting active transcript…');
         try {
           const blob = await handle.exportSession({
@@ -405,8 +410,16 @@
         } catch (err) {
           log('export failed:', err instanceof Error ? err.message : String(err));
         } finally {
+          activeExportController = null;
           exportBtn.disabled = !handle;
+          cancelExportBtn.disabled = true;
         }
+      });
+
+      cancelExportBtn.addEventListener('click', () => {
+        if (!activeExportController) return;
+        activeExportController.abort();
+        log('export: cancellation requested.');
       });
 
       const themeSelect = document.getElementById('theme');

@@ -202,12 +202,28 @@ const KINDS = new Set<CherryEnvelope['kind']>([
 export function isCherryEnvelope(value: unknown): value is CherryEnvelope {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return (
-    v.cherry === CHERRY_PROTOCOL_VERSION &&
-    typeof v.channelId === 'string' &&
-    typeof v.kind === 'string' &&
-    KINDS.has(v.kind as CherryEnvelope['kind'])
-  );
+  if (
+    v.cherry !== CHERRY_PROTOCOL_VERSION ||
+    typeof v.channelId !== 'string' ||
+    typeof v.kind !== 'string' ||
+    !KINDS.has(v.kind as CherryEnvelope['kind'])
+  )
+    return false;
+  // Export envelopes require a non-empty requestId and kind-specific fields.
+  const k = v.kind as CherryEnvelope['kind'];
+  if (
+    k === 'session.export.request' ||
+    k === 'session.export.cancel' ||
+    k === 'session.export.progress' ||
+    k === 'session.export.response' ||
+    k === 'session.export.error'
+  ) {
+    if (typeof v.requestId !== 'string' || v.requestId === '') return false;
+    if (k === 'session.export.progress' && typeof v.phase !== 'string') return false;
+    if (k === 'session.export.response' && !(v.blob instanceof Blob)) return false;
+    if (k === 'session.export.error' && typeof v.code !== 'string') return false;
+  }
+  return true;
 }
 
 export interface AcceptContext {
