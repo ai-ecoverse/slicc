@@ -226,7 +226,8 @@ export function prepareRequestBody(
   headers?: Record<string, string>
 ): BodyInit | undefined {
   if (!body) return undefined;
-  const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
+  const ct =
+    Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? '';
   if (!isTextContentType(ct)) {
     const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
     return new Blob([bytes]);

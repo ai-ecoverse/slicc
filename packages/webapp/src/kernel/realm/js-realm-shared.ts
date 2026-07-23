@@ -201,7 +201,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
           : String(input);
     const serialized: SerializedFetchResponse = await rpc.call('fetch', 'request', [
       url,
-      serializeRequestInit(opts, input),
+      await serializeRequestInit(opts, input),
     ]);
     const body =
       serialized.body.byteLength === 0
