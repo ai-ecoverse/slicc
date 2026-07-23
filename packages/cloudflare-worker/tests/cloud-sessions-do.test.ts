@@ -25,6 +25,7 @@ interface FakeSandbox {
 class FakeSubstrate implements SandboxSubstrate {
   readonly id = 'e2b' as const;
   readonly sandboxes = new Map<string, FakeSandbox>();
+  readonly createdTemplates: string[] = [];
   private nextId = 1;
   /** If set, connect() will throw this error. Used to test rollback logic. */
   connectError?: Error;
@@ -52,6 +53,7 @@ class FakeSubstrate implements SandboxSubstrate {
   }
 
   async create(opts: CreateOpts): Promise<SandboxHandle> {
+    this.createdTemplates.push(opts.template);
     const id = `sbx-${this.nextId++}`;
     this.seedSandbox(id, {
       state: 'running',
@@ -168,9 +170,10 @@ function makeFakeState() {
   return { state, storage };
 }
 
-function makeDoEnv(substrate: FakeSubstrate) {
+function makeDoEnv(substrate: FakeSubstrate, templateName?: string) {
   return {
     E2B_API_KEY: 'test',
+    ...(templateName === undefined ? {} : { SLICC_E2B_TEMPLATE_NAME: templateName }),
     __SUBSTRATE_FACTORY__: () => substrate as SandboxSubstrate,
   };
 }
@@ -220,6 +223,26 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
+  it.each([
+    { label: 'production default', configured: undefined, expected: 'slicc' },
+    { label: 'staging override', configured: 'slicc-staging', expected: 'slicc-staging' },
+    { label: 'blank override', configured: '   ', expected: 'slicc' },
+  ])('uses the $label template alias', async ({ configured, expected }) => {
+    const substrate = new FakeSubstrate();
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate, configured));
+
+    const response = await call(do_, '/start-cone', {
+      bearer: 'b',
+      userId: 'u1',
+      workerOrigin: 'https://w',
+      name: `template-${expected}`,
+    });
+
+    expect(response.status).toBe(200);
+    expect(substrate.createdTemplates).toEqual([expected]);
+  });
+
   it('start-cone creates a new cone', async () => {
     const substrate = new FakeSubstrate();
     const { state } = makeFakeState();

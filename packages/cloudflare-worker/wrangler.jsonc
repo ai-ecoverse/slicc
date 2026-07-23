@@ -82,6 +82,7 @@
         "BLOCKED_EMAILS": "",
         "REQUIRE_OWNER_ORG": "false",
         "ADMIN_USER_IDS": "",
+        "SLICC_E2B_TEMPLATE_NAME": "slicc-staging",
         // OAuth relay allowlist for remote origins (staging/preview deploys)
         "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai",
         // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)

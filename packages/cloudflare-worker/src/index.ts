@@ -54,6 +54,7 @@ export interface WorkerEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
+  SLICC_E2B_TEMPLATE_NAME?: string;
   ADOBE_PROXY_ENDPOINT?: string;
   IMS_RELAY_URL?: string;
   ALLOWED_EMAIL_DOMAIN?: string;

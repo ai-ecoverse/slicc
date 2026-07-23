@@ -225,6 +225,7 @@ Vars in `wrangler.jsonc`:
 - `BLOCKED_EMAILS` — CSV denylist.
 - `REQUIRE_OWNER_ORG` — `true` for expansion to any ownerOrg-holder.
 - `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
+- `SLICC_E2B_TEMPLATE_NAME` — optional sandbox template alias. Production leaves it unset and defaults to `slicc`; Wrangler staging sets `slicc-staging`, matching the alias built by `worker-staging.yml`.
 
 Secrets (`wrangler secret put`): `E2B_API_KEY` (Adobe team key; worker-only).
 

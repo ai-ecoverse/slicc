@@ -16,6 +16,7 @@ import { LocalRegistry } from './local-registry.js';
 
 interface DoEnv {
   E2B_API_KEY: string;
+  SLICC_E2B_TEMPLATE_NAME?: string;
   /** Test-only hatch: inject a substrate factory in place of e2b. */
   __SUBSTRATE_FACTORY__?: () => SandboxSubstrate;
 }
@@ -161,6 +162,7 @@ export class CloudSessionsDurableObject {
         { substrate, registry },
         {
           reservationId: reservation.reservationId,
+          template: this.env.SLICC_E2B_TEMPLATE_NAME?.trim() || undefined,
           envContents,
           coneConfigJson,
           envs: {
