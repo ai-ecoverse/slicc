@@ -55,6 +55,10 @@ import {
 export type { ScoopObserver };
 
 const log = createLogger('orchestrator');
+type SliccGlobalHooks = typeof globalThis & {
+  __slicc_fs_watcher?: FsWatcher;
+  __slicc_lick_handler?: (event: LickEvent) => void;
+};
 
 // Re-exported from the idle-timers module so consumers (tests, the cone-idle
 // notice copy) can keep importing it from this barrel.
@@ -332,7 +336,7 @@ export class Orchestrator implements ConeApprovalRouter {
     // Create and attach file system watcher
     this.fsWatcher = new FsWatcher();
     this.sharedFs.setWatcher(this.fsWatcher);
-    (globalThis as any).__slicc_fs_watcher = this.fsWatcher;
+    (globalThis as SliccGlobalHooks).__slicc_fs_watcher = this.fsWatcher;
     await this.ensureRootStructure();
 
     // Stand up the sudo policy manager: seeds the default /etc/sudoers
@@ -546,7 +550,7 @@ export class Orchestrator implements ConeApprovalRouter {
     lickManager.setScoopExistenceResolver((scoopField) =>
       this.getScoops().some((s) => lickScoopMatches(scoopField, s.name, s.folder))
     );
-    (globalThis as any).__slicc_lick_handler = (event: any) => {
+    (globalThis as SliccGlobalHooks).__slicc_lick_handler = (event: LickEvent) => {
       this.lickManager?.emitEvent(event);
     };
   }

@@ -1,5 +1,7 @@
+import type { LickEvent } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { FsChangeEvent, FsWatcher } from '../../fs/fs-watcher.js';
 
 // Keep a module-level registry of active fswatches
 interface FsWatchEntry {
@@ -14,6 +16,10 @@ interface FsWatchEntry {
 
 const activeWatches = new Map<string, FsWatchEntry>();
 let nextId = 0;
+type SliccGlobalHooks = typeof globalThis & {
+  __slicc_fs_watcher?: FsWatcher;
+  __slicc_lick_handler?: (event: LickEvent) => void;
+};
 
 export function createFsWatchCommand(): Command {
   return defineCommand('fswatch', async (args) => {
@@ -98,7 +104,7 @@ Options:
       };
 
       // Access VFS watcher via global hook
-      const watcher = (globalThis as any).__slicc_fs_watcher;
+      const watcher = (globalThis as SliccGlobalHooks).__slicc_fs_watcher;
       if (!watcher) {
         return {
           stdout: '',
@@ -110,18 +116,19 @@ Options:
       const id = `fsw-${++nextId}`;
       if (!name) name = `${pattern} in ${basePath}`;
 
-      const lickHandler = (globalThis as any).__slicc_lick_handler;
+      const lickHandler = (globalThis as SliccGlobalHooks).__slicc_lick_handler;
 
-      const unsubscribe = watcher.watch(basePath, filter, (events: any[]) => {
+      const unsubscribe = watcher.watch(basePath, filter, (events: FsChangeEvent[]) => {
         if (lickHandler) {
+          const changes = events.map((event) => ({ type: event.type, path: event.path }));
           lickHandler({
             type: 'fswatch',
             fswatchId: id,
             fswatchName: name,
             targetScoop: scoop,
             timestamp: new Date().toISOString(),
-            changes: events.map((e: any) => ({ type: e.type, path: e.path })),
-            body: { changes: events.map((e: any) => ({ type: e.type, path: e.path })) },
+            changes,
+            body: { changes },
           });
         }
       });
