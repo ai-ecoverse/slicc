@@ -13,10 +13,10 @@ import type { RealmRpcClient } from './realm-rpc.js';
 import type { TabHandle } from './realm-types.js';
 import { createWsObserverApi } from './realm-ws-observer.js';
 
-export function serializeRequestInit(
+export async function serializeRequestInit(
   init: RequestInit | undefined,
   input: string | URL | Request
-): RequestInit | undefined {
+): Promise<RequestInit | undefined> {
   if (!init && !(input instanceof Request)) return undefined;
   const fromRequest = input instanceof Request ? input : null;
   const method = (init?.method ?? fromRequest?.method ?? 'GET').toUpperCase();
@@ -37,10 +37,41 @@ export function serializeRequestInit(
     });
   }
   let body: string | undefined;
+  let isBinaryBody = false;
   if (init?.body !== undefined && init?.body !== null && init?.body !== '') {
-    body = typeof init.body === 'string' ? init.body : String(init.body);
+    const serialized = await serializeRequestBody(init.body);
+    body = serialized.body;
+    isBinaryBody = serialized.isBinary;
+  }
+  if (isBinaryBody && !Object.keys(headers).some((name) => name.toLowerCase() === 'content-type')) {
+    headers['Content-Type'] = 'application/octet-stream';
   }
   return { method, headers, body };
+}
+
+async function serializeRequestBody(body: BodyInit): Promise<{ body: string; isBinary: boolean }> {
+  if (typeof body === 'string' || body instanceof URLSearchParams) {
+    return { body: body.toString(), isBinary: false };
+  }
+  if (body instanceof Blob) {
+    return { body: bytesToLatin1(new Uint8Array(await body.arrayBuffer())), isBinary: true };
+  }
+  if (body instanceof ArrayBuffer) {
+    return { body: bytesToLatin1(new Uint8Array(body)), isBinary: true };
+  }
+  if (ArrayBuffer.isView(body)) {
+    const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+    return { body: bytesToLatin1(bytes), isBinary: true };
+  }
+  return { body: String(body), isBinary: false };
+}
+
+function bytesToLatin1(bytes: Uint8Array): string {
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return chunks.join('');
 }
 
 // ---------------------------------------------------------------------------
