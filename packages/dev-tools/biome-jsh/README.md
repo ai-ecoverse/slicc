@@ -54,6 +54,22 @@ runtime**, not bundled: `biome-jsh` looks for `node_modules/.bin/biome` walking
 up from the current directory and from its own location, or uses `$BIOME_BIN`.
 Any already-installed Biome is reused, so no fresh install is required.
 
+## Published package
+
+Published to npm as **`@ai-ecoverse/biome-jsh`** (public), released **in lockstep
+with SLICC** via slicc's semantic-release pipeline — its version tracks the
+`sliccy` release version (see the second `@semantic-release/npm` target with
+`pkgRoot: packages/dev-tools/biome-jsh` in `.releaserc.json`). Downstream repos
+consume it as a dev dependency:
+
+```sh
+npm i -D @ai-ecoverse/biome-jsh
+```
+
+then run `npx biome-jsh check <paths>` in CI — it reuses the repo's own
+already-installed `@biomejs/biome`, so there's nothing to rename and no false
+`return`/`await` parse errors.
+
 ## Layout
 
 | File                   | Role                                                            |
