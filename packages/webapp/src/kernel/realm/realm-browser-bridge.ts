@@ -63,7 +63,19 @@ async function serializeRequestBody(body: BodyInit): Promise<{ body: string; isB
     const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
     return { body: bytesToLatin1(bytes), isBinary: true };
   }
-  return { body: String(body), isBinary: false };
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    throw new Error(
+      'node fetch shim: FormData request bodies are not supported (post raw application/x-www-form-urlencoded with URLSearchParams instead)'
+    );
+  }
+  if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+    throw new Error(
+      'node fetch shim: ReadableStream request bodies are not supported (collect into a Uint8Array or string before calling fetch)'
+    );
+  }
+  throw new Error(
+    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, or URLSearchParams`
+  );
 }
 
 function bytesToLatin1(bytes: Uint8Array): string {
