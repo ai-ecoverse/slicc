@@ -383,6 +383,7 @@ async function launchOAuthExtension(
     };
 
     const handler = (message: unknown) => {
+      if (typeof message !== 'object' || message === null) return;
       const envelope = message as {
         source?: string;
         payload?: { type?: string; error?: string; redirectUrl?: string };

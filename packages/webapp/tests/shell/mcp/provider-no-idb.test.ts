@@ -43,6 +43,27 @@ describe('MCP provider registration without indexedDB', () => {
     expect(getRegisteredProviderConfig(mcpProviderId('weather'))).toBeUndefined();
   });
 
+  it('treats present-but-undefined indexedDB as unavailable', async () => {
+    const key = 'indexedDB' as const;
+    const prior = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    try {
+      await expect(ensureAllMcpProvidersRegistered()).resolves.toEqual([]);
+      await expect(ensureMcpProviderRegistered('weather')).resolves.toBe(false);
+    } finally {
+      if (prior) {
+        Object.defineProperty(globalThis, key, prior);
+      } else {
+        delete (globalThis as { indexedDB?: unknown }).indexedDB;
+      }
+    }
+  });
+
   it('still returns true for providers already in the in-session cache', async () => {
     // Populate the session cache via the synchronous registration path —
     // it doesn't touch IDB, so it works even when `indexedDB` is missing.

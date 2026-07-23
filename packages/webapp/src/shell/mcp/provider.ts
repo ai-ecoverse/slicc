@@ -43,7 +43,10 @@ export const MCP_PROVIDER_PREFIX = 'mcp:';
  * not defined` and surfaces as an unhandled rejection in Vitest 4.
  */
 function hasIndexedDB(): boolean {
-  return typeof globalThis !== 'undefined' && 'indexedDB' in globalThis;
+  return (
+    typeof globalThis !== 'undefined' &&
+    typeof (globalThis as { indexedDB?: unknown }).indexedDB !== 'undefined'
+  );
 }
 
 /** Public id formatter — `name` -> `mcp:<name>`. */

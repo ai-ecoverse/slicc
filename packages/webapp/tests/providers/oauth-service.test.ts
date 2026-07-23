@@ -717,6 +717,37 @@ describe('createOAuthLauncher — runtime gating regression', () => {
       })
     );
   });
+
+  it('extension launcher ignores null runtime messages and still resolves valid oauth results', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    let listener: ((message: unknown) => void) | undefined;
+    const onMessage = {
+      addListener: vi.fn((fn: (message: unknown) => void) => {
+        listener = fn;
+      }),
+      removeListener: vi.fn(),
+    };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    const promise = launcher('https://idp.example.com/authorize');
+    expect(listener).toBeDefined();
+    expect(() => listener?.(null)).not.toThrow();
+    listener?.({
+      source: 'service-worker',
+      payload: {
+        type: 'oauth-result',
+        redirectUrl: 'https://test-extension-id.chromiumapp.org/mcp-callback#code=ok',
+      },
+    });
+
+    await expect(promise).resolves.toBe(
+      'https://test-extension-id.chromiumapp.org/mcp-callback#code=ok'
+    );
+  });
 });
 
 describe('createOAuthLauncher — user-activation fast path (Wave 13b)', () => {
