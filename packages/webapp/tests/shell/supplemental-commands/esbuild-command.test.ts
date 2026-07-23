@@ -132,8 +132,16 @@ describe('inferLoader', () => {
 describe('matchesExternal', () => {
   it('matches exact specifiers and anchored wildcard patterns', () => {
     expect(matchesExternal('fs', ['fs'])).toBe(true);
+    expect(matchesExternal('pkg/subpath', ['pkg'])).toBe(true);
+    expect(matchesExternal('@scope/pkg/subpath', ['@scope/pkg'])).toBe(true);
+    expect(matchesExternal('pkg-extra/subpath', ['pkg'])).toBe(false);
     expect(matchesExternal('sliccy:fs', ['sliccy:*'])).toBe(true);
     expect(matchesExternal('other:sliccy:fs', ['sliccy:*'])).toBe(false);
+  });
+
+  it('keeps exact VFS external patterns exact', () => {
+    expect(matchesExternal('./vendor.js/nested', ['./vendor.js'])).toBe(false);
+    expect(matchesExternal('/workspace/vendor.js/nested', ['/workspace/vendor.js'])).toBe(false);
   });
 
   it('escapes regex metacharacters in patterns', () => {
@@ -157,7 +165,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
   it("surfaces a 'run ipk install' error for an uninstalled bare specifier", async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, []);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     const collected: { errors: { text: string }[] } = { errors: [] };
     type ResolveCb = (a: { path: string; importer?: string; namespace?: string }) => Promise<{
       path?: string;
@@ -183,7 +191,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
   it('marks node: / data: imports as external', async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, []);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     type ResolveCb = (a: { path: string; importer?: string; namespace?: string }) => Promise<{
       path?: string;
       external?: boolean;
@@ -206,7 +214,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
   it('marks a matched external before bare-specifier resolution', async () => {
     const ctx = createMockCtx();
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, ['sliccy:*']);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, ['sliccy:*'], null);
     type ResolveCb = (a: { path: string; importer?: string }) => Promise<{
       path?: string;
       external?: boolean;
@@ -224,6 +232,71 @@ describe('createVfsPlugin bare specifier resolution', () => {
       importer: '/workspace/entry.ts',
     });
     expect(res).toEqual({ path: 'sliccy:fs', external: true });
+  });
+
+  it.each([
+    ['browser', '/workspace/node_modules/conditional/browser.js'],
+    ['node', '/workspace/node_modules/conditional/node.js'],
+    ['neutral', '/workspace/node_modules/conditional/import.js'],
+  ] as const)('uses %s conditions for IPK package exports', async (platform, expectedPath) => {
+    const packageDir = '/workspace/node_modules/conditional';
+    const files = new Map([
+      [
+        `${packageDir}/package.json`,
+        JSON.stringify({
+          exports: {
+            browser: './browser.js',
+            node: './node.js',
+            import: './import.js',
+            default: './default.js',
+          },
+        }),
+      ],
+      [`${packageDir}/browser.js`, 'export default "browser";'],
+      [`${packageDir}/node.js`, 'export default "node";'],
+      [`${packageDir}/import.js`, 'export default "import";'],
+      [`${packageDir}/default.js`, 'export default "default";'],
+    ]);
+    const directories = new Set(['/workspace/node_modules', packageDir]);
+    const ctx = createMockCtx({
+      fs: {
+        exists: async (path) => files.has(path) || directories.has(path),
+        readFile: async (path) => {
+          const contents = files.get(path);
+          if (contents === undefined) throw new Error(`ENOENT: ${path}`);
+          return contents;
+        },
+        stat: async (path) => ({
+          isFile: files.has(path),
+          isDirectory: directories.has(path),
+          isSymbolicLink: false,
+          mode: directories.has(path) ? 0o755 : 0o644,
+          size: files.get(path)?.length ?? 0,
+          mtime: new Date(0),
+        }),
+      },
+    });
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx), [], platform);
+    type ResolveCb = (args: {
+      path: string;
+      importer?: string;
+      kind: string;
+    }) => Promise<{ path?: string; errors?: { text: string }[] }>;
+    let resolveCb: ResolveCb | null = null;
+    plugin.setup({
+      onResolve(_filter: { filter: RegExp }, cb: ResolveCb) {
+        resolveCb = cb;
+      },
+      onLoad: () => {},
+    } as unknown as Parameters<typeof plugin.setup>[0]);
+    if (!resolveCb) throw new Error('onResolve callback not registered');
+    const result = await (resolveCb as ResolveCb)({
+      path: 'conditional',
+      importer: '/workspace/entry.js',
+      kind: 'import-statement',
+    });
+    expect(result.errors).toBeUndefined();
+    expect(result.path).toBe(expectedPath);
   });
 });
 
@@ -513,7 +586,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
 
   function wirePlugin(ctx: ReturnType<typeof createMockCtx>) {
     const ipk = createIpkContextFromCtx(ctx);
-    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, []);
+    const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     let resolveCb: ResolveCb | null = null;
     let loadCb: LoadCb | null = null;
     const build = {

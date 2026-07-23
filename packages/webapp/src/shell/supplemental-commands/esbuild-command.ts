@@ -340,7 +340,8 @@ export function createVfsPlugin(
   fs: CommandContext['fs'],
   cwd: string,
   ipk: IpkResolutionContext,
-  externals: string[]
+  externals: string[],
+  platform: ParsedEsbuildArgs['platform']
 ): Plugin {
   return {
     name: 'slicc-vfs',
@@ -368,7 +369,12 @@ export function createVfsPlugin(
         // Bare specifier — resolve from ipk-installed node_modules.
         // No network fallback: a missing dep is surfaced as an
         // esbuild error pointing the user at the exact `ipk add`.
-        return resolveBareSpecifier(args.path, args.importer, ipk);
+        return resolveBareSpecifier(
+          args.path,
+          args.importer,
+          ipk,
+          ipkConditionsForPlatform(platform, args.kind)
+        );
       });
 
       // VFS load (default namespace).
@@ -384,10 +390,24 @@ export function createVfsPlugin(
 export function matchesExternal(path: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
     if (path === pattern) return true;
-    if (!pattern.includes('*')) return false;
+    if (!pattern.includes('*')) {
+      return !isVfsPath(pattern) && path.startsWith(`${pattern}/`);
+    }
     const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('*', '.*');
     return new RegExp(`^${escaped}$`).test(path);
   });
+}
+
+function ipkConditionsForPlatform(platform: ParsedEsbuildArgs['platform'], kind: string): string[] {
+  const accessKind = kind === 'require-call' || kind === 'require-resolve' ? 'require' : 'import';
+  switch (platform ?? 'browser') {
+    case 'browser':
+      return ['browser', accessKind, 'default'];
+    case 'node':
+      return ['node', accessKind, 'default'];
+    case 'neutral':
+      return [accessKind, 'default'];
+  }
 }
 
 function isVfsPath(path: string): boolean {
@@ -397,11 +417,12 @@ function isVfsPath(path: string): boolean {
 async function resolveBareSpecifier(
   path: string,
   importer: string | undefined,
-  ipk: IpkResolutionContext
+  ipk: IpkResolutionContext,
+  conditions: string[]
 ): Promise<{ path?: string; external?: boolean; errors?: { text: string }[] }> {
   const importerDir = importer?.startsWith('/') ? dirname(importer) : ipk.fromDir;
   try {
-    const result = await ipkResolve(path, importerDir, ipk.reader);
+    const result = await ipkResolve(path, importerDir, ipk.reader, { conditions });
     if (result.type === 'file') return { path: result.path };
     return { path, external: true };
   } catch (err) {
@@ -633,7 +654,15 @@ async function runBundle(
     entryPoints,
     bundle: true,
     write: false,
-    plugins: [createVfsPlugin(ctx.fs, ctx.cwd, createIpkContextFromCtx(ctx), parsed.external)],
+    plugins: [
+      createVfsPlugin(
+        ctx.fs,
+        ctx.cwd,
+        createIpkContextFromCtx(ctx),
+        parsed.external,
+        parsed.platform
+      ),
+    ],
     format: parsed.format ?? 'esm',
     ...buildOptionOverrides(parsed),
   };
