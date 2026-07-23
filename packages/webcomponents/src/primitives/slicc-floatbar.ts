@@ -1,7 +1,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
-import type { CostOverlayModel, CostOverlayScoop } from './slicc-cost-overlay.js';
+import type { CostOverlayModel, CostOverlayScoop, SliccCostOverlay } from './slicc-cost-overlay.js';
 import './slicc-cost-overlay.js';
 
 const DEFAULT_LABEL = 'CLI float';
@@ -237,7 +237,7 @@ export class SliccFloatbar extends HTMLElement {
 
   set costModels(value: CostOverlayModel[]) {
     this.#costModels = value;
-    if (this.#overlay) (this.#overlay as any).models = value;
+    if (this.#overlay) this.#overlay.models = value;
   }
 
   get costScoops(): CostOverlayScoop[] {
@@ -246,7 +246,7 @@ export class SliccFloatbar extends HTMLElement {
 
   set costScoops(value: CostOverlayScoop[]) {
     this.#costScoops = value;
-    if (this.#overlay) (this.#overlay as any).scoops = value;
+    if (this.#overlay) this.#overlay.scoops = value;
   }
 
   /**
@@ -303,9 +303,9 @@ export class SliccFloatbar extends HTMLElement {
   #showOverlay(): void {
     clearTimeout(this.#hideTimer);
     if (!this.#overlay) {
-      const overlay = document.createElement('slicc-cost-overlay');
-      (overlay as any).models = this.#costModels;
-      (overlay as any).scoops = this.#costScoops;
+      const overlay = document.createElement('slicc-cost-overlay') as SliccCostOverlay;
+      overlay.models = this.#costModels;
+      overlay.scoops = this.#costScoops;
       overlay.addEventListener('mouseenter', () => this.#showOverlay());
       overlay.addEventListener('mouseleave', () => this.#scheduleHide());
       this.#root.appendChild(overlay);
