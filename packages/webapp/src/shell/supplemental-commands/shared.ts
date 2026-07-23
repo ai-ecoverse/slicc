@@ -25,6 +25,8 @@ const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 
 export type TypeScriptModule = typeof import('typescript-js');
 
+export const TYPESCRIPT_VFS_INSTALL_COMMAND = 'ipk add typescript@6.0.3';
+
 export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
   if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {
     throw new Error(`${packageName} must use an exact semver version in package.json`);
@@ -209,7 +211,7 @@ export async function getSqlJs(): Promise<SqlJsModule> {
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed
- * `typescript` from the VFS `node_modules`. Mirrors the
+ * `typescript@6.0.3` from the VFS `node_modules`. Mirrors the
  * `IpkResolutionContext` shape used by `esbuild-wasm.ts` and
  * `biome-command.ts` so every float (standalone/hosted/extension/Node)
  * wires it the same way. `readBytes` is unused for typescript (the
@@ -224,7 +226,8 @@ export interface TypeScriptIpkContext {
 }
 
 const TYPESCRIPT_NOT_INSTALLED =
-  'typescript is not installed in node_modules: run `ipk add typescript` (no network fallback)';
+  `TypeScript 6 is not installed in node_modules: run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` ` +
+  '(no network fallback)';
 
 /**
  * Lazy singleton for the classic TypeScript JS compiler API. Pure JS (no WASM init).
@@ -236,7 +239,8 @@ const TYPESCRIPT_NOT_INSTALLED =
  * functional for tests and the realm host's transpile fallback.
  *
  * Browser runtime (standalone OR extension): reads the
- * ipk-installed `typescript/lib/typescript.js` from VFS `node_modules`
+ * ipk-installed `typescript@6.0.3` compiler from
+ * `typescript/lib/typescript.js` in VFS `node_modules`
  * via the shared resolver, evaluates the CJS source in a fresh
  * `new Function('module', 'exports', source)` wrapper, and returns
  * the captured `module.exports` as the `ts` API surface. No CDN
@@ -270,7 +274,7 @@ async function loadTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptMod
 
 /**
  * Try to read `typescript/lib/typescript.js` source from an ipk-installed
- * `typescript` in the VFS. Returns `null` on any resolution / read miss
+ * TypeScript 6 package in the VFS. Returns `null` on any resolution / read miss
  * so the caller surfaces the canonical guidance error. Exported so the
  * loader's resolution behavior is unit-testable without booting the
  * heavy compiler.
