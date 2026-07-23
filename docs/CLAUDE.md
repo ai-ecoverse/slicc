@@ -4,11 +4,12 @@ This file covers the documentation surface in `docs/`.
 
 ## Documentation Tiers
 
-| Tier            | Primary file/location              | Purpose                                                            |
-| --------------- | ---------------------------------- | ------------------------------------------------------------------ |
-| Public          | `README.md`                        | User-facing overview and onboarding                                |
-| Development     | root and package `CLAUDE.md` files | High-signal developer guidance and package navigation              |
-| Agent reference | `docs/`                            | Detailed architecture, commands, patterns, pitfalls, and workflows |
+| Tier                   | Primary file/location              | Purpose                                                                          |
+| ---------------------- | ---------------------------------- | -------------------------------------------------------------------------------- |
+| Public                 | `README.md`                        | User-facing overview and onboarding                                              |
+| Development            | root and package `CLAUDE.md` files | High-signal developer guidance and package navigation                            |
+| Agent reference        | `docs/`                            | Detailed architecture, commands, patterns, pitfalls, and workflows               |
+| Developer agent skills | `.agents/skills/*/SKILL.md`        | Repo procedures for verification, feature wiring, tests, and operations runbooks |
 
 ## How to Update Docs
 
