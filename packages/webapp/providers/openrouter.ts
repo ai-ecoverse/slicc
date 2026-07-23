@@ -91,7 +91,8 @@ export const config: ProviderConfig = {
     options?: OAuthLoginOptions
   ) => {
     await loginIntercepted(launcher, () => undefined, options);
-    await fetchModels();
+    // The permanent key is already stored; fall back to the seed catalog if refresh fails.
+    await fetchModels().catch(() => undefined);
     onSuccess();
   },
   onOAuthLogout: async () => {
