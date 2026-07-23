@@ -103,3 +103,4 @@ Swift-server includes `OAuthSecretStore.swift` for OAuth token replicas plus mat
 - `packages/node-server/CLAUDE.md` for the parallel Node runtime
 - `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/development.md` for broader run/debug workflow guidance
+- `docs/transcript-export.md` — transcript export (runs in the webapp; swift-server is transparent)

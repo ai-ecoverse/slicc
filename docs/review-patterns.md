@@ -241,6 +241,51 @@ URLs by hand. Verify the call works when the UI origin is the hosted origin and 
 the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
 Test in both CLI and extension floats.
 
+## Transcript export — redaction boundary and protocol parity
+
+Changes to export-service, redaction logic, or the Cherry/follower export protocol.
+
+**What to check**
+
+- Redaction is **fail-closed**: if the redactor fails to initialize, the export must abort with
+  `redaction-unavailable`, not emit an unredacted bundle. Any code path that skips or
+  short-circuits redaction is a Critical finding.
+- `privacy.reasoningExcluded` must always be `true`. Any path that can produce an export with
+  a reasoning block is a Critical finding.
+- Binary attachments go through unchanged — confirm no text-redaction step touches them.
+- Approval gate: every follower/Cherry export path must call `openTranscriptExportApproval()`
+  before streaming. A bypass is Critical.
+- Approval semantics: **one-time per request** — no "Always allow" option.
+- Cherry protocol: `session.export.request` → approval → `session.export.progress*` →
+  `session.export.response` OR `session.export.error`. Confirm cancel (`session.export.cancel`)
+  is handled on both sides.
+- Unknown error codes from followers must map to `transfer-corrupt` (M-1 guard in `mount.ts`).
+- SHA-256 verification on receipt: a mismatch must reject with `transfer-corrupt`.
+- No temporary files left behind after a cancelled or failed transfer.
+
+**Historical precedents**
+
+- **Task-4 review**: redaction was fail-open — export succeeded even when the redactor was
+  unavailable, potentially emitting raw secrets.
+- **Task-7 review**: legacy frozen-session IDs were not normalized, causing `session-not-found`
+  on valid IDs.
+- **Task-8 review (M-1)**: unknown error codes from followers were passed through unvalidated;
+  the fix maps unknown codes to `transfer-corrupt`.
+
+**Remediation** — verify the fail-closed path with a unit test that makes the redactor throw;
+confirm the approval dialog is rendered before `streamExport()` is called; check both
+follower (tray) and Cherry paths. See [docs/transcript-export.md](transcript-export.md).
+
+---
+
+## Approval gate changes in `wc-tray.ts` or `wc-transcript-export.ts`.
+
+When the approval dialog is changed: verify that Deny still resolves with `permission-denied`,
+that no approval escapes require a new prompt, and that the binary-attachment warning is
+still visible.
+
+---
+
 ## Severity rubric
 
 Reviewers should label findings so authors can triage:
