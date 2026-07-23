@@ -216,8 +216,15 @@ class ToolUIRegistry {
 // Global singleton registry
 export const toolUIRegistry = new ToolUIRegistry();
 
-/** Type for the onUpdate callback from AgentTool - uses any to avoid import cycles */
-type OnUpdateCallback = (partialResult: any) => void;
+interface ToolUiDoneContent {
+  type: 'tool_ui_done';
+  requestId: string;
+}
+
+/** Type for the onUpdate callback from AgentTool. */
+type OnUpdateCallback = (partialResult: {
+  content: Array<ToolUIContent | ToolUiDoneContent>;
+}) => void;
 
 /**
  * Show interactive UI from a tool execution.
@@ -283,7 +290,7 @@ export async function showToolUI(
           type: 'tool_ui',
           requestId: id,
           html: request.html,
-        } as { type: string; requestId: string; html: string },
+        },
       ],
     });
   } else {
@@ -298,7 +305,7 @@ export async function showToolUI(
           {
             type: 'tool_ui_done',
             requestId: id,
-          } as { type: string; requestId: string },
+          },
         ],
       });
     }
