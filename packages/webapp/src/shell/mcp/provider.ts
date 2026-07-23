@@ -272,7 +272,7 @@ export function removeMcpProvider(name: string): boolean {
 }
 
 /** Test-only helpers — reset module-level caches between tests. */
-export function _testOnly_resetMcpProviderState(): void {
+export function testOnlyResetMcpProviderState(): void {
   registeredInSession.clear();
   discoveryCache.clear();
 }

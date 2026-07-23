@@ -4,11 +4,11 @@ import {
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
 import {
-  _testOnly_resetMcpProviderState,
   ensureAllMcpProvidersRegistered,
   ensureMcpProviderRegistered,
   mcpProviderId,
   registerMcpProvider,
+  testOnlyResetMcpProviderState,
 } from '../../../src/shell/mcp/provider.js';
 
 // These tests run in Vitest's node environment where `indexedDB` is
@@ -17,13 +17,13 @@ import {
 
 describe('MCP provider registration without indexedDB', () => {
   beforeEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('weather'));
     unregisterProviderConfig(mcpProviderId('cached'));
   });
 
   afterEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('weather'));
     unregisterProviderConfig(mcpProviderId('cached'));
   });

@@ -4,15 +4,15 @@ import {
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
 import {
-  _testOnly_resetMcpProviderState,
   ensureMcpProviderRegistered,
   mcpProviderId,
   registerMcpProvider,
   removeMcpProvider,
+  testOnlyResetMcpProviderState,
 } from '../../../src/shell/mcp/provider.js';
 import {
-  _testOnly_resetStoreCache,
-  _testOnly_setFsModule,
+  testOnlyResetStoreCache,
+  testOnlySetFsModule,
 } from '../../../src/shell/mcp/provider-store-access.js';
 
 // ── Stub fs module ─────────────────────────────────────────────────
@@ -58,8 +58,8 @@ describe('ensureMcpProviderRegistered', () => {
   let originalIndexedDB: unknown;
 
   beforeEach(() => {
-    _testOnly_resetMcpProviderState();
-    _testOnly_resetStoreCache();
+    testOnlyResetMcpProviderState();
+    testOnlyResetStoreCache();
     // Drop any registry entry left over from a previous test run.
     unregisterProviderConfig(mcpProviderId('weather'));
     // The guard in `ensureMcpProviderRegistered` short-circuits when
@@ -72,8 +72,8 @@ describe('ensureMcpProviderRegistered', () => {
   });
 
   afterEach(() => {
-    _testOnly_setFsModule(null);
-    _testOnly_resetMcpProviderState();
+    testOnlySetFsModule(null);
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('weather'));
     if (hadIndexedDB) {
       (globalThis as any).indexedDB = originalIndexedDB;
@@ -83,7 +83,7 @@ describe('ensureMcpProviderRegistered', () => {
   });
 
   it('registers the provider on first call and is a no-op on subsequent calls', async () => {
-    _testOnly_setFsModule(makeFakeFsModule(SERVERS_JSON));
+    testOnlySetFsModule(makeFakeFsModule(SERVERS_JSON));
 
     const first = await ensureMcpProviderRegistered('weather');
     expect(first).toBe(true);
@@ -101,14 +101,14 @@ describe('ensureMcpProviderRegistered', () => {
   });
 
   it('returns false when the server has no persisted auth entry', async () => {
-    _testOnly_setFsModule(makeFakeFsModule(null));
+    testOnlySetFsModule(makeFakeFsModule(null));
     const ok = await ensureMcpProviderRegistered('weather');
     expect(ok).toBe(false);
     expect(getRegisteredProviderConfig(mcpProviderId('weather'))).toBeUndefined();
   });
 
   it('re-registers after removeMcpProvider clears the session cache', async () => {
-    _testOnly_setFsModule(makeFakeFsModule(SERVERS_JSON));
+    testOnlySetFsModule(makeFakeFsModule(SERVERS_JSON));
 
     await ensureMcpProviderRegistered('weather');
     expect(getRegisteredProviderConfig(mcpProviderId('weather'))).toBeDefined();
@@ -125,12 +125,12 @@ describe('ensureMcpProviderRegistered', () => {
 
 describe('registerMcpProvider', () => {
   beforeEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('synthetic'));
   });
 
   afterEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('synthetic'));
   });
 

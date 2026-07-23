@@ -174,13 +174,13 @@ export type { McpAuthEntry, McpServerAuthRecord, McpServerEntry, McpServersFile,
 // ── Test-only hooks ─────────────────────────────────────────────────
 
 /** Reset the cached fs module + instance so tests can swap implementations. */
-export function _testOnly_resetStoreCache(): void {
+export function testOnlyResetStoreCache(): void {
   cachedFsModule = null;
   cachedFs = null;
 }
 
 /** Inject a stub fs module (for tests that bypass IndexedDB). */
-export function _testOnly_setFsModule(mod: typeof import('../../fs/index.js') | null): void {
+export function testOnlySetFsModule(mod: typeof import('../../fs/index.js') | null): void {
   cachedFsModule = mod;
   cachedFs = null;
 }
