@@ -163,7 +163,7 @@ export class SliccFloatbar extends HTMLElement {
   readonly #onNarrowChange = (): void => {
     if (this.isConnected) this.#syncTitle();
   };
-  #overlay: HTMLElement | null = null;
+  #overlay: SliccCostOverlay | null = null;
   #costModels: CostOverlayModel[] = [];
   #costScoops: CostOverlayScoop[] = [];
   #hideTimer: ReturnType<typeof setTimeout> | undefined;
