@@ -55,7 +55,7 @@ const log = createLogger('provider-settings');
  * send in a half-state could route to the wrong agent.
  */
 /** Exposed for unit testing — not part of the public module surface. */
-export function _testOnly_dispatchTrayJoinWithFailureFeedback(
+export function testOnlyDispatchTrayJoinWithFailureFeedback(
   joinUrl: string,
   statusEl: HTMLElement
 ): () => void {

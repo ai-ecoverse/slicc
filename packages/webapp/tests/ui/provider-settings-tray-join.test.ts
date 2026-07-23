@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _testOnly_dispatchTrayJoinWithFailureFeedback as dispatch } from '../../src/ui/provider-settings.js';
+import { testOnlyDispatchTrayJoinWithFailureFeedback as dispatch } from '../../src/ui/provider-settings.js';
 
 /**
  * Tests for `dispatchTrayJoinWithFailureFeedback` — the helper that
