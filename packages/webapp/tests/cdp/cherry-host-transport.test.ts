@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TranscriptExportProgress } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHERRY_PROTOCOL_VERSION } from '../../src/cdp/cherry-host-protocol.js';
 import { CherryHostTransport } from '../../src/cdp/cherry-host-transport.js';
 
@@ -54,7 +54,11 @@ describe('CherryHostTransport', () => {
     try {
       // Host SDK speaking a different cherry version — fails the structural validator, but
       // must be diagnosed as skew (and fail fast), not eaten as noise.
-      h.inbound({ cherry: CHERRY_PROTOCOL_VERSION + 1, channelId: hello.channelId, kind: 'handshake.welcome' });
+      h.inbound({
+        cherry: CHERRY_PROTOCOL_VERSION + 1,
+        channelId: hello.channelId,
+        kind: 'handshake.welcome',
+      });
       await expect(p).rejects.toThrow(
         new RegExp(`version mismatch \\(peer v${CHERRY_PROTOCOL_VERSION + 1}`)
       );
@@ -74,7 +78,11 @@ describe('CherryHostTransport', () => {
       h.transport.testReceive({
         origin: 'https://evil.example',
         source: {} as MessageEventSource,
-        data: { cherry: CHERRY_PROTOCOL_VERSION + 1, channelId: hello.channelId, kind: 'handshake.welcome' },
+        data: {
+          cherry: CHERRY_PROTOCOL_VERSION + 1,
+          channelId: hello.channelId,
+          kind: 'handshake.welcome',
+        },
       } as MessageEvent);
     } finally {
       warnSpy.mockRestore();
@@ -383,7 +391,9 @@ describe('CherryHostTransport', () => {
     h.transport.onExportRequest = vi.fn().mockImplementation(
       (_rId: string, _sId: string, signal: AbortSignal) =>
         new Promise<Blob>((_resolve, _reject) => {
-          signal.addEventListener('abort', () => { aborted = true; });
+          signal.addEventListener('abort', () => {
+            aborted = true;
+          });
         })
     );
 

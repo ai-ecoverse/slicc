@@ -875,16 +875,20 @@ describe('exportSession', () => {
         source: iframe.contentWindow,
       })
     );
-    await vi.waitFor(() =>
-      expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true)
-    );
+    await vi.waitFor(() => expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true));
 
     const exportPromise = handle.exportSession();
     const request = posted.find((e) => e.kind === 'session.export.request');
 
     // Attacker sends a response from a different origin
     let settled = false;
-    exportPromise.then(() => { settled = true; }).catch(() => { settled = true; });
+    exportPromise
+      .then(() => {
+        settled = true;
+      })
+      .catch(() => {
+        settled = true;
+      });
 
     window.dispatchEvent(
       new MessageEvent('message', {
