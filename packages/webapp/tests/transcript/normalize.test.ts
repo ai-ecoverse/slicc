@@ -455,4 +455,102 @@ describe('normalizeConversations', () => {
     expect(result.excludedReasoningBlocks).toBe(1);
     expect(JSON.stringify(result)).not.toContain('chain of thought');
   });
+
+  // ---------------------------------------------------------------------------
+  // canonicalImages — assistant and tool-result image bytes
+  // ---------------------------------------------------------------------------
+
+  it('returns canonicalImages with data from assistant image blocks', () => {
+    // Pi's AssistantMessage type doesn't include ImageContent in its union at the
+    // TypeScript level but the runtime processes image blocks — cast needed.
+    const img = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'here is the image' },
+        { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+      ],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      usage: makeUsage(),
+      stopReason: 'stop',
+      timestamp: 10,
+    } as unknown as AgentMessage;
+    const result = normalizeConversations([
+      { id: 'conv-asst', kind: 'cone', name: 'Sliccy', messages: [img] },
+    ]);
+    // One attachment-ref should appear in the assistant message
+    const msg = result.conversations[0].messages[0];
+    const ref = msg.content.find((b) => b.type === 'attachment-ref');
+    expect(ref).toBeDefined();
+    const attachmentId = (ref as { type: 'attachment-ref'; attachmentId: string }).attachmentId;
+    // canonicalImages must contain the bytes for this ref
+    expect(result.canonicalImages).toBeDefined();
+    const entry = result.canonicalImages.get(attachmentId);
+    expect(entry).toBeDefined();
+    expect(entry?.data).toBe('aGVsbG8=');
+    expect(entry?.mimeType).toBe('image/png');
+  });
+
+  it('returns canonicalImages with data from tool-result image blocks', () => {
+    // Same cast: Pi tool-result content at the TS level lacks an image union member.
+    const toolResMsg = {
+      role: 'toolResult',
+      toolCallId: 'call-img',
+      toolName: 'screenshot',
+      content: [{ type: 'image', data: 'd29ybGQ=', mimeType: 'image/jpeg' }],
+      isError: false,
+      timestamp: 20,
+    } as unknown as AgentMessage;
+    const result = normalizeConversations([
+      { id: 'conv-tr', kind: 'cone', name: 'Sliccy', messages: [toolResMsg] },
+    ]);
+    const msg = result.conversations[0].messages[0];
+    const ref = msg.content.find((b) => b.type === 'attachment-ref');
+    expect(ref).toBeDefined();
+    const attachmentId = (ref as { type: 'attachment-ref'; attachmentId: string }).attachmentId;
+    expect(result.canonicalImages).toBeDefined();
+    const entry = result.canonicalImages.get(attachmentId);
+    expect(entry).toBeDefined();
+    expect(entry?.data).toBe('d29ybGQ=');
+    expect(entry?.mimeType).toBe('image/jpeg');
+  });
+
+  it('accumulates canonicalImages across multiple conversations', () => {
+    const assistantMsg = {
+      role: 'assistant',
+      content: [{ type: 'image', data: 'QQ==', mimeType: 'image/png' }],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      usage: makeUsage(),
+      stopReason: 'stop',
+      timestamp: 1,
+    } as unknown as AgentMessage;
+    const toolMsg = {
+      role: 'toolResult',
+      toolCallId: 'c1',
+      toolName: 'tool',
+      content: [{ type: 'image', data: 'Qg==', mimeType: 'image/gif' }],
+      isError: false,
+      timestamp: 2,
+    } as unknown as AgentMessage;
+    const result = normalizeConversations([
+      { id: 'conv-a', kind: 'cone', name: 'A', messages: [assistantMsg] },
+      { id: 'conv-b', kind: 'scoop', name: 'B', messages: [toolMsg] },
+    ]);
+    expect(result.canonicalImages.size).toBe(2);
+  });
+
+  it('canonicalImages is empty when no non-user image blocks exist', () => {
+    const result = normalizeConversations([
+      {
+        id: 'conv-text',
+        kind: 'cone',
+        name: 'T',
+        messages: [{ role: 'user', content: 'hello', timestamp: 1 }],
+      },
+    ]);
+    expect(result.canonicalImages.size).toBe(0);
+  });
 });

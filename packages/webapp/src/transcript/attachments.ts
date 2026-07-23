@@ -2,16 +2,21 @@
  * Transcript attachment extraction, classification, and bundle building.
  *
  * Walks the normalized TranscriptDocumentV1 to find all `attachment-ref`
- * blocks, associates them with UI ChatMessage.attachments by role ordinal,
- * and walks UI messages for additional file attachments (text / binary) that
- * were not captured as `attachment-ref` by the normalizer.
+ * blocks in ALL message roles (user, assistant, tool-result), associates
+ * them with canonical Pi image bytes or UI ChatMessage attachments by ordinal,
+ * and walks UI messages for additional file attachments (text / binary).
  *
  * Text attachments are passed through `redactTranscript` (via
  * `KnownSecretBatchRedactor`). Binary attachments are copied unchanged.
  * Both kinds get opaque `att-NNNN.ext` bundle paths and SHA-256 hashes.
+ *
+ * Attachment metadata (originalName) is redacted via `knownSecrets` +
+ * credential-pattern scanning before being stored in the document.
+ * Binary deduplication uses full SHA-256 (not unsafe first-64-bytes sampling).
  */
 
 import {
+  redactCredentialPatterns,
   type TranscriptAttachment,
   type TranscriptCompletenessReason,
   type TranscriptContentBlock,
@@ -19,6 +24,7 @@ import {
   TranscriptExportError,
 } from '@slicc/shared-ts';
 import type { ChatMessage } from '../scoops/chat-types.js';
+import type { CanonicalImageEntry } from './normalize.js';
 import { type KnownSecretBatchRedactor, redactTranscript } from './redact.js';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +35,13 @@ export interface AttachmentProcessingInput {
   document: TranscriptDocumentV1;
   chatMessagesByConversation: Map<string, readonly ChatMessage[]>;
   knownSecrets: KnownSecretBatchRedactor;
+  /** Base64 image data from assistant and tool-result Pi blocks, keyed by attachmentId. */
+  canonicalImages?: Map<string, CanonicalImageEntry>;
+  /**
+   * Optional VFS reader for resolving path-backed UI attachments.
+   * Called when a UI attachment has only `path` (no inline `data` or `text`).
+   */
+  vfsReader?: (path: string) => Promise<Uint8Array>;
   signal?: AbortSignal;
 }
 
@@ -47,7 +60,6 @@ interface PendingAttachment {
   originalName: string;
   mimeType: string;
   handling: 'text-redacted' | 'binary-unchanged';
-  bundleKey: string;
   rawText?: string;
   rawBytes?: Uint8Array;
   present: boolean;
@@ -106,21 +118,18 @@ function decodeBase64(b64: string): Uint8Array {
   return bytes;
 }
 
-/** Fast dedup key for binary bytes: first 64 bytes + total length. */
-function binaryDedupKey(bytes: Uint8Array): string {
-  const sample = bytes.slice(0, 64);
-  return `${bytes.length}:${btoa(String.fromCharCode(...sample))}`;
-}
-
 // ---------------------------------------------------------------------------
-// Attachment-ref location scanning
+// Attachment-ref location scanning (all message roles)
 // ---------------------------------------------------------------------------
 
 interface AttachmentRefLocation {
   attachmentId: string;
   conversationId: string;
   messageId: string;
+  role: 'user' | 'assistant' | 'tool-result';
+  /** Index among user-role messages in the conversation; only valid when role='user'. */
   userOrdinal: number;
+  /** Index among image-eligible attachments in the UI message; only valid when role='user'. */
   imgIndex: number;
 }
 
@@ -129,7 +138,8 @@ function collectExistingAttachmentRefs(document: TranscriptDocumentV1): Attachme
   for (const conv of document.conversations) {
     let userOrdinal = 0;
     for (const msg of conv.messages) {
-      if (msg.role !== 'user') continue;
+      const role = msg.role as 'user' | 'assistant' | 'tool-result';
+      if (role !== 'user' && role !== 'assistant' && role !== 'tool-result') continue;
       let imgIndex = 0;
       for (const block of msg.content) {
         if (block.type === 'attachment-ref') {
@@ -137,28 +147,30 @@ function collectExistingAttachmentRefs(document: TranscriptDocumentV1): Attachme
             attachmentId: block.attachmentId,
             conversationId: conv.id,
             messageId: msg.id,
+            role,
             userOrdinal,
             imgIndex,
           });
           imgIndex++;
         }
       }
-      userOrdinal++;
+      if (role === 'user') userOrdinal++;
     }
   }
   return locations;
 }
 
 // ---------------------------------------------------------------------------
-// Source extraction from a single UI attachment
+// Source extraction from a single UI attachment (async for VFS path-backed files)
 // ---------------------------------------------------------------------------
 
-function extractRawFromUiAttachment(
+async function extractRawFromUiAttachment(
   uiAtt: UiAttachment,
   attachmentId: string,
   convId: string,
-  messageId: string
-): PendingAttachment {
+  messageId: string,
+  vfsReader?: (path: string) => Promise<Uint8Array>
+): Promise<PendingAttachment> {
   const handling = attachmentHandling(uiAtt.mimeType, uiAtt.name);
   const base = {
     attachmentId,
@@ -174,76 +186,113 @@ function extractRawFromUiAttachment(
     let rawText: string | undefined;
     if (uiAtt.text !== undefined) rawText = uiAtt.text;
     else if (uiAtt.data !== undefined) rawText = new TextDecoder().decode(decodeBase64(uiAtt.data));
-    if (rawText === undefined) {
-      return {
-        ...base,
-        present: false,
-        missingReason: 'attachment-file-missing',
-        bundleKey: `missing:${attachmentId}`,
-      };
+    else if (uiAtt.path !== undefined && vfsReader !== undefined) {
+      try {
+        rawText = new TextDecoder().decode(await vfsReader(uiAtt.path));
+      } catch {
+        return {
+          ...base,
+          present: false,
+          missingReason: 'attachment-file-missing',
+        };
+      }
     }
-    return { ...base, rawText, bundleKey: `text:${rawText}` };
+    if (rawText === undefined) {
+      return { ...base, present: false, missingReason: 'attachment-file-missing' };
+    }
+    return { ...base, rawText };
   }
 
+  // binary-unchanged
   let rawBytes: Uint8Array | undefined;
   if (uiAtt.data !== undefined) rawBytes = decodeBase64(uiAtt.data);
-  if (rawBytes === undefined) {
-    return {
-      ...base,
-      present: false,
-      missingReason: 'attachment-file-missing',
-      bundleKey: `missing:${attachmentId}`,
-    };
+  else if (uiAtt.path !== undefined && vfsReader !== undefined) {
+    try {
+      rawBytes = await vfsReader(uiAtt.path);
+    } catch {
+      return { ...base, present: false, missingReason: 'attachment-file-missing' };
+    }
   }
-  return { ...base, rawBytes, bundleKey: `binary:${binaryDedupKey(rawBytes)}` };
+  if (rawBytes === undefined) {
+    return { ...base, present: false, missingReason: 'attachment-file-missing' };
+  }
+  return { ...base, rawBytes };
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: resolve existing attachment-ref blocks (inline images)
+// Phase 1: resolve existing attachment-ref blocks (all roles)
 // ---------------------------------------------------------------------------
 
 function resolveExistingRefs(
   refs: AttachmentRefLocation[],
-  chatMessagesByConversation: Map<string, readonly ChatMessage[]>
+  chatMessagesByConversation: Map<string, readonly ChatMessage[]>,
+  canonicalImages: Map<string, CanonicalImageEntry>,
+  vfsReader: ((path: string) => Promise<Uint8Array>) | undefined
 ): {
-  pending: PendingAttachment[];
+  pendingPromises: Promise<PendingAttachment>[];
   mismatchedConvIds: Set<string>;
-  /**
-   * Keys of UI attachment positions consumed by Phase 1.
-   * Format: `${convId}:${uiMsgId}:${fullAttachmentIndex}`.
-   * Phase 2 must skip any UI attachment whose key appears here to
-   * ensure Phase 1 and Phase 2 are provably disjoint.
-   */
   processedUiPositions: Set<string>;
 } {
-  const pending: PendingAttachment[] = [];
+  const pendingPromises: Promise<PendingAttachment>[] = [];
   const mismatchedConvIds = new Set<string>();
   const processedUiPositions = new Set<string>();
 
   for (const ref of refs) {
+    // Non-user roles: resolve from canonical Pi image data.
+    if (ref.role !== 'user') {
+      const entry = canonicalImages.get(ref.attachmentId);
+      if (entry === undefined) {
+        pendingPromises.push(
+          Promise.resolve<PendingAttachment>({
+            attachmentId: ref.attachmentId,
+            originalName: 'unknown',
+            mimeType: 'application/octet-stream',
+            handling: 'binary-unchanged',
+            present: false,
+            missingReason: 'attachment-file-missing',
+            sourceConversationId: ref.conversationId,
+            sourceMessageId: ref.messageId,
+          })
+        );
+      } else {
+        pendingPromises.push(
+          Promise.resolve<PendingAttachment>({
+            attachmentId: ref.attachmentId,
+            originalName: `image-${ref.imgIndex}`,
+            mimeType: entry.mimeType,
+            handling: 'binary-unchanged',
+            rawBytes: decodeBase64(entry.data),
+            present: true,
+            sourceConversationId: ref.conversationId,
+            sourceMessageId: ref.messageId,
+          })
+        );
+      }
+      continue;
+    }
+
+    // User role: resolve from UI messages by ordinal.
     const uiMessages = chatMessagesByConversation.get(ref.conversationId) ?? [];
     const uiUserMessages = uiMessages.filter((m) => m.role === 'user');
     const uiMsg = uiUserMessages[ref.userOrdinal];
 
     if (uiMsg === undefined) {
       mismatchedConvIds.add(ref.conversationId);
-      pending.push({
-        attachmentId: ref.attachmentId,
-        originalName: 'unknown',
-        mimeType: 'application/octet-stream',
-        handling: 'binary-unchanged',
-        bundleKey: `missing:${ref.attachmentId}`,
-        present: false,
-        missingReason: 'attachment-association-unavailable',
-        sourceConversationId: ref.conversationId,
-        sourceMessageId: ref.messageId,
-      });
+      pendingPromises.push(
+        Promise.resolve<PendingAttachment>({
+          attachmentId: ref.attachmentId,
+          originalName: 'unknown',
+          mimeType: 'application/octet-stream',
+          handling: 'binary-unchanged',
+          present: false,
+          missingReason: 'attachment-association-unavailable',
+          sourceConversationId: ref.conversationId,
+          sourceMessageId: ref.messageId,
+        })
+      );
       continue;
     }
 
-    // Build (attachment, originalIndex) pairs so Phase 1 can record exact
-    // positions for Phase 2 to skip — prevents double-processing a
-    // kind='file'+data attachment that matches both predicates.
     const allAtts = uiMsg.attachments ?? [];
     const uiImagesWithIdx = allAtts
       .map((a, i) => ({ a, i }))
@@ -251,29 +300,34 @@ function resolveExistingRefs(
     const entry = uiImagesWithIdx[ref.imgIndex];
 
     if (entry === undefined) {
-      pending.push({
-        attachmentId: ref.attachmentId,
-        originalName: 'unknown',
-        mimeType: 'application/octet-stream',
-        handling: 'binary-unchanged',
-        bundleKey: `missing:${ref.attachmentId}`,
-        present: false,
-        missingReason: 'attachment-file-missing',
-        sourceConversationId: ref.conversationId,
-        sourceMessageId: ref.messageId,
-      });
+      pendingPromises.push(
+        Promise.resolve<PendingAttachment>({
+          attachmentId: ref.attachmentId,
+          originalName: 'unknown',
+          mimeType: 'application/octet-stream',
+          handling: 'binary-unchanged',
+          present: false,
+          missingReason: 'attachment-file-missing',
+          sourceConversationId: ref.conversationId,
+          sourceMessageId: ref.messageId,
+        })
+      );
       continue;
     }
 
-    // Mark this UI attachment position as consumed so Phase 2 skips it.
     processedUiPositions.add(`${ref.conversationId}:${uiMsg.id}:${entry.i}`);
-
-    pending.push(
-      extractRawFromUiAttachment(entry.a, ref.attachmentId, ref.conversationId, ref.messageId)
+    pendingPromises.push(
+      extractRawFromUiAttachment(
+        entry.a,
+        ref.attachmentId,
+        ref.conversationId,
+        ref.messageId,
+        vfsReader
+      )
     );
   }
 
-  return { pending, mismatchedConvIds, processedUiPositions };
+  return { pendingPromises, mismatchedConvIds, processedUiPositions };
 }
 
 // ---------------------------------------------------------------------------
@@ -281,17 +335,10 @@ function resolveExistingRefs(
 // ---------------------------------------------------------------------------
 
 interface ContentUpdateMap {
-  /** conversationId → (messageId → updated content blocks) */
   updates: Map<string, Map<string, TranscriptContentBlock[]>>;
-  additionalPending: PendingAttachment[];
+  additionalPendingPromises: Promise<PendingAttachment>[];
 }
 
-/**
- * Pick Phase-2 file attachments from a UI message, excluding positions already
- * consumed by Phase 1. Returns (attachment, originalIndex) pairs that are not
- * in `processedUiPositions`. Extracted to keep `collectFileAttachments` within
- * the cognitive-complexity limit.
- */
 function selectPhase2Atts(
   uiMsg: ChatMessage,
   convId: string,
@@ -301,22 +348,20 @@ function selectPhase2Atts(
     .map((a, i) => ({ a, i }))
     .filter(
       ({ a, i }) =>
-        // Only text/binary file attachments not already handled by Phase 1.
-        // The kind='file'+data case is excluded when Phase 1 consumed this
-        // position — ensures the two phases are provably disjoint.
-        (a.kind === 'text' || (a.kind === 'file' && a.data !== undefined)) &&
+        (a.kind === 'text' ||
+          (a.kind === 'file' && (a.data !== undefined || a.path !== undefined))) &&
         !processedUiPositions.has(`${convId}:${uiMsg.id}:${i}`)
     );
 }
 
-/** Build new attachment-ref blocks for a single user message's Phase-2 file atts. */
 function buildPhase2Blocks(
   msg: TranscriptDocumentV1['conversations'][number]['messages'][number],
   uiMsg: ChatMessage,
   convId: string,
   existingPendingIds: Set<string>,
   processedUiPositions: Set<string>,
-  additionalPending: PendingAttachment[]
+  additionalPendingPromises: Promise<PendingAttachment>[],
+  vfsReader: ((path: string) => Promise<Uint8Array>) | undefined
 ): TranscriptContentBlock[] {
   const fileAtts = selectPhase2Atts(uiMsg, convId, processedUiPositions);
   const newBlocks: TranscriptContentBlock[] = [];
@@ -324,7 +369,9 @@ function buildPhase2Blocks(
     const { a: uiAtt } = fileAtts[k]!;
     const newId = `${msg.id}-file-${k}`;
     if (!existingPendingIds.has(newId)) {
-      additionalPending.push(extractRawFromUiAttachment(uiAtt, newId, convId, msg.id));
+      additionalPendingPromises.push(
+        extractRawFromUiAttachment(uiAtt, newId, convId, msg.id, vfsReader)
+      );
       newBlocks.push({ type: 'attachment-ref', attachmentId: newId });
     }
   }
@@ -335,16 +382,11 @@ function collectFileAttachments(
   document: TranscriptDocumentV1,
   chatMessagesByConversation: Map<string, readonly ChatMessage[]>,
   existingPendingIds: Set<string>,
-  /**
-   * UI attachment positions already consumed by Phase 1 (resolveExistingRefs).
-   * Keyed as `${convId}:${uiMsgId}:${fullAttachmentIndex}`. Entries here are
-   * skipped so Phase 2 never double-processes a kind='file'+data attachment
-   * that Phase 1 already handled via an attachment-ref block.
-   */
-  processedUiPositions: Set<string>
+  processedUiPositions: Set<string>,
+  vfsReader: ((path: string) => Promise<Uint8Array>) | undefined
 ): ContentUpdateMap {
   const updates = new Map<string, Map<string, TranscriptContentBlock[]>>();
-  const additionalPending: PendingAttachment[] = [];
+  const additionalPendingPromises: Promise<PendingAttachment>[] = [];
 
   for (const conv of document.conversations) {
     const uiMessages = chatMessagesByConversation.get(conv.id) ?? [];
@@ -363,7 +405,8 @@ function collectFileAttachments(
         conv.id,
         existingPendingIds,
         processedUiPositions,
-        additionalPending
+        additionalPendingPromises,
+        vfsReader
       );
       if (newBlocks.length > 0) {
         if (!updates.has(conv.id)) updates.set(conv.id, new Map());
@@ -372,11 +415,32 @@ function collectFileAttachments(
     }
   }
 
-  return { updates, additionalPending };
+  return { updates, additionalPendingPromises };
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: redact and build bundle
+// Metadata redaction: redact originalName values before storing in document
+// ---------------------------------------------------------------------------
+
+async function redactAttachmentNames(
+  names: string[],
+  knownSecrets: KnownSecretBatchRedactor,
+  signal: AbortSignal | undefined
+): Promise<string[]> {
+  if (names.length === 0) return [];
+  let afterKnown: readonly string[];
+  try {
+    afterKnown = await knownSecrets.redact(names, signal);
+  } catch (err) {
+    if (err instanceof TranscriptExportError) throw err;
+    throw new TranscriptExportError('attachment-unreadable');
+  }
+  if (afterKnown.length !== names.length) throw new TranscriptExportError('attachment-unreadable');
+  return afterKnown.map((name) => redactCredentialPatterns(name, 'mdr', 1).text);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: redact document, build bundle with SHA-256-based dedup
 // ---------------------------------------------------------------------------
 
 async function redactAndBuildBundle(
@@ -387,10 +451,10 @@ async function redactAndBuildBundle(
   signal?: AbortSignal
 ): Promise<{
   redactedDocument: TranscriptDocumentV1;
-  redactedText: Map<string, string>;
   bundleFiles: Map<string, Uint8Array>;
   transcriptAttachments: TranscriptAttachment[];
 }> {
+  // Build text map for document redaction.
   const textMap = new Map<string, string>();
   for (const p of allPending) {
     if (p.handling === 'text-redacted' && p.rawText !== undefined) {
@@ -398,27 +462,38 @@ async function redactAndBuildBundle(
     }
   }
 
+  // Redact the document (conversations, delegations, etc.). Rethrow any
+  // TranscriptExportError (e.g. redaction-unavailable) unchanged.
   let redactedDocument: TranscriptDocumentV1;
   let redactedText: Map<string, string>;
   try {
     const res = await redactTranscript(document, textMap, knownSecrets, signal);
     redactedDocument = res.document;
     redactedText = res.textAttachments;
-  } catch {
+  } catch (err) {
+    if (err instanceof TranscriptExportError) throw err;
     throw new TranscriptExportError('attachment-unreadable');
   }
 
+  // Redact originalName values (metadata) separately before storing.
+  const nameInputs = allPending.map((p) => p.originalName);
+  const redactedNames = await redactAttachmentNames(nameInputs, knownSecrets, signal);
+
+  // Build bundle with full SHA-256-based dedup (replaces unsafe first-64-bytes key).
   const bundleFiles = new Map<string, Uint8Array>();
   const transcriptAttachments: TranscriptAttachment[] = [];
-  const dedupeByKey = new Map<string, string>();
+  const dedupeByHash = new Map<string, string>(); // sha256 → opaquePath
   let idx = 0;
 
-  for (const p of allPending) {
+  for (let i = 0; i < allPending.length; i++) {
+    const p = allPending[i]!;
+    const redactedName = redactedNames[i] ?? p.originalName;
+
     if (!p.present) {
       transcriptAttachments.push({
         id: p.attachmentId,
         path: '',
-        originalName: p.originalName,
+        originalName: redactedName,
         mimeType: p.mimeType,
         byteLength: 0,
         sha256: '',
@@ -429,8 +504,6 @@ async function redactAndBuildBundle(
         missingReason:
           p.missingReason === 'attachment-file-missing' ? 'attachment-file-missing' : undefined,
       });
-      // Both missing-file and association-failure escalate the document to
-      // partial so consumers know the export is not complete.
       if (p.missingReason === 'attachment-association-unavailable') {
         partialReasons.add('attachment-association-unavailable');
       } else if (p.missingReason === 'attachment-file-missing') {
@@ -439,16 +512,24 @@ async function redactAndBuildBundle(
       continue;
     }
 
-    const existingPath = dedupeByKey.get(p.bundleKey);
+    // Compute final bytes.
+    const bytes =
+      p.handling === 'text-redacted'
+        ? new TextEncoder().encode(redactedText.get(p.attachmentId) ?? p.rawText ?? '')
+        : p.rawBytes!;
+
+    // SHA-256-based dedup (safe: full content hash, no sampling).
+    const hash = await sha256Hex(bytes);
+    const existingPath = dedupeByHash.get(hash);
+
     if (existingPath !== undefined) {
-      const existingBytes = bundleFiles.get(existingPath)!;
       transcriptAttachments.push({
         id: p.attachmentId,
         path: existingPath,
-        originalName: p.originalName,
+        originalName: redactedName,
         mimeType: p.mimeType,
-        byteLength: existingBytes.length,
-        sha256: await sha256Hex(existingBytes),
+        byteLength: bytes.length,
+        sha256: hash,
         sourceConversationId: p.sourceConversationId,
         sourceMessageId: p.sourceMessageId,
         handling: p.handling,
@@ -458,20 +539,15 @@ async function redactAndBuildBundle(
     }
 
     const opaquePath = assignOpaquePath(idx++, p.originalName);
-    const bytes =
-      p.handling === 'text-redacted'
-        ? new TextEncoder().encode(redactedText.get(p.attachmentId) ?? p.rawText ?? '')
-        : p.rawBytes!;
-
     bundleFiles.set(opaquePath, bytes);
-    dedupeByKey.set(p.bundleKey, opaquePath);
+    dedupeByHash.set(hash, opaquePath);
     transcriptAttachments.push({
       id: p.attachmentId,
       path: opaquePath,
-      originalName: p.originalName,
+      originalName: redactedName,
       mimeType: p.mimeType,
       byteLength: bytes.length,
-      sha256: await sha256Hex(bytes),
+      sha256: hash,
       sourceConversationId: p.sourceConversationId,
       sourceMessageId: p.sourceMessageId,
       handling: p.handling,
@@ -479,7 +555,7 @@ async function redactAndBuildBundle(
     });
   }
 
-  return { redactedDocument, redactedText, bundleFiles, transcriptAttachments };
+  return { redactedDocument, bundleFiles, transcriptAttachments };
 }
 
 // ---------------------------------------------------------------------------
@@ -488,34 +564,37 @@ async function redactAndBuildBundle(
 
 /**
  * Process all attachments in the document:
- *  1. Resolve existing `attachment-ref` blocks (inline images) from UI data.
+ *  1. Resolve existing `attachment-ref` blocks (all roles) from canonical Pi data or UI.
  *  2. Walk UI ChatMessage.attachments for additional text/binary files.
- *  3. Redact text attachments via `KnownSecretBatchRedactor`.
+ *  3. Redact text attachments and attachment metadata (originalName) via KnownSecretBatchRedactor.
  *  4. Copy binary bytes unchanged.
- *  5. Assign opaque `att-NNNN.ext` names and compute SHA-256 hashes.
+ *  5. Assign opaque `att-NNNN.ext` names and compute full SHA-256 hashes for dedup.
  *  6. Populate `document.attachments[]` and return bundle files.
  *
- * Throws `TranscriptExportError('attachment-unreadable')` on decode/redaction failure.
+ * Throws `TranscriptExportError('redaction-unavailable')` on redaction failure.
+ * Throws `TranscriptExportError('attachment-unreadable')` on decode/read failure.
  */
 export async function processTranscriptAttachments(
   input: AttachmentProcessingInput
 ): Promise<AttachmentProcessingResult> {
   const { document, chatMessagesByConversation, knownSecrets, signal } = input;
+  const canonicalImages = input.canonicalImages ?? new Map<string, CanonicalImageEntry>();
+  const vfsReader = input.vfsReader;
   const partialReasons = new Set<TranscriptCompletenessReason>();
 
-  // Phase 1: resolve existing image attachment-refs by ordinal matching.
+  // Phase 1: resolve existing attachment-refs (all roles).
   const existingRefs = collectExistingAttachmentRefs(document);
   const {
-    pending: phase1Pending,
+    pendingPromises: phase1Promises,
     mismatchedConvIds,
     processedUiPositions,
-  } = resolveExistingRefs(existingRefs, chatMessagesByConversation);
+  } = resolveExistingRefs(existingRefs, chatMessagesByConversation, canonicalImages, vfsReader);
 
   if (mismatchedConvIds.size > 0) {
     partialReasons.add('attachment-association-unavailable');
   }
 
-  // Also flag conversations where normalized has more user messages than UI.
+  // Flag conversations where normalized has more user messages than UI.
   for (const conv of document.conversations) {
     const normalizedUserCount = conv.messages.filter((m) => m.role === 'user').length;
     const uiMessages = chatMessagesByConversation.get(conv.id) ?? [];
@@ -526,13 +605,16 @@ export async function processTranscriptAttachments(
   }
 
   // Phase 2: collect text/binary file attachments not yet in the doc.
+  const phase1Pending = await Promise.all(phase1Promises);
   const existingIds = new Set(phase1Pending.map((p) => p.attachmentId));
-  const { updates, additionalPending } = collectFileAttachments(
+  const { updates, additionalPendingPromises } = collectFileAttachments(
     document,
     chatMessagesByConversation,
     existingIds,
-    processedUiPositions
+    processedUiPositions,
+    vfsReader
   );
+  const additionalPending = await Promise.all(additionalPendingPromises);
 
   const allPending = [...phase1Pending, ...additionalPending];
 
