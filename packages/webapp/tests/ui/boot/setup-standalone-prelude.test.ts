@@ -172,7 +172,6 @@ function createFakeWindow(search: string): Window {
 
 describe('setupStandalonePrelude — extension leader transport selection', () => {
   afterEach(() => {
-    // biome-ignore lint/performance/noDelete: test cleanup of an injected global
     delete (globalThis as { chrome?: unknown }).chrome;
     delete (globalThis as Record<string, unknown>).__slicc_browser;
   });
