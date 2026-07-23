@@ -46,6 +46,10 @@ unless, in the same change, you:
 1. Refactor every function in that file under the relevant cap, then
 2. Remove the file's entry from the corresponding `biome.json` `overrides` block.
 
+For warning-only cleanup PRs, this means "lint warning count down" is not enough:
+if you touch a debt-listed file, you must fully pay down that file's complexity debt
+in the same PR or avoid touching that file.
+
 It is a one-way ratchet — you may not add a file to the debt list to silence it. The
 gate auto-skips on `merge_group` / `push` events (it resolves the merge-base against
 `$GITHUB_BASE_REF`), so always run it locally before pushing if you touched a listed file.
