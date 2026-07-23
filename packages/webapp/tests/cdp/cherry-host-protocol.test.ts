@@ -145,8 +145,7 @@ describe('isCherryEnvelope', () => {
 
 describe('isCherryVersionMismatch', () => {
   it('detects an envelope-shaped message with a different version', () => {
-    // Use a version that is definitely not the current one (neither 1 nor CHERRY_PROTOCOL_VERSION)
-    expect(isCherryVersionMismatch({ ...make(), cherry: 3 })).toBe(true);
+    expect(isCherryVersionMismatch({ ...make(), cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(true);
     expect(isCherryVersionMismatch({ cherry: 0, channelId: 'x', kind: 'handshake.hello' })).toBe(
       true
     );
@@ -159,7 +158,7 @@ describe('isCherryVersionMismatch', () => {
   });
   it('is false for non-envelope noise', () => {
     expect(isCherryVersionMismatch(null)).toBe(false);
-    expect(isCherryVersionMismatch({ cherry: 3 })).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(false);
     expect(isCherryVersionMismatch({ cherry: '3', channelId: 'x', kind: 'k' })).toBe(false);
   });
 });
