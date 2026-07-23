@@ -34,6 +34,7 @@ import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'ju
 import type { BrowserAPI } from '../cdp/index.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
+import { FsError } from '../fs/types.js';
 import { GitCommands } from '../git/git-commands.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { SudoBroker } from '../sudo/types.js';
@@ -771,8 +772,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       if (await fs.exists(path)) {
         existing = (await fs.readFile(path)) as string;
       }
-    } catch {
-      existing = '';
+    } catch (err) {
+      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
     }
     const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
     await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
