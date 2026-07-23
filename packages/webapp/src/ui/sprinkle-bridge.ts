@@ -887,9 +887,10 @@ export class SprinkleBridge {
    * Build the `slicc.agent()` sprinkle helper that spawns a scoop and
    * returns its final message. Wraps the `agent` shell command.
    */
-  private createAgentHandler(
-    sprinkleName: string
-  ): (prompt: string, opts?: SprinkleAgentOptions) => Promise<SprinkleAgentResult> {
+  private createAgentHandler(): (
+    prompt: string,
+    opts?: SprinkleAgentOptions
+  ) => Promise<SprinkleAgentResult> {
     return async (prompt, opts) => {
       const cwd = opts?.cwd ?? '.';
       const allowed = opts?.allowedCommands ?? '*';
@@ -1100,7 +1101,7 @@ export class SprinkleBridge {
       _jsh: (op: string, args: unknown[]) => this.jshDispatch(op, args),
       _device: (channel: 'hid' | 'serial' | 'usb', op: string, args: unknown[]) =>
         this.deviceOp(sprinkleName, channel, op, args),
-      agent: this.createAgentHandler(sprinkleName),
+      agent: this.createAgentHandler(),
     };
     return api;
   }
