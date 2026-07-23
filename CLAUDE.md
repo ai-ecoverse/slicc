@@ -182,5 +182,6 @@ Automated reviewers (Claude action, Codex via `AGENTS.md`, Copilot via `.github/
 8. **Follower wiring parity** — leader broadcasts need matching follower handler + UI action; check all boot paths.
 9. **Origin/bridge routing** — `fetch('/api/...')` must work in thin-bridge mode; normalize trailing slashes.
 10. **Agent skill freshness** — shell command changes → update matching `vfs-root/workspace/skills/*/SKILL.md`.
+11. **Transcript export redaction** — fail-closed redaction; `reasoningExcluded` always true; approval gate on every follower/Cherry path; unknown error codes → `transfer-corrupt`; SHA-256 verified. See `docs/transcript-export.md`.
 
 When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.

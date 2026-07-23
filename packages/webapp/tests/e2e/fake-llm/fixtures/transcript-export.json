@@ -1,0 +1,21 @@
+{
+  "model": "fake-exporter",
+  "turns": [
+    {
+      "whenUserMessageMatches": "export",
+      "content": "I'll run the export scenario and capture the credential-shaped string in a tool call.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "echo 'integration_token=sk-1234abcd5678efgh9012ijkl3456mnop'"
+          }
+        }
+      ]
+    },
+    {
+      "content": "Done. The credential-shaped token appeared in the command output and should be redacted in any export."
+    }
+  ],
+  "onOverflow": "error"
+}
