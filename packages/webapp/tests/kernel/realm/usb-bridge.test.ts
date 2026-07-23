@@ -73,7 +73,13 @@ function setup(recorded: Recorded[], throwOn?: string) {
   const handle = attachRealmHost(host, ctx, { usbBackend: makeMockBackend(recorded, throwOn) });
   const client = new RealmRpcClient(realm);
   const usb = createUsbBridge(client);
-  return { usb, dispose: () => (client.dispose(), handle.dispose()) };
+  return {
+    usb,
+    dispose: () => {
+      client.dispose();
+      handle.dispose();
+    },
+  };
 }
 
 describe('realm usb bridge', () => {

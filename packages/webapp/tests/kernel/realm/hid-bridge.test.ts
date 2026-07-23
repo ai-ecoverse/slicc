@@ -90,7 +90,15 @@ function setup(recorded: Recorded[], opts: MockBackendOpts = {}) {
   const handle = attachRealmHost(host, ctx, { hidBackend: makeMockBackend(recorded, opts) });
   const client = new RealmRpcClient(realm);
   const hid = createHidBridge(client);
-  return { hid, client, handle, dispose: () => (client.dispose(), handle.dispose()) };
+  return {
+    hid,
+    client,
+    handle,
+    dispose: () => {
+      client.dispose();
+      handle.dispose();
+    },
+  };
 }
 
 describe('realm hid bridge', () => {
