@@ -205,7 +205,7 @@ async function prepareTstHarness(ts: TypeScriptModule): Promise<string> {
     target: ts.ScriptTarget.ES2022,
     esModuleInterop: true,
     isolatedModules: false,
-  } as import('typescript').CompilerOptions;
+  } as import('typescript-js').CompilerOptions;
   const assertCjs = ts.transpileModule(assertSource, {
     compilerOptions: opts,
     fileName: 'assert.js',
@@ -347,7 +347,7 @@ async function collectLocalDependencies(
   ts: TypeScriptModule,
   entryPath: string,
   entryCjs: string,
-  userOpts: import('typescript').CompilerOptions
+  userOpts: import('typescript-js').CompilerOptions
 ): Promise<{
   modules: Map<string, string>;
   edgeRewrites: Map<string, Map<string, string>>;
@@ -444,7 +444,7 @@ export function _resetTstHarnessForTests(): void {
 
 type TestCmdResult = { stdout: string; stderr: string; exitCode: number };
 
-type UserCompilerOptions = import('typescript').CompilerOptions;
+type UserCompilerOptions = import('typescript-js').CompilerOptions;
 
 const USER_OPTS_TEMPLATE = {
   esModuleInterop: true,

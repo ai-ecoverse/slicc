@@ -205,7 +205,10 @@ export async function loadTsconfig(
   };
 }
 
-function diagnosticToString(ts: TypeScriptModule, diag: import('typescript').Diagnostic): string {
+function diagnosticToString(
+  ts: TypeScriptModule,
+  diag: import('typescript-js').Diagnostic
+): string {
   const text = ts.flattenDiagnosticMessageText(diag.messageText, '\n');
   if (diag.file && typeof diag.start === 'number') {
     const { line, character } = diag.file.getLineAndCharacterOfPosition(diag.start);
@@ -217,7 +220,7 @@ function diagnosticToString(ts: TypeScriptModule, diag: import('typescript').Dia
 function inferScriptKind(
   ts: TypeScriptModule,
   fileName: string
-): import('typescript').ScriptKind | undefined {
+): import('typescript-js').ScriptKind | undefined {
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.tsx')) return ts.ScriptKind.TSX;
   if (lower.endsWith('.jsx')) return ts.ScriptKind.JSX;
@@ -228,7 +231,7 @@ function inferScriptKind(
 
 interface TranspileOneResult {
   outputText: string;
-  diagnostics: import('typescript').Diagnostic[];
+  diagnostics: import('typescript-js').Diagnostic[];
 }
 
 function transpileOne(
@@ -239,7 +242,7 @@ function transpileOne(
   reportDiagnostics: boolean
 ): TranspileOneResult {
   const result = ts.transpileModule(source, {
-    compilerOptions: compilerOptions as import('typescript').CompilerOptions,
+    compilerOptions: compilerOptions as import('typescript-js').CompilerOptions,
     fileName,
     reportDiagnostics,
   });

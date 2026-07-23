@@ -114,7 +114,8 @@
     "prettier": "3.9.5",
     "semantic-release": "25.0.7",
     "tsx": "4.23.1",
-    "typescript": "^6.0.0",
+    "typescript": "^7.0.0",
+    "typescript-js": "npm:typescript@6.0.3",
     "vite": "8.1.5",
     "vitest": "4.1.10"
   },
