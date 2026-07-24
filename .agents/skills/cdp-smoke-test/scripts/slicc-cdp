@@ -18,6 +18,8 @@
  *   slicc-cdp term-text [lines]             # read visible terminal buffer (default 15 lines)
  *   slicc-cdp shot <file> [title-substr]    # screenshot leader (or matching target)
  *   slicc-cdp watch <logfile>               # stream console errors/warnings (foreground)
+ *   slicc-cdp download <outfile> [trigger-js]  # capture a browser download to <outfile>
+ *                                              # (default trigger: avatar-menu Export transcript)
  */
 
 const args = process.argv.slice(2);
@@ -471,6 +473,87 @@ if (cmd === 'targets') {
   const { writeFileSync } = await import('node:fs');
   writeFileSync(file, Buffer.from(shot.result.data, 'base64'));
   console.log('saved', file);
+  session.ws.close();
+} else if (cmd === 'download') {
+  // Capture an anchor/blob browser download to a host file. Chrome (the
+  // harness browser) runs locally, so CDP writes the download to a temp
+  // dir on this host that we then copy to <outfile>. Works for the
+  // avatar-menu "Export transcript" action (default trigger) or any custom
+  // JS that initiates a download.
+  const [outfile, ...triggerParts] = rest;
+  if (!outfile) {
+    console.error('usage: slicc-cdp download <outfile> [trigger-js]');
+    process.exit(1);
+  }
+  const trigger =
+    triggerParts.join(' ') ||
+    `(() => { const m = document.querySelector('slicc-avatar-menu'); if (!m) throw new Error('slicc-avatar-menu not found'); m.dispatchEvent(new CustomEvent('slicc-avatar-action', { detail: { id: 'export-transcript' }, bubbles: true, composed: true })); return 'dispatched'; })()`;
+  const { mkdtempSync, readFileSync, writeFileSync, readdirSync, existsSync } =
+    await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dlDir = mkdtempSync(path.join(os.tmpdir(), 'slicc-dl-'));
+  const session = await connect();
+  // Subscribe BEFORE triggering so no download event is missed.
+  let guid = null;
+  let suggested = null;
+  let state = null;
+  session.subscribe((m) => {
+    if (m.method === 'Page.downloadWillBegin') {
+      guid = m.params.guid;
+      suggested = m.params.suggestedFilename;
+    }
+    if (m.method === 'Page.downloadProgress') state = m.params.state;
+  });
+  await session.send('Page.enable');
+  // Browser-scoped behavior saves the file named by its guid (no picker);
+  // fall back to the deprecated page-scoped variant if unsupported.
+  try {
+    await session.send('Browser.setDownloadBehavior', {
+      behavior: 'allowAndName',
+      downloadPath: dlDir,
+      eventsEnabled: true,
+    });
+  } catch {
+    await session.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: dlDir });
+  }
+  await session.send('Page.bringToFront');
+  const triggerResult = await session.evaluate(trigger);
+  // Wait for completion — blob downloads are quick but the bundle build
+  // (redaction + zip + scoop drain) can take a few seconds.
+  const deadline = Date.now() + 30_000;
+  while (state !== 'completed') {
+    if (state === 'canceled') {
+      console.error('download canceled (state=canceled)');
+      process.exit(1);
+    }
+    if (Date.now() > deadline) {
+      console.error(`download did not complete within 30s (state=${state ?? 'none'})`);
+      process.exit(1);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  // allowAndName → file saved as <guid>; page fallback keeps its name.
+  let srcPath = guid ? path.join(dlDir, guid) : null;
+  if (!srcPath || !existsSync(srcPath)) {
+    const files = readdirSync(dlDir).filter((f) => !f.endsWith('.crdownload'));
+    if (files.length === 0) {
+      console.error(`download reported complete but no file landed in ${dlDir}`);
+      process.exit(1);
+    }
+    srcPath = path.join(dlDir, files[0]);
+  }
+  const bytes = readFileSync(srcPath);
+  writeFileSync(outfile, bytes);
+  console.log(
+    JSON.stringify({
+      ok: true,
+      outfile,
+      suggestedFilename: suggested,
+      bytes: bytes.length,
+      trigger: triggerResult,
+    })
+  );
   session.ws.close();
 } else if (cmd === 'watch') {
   const logfile = rest[0];
