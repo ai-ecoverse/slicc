@@ -93,43 +93,75 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
 
     const method = (req.method ?? 'GET').toUpperCase();
     const url = req.url ?? '/';
+    const pathIs = (p: string): boolean => url === p || url.startsWith(`${p}?`);
     if (method === 'OPTIONS') {
-      // Echo the client's requested headers when present so direct
-      // browser/extension callers (e.g. pi-ai's X-Stainless-* set) pass
-      // the preflight without us having to enumerate every header up
-      // front. Header lookup is case-insensitive via node's lowercased
-      // `req.headers` map.
-      const requested = req.headers['access-control-request-headers'];
-      if (typeof requested === 'string' && requested.length > 0) {
-        res.setHeader('Access-Control-Allow-Headers', requested);
-      }
-      res.statusCode = 204;
-      res.end();
+      handlePreflight(req, res);
       return;
     }
-    if (method === 'POST' && (url === '/__reset' || url.startsWith('/__reset?'))) {
-      // Test-only control endpoint: rewind the turn cursor so a
-      // Playwright retry (the fake LLM is a long-lived `webServer`)
-      // replays the scripted fixture from the top instead of continuing
-      // past the cursor a failed attempt left behind — which would
-      // otherwise fail deterministically with `fixture_overflow`. See
-      // `fake-llm-helpers.ts:resetFakeLlm` + `reference-scenario.test.ts`.
+    if (method === 'POST' && pathIs('/__reset')) {
+      // Test-only control endpoint: rewind the turn cursor so a Playwright
+      // retry (the fake LLM is a long-lived `webServer`) replays the scripted
+      // fixture from the top instead of continuing past the cursor a failed
+      // attempt left behind — which would otherwise fail deterministically
+      // with `fixture_overflow`. See `resetFakeLlm` + `reference-scenario`.
       resetState();
       writeJson(res, 200, { object: 'fake_llm.reset', cursor, requestCount });
       return;
     }
-    if (method === 'GET' && (url === '/v1/models' || url.startsWith('/v1/models?'))) {
+    if (method === 'POST' && pathIs('/__fixture')) {
+      await handleFixtureSwap(req, res);
+      return;
+    }
+    if (method === 'GET' && pathIs('/v1/models')) {
       writeJson(res, 200, { object: 'list', data: modelsList(fixture) });
       return;
     }
-    if (
-      method === 'POST' &&
-      (url === '/v1/chat/completions' || url.startsWith('/v1/chat/completions?'))
-    ) {
+    if (method === 'POST' && pathIs('/v1/chat/completions')) {
       await handleChatCompletions(req, res);
       return;
     }
     writeJson(res, 404, { error: { message: `Not found: ${method} ${url}`, type: 'not_found' } });
+  }
+
+  function handlePreflight(req: IncomingMessage, res: ServerResponse): void {
+    // Echo the client's requested headers when present so direct
+    // browser/extension callers (e.g. pi-ai's X-Stainless-* set) pass the
+    // preflight without us enumerating every header. Header lookup is
+    // case-insensitive via node's lowercased `req.headers` map.
+    const requested = req.headers['access-control-request-headers'];
+    if (typeof requested === 'string' && requested.length > 0) {
+      res.setHeader('Access-Control-Allow-Headers', requested);
+    }
+    res.statusCode = 204;
+    res.end();
+  }
+
+  /**
+   * Test-only control endpoint: swap the active fixture at runtime so a single
+   * long-lived `webServer` (booted with the default reference scenario) can
+   * serve a scenario-specific fixture without a dedicated server process.
+   * Resets the cursor so the new fixture plays from the top.
+   */
+  async function handleFixtureSwap(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    try {
+      const next = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Fixture;
+      fixture = validateFixture(next);
+      resetState();
+      writeJson(res, 200, {
+        object: 'fake_llm.fixture',
+        model: fixture.model,
+        turns: fixture.turns.length,
+      });
+    } catch (err) {
+      writeJson(res, 400, {
+        error: {
+          message: `fake-llm: invalid fixture: ${String((err as Error)?.message ?? err)}`,
+          type: 'invalid_fixture',
+        },
+      });
+    }
   }
 
   async function handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {

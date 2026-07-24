@@ -37,16 +37,24 @@
  */
 
 import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { unzipSync } from 'fflate';
 import {
   FAKE_LLM_BASE_URL,
+  loadFakeLlmFixture,
   resetFakeLlm,
   seedLocalLlmProvider,
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+
+/** Read a fixture JSON from the fake-llm fixtures directory. */
+function readFixture(name: string): unknown {
+  const dir = fileURLToPath(new URL('./fake-llm/fixtures/', import.meta.url));
+  return JSON.parse(fs.readFileSync(`${dir}${name}.json`, 'utf8'));
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -148,6 +156,15 @@ test.describe('transcript export — local ZIP download', () => {
     // Playwright webServer failed to start), this throws ECONNREFUSED and the
     // test fails with a clear diagnostic — not silently skipped.
     await resetFakeLlm();
+    // The shared CI webServer boots the default reference-scenario fixture.
+    // This test needs the transcript-export turns, so swap them in at runtime.
+    await loadFakeLlmFixture(readFixture('transcript-export'));
+  });
+
+  test.afterEach(async () => {
+    // Restore the boot default so later serial tests (workers: 1) that rely on
+    // the reference scenario see the fixture they expect.
+    await loadFakeLlmFixture(readFixture('reference-scenario'));
   });
 
   test('exports ZIP: cone + scoop conversations, binary unchanged, credential redacted', async ({
