@@ -3,7 +3,7 @@ import Foundation
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-let traySyncProtocolVersion = 2
+let traySyncProtocolVersion = 3
 
 // MARK: - AgentEvent
 
