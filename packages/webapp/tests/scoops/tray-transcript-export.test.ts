@@ -20,6 +20,7 @@ import type {
 } from '../../src/scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { ExportSpool } from '../../src/transcript/export-spool.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel with backpressure simulation
@@ -2189,6 +2190,48 @@ describe('Wave 4: Follower uses spool — no chunk array accumulation', () => {
     for (let i = 0; i < 3; i++) {
       expect((acks[i] as { index?: number }).index).toBe(i);
     }
+  });
+
+  it('cancels the leader immediately when a spool append fails', async () => {
+    const ch = new FakeChannel();
+    const spool: ExportSpool = {
+      append: vi.fn(async () => {
+        throw new Error('OPFS write failed');
+      }),
+      finalize: vi.fn(),
+      cancel: vi.fn(async () => undefined),
+    };
+    const follower = new FollowerSyncManager(ch, { makeExportSpool: () => spool });
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    await vi.waitFor(() =>
+      expect(ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')).toBe(true)
+    );
+    const request = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as {
+      requestId: string;
+    };
+
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.chunk',
+      requestId: request.requestId,
+      index: 0,
+      data: base64(new Uint8Array([1, 2, 3])),
+    });
+
+    await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-corrupt' });
+    await vi.waitFor(() =>
+      expect(
+        ch
+          .parseSentFollower()
+          .some(
+            (message) =>
+              message.type === 'transcript.export.cancel' && message.requestId === request.requestId
+          )
+      ).toBe(true)
+    );
+    expect(spool.cancel).toHaveBeenCalledOnce();
+    follower.close();
   });
 
   it('follower spool cancel is called on close mid-transfer', async () => {
