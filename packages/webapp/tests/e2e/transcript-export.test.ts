@@ -46,7 +46,6 @@ import {
   resetFakeLlm,
   seedLocalLlmProvider,
   submitUserMessage,
-  waitForTurnComplete,
 } from './fake-llm-helpers.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
@@ -94,7 +93,8 @@ function decode(bytes: Uint8Array): string {
  * attachments whose `data` field is set, copies the bytes unchanged into the
  * ZIP bundle, and records them in `transcript.json`'s `attachments[]` array.
  *
- * Must be called after `waitForTurnComplete` so the session-cone record exists.
+ * Must be called after the turn reaches idle (`data-processing` cleared) so the
+ * session-cone record exists and the shell is no longer writing to it.
  */
 async function seedBinaryAttachment(
   page: import('@playwright/test').Page,
@@ -170,6 +170,11 @@ test.describe('transcript export — local ZIP download', () => {
   test('exports ZIP: cone + scoop conversations, binary unchanged, credential redacted', async ({
     page,
   }) => {
+    // Boot + agent turn + scoop + export/download exceeds the suite's default
+    // 30s per-test budget; give this long flow its own headroom so the inner
+    // assertion/idle timeouts below aren't silently truncated by the deadline.
+    test.setTimeout(120_000);
+
     // ── 1. Boot the leader with the fake exporter model ──────────────────
     expect(FAKE_LLM_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
 
@@ -192,15 +197,23 @@ test.describe('transcript export — local ZIP download', () => {
     // "verify-export-scoop". The fixture uses onOverflow:'repeat-last' so any
     // ordering between the scoop and cone continuation is safe.
     await submitUserMessage(page, 'run the export scenario');
-    // Don't require observing the processing rising-edge: the turn spawns a
-    // scoop and the shared CI runner can be slow, so a missed rise poll would
-    // flake. The real completion gate is the final assistant text below, which
-    // Playwright auto-waits for — a turn that never starts fails there with a
-    // clearer diagnostic.
-    await waitForTurnComplete(page);
-
+    // Synchronize on the response, not on the transient processing rising edge
+    // (a missed rise poll on the slow shared CI runner flakes). First prove the
+    // turn produced its final assistant text, then wait for the level-triggered
+    // idle state — the marker alone is not a completion boundary because
+    // assistant text streams in incrementally while `data-processing` is still
+    // set and only clears at turn end. Seeding the session before idle could
+    // race the shell's own session-cone save.
     await expect(page.locator('slicc-chat-thread')).toContainText(
       'credential-shaped token appeared',
+      { timeout: 30_000 }
+    );
+    await page.waitForFunction(
+      () => {
+        const frame = document.querySelector('.wcui-frame');
+        return frame !== null && !frame.hasAttribute('data-processing');
+      },
+      undefined,
       { timeout: 30_000 }
     );
 
