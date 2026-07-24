@@ -185,19 +185,34 @@ export class OpfsSpool implements ExportSpool {
       throw new TranscriptExportError('transfer-corrupt');
     }
 
-    // Wrap close + getFile + delete in a single try/catch so ANY OPFS fault
-    // (writable.close throws, getFile throws, quota exhausted) always runs
-    // cleanup rather than leaking the temp file.
+    // Wrap close + getFile + blob construction + delete in a single try/catch
+    // so ANY OPFS fault always runs cleanup rather than leaking the temp file.
     try {
       await this.writable?.close();
       this.writable = null;
       const file = await this.fileHandle.getFile();
-      // Wrap as Blob with the correct MIME type
-      const blob = file.slice(0, file.size, 'application/zip');
+
+      // Stream the OPFS File into an independent in-memory Blob BEFORE
+      // deleting the temp file. In Chromium, file.slice() returns a Blob
+      // still backed by the OPFS entry; deleting that entry before the Blob
+      // is consumed causes Playwright to report the download as "cancelled".
+      // Response(file.stream()).blob() fully materialises the bytes without
+      // exposing a Uint8Array in JS. Falls back to arrayBuffer() only on the
+      // rare runtime that lacks ReadableStream.
+      let blob: Blob;
+      if (typeof file.stream === 'function') {
+        const response = new Response(file.stream(), {
+          headers: { 'Content-Type': 'application/zip' },
+        });
+        blob = await response.blob();
+      } else {
+        blob = new Blob([await file.arrayBuffer()], { type: 'application/zip' });
+      }
+
       await this.deleteTempFile();
       return blob;
     } catch {
-      // Null writable here so cleanup’s close() call is a no-op.
+      // Null writable here so cleanup's close() call is a no-op.
       this.writable = null;
       await this.cleanup();
       throw new TranscriptExportError('transfer-corrupt');
