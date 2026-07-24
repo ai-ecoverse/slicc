@@ -10,9 +10,9 @@
  * process/buffer) and HARD-FAILS the rest with the browser-unavailable message
  * (NOT a misleading "Cannot find module 'x' (run: ipk install x)").
  *
- * `crypto` is now SERVED (Web Crypto-backed `nodeCrypto` bridge), so the
- * still-unavailable-builtin contract is pinned via `os` instead; the positive
- * crypto coverage lives in the "crypto built-in bridge" describe below.
+ * `crypto` and `os` are now SERVED, so the still-unavailable-builtin contract
+ * is pinned via `net`; the positive coverage lives in the served-builtin
+ * describe blocks below.
  *
  * Drives the same in-process `runJsRealm` engine the worker/iframe floats use,
  * so behavior parity is by construction.
@@ -65,20 +65,20 @@ describe('m4: nested package require of a browser-unavailable built-in', () => {
 
   it('a package that internally requires an unavailable built-in LOADS fine until it is actually requested', async () => {
     // Importing the package must not fail at graph-build time — only the actual
-    // require('os') at call time hard-fails. A lazily-guarded path that never
+    // require('net') at call time hard-fails. A lazily-guarded path that never
     // touches the unavailable built-in runs clean.
     const ctx = makeCtx({
       files: {
-        '/workspace/node_modules/lazyos/package.json': JSON.stringify({
-          name: 'lazyos',
+        '/workspace/node_modules/lazynet/package.json': JSON.stringify({
+          name: 'lazynet',
           version: '1.0.0',
           main: 'index.js',
         }),
-        '/workspace/node_modules/lazyos/index.js':
-          "module.exports = { host: () => require('os').hostname(), tag: 'loaded' };",
+        '/workspace/node_modules/lazynet/index.js':
+          "module.exports = { connect: () => require('net').connect(80), tag: 'loaded' };",
       },
     });
-    const out = await runCode("const m = require('lazyos'); console.log(m.tag);", ctx);
+    const out = await runCode("const m = require('lazynet'); console.log(m.tag);", ctx);
     expect(out.exitCode).toBe(0);
     expect(out.stdout.trim()).toBe('loaded');
     expect(out.stderr).not.toContain('Cannot find module');
@@ -382,6 +382,22 @@ describe('NS3: zlib built-in is served by the pako-backed shim', () => {
     );
     expect(out.exitCode).toBe(0);
     expect(out.stdout.trim()).toBe('true');
+  });
+});
+
+describe('NS3: tty built-in is served by the browser-worker shim', () => {
+  it('require("tty") and require("node:tty") return the SAME shim with non-TTY descriptors', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const tty = require('tty');
+       const aliased = require('node:tty');
+       console.log(tty.isatty(1), aliased.isatty(2), aliased === tty);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).not.toContain('not available in the browser');
+    expect(out.stderr).not.toContain('Cannot find module');
+    expect(out.stdout.trim()).toBe('false false true');
   });
 });
 
