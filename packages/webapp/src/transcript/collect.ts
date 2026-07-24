@@ -57,6 +57,14 @@ function uiSessionId(scoop: RegisteredScoop): string {
  * (count, last-message role, last-message timestamp, last-message toolCallId)
  * are all identical. Used to detect mid-load state changes, including a
  * complete turn that starts and finishes while stores are loading.
+ *
+ * Note: in-place content mutation (streaming tokens appended to an existing
+ * message) is not detected here because it does not change count, role,
+ * timestamp, or toolCallId. That case is covered by the outer isProcessing=true
+ * guard — the poll loop above never exits while any scoop is still processing,
+ * so streaming content is never captured mid-flight. This signature is designed
+ * solely for completed-turn races (a full new turn begins and ends between the
+ * poll and the store reads while isProcessing is transiently false).
  */
 function computeSnapshotSignature(
   scoops: readonly RegisteredScoop[],

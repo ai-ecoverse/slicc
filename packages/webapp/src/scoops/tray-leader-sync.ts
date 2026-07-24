@@ -241,6 +241,10 @@ interface SendExportChunksResult {
  * spread arguments to String.fromCharCode.
  */
 function bytesToBase64(data: Uint8Array): string {
+  // 8 KiB is a safety ceiling for JS engine call-stack argument limits, not a
+  // performance tuning knob. Do not confuse this with the 32 KiB wire chunk
+  // limit (EXPORT_CHUNK_B64_MAX): lowering this value only increases loop
+  // iterations, not throughput.
   const CHUNK = 8192;
   let binary = '';
   for (let i = 0; i < data.length; i += CHUNK) {

@@ -319,6 +319,27 @@ describe('CherryHostTransport', () => {
     expect(errEnv.code).toBe('permission-denied');
   });
 
+  it('posts session.export.error with transfer-corrupt when rejection has an unknown string code', async () => {
+    // Exercises the new guard: maybeCode is a non-empty string but is not in
+    // VALID_EXPORT_ERROR_CODES. The clamp must fall back to 'transfer-corrupt'.
+    await connectHelper(h);
+    const channelId = lastChannelId(h);
+    const err = Object.assign(new Error('totally unknown'), { code: 'totally-unknown' });
+    h.transport.onExportRequest = vi.fn().mockRejectedValue(err);
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId,
+      kind: 'session.export.request',
+      requestId: 'req-unknown-code-1',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const errEnv = h.posted.find((m) => m.kind === 'session.export.error');
+    expect(errEnv?.requestId).toBe('req-unknown-code-1');
+    expect(errEnv?.code).toBe('transfer-corrupt');
+  });
+
   it('posts session.export.error with transfer-corrupt when rejection has no code', async () => {
     await connectHelper(h);
     const channelId = lastChannelId(h);
