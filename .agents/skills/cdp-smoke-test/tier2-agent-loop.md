@@ -71,6 +71,51 @@ confirm.`
    `slicc-cdp eval` a shadow-piercing lookup of `#clock-time` →
    `getComputedStyle(el).color` = `rgb(0, 200, 83)`.
 
+## Transcript export (cone + scoop bundle)
+
+Validates the `session export` shell command end-to-end against a live
+session: normalized bundle, cone + scoop conversations, fail-closed
+credential redaction, and the reasoning-excluded invariant. Runs entirely
+in-browser (shell + VFS) — no host-side download plumbing.
+
+Prereq: a completed turn that spawned at least one scoop (the Scoops check
+above leaves the resident `clock` scoop; any turn with a scoop works). The
+export waits for all scoops to reach idle before packaging.
+
+1. Write the bundle to the VFS (avoids browser-download interception):
+   ```bash
+   slicc-cdp term "session export --output /workspace/transcript.zip"
+   # term-text → "exported /workspace/transcript.zip"
+   slicc-cdp term "unzip /workspace/transcript.zip -d /workspace/tx"
+   ```
+2. Validate with an in-browser `node -e` script that emits a single
+   marker-bracketed line. The terminal hard-wraps at ~28 cols, so bracket
+   the output with `@@B@@`/`@@E@@` and strip newlines between the markers
+   to reconstruct — a one-line payload has no meaningful newlines, unlike
+   the pretty-printed `transcript.json` itself (`JSON.stringify(_, null, 2)`,
+   so never de-wrap the file directly). Keep the script quote-safe: single
+   quotes around `-e`, only double quotes inside.
+   ```bash
+   slicc-cdp term 'node -e '\''const fs=require("fs");const d=JSON.parse(fs.readFileSync("/workspace/tx/transcript.json","utf8"));const c=d.conversations||[];const has=k=>c.some(x=>x.kind===k);const t=JSON.stringify(d);console.log("@@B@@sv="+d.schemaVersion+";cone="+(has("cone")?1:0)+";scoop="+(has("scoop")?1:0)+";cred="+(t.includes("sk-proj-1234")?0:1)+";reason="+(d.privacy&&d.privacy.reasoningExcluded?1:0)+";convs="+c.length+"@@E@@")'\'''
+   ```
+3. Extract and assert the de-wrapped payload. The terminal echoes the
+   command (whose source literally contains the marker strings), so match
+   the value payload — markers followed by `sv=<digit>` — not the echo:
+   ```bash
+   slicc-cdp term-text | tr -d '\n' | grep -oE '@@B@@sv=[0-9][^@]*@@E@@' | tail -1
+   # → @@B@@sv=1;cone=1;scoop=1;cred=1;reason=1;convs=2@@E@@
+   ```
+   Assert `sv=1`, `cone=1`, `scoop=1`, `cred=1` (the seeded credential is
+   absent → redacted), `reason=1` (`reasoningExcluded`), `convs>=2` (cone +
+   each scoop). The console watcher must stay clean — redaction failure is
+   fail-closed and would surface as an export error, not a silent pass.
+
+Local UI path (optional): the avatar menu's **Export transcript** action
+(`slicc-cdp eval` dispatching `slicc-avatar-action` with
+`{id:'export-transcript'}`) triggers a real browser download instead of a
+VFS write — driving that needs `Page.setDownloadBehavior` over CDP, so the
+shell path above is the autonomous default.
+
 ## Model switching
 
 Route a prompt through each Adobe model — `claude-opus-4-8` especially,
