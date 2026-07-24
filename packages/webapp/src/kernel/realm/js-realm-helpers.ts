@@ -1471,6 +1471,21 @@ export const nodeOs: NodeOs = {
 };
 
 // ---------------------------------------------------------------------------
+// `nodeTty` — the minimal Node `tty` built-in served by the worker realm.
+// The browser realm has no terminal, so descriptors are never TTYs; the stream
+// constructors are harmless stubs retained for Node API shape compatibility.
+// ---------------------------------------------------------------------------
+
+class ReadStream {}
+class WriteStream {}
+
+export const nodeTty = {
+  isatty: (_fd: number): boolean => false,
+  ReadStream,
+  WriteStream,
+};
+
+// ---------------------------------------------------------------------------
 // `nodeUrl` — the subset of the Node `url` built-in served by the realm
 // `require('url')` / `require('node:url')` shim. Bridges `fileURLToPath` and
 // `pathToFileURL` (used by 5 audited .mjs files) plus re-exports the browser's
