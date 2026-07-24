@@ -6,6 +6,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/index.js';
 import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
+import { registerProviderConfig, unregisterProviderConfig } from '../../src/providers/index.js';
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../src/scoops/workflow-run-manager.js';
 import {
   AlmostBashShell,
@@ -304,6 +305,33 @@ describe('AlmostBashShell playwright command discoverability', () => {
     expect((await shell.getScriptCatalog().getBshEntries()).map((entry) => entry.path)).toEqual([
       '/workspace/login.example.com.bsh',
     ]);
+  });
+});
+
+describe('AlmostBashShell GitHub token renewal wiring', () => {
+  it('uses the registered expiry-gated hook only for git network operations', async () => {
+    const fs = await VirtualFS.create({ dbName: 'test-shell-github-renewal', wipe: true });
+    const getValidAccessToken = vi.fn(async () => 'ghp_fresh');
+    registerProviderConfig({
+      id: 'github',
+      name: 'GitHub',
+      description: 'GitHub test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getValidAccessToken,
+    });
+
+    try {
+      const shell = new AlmostBashShell({ fs });
+      await shell.executeCommand('git fetch');
+      expect(getValidAccessToken).toHaveBeenCalledTimes(1);
+
+      await shell.executeCommand('git status');
+      expect(getValidAccessToken).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterProviderConfig('github');
+      await fs.dispose();
+    }
   });
 });
 
