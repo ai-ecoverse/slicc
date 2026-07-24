@@ -5,6 +5,7 @@ vi.mock('../../../src/ui/provider-settings.js', () => ({
   getOAuthAccountInfo: vi.fn(),
   getSelectedProvider: vi.fn(),
   getAccounts: vi.fn(() => []),
+  saveOAuthAccount: vi.fn(),
 }));
 
 vi.mock('../../../src/providers/index.js', () => ({
@@ -30,6 +31,7 @@ import {
   getAccounts,
   getOAuthAccountInfo,
   getSelectedProvider,
+  saveOAuthAccount,
 } from '../../../src/ui/provider-settings.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
@@ -38,6 +40,7 @@ const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
 const mockGetRegisteredProviderConfig = vi.mocked(getRegisteredProviderConfig);
 const mockGetRegisteredProviderIds = vi.mocked(getRegisteredProviderIds);
 const mockGetAccounts = vi.mocked(getAccounts);
+const mockSaveOAuthAccount = vi.mocked(saveOAuthAccount);
 const mockCreateOAuthLauncher = vi.mocked(createOAuthLauncher);
 const mockCreateInterceptingOAuthLauncherForCurrentRuntime = vi.mocked(
   createInterceptingOAuthLauncherForCurrentRuntime
@@ -61,6 +64,9 @@ describe('oauth-token command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('oauth-token');
     expect(result.stdout).toContain('Usage:');
+    expect(result.stdout).toContain('Testing:');
+    expect(result.stdout).toContain('--expire');
+    expect(result.stdout).toContain('Does not revoke anything upstream');
   });
 
   it('returns stored valid token immediately', async () => {
@@ -643,6 +649,82 @@ describe('oauth-token command', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('no onSilentRenew hook');
+  });
+
+  it.each([
+    ['provider-first', ['github', '--expire']],
+    ['flag-first', ['--expire', 'github']],
+    ['selected-provider', ['--expire']],
+  ])('--expire back-dates expiry and preserves tokens (%s)', async (_label, args) => {
+    const before = Date.now();
+    mockGetSelectedProvider.mockReturnValue('github');
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: vi.fn(),
+    } as never);
+    mockGetAccounts.mockReturnValue([
+      {
+        providerId: 'github',
+        apiKey: '',
+        accessToken: 'existing-access-token',
+        refreshToken: 'existing-refresh-token',
+        tokenExpiresAt: before + 8 * 3600_000,
+        userName: 'octocat',
+      },
+    ]);
+
+    const result = await createOAuthTokenCommand().execute(args, createMockCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'oauth-token github: stored token marked expired; next network op will trigger silent renewal.\n'
+    );
+    expect(mockSaveOAuthAccount).toHaveBeenCalledTimes(1);
+    const saved = mockSaveOAuthAccount.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({
+      providerId: 'github',
+      accessToken: 'existing-access-token',
+      refreshToken: 'existing-refresh-token',
+      userName: 'octocat',
+    });
+    expect(saved?.tokenExpiresAt).toBeGreaterThanOrEqual(before - 1000);
+    expect(saved?.tokenExpiresAt).toBeLessThanOrEqual(Date.now() - 1000);
+  });
+
+  it('--expire returns a clear error when no account is stored', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: vi.fn(),
+    } as never);
+    mockGetAccounts.mockReturnValue([]);
+
+    const result = await createOAuthTokenCommand().execute(['github', '--expire'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no stored OAuth account for "github"');
+    expect(mockSaveOAuthAccount).not.toHaveBeenCalled();
+  });
+
+  it('--expire reports persistence failures', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: vi.fn(),
+    } as never);
+    mockGetAccounts.mockReturnValue([
+      { providerId: 'github', apiKey: '', accessToken: 'access', refreshToken: 'refresh' },
+    ]);
+    mockSaveOAuthAccount.mockRejectedValueOnce(new Error('storage unavailable'));
+
+    const result = await createOAuthTokenCommand().execute(['github', '--expire'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to update "github": storage unavailable');
   });
 
   it('--from-file reads JSON via ctx.fs and runs the intercept launcher', async () => {

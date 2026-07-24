@@ -583,6 +583,7 @@ export const config: ProviderConfig = {
   },
 
   onSilentRenew: renewGitHubToken,
+  getValidAccessToken,
 
   onOAuthLogout: async () => {
     const account = getGitHubAccount();

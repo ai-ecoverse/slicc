@@ -37,6 +37,7 @@ import { MountCommands } from '../fs/mount-commands.js';
 import { FsError } from '../fs/types.js';
 import { GitCommands } from '../git/git-commands.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
+import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
@@ -198,6 +199,10 @@ function getFsWatcher(fs: unknown): FsWatcher | null {
   return null;
 }
 
+async function ensureFreshGithubToken(): Promise<void> {
+  await getRegisteredProviderConfig('github')?.getValidAccessToken?.();
+}
+
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
   signal?: AbortSignal;
 };
@@ -314,6 +319,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       fs: options.fs,
       authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
       authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
+      ensureFreshGithubToken,
     });
 
     this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
