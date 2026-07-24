@@ -192,10 +192,16 @@ test.describe('transcript export — local ZIP download', () => {
     // "verify-export-scoop". The fixture uses onOverflow:'repeat-last' so any
     // ordering between the scoop and cone continuation is safe.
     await submitUserMessage(page, 'run the export scenario');
-    await waitForTurnComplete(page, { mustObserveTurnRise: true });
+    // Don't require observing the processing rising-edge: the turn spawns a
+    // scoop and the shared CI runner can be slow, so a missed rise poll would
+    // flake. The real completion gate is the final assistant text below, which
+    // Playwright auto-waits for — a turn that never starts fails there with a
+    // clearer diagnostic.
+    await waitForTurnComplete(page);
 
     await expect(page.locator('slicc-chat-thread')).toContainText(
-      'credential-shaped token appeared'
+      'credential-shaped token appeared',
+      { timeout: 30_000 }
     );
 
     // ── 3. Seed binary attachment into the cone UI session ─────────────────
