@@ -1453,6 +1453,7 @@ export class FollowerSyncManager implements AgentHandle {
       if (!this.activeExportRequests.has(requestId)) return;
       entry.signal.removeEventListener('abort', entry.onAbort);
       this.activeExportRequests.delete(requestId);
+      this.sync.send({ type: 'transcript.export.cancel', requestId });
       void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-corrupt'));
       log.warn('Transcript export spool append failed', {
