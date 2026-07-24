@@ -14,6 +14,7 @@ import {
   nodeOs,
   nodePath,
   nodeStream,
+  nodeTty,
   nodeUrl,
   nodeUtil,
   nodeZlib,
@@ -246,6 +247,7 @@ function resolveServedBuiltin(
   if (bareId === 'util') return { hit: true, value: nodeUtil };
   if (bareId === 'events') return { hit: true, value: nodeEvents };
   if (bareId === 'os') return { hit: true, value: nodeOs };
+  if (bareId === 'tty') return { hit: true, value: nodeTty };
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
