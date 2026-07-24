@@ -17,7 +17,7 @@
  * Cherry transport integration tests live in the correct package:
  *   packages/cherry/tests/mount.test.ts — exportSession describe block
  *   packages/webapp/tests/cdp/cherry-host-transport.test.ts — CherryHostTransport
- * Those tests use the real mountSliccImpl/__test_receive seams and cover the
+ * Those tests use the real mountSliccImpl/testReceive seams and cover the
  * full protocol (request→progress→response, unknown code M-1 guard, abort,
  * concurrent exports, stale/untrusted envelopes) without any DOM environment.
  *
