@@ -34,7 +34,9 @@
         "**/index.html",
         "**/shims/**",
         "packages/*/src/**/*.test.ts",
-        "packages/shared-ts/src/secret-env-schema.ts"
+        "packages/shared-ts/src/secret-env-schema.ts",
+        "packages/shared-ts/src/transcript-export.ts",
+        "packages/shared-ts/src/transcript-redaction.ts"
       ]
     },
     "chrome-extension": {

@@ -97,6 +97,43 @@ describe('startFakeLlmServer — boot + endpoints', () => {
     expect(res.status).toBe(404);
     expect((await res.json()).error.type).toBe('not_found');
   });
+
+  it('POST /__fixture swaps the active fixture and resets the cursor', async () => {
+    await start({ model: 'boot', turns: [{ content: 'boot turn' }] });
+    const swap = await fetch(`${server.url}/__fixture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'swapped', turns: [{ content: 'swapped turn' }] }),
+    });
+    expect(swap.status).toBe(200);
+    expect(await swap.json()).toMatchObject({ model: 'swapped', turns: 1 });
+    expect(server.getState().cursor).toBe(0);
+
+    const models = (await (await fetch(`${server.url}/v1/models`)).json()) as {
+      data: Array<{ id: string }>;
+    };
+    expect(models.data.map((m) => m.id)).toEqual(['swapped']);
+
+    const chat = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userTurnBody('anything', { model: 'swapped', stream: false })),
+    });
+    expect(chat.status).toBe(200);
+    const choice = (await chat.json()).choices[0];
+    expect(choice.message.content).toBe('swapped turn');
+  });
+
+  it('POST /__fixture rejects an invalid fixture with 400', async () => {
+    await start({ model: 'boot', turns: [] });
+    const res = await fetch(`${server.url}/__fixture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turns: 'not-an-array' }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.type).toBe('invalid_fixture');
+  });
 });
 
 describe('POST /v1/chat/completions — streaming SSE', () => {
