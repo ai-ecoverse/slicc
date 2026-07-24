@@ -82,6 +82,45 @@ Prereq: a completed turn that spawned at least one scoop (the Scoops check
 above leaves the resident `clock` scoop; any turn with a scoop works). The
 export waits for all scoops to reach idle before packaging.
 
+### Path A — local UI download (preferred; validates the real menu action)
+
+`slicc-cdp download` captures the anchor/blob browser download to a host
+file via CDP `Browser.setDownloadBehavior`, so the bundle lands on disk and
+is validated with ordinary host tooling — no in-browser wrap workaround.
+
+```bash
+# Default trigger = avatar-menu "Export transcript" action.
+slicc-cdp download /tmp/slicc-ui-export.zip
+# → {"ok":true,"outfile":"/tmp/slicc-ui-export.zip",
+#    "suggestedFilename":"slicc-2026-07-24-cone-<id>.zip","bytes":7694,...}
+```
+
+Validate host-side (Python shown; the download landed as a normal file):
+
+```bash
+python3 - <<'PY'
+import zipfile, json
+z = zipfile.ZipFile('/tmp/slicc-ui-export.zip')
+d = json.loads(z.read('transcript.json'))
+c = d.get('conversations', [])
+raw = z.read('transcript.json').decode('utf-8', 'replace')
+assert d['schemaVersion'] == 1
+assert {x['kind'] for x in c} >= {'cone', 'scoop'}
+assert d['privacy']['reasoningExcluded'] is True
+assert 'sk-proj-1234' not in raw          # fail-closed credential redaction
+print('PASS', [x['kind'] for x in c], 'msgs=', sum(len(x['messages']) for x in c))
+PY
+```
+
+Assert the ZIP magic (`PK\x03\x04`), `suggestedFilename` carries the
+export-id suffix, cone + scoop conversations, `reasoningExcluded`, and the
+seeded credential is absent. The console watcher must stay clean.
+
+### Path B — shell command into the VFS (no download plumbing)
+
+Useful when driving the download event is undesirable (headless, or
+asserting the agent-facing command directly).
+
 1. Write the bundle to the VFS (avoids browser-download interception):
    ```bash
    slicc-cdp term "session export --output /workspace/transcript.zip"
@@ -110,11 +149,10 @@ export waits for all scoops to reach idle before packaging.
    each scoop). The console watcher must stay clean — redaction failure is
    fail-closed and would surface as an export error, not a silent pass.
 
-Local UI path (optional): the avatar menu's **Export transcript** action
-(`slicc-cdp eval` dispatching `slicc-avatar-action` with
-`{id:'export-transcript'}`) triggers a real browser download instead of a
-VFS write — driving that needs `Page.setDownloadBehavior` over CDP, so the
-shell path above is the autonomous default.
+Both paths should agree (same conversation count, same redaction outcome);
+run Path A to exercise the real menu action and Path B to assert the
+agent-facing command. A custom trigger can be passed as the second arg to
+`slicc-cdp download` for any other blob download.
 
 ## Model switching
 
