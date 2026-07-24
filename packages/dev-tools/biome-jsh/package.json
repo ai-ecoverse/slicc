@@ -1,6 +1,6 @@
 {
   "name": "@ai-ecoverse/biome-jsh",
-  "version": "5.68.0",
+  "version": "5.69.0",
   "description": "A jsh-aware Biome runner: lint/format .jsh/.bsh shell scripts (AsyncFunction bodies) without false return/await parse errors.",
   "license": "Apache-2.0",
   "type": "module",
