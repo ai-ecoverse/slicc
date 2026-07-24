@@ -147,6 +147,12 @@ const PROVIDERS: readonly ProviderSpec[] = [
     auth: 'oauth',
   },
   {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'OpenRouter models via OAuth login.',
+    auth: 'oauth',
+  },
+  {
     id: 'azure-openai',
     name: 'Azure OpenAI',
     description: 'OpenAI models on your own Azure deployment.',

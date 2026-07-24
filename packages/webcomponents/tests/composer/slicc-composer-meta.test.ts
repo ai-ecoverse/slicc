@@ -354,41 +354,43 @@ describe('slicc-composer-meta', () => {
       expect(detail).toEqual({ model: 'Haiku 4.5', provider: 'Anthropic', id: 'claude-haiku-4-5' });
     });
 
-    it('grows a type-ahead search for a long list and filters by name + provider', () => {
+    it('keeps a 256-model OpenRouter catalog usable with type-ahead search', () => {
       const el = mount();
-      el.models = [
-        { name: 'Opus 4.8', provider: 'Anthropic' },
-        { name: 'Sonnet 4.6', provider: 'Anthropic' },
-        { name: 'Haiku 4.5', provider: 'Anthropic' },
-        { name: 'GPT-5', provider: 'OpenAI' },
-        { name: 'GPT-5 mini', provider: 'OpenAI' },
-        { name: 'o4', provider: 'OpenAI' },
-        { name: 'Gemini 2.5 Pro', provider: 'Google' },
-        { name: 'Gemini 2.5 Flash', provider: 'Google' },
-        { name: 'Llama 4', provider: 'Meta' },
+      const modelFamilies = [
+        { prefix: 'anthropic/claude-sonnet', provider: 'Anthropic' },
+        { prefix: 'openai/gpt', provider: 'OpenAI' },
+        { prefix: 'google/gemini-pro', provider: 'Google' },
+        { prefix: 'meta-llama/llama-instruct', provider: 'Meta' },
+        { prefix: 'deepseek/deepseek-r1', provider: 'DeepSeek' },
+        { prefix: 'mistralai/mistral-large', provider: 'Mistral AI' },
+        { prefix: 'qwen/qwen3', provider: 'Qwen' },
+        { prefix: 'cohere/command-r', provider: 'Cohere' },
       ];
+      el.models = Array.from({ length: 256 }, (_, index) => {
+        const family = modelFamilies[index % modelFamilies.length];
+        const name = `${family.prefix}-${Math.floor(index / 8) + 1}`;
+        return { name, provider: `OpenRouter / ${family.provider}`, id: name };
+      });
       modelPill(el).click();
       const search = el.shadowRoot?.querySelector('.msearch') as HTMLInputElement;
       expect(search).not.toBeNull();
+      expect(el.shadowRoot?.querySelectorAll('.mwrap .mitem')).toHaveLength(256);
       // Filter by provider name.
-      search.value = 'openai';
+      search.value = 'Mistral AI';
       search.dispatchEvent(new Event('input'));
-      let names = [...(el.shadowRoot?.querySelectorAll('.mwrap .mname') ?? [])].map(
-        (n) => n.textContent
-      );
-      expect(names).toEqual(['GPT-5', 'GPT-5 mini', 'o4']);
+      expect(el.shadowRoot?.querySelectorAll('.mwrap .mitem')).toHaveLength(32);
       // Filter by model name.
-      search.value = 'gemini';
+      search.value = 'deepseek-r1-17';
       search.dispatchEvent(new Event('input'));
-      names = [...(el.shadowRoot?.querySelectorAll('.mwrap .mname') ?? [])].map(
+      const names = [...(el.shadowRoot?.querySelectorAll('.mwrap .mname') ?? [])].map(
         (n) => n.textContent
       );
-      expect(names).toEqual(['Gemini 2.5 Pro', 'Gemini 2.5 Flash']);
+      expect(names).toEqual(['deepseek/deepseek-r1-17']);
       // No match → empty state.
-      search.value = 'zzz';
+      search.value = 'not-a-real-openrouter-model';
       search.dispatchEvent(new Event('input'));
       expect(el.shadowRoot?.querySelectorAll('.mwrap .mitem').length).toBe(0);
-      expect(el.shadowRoot?.querySelector('.mempty')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.mempty')?.textContent).toBe('No models match.');
     });
 
     it('does not show the search box for a short list', () => {

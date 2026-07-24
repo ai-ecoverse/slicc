@@ -76,6 +76,25 @@ Three xAI-specific notes:
 3. **`referrer=slicc`** is informational — xAI logs the originating tool
    server-side.
 
+## Example: OpenRouter
+
+The shipped `packages/webapp/providers/openrouter.ts` provider uses the same
+interceptor for OpenRouter's PKCE flow:
+
+```jsonc
+{
+  "authorizeUrl": "https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A3000%2Fcallback&code_challenge=…&code_challenge_method=S256",
+  "redirectUriPattern": "http://127.0.0.1:3000/*",
+  "onCapture": "close",
+}
+```
+
+OpenRouter names the loopback redirect parameter `callback_url`. After the
+interceptor captures its `?code=…` redirect, the provider posts the code and
+PKCE verifier to `https://openrouter.ai/api/v1/auth/keys`. The response is a
+permanent OpenRouter API key, not a short-lived access token, so it has no
+refresh flow or expiry.
+
 ## Running a one-off interception from the shell
 
 ```bash
