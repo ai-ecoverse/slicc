@@ -9,9 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"sync"
-	"syscall"
 )
 
 // chunkBytes bounds each streamed output block. Small enough that the tray data
@@ -58,6 +56,11 @@ func Run(ctx context.Context, command string, opts Options) Result {
 		cmd.Dir = opts.Cwd
 	}
 	cmd.Env = mergedEnv(opts.Env)
+	// Run the child in its own process group so a signal can reach the WHOLE
+	// runner subtree (a shell may fork children — e.g. `sh -c` on some systems,
+	// `docker exec`, pipelines — that would otherwise survive and keep the output
+	// pipes open, hanging the read loop).
+	setProcAttr(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -120,34 +123,15 @@ func forwardSignals(ctx context.Context, cmd *exec.Cmd, control <-chan string, f
 		case <-finished:
 			return
 		case <-ctx.Done():
-			signalProcess(cmd.Process, "SIGKILL")
+			killProcess(cmd, "SIGKILL")
 			return
 		case name, ok := <-control:
 			if !ok {
 				control = nil
 				continue
 			}
-			signalProcess(cmd.Process, name)
+			killProcess(cmd, name)
 		}
-	}
-}
-
-func signalProcess(p *os.Process, name string) {
-	if p == nil {
-		return
-	}
-	if runtime.GOOS == "windows" {
-		// Windows can't deliver POSIX signals to a child; terminate instead.
-		_ = p.Kill()
-		return
-	}
-	switch name {
-	case "SIGINT":
-		_ = p.Signal(syscall.SIGINT)
-	case "SIGTERM":
-		_ = p.Signal(syscall.SIGTERM)
-	default: // SIGKILL / unknown
-		_ = p.Kill()
 	}
 }
 
