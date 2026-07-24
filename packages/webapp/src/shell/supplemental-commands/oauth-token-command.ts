@@ -316,7 +316,7 @@ async function runExpire(args: string[]): Promise<CommandResult> {
     return errResult(`oauth-token --expire: failed to update "${providerId}": ${message}`);
   }
   return {
-    stdout: `oauth-token ${providerId}: stored token marked expired (tokenExpiresAt back-dated); next network op will trigger silent renewal.\n`,
+    stdout: `oauth-token ${providerId}: stored token marked expired; next network op will trigger silent renewal.\n`,
     stderr: '',
     exitCode: 0,
   };
