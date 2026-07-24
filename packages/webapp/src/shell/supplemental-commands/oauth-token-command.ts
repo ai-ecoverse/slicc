@@ -24,6 +24,12 @@ Provider mode:
                                   bypassing the expiry gate. Reports success and
                                   the new expiry.
 
+Testing:
+  oauth-token <providerId> --expire
+  oauth-token --expire [<id>]     Back-date the locally stored token expiry only.
+                                  Does not revoke anything upstream; the next network
+                                  operation will trigger silent renewal.
+
 Declarative intercept mode (no provider needed):
   oauth-token --from-file <path>  Run an intercepted OAuth flow defined by a
                                   JSON file in the VFS. The file's shape is
@@ -82,6 +88,7 @@ async function executeOAuthTokenCommand(
       settings.getOAuthAccountInfo
     );
   }
+  if (args.includes('--expire')) return runExpire(args);
   if (args.includes('--renew')) return runSilentRenew(args);
   if (args.includes('--from-file') || args.includes('--intercept')) {
     return runDeclarativeIntercept(args, ctx);
@@ -254,6 +261,67 @@ async function tryExpiredTokenSilentRenew(
   }
 }
 
+function resolveSilentRenewProviderId(
+  args: string[],
+  getSelectedProvider: ProviderSettings['getSelectedProvider'],
+  getRegisteredProviderConfig: ProviderRegistry['getRegisteredProviderConfig'],
+  getRegisteredProviderIds: ProviderRegistry['getRegisteredProviderIds']
+): string | undefined {
+  const positional = args.filter((arg) => !arg.startsWith('-'));
+  const explicit = positional[0];
+  if (explicit) return explicit;
+
+  const selected = getSelectedProvider();
+  if (getRegisteredProviderConfig(selected)?.onSilentRenew) return selected;
+  return getRegisteredProviderIds().find((id) => getRegisteredProviderConfig(id)?.onSilentRenew);
+}
+
+/** Debug aid: back-date only the locally stored expiry so the next network op renews. */
+async function runExpire(args: string[]): Promise<CommandResult> {
+  const { getAccounts, getSelectedProvider, saveOAuthAccount } = await import(
+    '../../ui/provider-settings.js'
+  );
+  const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
+    '../../providers/index.js'
+  );
+  const providerId = resolveSilentRenewProviderId(
+    args,
+    getSelectedProvider,
+    getRegisteredProviderConfig,
+    getRegisteredProviderIds
+  );
+  if (!providerId) {
+    return errResult('oauth-token --expire: no provider supports silent renewal');
+  }
+  const config = getRegisteredProviderConfig(providerId);
+  if (!config) {
+    return errResult(`oauth-token --expire: unknown provider "${providerId}"`);
+  }
+  if (!config.onSilentRenew) {
+    return errResult(`oauth-token --expire: provider "${providerId}" has no onSilentRenew hook`);
+  }
+
+  const existing = getAccounts().find((account) => account.providerId === providerId);
+  if (!existing?.accessToken) {
+    return errResult(`oauth-token --expire: no stored OAuth account for "${providerId}"`);
+  }
+  try {
+    await saveOAuthAccount({
+      ...existing,
+      accessToken: existing.accessToken,
+      tokenExpiresAt: Date.now() - 1000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errResult(`oauth-token --expire: failed to update "${providerId}": ${message}`);
+  }
+  return {
+    stdout: `oauth-token ${providerId}: stored token marked expired (tokenExpiresAt back-dated); next network op will trigger silent renewal.\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
 /**
  * Force a silent token renewal now via the provider's `onSilentRenew()` hook,
  * bypassing the expiry gate. Reports whether a fresh token came back and the
@@ -269,20 +337,12 @@ async function runSilentRenew(
     '../../providers/index.js'
   );
 
-  // First non-flag arg is the provider id; fall back to the selected
-  // provider, then the first registered provider that supports renewal.
-  const positional = args.filter((a) => !a.startsWith('-'));
-  let providerId: string | undefined = positional[0];
-  if (!providerId) {
-    const selected = getSelectedProvider();
-    if (getRegisteredProviderConfig(selected)?.onSilentRenew) {
-      providerId = selected;
-    } else {
-      providerId = getRegisteredProviderIds().find(
-        (id) => getRegisteredProviderConfig(id)?.onSilentRenew
-      );
-    }
-  }
+  const providerId = resolveSilentRenewProviderId(
+    args,
+    getSelectedProvider,
+    getRegisteredProviderConfig,
+    getRegisteredProviderIds
+  );
   if (!providerId) {
     return errResult('oauth-token --renew: no provider supports silent renewal');
   }
