@@ -240,6 +240,75 @@ describe('GitCommands', () => {
     expect(getResult.stdout.trim()).toBe('ghp_via_shared_const');
   });
 
+  it('renews before a network operation, reloads the bridge, and skips renewal for local ops', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_expired');
+    const ensureFreshGithubToken = vi.fn(async () => {
+      await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_fresh');
+    });
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      const cloneResult = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(cloneResult.exitCode).toBe(0);
+      expect(ensureFreshGithubToken).toHaveBeenCalledTimes(1);
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+      };
+      expect(cloneOptions.onAuth?.()).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked_fresh',
+      });
+
+      await renewingGit.execute(['init'], '/local');
+      expect(ensureFreshGithubToken).toHaveBeenCalledTimes(1);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('continues a network operation with existing auth when token renewal fails', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_existing');
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken: vi.fn(async () => {
+        throw new Error('refresh unavailable');
+      }),
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const result = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+      };
+      expect(cloneOptions.onAuth?.().password).toBe('ghp_masked_existing');
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   describe('GH_TOKEN / GITHUB_TOKEN env fallback', () => {
     // Pull the onAuth callback that GitCommands hands to isomorphic-git for a
     // clone invocation. Works for both Map<string,string> and Record<string,string>

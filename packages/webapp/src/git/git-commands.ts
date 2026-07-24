@@ -15,6 +15,7 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
+import { createLogger } from '../core/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { VirtualFS } from '../fs/index.js';
 import { type ArgSpec, parseArgs } from '../shell/arg-parser.js';
@@ -53,6 +54,9 @@ import { readGlobalGitConfigValue } from './git-config.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
 export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
+
+const logger = createLogger('git-commands');
+const NETWORK_COMMANDS = new Set(['clone', 'fetch', 'pull', 'push', 'ls-remote']);
 
 /**
  * Leading global flags accepted BEFORE the subcommand (`git -c k=v commit …`).
@@ -205,6 +209,17 @@ export class GitCommands {
     }
   }
 
+  /** Refresh GitHub auth before network operations without making git depend on the provider. */
+  private async ensureFreshGithubToken(): Promise<void> {
+    try {
+      await this.options.ensureFreshGithubToken?.();
+    } catch (err) {
+      logger.warn('GitHub token freshness check failed; continuing with existing auth', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   /** Persist GitHub token to global VFS. */
   private async setGithubToken(token: string): Promise<void> {
     const trimmed = token.trim();
@@ -300,6 +315,9 @@ export class GitCommands {
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
     try {
+      if (NETWORK_COMMANDS.has(command)) {
+        await this.ensureFreshGithubToken();
+      }
       await this.loadGithubToken();
       // NB: every async dispatch below MUST be `return await`, not `return`.
       // The `finally` block clears `currentEnv` / `currentConfigOverrides`,

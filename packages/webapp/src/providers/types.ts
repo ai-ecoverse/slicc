@@ -283,6 +283,8 @@ export interface ProviderConfig {
    * (e.g. user must re-authenticate).
    */
   onSilentRenew?: () => Promise<string | null>;
+  /** Return a valid access token, renewing only when it is expired or near expiry. */
+  getValidAccessToken?: () => Promise<string>;
   /**
    * Optional: fetch and cache the provider's dynamic model list (and persist it
    * so cold consumers — e.g. the cloud cone's kernel worker reading localStorage

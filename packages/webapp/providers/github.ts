@@ -28,9 +28,11 @@ import { isWorkerServedSpa } from '../src/providers/adobe-oauth-state.js';
 import {
   exchangeOAuthCode,
   getWorkerBaseUrl,
+  refreshOAuthToken,
   revokeOAuthToken,
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
 import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
@@ -392,11 +394,62 @@ export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Pro
 
 // ── Token access ───────────────────────────────────────────────────
 
+const silentRenewBackoff = createSilentRenewBackoff();
+
+async function renewGitHubToken(): Promise<string | null> {
+  try {
+    const account = getGitHubAccount();
+    if (!account?.refreshToken) return null;
+
+    const tokenResult = await refreshOAuthToken({
+      provider: 'github',
+      refreshToken: account.refreshToken,
+    });
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: tokenResult.access_token,
+      refreshToken: tokenResult.refresh_token,
+      tokenExpiresAt: tokenResult.expires_in
+        ? Date.now() + tokenResult.expires_in * 1000
+        : undefined,
+      userName: account.userName,
+      userAvatar: account.userAvatar,
+    });
+
+    const masked = getOAuthAccountInfo('github')?.maskedValue;
+    if (masked) {
+      await writeGitToken(masked);
+    } else {
+      await clearGitToken();
+    }
+    return tokenResult.access_token;
+  } catch (err) {
+    console.warn(
+      '[github] Silent renewal failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return null;
+  }
+}
+
 async function getValidAccessToken(): Promise<string> {
   const account = getGitHubAccount();
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
-  // GitHub OAuth tokens don't expire (unless revoked), so no renewal logic needed
-  return account.accessToken;
+
+  const expiresIn = (account.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
+  if (expiresIn > 60000) return account.accessToken;
+
+  const newToken = await silentRenewBackoff.run(() => renewGitHubToken());
+  if (newToken) return newToken;
+
+  const refreshedAccount = getGitHubAccount();
+  const refreshedExpiresIn =
+    (refreshedAccount?.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
+  if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) {
+    return refreshedAccount.accessToken;
+  }
+
+  throw new Error('GitHub session expired — please log in again');
 }
 
 export const config: ProviderConfig = {
@@ -504,6 +557,10 @@ export const config: ProviderConfig = {
     await saveOAuthAccount({
       providerId: 'github',
       accessToken: tokenResult.access_token,
+      refreshToken: tokenResult.refresh_token,
+      tokenExpiresAt: tokenResult.expires_in
+        ? Date.now() + tokenResult.expires_in * 1000
+        : undefined,
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
     });
@@ -524,6 +581,9 @@ export const config: ProviderConfig = {
 
     onSuccess();
   },
+
+  onSilentRenew: renewGitHubToken,
+  getValidAccessToken,
 
   onOAuthLogout: async () => {
     const account = getGitHubAccount();

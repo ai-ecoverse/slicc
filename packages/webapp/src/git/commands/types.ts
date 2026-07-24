@@ -21,6 +21,8 @@ export interface GitCommandsOptions {
   fs: VirtualFS;
   /** CORS proxy URL for remote operations. */
   corsProxy?: string;
+  /** Best-effort GitHub token freshness check before network operations. */
+  ensureFreshGithubToken?: () => Promise<void>;
   /** Default author name. */
   authorName?: string;
   /** Default author email. */

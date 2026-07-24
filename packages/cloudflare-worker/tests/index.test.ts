@@ -2061,6 +2061,7 @@ describe('generic OAuth token broker', () => {
         body: JSON.stringify({
           provider: 'github',
           code: 'test-auth-code',
+          refresh_token: 'ignored-refresh-token',
           redirect_uri: 'https://www.sliccy.ai/auth/callback',
         }),
       }),
@@ -2085,6 +2086,54 @@ describe('generic OAuth token broker', () => {
     expect(fetchInit?.headers).toMatchObject({
       'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
+    });
+    expect(Object.fromEntries(new URLSearchParams(fetchInit?.body as string))).toEqual({
+      client_id: 'test-client-id',
+      client_secret: 'test-client-secret',
+      code: 'test-auth-code',
+      grant_type: 'authorization_code',
+      redirect_uri: 'https://www.sliccy.ai/auth/callback',
+    });
+  });
+
+  it('exchanges a refresh token via POST /oauth/token', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: 'gho_refreshed_token',
+          refresh_token: 'ghr_rotated_token',
+          expires_in: 28_800,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', refresh_token: 'ghr_existing_token' }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      access_token: 'gho_refreshed_token',
+      refresh_token: 'ghr_rotated_token',
+      expires_in: 28_800,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
+    expect(fetchUrl).toBe('https://github.com/login/oauth/access_token');
+    expect(Object.fromEntries(new URLSearchParams(fetchInit?.body as string))).toEqual({
+      client_id: 'test-client-id',
+      client_secret: 'test-client-secret',
+      refresh_token: 'ghr_existing_token',
+      grant_type: 'refresh_token',
     });
   });
 

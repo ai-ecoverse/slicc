@@ -121,6 +121,7 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
 
     // Import github provider
     const { config } = await import('../../providers/github.js');
+    const { getAccounts } = await import('../../src/ui/provider-settings.js');
     const { VirtualFS } = await import('../../src/fs/index.js');
     const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
 
@@ -156,6 +157,10 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
     // Assert the masked value was written, NOT the real token
     expect(tokenContent).toBe('ghp_masked_safe');
     expect(tokenContent).not.toContain('ghp_REAL_must_not_leak');
+
+    const account = getAccounts().find((candidate) => candidate.providerId === 'github');
+    expect(account).not.toHaveProperty('refreshToken');
+    expect(account).not.toHaveProperty('tokenExpiresAt');
   });
 
   it('writes the real token to localStorage Account but masked token to VFS', async () => {
@@ -174,6 +179,8 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
           ok: true,
           json: async () => ({
             access_token: 'ghp_REAL_token_123',
+            refresh_token: 'ghr_refresh_token_123',
+            expires_in: 28_800,
             token_type: 'Bearer',
             scope: 'repo',
           }),
@@ -217,12 +224,16 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
       return 'https://x.com/callback?code=c';
     });
 
+    const beforeLogin = Date.now();
     await config.onOAuthLogin!(fakeLauncher, () => {}, undefined);
 
     // Check localStorage has the real token
     const accounts = getAccounts();
     const githubAccount = accounts.find((a) => a.providerId === 'github');
     expect(githubAccount?.accessToken).toBe('ghp_REAL_token_123');
+    expect(githubAccount?.refreshToken).toBe('ghr_refresh_token_123');
+    expect(githubAccount?.tokenExpiresAt).toBeGreaterThanOrEqual(beforeLogin + 28_800_000);
+    expect(githubAccount?.tokenExpiresAt).toBeLessThanOrEqual(Date.now() + 28_800_000);
     expect(githubAccount?.maskedValue).toBe('ghp_masked_xyz');
 
     // Check VFS has the masked token
