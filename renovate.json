@@ -35,6 +35,11 @@
       "allowedVersions": "<1.0.0"
     },
     {
+      "description": "TypeScript 7's native Go type-checker (adopted in PR #1633) remains on the real typescript dependency, while the in-browser compiler needs the classic JS lib/typescript.js bundle; keep the typescript-js npm alias on v6 so Renovate does not re-propose the breaking v7 bump from PR #1653.",
+      "matchDepNames": ["typescript-js"],
+      "allowedVersions": "<7"
+    },
+    {
       "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
       "matchUpdateTypes": ["major"],
       "minimumReleaseAge": "14 days"
