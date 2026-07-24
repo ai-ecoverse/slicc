@@ -12,6 +12,16 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# ── dependency check ──────────────────────────────────────────────────────────
+BIN="$REPO_ROOT/node_modules/.bin"
+for bin in biome prettier knip; do
+	if [ ! -x "$BIN/$bin" ]; then
+		echo "pre-push-lint-gate: $bin not found in node_modules/.bin." >&2
+		echo "Run 'npm ci' before pushing." >&2
+		exit 2
+	fi
+done
+
 # ── tmp dir for per-check logs ───────────────────────────────────────────────
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -38,9 +48,9 @@ run_check() {
 
 # ── launch all checks in parallel ────────────────────────────────────────────
 
-# Heavy whole-repo scanners (run directly to avoid npm overhead)
-run_check "biome" npx biome check .
-run_check "prettier" npx prettier --check .
+# Heavy whole-repo scanners (pinned local binaries, no npx)
+run_check "biome" "$BIN/biome" check .
+run_check "prettier" "$BIN/prettier" --check .
 
 # Lightweight custom lints — grouped into one sequential check to avoid
 # spawning 8 separate npm processes for sub-second scripts.
@@ -59,9 +69,9 @@ run_check "custom-lints" bash -c '
 run_check "complexity" node packages/dev-tools/tools/check-touched-exemptions.mjs
 run_check "manifest" bash packages/dev-tools/tools/check-manifest-justifications.sh
 
-# Dead-code detection (two independent knip passes)
-run_check "deadcode" npm run deadcode --silent -- --no-progress --reporter compact
-run_check "deadcode-prod" npm run deadcode:production-files --silent -- --no-progress --reporter compact
+# Dead-code detection (two independent knip passes, pinned local binary)
+run_check "deadcode" "$BIN/knip" --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates --no-progress --reporter compact
+run_check "deadcode-prod" "$BIN/knip" --production --include files --no-progress --reporter compact
 
 # ── wait for all, collect results ────────────────────────────────────────────
 failures=0
