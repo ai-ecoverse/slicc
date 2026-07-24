@@ -467,8 +467,9 @@ function collectFileAttachments(
 
 /**
  * Build raw (pre-redaction) TranscriptAttachment records from pending entries.
- * Pre-assigns opaque paths (MIME-derived). Accumulates partial reasons for
- * missing entries. sha256/byteLength are placeholder zeroes — patched later.
+ * Pre-assigns opaque paths (MIME-derived). sha256/byteLength are placeholder zeroes
+ * — patched later. Partial reasons are accumulated explicitly in a separate pass,
+ * not as a side effect inside the mapper.
  */
 function buildRawAttachments(
   allPending: PendingAttachment[],
@@ -485,13 +486,16 @@ function buildRawAttachments(
       opaquePaths.set(p.attachmentId, assignOpaquePath(idx++, p.mimeType, p.handling));
     }
   }
+
+  // Accumulate partial reasons in an explicit loop — not as a side effect inside map.
+  for (const p of allPending) {
+    if (!p.present && p.missingReason !== undefined) {
+      partialReasons.add(p.missingReason);
+    }
+  }
+
   const rawAttachments: TranscriptAttachment[] = allPending.map((p) => {
     if (!p.present) {
-      if (p.missingReason === 'attachment-association-unavailable') {
-        partialReasons.add('attachment-association-unavailable');
-      } else if (p.missingReason === 'attachment-file-missing') {
-        partialReasons.add('attachment-file-missing');
-      }
       return {
         id: p.attachmentId,
         path: '',
@@ -503,8 +507,8 @@ function buildRawAttachments(
         sourceMessageId: p.sourceMessageId,
         handling: p.handling,
         present: false,
-        missingReason:
-          p.missingReason === 'attachment-file-missing' ? 'attachment-file-missing' : undefined,
+        // Always emit the explicit missingReason for absent records.
+        missingReason: p.missingReason ?? 'attachment-file-missing',
       };
     }
     return {
@@ -554,11 +558,23 @@ async function redactAndBuildBundle(
   }
 
   // Build bundle files and patch sha256/byteLength (no dedup — each ref gets its own entry).
+  // Map pending entries by attachmentId to avoid positional coupling.
+  const pendingById = new Map<string, PendingAttachment>();
+  for (const p of allPending) {
+    if (pendingById.has(p.attachmentId)) {
+      throw new TranscriptExportError('schema-invalid');
+    }
+    pendingById.set(p.attachmentId, p);
+  }
+
   const bundleFiles = new Map<string, Uint8Array>();
   const patchedAttachments = await Promise.all(
-    redactedDocument.attachments.map(async (att, i) => {
+    redactedDocument.attachments.map(async (att) => {
       if (!att.present || !att.path) return att;
-      const p = allPending[i]!;
+      const p = pendingById.get(att.id);
+      if (p === undefined) {
+        throw new TranscriptExportError('schema-invalid');
+      }
       const bytes =
         p.handling === 'text-redacted'
           ? new TextEncoder().encode(redactedText.get(p.attachmentId) ?? p.rawText ?? '')

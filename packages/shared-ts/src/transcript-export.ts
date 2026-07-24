@@ -127,7 +127,7 @@ export interface TranscriptAttachment {
   sourceMessageId: string;
   handling: 'text-redacted' | 'binary-unchanged';
   present: boolean;
-  missingReason?: 'attachment-file-missing';
+  missingReason?: 'attachment-file-missing' | 'attachment-association-unavailable';
 }
 
 export interface TranscriptRedaction {
@@ -473,6 +473,11 @@ function validatePresentAttachment(
   return { ok: true };
 }
 
+const VALID_MISSING_REASONS = [
+  'attachment-file-missing',
+  'attachment-association-unavailable',
+] as const;
+
 function validateAbsentAttachment(
   att: Record<string, unknown>,
   path: string
@@ -485,13 +490,7 @@ function validateAbsentAttachment(
   if (byteLength !== 0) {
     return { ok: false, error: `${path}.byteLength must be zero when not present` };
   }
-  if (att['missingReason'] !== 'attachment-file-missing') {
-    return {
-      ok: false,
-      error: `${path}.missingReason must equal "attachment-file-missing" when not present`,
-    };
-  }
-  return { ok: true };
+  return validateEnum(att['missingReason'], VALID_MISSING_REASONS, `${path}.missingReason`);
 }
 
 function validateAttachmentStateInvariants(
