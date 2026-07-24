@@ -34,6 +34,7 @@ while read -r local_ref local_oid remote_ref remote_oid; do
     continue
   fi
   pushing_feature=true
+  pushed_oid="$local_oid"
   if ! bash packages/dev-tools/tools/check-linear-history.sh "$BASE_REF" "$local_oid"; then
     status=1
   fi
@@ -46,5 +47,20 @@ done
 # after a red PR. Only runs for feature branches.
 # Escape hatch: `git push --no-verify`.
 if [ "$pushing_feature" = true ]; then
+  # Ensure the working tree matches the pushed commit. Without this, the gate
+  # could pass against uncommitted fixes while the pushed commit still has
+  # lint failures, or fail due to unrelated uncommitted changes.
+  head_oid="$(git rev-parse HEAD)"
+  if [ "$pushed_oid" != "$head_oid" ]; then
+    echo "pre-push: pushed OID ($pushed_oid) differs from HEAD ($head_oid)." >&2
+    echo "Check out the branch you are pushing, or use git push --no-verify." >&2
+    exit 1
+  fi
+  if ! git diff --quiet HEAD; then
+    echo "pre-push: working tree has uncommitted changes." >&2
+    echo "Commit or stash them so the lint gate checks what will actually be pushed." >&2
+    exit 1
+  fi
+
   bash packages/dev-tools/tools/pre-push-lint-gate.sh
 fi
