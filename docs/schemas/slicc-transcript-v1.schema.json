@@ -100,7 +100,7 @@
       "additionalProperties": true,
       "properties": {
         "reasoningExcluded": { "const": true },
-        "excludedReasoningBlocks": { "type": "number" },
+        "excludedReasoningBlocks": { "type": "integer", "minimum": 0 },
         "binaryAttachments": { "const": "included-unchanged" },
         "redactionCounts": {
           "type": "object",
@@ -168,7 +168,7 @@
       "additionalProperties": true,
       "properties": {
         "id": { "type": "string" },
-        "sequence": { "type": "number" },
+        "sequence": { "type": "integer", "minimum": 1 },
         "role": { "enum": ["user", "assistant", "tool-result"] },
         "timestamp": { "type": "string", "format": "date-time" },
         "content": {
@@ -232,21 +232,21 @@
       "required": ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"],
       "additionalProperties": true,
       "properties": {
-        "input": { "type": "number" },
-        "output": { "type": "number" },
-        "cacheRead": { "type": "number" },
-        "cacheWrite": { "type": "number" },
-        "totalTokens": { "type": "number" },
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cacheRead": { "type": "integer", "minimum": 0 },
+        "cacheWrite": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
         "cost": {
           "type": "object",
           "required": ["input", "output", "cacheRead", "cacheWrite", "total"],
           "additionalProperties": true,
           "properties": {
-            "input": { "type": "number" },
-            "output": { "type": "number" },
-            "cacheRead": { "type": "number" },
-            "cacheWrite": { "type": "number" },
-            "total": { "type": "number" }
+            "input": { "type": "number", "minimum": 0 },
+            "output": { "type": "number", "minimum": 0 },
+            "cacheRead": { "type": "number", "minimum": 0 },
+            "cacheWrite": { "type": "number", "minimum": 0 },
+            "total": { "type": "number", "minimum": 0 }
           }
         }
       }
@@ -282,8 +282,8 @@
         "path": { "type": "string" },
         "originalName": { "type": "string" },
         "mimeType": { "type": "string" },
-        "byteLength": { "type": "number" },
-        "sha256": { "type": "string" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$|^$" },
         "sourceConversationId": { "type": "string" },
         "sourceMessageId": { "type": "string" },
         "handling": { "enum": ["text-redacted", "binary-unchanged"] },

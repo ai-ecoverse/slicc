@@ -25,6 +25,17 @@ export type TranscriptCompletenessReason =
   | 'attachment-association-unavailable'
   | 'complete-snapshot-unavailable';
 
+/** Canonical runtime list of all valid completeness reasons. */
+export const VALID_COMPLETENESS_REASONS: readonly TranscriptCompletenessReason[] = [
+  'canonical-agent-history-unavailable',
+  'tool-data-may-be-truncated',
+  'model-metadata-unavailable',
+  'scoop-history-unavailable',
+  'attachment-file-missing',
+  'attachment-association-unavailable',
+  'complete-snapshot-unavailable',
+] as const;
+
 export type TranscriptExportErrorCode =
   | 'permission-denied'
   | 'redaction-unavailable'
@@ -190,11 +201,27 @@ export class TranscriptExportError extends Error {
 export type TranscriptValidationResult = { ok: true } | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------
+// Private — scalar / regex constants
+// ---------------------------------------------------------------------------
+
+const VALID_COMPLETENESS_REASONS_SET = new Set<string>(VALID_COMPLETENESS_REASONS);
+const SHA256_HEX_RE = /^[0-9a-fA-F]{64}$/;
+const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+// ---------------------------------------------------------------------------
 // Validator primitives — never throw for untrusted input
 // ---------------------------------------------------------------------------
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function isSha256Hex(v: unknown): boolean {
+  return typeof v === 'string' && SHA256_HEX_RE.test(v);
+}
+
+function isIsoDateTime(v: string): boolean {
+  return ISO_DATETIME_RE.test(v) && Number.isFinite(Date.parse(v));
 }
 
 /** Build a human-readable "must be" enum error string. */
@@ -231,12 +258,71 @@ function validateArray(
 }
 
 // ---------------------------------------------------------------------------
-// Content-block / message / conversation validators
+// Content-block validators
 // ---------------------------------------------------------------------------
+
+function validateContentBlockFields(
+  block: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const type = block['type'];
+  if (type === 'text') {
+    if (typeof block['text'] !== 'string') {
+      return { ok: false, error: `${path}.text must be a string` };
+    }
+  } else if (type === 'tool-call') {
+    if (typeof block['id'] !== 'string' || block['id'] === '') {
+      return { ok: false, error: `${path}.id must be a non-empty string` };
+    }
+    if (typeof block['name'] !== 'string' || block['name'] === '') {
+      return { ok: false, error: `${path}.name must be a non-empty string` };
+    }
+    if (!('input' in block)) {
+      return { ok: false, error: `${path}.input must be present` };
+    }
+  } else {
+    // attachment-ref
+    if (typeof block['attachmentId'] !== 'string' || block['attachmentId'] === '') {
+      return { ok: false, error: `${path}.attachmentId must be a non-empty string` };
+    }
+  }
+  return { ok: true };
+}
 
 function validateContentBlock(block: unknown, path: string): TranscriptValidationResult {
   if (!isObj(block)) return { ok: false, error: `${path} must be a non-null object` };
-  return validateEnum(block['type'], ['text', 'tool-call', 'attachment-ref'], `${path}.type`);
+  const typeResult = validateEnum(
+    block['type'],
+    ['text', 'tool-call', 'attachment-ref'],
+    `${path}.type`
+  );
+  if (!typeResult.ok) return typeResult;
+  return validateContentBlockFields(block, path);
+}
+
+// ---------------------------------------------------------------------------
+// Message validators
+// ---------------------------------------------------------------------------
+
+function validateMessageScalars(
+  msg: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  if (typeof msg['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
+  if (typeof msg['sequence'] !== 'number') {
+    return { ok: false, error: `${path}.sequence must be a number` };
+  }
+  const seq = msg['sequence'] as number;
+  if (!Number.isInteger(seq) || seq < 1) {
+    return { ok: false, error: `${path}.sequence must be a positive integer` };
+  }
+  if (typeof msg['timestamp'] !== 'string') {
+    return { ok: false, error: `${path}.timestamp must be a string` };
+  }
+  if (!isIsoDateTime(msg['timestamp'] as string)) {
+    return { ok: false, error: `${path}.timestamp must be a valid ISO 8601 date-time string` };
+  }
+  return { ok: true };
 }
 
 function validateMessage(msg: unknown, path: string): TranscriptValidationResult {
@@ -247,13 +333,8 @@ function validateMessage(msg: unknown, path: string): TranscriptValidationResult
     `${path}.role`
   );
   if (!roleResult.ok) return roleResult;
-  if (typeof msg['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
-  if (typeof msg['sequence'] !== 'number') {
-    return { ok: false, error: `${path}.sequence must be a number` };
-  }
-  if (typeof msg['timestamp'] !== 'string') {
-    return { ok: false, error: `${path}.timestamp must be a string` };
-  }
+  const scalarsResult = validateMessageScalars(msg, path);
+  if (!scalarsResult.ok) return scalarsResult;
   const content = msg['content'];
   if (!Array.isArray(content)) return { ok: false, error: `${path}.content must be an array` };
   return validateArray(content, validateContentBlock, `${path}.content`);
@@ -275,29 +356,123 @@ function validateConversation(conv: unknown, path: string): TranscriptValidation
 }
 
 // ---------------------------------------------------------------------------
-// Attachment / redaction validators
+// Attachment validators
 // ---------------------------------------------------------------------------
 
-function validateAttachment(att: unknown, path: string): TranscriptValidationResult {
-  if (!isObj(att)) return { ok: false, error: `${path} must be a non-null object` };
-  for (const field of ['id', 'path', 'originalName', 'mimeType', 'sha256']) {
+function validateAttachmentStringFields(
+  att: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  for (const field of [
+    'id',
+    'path',
+    'originalName',
+    'mimeType',
+    'sha256',
+    'sourceConversationId',
+    'sourceMessageId',
+  ] as const) {
     if (typeof att[field] !== 'string') {
       return { ok: false, error: `${path}.${field} must be a string` };
     }
   }
+  return { ok: true };
+}
+
+function validatePresentAttachment(
+  att: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const attPath = att['path'] as string;
+  const sha256 = att['sha256'] as string;
+  const byteLength = att['byteLength'] as number;
+  if (attPath === '') return { ok: false, error: `${path}.path must be non-empty when present` };
+  if (!isSha256Hex(sha256)) {
+    return { ok: false, error: `${path}.sha256 must be a 64-char hex string when present` };
+  }
+  if (!Number.isFinite(byteLength) || byteLength < 0) {
+    return { ok: false, error: `${path}.byteLength must be a non-negative number when present` };
+  }
+  if (att['missingReason'] !== undefined) {
+    return { ok: false, error: `${path}.missingReason must be absent when present is true` };
+  }
+  return { ok: true };
+}
+
+function validateAbsentAttachment(
+  att: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const attPath = att['path'] as string;
+  const sha256 = att['sha256'] as string;
+  const byteLength = att['byteLength'] as number;
+  if (attPath !== '') return { ok: false, error: `${path}.path must be empty when not present` };
+  if (sha256 !== '') return { ok: false, error: `${path}.sha256 must be empty when not present` };
+  if (byteLength !== 0) {
+    return { ok: false, error: `${path}.byteLength must be zero when not present` };
+  }
+  if (att['missingReason'] !== 'attachment-file-missing') {
+    return {
+      ok: false,
+      error: `${path}.missingReason must equal "attachment-file-missing" when not present`,
+    };
+  }
+  return { ok: true };
+}
+
+function validateAttachmentStateInvariants(
+  att: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  return att['present']
+    ? validatePresentAttachment(att, path)
+    : validateAbsentAttachment(att, path);
+}
+
+function validateAttachment(att: unknown, path: string): TranscriptValidationResult {
+  if (!isObj(att)) return { ok: false, error: `${path} must be a non-null object` };
+  const strResult = validateAttachmentStringFields(att, path);
+  if (!strResult.ok) return strResult;
   if (typeof att['byteLength'] !== 'number') {
     return { ok: false, error: `${path}.byteLength must be a number` };
   }
   if (typeof att['present'] !== 'boolean') {
     return { ok: false, error: `${path}.present must be a boolean` };
   }
-  if (typeof att['sourceConversationId'] !== 'string') {
-    return { ok: false, error: `${path}.sourceConversationId must be a string` };
+  const handlingResult = validateEnum(
+    att['handling'],
+    ['text-redacted', 'binary-unchanged'],
+    `${path}.handling`
+  );
+  if (!handlingResult.ok) return handlingResult;
+  return validateAttachmentStateInvariants(att, path);
+}
+
+// ---------------------------------------------------------------------------
+// Redaction validators
+// ---------------------------------------------------------------------------
+
+function validateRedactionTarget(
+  target: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const kindResult = validateEnum(target['kind'], ['json', 'attachment'], `${path}.kind`);
+  if (!kindResult.ok) return kindResult;
+  if (target['kind'] === 'json') {
+    if (typeof target['pointer'] !== 'string') {
+      return { ok: false, error: `${path}.pointer must be a string` };
+    }
+    const ptr = target['pointer'] as string;
+    if (ptr !== '' && !ptr.startsWith('/')) {
+      return { ok: false, error: `${path}.pointer must be a valid RFC 6901 JSON pointer` };
+    }
+  } else {
+    // attachment kind
+    if (typeof target['attachmentId'] !== 'string' || target['attachmentId'] === '') {
+      return { ok: false, error: `${path}.attachmentId must be a non-empty string` };
+    }
   }
-  if (typeof att['sourceMessageId'] !== 'string') {
-    return { ok: false, error: `${path}.sourceMessageId must be a string` };
-  }
-  return validateEnum(att['handling'], ['text-redacted', 'binary-unchanged'], `${path}.handling`);
+  return { ok: true };
 }
 
 function validateRedaction(red: unknown, path: string): TranscriptValidationResult {
@@ -314,11 +489,37 @@ function validateRedaction(red: unknown, path: string): TranscriptValidationResu
   if (!detectorResult.ok) return detectorResult;
   const target = red['target'];
   if (!isObj(target)) return { ok: false, error: `${path}.target must be a non-null object` };
-  return validateEnum(target['kind'], ['json', 'attachment'], `${path}.target.kind`);
+  return validateRedactionTarget(target, `${path}.target`);
 }
 
 // ---------------------------------------------------------------------------
-// Top-level section validators (extracted to keep main function within CC ≤ 8)
+// Delegation validator
+// ---------------------------------------------------------------------------
+
+function validateDelegation(del: unknown, path: string): TranscriptValidationResult {
+  if (!isObj(del)) return { ok: false, error: `${path} must be a non-null object` };
+  if (typeof del['sourceConversationId'] !== 'string') {
+    return { ok: false, error: `${path}.sourceConversationId must be a string` };
+  }
+  if (typeof del['targetConversationId'] !== 'string') {
+    return { ok: false, error: `${path}.targetConversationId must be a string` };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Completeness reason validator
+// ---------------------------------------------------------------------------
+
+function validateCompletenessReason(item: unknown, path: string): TranscriptValidationResult {
+  if (typeof item !== 'string' || !VALID_COMPLETENESS_REASONS_SET.has(item)) {
+    return { ok: false, error: `${path} is not a valid completeness reason` };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Top-level section validators
 // ---------------------------------------------------------------------------
 
 function validateExport(exp: unknown): TranscriptValidationResult {
@@ -343,6 +544,26 @@ function validateExport(exp: unknown): TranscriptValidationResult {
   return { ok: true };
 }
 
+function validateCompleteness(completeness: unknown): TranscriptValidationResult {
+  if (!isObj(completeness)) {
+    return { ok: false, error: 'session.completeness must be a non-null object' };
+  }
+  const statusResult = validateEnum(
+    completeness['status'],
+    ['complete', 'partial'],
+    'session.completeness.status'
+  );
+  if (!statusResult.ok) return statusResult;
+  if (!Array.isArray(completeness['missing'])) {
+    return { ok: false, error: 'session.completeness.missing must be an array' };
+  }
+  return validateArray(
+    completeness['missing'],
+    validateCompletenessReason,
+    'session.completeness.missing'
+  );
+}
+
 function validateSession(session: unknown): TranscriptValidationResult {
   if (!isObj(session)) return { ok: false, error: 'session must be a non-null object' };
   if (typeof session['id'] !== 'string') {
@@ -353,20 +574,7 @@ function validateSession(session: unknown): TranscriptValidationResult {
   }
   const stateResult = validateEnum(session['state'], ['active', 'frozen'], 'session.state');
   if (!stateResult.ok) return stateResult;
-  const completeness = session['completeness'];
-  if (!isObj(completeness)) {
-    return { ok: false, error: 'session.completeness must be a non-null object' };
-  }
-  const compResult = validateEnum(
-    completeness['status'],
-    ['complete', 'partial'],
-    'session.completeness.status'
-  );
-  if (!compResult.ok) return compResult;
-  if (!Array.isArray(completeness['missing'])) {
-    return { ok: false, error: 'session.completeness.missing must be an array' };
-  }
-  return { ok: true };
+  return validateCompleteness(session['completeness']);
 }
 
 function validatePrivacy(privacy: unknown): TranscriptValidationResult {
@@ -397,14 +605,328 @@ function validateTopLevelArrays(doc: Record<string, unknown>): TranscriptValidat
   }
   const convsResult = validateArray(conversations, validateConversation, 'conversations');
   if (!convsResult.ok) return convsResult;
-  if (!Array.isArray(doc['delegations'])) {
+  const delegations = doc['delegations'];
+  if (!Array.isArray(delegations)) {
     return { ok: false, error: 'delegations must be an array' };
   }
+  const delsResult = validateArray(delegations, validateDelegation, 'delegations');
+  if (!delsResult.ok) return delsResult;
   const attachments = doc['attachments'];
   if (!Array.isArray(attachments)) {
     return { ok: false, error: 'attachments must be an array' };
   }
   return validateArray(attachments, validateAttachment, 'attachments');
+}
+
+// ---------------------------------------------------------------------------
+// Relational validation helpers — run only after structural checks pass
+// ---------------------------------------------------------------------------
+
+function checkUniqueConvAndMsgIds(conversations: unknown[]): TranscriptValidationResult {
+  const convIds = new Set<string>();
+  const msgIds = new Set<string>();
+  for (const conv of conversations) {
+    if (!isObj(conv) || typeof conv['id'] !== 'string') continue;
+    if (convIds.has(conv['id'])) {
+      return { ok: false, error: `duplicate conversation id "${conv['id']}"` };
+    }
+    convIds.add(conv['id']);
+    const msgs = conv['messages'];
+    if (!Array.isArray(msgs)) continue;
+    for (const msg of msgs) {
+      if (!isObj(msg) || typeof msg['id'] !== 'string') continue;
+      if (msgIds.has(msg['id'])) {
+        return { ok: false, error: `duplicate message id "${msg['id']}"` };
+      }
+      msgIds.add(msg['id']);
+    }
+  }
+  return { ok: true };
+}
+
+function checkSequences(conversations: unknown[]): TranscriptValidationResult {
+  for (const conv of conversations) {
+    if (!isObj(conv)) continue;
+    const msgs = conv['messages'];
+    if (!Array.isArray(msgs)) continue;
+    const convId = typeof conv['id'] === 'string' ? conv['id'] : '?';
+    let prev = 0;
+    for (const msg of msgs) {
+      if (!isObj(msg) || typeof msg['sequence'] !== 'number') continue;
+      const seq = msg['sequence'] as number;
+      if (seq <= prev) {
+        return {
+          ok: false,
+          error: `sequences in conversation "${convId}" must be strictly increasing`,
+        };
+      }
+      prev = seq;
+    }
+  }
+  return { ok: true };
+}
+
+/** Collect tool-call block ids from an array of raw messages. */
+function getToolCallIdsFromMessages(msgs: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const msg of msgs) {
+    if (!isObj(msg)) continue;
+    const content = msg['content'];
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (isObj(block) && block['type'] === 'tool-call' && typeof block['id'] === 'string') {
+        ids.push(block['id']);
+      }
+    }
+  }
+  return ids;
+}
+
+function collectAllToolCallIds(conversations: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const conv of conversations) {
+    if (!isObj(conv)) continue;
+    const msgs = conv['messages'];
+    if (!Array.isArray(msgs)) continue;
+    for (const id of getToolCallIdsFromMessages(msgs)) ids.add(id);
+  }
+  return ids;
+}
+
+function checkToolResultRefIds(
+  conversations: unknown[],
+  toolCallIds: Set<string>
+): TranscriptValidationResult {
+  for (const conv of conversations) {
+    if (!isObj(conv)) continue;
+    const msgs = conv['messages'];
+    if (!Array.isArray(msgs)) continue;
+    for (const msg of msgs) {
+      if (!isObj(msg) || msg['role'] !== 'tool-result') continue;
+      const tcId = msg['toolCallId'];
+      if (typeof tcId !== 'string' || tcId === '') continue;
+      if (!toolCallIds.has(tcId)) {
+        return { ok: false, error: `tool-result message references unknown toolCallId "${tcId}"` };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+function checkToolResultRefs(conversations: unknown[]): TranscriptValidationResult {
+  return checkToolResultRefIds(conversations, collectAllToolCallIds(conversations));
+}
+
+function checkAttachmentRefsInContent(
+  content: unknown[],
+  attIds: Set<string>
+): TranscriptValidationResult {
+  for (const block of content) {
+    if (!isObj(block) || block['type'] !== 'attachment-ref') continue;
+    const attId = block['attachmentId'];
+    if (typeof attId !== 'string' || !attIds.has(attId)) {
+      return { ok: false, error: `attachment-ref references unknown attachmentId "${attId}"` };
+    }
+  }
+  return { ok: true };
+}
+
+function checkAttachmentRefsInConversations(
+  conversations: unknown[],
+  attIds: Set<string>
+): TranscriptValidationResult {
+  for (const conv of conversations) {
+    if (!isObj(conv)) continue;
+    const msgs = conv['messages'];
+    if (!Array.isArray(msgs)) continue;
+    for (const msg of msgs) {
+      if (!isObj(msg)) continue;
+      const content = msg['content'];
+      if (!Array.isArray(content)) continue;
+      const r = checkAttachmentRefsInContent(content, attIds);
+      if (!r.ok) return r;
+    }
+  }
+  return { ok: true };
+}
+
+function checkAttachmentRefResolution(
+  conversations: unknown[],
+  attachments: unknown[]
+): TranscriptValidationResult {
+  const attIds = new Set<string>();
+  for (const att of attachments) {
+    if (isObj(att) && typeof att['id'] === 'string') attIds.add(att['id']);
+  }
+  return checkAttachmentRefsInConversations(conversations, attIds);
+}
+
+/** Build a map of conversationId → Set<messageId> from the conversations array. */
+function buildConvMsgIndex(conversations: unknown[]): Map<string, Set<string>> {
+  const idx = new Map<string, Set<string>>();
+  for (const conv of conversations) {
+    if (!isObj(conv) || typeof conv['id'] !== 'string') continue;
+    const msgIds = new Set<string>();
+    const msgs = conv['messages'];
+    if (Array.isArray(msgs)) {
+      for (const msg of msgs) {
+        if (isObj(msg) && typeof msg['id'] === 'string') msgIds.add(msg['id']);
+      }
+    }
+    idx.set(conv['id'], msgIds);
+  }
+  return idx;
+}
+
+function checkAttachmentSources(
+  attachments: unknown[],
+  conversations: unknown[]
+): TranscriptValidationResult {
+  const convMsgIdx = buildConvMsgIndex(conversations);
+  for (let i = 0; i < attachments.length; i++) {
+    const att = attachments[i];
+    if (!isObj(att)) continue;
+    const convId = att['sourceConversationId'];
+    const msgId = att['sourceMessageId'];
+    if (typeof convId !== 'string' || typeof msgId !== 'string') continue;
+    const msgIds = convMsgIdx.get(convId);
+    if (!msgIds) {
+      return {
+        ok: false,
+        error: `attachments[${i}].sourceConversationId "${convId}" does not exist`,
+      };
+    }
+    if (!msgIds.has(msgId)) {
+      return {
+        ok: false,
+        error: `attachments[${i}].sourceMessageId "${msgId}" does not exist in conversation "${convId}"`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/** Build a map of conversationId → Set<toolCallId> from all tool-call blocks. */
+function buildConvToolCallIndex(conversations: unknown[]): Map<string, Set<string>> {
+  const idx = new Map<string, Set<string>>();
+  for (const conv of conversations) {
+    if (!isObj(conv) || typeof conv['id'] !== 'string') continue;
+    const msgs = Array.isArray(conv['messages']) ? conv['messages'] : [];
+    idx.set(conv['id'], new Set<string>(getToolCallIdsFromMessages(msgs)));
+  }
+  return idx;
+}
+
+function checkEachDelegation(
+  delegations: unknown[],
+  convIds: Set<string>,
+  convToolCallIds: Map<string, Set<string>>
+): TranscriptValidationResult {
+  for (let i = 0; i < delegations.length; i++) {
+    const del = delegations[i];
+    if (!isObj(del)) continue;
+    const srcId = del['sourceConversationId'];
+    const tgtId = del['targetConversationId'];
+    if (typeof srcId !== 'string' || !convIds.has(srcId)) {
+      return {
+        ok: false,
+        error: `delegations[${i}].sourceConversationId "${srcId}" does not exist`,
+      };
+    }
+    if (typeof tgtId !== 'string' || !convIds.has(tgtId)) {
+      return {
+        ok: false,
+        error: `delegations[${i}].targetConversationId "${tgtId}" does not exist`,
+      };
+    }
+    const tcId = del['toolCallId'];
+    if (typeof tcId === 'string' && tcId !== '') {
+      const srcToolCalls = convToolCallIds.get(srcId);
+      if (!srcToolCalls?.has(tcId)) {
+        return {
+          ok: false,
+          error: `delegations[${i}].toolCallId "${tcId}" does not exist in source conversation "${srcId}"`,
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+function checkDelegationRefs(
+  delegations: unknown[],
+  conversations: unknown[]
+): TranscriptValidationResult {
+  const convIds = new Set<string>();
+  for (const conv of conversations) {
+    if (isObj(conv) && typeof conv['id'] === 'string') convIds.add(conv['id']);
+  }
+  return checkEachDelegation(delegations, convIds, buildConvToolCallIndex(conversations));
+}
+
+function checkRedactionTargetRef(
+  target: Record<string, unknown>,
+  attIds: Set<string>,
+  path: string
+): TranscriptValidationResult {
+  if (target['kind'] !== 'attachment') return { ok: true };
+  const attId = target['attachmentId'];
+  if (typeof attId !== 'string' || !attIds.has(attId)) {
+    return {
+      ok: false,
+      error: `${path}.attachmentId "${attId}" does not reference a known attachment`,
+    };
+  }
+  return { ok: true };
+}
+
+function checkRedactionRefs(
+  redactions: unknown[],
+  attachments: unknown[]
+): TranscriptValidationResult {
+  const attIds = new Set<string>();
+  for (const att of attachments) {
+    if (isObj(att) && typeof att['id'] === 'string') attIds.add(att['id']);
+  }
+  for (let i = 0; i < redactions.length; i++) {
+    const red = redactions[i];
+    if (!isObj(red)) continue;
+    const target = red['target'];
+    if (!isObj(target)) continue;
+    const r = checkRedactionTargetRef(target, attIds, `privacy.redactions[${i}].target`);
+    if (!r.ok) return r;
+  }
+  return { ok: true };
+}
+
+function validateRelational(doc: Record<string, unknown>): TranscriptValidationResult {
+  const conversations = doc['conversations'] as unknown[];
+  const attachments = doc['attachments'] as unknown[];
+  const delegations = doc['delegations'] as unknown[];
+  const privacy = doc['privacy'] as Record<string, unknown> | undefined;
+  const redactions = (
+    Array.isArray(privacy?.['redactions']) ? privacy!['redactions'] : []
+  ) as unknown[];
+
+  const r1 = checkUniqueConvAndMsgIds(conversations);
+  if (!r1.ok) return r1;
+  const r2 = checkSequences(conversations);
+  if (!r2.ok) return r2;
+  const r3 = checkToolResultRefs(conversations);
+  if (!r3.ok) return r3;
+  const r4 = checkAttachmentRefResolution(conversations, attachments);
+  if (!r4.ok) return r4;
+  const r5 = checkAttachmentSources(attachments, conversations);
+  if (!r5.ok) return r5;
+  const r6 = checkDelegationRefs(delegations, conversations);
+  if (!r6.ok) return r6;
+  return checkRedactionRefs(redactions, attachments);
+}
+
+function validateStructuredBody(doc: Record<string, unknown>): TranscriptValidationResult {
+  const r = validateTopLevelArrays(doc);
+  if (!r.ok) return r;
+  return validateRelational(doc);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,8 +936,12 @@ function validateTopLevelArrays(doc: Record<string, unknown>): TranscriptValidat
 /**
  * Runtime validator for `TranscriptDocumentV1`.
  *
- * Checks all required discriminators, arrays, scalar types, and the invariant
- * `reasoningExcluded === true`. Never throws for untrusted input.
+ * Validates all required discriminators, type-specific content block fields,
+ * scalar constraints (sequence ≥ 1, ISO timestamps, SHA-256 hex, attachment
+ * state invariants), and relational cross-references. Returns early with the
+ * first structural error before performing any relational checks.
+ *
+ * Never throws for untrusted input.
  */
 export function validateTranscriptDocumentV1(value: unknown): TranscriptValidationResult {
   if (!isObj(value)) {
@@ -430,5 +956,5 @@ export function validateTranscriptDocumentV1(value: unknown): TranscriptValidati
   if (!sessionResult.ok) return sessionResult;
   const privacyResult = validatePrivacy(value['privacy']);
   if (!privacyResult.ok) return privacyResult;
-  return validateTopLevelArrays(value);
+  return validateStructuredBody(value);
 }
