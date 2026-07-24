@@ -88,7 +88,8 @@
     "postinstall": "if [ -d patches ]; then npx --no-install patch-package || { echo \"ERROR: patches/ present but patch-package not installed (run a full 'npm ci' incl. devDependencies)\"; exit 1; }; fi && if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi && if [ -d packages/spoon ]; then npm run build -w @ai-ecoverse/spoon; fi && if [ -d packages/webcomponents ]; then npm run build -w @slicc/webcomponents; fi && if [ -d packages/cherry ]; then npm run build -w @ai-ecoverse/cherry; fi",
     "prepare": "husky",
     "lint:no-raw-chrome-runtime-id": "node packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs",
-    "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs"
+    "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs",
+    "verify": "bash packages/dev-tools/tools/pre-push-lint-gate.sh"
   },
   "dependencies": {
     "e2b": "^2.35.0",
