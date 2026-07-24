@@ -304,6 +304,11 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     ios: 'undecodable',
     message: { type: 'transcript.export.cancel', requestId: 'te-2' },
   },
+  // TS-only: iOS never originates exports so it never sends acks.
+  'transcript.export.ack': {
+    ios: 'undecodable',
+    message: { type: 'transcript.export.ack', requestId: 'te-2', index: 0 },
+  },
   user_message: {
     ios: 'decoded',
     message: { type: 'user_message', text: 'hello from follower', messageId: 'f-1' },
@@ -449,7 +454,7 @@ export function buildCorpusDocument(): {
       .map(({ ios, message }) => ({ type: message.type, ios, message: message as unknown }))
       .sort((a, b) => a.type.localeCompare(b.type));
   return {
-    traySyncProtocolVersion: 2,
+    traySyncProtocolVersion: 3,
     // Mapped-type-enforced variant counts; the Swift suite asserts the entry
     // arrays match so a truncated/stale JSON copy fails loudly.
     leaderVariantCount: Object.keys(LEADER_TO_FOLLOWER_CORPUS).length,

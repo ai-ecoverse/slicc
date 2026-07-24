@@ -227,6 +227,8 @@ interface SendExportChunksCtx {
   hasher: { update(data: Uint8Array): void };
   abort: AbortController;
   onSlice: (index: number, slice: string) => boolean;
+  /** When true, leader waits for follower ack before sending the next slice. */
+  awaitAck: boolean;
 }
 
 interface SendExportChunksResult {
@@ -396,9 +398,41 @@ export class LeaderSyncManager {
     { bootstrapId: string; abort: AbortController }
   >();
 
+  /**
+   * Ack waiters for the bounded in-flight chunk window (Wave 4).
+   *
+   * Keyed by `${bootstrapId}:${requestId}:${index}`. Each entry holds a
+   * resolver that is called when the matching `transcript.export.ack`
+   * arrives from the correct follower. Entries are rejected on abort or
+   * disconnect and deleted on receipt or cleanup.
+   */
+  private readonly ackWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (err: Error) => void }
+  >();
+
   /** Build the composite map key from follower identity and wire request ID. */
   private static exportKey(bootstrapId: string, requestId: string): string {
     return `${bootstrapId}:${requestId}`;
+  }
+
+  /** Build the ack waiter map key (owner-scoped). */
+  private static ackKey(bootstrapId: string, requestId: string, index: number): string {
+    return `${bootstrapId}:${requestId}:${index}`;
+  }
+
+  /**
+   * Reject and remove all ack waiters for a given bootstrapId:requestId.
+   * Called on cancel, disconnect, and abort to prevent stuck Promises.
+   */
+  private clearAckWaiters(bootstrapId: string, requestId: string): void {
+    const prefix = `${bootstrapId}:${requestId}:`;
+    for (const [key, waiter] of this.ackWaiters) {
+      if (key.startsWith(prefix)) {
+        waiter.reject(new Error('export aborted'));
+        this.ackWaiters.delete(key);
+      }
+    }
   }
 
   /** Max payload per chunk message: 32 KiB of base64 text. */
@@ -501,6 +535,9 @@ export class LeaderSyncManager {
     for (const [key, entry] of this.activeExports) {
       if (entry.bootstrapId === bootstrapId) {
         entry.abort.abort();
+        // Reject ack waiters for this export so sendExportChunks exits.
+        const requestId = key.slice(bootstrapId.length + 1);
+        this.clearAckWaiters(bootstrapId, requestId);
         this.activeExports.delete(key);
       }
     }
@@ -1099,6 +1136,9 @@ export class LeaderSyncManager {
       case 'transcript.export.cancel':
         this.handleTranscriptExportCancel(bootstrapId, message.requestId);
         break;
+      case 'transcript.export.ack':
+        this.handleTranscriptExportAck(bootstrapId, message.requestId, message.index);
+        break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
@@ -1246,6 +1286,21 @@ export class LeaderSyncManager {
     log.info('Transcript export cancelled by follower', { requestId, bootstrapId });
     entry.abort.abort();
     this.activeExports.delete(key);
+    // Reject any ack waiter for this request so the sendExportChunks loop exits.
+    this.clearAckWaiters(bootstrapId, requestId);
+  }
+
+  /**
+   * Handle `transcript.export.ack` from a follower.
+   * Resolves the waiter for the matching bootstrapId:requestId:index.
+   * Acks from other followers are silently dropped (owner-scoped key).
+   */
+  private handleTranscriptExportAck(bootstrapId: string, requestId: string, index: number): void {
+    const key = LeaderSyncManager.ackKey(bootstrapId, requestId, index);
+    const waiter = this.ackWaiters.get(key);
+    if (!waiter) return; // late or spurious ack — ignore
+    this.ackWaiters.delete(key);
+    waiter.resolve();
   }
 
   /**
@@ -1305,6 +1360,12 @@ export class LeaderSyncManager {
     const { sha256: sha256Lib } = await import('js-sha256');
     const hasher = sha256Lib.create();
 
+    // Gate ack-based flow control on the follower's protocol version.
+    // Followers that sent `hello` with protocolVersion >= 3 support acks;
+    // older or legacy peers (no hello) skip ack waiting for compatibility.
+    const followerForAck = this.followers.get(bootstrapId);
+    const awaitAck = (followerForAck?.peerProtocolVersion ?? 0) >= TRAY_SYNC_PROTOCOL_VERSION;
+
     const {
       streamError,
       chunkCount: chunkIndex,
@@ -1315,6 +1376,7 @@ export class LeaderSyncManager {
       chunks: result.chunks,
       hasher,
       abort,
+      awaitAck,
       onSlice: (idx, slice) => {
         const f = this.followers.get(bootstrapId);
         if (!f) return false;
@@ -1398,7 +1460,7 @@ export class LeaderSyncManager {
    * totals processed regardless of terminal state.
    */
   private async sendExportChunks(ctx: SendExportChunksCtx): Promise<SendExportChunksResult> {
-    const { bootstrapId, requestId, chunks, hasher, abort, onSlice } = ctx;
+    const { bootstrapId, requestId, chunks, hasher, abort, onSlice, awaitAck } = ctx;
     const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
     const sync = this.followers.get(bootstrapId)?.sync;
     if (!sync) return { streamError: true, chunkCount: 0, byteLength: 0 };
@@ -1412,23 +1474,24 @@ export class LeaderSyncManager {
         hasher.update(raw);
         byteCount += raw.byteLength;
         const b64 = bytesToBase64(raw);
-        for (let off = 0; off < b64.length; off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX) {
-          if (abort.signal.aborted || !this.activeExports.has(key)) {
-            return { streamError: false, chunkCount: idx, byteLength: byteCount };
-          }
-          await waitForBufferedAmountLow(
-            sync,
-            LeaderSyncManager.EXPORT_BACKPRESSURE_THRESHOLD,
-            abort.signal
-          );
-          if (abort.signal.aborted || !this.activeExports.has(key)) {
-            return { streamError: false, chunkCount: idx, byteLength: byteCount };
-          }
-          const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
-          if (!onSlice(idx, slice)) {
-            return { streamError: true, chunkCount: idx, byteLength: byteCount };
-          }
-          idx++;
+        const sliceResult = await this.sendExportSlices({
+          bootstrapId,
+          requestId,
+          b64,
+          sync,
+          key,
+          abort,
+          onSlice,
+          awaitAck,
+          startIdx: idx,
+        });
+        idx = sliceResult.nextIdx;
+        if (sliceResult.done !== 'continue') {
+          return {
+            streamError: sliceResult.done === 'error',
+            chunkCount: idx,
+            byteLength: byteCount,
+          };
         }
       }
     } catch (streamErr) {
@@ -1442,6 +1505,91 @@ export class LeaderSyncManager {
       return { streamError: true, chunkCount: idx, byteLength: byteCount };
     }
     return { streamError: false, chunkCount: idx, byteLength: byteCount };
+  }
+
+  /** Send all base64 slices for one raw ZIP chunk, applying backpressure and optional ack-gating. */
+  private async sendExportSlices(ctx: {
+    bootstrapId: string;
+    requestId: string;
+    b64: string;
+    sync: { bufferedAmount?: number };
+    key: string;
+    abort: AbortController;
+    onSlice: (index: number, slice: string) => boolean;
+    awaitAck: boolean;
+    startIdx: number;
+  }): Promise<{ nextIdx: number; done: 'continue' | 'abort' | 'error' }> {
+    const { bootstrapId, requestId, b64, sync, key, abort, onSlice, awaitAck } = ctx;
+    let idx = ctx.startIdx;
+    for (let off = 0; off < b64.length; off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX) {
+      if (abort.signal.aborted || !this.activeExports.has(key)) {
+        return { nextIdx: idx, done: 'abort' };
+      }
+      await waitForBufferedAmountLow(
+        sync,
+        LeaderSyncManager.EXPORT_BACKPRESSURE_THRESHOLD,
+        abort.signal
+      );
+      if (abort.signal.aborted || !this.activeExports.has(key)) {
+        return { nextIdx: idx, done: 'abort' };
+      }
+      const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
+      if (!onSlice(idx, slice)) {
+        return { nextIdx: idx, done: 'error' };
+      }
+      // Wave 4: wait for durable-write ack from v3+ followers before sending the next slice.
+      if (awaitAck) {
+        const waited = await this.waitForAck(bootstrapId, requestId, idx, abort.signal);
+        if (!waited || abort.signal.aborted || !this.activeExports.has(key)) {
+          return { nextIdx: idx + 1, done: 'abort' };
+        }
+      }
+      idx++;
+    }
+    return { nextIdx: idx, done: 'continue' };
+  }
+
+  /**
+   * Register an ack waiter for the given chunk index and await it.
+   * Returns `true` when ack arrives, `false` when aborted/cancelled.
+   * The waiter is stored with an owner-scoped key so cross-follower
+   * acks are silently dropped by `handleTranscriptExportAck`.
+   */
+  private waitForAck(
+    bootstrapId: string,
+    requestId: string,
+    index: number,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      if (signal.aborted) {
+        resolve(false);
+        return;
+      }
+
+      const key = LeaderSyncManager.ackKey(bootstrapId, requestId, index);
+      const cleanup = (): void => {
+        this.ackWaiters.delete(key);
+      };
+      const onAbort = (): void => {
+        cleanup();
+        resolve(false);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      this.ackWaiters.set(key, {
+        resolve: () => {
+          signal.removeEventListener('abort', onAbort);
+          cleanup();
+          resolve(true);
+        },
+        reject: () => {
+          signal.removeEventListener('abort', onAbort);
+          cleanup();
+          resolve(false);
+        },
+      });
+    });
   }
 
   /**

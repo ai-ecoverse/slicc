@@ -9,6 +9,7 @@ import type {
   TranscriptExportSelector,
 } from '@slicc/shared-ts';
 import { TranscriptExportError, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
+import { sha256 as sha256Hasher } from 'js-sha256';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -17,6 +18,8 @@ import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { ExportSpool } from '../transcript/export-spool.js';
+import { makeExportSpool } from '../transcript/export-spool.js';
 import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import type { LickEvent } from './lick-manager.js';
@@ -107,6 +110,12 @@ export interface FollowerSyncManagerOptions {
    * non-finite inputs throw at construction.
    */
   sprinkleFetchTimeoutMs?: number;
+  /**
+   * Factory for creating export spools. Defaults to `makeExportSpool` which
+   * returns an OpfsSpool in production and a MemorySpool as fallback.
+   * Inject `() => new MemorySpool()` in tests for a deterministic, fast spool.
+   */
+  makeExportSpool?: (requestId: string) => ExportSpool;
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
@@ -201,15 +210,23 @@ export class FollowerSyncManager implements AgentHandle {
 
   /**
    * In-flight transcript export requests keyed by requestId.
-   * Tracks the resolver/rejecter and the received chunks.
+   *
+   * Wave 4 (bounded-memory): `chunks: Uint8Array[]` is replaced by a
+   * spool that writes bytes through the ExportSpool interface. No chunk
+   * array is retained in this map; the spool accumulates bytes externally
+   * (OPFS in production, memory in tests via the injected factory).
+   * SHA-256 and byte count are tracked incrementally so the map never
+   * holds more than the current chunk being processed.
    */
   private readonly activeExportRequests = new Map<
     string,
     {
       resolve: (blob: Blob) => void;
       reject: (err: Error) => void;
-      chunks: Uint8Array[];
+      spool: ExportSpool;
+      hasher: { update(data: Uint8Array): void; hex(): string };
       nextExpectedIndex: number;
+      totalBytes: number;
       signal: AbortSignal;
       onAbort: () => void;
       onProgress?: (progress: TranscriptExportProgress) => void;
@@ -373,10 +390,11 @@ export class FollowerSyncManager implements AgentHandle {
     for (const transport of this.remoteTransports.values()) transport.disconnect();
     this.remoteTransports.clear();
     // Reject all in-flight transcript export requests with transfer-aborted.
-    // Remove each AbortSignal listener to avoid listener leaks, then clear
-    // retained chunk buffers so no Uint8Array memory hangs after disconnect.
+    // Remove each AbortSignal listener, cancel the spool (releasing OPFS
+    // temp files and memory), and clear the map.
     for (const [, entry] of this.activeExportRequests) {
       entry.signal.removeEventListener('abort', entry.onAbort);
+      void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-aborted'));
     }
     this.activeExportRequests.clear();
@@ -1290,7 +1308,7 @@ export class FollowerSyncManager implements AgentHandle {
         });
         break;
       case 'transcript.export.chunk':
-        this.handleExportChunk(message.requestId, message.index, message.data);
+        void this.handleExportChunkAsync(message.requestId, message.index, message.data);
         break;
       case 'transcript.export.complete':
         void this.handleExportComplete(
@@ -1325,23 +1343,31 @@ export class FollowerSyncManager implements AgentHandle {
    *   export phases. Phases are forwarded without leaking filename, sha256,
    *   or byte counts until the verified Blob is returned.
    */
-  async requestTranscriptExport(
+  requestTranscriptExport(
     selector: TranscriptExportSelector,
     signal: AbortSignal,
     onProgress?: (progress: TranscriptExportProgress) => void
   ): Promise<Blob> {
+    if (signal.aborted) {
+      return Promise.reject(new TranscriptExportError('transfer-aborted'));
+    }
+
     const requestId = `te-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const spoolFactory = this.options.makeExportSpool ?? makeExportSpool;
+    const spool = spoolFactory(requestId);
+
     return new Promise<Blob>((resolve, reject) => {
       const onAbort = (): void => {
         const entry = this.activeExportRequests.get(requestId);
         if (!entry) return;
-        // Send cancel to leader
         this.sync.send({ type: 'transcript.export.cancel', requestId });
         this.activeExportRequests.delete(requestId);
+        void entry.spool.cancel();
         reject(new TranscriptExportError('transfer-aborted'));
       };
 
       if (signal.aborted) {
+        void spool.cancel();
         reject(new TranscriptExportError('transfer-aborted'));
         return;
       }
@@ -1351,8 +1377,10 @@ export class FollowerSyncManager implements AgentHandle {
       this.activeExportRequests.set(requestId, {
         resolve,
         reject,
-        chunks: [],
+        spool,
+        hasher: sha256Hasher.create(),
         nextExpectedIndex: 0,
+        totalBytes: 0,
         signal,
         onAbort,
         onProgress,
@@ -1371,16 +1399,38 @@ export class FollowerSyncManager implements AgentHandle {
     if (!entry) return;
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
+    void entry.spool.cancel();
     entry.reject(new TranscriptExportError('permission-denied'));
   }
 
-  private handleExportChunk(requestId: string, index: number, data: string): void {
+  /**
+   * Async chunk handler (Wave 4 bounded-memory).
+   *
+   * Decodes the base64 payload, appends to the spool (which may be an
+   * async OPFS write in production), updates the running hash and byte
+   * count, then sends a durable-write ack back to the leader. The ack
+   * is the backpressure signal: the leader waits for it before sending
+   * the next chunk, bounding in-flight data to one message at a time.
+   */
+  /**
+   * Async chunk handler (Wave 4 bounded-memory).
+   *
+   * State (`nextExpectedIndex`, `hasher`, `totalBytes`) is updated SYNCHRONOUSLY
+   * before the async spool write. This ensures that a `complete` message arriving
+   * synchronously after a `chunk` (as in legacy non-ack-gated tests) sees the
+   * correct counts. The ack is sent AFTER the spool write resolves so that it
+   * reflects true durability (OPFS in production, synchronous push in MemorySpool).
+   */
+  private async handleExportChunkAsync(
+    requestId: string,
+    index: number,
+    data: string
+  ): Promise<void> {
     const entry = this.activeExportRequests.get(requestId);
     if (!entry) return;
 
-    // Reject duplicate indices immediately
     if (index !== entry.nextExpectedIndex) {
-      log.warn('Transcript export chunk duplicate or gap', {
+      log.warn('Transcript export chunk out of order', {
         requestId,
         expected: entry.nextExpectedIndex,
         got: index,
@@ -1388,20 +1438,47 @@ export class FollowerSyncManager implements AgentHandle {
       entry.signal.removeEventListener('abort', entry.onAbort);
       this.activeExportRequests.delete(requestId);
       this.sync.send({ type: 'transcript.export.cancel', requestId });
+      void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-corrupt'));
       return;
     }
 
-    // Decode base64 chunk and store
+    // Decode base64 payload
     const binary = atob(data);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    entry.chunks.push(bytes);
+
+    // Update running state SYNCHRONOUSLY before the async spool write so that
+    // concurrent complete handlers see the correct nextExpectedIndex/hasher.
+    entry.hasher.update(bytes);
+    entry.totalBytes += bytes.byteLength;
     entry.nextExpectedIndex++;
-    // Forward transferring progress (byte count only; no filename or sha256).
-    let processedBytes = 0;
-    for (const c of entry.chunks) processedBytes += c.byteLength;
-    entry.onProgress?.({ phase: 'transferring', processedBytes });
+    entry.onProgress?.({ phase: 'transferring', processedBytes: entry.totalBytes });
+
+    // Write to spool. For MemorySpool: parts.push is synchronous inside append,
+    // one microtask tick later the await resolves. For OpfsSpool: genuine async
+    // OPFS write — the ack below confirms durability to the leader.
+    try {
+      await entry.spool.append(bytes, index);
+    } catch (err) {
+      if (!this.activeExportRequests.has(requestId)) return;
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      this.activeExportRequests.delete(requestId);
+      void entry.spool.cancel();
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      log.warn('Transcript export spool append failed', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    // Re-check: entry may be gone if complete arrived before spool write resolved.
+    if (!this.activeExportRequests.has(requestId)) return;
+
+    // Send durable-write ack to leader. The leader's bounded window (=1) waits
+    // for this before sending the next chunk, providing application-level backpressure.
+    this.sync.send({ type: 'transcript.export.ack', requestId, index });
   }
 
   private async handleExportComplete(
@@ -1415,42 +1492,33 @@ export class FollowerSyncManager implements AgentHandle {
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
 
-    // Verify chunk count
-    if (entry.chunks.length !== expectedChunks) {
+    // Verify chunk count against received index counter
+    if (entry.nextExpectedIndex !== expectedChunks) {
       log.warn('Transcript export chunk count mismatch', {
         requestId,
         expected: expectedChunks,
-        got: entry.chunks.length,
+        got: entry.nextExpectedIndex,
       });
+      void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-corrupt'));
       return;
     }
 
-    // Reassemble and verify byte length
-    let totalBytes = 0;
-    for (const c of entry.chunks) totalBytes += c.byteLength;
-    if (totalBytes !== expectedByteLength) {
-      log.warn('Transcript export byte length mismatch', {
+    // Delegate integrity checks (byte length + SHA-256) to the spool.
+    // The spool's hasher and byte counter are updated incrementally as
+    // chunks arrive, so no second pass over the data is needed.
+    let blob: Blob;
+    try {
+      blob = await entry.spool.finalize(expectedChunks, expectedByteLength, expectedSha256);
+    } catch (err) {
+      log.warn('Transcript export spool finalize failed', {
         requestId,
-        expected: expectedByteLength,
-        got: totalBytes,
+        error: err instanceof Error ? err.message : String(err),
       });
       entry.reject(new TranscriptExportError('transfer-corrupt'));
       return;
     }
 
-    // Verify SHA-256
-    const { sha256 } = await import('js-sha256');
-    const hasher = sha256.create();
-    for (const c of entry.chunks) hasher.update(c);
-    if (hasher.hex() !== expectedSha256) {
-      log.warn('Transcript export SHA-256 mismatch', { requestId });
-      entry.reject(new TranscriptExportError('transfer-corrupt'));
-      return;
-    }
-
-    // All checks passed — assemble Blob
-    const blob = new Blob(entry.chunks as Uint8Array<ArrayBuffer>[], { type: 'application/zip' });
     entry.resolve(blob);
   }
 
@@ -1459,8 +1527,7 @@ export class FollowerSyncManager implements AgentHandle {
     if (!entry) return;
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
-    // Runtime-validate wire code; unknown values from a version-skewed or
-    // misbehaving leader become transfer-corrupt (same as Cherry guard).
+    void entry.spool.cancel();
     const safeCode: TranscriptExportErrorCode = VALID_EXPORT_ERROR_CODES.has(
       code as TranscriptExportErrorCode
     )

@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 2,
+  "traySyncProtocolVersion": 3,
   "leaderVariantCount": 32,
-  "followerVariantCount": 24,
+  "followerVariantCount": 25,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -580,6 +580,15 @@
           }
         ],
         "runtimeId": "slicc-ios"
+      }
+    },
+    {
+      "type": "transcript.export.ack",
+      "ios": "undecodable",
+      "message": {
+        "type": "transcript.export.ack",
+        "requestId": "te-2",
+        "index": 0
       }
     },
     {

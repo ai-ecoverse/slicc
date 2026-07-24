@@ -52,7 +52,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 2;
+export const TRAY_SYNC_PROTOCOL_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -166,6 +166,12 @@ export type FollowerToLeaderMessage =
   // Transcript export (follower → leader)
   | { type: 'transcript.export.request'; requestId: string; selector: TranscriptExportSelector }
   | { type: 'transcript.export.cancel'; requestId: string }
+  /**
+   * Sent by the follower after a chunk has been durably appended to the spool.
+   * The leader's bounded in-flight window (one chunk) waits for this before
+   * sending the next chunk. Owner-scoped via requestId + follower identity.
+   */
+  | { type: 'transcript.export.ack'; requestId: string; index: number }
   | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
