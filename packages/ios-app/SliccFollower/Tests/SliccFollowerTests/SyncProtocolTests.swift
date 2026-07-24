@@ -36,8 +36,9 @@ final class SyncProtocolTranscriptExportTests: XCTestCase {
 
     func testExportRequestMessagesThrowOnDecode() throws {
         let requestVariants = [
-            """{"type":"transcript.export.request","requestId":"te-1","selector":{"kind":"active"}}""",
-            """{"type":"transcript.export.cancel","requestId":"te-1"}""",
+            "{\"type\":\"transcript.export.request\",\"requestId\":\"te-1\","
+                + "\"selector\":{\"kind\":\"active\"}}",
+            "{\"type\":\"transcript.export.cancel\",\"requestId\":\"te-1\"}",
         ]
         for jsonStr in requestVariants {
             let json = jsonStr.data(using: .utf8)!
