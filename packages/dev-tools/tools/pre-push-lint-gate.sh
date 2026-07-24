@@ -24,7 +24,15 @@ done
 
 # ── tmp dir for per-check logs ───────────────────────────────────────────────
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+cleanup() {
+	# Kill any outstanding background checks before removing logs.
+	for pid in "${CHECK_PIDS[@]+${CHECK_PIDS[@]}}"; do
+		kill "$pid" 2>/dev/null || true
+	done
+	wait 2>/dev/null || true
+	rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
 
 # ── palette (no-op when stdout is not a tty) ─────────────────────────────────
 if [ -t 1 ]; then
