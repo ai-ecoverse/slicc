@@ -1,3 +1,4 @@
+import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
 import { createLogger } from '../../core/logger.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
@@ -34,6 +35,19 @@ const NOOP_AGENT: AgentHandle = {
   onEvent: () => () => {},
   stop: () => {},
 };
+
+/**
+ * Resolve a host-supplied sessionId string to a TranscriptExportSelector.
+ *
+ * - `undefined` or the literal `'active'` → `{ kind: 'active' }`
+ * - Any other non-empty, non-whitespace string → `{ kind: 'frozen', sessionId }`
+ * - Empty string or whitespace-only → `null` (caller rejects with session-not-found)
+ */
+function resolveExportSelector(sessionId: string | undefined): TranscriptExportSelector | null {
+  if (sessionId === undefined || sessionId === 'active') return { kind: 'active' };
+  if (sessionId.trim() === '') return null;
+  return { kind: 'frozen', sessionId };
+}
 
 /**
  * Render a terminal boot error into the app root (createElement/textContent,
@@ -549,11 +563,16 @@ export async function mountWcUiFollower(
     // The verified Blob from FollowerSyncManager is returned directly — no
     // rebuild or rehash; only the phase is forwarded (no filename/sha256/size).
     // requestId is used by CherryHostTransport for envelope routing, not here.
-    // sessionId selects the target session; only 'active' is supported today.
-    prelude.cherryTransport.onExportRequest = (_requestId, _sessionId, signal, onProgress) => {
+    // sessionId selects the target session:
+    //   - omitted (undefined) or the literal string 'active' → active selector
+    //   - non-empty, non-whitespace string other than 'active' → frozen selector
+    //   - empty string or whitespace-only → reject; never starts a tray export
+    prelude.cherryTransport.onExportRequest = (_requestId, sessionId, signal, onProgress) => {
       const sync = follower.currentSync;
       if (!sync) return Promise.reject(new TranscriptExportError('transfer-aborted'));
-      return sync.requestTranscriptExport({ kind: 'active' }, signal, onProgress);
+      const selector = resolveExportSelector(sessionId);
+      if (!selector) return Promise.reject(new TranscriptExportError('session-not-found'));
+      return sync.requestTranscriptExport(selector, signal, onProgress);
     };
   }
 
