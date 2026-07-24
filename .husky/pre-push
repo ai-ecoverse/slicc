@@ -12,10 +12,10 @@ set -e
 # Escape hatch: `git push --no-verify`.
 
 DEFAULT_BRANCH="main"
-BASE_REF="origin/$DEFAULT_BRANCH"
+export BASE_REF="origin/$DEFAULT_BRANCH"
 if ! git rev-parse --verify --quiet "$BASE_REF" >/dev/null 2>&1; then
   # Fresh clone without an origin/main ref — fall back to the local branch.
-  BASE_REF="$DEFAULT_BRANCH"
+  export BASE_REF="$DEFAULT_BRANCH"
 fi
 
 # Track whether we're pushing a feature branch (non-main). The lint gate only
