@@ -135,6 +135,7 @@ function makeOrchestratorMock() {
         requiresTrigger: true,
         assistantLabel: 'test-scoop',
         addedAt: new Date().toISOString(),
+        config: { thinkingLevel: 'max' as const },
       },
     ]),
     handleMessage: vi.fn().mockResolvedValue(undefined),
@@ -218,7 +219,11 @@ describe('Kernel facade parity', () => {
     expect(snapshot.scoops).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ jid: 'cone_1', isCone: true }),
-        expect.objectContaining({ jid: 'scoop_test', isCone: false }),
+        expect.objectContaining({
+          jid: 'scoop_test',
+          isCone: false,
+          config: { thinkingLevel: 'max' },
+        }),
       ])
     );
     // Bridge sent the same snapshot to the panel as a side-effect of
@@ -229,6 +234,13 @@ describe('Kernel facade parity', () => {
         payload: expect.objectContaining({ type: 'state-snapshot' }),
       })
     );
+  });
+
+  it('client forwards pi-ai max thinking levels over the extension bridge', async () => {
+    client.setScoopThinkingLevel('scoop_test', 'max');
+    await tick();
+
+    expect(orchestrator.setScoopThinkingLevel).toHaveBeenCalledWith('scoop_test', 'max', undefined);
   });
 
   // 2. scoop-drop deletes the right session id

@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@ai-ecoverse/cherry": "*",
-    "@earendil-works/pi-ai": "^0.80.0",
-    "@earendil-works/pi-coding-agent": "^0.80.0",
+    "@earendil-works/pi-ai": "^0.81.0",
+    "@earendil-works/pi-coding-agent": "^0.81.0",
     "@slicc/shared-ts": "*"
   }
 }

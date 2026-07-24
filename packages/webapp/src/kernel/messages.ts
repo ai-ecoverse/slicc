@@ -218,14 +218,21 @@ export interface RefreshModelMsg {
  * and we don't want to drag the scoop config layer into the message
  * envelopes).
  */
-export type ExtensionThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ExtensionThinkingLevel =
+  | 'off'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
 
 export interface SetThinkingLevelMsg {
   type: 'set-thinking-level';
   scoopJid: string;
   /** Undefined clears the override; the level falls back to default. */
   level?: ExtensionThinkingLevel;
-  /** Raw API effort override (e.g. `'max'`) bypassing pi-ai's ThinkingLevel. */
+  /** Raw API effort override retained for provider-specific stream mappings. */
   effortOverride?: string;
 }
 
