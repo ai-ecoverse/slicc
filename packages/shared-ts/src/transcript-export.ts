@@ -301,8 +301,52 @@ function validateContentBlock(block: unknown, path: string): TranscriptValidatio
 }
 
 // ---------------------------------------------------------------------------
-// Message validators
+// Message validators — usage helpers, role-specific checks, structural gate
 // ---------------------------------------------------------------------------
+
+function validateTokenFields(
+  usage: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const;
+  for (const field of fields) {
+    const v = usage[field];
+    if (typeof v !== 'number') {
+      return { ok: false, error: `${path}.${field} must be a number` };
+    }
+    if (!Number.isInteger(v) || v < 0) {
+      return { ok: false, error: `${path}.${field} must be a non-negative integer` };
+    }
+  }
+  return { ok: true };
+}
+
+function validateCostFields(
+  cost: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
+  for (const field of fields) {
+    const v = cost[field];
+    if (typeof v !== 'number') {
+      return { ok: false, error: `${path}.${field} must be a number` };
+    }
+    if (!Number.isFinite(v) || v < 0) {
+      return { ok: false, error: `${path}.${field} must be a finite non-negative number` };
+    }
+  }
+  return { ok: true };
+}
+
+function validateUsage(usage: Record<string, unknown>, path: string): TranscriptValidationResult {
+  const tokenResult = validateTokenFields(usage, path);
+  if (!tokenResult.ok) return tokenResult;
+  const cost = usage['cost'];
+  if (!isObj(cost)) {
+    return { ok: false, error: `${path}.cost must be a non-null object` };
+  }
+  return validateCostFields(cost, `${path}.cost`);
+}
 
 function validateMessageScalars(
   msg: Record<string, unknown>,
@@ -325,6 +369,30 @@ function validateMessageScalars(
   return { ok: true };
 }
 
+function validateToolResultMessage(
+  msg: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const tcId = msg['toolCallId'];
+  if (typeof tcId !== 'string' || tcId === '') {
+    return {
+      ok: false,
+      error: `${path}.toolCallId must be a non-empty string for tool-result messages`,
+    };
+  }
+  return { ok: true };
+}
+
+function validateMessageOptionalUsage(
+  msg: Record<string, unknown>,
+  path: string
+): TranscriptValidationResult {
+  const usage = msg['usage'];
+  if (usage === undefined) return { ok: true };
+  if (!isObj(usage)) return { ok: false, error: `${path}.usage must be a non-null object` };
+  return validateUsage(usage, `${path}.usage`);
+}
+
 function validateMessage(msg: unknown, path: string): TranscriptValidationResult {
   if (!isObj(msg)) return { ok: false, error: `${path} must be a non-null object` };
   const roleResult = validateEnum(
@@ -333,11 +401,17 @@ function validateMessage(msg: unknown, path: string): TranscriptValidationResult
     `${path}.role`
   );
   if (!roleResult.ok) return roleResult;
+  if (msg['role'] === 'tool-result') {
+    const tcResult = validateToolResultMessage(msg, path);
+    if (!tcResult.ok) return tcResult;
+  }
   const scalarsResult = validateMessageScalars(msg, path);
   if (!scalarsResult.ok) return scalarsResult;
   const content = msg['content'];
   if (!Array.isArray(content)) return { ok: false, error: `${path}.content must be an array` };
-  return validateArray(content, validateContentBlock, `${path}.content`);
+  const contentResult = validateArray(content, validateContentBlock, `${path}.content`);
+  if (!contentResult.ok) return contentResult;
+  return validateMessageOptionalUsage(msg, path);
 }
 
 function validateConversation(conv: unknown, path: string): TranscriptValidationResult {
@@ -390,8 +464,8 @@ function validatePresentAttachment(
   if (!isSha256Hex(sha256)) {
     return { ok: false, error: `${path}.sha256 must be a 64-char hex string when present` };
   }
-  if (!Number.isFinite(byteLength) || byteLength < 0) {
-    return { ok: false, error: `${path}.byteLength must be a non-negative number when present` };
+  if (!Number.isInteger(byteLength) || byteLength < 0) {
+    return { ok: false, error: `${path}.byteLength must be a non-negative integer when present` };
   }
   if (att['missingReason'] !== undefined) {
     return { ok: false, error: `${path}.missingReason must be absent when present is true` };
@@ -582,8 +656,12 @@ function validatePrivacy(privacy: unknown): TranscriptValidationResult {
   if (privacy['reasoningExcluded'] !== true) {
     return { ok: false, error: 'privacy.reasoningExcluded must be true' };
   }
-  if (typeof privacy['excludedReasoningBlocks'] !== 'number') {
+  const erBlocks = privacy['excludedReasoningBlocks'];
+  if (typeof erBlocks !== 'number') {
     return { ok: false, error: 'privacy.excludedReasoningBlocks must be a number' };
+  }
+  if (!Number.isInteger(erBlocks) || erBlocks < 0) {
+    return { ok: false, error: 'privacy.excludedReasoningBlocks must be a non-negative integer' };
   }
   if (privacy['binaryAttachments'] !== 'included-unchanged') {
     return { ok: false, error: 'privacy.binaryAttachments must equal "included-unchanged"' };

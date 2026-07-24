@@ -1008,7 +1008,6 @@ describe('validateTranscriptDocumentV1 — attachment SHA-256 and state invarian
   }
 
   it('rejects present:true attachment with non-64-hex sha256', () => {
-    expect(docWithAtt({ sha256: 'abc123' })).toBeDefined();
     expect(validateTranscriptDocumentV1(docWithAtt({ sha256: 'abc123' }))).toEqual({
       ok: false,
       error: 'attachments[0].sha256 must be a 64-char hex string when present',
@@ -1042,7 +1041,14 @@ describe('validateTranscriptDocumentV1 — attachment SHA-256 and state invarian
   it('rejects present:true attachment with negative byteLength', () => {
     expect(validateTranscriptDocumentV1(docWithAtt({ byteLength: -1 }))).toEqual({
       ok: false,
-      error: 'attachments[0].byteLength must be a non-negative number when present',
+      error: 'attachments[0].byteLength must be a non-negative integer when present',
+    });
+  });
+
+  it('rejects present:true attachment with fractional byteLength', () => {
+    expect(validateTranscriptDocumentV1(docWithAtt({ byteLength: 1.5 }))).toEqual({
+      ok: false,
+      error: 'attachments[0].byteLength must be a non-negative integer when present',
     });
   });
 
@@ -1499,5 +1505,240 @@ describe('validateTranscriptDocumentV1 — relational validation', () => {
     const r = validateTranscriptDocumentV1(bad);
     expect(r.ok).toBe(false);
     expect((r as { ok: false; error: string }).error).toContain('phantom-att');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: excludedReasoningBlocks integer enforcement (F2)
+// ---------------------------------------------------------------------------
+
+describe('validateTranscriptDocumentV1 — excludedReasoningBlocks integer enforcement', () => {
+  function docWithExcluded(v: unknown): unknown {
+    const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
+    (d['privacy'] as Record<string, unknown>)['excludedReasoningBlocks'] = v;
+    return d;
+  }
+
+  it('rejects negative excludedReasoningBlocks', () => {
+    expect(validateTranscriptDocumentV1(docWithExcluded(-1))).toEqual({
+      ok: false,
+      error: 'privacy.excludedReasoningBlocks must be a non-negative integer',
+    });
+  });
+
+  it('rejects fractional excludedReasoningBlocks', () => {
+    expect(validateTranscriptDocumentV1(docWithExcluded(0.5))).toEqual({
+      ok: false,
+      error: 'privacy.excludedReasoningBlocks must be a non-negative integer',
+    });
+  });
+
+  it('rejects negative-fractional excludedReasoningBlocks', () => {
+    expect(validateTranscriptDocumentV1(docWithExcluded(-0.5))).toEqual({
+      ok: false,
+      error: 'privacy.excludedReasoningBlocks must be a non-negative integer',
+    });
+  });
+
+  it('accepts zero excludedReasoningBlocks', () => {
+    expect(validateTranscriptDocumentV1(docWithExcluded(0))).toEqual({ ok: true });
+  });
+
+  it('accepts positive integer excludedReasoningBlocks', () => {
+    expect(validateTranscriptDocumentV1(docWithExcluded(5))).toEqual({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: usage token/cost validation (F3)
+// ---------------------------------------------------------------------------
+
+describe('validateTranscriptDocumentV1 — usage validation', () => {
+  function makeUsage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
+      cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+      ...overrides,
+    };
+  }
+
+  function docWithUsage(usage: unknown): unknown {
+    const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
+    const msgs = (d['conversations'] as Array<Record<string, unknown>>)[0]!['messages'] as Array<
+      Record<string, unknown>
+    >;
+    msgs[0]!['usage'] = usage;
+    return d;
+  }
+
+  it('accepts valid usage object', () => {
+    expect(validateTranscriptDocumentV1(docWithUsage(makeUsage()))).toEqual({ ok: true });
+  });
+
+  it('preserves numeric costs (decimal values pass)', () => {
+    const usage = makeUsage({
+      cost: { input: 0.0012345, output: 0.00678, cacheRead: 0.0001, cacheWrite: 0, total: 0.009 },
+    });
+    expect(validateTranscriptDocumentV1(docWithUsage(usage))).toEqual({ ok: true });
+  });
+
+  it('rejects non-object usage', () => {
+    expect(validateTranscriptDocumentV1(docWithUsage('bad'))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage must be a non-null object',
+    });
+  });
+
+  it('rejects fractional input token count', () => {
+    expect(validateTranscriptDocumentV1(docWithUsage(makeUsage({ input: 1.5 })))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.input must be a non-negative integer',
+    });
+  });
+
+  it('rejects negative input token count', () => {
+    expect(validateTranscriptDocumentV1(docWithUsage(makeUsage({ input: -1 })))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.input must be a non-negative integer',
+    });
+  });
+
+  it('rejects fractional output token count', () => {
+    expect(validateTranscriptDocumentV1(docWithUsage(makeUsage({ output: 0.5 })))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.output must be a non-negative integer',
+    });
+  });
+
+  it('rejects missing cost object', () => {
+    const u = makeUsage();
+    delete u['cost'];
+    expect(validateTranscriptDocumentV1(docWithUsage(u))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.cost must be a non-null object',
+    });
+  });
+
+  it('rejects negative cost.total', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithUsage(
+          makeUsage({ cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: -0.001 } })
+        )
+      )
+    ).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.cost.total must be a finite non-negative number',
+    });
+  });
+
+  it('rejects NaN cost.total', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithUsage(
+          makeUsage({ cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: NaN } })
+        )
+      )
+    ).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.cost.total must be a finite non-negative number',
+    });
+  });
+
+  it('rejects Infinity cost.total', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithUsage(
+          makeUsage({
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: Infinity },
+          })
+        )
+      )
+    ).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.cost.total must be a finite non-negative number',
+    });
+  });
+
+  it('rejects missing cost.input field', () => {
+    const cost: Record<string, unknown> = { output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    expect(validateTranscriptDocumentV1(docWithUsage(makeUsage({ cost })))).toEqual({
+      ok: false,
+      error: 'conversations[0].messages[0].usage.cost.input must be a number',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NEW: tool-result toolCallId enforcement (F5)
+// ---------------------------------------------------------------------------
+
+describe('validateTranscriptDocumentV1 — tool-result toolCallId enforcement', () => {
+  function docWithToolResult(msg: Record<string, unknown>): unknown {
+    const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
+    const msgs = (d['conversations'] as Array<Record<string, unknown>>)[0]!['messages'] as Array<
+      Record<string, unknown>
+    >;
+    // Add a tool-call first so relational check has something to resolve against.
+    msgs.push({
+      id: 'msg-tc',
+      sequence: 2,
+      role: 'assistant',
+      timestamp: '2026-07-22T12:01:00.000Z',
+      content: [{ type: 'tool-call', id: 'tc-ok', name: 'bash', input: {} }],
+    });
+    msgs.push({ sequence: 3, timestamp: '2026-07-22T12:02:00.000Z', ...msg });
+    return d;
+  }
+
+  it('rejects tool-result with empty toolCallId (structural, before relational)', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithToolResult({
+          id: 'msg-tr',
+          role: 'tool-result',
+          content: [{ type: 'text', text: 'out' }],
+          toolCallId: '',
+        })
+      )
+    ).toEqual({
+      ok: false,
+      error:
+        'conversations[0].messages[2].toolCallId must be a non-empty string for tool-result messages',
+    });
+  });
+
+  it('rejects tool-result without toolCallId', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithToolResult({
+          id: 'msg-tr',
+          role: 'tool-result',
+          content: [{ type: 'text', text: 'out' }],
+          // no toolCallId
+        })
+      )
+    ).toEqual({
+      ok: false,
+      error:
+        'conversations[0].messages[2].toolCallId must be a non-empty string for tool-result messages',
+    });
+  });
+
+  it('accepts tool-result with a valid non-empty toolCallId', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithToolResult({
+          id: 'msg-tr',
+          role: 'tool-result',
+          content: [{ type: 'text', text: 'out' }],
+          toolCallId: 'tc-ok',
+        })
+      )
+    ).toEqual({ ok: true });
   });
 });
