@@ -169,6 +169,11 @@ Minimal stubs: `Readable`, `Writable`, `Transform`, `PassThrough`, `Stream`.
 Basic event emission and `pipe()` work. These are NOT full Node streams —
 no backpressure, no flowing/paused modes, no proper pipe chaining.
 
+### `tty`
+
+`isatty(fd)` returns `false` because the worker has no terminal. `ReadStream`
+and `WriteStream` are inert stubs provided for Node API-shape compatibility.
+
 ### `url`
 
 `URL`, `URLSearchParams` (re-exported globals), `fileURLToPath(url)`,
