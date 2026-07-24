@@ -66,3 +66,12 @@ origin comparisons without trailing-slash normalization. 15 call-site fixes acro
 
 🔴 Critical = likely production issue · 🟡 Major = bites in a specific scenario ·
 🔵 Minor = quality / consistency. Stay high-signal; prefer no comment over a speculative one.
+
+## 9. Transcript export — redaction boundary (Critical)
+
+- Fail-closed: redactor failure → abort with `redaction-unavailable`, never emit raw bundle.
+- `privacy.reasoningExcluded` must always be `true`.
+- All follower/Cherry paths must call `openTranscriptExportApproval()`. Approval is one-time.
+- Unknown follower error codes → `transfer-corrupt`. SHA-256 mismatch → `transfer-corrupt`.
+
+See `docs/transcript-export.md` for error messages. See `docs/review-patterns.md` for spec.

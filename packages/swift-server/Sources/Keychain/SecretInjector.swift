@@ -658,6 +658,55 @@ public final class SecretInjector: @unchecked Sendable {
         return HmacSignResult(headerName: headerName, signatureHex: signatureHex, timestampHeaderName: nil, timestampValue: nil, forbidden: nil)
     }
 
+    /// Mirrors TS `SecretsPipeline.redactForExport`.
+    ///
+    /// Batch-redacts an array of strings for transcript export. Replaces every
+    /// occurrence of each known secret's real value AND masked value with a
+    /// stable anonymous marker `⟦REDACTED:known-secret:k<n>⟧`.
+    ///
+    /// Short secrets (below minimum maskable length) use identity masking, so
+    /// only their real value is replaced. Their marker indices continue after
+    /// the maskable-secret markers, preserving stable ordering.
+    ///
+    /// Returns the transformed texts plus the total replacement count.
+    /// Secret names and real values never appear in the return value.
+    func redactForExport(texts: [String]) -> (texts: [String], redactionCount: Int) {
+        let maskableSecrets = secrets.filter { $0.isMaskable }
+        let shortSecrets = secrets.filter { !$0.isMaskable }
+        struct MarkerSpec {
+            let values: [String]
+            let marker: String
+        }
+        // Maskable secrets: replace both realValue and maskedValue.
+        var allMarkers: [MarkerSpec] = maskableSecrets.enumerated().map { index, secret in
+            MarkerSpec(
+                values: [secret.realValue, secret.maskedValue].filter { !$0.isEmpty },
+                marker: "⟦REDACTED:known-secret:k\(index + 1)⟧"
+            )
+        }
+        // Short secrets: replace real value only (maskedValue == realValue for these).
+        let base = maskableSecrets.count
+        for (index, secret) in shortSecrets.enumerated() {
+            allMarkers.append(MarkerSpec(
+                values: [secret.realValue],
+                marker: "⟦REDACTED:known-secret:k\(base + index + 1)⟧"
+            ))
+        }
+        var redactionCount = 0
+        let redacted: [String] = texts.map { input in
+            var output = input
+            for spec in allMarkers {
+                for value in spec.values {
+                    let occurrences = output.components(separatedBy: value).count - 1
+                    redactionCount += occurrences
+                    output = output.replacingOccurrences(of: value, with: spec.marker)
+                }
+            }
+            return output
+        }
+        return (texts: redacted, redactionCount: redactionCount)
+    }
+
     /// Mirrors TS `SecretsPipeline.scrubResponseBytes`.
     ///
     /// Byte-level real → masked replacement for streaming response bodies.

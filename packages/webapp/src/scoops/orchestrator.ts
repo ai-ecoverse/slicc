@@ -15,7 +15,9 @@ import { createLogger } from '../core/logger.js';
 import { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
+import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import { registerSessionCostsProvider } from '../shell/supplemental-commands/cost-command.js';
 import type {
   ConeApprovalRouter,
@@ -25,6 +27,11 @@ import type {
   SudoRequest,
 } from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
+import { registerTranscriptExportService } from '../transcript/export-provider.js';
+import { DefaultTranscriptExportService } from '../transcript/export-service.js';
+import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
+import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import { SessionStore as UiSessionStore } from '../ui/session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
@@ -193,6 +200,8 @@ export class Orchestrator implements ConeApprovalRouter {
    * untracked-prompt behavior (plain AbortController).
    */
   private processManager: ProcessManager | null = null;
+  /** Teardown for the registered worker-side TranscriptExportService. */
+  private unregisterExportService: (() => void) | null = null;
   /**
    * Cone-mediated sudo approval lifecycle: pending-request registry,
    * cone delivery, sudoers persistence, and lick-card flip-on-resolve.
@@ -426,6 +435,12 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Register session costs provider for the `cost` shell command
     registerSessionCostsProvider(() => this.getSessionCosts());
+
+    // Register the worker-side transcript export service so
+    // getTranscriptExportService() works from any worker-side caller.
+    // Teardown is captured and called in shutdown() to prevent stale
+    // registration after the orchestrator is destroyed.
+    this.unregisterExportService = registerTranscriptExportService(this.buildWorkerExportService());
 
     // Start polling for pending messages
     this.messageRouter.startMessageLoop();
@@ -1022,6 +1037,55 @@ export class Orchestrator implements ConeApprovalRouter {
     this.sudoManager?.dispose();
     this.sudoManager = null;
 
+    // Unregister the worker-side transcript export service (identity-safe).
+    this.unregisterExportService?.();
+    this.unregisterExportService = null;
+
     log.info('Orchestrator shutdown');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private — worker-side export service factory
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a `DefaultTranscriptExportService` wired to the orchestrator's live
+   * state. Called once at the end of `init()` so `sharedFs` and
+   * `sessionStore` are already initialised.
+   *
+   * Uses a lazy `UiSessionStore` for `loadUiChatSessions` — the
+   * `browser-coding-agent` IDB is accessible from dedicated workers (same
+   * origin as the page). The VirtualFS is cast to both read and write
+   * client interfaces it already structurally satisfies.
+   */
+  private buildWorkerExportService(): DefaultTranscriptExportService {
+    const uiSessionStore = new UiSessionStore();
+    const fs = this.sharedFs!;
+    return new DefaultTranscriptExportService({
+      collection: {
+        listScoops: () => this.getScoops(),
+        isProcessing: (jid) => this.isProcessing(jid),
+        getAgentMessages: (jid) => this.getScoopContext(jid)?.getAgentMessages() ?? null,
+        loadPersistedSessions: () => this.sessionStore?.loadAll() ?? Promise.resolve([]),
+        loadUiChatSessions: async () => {
+          const ids = await uiSessionStore.list();
+          const sessions = await Promise.all(ids.map((id) => uiSessionStore.load(id)));
+          return sessions.filter((s): s is NonNullable<typeof s> => s !== null);
+        },
+        wait: (ms) => new Promise((res) => setTimeout(res, ms)),
+      },
+      knownSecrets: getStrictKnownSecretRedactor(),
+      snapshotStore: {
+        read: (sessionId) => readSnapshot(fs as unknown as LocalVfsClient, sessionId),
+        write: (sessionId, snapshot) =>
+          writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot),
+      },
+      vfs: fs as unknown as LocalVfsClient,
+      getActiveSessionInfo: () => {
+        const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+        return { id: cone?.jid ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
+      },
+      version: __SLICC_VERSION__,
+    });
   }
 }

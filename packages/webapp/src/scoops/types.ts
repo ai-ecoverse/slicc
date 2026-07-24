@@ -84,6 +84,18 @@ export interface RegisteredScoop {
    */
   configSchemaVersion?: number;
   /**
+   * JID of the parent scoop or cone that created this scoop.
+   * Set when the creation context knows the invoking scoop's JID.
+   * Used by the transcript export to reconstruct delegation chains.
+   */
+  parentJid?: string;
+  /**
+   * Tool-call ID from the parent conversation that triggered scoop creation.
+   * Only set where an actual tool-call ID is available — never inferred
+   * from timestamps or names.
+   */
+  originToolCallId?: string;
+  /**
    * When `false`, suppresses the orchestrator's cone-notify side effect
    * that fires when this scoop reaches the terminal `ready` status after
    * processing a prompt. Default (`undefined` / `true`) preserves the

@@ -5,10 +5,13 @@
 
 import type {
   LeaderToWorkerControlMessage,
+  TranscriptExportErrorCode,
+  TranscriptExportSelector,
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
 } from '@slicc/shared-ts';
+import { TranscriptExportError } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -18,6 +21,7 @@ import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
@@ -124,6 +128,26 @@ export interface LeaderSyncManagerOptions {
    * Wired by buildSyncManager to leaderTray.sendControlMessage.
    */
   sendControl: (msg: LeaderToWorkerControlMessage) => void;
+  /**
+   * Called when a follower requests a transcript export. The leader shows an
+   * approval dialog and resolves true (allow) or false (deny). Derive follower
+   * identity from connected state; never trust the request payload for it.
+   */
+  requestTranscriptExportApproval?: (request: {
+    requestId: string;
+    followerLabel: string;
+    hostOrigin?: string;
+    selector: TranscriptExportSelector;
+    estimatedBytes?: number;
+  }) => Promise<boolean>;
+  /**
+   * Create a TranscriptZipResult for a follower-requested export.
+   * The AbortSignal is cancelled on deny/cancel/disconnect/error.
+   */
+  createTranscriptExport?: (
+    selector: TranscriptExportSelector,
+    signal: AbortSignal
+  ) => Promise<TranscriptZipResult>;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -192,6 +216,65 @@ export function selectTeleportPool<
   });
 }
 
+// ---------------------------------------------------------------------------
+// Transcript export helpers (module-level, pure functions)
+// ---------------------------------------------------------------------------
+
+interface SendExportChunksCtx {
+  bootstrapId: string;
+  requestId: string;
+  chunks: AsyncIterable<Uint8Array>;
+  hasher: { update(data: Uint8Array): void };
+  abort: AbortController;
+  onSlice: (index: number, slice: string) => boolean;
+  /** When true, leader waits for follower ack before sending the next slice. */
+  awaitAck: boolean;
+}
+
+interface SendExportChunksResult {
+  streamError: boolean;
+  chunkCount: number;
+  byteLength: number;
+}
+
+/**
+ * Encode a Uint8Array to base64. Uses the browser btoa path for small arrays
+ * and a chunked approach for large ones to avoid stack overflows from large
+ * spread arguments to String.fromCharCode.
+ */
+function bytesToBase64(data: Uint8Array): string {
+  // 8 KiB is a safety ceiling for JS engine call-stack argument limits, not a
+  // performance tuning knob. Do not confuse this with the 32 KiB wire chunk
+  // limit (EXPORT_CHUNK_B64_MAX): lowering this value only increases loop
+  // iterations, not throughput.
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < data.length; i += CHUNK) {
+    binary += String.fromCharCode(...data.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Wait until the channel's bufferedAmount drops below `threshold`.
+ * Uses 25 ms polling regardless of channel type. The real RTCDataChannel
+ * `bufferedamountlow` event would be ~25× more responsive, but adding
+ * cancellable listener cleanup requires `removeEventListener` on
+ * `TrayDataChannelLike` — deferred as future work. For test doubles that
+ * expose `bufferedAmount = 0`, the while-loop body never executes. For test
+ * doubles with no `bufferedAmount` property, returns immediately.
+ */
+async function waitForBufferedAmountLow(
+  channel: { bufferedAmount?: number },
+  threshold: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (typeof channel.bufferedAmount !== 'number') return;
+  while (!signal.aborted && channel.bufferedAmount > threshold) {
+    await new Promise<void>((res) => setTimeout(res, 25));
+  }
+}
+
 interface ConnectedFollower {
   bootstrapId: string;
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
@@ -201,6 +284,13 @@ interface ConnectedFollower {
   connectedAt?: string;
   lastActivity: number;
   floatType: FloatType;
+  /**
+   * For Cherry followers (`runtime === CHERRY_RUNTIME_TAG`): the URL origin
+   * of the host page derived from the first cherry target in targets.advertise.
+   * Populated when `targets.advertise` arrives; absent for non-Cherry followers
+   * or when the target URL is malformed.
+   */
+  hostOrigin?: string;
   /**
    * The scoop this follower has currently selected for viewing.
    * Defaults to the leader's active scoop until the follower sends `scoops.select`.
@@ -296,6 +386,77 @@ export class LeaderSyncManager {
   private readonly previewLickLastEmitAt = new Map<string, number>();
   private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
 
+  /**
+   * In-flight transcript export requests keyed by composite `${bootstrapId}:${requestId}`.
+   * The composite key prevents cross-follower collisions when two followers happen to
+   * choose the same requestId. Wire messages still use requestId only; `exportKey()` builds
+   * the composite key from the bootstrapId known from the established connection.
+   * Cleared on deny/cancel/complete/error/disconnect.
+   */
+  private readonly activeExports = new Map<
+    string,
+    { bootstrapId: string; abort: AbortController }
+  >();
+
+  /**
+   * Ack waiters for the bounded in-flight chunk window (Wave 4).
+   *
+   * Keyed by `${bootstrapId}:${requestId}:${index}`. Each entry holds a
+   * resolver that is called when the matching `transcript.export.ack`
+   * arrives from the correct follower. Entries are rejected on abort or
+   * disconnect and deleted on receipt or cleanup.
+   */
+  private readonly ackWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (err: Error) => void }
+  >();
+
+  /** Build the composite map key from follower identity and wire request ID. */
+  private static exportKey(bootstrapId: string, requestId: string): string {
+    return `${bootstrapId}:${requestId}`;
+  }
+
+  /** Build the ack waiter map key (owner-scoped). */
+  private static ackKey(bootstrapId: string, requestId: string, index: number): string {
+    return `${bootstrapId}:${requestId}:${index}`;
+  }
+
+  /**
+   * Reject and remove all ack waiters for a given bootstrapId:requestId.
+   * Called on cancel, disconnect, and abort to prevent stuck Promises.
+   */
+  private clearAckWaiters(bootstrapId: string, requestId: string): void {
+    const prefix = `${bootstrapId}:${requestId}:`;
+    for (const [key, waiter] of this.ackWaiters) {
+      if (key.startsWith(prefix)) {
+        waiter.reject(new Error('export aborted'));
+        this.ackWaiters.delete(key);
+      }
+    }
+  }
+
+  /** Max payload per chunk message: 32 KiB of base64 text. */
+  private static readonly EXPORT_CHUNK_B64_MAX = 32 * 1024;
+
+  /** Backpressure threshold: pause when bufferedAmount exceeds 1 MiB. */
+  private static readonly EXPORT_BACKPRESSURE_THRESHOLD = 1024 * 1024;
+
+  /**
+   * Per-ack deadline: if a follower's OPFS write stalls for longer than this
+   * (I/O contention, quota pressure, frozen tab) and the data channel stays
+   * alive, the export is aborted so the leader never waits indefinitely.
+   */
+  private static readonly ACK_TIMEOUT_MS = 30_000;
+
+  /**
+   * Minimum peer protocol version that supports transcript.export.ack (Wave 4).
+   * Pin to 3 — do NOT replace with TRAY_SYNC_PROTOCOL_VERSION. When the
+   * protocol bumps to v4+, v3 peers still understand acks and must remain
+   * ack-gated. Only bump this constant if a future wave removes ack support
+   * for v3 peers.
+   */
+  private static readonly ACK_PROTOCOL_VERSION_MIN = 3;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -384,6 +545,17 @@ export class LeaderSyncManager {
     }
     if (this.registry.hasChanged()) {
       this.broadcastTargetRegistry();
+    }
+
+    // Abort any in-flight transcript exports for this follower
+    for (const [key, entry] of this.activeExports) {
+      if (entry.bootstrapId === bootstrapId) {
+        entry.abort.abort();
+        // Reject ack waiters for this export so sendExportChunks exits.
+        const requestId = key.slice(bootstrapId.length + 1);
+        this.clearAckWaiters(bootstrapId, requestId);
+        this.activeExports.delete(key);
+      }
     }
 
     log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
@@ -842,6 +1014,21 @@ export class LeaderSyncManager {
     }
     this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
     this.registry.setTargets(message.runtimeId, message.targets);
+
+    // Derive Cherry host origin from the first cherry-kind target URL.
+    // Stored for the approval dialog; never accepted from the request payload.
+    const follower = this.followers.get(bootstrapId);
+    if (follower && follower.runtime === CHERRY_RUNTIME_TAG) {
+      const cherryTarget = message.targets.find((t) => t.kind === 'cherry');
+      if (cherryTarget) {
+        try {
+          follower.hostOrigin = new URL(cherryTarget.url).origin;
+        } catch {
+          // Malformed URL — omit hostOrigin
+        }
+      }
+    }
+
     this.broadcastTargetRegistry();
   }
 
@@ -959,6 +1146,15 @@ export class LeaderSyncManager {
       case 'fs.response':
         this.handleFsResponse(message.requestId, message.response);
         break;
+      case 'transcript.export.request':
+        void this.handleTranscriptExportRequest(bootstrapId, message.requestId, message.selector);
+        break;
+      case 'transcript.export.cancel':
+        this.handleTranscriptExportCancel(bootstrapId, message.requestId);
+        break;
+      case 'transcript.export.ack':
+        this.handleTranscriptExportAck(bootstrapId, message.requestId, message.index);
+        break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
@@ -1005,6 +1201,442 @@ export class LeaderSyncManager {
         break;
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transcript export (leader side)
+  // ---------------------------------------------------------------------------
+
+  private async handleTranscriptExportRequest(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector
+  ): Promise<void> {
+    // Composite key: ${bootstrapId}:${requestId}. Prevents cross-follower collisions
+    // when two different followers happen to choose the same requestId.
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+
+    // One-use guard: same follower+requestId pair is a duplicate.
+    if (this.activeExports.has(key)) {
+      log.warn('Duplicate transcript export request from same follower, ignoring', {
+        bootstrapId,
+        requestId,
+      });
+      return;
+    }
+
+    const follower = this.followers.get(bootstrapId);
+    if (!follower) return;
+
+    const { requestTranscriptExportApproval, createTranscriptExport } = this.options;
+    if (!requestTranscriptExportApproval || !createTranscriptExport) {
+      follower.sync.send({ type: 'transcript.export.denied', requestId });
+      return;
+    }
+
+    // Per-follower concurrency cap: at most one approved or pending export per follower.
+    // Auto-deny additional requests without opening approval or leaking metadata.
+    const hasInFlight = [...this.activeExports.values()].some((e) => e.bootstrapId === bootstrapId);
+    if (hasInFlight) {
+      log.warn('Follower already has an in-flight export; denying duplicate', {
+        bootstrapId,
+        requestId,
+      });
+      follower.sync.send({ type: 'transcript.export.denied', requestId });
+      return;
+    }
+
+    // Register in-flight state with AbortController before the async approval
+    const abort = new AbortController();
+    this.activeExports.set(key, { bootstrapId, abort });
+
+    // Derive follower identity from connected state (never trust request payload)
+    const followerLabel = labelForFollower(follower.floatType, follower.runtime);
+
+    // Send pending immediately to unblock the follower's UI
+    follower.sync.send({ type: 'transcript.export.pending', requestId });
+
+    let approved = false;
+    try {
+      approved = await requestTranscriptExportApproval({
+        requestId,
+        followerLabel,
+        // Derived from connected state via targets.advertise — never from request payload.
+        // Only populated for Cherry followers; omitted for non-Cherry runtimes.
+        hostOrigin: follower.hostOrigin,
+        selector,
+      });
+    } catch (err) {
+      log.warn('requestTranscriptExportApproval threw', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      approved = false;
+    }
+
+    // Re-fetch follower — might have disconnected during approval dialog
+    const stillConnected = this.followers.get(bootstrapId);
+    if (!this.activeExports.has(key) || !stillConnected) {
+      // Cancelled or disconnected during approval
+      this.activeExports.delete(key);
+      return;
+    }
+
+    if (!approved) {
+      // Send denied — NO metadata about the transcript
+      stillConnected.sync.send({ type: 'transcript.export.denied', requestId });
+      this.activeExports.delete(key);
+      return;
+    }
+
+    // Approved: create export and stream chunks
+    void this.streamTranscriptExport(bootstrapId, requestId, selector, abort);
+  }
+
+  private handleTranscriptExportCancel(bootstrapId: string, requestId: string): void {
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+    const entry = this.activeExports.get(key);
+    // Owner-aware guard: composite key already encodes bootstrapId, so only the
+    // originating follower's key exists. Guard against a missing entry anyway.
+    if (!entry) return;
+    log.info('Transcript export cancelled by follower', { requestId, bootstrapId });
+    entry.abort.abort();
+    this.activeExports.delete(key);
+    // Reject any ack waiter for this request so the sendExportChunks loop exits.
+    this.clearAckWaiters(bootstrapId, requestId);
+  }
+
+  /**
+   * Handle `transcript.export.ack` from a follower.
+   * Resolves the waiter for the matching bootstrapId:requestId:index.
+   * Acks from other followers are silently dropped (owner-scoped key).
+   */
+  private handleTranscriptExportAck(bootstrapId: string, requestId: string, index: number): void {
+    const key = LeaderSyncManager.ackKey(bootstrapId, requestId, index);
+    const waiter = this.ackWaiters.get(key);
+    if (!waiter) return; // late or spurious ack — ignore
+    this.ackWaiters.delete(key);
+    waiter.resolve();
+  }
+
+  /**
+   * Stream a ZIP result over the data channel with bounded backpressure.
+   * Each raw-bytes slice is base64-encoded and split so each message carries
+   * at most EXPORT_CHUNK_B64_MAX bytes of base64 text.
+   */
+  private async streamTranscriptExport(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector,
+    abort: AbortController
+  ): Promise<void> {
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+    const { createTranscriptExport } = this.options;
+    const follower = this.followers.get(bootstrapId);
+    if (!follower || !createTranscriptExport) {
+      this.activeExports.delete(key);
+      return;
+    }
+    const sendErr = (code: TranscriptExportErrorCode): void => {
+      const f = this.followers.get(bootstrapId);
+      if (f) f.sync.send({ type: 'transcript.export.error', requestId, code });
+      this.activeExports.delete(key);
+    };
+
+    let result: TranscriptZipResult;
+    try {
+      result = await createTranscriptExport(selector, abort.signal);
+    } catch (createErr) {
+      if (abort.signal.aborted) {
+        this.activeExports.delete(key);
+        return;
+      }
+      log.warn('createTranscriptExport failed', {
+        requestId,
+        error: createErr instanceof Error ? createErr.message : String(createErr),
+      });
+      const code: TranscriptExportErrorCode =
+        createErr instanceof TranscriptExportError ? createErr.code : 'session-not-found';
+      sendErr(code);
+      return;
+    }
+
+    if (abort.signal.aborted || !this.activeExports.has(key)) {
+      this.activeExports.delete(key);
+      return;
+    }
+    const sync = this.followers.get(bootstrapId)?.sync;
+    if (!sync) {
+      this.activeExports.delete(key);
+      return;
+    }
+
+    sync.send({ type: 'transcript.export.start', requestId, filename: result.filename });
+
+    const { sha256: sha256Lib } = await import('js-sha256');
+    const hasher = sha256Lib.create();
+
+    // Gate ack-based flow control on the follower's protocol version.
+    // Followers that sent `hello` with protocolVersion >= 3 support acks;
+    // older or legacy peers (no hello) skip ack waiting for compatibility.
+    const followerForAck = this.followers.get(bootstrapId);
+    const awaitAck =
+      (followerForAck?.peerProtocolVersion ?? 0) >= LeaderSyncManager.ACK_PROTOCOL_VERSION_MIN;
+
+    const {
+      streamError,
+      chunkCount: chunkIndex,
+      byteLength: leaderByteCount,
+    } = await this.sendExportChunks({
+      bootstrapId,
+      requestId,
+      chunks: result.chunks,
+      hasher,
+      abort,
+      awaitAck,
+      onSlice: (idx, slice) => {
+        const f = this.followers.get(bootstrapId);
+        if (!f) return false;
+        f.sync.send({ type: 'transcript.export.chunk', requestId, index: idx, data: slice });
+        return true;
+      },
+    });
+    if (streamError) {
+      // Stream iteration failed — not a user abort.
+      sendErr('transfer-corrupt');
+      return;
+    }
+
+    // If the key is gone the export was cancelled or the follower disconnected
+    // (both paths delete the key before aborting) — return silently.
+    if (!this.activeExports.has(key)) return;
+    if (abort.signal.aborted) {
+      // Key still present ⇒ ack-timeout abort: notify the follower so it can
+      // clean up its in-flight OPFS spool.
+      sendErr('transfer-aborted');
+      return;
+    }
+
+    let completion: { byteLength: number; sha256: string };
+    try {
+      completion = await result.completion;
+    } catch {
+      if (abort.signal.aborted) {
+        this.activeExports.delete(key);
+        return;
+      }
+      sendErr('transfer-aborted');
+      return;
+    }
+
+    if (abort.signal.aborted || !this.activeExports.has(key)) {
+      this.activeExports.delete(key);
+      return;
+    }
+
+    // Verify the service's reported byte count matches what the leader actually sent.
+    // Both should equal the raw ZIP byte count; a mismatch indicates a service bug
+    // or a corrupted stream before the follower ever validates.
+    if (completion.byteLength !== leaderByteCount) {
+      log.warn('Transcript export byte count mismatch between service and leader stream', {
+        requestId,
+        serviceByteLength: completion.byteLength,
+        leaderByteCount,
+      });
+      sendErr('transfer-corrupt');
+      return;
+    }
+
+    // Cross-check leader-computed SHA-256 against the service's reported digest.
+    // Both cover the same raw ZIP bytes; a mismatch indicates a service/stream bug.
+    const leaderSha = hasher.hex();
+    if (completion.sha256 !== leaderSha) {
+      log.warn('Transcript export SHA-256 mismatch between service and leader stream', {
+        requestId,
+      });
+      sendErr('transfer-corrupt');
+      return;
+    }
+
+    const done = this.followers.get(bootstrapId);
+    if (done) {
+      done.sync.send({
+        type: 'transcript.export.complete',
+        requestId,
+        chunks: chunkIndex,
+        byteLength: leaderByteCount,
+        sha256: leaderSha,
+      });
+    }
+    this.activeExports.delete(key);
+  }
+
+  /**
+   * Iterate the ZIP chunk iterable, base64-encode each slice (≤32 KiB), apply
+   * backpressure, and call `ctx.onSlice` per slice.
+   *
+   * Returns a result object: `streamError` is true when a stream error occurred
+   * (caller should send `transfer-corrupt`); false when completed normally OR
+   * aborted (caller distinguishes via `abort.signal.aborted` or
+   * `activeExports.has(key)`). `chunkCount` and `byteLength` reflect the
+   * totals processed regardless of terminal state.
+   */
+  private async sendExportChunks(ctx: SendExportChunksCtx): Promise<SendExportChunksResult> {
+    const { bootstrapId, requestId, chunks, hasher, abort, onSlice, awaitAck } = ctx;
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+    const sync = this.followers.get(bootstrapId)?.sync;
+    if (!sync) return { streamError: true, chunkCount: 0, byteLength: 0 };
+    let idx = 0;
+    let byteCount = 0;
+    try {
+      for await (const raw of chunks) {
+        if (abort.signal.aborted || !this.activeExports.has(key)) {
+          return { streamError: false, chunkCount: idx, byteLength: byteCount };
+        }
+        hasher.update(raw);
+        byteCount += raw.byteLength;
+        const b64 = bytesToBase64(raw);
+        const sliceResult = await this.sendExportSlices({
+          bootstrapId,
+          requestId,
+          b64,
+          sync,
+          key,
+          abort,
+          onSlice,
+          awaitAck,
+          startIdx: idx,
+        });
+        idx = sliceResult.nextIdx;
+        if (sliceResult.done !== 'continue') {
+          return {
+            streamError: sliceResult.done === 'error',
+            chunkCount: idx,
+            byteLength: byteCount,
+          };
+        }
+      }
+    } catch (streamErr) {
+      if (abort.signal.aborted) {
+        return { streamError: false, chunkCount: idx, byteLength: byteCount };
+      }
+      log.warn('Error streaming transcript export chunks', {
+        requestId,
+        error: streamErr instanceof Error ? streamErr.message : String(streamErr),
+      });
+      return { streamError: true, chunkCount: idx, byteLength: byteCount };
+    }
+    return { streamError: false, chunkCount: idx, byteLength: byteCount };
+  }
+
+  /** Send all base64 slices for one raw ZIP chunk, applying backpressure and optional ack-gating. */
+  private async sendExportSlices(ctx: {
+    bootstrapId: string;
+    requestId: string;
+    b64: string;
+    sync: { bufferedAmount?: number };
+    key: string;
+    abort: AbortController;
+    onSlice: (index: number, slice: string) => boolean;
+    awaitAck: boolean;
+    startIdx: number;
+  }): Promise<{ nextIdx: number; done: 'continue' | 'abort' | 'error' }> {
+    const { bootstrapId, requestId, b64, sync, key, abort, onSlice, awaitAck } = ctx;
+    let idx = ctx.startIdx;
+    for (let off = 0; off < b64.length; off += LeaderSyncManager.EXPORT_CHUNK_B64_MAX) {
+      if (abort.signal.aborted || !this.activeExports.has(key)) {
+        return { nextIdx: idx, done: 'abort' };
+      }
+      await waitForBufferedAmountLow(
+        sync,
+        LeaderSyncManager.EXPORT_BACKPRESSURE_THRESHOLD,
+        abort.signal
+      );
+      if (abort.signal.aborted || !this.activeExports.has(key)) {
+        return { nextIdx: idx, done: 'abort' };
+      }
+      const slice = b64.slice(off, off + LeaderSyncManager.EXPORT_CHUNK_B64_MAX);
+      if (!onSlice(idx, slice)) {
+        return { nextIdx: idx, done: 'error' };
+      }
+      // Wave 4: wait for durable-write ack from v3+ followers before sending the next slice.
+      if (awaitAck) {
+        const waited = await this.waitForAck(bootstrapId, requestId, idx, abort);
+        if (!waited || abort.signal.aborted || !this.activeExports.has(key)) {
+          return { nextIdx: idx + 1, done: 'abort' };
+        }
+      }
+      idx++;
+    }
+    return { nextIdx: idx, done: 'continue' };
+  }
+
+  /**
+   * Register an ack waiter for the given chunk index and await it.
+   * Returns `true` when ack arrives, `false` when aborted/cancelled/timed-out.
+   * The waiter is stored with an owner-scoped key so cross-follower
+   * acks are silently dropped by `handleTranscriptExportAck`.
+   *
+   * A 30 s deadline timer is registered so a follower whose OPFS write stalls
+   * indefinitely (live channel, stuck I/O) does not hold the export forever.
+   * When the timer fires, the export's AbortController is triggered and all
+   * sibling ack waiters for this export are rejected via clearAckWaiters.
+   */
+  private waitForAck(
+    bootstrapId: string,
+    requestId: string,
+    index: number,
+    abort: AbortController
+  ): Promise<boolean> {
+    const signal = abort.signal;
+    return new Promise<boolean>((resolve) => {
+      if (signal.aborted) {
+        resolve(false);
+        return;
+      }
+
+      const key = LeaderSyncManager.ackKey(bootstrapId, requestId, index);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const clearTimer = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
+      const cleanup = (): void => {
+        this.ackWaiters.delete(key);
+        clearTimer();
+      };
+      const onAbort = (): void => {
+        cleanup();
+        resolve(false);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      // Per-ack deadline: abort the export if the follower stalls.
+      // abort.abort() fires the signal’s abort event synchronously, which
+      // triggers onAbort (cleanup + resolve false). clearAckWaiters then
+      // handles any sibling waiters for this export.
+      timer = setTimeout(() => {
+        timer = undefined;
+        abort.abort();
+        this.clearAckWaiters(bootstrapId, requestId);
+      }, LeaderSyncManager.ACK_TIMEOUT_MS);
+
+      this.ackWaiters.set(key, {
+        resolve: () => {
+          signal.removeEventListener('abort', onAbort);
+          cleanup();
+          resolve(true);
+        },
+        reject: () => {
+          signal.removeEventListener('abort', onAbort);
+          cleanup();
+          resolve(false);
+        },
+      });
+    });
   }
 
   /**

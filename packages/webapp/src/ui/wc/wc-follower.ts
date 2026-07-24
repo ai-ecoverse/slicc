@@ -1,3 +1,5 @@
+import type { TranscriptExportSelector } from '@slicc/shared-ts';
+import { TranscriptExportError } from '@slicc/shared-ts';
 import { createLogger } from '../../core/logger.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
@@ -33,6 +35,19 @@ const NOOP_AGENT: AgentHandle = {
   onEvent: () => () => {},
   stop: () => {},
 };
+
+/**
+ * Resolve a host-supplied sessionId string to a TranscriptExportSelector.
+ *
+ * - `undefined` or the literal `'active'` → `{ kind: 'active' }`
+ * - Any other non-empty, non-whitespace string → `{ kind: 'frozen', sessionId }`
+ * - Empty string or whitespace-only → `null` (caller rejects with session-not-found)
+ */
+function resolveExportSelector(sessionId: string | undefined): TranscriptExportSelector | null {
+  if (sessionId === undefined || sessionId === 'active') return { kind: 'active' };
+  if (sessionId.trim() === '') return null;
+  return { kind: 'frozen', sessionId };
+}
 
 /**
  * Render a terminal boot error into the app root (createElement/textContent,
@@ -544,6 +559,21 @@ export async function mountWcUiFollower(
   if (isCherry && prelude.cherryTransport) {
     prelude.cherryTransport.onHostEvent = (name, detail) =>
       follower.currentSync?.sendCherryHostEvent(name, detail);
+    // Wire host-initiated export requests to the follower tray export path.
+    // The verified Blob from FollowerSyncManager is returned directly — no
+    // rebuild or rehash; only the phase is forwarded (no filename/sha256/size).
+    // requestId is used by CherryHostTransport for envelope routing, not here.
+    // sessionId selects the target session:
+    //   - omitted (undefined) or the literal string 'active' → active selector
+    //   - non-empty, non-whitespace string other than 'active' → frozen selector
+    //   - empty string or whitespace-only → reject; never starts a tray export
+    prelude.cherryTransport.onExportRequest = (_requestId, sessionId, signal, onProgress) => {
+      const sync = follower.currentSync;
+      if (!sync) return Promise.reject(new TranscriptExportError('transfer-aborted'));
+      const selector = resolveExportSelector(sessionId);
+      if (!selector) return Promise.reject(new TranscriptExportError('session-not-found'));
+      return sync.requestTranscriptExport(selector, signal, onProgress);
+    };
   }
 
   // Task 4: Navigate-lick watcher for non-cherry follower. Capture its stop fn
@@ -560,16 +590,54 @@ export async function mountWcUiFollower(
   // Task 6 (switch-out): Minimal follower nav menu + tray-leave listener.
   // (wireWcNav needs a worker client; a follower has none, so we set the
   // menu items directly.)
-  boot.refs.avatarMenu.items = [
-    { kind: 'separator' },
-    { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
-  ];
+  // Task 8: add "Export transcript" to the follower avatar menu.
+  let exportInFlight = false;
+  const syncFollowerMenuItems = (): void => {
+    boot.refs.avatarMenu.items = [
+      { kind: 'separator' },
+      {
+        id: 'export-transcript',
+        label: exportInFlight ? 'Exporting…' : 'Export transcript',
+        icon: 'download',
+        disabled: exportInFlight || undefined,
+      },
+      { id: 'tray-stop', label: 'Disconnect from leader', icon: 'unplug', danger: true },
+    ];
+  };
+  syncFollowerMenuItems();
+
   boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (id === 'tray-stop') {
       window.dispatchEvent(
         new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })
       );
+      return;
+    }
+    if (id === 'export-transcript' && !exportInFlight) {
+      exportInFlight = true;
+      syncFollowerMenuItems();
+      const sync = follower.currentSync;
+      if (!sync) {
+        exportInFlight = false;
+        syncFollowerMenuItems();
+        return;
+      }
+      const abort = new AbortController();
+      void sync
+        .requestTranscriptExport({ kind: 'active' }, abort.signal)
+        .then(async (blob) => {
+          const { downloadTranscriptBlob } = await import('./wc-transcript-export.js');
+          const filename = `slicc-transcript-${new Date().toISOString().slice(0, 10)}.zip`;
+          await downloadTranscriptBlob(blob, filename);
+        })
+        .catch((err) => {
+          log.error('follower transcript export failed', { error: String(err) });
+        })
+        .finally(() => {
+          exportInFlight = false;
+          syncFollowerMenuItems();
+        });
     }
   });
 

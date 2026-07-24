@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 1,
-  "leaderVariantCount": 26,
-  "followerVariantCount": 22,
+  "traySyncProtocolVersion": 3,
+  "leaderVariantCount": 32,
+  "followerVariantCount": 25,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -294,6 +294,62 @@
       }
     },
     {
+      "type": "transcript.export.chunk",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.chunk",
+        "requestId": "te-1",
+        "index": 0,
+        "data": "AQID"
+      }
+    },
+    {
+      "type": "transcript.export.complete",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.complete",
+        "requestId": "te-1",
+        "chunks": 1,
+        "byteLength": 3,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "type": "transcript.export.denied",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.denied",
+        "requestId": "te-1"
+      }
+    },
+    {
+      "type": "transcript.export.error",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.error",
+        "requestId": "te-1",
+        "code": "session-not-found"
+      }
+    },
+    {
+      "type": "transcript.export.pending",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.pending",
+        "requestId": "te-1"
+      }
+    },
+    {
+      "type": "transcript.export.start",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.start",
+        "requestId": "te-1",
+        "filename": "slicc-transcript.zip",
+        "estimatedBytes": 1024
+      }
+    },
+    {
       "type": "user_message_echo",
       "ios": "decoded",
       "message": {
@@ -524,6 +580,34 @@
           }
         ],
         "runtimeId": "slicc-ios"
+      }
+    },
+    {
+      "type": "transcript.export.ack",
+      "ios": "undecodable",
+      "message": {
+        "type": "transcript.export.ack",
+        "requestId": "te-2",
+        "index": 0
+      }
+    },
+    {
+      "type": "transcript.export.cancel",
+      "ios": "undecodable",
+      "message": {
+        "type": "transcript.export.cancel",
+        "requestId": "te-2"
+      }
+    },
+    {
+      "type": "transcript.export.request",
+      "ios": "undecodable",
+      "message": {
+        "type": "transcript.export.request",
+        "requestId": "te-2",
+        "selector": {
+          "kind": "active"
+        }
       }
     },
     {

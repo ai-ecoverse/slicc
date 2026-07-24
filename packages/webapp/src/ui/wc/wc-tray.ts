@@ -205,6 +205,14 @@ function createLeaderOptionsFactory(
     onCherryHostEvent: (runtimeId, name, detail) =>
       client.sendCherryHostEvent(runtimeId, name, detail),
     onPreviewLick: (event) => client.sendPreviewLick(event),
+    requestTranscriptExportApproval: (request) =>
+      import('./wc-transcript-export.js').then(({ openTranscriptExportApproval }) =>
+        openTranscriptExportApproval(request)
+      ),
+    createTranscriptExport: async (selector, signal) => {
+      const { runTranscriptExportForFollower } = await import('./wc-transcript-export.js');
+      return runTranscriptExportForFollower(selector, signal, client);
+    },
     sendWebhookEvent: (webhookId, headers, body) =>
       client.sendWebhookEvent(webhookId, headers, body),
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),

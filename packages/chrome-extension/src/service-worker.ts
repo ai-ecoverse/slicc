@@ -1883,6 +1883,28 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
   return true;
 }
 
+// Fail-closed export redaction. Batch-replaces all known secret values
+// (both real and masked forms) with stable anonymous markers for transcript
+// export. Unlike scrub-tool-result, this MUST NOT degrade to returning the
+// input — any failure returns { error } with no request texts echoed.
+function runSecretsRedactExport(msg: unknown, sendResponse: SendResponse): boolean {
+  const texts = getStringArrayField(msg, 'texts');
+  if (texts === undefined) return false;
+  (async () => {
+    try {
+      const pipeline = await buildSecretsPipeline();
+      await pipeline.reload();
+      const result = pipeline.redactForExport(texts);
+      sendResponse(result);
+    } catch (err) {
+      console.error('[sw] secrets.redact-export failed', err);
+      // Fail-closed: never echo input texts in error response.
+      sendResponse({ error: errMsg(err) });
+    }
+  })();
+  return true;
+}
+
 const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
   'secrets.list-masked-entries': runSecretsListMaskedEntries,
   'secrets.scrub-tool-result': runSecretsScrubToolResult,
@@ -1895,6 +1917,7 @@ const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
   'secrets.peek': runSecretsPeek,
   'secrets.set-domains': runSecretsSetDomains,
   'secrets.mask-oauth-token': runSecretsMaskOauthToken,
+  'secrets.redact-export': runSecretsRedactExport,
 };
 
 chrome.runtime.onMessage.addListener(

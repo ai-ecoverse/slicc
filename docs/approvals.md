@@ -512,3 +512,49 @@ permission surface is mounted (early boot / non-WC realms).
 | `packages/webapp/src/shell/supplemental-commands/screencapture-command.ts` | `getDisplayMedia` invocation                           |
 | `packages/webapp/src/speech/composer-speech.ts`                            | push-to-talk `getUserMedia` via the permission surface |
 | `packages/webapp/src/speech/hear.ts`                                       | `hear` command mic acquisition (surface or direct)     |
+
+---
+
+## Transcript export — per-request human approval
+
+### Summary
+
+When a tray follower or a Cherry-embedded host requests a transcript export, the
+leader's user must explicitly approve each individual request before any data
+is sent. Approval is **one-time per request** — a second export always requires
+a new prompt.
+
+### Threat model
+
+The approval gate prevents a compromised follower or malicious Cherry host from
+exfiltrating session history without the user's knowledge. Every export path
+(tray follower and Cherry SDK) goes through the same approval dialog.
+
+### Dialog contents
+
+The approval dialog (`wc-transcript-export.ts`) shows:
+
+- **Requester** — follower display name (tray) or host origin (Cherry).
+- **Session** — "Active session" or "Archived session (ID: …)".
+- **Estimated size** — derived from the stored snapshot or a live estimate.
+- **Binary-attachment warning** — explains that binary files are sent unchanged
+  and may contain sensitive data.
+
+### Semantics
+
+- **Allow once** — starts the export immediately; this approval covers exactly
+  one transfer. A second request shows the dialog again.
+- **Deny** (Escape / close) — rejects the pending Promise / request with
+  `permission-denied`; no data is sent.
+- There is no "Always allow" option for transcript export.
+
+### Files
+
+| Path                                                | Role                                                                         |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `packages/webapp/src/ui/wc/wc-transcript-export.ts` | `openTranscriptExportApproval()` — renders the dialog and returns Allow/Deny |
+| `packages/webapp/src/transcript/export-service.ts`  | `TranscriptExportService` — verifies approval before streaming               |
+| `packages/shared-ts/src/transcript-export.ts`       | `TranscriptExportErrorCode` union including `'permission-denied'`            |
+| `packages/cherry/src/mount.ts`                      | Cherry host — sends `session.export.request`, awaits response                |
+
+See [docs/transcript-export.md](transcript-export.md) for the full export flow.

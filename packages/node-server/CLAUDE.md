@@ -86,3 +86,4 @@ Node-server includes `OauthSecretStore` (in-memory writable store for OAuth toke
 - `packages/cloud-core/CLAUDE.md` for the sandbox lifecycle logic used by `--cloud`
 - `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/development.md` and `docs/electron.md` for longer-form workflows
+- `docs/transcript-export.md` — transcript export bundle layout (the export runs in the webapp; the node-server's `/cdp` bridge is transparent)

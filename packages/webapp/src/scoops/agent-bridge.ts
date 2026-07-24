@@ -453,6 +453,9 @@ export function createAgentBridge(
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
       notifyOnComplete: false,
+      // Propagate the invoking scoop's JID for delegation-chain reconstruction.
+      // Only set when AgentSpawnOptions.parentJid is provided; never inferred.
+      ...(options.parentJid !== undefined ? { parentJid: options.parentJid } : {}),
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);

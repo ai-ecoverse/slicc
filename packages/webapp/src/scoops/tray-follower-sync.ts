@@ -3,6 +3,12 @@
  * and provides an AgentHandle for the follower's ChatPanel.
  */
 
+import type {
+  TranscriptExportErrorCode,
+  TranscriptExportProgress,
+  TranscriptExportSelector,
+} from '@slicc/shared-ts';
+import { TranscriptExportError, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -11,6 +17,8 @@ import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { ExportSpool } from '../transcript/export-spool.js';
+import { makeExportSpool } from '../transcript/export-spool.js';
 import type { ChatMessage } from './chat-types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import type { LickEvent } from './lick-manager.js';
@@ -101,6 +109,12 @@ export interface FollowerSyncManagerOptions {
    * non-finite inputs throw at construction.
    */
   sprinkleFetchTimeoutMs?: number;
+  /**
+   * Factory for creating export spools. Defaults to `makeExportSpool` which
+   * returns an OpfsSpool in production and a MemorySpool as fallback.
+   * Inject `() => new MemorySpool()` in tests for a deterministic, fast spool.
+   */
+  makeExportSpool?: (requestId: string) => ExportSpool;
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
@@ -192,6 +206,31 @@ export class FollowerSyncManager implements AgentHandle {
   private cacheEpoch = 0;
   /** Per-requestId epoch stamp captured at `fetchSprinkleContent` time. */
   private readonly fetchEpoch = new Map<string, number>();
+
+  /**
+   * In-flight transcript export requests keyed by requestId.
+   *
+   * Wave 4 (bounded-memory): `chunks: Uint8Array[]` is replaced by a
+   * spool that writes bytes through the ExportSpool interface. No chunk
+   * array is retained in this map; the spool accumulates bytes externally
+   * (OPFS in production, memory in tests via the injected factory).
+   * Byte count is tracked incrementally for progress reporting only;
+   * integrity verification (SHA-256 + byte count) is delegated to the spool.
+   */
+  private readonly activeExportRequests = new Map<
+    string,
+    {
+      resolve: (blob: Blob) => void;
+      reject: (err: Error) => void;
+      spool: ExportSpool;
+      nextExpectedIndex: number;
+      totalBytes: number;
+      signal: AbortSignal;
+      onAbort: () => void;
+      onProgress?: (progress: TranscriptExportProgress) => void;
+    }
+  >();
+
   constructor(
     channel: TrayDataChannelLike,
     private readonly options: FollowerSyncManagerOptions = {}
@@ -348,6 +387,15 @@ export class FollowerSyncManager implements AgentHandle {
     this.cdpChunkBuffers.clear();
     for (const transport of this.remoteTransports.values()) transport.disconnect();
     this.remoteTransports.clear();
+    // Reject all in-flight transcript export requests with transfer-aborted.
+    // Remove each AbortSignal listener, cancel the spool (releasing OPFS
+    // temp files and memory), and clear the map.
+    for (const [, entry] of this.activeExportRequests) {
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      void entry.spool.cancel();
+      entry.reject(new TranscriptExportError('transfer-aborted'));
+    }
+    this.activeExportRequests.clear();
   }
 
   /** Advertise local browser targets to the leader. */
@@ -688,27 +736,9 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
 
-      case 'sprinkles.list': {
-        log.info('Sprinkles list received from leader', {
-          sprinkleCount: message.sprinkles.length,
-        });
-        // Treat every list broadcast as a content invalidation barrier.
-        // The leader has no per-file change signal today; broadcasts are
-        // periodic (~5 s default), so a stable `.shtml` re-invalidates
-        // its cache on every tick. This is conservative — the trade-off
-        // is cache effectiveness during steady state in exchange for
-        // never serving stale content to the user when the leader's
-        // file actually changed. Bumping `cacheEpoch` ALSO discards any
-        // in-flight fetch's content reply that arrives AFTER this
-        // barrier — see `handleSprinkleContent`. Without that, a late
-        // pre-barrier reply could poison the cache for the post-barrier
-        // world.
-        this.sprinkleContentCache.clear();
-        this.cacheEpoch++;
-        this.latestSprinkles = message.sprinkles;
-        this.options.onSprinklesList?.(message.sprinkles);
+      case 'sprinkles.list':
+        this.handleSprinklesList(message.sprinkles);
         break;
-      }
 
       case 'sprinkle.content':
         this.handleSprinkleContent(message);
@@ -728,6 +758,15 @@ export class FollowerSyncManager implements AgentHandle {
         this.options.onCherrySliccEvent?.(message.name, message.detail);
         break;
 
+      // Transcript export messages — all routed to the export sub-handler
+      case 'transcript.export.pending':
+      case 'transcript.export.denied':
+      case 'transcript.export.start':
+      case 'transcript.export.chunk':
+      case 'transcript.export.complete':
+      case 'transcript.export.error':
+        this.handleExportLeaderMessage(message);
+        break;
       case 'ping':
         this.keepalive.receivePing();
         this.sync.send({ type: 'pong' });
@@ -776,6 +815,20 @@ export class FollowerSyncManager implements AgentHandle {
   private handleScoopsList(scoops: ScoopSummary[], activeScoopJid: string): void {
     log.info('Scoops list received from leader', { scoopCount: scoops.length });
     this.options.onScoopsList?.(scoops, activeScoopJid);
+  }
+
+  /**
+   * Handle a `sprinkles.list` broadcast from the leader.
+   * Every list arrival is a content-invalidation barrier: clears the cache and
+   * bumps `cacheEpoch` so late pre-barrier fetch replies don’t poison the
+   * post-barrier world (see `handleSprinkleContent`).
+   */
+  private handleSprinklesList(sprinkles: SprinkleSummary[]): void {
+    log.info('Sprinkles list received from leader', { sprinkleCount: sprinkles.length });
+    this.sprinkleContentCache.clear();
+    this.cacheEpoch++;
+    this.latestSprinkles = sprinkles;
+    this.options.onSprinklesList?.(sprinkles);
   }
 
   /**
@@ -1215,5 +1268,261 @@ export class FollowerSyncManager implements AgentHandle {
       this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
       this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transcript export (follower side)
+  // ---------------------------------------------------------------------------
+
+  private handleExportLeaderMessage(
+    message: Extract<
+      LeaderToFollowerMessage,
+      {
+        type:
+          | 'transcript.export.pending'
+          | 'transcript.export.denied'
+          | 'transcript.export.start'
+          | 'transcript.export.chunk'
+          | 'transcript.export.complete'
+          | 'transcript.export.error';
+      }
+    >
+  ): void {
+    switch (message.type) {
+      case 'transcript.export.pending':
+        log.debug('Transcript export pending', { requestId: message.requestId });
+        this.activeExportRequests.get(message.requestId)?.onProgress?.({
+          phase: 'collecting',
+        });
+        break;
+      case 'transcript.export.denied':
+        this.handleExportDenied(message.requestId);
+        break;
+      case 'transcript.export.start':
+        // Log without filename to avoid leaking session title before leader approval.
+        log.debug('Transcript export start', { requestId: message.requestId });
+        this.activeExportRequests.get(message.requestId)?.onProgress?.({
+          phase: 'packaging',
+        });
+        break;
+      case 'transcript.export.chunk':
+        void this.handleExportChunkAsync(message.requestId, message.index, message.data);
+        break;
+      case 'transcript.export.complete':
+        void this.handleExportComplete(
+          message.requestId,
+          message.chunks,
+          message.byteLength,
+          message.sha256
+        );
+        break;
+      case 'transcript.export.error':
+        this.handleExportError(message.requestId, message.code);
+        break;
+      default: {
+        // Exhaustiveness guard: a new export message variant fails compile here
+        // until this dispatcher decides. At runtime this means a version-skewed
+        // leader — log and discard, never throw.
+        const unknown = unhandledProtocolMessage(message);
+        log.warn('Unknown transcript export leader message — skewed leader?', {
+          type: unknown.type,
+        });
+        break;
+      }
+    }
+  }
+
+  /**
+   * Request a transcript export from the leader.
+   * Returns a Promise<Blob> with the verified ZIP, or rejects with
+   * TranscriptExportError on denial, corruption, or abort.
+   *
+   * @param onProgress Optional callback invoked as the leader advances through
+   *   export phases. Phases are forwarded without leaking filename, sha256,
+   *   or byte counts until the verified Blob is returned.
+   */
+  requestTranscriptExport(
+    selector: TranscriptExportSelector,
+    signal: AbortSignal,
+    onProgress?: (progress: TranscriptExportProgress) => void
+  ): Promise<Blob> {
+    if (signal.aborted) {
+      return Promise.reject(new TranscriptExportError('transfer-aborted'));
+    }
+
+    const requestId = `te-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const spoolFactory = this.options.makeExportSpool ?? makeExportSpool;
+    const spool = spoolFactory(requestId);
+
+    return new Promise<Blob>((resolve, reject) => {
+      const onAbort = (): void => {
+        const entry = this.activeExportRequests.get(requestId);
+        if (!entry) return;
+        this.sync.send({ type: 'transcript.export.cancel', requestId });
+        this.activeExportRequests.delete(requestId);
+        void entry.spool.cancel();
+        reject(new TranscriptExportError('transfer-aborted'));
+      };
+
+      if (signal.aborted) {
+        void spool.cancel();
+        reject(new TranscriptExportError('transfer-aborted'));
+        return;
+      }
+
+      signal.addEventListener('abort', onAbort, { once: true });
+
+      this.activeExportRequests.set(requestId, {
+        resolve,
+        reject,
+        spool,
+        nextExpectedIndex: 0,
+        totalBytes: 0,
+        signal,
+        onAbort,
+        onProgress,
+      });
+
+      this.sync.send({
+        type: 'transcript.export.request',
+        requestId,
+        selector,
+      });
+    });
+  }
+
+  private handleExportDenied(requestId: string): void {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+    void entry.spool.cancel();
+    entry.reject(new TranscriptExportError('permission-denied'));
+  }
+
+  /**
+   * Async chunk handler (Wave 4 bounded-memory).
+   *
+   * Decodes the base64 payload and appends to the spool (which may be an
+   * async OPFS write in production). `nextExpectedIndex` and `totalBytes`
+   * are updated SYNCHRONOUSLY before the async spool write so that a
+   * `complete` message arriving concurrently (legacy non-ack-gated path)
+   * sees the correct counts. The ack is sent AFTER the spool write resolves
+   * so that it reflects true durability (OPFS in production, synchronous
+   * push in MemorySpool).
+   */
+  private async handleExportChunkAsync(
+    requestId: string,
+    index: number,
+    data: string
+  ): Promise<void> {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+
+    if (index !== entry.nextExpectedIndex) {
+      log.warn('Transcript export chunk out of order', {
+        requestId,
+        expected: entry.nextExpectedIndex,
+        got: index,
+      });
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      this.activeExportRequests.delete(requestId);
+      this.sync.send({ type: 'transcript.export.cancel', requestId });
+      void entry.spool.cancel();
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // Decode base64 payload
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    // Update running state SYNCHRONOUSLY before the async spool write so that
+    // concurrent complete handlers see the correct nextExpectedIndex.
+    entry.totalBytes += bytes.byteLength;
+    entry.nextExpectedIndex++;
+    entry.onProgress?.({ phase: 'transferring', processedBytes: entry.totalBytes });
+
+    // Write to spool. For MemorySpool: parts.push is synchronous inside append,
+    // one microtask tick later the await resolves. For OpfsSpool: genuine async
+    // OPFS write — the ack below confirms durability to the leader.
+    try {
+      await entry.spool.append(bytes, index);
+    } catch (err) {
+      if (!this.activeExportRequests.has(requestId)) return;
+      entry.signal.removeEventListener('abort', entry.onAbort);
+      this.activeExportRequests.delete(requestId);
+      this.sync.send({ type: 'transcript.export.cancel', requestId });
+      void entry.spool.cancel();
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      log.warn('Transcript export spool append failed', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    // Re-check: entry may be gone if complete arrived before spool write resolved.
+    if (!this.activeExportRequests.has(requestId)) return;
+
+    // Send durable-write ack to leader. The leader's bounded window (=1) waits
+    // for this before sending the next chunk, providing application-level backpressure.
+    this.sync.send({ type: 'transcript.export.ack', requestId, index });
+  }
+
+  private async handleExportComplete(
+    requestId: string,
+    expectedChunks: number,
+    expectedByteLength: number,
+    expectedSha256: string
+  ): Promise<void> {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+
+    // Verify chunk count against received index counter
+    if (entry.nextExpectedIndex !== expectedChunks) {
+      log.warn('Transcript export chunk count mismatch', {
+        requestId,
+        expected: expectedChunks,
+        got: entry.nextExpectedIndex,
+      });
+      void entry.spool.cancel();
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    // Delegate integrity checks (byte length + SHA-256) to the spool.
+    // The spool's hasher and byte counter are updated incrementally as
+    // chunks arrive, so no second pass over the data is needed.
+    let blob: Blob;
+    try {
+      blob = await entry.spool.finalize(expectedChunks, expectedByteLength, expectedSha256);
+    } catch (err) {
+      log.warn('Transcript export spool finalize failed', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      entry.reject(new TranscriptExportError('transfer-corrupt'));
+      return;
+    }
+
+    entry.resolve(blob);
+  }
+
+  private handleExportError(requestId: string, code: TranscriptExportErrorCode): void {
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) return;
+    entry.signal.removeEventListener('abort', entry.onAbort);
+    this.activeExportRequests.delete(requestId);
+    void entry.spool.cancel();
+    const safeCode: TranscriptExportErrorCode = VALID_EXPORT_ERROR_CODES.has(
+      code as TranscriptExportErrorCode
+    )
+      ? (code as TranscriptExportErrorCode)
+      : 'transfer-corrupt';
+    entry.reject(new TranscriptExportError(safeCode));
   }
 }

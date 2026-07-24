@@ -34,12 +34,122 @@ describe('isCherryEnvelope', () => {
   it('rejects an unknown kind', () => {
     expect(isCherryEnvelope({ ...make(), kind: 'bogus.kind' })).toBe(false);
   });
+
+  // New export envelope kinds
+  it('accepts session.export.request kind', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.request',
+        requestId: 'req-1',
+      })
+    ).toBe(true);
+  });
+  it('accepts session.export.cancel kind', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.cancel',
+        requestId: 'req-1',
+      })
+    ).toBe(true);
+  });
+  it('accepts session.export.progress kind', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.progress',
+        requestId: 'req-1',
+        phase: 'collecting',
+      })
+    ).toBe(true);
+  });
+  it('accepts session.export.response kind', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.response',
+        requestId: 'req-1',
+        blob: new Blob(['data'], { type: 'application/zip' }),
+      })
+    ).toBe(true);
+  });
+  it('accepts session.export.error kind', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.error',
+        requestId: 'req-1',
+        code: 'permission-denied',
+      })
+    ).toBe(true);
+  });
+
+  // Malformed export envelopes — L-2 guard tests
+  it('rejects export kinds with an empty requestId', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.request',
+        requestId: '',
+      })
+    ).toBe(false);
+  });
+  it('rejects export kinds with a missing requestId', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.cancel',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.progress without phase', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.progress',
+        requestId: 'req-1',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.response without a Blob', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.response',
+        requestId: 'req-1',
+        blob: 'not-a-blob',
+      })
+    ).toBe(false);
+  });
+  it('rejects session.export.error without a code', () => {
+    expect(
+      isCherryEnvelope({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'ch-1',
+        kind: 'session.export.error',
+        requestId: 'req-1',
+      })
+    ).toBe(false);
+  });
 });
 
 describe('isCherryVersionMismatch', () => {
   it('detects an envelope-shaped message with a different version', () => {
-    expect(isCherryVersionMismatch({ ...make(), cherry: 2 })).toBe(true);
+    expect(isCherryVersionMismatch({ ...make(), cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(true);
     expect(isCherryVersionMismatch({ cherry: 0, channelId: 'x', kind: 'handshake.hello' })).toBe(
+      true
+    );
+    expect(isCherryVersionMismatch({ cherry: 1, channelId: 'x', kind: 'handshake.hello' })).toBe(
       true
     );
   });
@@ -48,8 +158,8 @@ describe('isCherryVersionMismatch', () => {
   });
   it('is false for non-envelope noise', () => {
     expect(isCherryVersionMismatch(null)).toBe(false);
-    expect(isCherryVersionMismatch({ cherry: 2 })).toBe(false);
-    expect(isCherryVersionMismatch({ cherry: '2', channelId: 'x', kind: 'k' })).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: CHERRY_PROTOCOL_VERSION + 1 })).toBe(false);
+    expect(isCherryVersionMismatch({ cherry: '3', channelId: 'x', kind: 'k' })).toBe(false);
   });
 });
 
@@ -122,5 +232,35 @@ describe('acceptEnvelope three-factor pinning', () => {
       data: make(),
     } as MessageEvent;
     expect(acceptEnvelope(ev, { ...ctx, expectedSource: null })).toBe(true);
+  });
+
+  it('accepts a session.export.response envelope through the gate', () => {
+    const ev = {
+      origin: 'https://host.example',
+      source: expectedSource,
+      data: {
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'cherry-abc',
+        kind: 'session.export.response',
+        requestId: 'req-1',
+        blob: new Blob(['data'], { type: 'application/zip' }),
+      },
+    } as unknown as MessageEvent;
+    expect(acceptEnvelope(ev, ctx)).toBe(true);
+  });
+
+  it('rejects a session.export.response from wrong origin', () => {
+    const ev = {
+      origin: 'https://evil.example',
+      source: expectedSource,
+      data: {
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: 'cherry-abc',
+        kind: 'session.export.response',
+        requestId: 'req-1',
+        blob: new Blob(['data'], { type: 'application/zip' }),
+      },
+    } as unknown as MessageEvent;
+    expect(acceptEnvelope(ev, ctx)).toBe(false);
   });
 });

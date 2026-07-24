@@ -8,8 +8,8 @@ import {
 } from '../src/tray-sync-protocol.js';
 
 describe('tray-sync-protocol', () => {
-  it('exposes protocol version 1 and the cherry runtime tag', () => {
-    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(1);
+  it('exposes protocol version 3 and the cherry runtime tag', () => {
+    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(3);
     expect(CHERRY_RUNTIME_TAG).toBe('slicc-cherry');
   });
 

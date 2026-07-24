@@ -782,6 +782,10 @@ export class ScoopLifecycleManager {
             const fullScoop: RegisteredScoop = {
               ...newScoop,
               jid: `scoop_${newScoop.folder}_${Date.now()}`,
+              // Record the creating cone's JID so transcript export can
+              // reconstruct the delegation chain. originToolCallId is not
+              // available in this path (ToolDefinition has no toolCallId).
+              parentJid: scoop.jid,
             };
             await cone.registerScoop(fullScoop);
             return fullScoop;
