@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ai-ecoverse/slicc-cli/internal/follow"
@@ -152,17 +153,18 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	}
 }
 
-// cmdFollow stays connected and runs leader-issued commands locally, reconnecting
-// with backoff. Unless --deny-exec is set, the leader gets a shell on this box.
-func cmdFollow(ctx context.Context, joinURL string, denyExec bool) int {
-	printFollowBanner(denyExec)
+// cmdFollow stays connected and runs leader-issued commands locally through the
+// given runner argv, reconnecting with backoff. An empty runner means the leader
+// gets no exec on this box.
+func cmdFollow(ctx context.Context, joinURL string, runner []string) int {
+	printFollowBanner(runner)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
-		connected, err := followOnce(ctx, joinURL, denyExec)
+		connected, err := followOnce(ctx, joinURL, runner)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -187,11 +189,11 @@ func cmdFollow(ctx context.Context, joinURL string, denyExec bool) int {
 	}
 }
 
-func followOnce(ctx context.Context, joinURL string, denyExec bool) (connected bool, err error) {
+func followOnce(ctx context.Context, joinURL string, runner []string) (connected bool, err error) {
 	msgCh := make(chan inbound, 256)
 
 	var caps *protocol.Capabilities
-	if !denyExec {
+	if len(runner) > 0 {
 		caps = &protocol.Capabilities{Exec: true}
 	}
 
@@ -209,7 +211,7 @@ func followOnce(ctx context.Context, joinURL string, denyExec bool) (connected b
 		return false, dialErr
 	}
 	defer conn.Close()
-	session := follow.NewSession(conn, denyExec, os.Stderr)
+	session := follow.NewSession(conn, runner, os.Stderr)
 	fmt.Fprintln(os.Stderr, "slicc follow: connected")
 
 	for {
@@ -227,14 +229,15 @@ func followOnce(ctx context.Context, joinURL string, denyExec bool) (connected b
 
 // --- helpers -----------------------------------------------------------------
 
-func printFollowBanner(denyExec bool) {
+func printFollowBanner(runner []string) {
 	who := fmt.Sprintf("%s@%s", currentUser(), hostname())
-	if denyExec {
-		fmt.Fprintf(os.Stderr, "slicc follow: connecting as %s (exec DISABLED via --deny-exec)\n", who)
+	if len(runner) == 0 {
+		fmt.Fprintf(os.Stderr, "slicc follow: connecting as %s (exec disabled — no runner given)\n", who)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "⚠️  slicc follow: the leader can run shell commands on this machine as %s.\n", who)
-	fmt.Fprintln(os.Stderr, "    Each command is printed here as it runs. Pass --deny-exec to refuse.")
+	fmt.Fprintf(os.Stderr, "⚠️  slicc follow: the leader can run commands on this machine as %s\n", who)
+	fmt.Fprintf(os.Stderr, "    via: %s <command>\n", strings.Join(runner, " "))
+	fmt.Fprintln(os.Stderr, "    Each command is printed here as it runs.")
 }
 
 func currentUser() string {

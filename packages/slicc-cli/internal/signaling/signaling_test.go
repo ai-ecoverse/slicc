@@ -43,7 +43,7 @@ func newMock(t *testing.T, handler func(action string, body map[string]any) any)
 }
 
 func TestAttachSignal(t *testing.T) {
-	srv := newMock(t, func(action string, body map[string]any) any {
+	srv := newMock(t, func(_ string, body map[string]any) any {
 		return map[string]any{
 			"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 1,
 			"result":     map[string]any{"action": "signal", "code": "LEADER_CONNECTED", "bootstrap": bootstrapObj("b1", 0)},
@@ -68,7 +68,7 @@ func TestAttachSignal(t *testing.T) {
 }
 
 func TestAttachWaitAndSupersede(t *testing.T) {
-	waitSrv := newMock(t, func(action string, body map[string]any) any {
+	waitSrv := newMock(t, func(_ string, body map[string]any) any {
 		return map[string]any{
 			"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 0,
 			"result": map[string]any{"action": "wait", "code": "LEADER_NOT_CONNECTED", "retryAfterMs": 250},
@@ -83,7 +83,7 @@ func TestAttachWaitAndSupersede(t *testing.T) {
 		t.Fatalf("wait plan = %+v", plan)
 	}
 
-	supersedeSrv := newMock(t, func(action string, body map[string]any) any {
+	supersedeSrv := newMock(t, func(_ string, body map[string]any) any {
 		return map[string]any{
 			"trayId": "t1", "controllerId": body["controllerId"], "role": "follower", "participantCount": 0,
 			"result": map[string]any{"action": "fail", "code": "TRAY_SUPERSEDED", "error": "moved", "joinUrl": "https://x/join/new"},

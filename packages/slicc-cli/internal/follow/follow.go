@@ -24,8 +24,10 @@ type Sender interface {
 
 // Session tracks in-flight leader-issued execs for one connection.
 type Session struct {
-	sender   Sender
-	denyExec bool
+	sender Sender
+	// runner is the argv each command is handed to (command appended as the final
+	// arg). Empty means exec is disabled: every exec.request is refused.
+	runner []string
 	// Log receives one line per command as it starts (per-command visibility).
 	log io.Writer
 
@@ -33,10 +35,11 @@ type Session struct {
 	running map[string]chan string
 }
 
-// NewSession builds a follow session. denyExec makes every exec.request refuse.
+// NewSession builds a follow session. An empty runner makes every exec.request
+// refuse; a non-empty runner (e.g. ["bash","-c"]) runs each command through it.
 // log (optional) receives a one-line notice per command.
-func NewSession(sender Sender, denyExec bool, log io.Writer) *Session {
-	return &Session{sender: sender, denyExec: denyExec, log: log, running: make(map[string]chan string)}
+func NewSession(sender Sender, runner []string, log io.Writer) *Session {
+	return &Session{sender: sender, runner: runner, log: log, running: make(map[string]chan string)}
 }
 
 // Handle routes an inbound message. Only exec.request / exec.signal are acted
@@ -48,10 +51,10 @@ func (s *Session) Handle(ctx context.Context, msgType string, raw []byte) {
 		if json.Unmarshal(raw, &req) != nil {
 			return
 		}
-		if s.denyExec {
+		if len(s.runner) == 0 {
 			_ = s.sender.SendJSON(protocol.ExecResponse{
 				Type: protocol.TypeExecResponse, RequestID: req.RequestID, ExitCode: 127,
-				Error: "exec disabled on this follower (--deny-exec)",
+				Error: "exec disabled on this follower (started with no runner)",
 			})
 			return
 		}
@@ -84,6 +87,7 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 
 	go func() {
 		res := execrun.Run(ctx, req.Command, execrun.Options{
+			Runner:  s.runner,
 			Cwd:     req.Cwd,
 			Env:     req.Env,
 			Control: ctrl,

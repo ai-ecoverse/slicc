@@ -39,7 +39,7 @@ func (c *capture) err() string {
 
 func TestRunStdoutAndExitZero(t *testing.T) {
 	c := &capture{}
-	res := Run(context.Background(), "echo hello-follower", Options{OnChunk: c.onChunk})
+	res := Run(context.Background(), "echo hello-follower", Options{Runner: []string{"sh", "-c"}, OnChunk: c.onChunk})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit = %d, want 0 (err=%v)", res.ExitCode, res.Err)
 	}
@@ -50,7 +50,7 @@ func TestRunStdoutAndExitZero(t *testing.T) {
 
 func TestRunNonZeroExit(t *testing.T) {
 	c := &capture{}
-	res := Run(context.Background(), "exit 3", Options{OnChunk: c.onChunk})
+	res := Run(context.Background(), "exit 3", Options{Runner: []string{"sh", "-c"}, OnChunk: c.onChunk})
 	if res.ExitCode != 3 {
 		t.Fatalf("exit = %d, want 3", res.ExitCode)
 	}
@@ -61,7 +61,7 @@ func TestRunStderr(t *testing.T) {
 		t.Skip("redirection form differs on cmd.exe")
 	}
 	c := &capture{}
-	res := Run(context.Background(), "echo oops 1>&2", Options{OnChunk: c.onChunk})
+	res := Run(context.Background(), "echo oops 1>&2", Options{Runner: []string{"sh", "-c"}, OnChunk: c.onChunk})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit = %d, want 0", res.ExitCode)
 	}
@@ -77,7 +77,7 @@ func TestRunSignalTerminates(t *testing.T) {
 	control := make(chan string, 1)
 	done := make(chan Result, 1)
 	go func() {
-		done <- Run(context.Background(), "sleep 30", Options{Control: control})
+		done <- Run(context.Background(), "sleep 30", Options{Runner: []string{"sh", "-c"}, Control: control})
 	}()
 	// Give the process a moment to start, then interrupt it.
 	time.Sleep(100 * time.Millisecond)
@@ -100,7 +100,7 @@ func TestRunContextCancelTerminates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Result, 1)
 	go func() {
-		done <- Run(ctx, "sleep 30", Options{})
+		done <- Run(ctx, "sleep 30", Options{Runner: []string{"sh", "-c"}})
 	}()
 	time.Sleep(100 * time.Millisecond)
 	cancel()

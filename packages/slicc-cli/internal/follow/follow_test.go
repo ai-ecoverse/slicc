@@ -66,7 +66,7 @@ func waitResponse(t *testing.T, f *fakeSender) map[string]any {
 
 func TestSessionRunsCommandAndStreams(t *testing.T) {
 	sender := newFakeSender()
-	s := NewSession(sender, false, nil)
+	s := NewSession(sender, []string{"sh", "-c"}, nil)
 	s.Handle(context.Background(), protocol.TypeExecRequest, mustJSON(protocol.ExecRequest{
 		Type: "exec.request", RequestID: "r1", Command: "echo hello-follow",
 	}))
@@ -79,9 +79,9 @@ func TestSessionRunsCommandAndStreams(t *testing.T) {
 	}
 }
 
-func TestSessionDenyExec(t *testing.T) {
+func TestSessionNoRunnerRefuses(t *testing.T) {
 	sender := newFakeSender()
-	s := NewSession(sender, true, nil)
+	s := NewSession(sender, nil, nil)
 	s.Handle(context.Background(), protocol.TypeExecRequest, mustJSON(protocol.ExecRequest{
 		Type: "exec.request", RequestID: "r1", Command: "echo nope",
 	}))
@@ -99,7 +99,7 @@ func TestSessionSignalAborts(t *testing.T) {
 		t.Skip("sleep + POSIX signals unavailable on cmd.exe")
 	}
 	sender := newFakeSender()
-	s := NewSession(sender, false, nil)
+	s := NewSession(sender, []string{"sh", "-c"}, nil)
 	s.Handle(context.Background(), protocol.TypeExecRequest, mustJSON(protocol.ExecRequest{
 		Type: "exec.request", RequestID: "r1", Command: "sleep 30",
 	}))

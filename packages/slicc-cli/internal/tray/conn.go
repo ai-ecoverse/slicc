@@ -417,17 +417,17 @@ func (c *Conn) SendJSON(v any) error {
 // Done is closed when the connection drops.
 func (c *Conn) Done() <-chan struct{} { return c.done }
 
-// Close tears down the peer connection.
-func (c *Conn) Close() error {
+// Close tears down the peer connection. Teardown errors are not actionable, so
+// it returns nothing.
+func (c *Conn) Close() {
 	c.markDone()
 	c.mu.Lock()
 	pc := c.pc
 	c.pc = nil
 	c.mu.Unlock()
 	if pc != nil {
-		return pc.Close()
+		_ = pc.Close()
 	}
-	return nil
 }
 
 func (c *Conn) markDone() {

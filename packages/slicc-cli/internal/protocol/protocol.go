@@ -8,7 +8,7 @@ package protocol
 // TraySyncProtocolVersion mirrors TRAY_SYNC_PROTOCOL_VERSION.
 const TraySyncProtocolVersion = 1
 
-// Runtime tag the CLI attaches with (mirrors 'slicc-standalone' etc.).
+// RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"
 
 // Capabilities is the additive `hello.capabilities` advertisement.
@@ -70,10 +70,12 @@ type Abort struct {
 	Type string `json:"type"` // "abort"
 }
 
-// Ping / Pong liveness.
+// Ping is a liveness probe.
 type Ping struct {
 	Type string `json:"type"` // "ping"
 }
+
+// Pong is a liveness reply.
 type Pong struct {
 	Type string `json:"type"` // "pong"
 }

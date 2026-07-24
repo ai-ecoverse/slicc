@@ -31,7 +31,7 @@ func TestFollowerExecRoundTripOverWebRTC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("leader peer connection: %v", err)
 	}
-	defer leaderPC.Close()
+	defer func() { _ = leaderPC.Close() }()
 
 	dc, err := leaderPC.CreateDataChannel("tray-control", nil)
 	if err != nil {
@@ -149,7 +149,7 @@ func TestFollowerExecRoundTripOverWebRTC(t *testing.T) {
 	}
 	defer conn.Close()
 
-	session := follow.NewSession(conn, false, nil)
+	session := follow.NewSession(conn, []string{"sh", "-c"}, nil)
 	go func() {
 		for {
 			select {

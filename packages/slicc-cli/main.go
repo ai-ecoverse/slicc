@@ -5,8 +5,10 @@
 //	slicc <join-url> exec "command"  run a command in the leader's shell, stream output
 //	slicc <join-url> follow          stay connected; run leader-issued commands locally
 //
-// In `follow` the leader can run shell commands on this machine, as the user who
-// started the process (see the startup banner). Pass --deny-exec to refuse.
+// In `follow` the trailing argv is the runner the leader's commands are handed to
+// (e.g. `follow bash -c`, `follow docker exec -i box sh -c`) — the command runs
+// as the user who started the process, scoped to whatever the runner allows. With
+// no runner, `follow` connects as a plain follower and refuses every command.
 package main
 
 import (
@@ -69,20 +71,14 @@ func run(args []string) int {
 		}
 		return cmdExec(ctx, joinURL, strings.Join(rest, " "))
 	case "follow":
-		denyExec := false
-		for _, a := range rest {
-			switch a {
-			case "--deny-exec":
-				denyExec = true
-			case "-h", "--help":
-				usage(os.Stdout)
-				return 0
-			default:
-				fmt.Fprintf(os.Stderr, "slicc follow: unknown flag %q\n", a)
-				return 2
-			}
+		// Everything after `follow` is the runner argv (verbatim) the leader's
+		// commands are handed to — no slicc-level flag parsing, so runner flags
+		// like `-i` / `-c` pass straight through. A leading -h/--help is help.
+		if len(rest) > 0 && (rest[0] == "-h" || rest[0] == "--help") {
+			usage(os.Stdout)
+			return 0
 		}
-		return cmdFollow(ctx, joinURL, denyExec)
+		return cmdFollow(ctx, joinURL, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "slicc: unknown subcommand %q\n", sub)
 		usage(os.Stderr)
@@ -96,10 +92,14 @@ func usage(w *os.File) {
 Usage:
   slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
-  slicc <join-url> follow [--deny-exec]
-                                      Stay connected as a follower. Unless --deny-exec is
-                                      passed, the leader can run shell commands on THIS
-                                      machine, as the user who started slicc.
+  slicc <join-url> follow [runner...]
+                                      Stay connected as a follower. If a runner is given,
+                                      the leader can run commands on THIS machine — each
+                                      one is executed as "<runner> <command>", as the user
+                                      who started slicc. With no runner, exec is refused.
+                                        follow bash -c
+                                        follow sh -c
+                                        follow docker exec -i sandbox sh -c
   slicc --version
   slicc --help
 

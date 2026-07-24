@@ -1,0 +1,44 @@
+# Attach the cross-compiled `slicc` CLI binaries to each GitHub release.
+#
+# Decoupled from the main semantic-release flow (release.yml / .releaserc.json)
+# on purpose: it runs AFTER semantic-release has created the release (which
+# creates the tag), so a Go build hiccup can never break the npm / native
+# release — it just means the binaries aren't attached, and this job can be
+# re-run (`--clobber` makes it idempotent) or triggered manually for a tag.
+name: slicc-cli release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build + attach binaries to
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: slicc-cli-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+      - name: Cross-compile all targets
+        working-directory: packages/slicc-cli
+        run: make dist VERSION=${{ github.event.release.tag_name || inputs.tag }}
+      - name: Attach binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" packages/slicc-cli/dist/slicc-* --clobber

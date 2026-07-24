@@ -128,7 +128,7 @@ type rawBootstrapResponse struct {
 // Attach performs the first join call.
 func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*AttachPlan, error) {
 	body := map[string]any{"controllerId": controllerID, "runtime": runtime}
-	data, _, err := c.post(ctx, body)
+	data, err := c.post(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func (c *Client) Retry(ctx context.Context, controllerID, bootstrapID, runtime s
 }
 
 func (c *Client) postBootstrap(ctx context.Context, body map[string]any) (*BootstrapPlan, error) {
-	data, _, err := c.post(ctx, body)
+	data, err := c.post(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -220,32 +220,32 @@ func (c *Client) postBootstrap(ctx context.Context, body map[string]any) (*Boots
 	return &BootstrapPlan{Bootstrap: raw.Bootstrap, Events: raw.Events}, nil
 }
 
-func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, int, error) {
+func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.joinURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("tray signaling network error: %w", err)
+		return nil, fmt.Errorf("tray signaling network error: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, err
 	}
-	return data, resp.StatusCode, nil
+	return data, nil
 }
 
 func truncate(b []byte) string {
-	const max = 200
-	if len(b) > max {
-		return string(b[:max]) + "…"
+	const maxLen = 200
+	if len(b) > maxLen {
+		return string(b[:maxLen]) + "…"
 	}
 	return string(b)
 }

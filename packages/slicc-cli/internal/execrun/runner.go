@@ -23,6 +23,10 @@ type ChunkFunc func(stream string, data []byte)
 
 // Options configures Run.
 type Options struct {
+	// Runner is the argv the command is handed to; the command string is appended
+	// as the final argument. e.g. ["bash","-c"], ["sh","-c"],
+	// ["docker","exec","-i","box","sh","-c"]. Required.
+	Runner  []string
 	Cwd     string
 	Env     map[string]string
 	OnChunk ChunkFunc
@@ -45,8 +49,11 @@ type Result struct {
 // non-zero exit — that's reported in Result.ExitCode; Result.Err is set only
 // when the process could not be launched.
 func Run(ctx context.Context, command string, opts Options) Result {
-	name, args := shellCommand(command)
-	cmd := exec.Command(name, args...)
+	if len(opts.Runner) == 0 {
+		return Result{ExitCode: 126, Err: errors.New("no runner configured")}
+	}
+	argv := append(append([]string{}, opts.Runner...), command)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
@@ -142,17 +149,6 @@ func signalProcess(p *os.Process, name string) {
 	default: // SIGKILL / unknown
 		_ = p.Kill()
 	}
-}
-
-// shellCommand picks the platform shell to interpret a command line.
-func shellCommand(command string) (string, []string) {
-	if runtime.GOOS == "windows" {
-		return "cmd", []string{"/C", command}
-	}
-	if path, err := exec.LookPath("bash"); err == nil {
-		return path, []string{"-c", command}
-	}
-	return "/bin/sh", []string{"-c", command}
 }
 
 func mergedEnv(extra map[string]string) []string {

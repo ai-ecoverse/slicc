@@ -6,10 +6,15 @@ exposes three verbs. It is a **Go module, not an npm workspace** (like
 `packages/ios-app`), so it is built with `go`/`make`, not `npm`.
 
 ```
-slicc <join-url> prompt "<text>"    Stream one assistant turn, then exit
-slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream output
-slicc <join-url> follow [--deny-exec]   Stay connected; run leader-issued commands here
+slicc <join-url> prompt "<text>"      Stream one assistant turn, then exit
+slicc <join-url> exec "<command>"     Run a command in the leader's shell, stream output
+slicc <join-url> follow [runner...]   Stay connected; run leader-issued commands via <runner>
 ```
+
+The trailing argv of `follow` is the **runner** each leader-issued command is handed
+to (command appended as the final arg): `follow bash -c`, `follow sh -c`,
+`follow docker exec -i sandbox sh -c`, a multiplexer, `flatpak-spawn --host …`, etc.
+With no runner, `follow` connects as a plain follower and refuses every command.
 
 ## Why Go + pion
 
@@ -42,20 +47,28 @@ tray protocol changes, regenerate the corpus JSON and update the Go structs +
 
 ## Exec safety (`follow`)
 
-`follow` advertises `hello.capabilities.exec = true`, which tells the leader it may
-send `exec.request`. Each command runs via the platform shell (`bash -c` / `cmd /C`)
-as the user who started `slicc`, and is echoed to stderr as it runs. A startup
-banner states this plainly. `--deny-exec` connects as a plain follower and refuses
-every `exec.request` with an error response.
+A `follow` with a runner advertises `hello.capabilities.exec = true`, telling the
+leader it may send `exec.request`. Each command runs as `<runner> <command>` (so
+the runner names — and can sandbox — the exec surface, e.g. a container or a
+restricted shell), as the user who started `slicc`, and is echoed to stderr as it
+runs. The startup banner shows the exact runner. A `follow` with **no** runner
+advertises no capability and refuses every `exec.request` with an error response.
 
 ## Build / test
 
 ```bash
 make build          # → bin/slicc
-make check          # gofmt check + go vet + go test (the CI gate)
+make check          # CI gate: gofmt + go vet + golangci-lint + race tests + coverage floor
+make lint           # golangci-lint run (config in .golangci.yml)
+make cover          # race tests + total-coverage floor (COVER_MIN, default 48%)
 make dist           # cross-compiled static binaries → dist/
-go test ./...       # unit tests (protocol corpus, signaling mock, exec runner)
 ```
+
+Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
+complexity, matching the TS side's biome complexity gate) and the `COVER_MIN`
+coverage floor in the Makefile. Both run in the `slicc-cli` CI job. Release
+binaries are attached to each GitHub release by `.github/workflows/slicc-cli-release.yml`
+(decoupled from semantic-release; triggered on `release: published`).
 
 `integration_test.go` is the real end-to-end test: it drives the whole follower
 path over an actual WebRTC connection (pion ↔ pion on loopback) — a leader peer
