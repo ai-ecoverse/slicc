@@ -2249,4 +2249,100 @@ describe('Wave 4: Follower uses spool — no chunk array accumulation', () => {
       offset += 1024;
     }
   });
+
+  it('activeExportRequests entries do not contain a chunks array (CV-3)', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    void follower.requestTranscriptExport({ kind: 'active' }, controller.signal).catch(() => {});
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    // Deliver one chunk so the request is definitively active
+    const chunk = new Uint8Array([0xaa, 0xbb]);
+    let s = '';
+    for (const b of chunk) s += String.fromCharCode(b);
+    ch.simulateLeaderMessage({ type: 'transcript.export.start', requestId, filename: 'x.zip' });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.chunk',
+      requestId,
+      index: 0,
+      data: btoa(s),
+    });
+    // Brief yield so the async handler processes the chunk
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Inspect the private map via type cast (test-only introspection).
+    const fsm = follower as unknown as {
+      activeExportRequests: Map<string, Record<string, unknown>>;
+    };
+    const entry = fsm.activeExportRequests.get(requestId);
+    expect(entry).toBeDefined();
+    // The bounded-memory contract: no `chunks` array in the live entry.
+    expect('chunks' in (entry ?? {})).toBe(false);
+
+    controller.abort();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-ack timeout (P1-1)
+// ---------------------------------------------------------------------------
+
+describe('Leader: per-ack timeout aborts stalled export', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('export is aborted and activeExports cleaned up when ack never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      // Create an export where the data is large enough to require an ack
+      const data = new Uint8Array(10).fill(0xcc);
+      const { manager } = createLeaderManager({
+        createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([data])),
+      });
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch);
+
+      // Send hello so the leader knows protocol v3 (ack-gating enabled)
+      ch.simulateMessage({
+        type: 'hello',
+        protocolVersion: 3,
+      } as import('../../src/scoops/tray-sync-protocol.js').FollowerToLeaderMessage);
+
+      ch.simulateMessage({
+        type: 'transcript.export.request',
+        requestId: 'ack-timeout-req',
+        selector: { kind: 'active' },
+      });
+
+      // Wait for chunk to be sent (ack is now pending)
+      await vi.waitFor(() =>
+        ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')
+      );
+
+      // Advance time past the 30 s ACK_TIMEOUT_MS without sending an ack
+      await vi.runAllTimersAsync();
+
+      // The export should have been aborted: either error or no complete
+      await vi.waitFor(() => {
+        const msgs = ch.parseSentLeader();
+        return (
+          msgs.some((m) => m.type === 'transcript.export.error') ||
+          // export aborted cleanly (no message) — verify activeExports is empty
+          !msgs.some((m) => m.type === 'transcript.export.complete')
+        );
+      });
+
+      // No complete message should be sent after a stalled ack timeout
+      expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

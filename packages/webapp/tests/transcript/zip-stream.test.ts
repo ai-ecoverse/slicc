@@ -394,19 +394,89 @@ describe('createTranscriptZip — pull-driven (Wave 4)', () => {
     expect(new TextDecoder().decode(files['readme.txt'])).toBe('hello world');
   });
 
-  it('handles filenames with UTF-8 characters', async () => {
+  it('handles filenames with UTF-8 characters — exact decoded round-trip', async () => {
+    const nonAsciiName = 'attachments/日本語.txt';
     const document = makeTranscriptDocument();
     const result = createTranscriptZip(
       document,
-      new Map([['attachments/日本語.txt', new TextEncoder().encode('テスト')]])
+      new Map([[nonAsciiName, new TextEncoder().encode('テスト')]])
     );
     const archive = await collectChunks(result.chunks);
-    const files = unzipSync(archive);
-    // fflate should decode the UTF-8 filename
-    const names = Object.keys(files);
-    expect(names.some((n) => n.includes('Japanese') || n.includes('.txt') || n.length > 0)).toBe(
-      true
-    );
     await result.completion;
+    // fflate honors the EFS (bit 11) flag and decodes the filename as UTF-8.
+    const files = unzipSync(archive);
+    const names = Object.keys(files);
+    // The non-ASCII filename must survive the ZIP round-trip exactly.
+    expect(names).toContain(nonAsciiName);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ZIP32 overflow guard tests (P3-2)
+// ---------------------------------------------------------------------------
+
+describe('createTranscriptZip — ZIP32 overflow guards', () => {
+  it('rejects when entry count (including transcript.json) exceeds 65535', () => {
+    const document = makeTranscriptDocument();
+    // Build a Map with exactly 65535 entries (64K − 1); adding transcript.json would make 65536.
+    const bigMap = new Map<string, Uint8Array>();
+    for (let i = 0; i < 65535; i++) {
+      bigMap.set(`attachments/f${String(i).padStart(6, '0')}.bin`, bytes([i & 0xff]));
+    }
+    expect(() => createTranscriptZip(document, bigMap)).toThrow(TranscriptExportError);
+  });
+
+  it('rejects when a single bundle file exceeds 4 GiB', () => {
+    const document = makeTranscriptDocument();
+    // Simulate a file whose byteLength is 4 GiB (0x100000000). We can't allocate
+    // one in memory, so we mock the byteLength property via a Proxy.
+    const FOUR_GIB = 0x1_0000_0000;
+    const fakeData = new Proxy(new Uint8Array(0), {
+      get(target, prop) {
+        if (prop === 'byteLength') return FOUR_GIB;
+        // biome-ignore lint: proxy trampoline for test
+        return (target as unknown as Record<string, unknown>)[prop as string];
+      },
+    }) as Uint8Array;
+    expect(() => createTranscriptZip(document, new Map([['big.bin', fakeData]]))).toThrow(
+      TranscriptExportError
+    );
+  });
+
+  it('accepts exactly 65534 bundle files (65534 + transcript.json = 65535 entries)', () => {
+    const document = makeTranscriptDocument();
+    const bigMap = new Map<string, Uint8Array>();
+    for (let i = 0; i < 65534; i++) {
+      bigMap.set(`attachments/f${String(i).padStart(6, '0')}.bin`, bytes([i & 0xff]));
+    }
+    // Should not throw (65534 bundle files + 1 transcript.json = 65535 = uint16 max)
+    expect(() => createTranscriptZip(document, bigMap)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Completion rejects when consumer exits early (P3-5)
+// ---------------------------------------------------------------------------
+
+describe('createTranscriptZip — completion rejects on early consumer exit', () => {
+  it('completion rejects with transfer-aborted when consumer calls generator.return() mid-stream', async () => {
+    const document = makeTranscriptDocument();
+    const attach = bytes([1, 2, 3, 4, 5]);
+    const result = createTranscriptZip(
+      document,
+      new Map([
+        ['a.bin', attach],
+        ['b.bin', attach],
+      ])
+    );
+
+    // Pull exactly one chunk then abandon (simulates streamError=true in the leader).
+    const gen = result.chunks[Symbol.asyncIterator]();
+    const first = await gen.next();
+    expect(first.done).toBe(false);
+    await gen.return?.(); // consumer exits early
+
+    // Completion must settle (reject) rather than remain pending forever.
+    await expect(result.completion).rejects.toMatchObject({ code: 'transfer-aborted' });
   });
 });

@@ -88,7 +88,7 @@ function buildLocalFileHeader(nameBytes: Uint8Array, size: number, fileCrc: numb
   hdr[2] = 0x03;
   hdr[3] = 0x04;
   writeU16(hdr, 4, 20); // version needed (2.0)
-  writeU16(hdr, 6, 0); // general purpose bit flag
+  writeU16(hdr, 6, 0x0800); // general purpose bit flag: EFS (UTF-8 filename encoding, bit 11)
   writeU16(hdr, 8, 0); // compression method (stored)
   writeU16(hdr, 10, 0); // last mod time
   writeU16(hdr, 12, 0); // last mod date
@@ -116,7 +116,7 @@ function buildCentralDirEntry(
   entry[3] = 0x02;
   writeU16(entry, 4, 20); // version made by
   writeU16(entry, 6, 20); // version needed
-  writeU16(entry, 8, 0); // general purpose bit flag
+  writeU16(entry, 8, 0x0800); // general purpose bit flag: EFS (UTF-8 filename encoding, bit 11)
   writeU16(entry, 10, 0); // compression method (stored)
   writeU16(entry, 12, 0); // last mod time
   writeU16(entry, 14, 0); // last mod date
@@ -230,6 +230,9 @@ async function* generateZip(
   let byteLength = 0;
   let offset = 0;
   const cdEntries: CdEntry[] = [];
+  // Track whether completion has been settled to ensure it rejects when the
+  // consumer abandons the generator early (generator.return() on streamError).
+  let completionSettled = false;
 
   /** Yield a chunk: hash it, count it, track offset. */
   function* emitChunk(chunk: Uint8Array): Generator<Uint8Array> {
@@ -281,12 +284,21 @@ async function* generateZip(
     if (signal?.aborted) throw new TranscriptExportError('transfer-aborted');
     yield* emitChunk(buildEOCD(cdEntries.length, offset - cdStart, cdStart));
 
+    completionSettled = true;
     completionResolve({ byteLength, sha256: hasher.hex() });
   } catch (err) {
+    completionSettled = true;
     completionReject(err as Error);
     throw err;
   } finally {
     signal?.removeEventListener('abort', handleAbort);
+    // If the consumer abandoned the generator without going through catch
+    // (e.g. onSlice returned false → streamError → generator.return()), the
+    // completion Promise must still settle so callers don't hang forever.
+    if (!completionSettled) {
+      completionSettled = true;
+      completionReject(new TranscriptExportError('transfer-aborted'));
+    }
   }
 }
 
@@ -305,6 +317,11 @@ async function* generateZip(
  * Throws `TranscriptExportError('schema-invalid')` synchronously if any
  * bundle file path fails the safety check.
  */
+/** Maximum size of a single file in a ZIP32 archive (uint32 max = 4 GiB − 1). */
+const ZIP32_MAX_FILE_BYTES = 0xffffffff;
+/** Maximum number of entries in a ZIP32 archive (uint16 max = 65 535). */
+const ZIP32_MAX_ENTRIES = 0xffff;
+
 export function createTranscriptZip(
   document: TranscriptDocumentV1,
   bundleFiles: Map<string, Uint8Array>,
@@ -312,6 +329,17 @@ export function createTranscriptZip(
 ): TranscriptZipResult {
   for (const path of bundleFiles.keys()) {
     if (!isSafeBundlePath(path)) {
+      throw new TranscriptExportError('schema-invalid');
+    }
+  }
+
+  // ZIP32 guards: reject inputs that would silently overflow uint32/uint16 fields.
+  // +1 for the always-present transcript.json entry.
+  if (bundleFiles.size + 1 > ZIP32_MAX_ENTRIES) {
+    throw new TranscriptExportError('schema-invalid');
+  }
+  for (const data of bundleFiles.values()) {
+    if (data.byteLength > ZIP32_MAX_FILE_BYTES) {
       throw new TranscriptExportError('schema-invalid');
     }
   }
