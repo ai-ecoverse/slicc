@@ -35,3 +35,4 @@ packages/cloudflare-worker/src/preview-bridge-assets.ts
 
 # RUM error-triage runtime artifact
 rum-error-candidates.json
+.claude/rules/kite.md
