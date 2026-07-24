@@ -441,6 +441,13 @@ export class LeaderSyncManager {
   /** Backpressure threshold: pause when bufferedAmount exceeds 1 MiB. */
   private static readonly EXPORT_BACKPRESSURE_THRESHOLD = 1024 * 1024;
 
+  /**
+   * Per-ack deadline: if a follower's OPFS write stalls for longer than this
+   * (I/O contention, quota pressure, frozen tab) and the data channel stays
+   * alive, the export is aborted so the leader never waits indefinitely.
+   */
+  private static readonly ACK_TIMEOUT_MS = 30_000;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -1539,7 +1546,7 @@ export class LeaderSyncManager {
       }
       // Wave 4: wait for durable-write ack from v3+ followers before sending the next slice.
       if (awaitAck) {
-        const waited = await this.waitForAck(bootstrapId, requestId, idx, abort.signal);
+        const waited = await this.waitForAck(bootstrapId, requestId, idx, abort);
         if (!waited || abort.signal.aborted || !this.activeExports.has(key)) {
           return { nextIdx: idx + 1, done: 'abort' };
         }
@@ -1551,16 +1558,22 @@ export class LeaderSyncManager {
 
   /**
    * Register an ack waiter for the given chunk index and await it.
-   * Returns `true` when ack arrives, `false` when aborted/cancelled.
+   * Returns `true` when ack arrives, `false` when aborted/cancelled/timed-out.
    * The waiter is stored with an owner-scoped key so cross-follower
    * acks are silently dropped by `handleTranscriptExportAck`.
+   *
+   * A 30 s deadline timer is registered so a follower whose OPFS write stalls
+   * indefinitely (live channel, stuck I/O) does not hold the export forever.
+   * When the timer fires, the export's AbortController is triggered and all
+   * sibling ack waiters for this export are rejected via clearAckWaiters.
    */
   private waitForAck(
     bootstrapId: string,
     requestId: string,
     index: number,
-    signal: AbortSignal
+    abort: AbortController
   ): Promise<boolean> {
+    const signal = abort.signal;
     return new Promise<boolean>((resolve) => {
       if (signal.aborted) {
         resolve(false);
@@ -1568,14 +1581,33 @@ export class LeaderSyncManager {
       }
 
       const key = LeaderSyncManager.ackKey(bootstrapId, requestId, index);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const clearTimer = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
       const cleanup = (): void => {
         this.ackWaiters.delete(key);
+        clearTimer();
       };
       const onAbort = (): void => {
         cleanup();
         resolve(false);
       };
       signal.addEventListener('abort', onAbort, { once: true });
+
+      // Per-ack deadline: abort the export if the follower stalls.
+      // abort.abort() fires the signal’s abort event synchronously, which
+      // triggers onAbort (cleanup + resolve false). clearAckWaiters then
+      // handles any sibling waiters for this export.
+      timer = setTimeout(() => {
+        timer = undefined;
+        abort.abort();
+        this.clearAckWaiters(bootstrapId, requestId);
+      }, LeaderSyncManager.ACK_TIMEOUT_MS);
 
       this.ackWaiters.set(key, {
         resolve: () => {

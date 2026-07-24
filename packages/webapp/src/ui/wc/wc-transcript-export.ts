@@ -9,8 +9,7 @@
  *   export using the registered TranscriptExportService.
  */
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
-import { TranscriptExportError } from '@slicc/shared-ts';
-import { sha256 } from 'js-sha256';
+import { makeExportSpool } from '../../transcript/export-spool.js';
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 
@@ -19,34 +18,32 @@ import type { OffscreenClient } from '../offscreen-client.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Stream all chunks from `result`, await `completion`, verify byte length,
- * and return a Blob typed `application/zip`.
+ * Stream all chunks from `result` into an ExportSpool (OPFS-backed in
+ * production, MemorySpool fallback), verify via the completion receipt,
+ * and return the assembled Blob typed `application/zip`.
  *
- * Throws `TranscriptExportError('transfer-corrupt')` when the consumed byte
- * count does not match the completion receipt.
+ * Using makeExportSpool here keeps the local export path consistent with
+ * the follower path: large exports are written to an OPFS temp file rather
+ * than accumulated in a JS heap array, bounding peak memory usage.
+ *
+ * Throws `TranscriptExportError('transfer-corrupt')` on byte-length or
+ * SHA-256 mismatch (delegated to spool.finalize).
  */
 export async function transcriptZipToBlob(result: TranscriptZipResult): Promise<Blob> {
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-
-  for await (const chunk of result.chunks) {
-    chunks.push(chunk);
-    byteLength += chunk.byteLength;
+  const spool = makeExportSpool(`local-${crypto.randomUUID()}`);
+  try {
+    let idx = 0;
+    for await (const chunk of result.chunks) {
+      await spool.append(chunk, idx++);
+    }
+    const completion = await result.completion;
+    // spool.finalize verifies byteLength + SHA-256 and returns the Blob.
+    return await spool.finalize(idx, completion.byteLength, completion.sha256);
+  } catch (err) {
+    // Cancel releases any OPFS temp file before re-throwing.
+    await spool.cancel();
+    throw err;
   }
-
-  const completion = await result.completion;
-  if (completion.byteLength !== byteLength) {
-    throw new TranscriptExportError('transfer-corrupt');
-  }
-
-  // SHA-256 content integrity check — catches corruption that byteLength alone cannot.
-  const hasher = sha256.create();
-  for (const chunk of chunks) hasher.update(chunk);
-  if (hasher.hex() !== completion.sha256) {
-    throw new TranscriptExportError('transfer-corrupt');
-  }
-
-  return new Blob(chunks as Uint8Array<ArrayBuffer>[], { type: 'application/zip' });
 }
 
 // ---------------------------------------------------------------------------

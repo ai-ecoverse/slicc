@@ -9,7 +9,6 @@ import type {
   TranscriptExportSelector,
 } from '@slicc/shared-ts';
 import { TranscriptExportError, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
-import { sha256 as sha256Hasher } from 'js-sha256';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -215,8 +214,8 @@ export class FollowerSyncManager implements AgentHandle {
    * spool that writes bytes through the ExportSpool interface. No chunk
    * array is retained in this map; the spool accumulates bytes externally
    * (OPFS in production, memory in tests via the injected factory).
-   * SHA-256 and byte count are tracked incrementally so the map never
-   * holds more than the current chunk being processed.
+   * Byte count is tracked incrementally for progress reporting only;
+   * integrity verification (SHA-256 + byte count) is delegated to the spool.
    */
   private readonly activeExportRequests = new Map<
     string,
@@ -224,7 +223,6 @@ export class FollowerSyncManager implements AgentHandle {
       resolve: (blob: Blob) => void;
       reject: (err: Error) => void;
       spool: ExportSpool;
-      hasher: { update(data: Uint8Array): void; hex(): string };
       nextExpectedIndex: number;
       totalBytes: number;
       signal: AbortSignal;
@@ -1378,7 +1376,6 @@ export class FollowerSyncManager implements AgentHandle {
         resolve,
         reject,
         spool,
-        hasher: sha256Hasher.create(),
         nextExpectedIndex: 0,
         totalBytes: 0,
         signal,
@@ -1406,20 +1403,13 @@ export class FollowerSyncManager implements AgentHandle {
   /**
    * Async chunk handler (Wave 4 bounded-memory).
    *
-   * Decodes the base64 payload, appends to the spool (which may be an
-   * async OPFS write in production), updates the running hash and byte
-   * count, then sends a durable-write ack back to the leader. The ack
-   * is the backpressure signal: the leader waits for it before sending
-   * the next chunk, bounding in-flight data to one message at a time.
-   */
-  /**
-   * Async chunk handler (Wave 4 bounded-memory).
-   *
-   * State (`nextExpectedIndex`, `hasher`, `totalBytes`) is updated SYNCHRONOUSLY
-   * before the async spool write. This ensures that a `complete` message arriving
-   * synchronously after a `chunk` (as in legacy non-ack-gated tests) sees the
-   * correct counts. The ack is sent AFTER the spool write resolves so that it
-   * reflects true durability (OPFS in production, synchronous push in MemorySpool).
+   * Decodes the base64 payload and appends to the spool (which may be an
+   * async OPFS write in production). `nextExpectedIndex` and `totalBytes`
+   * are updated SYNCHRONOUSLY before the async spool write so that a
+   * `complete` message arriving concurrently (legacy non-ack-gated path)
+   * sees the correct counts. The ack is sent AFTER the spool write resolves
+   * so that it reflects true durability (OPFS in production, synchronous
+   * push in MemorySpool).
    */
   private async handleExportChunkAsync(
     requestId: string,
@@ -1449,8 +1439,7 @@ export class FollowerSyncManager implements AgentHandle {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
     // Update running state SYNCHRONOUSLY before the async spool write so that
-    // concurrent complete handlers see the correct nextExpectedIndex/hasher.
-    entry.hasher.update(bytes);
+    // concurrent complete handlers see the correct nextExpectedIndex.
     entry.totalBytes += bytes.byteLength;
     entry.nextExpectedIndex++;
     entry.onProgress?.({ phase: 'transferring', processedBytes: entry.totalBytes });

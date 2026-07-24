@@ -123,6 +123,15 @@ export class OpfsSpool implements ExportSpool {
   private cancelled = false;
   private fileHandle: FileSystemFileHandle | null = null;
   private dirHandle: FileSystemDirectoryHandle | null = null;
+  /**
+   * Serial write chain: all appends are queued onto this Promise so that
+   * concurrent appends (v2 legacy leader, no ack gating) are serialized.
+   * `finalize` awaits this chain before reading `chunkCount`/`bytesWritten`
+   * so it never sees stale counters from an in-flight write.
+   * The chain itself never rejects — errors propagate through the individual
+   * `append` Promise returned to the caller.
+   */
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(requestId: string) {
     this.tempName = `export-${requestId}.zip.tmp`;
@@ -140,14 +149,27 @@ export class OpfsSpool implements ExportSpool {
     if (!this.writable) await this.openWritable();
     // Ensure the Uint8Array has a plain ArrayBuffer (not SharedArrayBuffer) for OPFS write.
     const buf = chunk.buffer instanceof ArrayBuffer ? chunk : new Uint8Array(chunk);
-    await this.writable!.write(buf as unknown as FileSystemWriteChunkType);
-    this.hasher.update(chunk);
-    this.bytesWritten += chunk.byteLength;
-    this.chunkCount++;
+    // Serialize this write behind all prior writes so finalize() sees consistent counters.
+    const write = this.writeChain.then(async () => {
+      if (this.cancelled) throw new Error('OpfsSpool: already cancelled');
+      await this.writable!.write(buf as unknown as FileSystemWriteChunkType);
+      this.hasher.update(chunk);
+      this.bytesWritten += chunk.byteLength;
+      this.chunkCount++;
+    });
+    // The chain must always advance even when a write fails, so callers that
+    // catch their own append error don't block the next append or finalize.
+    this.writeChain = write.catch(() => {});
+    return write;
   }
 
   async finalize(chunkCount: number, byteLength: number, sha256Hex: string): Promise<Blob> {
     if (this.cancelled) throw new TranscriptExportError('transfer-corrupt');
+
+    // Drain all in-flight writes before reading counters.
+    // This is essential for v2 legacy leaders where multiple appends
+    // can be in-flight concurrently (no ack-gating).
+    await this.writeChain;
 
     if (this.chunkCount !== chunkCount || this.bytesWritten !== byteLength) {
       await this.cleanup();
@@ -158,20 +180,28 @@ export class OpfsSpool implements ExportSpool {
       throw new TranscriptExportError('transfer-corrupt');
     }
 
-    await this.writable?.close();
-    this.writable = null;
-
     if (!this.fileHandle) {
       await this.cleanup();
       throw new TranscriptExportError('transfer-corrupt');
     }
 
-    const file = await this.fileHandle.getFile();
-    // Wrap as Blob with the correct MIME type
-    const blob = file.slice(0, file.size, 'application/zip');
-
-    await this.deleteTempFile();
-    return blob;
+    // Wrap close + getFile + delete in a single try/catch so ANY OPFS fault
+    // (writable.close throws, getFile throws, quota exhausted) always runs
+    // cleanup rather than leaking the temp file.
+    try {
+      await this.writable?.close();
+      this.writable = null;
+      const file = await this.fileHandle.getFile();
+      // Wrap as Blob with the correct MIME type
+      const blob = file.slice(0, file.size, 'application/zip');
+      await this.deleteTempFile();
+      return blob;
+    } catch {
+      // Null writable here so cleanup’s close() call is a no-op.
+      this.writable = null;
+      await this.cleanup();
+      throw new TranscriptExportError('transfer-corrupt');
+    }
   }
 
   async cancel(): Promise<void> {
