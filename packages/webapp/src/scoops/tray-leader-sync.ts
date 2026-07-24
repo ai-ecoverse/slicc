@@ -448,6 +448,15 @@ export class LeaderSyncManager {
    */
   private static readonly ACK_TIMEOUT_MS = 30_000;
 
+  /**
+   * Minimum peer protocol version that supports transcript.export.ack (Wave 4).
+   * Pin to 3 — do NOT replace with TRAY_SYNC_PROTOCOL_VERSION. When the
+   * protocol bumps to v4+, v3 peers still understand acks and must remain
+   * ack-gated. Only bump this constant if a future wave removes ack support
+   * for v3 peers.
+   */
+  private static readonly ACK_PROTOCOL_VERSION_MIN = 3;
+
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -1371,7 +1380,8 @@ export class LeaderSyncManager {
     // Followers that sent `hello` with protocolVersion >= 3 support acks;
     // older or legacy peers (no hello) skip ack waiting for compatibility.
     const followerForAck = this.followers.get(bootstrapId);
-    const awaitAck = (followerForAck?.peerProtocolVersion ?? 0) >= TRAY_SYNC_PROTOCOL_VERSION;
+    const awaitAck =
+      (followerForAck?.peerProtocolVersion ?? 0) >= LeaderSyncManager.ACK_PROTOCOL_VERSION_MIN;
 
     const {
       streamError,
@@ -1397,8 +1407,13 @@ export class LeaderSyncManager {
       return;
     }
 
-    if (abort.signal.aborted || !this.activeExports.has(key)) {
-      this.activeExports.delete(key);
+    // If the key is gone the export was cancelled or the follower disconnected
+    // (both paths delete the key before aborting) — return silently.
+    if (!this.activeExports.has(key)) return;
+    if (abort.signal.aborted) {
+      // Key still present ⇒ ack-timeout abort: notify the follower so it can
+      // clean up its in-flight OPFS spool.
+      sendErr('transfer-aborted');
       return;
     }
 
