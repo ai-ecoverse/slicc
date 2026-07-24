@@ -2291,17 +2291,16 @@ describe('Wave 4: Follower uses spool — no chunk array accumulation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-ack timeout (P1-1)
+// Per-ack timeout (P1-1 / P3-N2)
 // ---------------------------------------------------------------------------
 
 describe('Leader: per-ack timeout aborts stalled export', () => {
   beforeEach(() => resetLoggerDedupForTests());
   afterEach(() => vi.clearAllMocks());
 
-  it('export is aborted and activeExports cleaned up when ack never arrives', async () => {
+  it('sends transcript.export.error(transfer-aborted) and cleans up activeExports when ack never arrives', async () => {
     vi.useFakeTimers();
     try {
-      // Create an export where the data is large enough to require an ack
       const data = new Uint8Array(10).fill(0xcc);
       const { manager } = createLeaderManager({
         createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([data])),
@@ -2309,7 +2308,7 @@ describe('Leader: per-ack timeout aborts stalled export', () => {
       const ch = new FakeChannel();
       manager.addFollower('b1', ch);
 
-      // Send hello so the leader knows protocol v3 (ack-gating enabled)
+      // Send hello with protocol v3 so the leader enables ack-gating
       ch.simulateMessage({
         type: 'hello',
         protocolVersion: 3,
@@ -2321,28 +2320,148 @@ describe('Leader: per-ack timeout aborts stalled export', () => {
         selector: { kind: 'active' },
       });
 
-      // Wait for chunk to be sent (ack is now pending)
+      // Wait until the first chunk is sent — the ack deadline timer is now running
       await vi.waitFor(() =>
         ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')
       );
 
-      // Advance time past the 30 s ACK_TIMEOUT_MS without sending an ack
+      // Advance time past ACK_TIMEOUT_MS without sending an ack
       await vi.runAllTimersAsync();
 
-      // The export should have been aborted: either error or no complete
-      await vi.waitFor(() => {
-        const msgs = ch.parseSentLeader();
-        return (
-          msgs.some((m) => m.type === 'transcript.export.error') ||
-          // export aborted cleanly (no message) — verify activeExports is empty
-          !msgs.some((m) => m.type === 'transcript.export.complete')
-        );
-      });
+      // The leader MUST send transcript.export.error with code transfer-aborted.
+      // This assertion fails if the timeout mechanism never fires, or if the
+      // leader stalls forever without aborting.
+      await vi.waitFor(
+        () => ch.parseSentLeader().some((m) => m.type === 'transcript.export.error'),
+        { timeout: 3000 }
+      );
 
-      // No complete message should be sent after a stalled ack timeout
+      const errMsg = ch
+        .parseSentLeader()
+        .find(
+          (m): m is Extract<LeaderToFollowerMessage, { type: 'transcript.export.error' }> =>
+            m.type === 'transcript.export.error'
+        );
+      expect(errMsg?.code).toBe('transfer-aborted');
+
+      // No complete message — the export must not have finished normally
       expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+
+      // activeExports must be cleaned up (no leaked state)
+      const mgr = manager as unknown as { activeExports: Map<string, unknown> };
+      expect(mgr.activeExports.size).toBe(0);
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ACK_PROTOCOL_VERSION_MIN constant semantics (P3-N1)
+//
+// The ack-gating comparison must use the *pinned* minimum version (3), not
+// the rolling TRAY_SYNC_PROTOCOL_VERSION. These tests verify that v3 peers
+// are ack-gated regardless of what the current protocol version is, and that
+// v2 peers are never ack-gated.
+// ---------------------------------------------------------------------------
+
+describe('Leader: ack-gating version guard (ACK_PROTOCOL_VERSION_MIN = 3)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  /** Boot a manager, send hello at `peerVersion`, trigger an export, and
+   * return whether the leader waits for an ack before sending the next chunk.
+   *
+   * A v3+ peer causes the leader to stall after the first chunk unless an ack
+   * is sent. We probe this by advancing fake time 1 ms (well below the 30 s
+   * ack deadline) to flush all pending microtasks, then checking whether
+   * `transcript.export.complete` arrived without an ack. */
+  async function isAckGated(peerVersion: number): Promise<boolean> {
+    vi.useFakeTimers();
+    try {
+      const data = new Uint8Array(10).fill(0xaa);
+      const { manager } = createLeaderManager({
+        createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([data])),
+      });
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch);
+
+      ch.simulateMessage({
+        type: 'hello',
+        protocolVersion: peerVersion,
+      } as import('../../src/scoops/tray-sync-protocol.js').FollowerToLeaderMessage);
+
+      ch.simulateMessage({
+        type: 'transcript.export.request',
+        requestId: `ack-guard-req-v${peerVersion}`,
+        selector: { kind: 'active' },
+      });
+
+      // Wait for the first chunk to be sent
+      await vi.waitFor(() =>
+        ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')
+      );
+
+      // Advance 1 ms of fake time: flushes all pending microtasks without
+      // triggering the 30 s ack deadline. A v2 peer's export completes here;
+      // a v3+ peer stalls waiting for an ack.
+      await vi.advanceTimersByTimeAsync(1);
+
+      const completedWithoutAck = ch
+        .parseSentLeader()
+        .some((m) => m.type === 'transcript.export.complete');
+
+      if (!completedWithoutAck) {
+        // Leader is waiting for ack — satisfy it so cleanup is tidy
+        const chunkMsg = ch
+          .parseSentLeader()
+          .find(
+            (m): m is Extract<LeaderToFollowerMessage, { type: 'transcript.export.chunk' }> =>
+              m.type === 'transcript.export.chunk'
+          );
+        if (chunkMsg) {
+          ch.simulateMessage({
+            type: 'transcript.export.ack',
+            requestId: chunkMsg.requestId,
+            index: chunkMsg.index,
+          });
+        }
+        await vi.waitFor(() =>
+          ch
+            .parseSentLeader()
+            .some(
+              (m) => m.type === 'transcript.export.complete' || m.type === 'transcript.export.error'
+            )
+        );
+      }
+
+      return !completedWithoutAck;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('v3 peers are ack-gated (chunk stalls until ack received)', async () => {
+    expect(await isAckGated(3)).toBe(true);
+  });
+
+  it('v4 peers are ack-gated (v4 >= ACK_PROTOCOL_VERSION_MIN=3)', async () => {
+    expect(await isAckGated(4)).toBe(true);
+  });
+
+  it('v2 peers are NOT ack-gated (v2 < ACK_PROTOCOL_VERSION_MIN=3)', async () => {
+    expect(await isAckGated(2)).toBe(false);
+  });
+
+  it('v3 peer ack-gating is independent of current protocol constant semantics', async () => {
+    // Even if TRAY_SYNC_PROTOCOL_VERSION were bumped to 4 or 5, a v3 peer
+    // must still remain ack-gated because it supports acks (introduced in Wave 4).
+    // This test asserts the separation of concerns: ACK_PROTOCOL_VERSION_MIN=3
+    // is the feature-introduction floor, not a comparison against current version.
+    //
+    // We verify by testing v3 and v4 simultaneously: both must be ack-gated.
+    const [v3gated, v4gated] = await Promise.all([isAckGated(3), isAckGated(4)]);
+    expect(v3gated).toBe(true);
+    expect(v4gated).toBe(true);
   });
 });

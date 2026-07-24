@@ -280,7 +280,8 @@
       "includes": [
         "packages/webapp/cloud/app.js",
         "packages/webapp/src/shell/supplemental-commands/pdftk-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/websocat-command.ts"
+        "packages/webapp/src/shell/supplemental-commands/websocat-command.ts",
+        "packages/webapp/src/ui/sprinkle-bridge.ts"
       ],
       "linter": {
         "rules": {
