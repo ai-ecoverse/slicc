@@ -19,6 +19,7 @@ import {
   SLICC_TRANSCRIPT_FORMAT,
   TRANSCRIPT_SCHEMA_VERSION,
   type TranscriptDocumentV1,
+  validateTranscriptDocumentV1,
 } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
@@ -1801,9 +1802,13 @@ describe('processTranscriptAttachments — opaque path extension from MIME (Fix 
 
 describe('processTranscriptAttachments — no dangling refs (Fix 6)', () => {
   it('every attachment-ref in every message has exactly one metadata entry', async () => {
+    // Each message gets a unique attachmentId (matching production behavior where
+    // IDs are derived from msgId). The old test incorrectly shared `msg2Id-img-0`
+    // across both the assistant and tool-result messages, creating duplicates.
     const convId = 'conv-no-dangling';
     const msg1Id = `${convId}-msg-000001`;
-    const msg2Id = `${convId}-msg-000003`;
+    const assistantMsgId = `${convId}-msg-000002`;
+    const toolResultMsgId = `${convId}-msg-000003`;
     const msg3Id = `${convId}-msg-000005`;
 
     const doc: TranscriptDocumentV1 = {
@@ -1825,18 +1830,20 @@ describe('processTranscriptAttachments — no dangling refs (Fix 6)', () => {
               ],
             },
             {
-              id: `${convId}-msg-000002`,
+              id: assistantMsgId,
               sequence: 2,
               role: 'assistant',
               timestamp: new Date(2000).toISOString(),
-              content: [{ type: 'attachment-ref', attachmentId: `${msg2Id}-img-0` }],
+              // Unique ID derived from the assistant message's own ID.
+              content: [{ type: 'attachment-ref', attachmentId: `${assistantMsgId}-img-0` }],
             },
             {
-              id: msg2Id,
+              id: toolResultMsgId,
               sequence: 3,
               role: 'tool-result',
               timestamp: new Date(3000).toISOString(),
-              content: [{ type: 'attachment-ref', attachmentId: `${msg2Id}-img-0` }],
+              // Unique ID derived from the tool-result message's own ID.
+              content: [{ type: 'attachment-ref', attachmentId: `${toolResultMsgId}-img-0` }],
               toolCallId: 'call-1',
               isError: false,
             },
@@ -1881,11 +1888,15 @@ describe('processTranscriptAttachments — no dangling refs (Fix 6)', () => {
       },
     ]);
 
-    const toolResultImgId = `${msg2Id}-img-0`;
+    // Canonical images for the two non-user roles, each with a unique ID.
     const canonicalImages = new Map([
       [
-        toolResultImgId,
+        `${assistantMsgId}-img-0`,
         { data: base64Encode(new Uint8Array([10, 11, 12])), mimeType: 'image/png' },
+      ],
+      [
+        `${toolResultMsgId}-img-0`,
+        { data: base64Encode(new Uint8Array([13, 14, 15])), mimeType: 'image/png' },
       ],
     ]);
 
@@ -2147,5 +2158,256 @@ describe('processTranscriptAttachments — error code specificity (Fix 4)', () =
         knownSecrets: failingRedactor(),
       })
     ).rejects.toMatchObject({ code: 'redaction-unavailable' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-wave: missingReason = attachment-association-unavailable passes validator
+// ---------------------------------------------------------------------------
+
+describe('processTranscriptAttachments — cross-wave missingReason invariants', () => {
+  /**
+   * Helper: build a minimal one-conversation, one-user-message doc with a
+   * single attachment-ref block for the given attachmentId.
+   */
+  function makeDocWithRef(
+    convId: string,
+    msgId: string,
+    attachmentId: string
+  ): TranscriptDocumentV1 {
+    return {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      export: {
+        id: 'exp-cw',
+        generatedAt: '2024-01-01T00:00:00.000Z',
+        producer: { application: 'slicc', version: '0.0.0-test' },
+        format: SLICC_TRANSCRIPT_FORMAT,
+      },
+      session: {
+        id: 'sess-cw',
+        title: 'CW test',
+        state: 'active',
+        completeness: { status: 'complete', missing: [] },
+      },
+      privacy: {
+        reasoningExcluded: true,
+        excludedReasoningBlocks: 0,
+        binaryAttachments: 'included-unchanged',
+        redactionCounts: {},
+        redactions: [],
+      },
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msgId,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId }],
+            },
+          ],
+        },
+      ],
+      delegations: [],
+      attachments: [],
+    };
+  }
+
+  it('association-mismatch: absent attachment gets missingReason attachment-association-unavailable and passes validator', async () => {
+    const convId = 'conv-cw-assoc';
+    const msgId = `${convId}-msg-000001`;
+    const attachmentId = `${msgId}-img-0`;
+
+    // Document has a user-message attachment-ref but chatMessages has ZERO user messages
+    // for that conversation — triggers association-unavailable.
+    const doc = makeDocWithRef(convId, msgId, attachmentId);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: new Map([[convId, [] as readonly ChatMessage[]]]),
+      knownSecrets: noOpRedactor(),
+    });
+
+    const att = result.document.attachments.find((a) => a.id === attachmentId);
+    expect(att).toBeDefined();
+    expect(att!.present).toBe(false);
+    expect(att!.missingReason).toBe('attachment-association-unavailable');
+    // The emitted document must pass the runtime validator.
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+    // Session must be partial.
+    expect(result.document.session.completeness.status).toBe('partial');
+    expect(result.document.session.completeness.missing).toContain(
+      'attachment-association-unavailable'
+    );
+  });
+
+  it('file-missing: absent attachment gets missingReason attachment-file-missing and passes validator', async () => {
+    const convId = 'conv-cw-filemiss';
+    const msgId = `${convId}-msg-000001`;
+    const attachmentId = `${msgId}-img-0`;
+
+    // UI message exists but has no image data — triggers file-missing.
+    const doc = makeDocWithRef(convId, msgId, attachmentId);
+    // UI message has no attachment data at the expected index (empty attachments).
+    const uiMsg = makeUiUserMessage([]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: new Map([[convId, [uiMsg] as readonly ChatMessage[]]]),
+      knownSecrets: noOpRedactor(),
+    });
+
+    const att = result.document.attachments.find((a) => a.id === attachmentId);
+    expect(att).toBeDefined();
+    expect(att!.present).toBe(false);
+    expect(att!.missingReason).toBe('attachment-file-missing');
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+    expect(result.document.session.completeness.status).toBe('partial');
+    expect(result.document.session.completeness.missing).toContain('attachment-file-missing');
+  });
+
+  it('present attachment emits no missingReason and passes validator', async () => {
+    const convId = 'conv-cw-present';
+    const msgId = `${convId}-msg-000001`;
+    const attachmentId = `${msgId}-img-0`;
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    const doc = makeDocWithRef(convId, msgId, attachmentId);
+    const uiMsg = makeUiUserMessage([
+      {
+        id: 'a1',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: bytes.length,
+        kind: 'image',
+        data: base64Encode(bytes),
+      },
+    ]);
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: new Map([[convId, [uiMsg] as readonly ChatMessage[]]]),
+      knownSecrets: noOpRedactor(),
+    });
+
+    const att = result.document.attachments.find((a) => a.id === attachmentId);
+    expect(att).toBeDefined();
+    expect(att!.present).toBe(true);
+    expect(att!.missingReason).toBeUndefined();
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+  });
+
+  it('reordered attachment array: each entry still receives the correct bytes and hash by ID', async () => {
+    // Two attachments with distinct bytes.
+    // The test verifies that the ID-based lookup (not positional) gives each
+    // attachment the correct bytes even if the internal allPending order
+    // differs from the redactedDocument.attachments order.
+    const convId = 'conv-cw-reorder';
+    const msg1Id = `${convId}-msg-000001`;
+    const msg2Id = `${convId}-msg-000002`;
+    const attId1 = `${msg1Id}-img-0`;
+    const attId2 = `${msg2Id}-img-0`; // second user message, second attachment
+
+    const bytesA = new Uint8Array([0xaa, 0xbb, 0xcc]);
+    const bytesB = new Uint8Array([0x11, 0x22, 0x33]);
+
+    const doc: TranscriptDocumentV1 = {
+      schemaVersion: TRANSCRIPT_SCHEMA_VERSION,
+      export: {
+        id: 'exp-cw-reorder',
+        generatedAt: '2024-01-01T00:00:00.000Z',
+        producer: { application: 'slicc', version: '0.0.0-test' },
+        format: SLICC_TRANSCRIPT_FORMAT,
+      },
+      session: {
+        id: 'sess-cw-reorder',
+        title: 'Reorder test',
+        state: 'active',
+        completeness: { status: 'complete', missing: [] },
+      },
+      privacy: {
+        reasoningExcluded: true,
+        excludedReasoningBlocks: 0,
+        binaryAttachments: 'included-unchanged',
+        redactionCounts: {},
+        redactions: [],
+      },
+      conversations: [
+        {
+          id: convId,
+          kind: 'cone',
+          name: 'Sliccy',
+          messages: [
+            {
+              id: msg1Id,
+              sequence: 1,
+              role: 'user',
+              timestamp: new Date(1000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: attId1 }],
+            },
+            {
+              id: msg2Id,
+              sequence: 2,
+              role: 'user',
+              timestamp: new Date(2000).toISOString(),
+              content: [{ type: 'attachment-ref', attachmentId: attId2 }],
+            },
+          ],
+        },
+      ],
+      delegations: [],
+      attachments: [],
+    };
+
+    const uiMsg1 = makeUiUserMessage([
+      {
+        id: 'img-a',
+        name: 'alpha.png',
+        mimeType: 'image/png',
+        size: bytesA.length,
+        kind: 'image',
+        data: base64Encode(bytesA),
+      },
+    ]);
+    const uiMsg2 = makeUiUserMessage([
+      {
+        id: 'img-b',
+        name: 'beta.png',
+        mimeType: 'image/png',
+        size: bytesB.length,
+        kind: 'image',
+        data: base64Encode(bytesB),
+      },
+    ]);
+
+    const result = await processTranscriptAttachments({
+      document: doc,
+      chatMessagesByConversation: new Map([[convId, [uiMsg1, uiMsg2] as readonly ChatMessage[]]]),
+      knownSecrets: noOpRedactor(),
+    });
+
+    const meta1 = result.document.attachments.find((a) => a.id === attId1);
+    const meta2 = result.document.attachments.find((a) => a.id === attId2);
+
+    expect(meta1).toBeDefined();
+    expect(meta2).toBeDefined();
+    expect(meta1!.present).toBe(true);
+    expect(meta2!.present).toBe(true);
+
+    // Verify bytes in bundle match by ID, not by position.
+    const bundle1 = result.bundleFiles.get(meta1!.path);
+    const bundle2 = result.bundleFiles.get(meta2!.path);
+    expect(bundle1).toBeDefined();
+    expect(bundle2).toBeDefined();
+    expect(Array.from(bundle1!)).toEqual(Array.from(bytesA));
+    expect(Array.from(bundle2!)).toEqual(Array.from(bytesB));
+
+    // SHA-256 must match the bytes stored under each ID.
+    expect(meta1!.sha256).toBe(await sha256Hex(bytesA));
+    expect(meta2!.sha256).toBe(await sha256Hex(bytesB));
+
+    // Validator must accept the whole document.
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
   });
 });

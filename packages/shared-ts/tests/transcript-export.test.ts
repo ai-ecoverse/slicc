@@ -1056,9 +1056,20 @@ describe('validateTranscriptDocumentV1 — attachment SHA-256 and state invarian
     expect(validateTranscriptDocumentV1(docWithAtt({ byteLength: 0 }))).toEqual({ ok: true });
   });
 
-  it('rejects present:true attachment with missingReason set', () => {
+  it('rejects present:true attachment with missingReason set (attachment-file-missing)', () => {
     expect(
       validateTranscriptDocumentV1(docWithAtt({ missingReason: 'attachment-file-missing' }))
+    ).toEqual({
+      ok: false,
+      error: 'attachments[0].missingReason must be absent when present is true',
+    });
+  });
+
+  it('rejects present:true attachment with missingReason attachment-association-unavailable', () => {
+    expect(
+      validateTranscriptDocumentV1(
+        docWithAtt({ missingReason: 'attachment-association-unavailable' })
+      )
     ).toEqual({
       ok: false,
       error: 'attachments[0].missingReason must be absent when present is true',
@@ -1154,6 +1165,50 @@ describe('validateTranscriptDocumentV1 — attachment SHA-256 and state invarian
     });
   });
 
+  it('accepts present:false attachment with missingReason attachment-association-unavailable', () => {
+    const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
+    d['attachments'] = [
+      {
+        id: 'att-assoc',
+        path: '',
+        originalName: 'gone.png',
+        mimeType: 'image/png',
+        sha256: '',
+        byteLength: 0,
+        present: false,
+        handling: 'binary-unchanged',
+        sourceConversationId: 'cone',
+        sourceMessageId: 'cone-msg-000001',
+        missingReason: 'attachment-association-unavailable',
+      },
+    ];
+    expect(validateTranscriptDocumentV1(d)).toEqual({ ok: true });
+  });
+
+  it('rejects present:false attachment with invalid missingReason', () => {
+    const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
+    d['attachments'] = [
+      {
+        id: 'att-bad',
+        path: '',
+        originalName: 'x.png',
+        mimeType: 'image/png',
+        sha256: '',
+        byteLength: 0,
+        present: false,
+        handling: 'binary-unchanged',
+        sourceConversationId: 'cone',
+        sourceMessageId: 'cone-msg-000001',
+        missingReason: 'not-a-valid-reason',
+      },
+    ];
+    expect(validateTranscriptDocumentV1(d)).toEqual({
+      ok: false,
+      error:
+        'attachments[0].missingReason must be "attachment-file-missing" or "attachment-association-unavailable"',
+    });
+  });
+
   it('rejects present:false attachment without missingReason', () => {
     const d = structuredClone(completeDocument()) as unknown as Record<string, unknown>;
     d['attachments'] = [
@@ -1172,7 +1227,8 @@ describe('validateTranscriptDocumentV1 — attachment SHA-256 and state invarian
     ];
     expect(validateTranscriptDocumentV1(d)).toEqual({
       ok: false,
-      error: 'attachments[0].missingReason must equal "attachment-file-missing" when not present',
+      error:
+        'attachments[0].missingReason must be "attachment-file-missing" or "attachment-association-unavailable"',
     });
   });
 });
