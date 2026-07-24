@@ -630,14 +630,14 @@ describe('exportSession', () => {
       joinToken: 'https://app.example/join?t=X',
       __test_post: (env) => posted.push(env as never),
     });
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 2,
       channelId: 'ch-unknown-code',
       kind: 'handshake.hello',
     } as never);
     const promise = handle.exportSession();
     const request = posted.find((e) => e.kind === 'session.export.request');
-    await handle.__test_receive({
+    await handle.testReceive({
       cherry: 2,
       channelId: 'ch-unknown-code',
       kind: 'session.export.error',
