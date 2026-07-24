@@ -168,6 +168,28 @@ describe('xai-grok provider', () => {
     expect(forwardedOptions).not.toHaveProperty('onPayload');
   });
 
+  it('falls back to Grok 4.5 when a stored model id is retired', async () => {
+    const provider = getApiProvider(XAI_API)!;
+    const model = { ...routedModel('grok-4.3'), id: 'grok-3-mini', name: 'Grok 3 Mini' };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(drain(provider.stream(model, context, {}))).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'xAI model "grok-3-mini" is no longer in the pi-ai catalog; falling back to default "grok-4.5"'
+      );
+      expect(mocks.streamOpenAIResponses).toHaveBeenCalledOnce();
+      expect(mocks.streamOpenAIResponses.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ id: 'grok-4.5', provider: 'xai', api: 'openai-responses' })
+      );
+      expect(mocks.streamOpenAICompletions).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('dispatches Grok 4.3 and Grok Build to native Completions streams', async () => {
     const provider = getApiProvider(XAI_API)!;
 

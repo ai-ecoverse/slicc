@@ -66,6 +66,7 @@ const XAI_OAUTH_SCOPE = 'openid profile email offline_access grok-cli:access api
 const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
 const XAI_REDIRECT_PATTERN = 'http://127.0.0.1:56121/*';
 const XAI_API_BASE_URL = 'https://api.x.ai/v1';
+const XAI_DEFAULT_MODEL_ID = 'grok-4.5';
 // The api slicc tags each model with after `provider-settings.ts` rewrites
 // `api: 'openai'` from `getModelIds()` to `${providerId}-${apiType}`.
 // We register our streams under this name so the agent loop routes Grok
@@ -98,9 +99,16 @@ function toModelMetadata(model: Model<Api>) {
 }
 
 function resolveNativeXaiModel(model: Model<Api>): NativeXaiModel {
-  const nativeModel = getNativeXaiModels().find((candidate) => candidate.id === model.id);
+  const nativeModels = getNativeXaiModels();
+  let nativeModel = nativeModels.find((candidate) => candidate.id === model.id);
   if (!nativeModel) {
-    throw new Error(`xAI model "${model.id}" is not registered by pi-ai`);
+    console.warn(
+      `xAI model "${model.id}" is no longer in the pi-ai catalog; falling back to default "${XAI_DEFAULT_MODEL_ID}"`
+    );
+    nativeModel = nativeModels.find((candidate) => candidate.id === XAI_DEFAULT_MODEL_ID);
+    if (!nativeModel) {
+      throw new Error(`xAI default model "${XAI_DEFAULT_MODEL_ID}" is not registered by pi-ai`);
+    }
   }
   if (nativeModel.api !== 'openai-responses' && nativeModel.api !== 'openai-completions') {
     throw new Error(`Unsupported pi-ai API "${nativeModel.api}" for xAI model "${model.id}"`);
@@ -346,7 +354,7 @@ export const config: ProviderConfig = {
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'grok-4.5',
+  defaultModelId: XAI_DEFAULT_MODEL_ID,
   oauthTokenDomains: ['api.x.ai', '*.x.ai', 'auth.x.ai', 'accounts.x.ai'],
   getModelIds: () => getNativeXaiModels().map(toModelMetadata),
 

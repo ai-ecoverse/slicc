@@ -41,7 +41,7 @@ x_search --from "elonmusk,xai" "ship dates for Grok"
 x_search --since 2025-01-01 --until 2025-03-31 "earnings call reactions"
 
 # Pin the underlying search model (default: grok-4.3)
-PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning x_search "fed minutes hot takes"
+PI_XAI_X_SEARCH_MODEL=grok-4.5 x_search "fed minutes hot takes"
 ```
 
 ## Output
