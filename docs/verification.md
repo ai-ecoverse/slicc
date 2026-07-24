@@ -4,10 +4,25 @@ The full verification pass to run **before committing, pushing, or opening a PR*
 These mirror the CI gates in `.github/workflows/ci.yml`; running them locally first
 is the fastest way to avoid a red PR.
 
+## Pre-push lint gate (automatic)
+
+The `.husky/pre-push` hook runs the full CI lint gate automatically before every
+push to a feature branch. It mirrors every check from the CI `lint` job —
+biome, prettier, custom lint scripts, complexity gate, manifest justifications,
+and knip dead-code detection — all in parallel (~6 s wall-clock).
+
+You can also run it manually:
+
+```bash
+npm run verify                         # Same gate, run on demand
+```
+
+Escape hatch: `git push --no-verify` bypasses the gate when needed.
+
 ## The standard pass
 
 ```bash
-npm run lint                           # Format + lint FIRST — CI fails on unformatted code
+npm run verify                         # Lint gate (mirrors CI lint job)
 npm run typecheck
 npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
@@ -65,9 +80,10 @@ To check whether a file is exempt, search `biome.json` for its path under the
 
 ## Other CI-only gates
 
-The `lint` job also checks the Chrome Web Store manifest justifications and runs knip
-dead-code detection; the `cloudflare-worker` job runs `wrangler deploy --dry-run`. These
-rarely trip for typical changes but live in `.github/workflows/ci.yml` if you need them.
+The `cloudflare-worker` job runs `wrangler deploy --dry-run`. This rarely trips for
+typical changes but lives in `.github/workflows/ci.yml` if you need it. All other
+lint-job gates (manifest justifications, knip dead-code) are now covered by the
+pre-push lint gate (`npm run verify`).
 
 ## Knip fixture exclusion
 
