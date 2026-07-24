@@ -65,9 +65,15 @@ import {
   setCherryPanelRecoveryDeps,
 } from './cherry-panel-sw.js';
 import { createDiscoveryObserver } from './discovery-observer.js';
-import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
+import { handleFetchProxyConnectionAsync, type PortLike } from './fetch-proxy-shared.js';
 import { buildWebAuthFlowOptions } from './oauth-flow-options.js';
-import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
+import {
+  deleteSecret,
+  listSecrets,
+  listSecretsWithValues,
+  type StorageArea,
+  setSecret,
+} from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 
 // ---------------------------------------------------------------------------
@@ -1379,6 +1385,7 @@ chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string
 // "vanish on session end" semantics). Layered into every pipeline build so the
 // fetch proxy unmasks session secrets like persisted ones.
 const sessionSecretStore = new SessionSecretStore();
+const storageLocal: StorageArea = chrome.storage.local;
 
 async function buildSecretsPipeline(): Promise<SecretsPipeline> {
   const sessionId = await readOrCreateSwSessionId();
@@ -1389,7 +1396,7 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
       const got = (await chrome.storage.local.get(name)) as Record<string, string | undefined>;
       return got[name];
     },
-    listAll: () => listSecretsWithValues(chrome.storage.local as any),
+    listAll: () => listSecretsWithValues(storageLocal),
   };
   return new SecretsPipeline({ sessionId, source, sessionStore: sessionSecretStore });
 }
@@ -1472,7 +1479,7 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     pipelinePromise.catch((err) => {
       console.error('[sw] external fetch-proxy init failed', err);
     });
-    handleFetchProxyConnectionAsync(port as any, pipelinePromise);
+    handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
     return;
   }
   if (port.name === 'secrets.crud') {
@@ -1591,7 +1598,7 @@ chrome.runtime.onConnect.addListener((port) => {
     // The handler's await pipelinePromise will throw and post response-error,
     // so we just log here. Don't disconnect — the handler needs the port.
   });
-  handleFetchProxyConnectionAsync(port as any, pipelinePromise);
+  handleFetchProxyConnectionAsync(port as PortLike, pipelinePromise);
 });
 
 // ---------------------------------------------------------------------------
@@ -1673,7 +1680,7 @@ function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendRe
   (async () => {
     try {
       const sessionId = await readOrCreateSwSessionId();
-      const persisted = await listSecretsWithValues(chrome.storage.local as any);
+      const persisted = await listSecretsWithValues(storageLocal);
       const persistedNames = new Set(persisted.map((e) => e.name));
       const session = sessionSecretStore.listAll().filter((s) => !persistedNames.has(s.name));
       const entries = [...persisted, ...session];
@@ -1693,7 +1700,7 @@ function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendRe
 function runSecretsList(_msg: unknown, sendResponse: SendResponse): boolean {
   (async () => {
     try {
-      const entries = await listSecrets(chrome.storage.local as any);
+      const entries = await listSecrets(storageLocal);
       sendResponse({ entries });
     } catch (err) {
       console.error('[sw] secrets.list failed', err);
@@ -1710,7 +1717,7 @@ function runSecretsSet(msg: unknown, sendResponse: SendResponse): boolean {
   if (name === undefined || value === undefined || domains === undefined) return false;
   (async () => {
     try {
-      await setSecret(chrome.storage.local as any, name, value, domains);
+      await setSecret(storageLocal, name, value, domains);
       sendResponse({ ok: true });
     } catch (err) {
       console.error('[sw] secrets.set failed', err);
@@ -1732,12 +1739,12 @@ function runSecretsDelete(msg: unknown, sendResponse: SendResponse): boolean {
         sendResponse({ ok: true, removed: true, fromSession: true });
         return;
       }
-      const existing = await listSecrets(chrome.storage.local as any);
+      const existing = await listSecrets(storageLocal);
       if (!existing.some((e) => e.name === name)) {
         sendResponse({ ok: true, removed: false });
         return;
       }
-      await deleteSecret(chrome.storage.local as any, name);
+      await deleteSecret(storageLocal, name);
       sendResponse({ ok: true, removed: true, fromSession: false });
     } catch (err) {
       console.error('[sw] secrets.delete failed', err);
@@ -1781,7 +1788,7 @@ function runSecretsPeek(msg: unknown, sendResponse: SendResponse): boolean {
         });
         return;
       }
-      const all = await listSecretsWithValues(chrome.storage.local as any);
+      const all = await listSecretsWithValues(storageLocal);
       const found = all.find((e) => e.name === name);
       sendResponse({
         record: found
@@ -1809,13 +1816,13 @@ function runSecretsSetDomains(msg: unknown, sendResponse: SendResponse): boolean
         sendResponse({ ok: true });
         return;
       }
-      const all = await listSecretsWithValues(chrome.storage.local as any);
+      const all = await listSecretsWithValues(storageLocal);
       const found = all.find((e) => e.name === name);
       if (!found) {
         sendResponse({ ok: false, error: `no secret named "${name}"` });
         return;
       }
-      await setSecret(chrome.storage.local as any, name, found.value, domains);
+      await setSecret(storageLocal, name, found.value, domains);
       sendResponse({ ok: true });
     } catch (err) {
       console.error('[sw] secrets.set-domains failed', err);

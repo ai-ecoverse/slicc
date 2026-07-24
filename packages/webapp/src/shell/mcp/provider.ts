@@ -43,7 +43,10 @@ export const MCP_PROVIDER_PREFIX = 'mcp:';
  * not defined` and surfaces as an unhandled rejection in Vitest 4.
  */
 function hasIndexedDB(): boolean {
-  return typeof globalThis !== 'undefined' && typeof (globalThis as any).indexedDB !== 'undefined';
+  return (
+    typeof globalThis !== 'undefined' &&
+    typeof (globalThis as { indexedDB?: unknown }).indexedDB !== 'undefined'
+  );
 }
 
 /** Public id formatter — `name` -> `mcp:<name>`. */
@@ -81,10 +84,13 @@ async function defaultRedirectUri(): Promise<string> {
   // completes against the deterministic `<extension-id>.chromiumapp.org`
   // redirect, so the URI registered at DCR time must match.
   if (isExtensionRealm()) {
-    const chromeApi = chrome as any;
+    const chromeApi = chrome as unknown as {
+      identity?: { getRedirectURL?: (path?: string) => string };
+      runtime?: { id?: string };
+    };
     return (
       chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
-      `https://${chromeApi.runtime.id}.chromiumapp.org/mcp-callback`
+      `https://${chromeApi.runtime?.id ?? ''}.chromiumapp.org/mcp-callback`
     );
   }
   // CLI / standalone: the popup→postMessage + /api/oauth-result polling
@@ -272,7 +278,7 @@ export function removeMcpProvider(name: string): boolean {
 }
 
 /** Test-only helpers — reset module-level caches between tests. */
-export function _testOnly_resetMcpProviderState(): void {
+export function testOnlyResetMcpProviderState(): void {
   registeredInSession.clear();
   discoveryCache.clear();
 }

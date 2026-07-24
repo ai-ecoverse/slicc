@@ -276,7 +276,7 @@ describe('ExtensionBridgeTransport', () => {
       url: 'https://www.sliccy.ai/handoff?handoff=fix+the+bug',
       instruction: 'fix the bug',
     };
-    t.__test_receive(envelope);
+    t.testReceive(envelope);
     expect(onLick).toHaveBeenCalledTimes(1);
     expect(licks[0]).toEqual(envelope);
   });
@@ -289,7 +289,7 @@ describe('ExtensionBridgeTransport', () => {
       onLick,
     });
     await connect(t, port);
-    t.__test_receive({
+    t.testReceive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId: 'other-bridge',
       kind: 'extension.lick',
@@ -318,7 +318,7 @@ describe('ExtensionBridgeTransport', () => {
       discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
       url: 'https://example.com/',
     };
-    t.__test_receive(envelope);
+    t.testReceive(envelope);
     expect(onDiscovery).toHaveBeenCalledTimes(1);
     expect(discoveries[0]).toEqual(envelope);
   });
@@ -331,7 +331,7 @@ describe('ExtensionBridgeTransport', () => {
       onDiscovery,
     });
     await connect(t, port);
-    t.__test_receive({
+    t.testReceive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId: 'other-bridge',
       kind: 'extension.discovery',
@@ -351,7 +351,7 @@ describe('ExtensionBridgeTransport', () => {
       onOpenSettings,
     });
     const channelId = await connect(t, port);
-    t.__test_receive({
+    t.testReceive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId,
       kind: 'extension.open-settings',
@@ -367,7 +367,7 @@ describe('ExtensionBridgeTransport', () => {
       onOpenSettings,
     });
     await connect(t, port);
-    t.__test_receive({
+    t.testReceive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId: 'other-bridge',
       kind: 'extension.open-settings',

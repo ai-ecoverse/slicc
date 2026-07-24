@@ -13,7 +13,7 @@ function makeTransport() {
   });
   // Drive inbound messages as if from the host.
   const inbound = (data: any) =>
-    transport.__test_receive({
+    transport.testReceive({
       origin: 'https://host.example',
       source: parent as unknown as MessageEventSource,
       data,

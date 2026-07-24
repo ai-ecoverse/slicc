@@ -256,7 +256,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   }
 
   /** Test seam: inject a MessageEvent without a real window. */
-  __test_receive(event: MessageEvent): void {
+  testReceive(event: MessageEvent): void {
     this.handleMessage(event);
   }
 

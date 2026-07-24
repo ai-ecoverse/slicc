@@ -276,7 +276,7 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 
 /** Apply ModelMetadata overrides to a model object (mutates in place). */
 function applyModelMetadata(
-  model: Record<string, any>,
+  model: Record<string, unknown>,
   metadata: {
     context_window?: number;
     max_tokens?: number;
@@ -361,7 +361,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
-        let model: Record<string, any>;
+        let model: Record<string, unknown>;
         if (base) {
           model = { ...base, api: customApi, provider: providerId };
         } else {
@@ -369,7 +369,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
           // from proxy metadata, so pass it explicitly rather than inferring).
           model = buildProviderRoutedModel(providerId, pm.id, '', customApi) as unknown as Record<
             string,
-            any
+            unknown
           >;
           if (pm.name) model.name = pm.name; // proxy display name; else keep the id
         }
@@ -389,7 +389,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       const anthropicModels = getModelsDynamic('anthropic');
       const customApi = `${providerId}-anthropic` as Api;
       return anthropicModels.map((m) => {
-        const model: Record<string, any> = { ...m, api: customApi, provider: providerId };
+        const model: Record<string, unknown> = { ...m, api: customApi, provider: providerId };
         const overrides = providerConfig.modelOverrides?.[m.id];
         if (overrides) applyModelMetadata(model, overrides);
         return model as unknown as Model<Api>;
@@ -1003,29 +1003,36 @@ export async function saveOAuthAccount(opts: {
         domains: string;
       }) =>
         new Promise<{ maskedValue?: string; error?: string }>((resolve) => {
-          chrome.runtime.sendMessage({ type: 'secrets.mask-oauth-token', ...payload }, (r: any) => {
-            // Chrome sets `lastError` AND invokes the callback with
-            // `undefined` when the SW is unreachable / message port closed /
-            // listener crashed. Without explicit handling the empty
-            // resolve looks identical to "SW returned no maskedValue".
-            if (chrome.runtime.lastError) {
-              log.error('SW mask-oauth-token transport failed', {
-                providerId: opts.providerId,
-                error: chrome.runtime.lastError.message,
-              });
+          chrome.runtime.sendMessage(
+            { type: 'secrets.mask-oauth-token', ...payload },
+            (r: unknown) => {
+              // Chrome sets `lastError` AND invokes the callback with
+              // `undefined` when the SW is unreachable / message port closed /
+              // listener crashed. Without explicit handling the empty
+              // resolve looks identical to "SW returned no maskedValue".
+              if (chrome.runtime.lastError) {
+                log.error('SW mask-oauth-token transport failed', {
+                  providerId: opts.providerId,
+                  error: chrome.runtime.lastError.message,
+                });
+              }
+              // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
+              // on storage-write / pipeline-build failure (see service-worker.ts
+              // secrets.mask-oauth-token catch). Surface that — matching the CLI
+              // branch's "OAuth replica POST non-ok" logging.
+              const response =
+                typeof r === 'object' && r !== null
+                  ? (r as { maskedValue?: string; error?: string })
+                  : undefined;
+              if (response?.error) {
+                log.warn('SW mask-oauth-token returned error', {
+                  providerId: opts.providerId,
+                  error: response.error,
+                });
+              }
+              resolve(response ?? {});
             }
-            // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
-            // on storage-write / pipeline-build failure (see service-worker.ts
-            // secrets.mask-oauth-token catch). Surface that — matching the CLI
-            // branch's "OAuth replica POST non-ok" logging.
-            if (r?.error) {
-              log.warn('SW mask-oauth-token returned error', {
-                providerId: opts.providerId,
-                error: r.error,
-              });
-            }
-            resolve(r ?? {});
-          });
+          );
         });
       await persistOAuthMaskViaServiceWorker(
         { providerId: opts.providerId, accessToken: opts.accessToken, domains },

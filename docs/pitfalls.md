@@ -877,6 +877,30 @@ The sprinkle subsystem is the canonical reference for full bidirectional dispatc
 
 Historical note: prior to the thin-bridge release the equivalent split was the chrome-extension side panel (page) vs the offscreen document (agent), bridged through `chrome.runtime.sendMessage` routed by the service worker. The realms changed but the page/worker idea is the same.
 
+## `any` → `unknown` Refactors at External Boundaries
+
+Replacing `any` with `unknown` is good, but boundary code must preserve runtime
+null-safety and shape checks. The common regression is casting and then reading
+fields directly:
+
+```ts
+const envelope = message as { source?: string };
+if (envelope.source !== 'service-worker') return; // crashes when message === null
+```
+
+Use a guard first:
+
+```ts
+if (typeof message !== 'object' || message === null) return;
+const envelope = message as { source?: string };
+```
+
+Apply this rule to external inputs (`chrome.runtime.onMessage`, parsed JSON,
+postMessage payloads, fetch responses) and environment probes. For optional
+globals such as `indexedDB`, check the **value** (`typeof ... !== 'undefined'`)
+instead of only property presence (`'indexedDB' in globalThis`), because test
+and SSR shims may define the property as `undefined`.
+
 ## Dual-Mode Testing Checklist
 
 When adding a feature that touches:

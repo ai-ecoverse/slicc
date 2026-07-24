@@ -856,7 +856,7 @@ export class Bridge implements KernelFacade {
       timestamp: Date.now(),
       source: 'lick',
       channel: 'sprinkle',
-    } as any);
+    });
     this.persistScoop(target.jid);
     await this.orchestrator.handleMessage(channelMsg);
   }
@@ -1515,7 +1515,7 @@ export class Bridge implements KernelFacade {
       }
 
       case 'sprinkle-lick': {
-        await this.handleSprinkleLickMsg(msg as any);
+        await this.handleSprinkleLickMsg(msg);
         break;
       }
 

@@ -39,12 +39,12 @@ import {
 } from '../../../src/providers/index.js';
 import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
 import {
-  _testOnly_resetMcpProviderState,
+  testOnlyResetMcpProviderState as _testOnly_resetMcpProviderState,
   mcpProviderId,
   registerMcpProvider,
 } from '../../../src/shell/mcp/provider.js';
 import {
-  _testOnly_resetStoreCache,
+  testOnlyResetStoreCache as _testOnly_resetStoreCache,
   readServersFile,
   setServer,
 } from '../../../src/shell/mcp/store.js';

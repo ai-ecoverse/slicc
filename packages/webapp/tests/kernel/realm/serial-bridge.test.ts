@@ -70,7 +70,13 @@ function setup(recorded: Recorded[], throwOn?: string) {
   const handle = attachRealmHost(host, ctx, { serialBackend: makeMockBackend(recorded, throwOn) });
   const client = new RealmRpcClient(realm);
   const serial = createSerialBridge(client);
-  return { serial, dispose: () => (client.dispose(), handle.dispose()) };
+  return {
+    serial,
+    dispose: () => {
+      client.dispose();
+      handle.dispose();
+    },
+  };
 }
 
 describe('realm serial bridge', () => {

@@ -12,7 +12,7 @@ function makeTransport() {
   });
   // Drive inbound messages as if from the host.
   const inbound = (data: any) =>
-    transport.__test_receive({
+    transport.testReceive({
       origin: 'https://host.example',
       source: parent as unknown as MessageEventSource,
       data,
@@ -68,7 +68,7 @@ describe('CherryHostTransport', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       // Hostile frame: right shape, wrong origin — must NOT kill the handshake.
-      h.transport.__test_receive({
+      h.transport.testReceive({
         origin: 'https://evil.example',
         source: {} as MessageEventSource,
         data: { cherry: 2, channelId: hello.channelId, kind: 'handshake.welcome' },
@@ -165,7 +165,7 @@ describe('CherryHostTransport', () => {
   it('rejects inbound from a foreign origin', async () => {
     await connectHelper(h);
     const before = h.posted.length;
-    h.transport.__test_receive({
+    h.transport.testReceive({
       origin: 'https://evil.example',
       source: h.parent as unknown as MessageEventSource,
       data: { cherry: CHERRY_PROTOCOL_VERSION, channelId: 'x', kind: 'cdp.event', method: 'X' },

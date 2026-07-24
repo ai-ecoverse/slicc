@@ -417,11 +417,7 @@ describe('VfsRpcHost — transfer list (write side)', () => {
     };
 
     const client = createRemoteWritableVfsClient({
-      transport: panelTransport as KernelTransport<
-        ExtensionMessage,
-        // biome-ignore lint/suspicious/noExplicitAny: test stub matches the wire shape
-        any
-      >,
+      transport: panelTransport as KernelTransport<ExtensionMessage, any>,
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
 
@@ -449,11 +445,7 @@ describe('VfsRpcHost — transfer list (write side)', () => {
       },
     };
     const client = createRemoteWritableVfsClient({
-      transport: panelTransport as KernelTransport<
-        ExtensionMessage,
-        // biome-ignore lint/suspicious/noExplicitAny: test stub matches the wire shape
-        any
-      >,
+      transport: panelTransport as KernelTransport<ExtensionMessage, any>,
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
     void client.writeFile('/x.txt', 'hello').catch(() => {});
@@ -473,11 +465,7 @@ describe('VfsRpcHost — transfer list (write side)', () => {
       },
     };
     const client = createRemoteWritableVfsClient({
-      transport: panelTransport as KernelTransport<
-        ExtensionMessage,
-        // biome-ignore lint/suspicious/noExplicitAny: test stub matches the wire shape
-        any
-      >,
+      transport: panelTransport as KernelTransport<ExtensionMessage, any>,
       logger: { warn: vi.fn(), debug: vi.fn() },
     });
     void client.mkdir('/d', { recursive: true }).catch(() => {});

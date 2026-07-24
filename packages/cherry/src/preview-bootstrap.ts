@@ -9,6 +9,15 @@ interface PreviewBridgeOptions {
   ws: WebSocket;
   capabilities?: CdpHostHandlerOptions['capabilities'];
 }
+interface BridgeWindowApi {
+  emit(name: string, detail?: unknown): void;
+  on(name: string, callback: (detail: unknown) => void): void;
+}
+
+type PreviewWindow = Window & {
+  slicc?: BridgeWindowApi;
+  __slicc?: BridgeWindowApi;
+};
 
 interface CdpRequestEnvelope {
   t: 'cdp.req';
@@ -57,10 +66,11 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
     try {
       const result = await handler(frame.method, frame.params ?? {});
       response.result = result;
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const error = err as { code?: number; message?: string };
       response.error = {
-        code: err.code ?? -32603,
-        message: err.message ?? String(err),
+        code: typeof error.code === 'number' ? error.code : -32603,
+        message: error.message ?? String(err),
       };
     }
     send(response);
@@ -69,7 +79,8 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
   function installWindowApi(): void {
     if (typeof window === 'undefined') return;
 
-    (window as any).slicc = {
+    const previewWindow = window as PreviewWindow;
+    previewWindow.slicc = {
       emit(name: string, detail?: unknown) {
         // Send over the bridge WS when open, so the Durable Object can attribute
         // the event to THIS connection (connId + previewToken live on the socket
@@ -90,7 +101,7 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
     };
 
     // Also expose as __slicc to satisfy Task 8 test assertion
-    (window as any).__slicc = (window as any).slicc;
+    previewWindow.__slicc = previewWindow.slicc;
   }
 
   function start(): void {

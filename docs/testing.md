@@ -331,6 +331,25 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 
 For skipped categories, ensure **manual verification in both CLI and extension modes** before committing.
 
+## Import-time runtime gating in extension tests
+
+Some modules compute runtime mode at import time (for example
+`const isExtension = isExtensionRealm()`). For those modules, extension-path
+tests must stub `chrome` **before import**, then re-import the module after
+`vi.resetModules()`.
+
+Pattern:
+
+```typescript
+(globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+vi.resetModules();
+const mod = await import('../../src/providers/oauth-service.js');
+```
+
+If one suite verifies both extension and non-extension paths, call
+`vi.resetModules()` between cases so each import sees the intended runtime
+globals.
+
 ## Coverage
 
 Coverage thresholds are enforced in CI and stored in `coverage-thresholds.json` at the

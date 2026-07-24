@@ -201,8 +201,8 @@ npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.build.json → dist/ (t
 npm test -w @ai-ecoverse/cherry        # vitest (jsdom)
 ```
 
-`mountSliccImpl` and `CherryHostTransport` both expose `__test_*` seams (e.g.
-`__test_post`, `__test_receive`) so the postMessage round-trip can be exercised
+`mountSliccImpl` and `CherryHostTransport` both expose `test*` seams (e.g.
+`__test_post`, `testReceive`) so the postMessage round-trip can be exercised
 without a real cross-origin window.
 
 ### Manual end-to-end embed harness

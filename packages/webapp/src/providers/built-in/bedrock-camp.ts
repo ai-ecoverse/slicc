@@ -207,13 +207,18 @@ function sanitize(text: string | undefined | null): string {
   );
 }
 
-function convertUserContentItem(c: any): any {
-  if (c.type === 'text') return { text: sanitize(c.text) };
-  if (c.type === 'image') return { image: createImageBlock(c.mimeType, c.data) };
-  throw new Error(`Unknown user content type: ${c.type}`);
+function convertUserContentItem(content: unknown): Record<string, unknown> {
+  const item = content as { type?: string; text?: string; mimeType?: string; data?: string };
+  if (item.type === 'text') return { text: sanitize(item.text) };
+  if (item.type === 'image')
+    return { image: createImageBlock(item.mimeType ?? '', item.data ?? '') };
+  throw new Error(`Unknown user content type: ${item.type ?? 'unknown'}`);
 }
 
-function convertUserMessage(m: any): any {
+function convertUserMessage(m: { content: string | unknown[] }): {
+  role: 'user';
+  content: Record<string, unknown>[];
+} {
   const content =
     typeof m.content === 'string'
       ? [{ text: sanitize(m.content) }]
@@ -221,44 +226,65 @@ function convertUserMessage(m: any): any {
   return { role: 'user', content };
 }
 
-function thinkingBlockForModel(c: any, model: Model<Api>): any | null {
-  if (c.thinking.trim().length === 0) return null;
+function thinkingBlockForModel(
+  content: { thinking?: string; thinkingSignature?: string },
+  model: Model<Api>
+): Record<string, unknown> | null {
+  const thinking = content.thinking ?? '';
+  if (thinking.trim().length === 0) return null;
   if (!supportsThinkingSignature(model)) {
-    return { reasoningContent: { reasoningText: { text: sanitize(c.thinking) } } };
+    return { reasoningContent: { reasoningText: { text: sanitize(thinking) } } };
   }
   // Signatures arrive after thinking deltas. If a partial or externally
   // persisted message lacks a signature, Bedrock rejects the replayed
   // reasoning block. Fall back to plain text — matches pi-ai's
   // amazon-bedrock behavior.
-  if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
-    return { text: sanitize(c.thinking) };
+  if (!content.thinkingSignature || content.thinkingSignature.trim().length === 0) {
+    return { text: sanitize(thinking) };
   }
   return {
     reasoningContent: {
       reasoningText: {
-        text: sanitize(c.thinking),
-        signature: c.thinkingSignature,
+        text: sanitize(thinking),
+        signature: content.thinkingSignature,
       },
     },
   };
 }
 
-function convertAssistantContentItem(c: any, model: Model<Api>): any | null {
-  switch (c.type) {
+function convertAssistantContentItem(
+  content: unknown,
+  model: Model<Api>
+): Record<string, unknown> | null {
+  const item = content as {
+    type?: string;
+    text?: string;
+    id?: string;
+    name?: string;
+    arguments?: Record<string, unknown>;
+    thinking?: string;
+    thinkingSignature?: string;
+  };
+  switch (item.type) {
     case 'text':
-      return c.text.trim().length === 0 ? null : { text: sanitize(c.text) };
+      return (item.text ?? '').trim().length === 0 ? null : { text: sanitize(item.text ?? '') };
     case 'toolCall':
-      return { toolUse: { toolUseId: c.id, name: c.name, input: c.arguments } };
+      return {
+        toolUse: { toolUseId: item.id ?? '', name: item.name ?? '', input: item.arguments ?? {} },
+      };
     case 'thinking':
-      return thinkingBlockForModel(c, model);
+      return thinkingBlockForModel(item, model);
     default:
       return null;
   }
 }
 
-function convertAssistantMessage(m: any, model: Model<Api>): any | null {
+function convertAssistantMessage(
+  m: { content: unknown[] },
+  model: Model<Api>
+): { role: 'assistant'; content: Record<string, unknown>[] } | null {
   if (m.content.length === 0) return null;
-  const blocks: any[] = [];
+  const blocks: Record<string, unknown>[] = [];
   for (const c of m.content) {
     const block = convertAssistantContentItem(c, model);
     if (block !== null) blocks.push(block);
@@ -267,16 +293,34 @@ function convertAssistantMessage(m: any, model: Model<Api>): any | null {
   return { role: 'assistant', content: blocks };
 }
 
-function convertToolResultContentItem(c: any): any {
-  return c.type === 'image'
-    ? { image: createImageBlock(c.mimeType, c.data) }
-    : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) };
+function convertToolResultContentItem(content: unknown): Record<string, unknown> {
+  const item = content as {
+    type?: string;
+    mimeType?: string;
+    data?: string;
+    text?: string;
+    json?: unknown;
+  };
+  return item.type === 'image'
+    ? { image: createImageBlock(item.mimeType ?? '', item.data ?? '') }
+    : {
+        text: sanitize(
+          item.text ??
+            (typeof item.json === 'string' ? item.json : JSON.stringify(item.json ?? item))
+        ),
+      };
 }
 
-function buildToolResultEntry(m: any): any {
+function buildToolResultEntry(m: { toolCallId?: string; content: unknown[]; isError?: boolean }): {
+  toolResult: {
+    toolUseId: string;
+    content: Record<string, unknown>[];
+    status: 'error' | 'success';
+  };
+} {
   return {
     toolResult: {
-      toolUseId: m.toolCallId,
+      toolUseId: m.toolCallId ?? '',
       content: m.content.map(convertToolResultContentItem),
       status: m.isError ? 'error' : 'success',
     },
@@ -284,10 +328,22 @@ function buildToolResultEntry(m: any): any {
 }
 
 function coalesceToolResults(
-  transformed: any[],
+  transformed: Array<{ role: string; content: unknown[]; toolCallId?: string; isError?: boolean }>,
   startIndex: number
-): { message: any; nextIndex: number } {
-  const toolResults: any[] = [buildToolResultEntry(transformed[startIndex])];
+): {
+  message: {
+    role: 'user';
+    content: Array<{
+      toolResult: {
+        toolUseId: string;
+        content: Record<string, unknown>[];
+        status: 'error' | 'success';
+      };
+    }>;
+  };
+  nextIndex: number;
+} {
+  const toolResults = [buildToolResultEntry(transformed[startIndex])];
   let j = startIndex + 1;
   while (j < transformed.length && transformed[j].role === 'toolResult') {
     toolResults.push(buildToolResultEntry(transformed[j]));
@@ -297,7 +353,7 @@ function coalesceToolResults(
 }
 
 function appendCachePointToLastUser(
-  result: any[],
+  result: Array<{ role: string; content: Record<string, unknown>[] }>,
   model: Model<Api>,
   cacheRetention: CacheRetention
 ): void {
@@ -312,9 +368,14 @@ function convertMessages(
   context: Context,
   model: Model<Api>,
   cacheRetention: CacheRetention
-): any[] {
-  const result: any[] = [];
-  const transformed = transformMessages(context.messages, model, normalizeToolCallId);
+): Array<{ role: string; content: Record<string, unknown>[] }> {
+  const result: Array<{ role: string; content: Record<string, unknown>[] }> = [];
+  const transformed = transformMessages(context.messages, model, normalizeToolCallId) as Array<{
+    role: string;
+    content: unknown[];
+    toolCallId?: string;
+    isError?: boolean;
+  }>;
 
   for (let i = 0; i < transformed.length; i++) {
     const m = transformed[i];
@@ -386,12 +447,12 @@ function supportsMaxEffort(modelId: string, modelName?: string): boolean {
 function convertToolConfig(
   tools: Context['tools'],
   toolChoice?: BedrockCampOptions['toolChoice']
-): any | undefined {
+): Record<string, unknown> | undefined {
   if (!tools?.length || toolChoice === 'none') return undefined;
   const bedrockTools = tools.map((t) => ({
     toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.parameters } },
   }));
-  let choice: any;
+  let choice: Record<string, unknown> | undefined;
   switch (toolChoice) {
     case 'auto':
       choice = { auto: {} };
@@ -517,9 +578,9 @@ function buildSystemPrompt(
   systemPrompt: string | undefined,
   model: Model<Api>,
   cacheRetention: CacheRetention
-): any[] | undefined {
+): Array<Record<string, unknown>> | undefined {
   if (!systemPrompt) return undefined;
-  const blocks: any[] = [{ text: sanitize(systemPrompt) }];
+  const blocks: Array<Record<string, unknown>> = [{ text: sanitize(systemPrompt) }];
   if (cacheRetention !== 'none' && supportsPromptCaching(model)) {
     blocks.push(buildCachePoint(cacheRetention));
   }
@@ -560,17 +621,32 @@ function formatHttpError(status: number, body: string): string {
 // ── Response parsing (non-streaming /converse) ──────────────────────
 
 function parseConverseResponse(
-  body: any,
+  body: unknown,
   model: Model<Api>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream
 ): void {
+  const response = body as {
+    output?: { message?: { content?: Array<Record<string, unknown>> } };
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheWriteInputTokens?: number;
+      totalTokens?: number;
+    };
+    stopReason?: string;
+  };
   stream.push({ type: 'start', partial: output });
 
-  const message = body.output?.message;
+  const message = response.output?.message;
   if (message?.content) {
     for (let i = 0; i < message.content.length; i++) {
-      const block = message.content[i];
+      const block = message.content[i] as {
+        text?: string;
+        toolUse?: { toolUseId?: string; name?: string; input?: Record<string, unknown> };
+        reasoningContent?: { reasoningText?: { text?: string; signature?: string } };
+      };
       if (block.text !== undefined) {
         const textBlock = { type: 'text' as const, text: block.text };
         output.content.push(textBlock);
@@ -620,17 +696,18 @@ function parseConverseResponse(
   }
 
   // Usage
-  if (body.usage) {
-    output.usage.input = body.usage.inputTokens || 0;
-    output.usage.output = body.usage.outputTokens || 0;
-    output.usage.cacheRead = body.usage.cacheReadInputTokens || 0;
-    output.usage.cacheWrite = body.usage.cacheWriteInputTokens || 0;
-    output.usage.totalTokens = body.usage.totalTokens || output.usage.input + output.usage.output;
+  if (response.usage) {
+    output.usage.input = response.usage.inputTokens || 0;
+    output.usage.output = response.usage.outputTokens || 0;
+    output.usage.cacheRead = response.usage.cacheReadInputTokens || 0;
+    output.usage.cacheWrite = response.usage.cacheWriteInputTokens || 0;
+    output.usage.totalTokens =
+      response.usage.totalTokens || output.usage.input + output.usage.output;
     calculateCost(model, output.usage);
   }
 
   // Stop reason
-  output.stopReason = mapStopReason(body.stopReason || 'end_turn');
+  output.stopReason = mapStopReason(response.stopReason || 'end_turn');
 }
 
 function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
@@ -761,8 +838,9 @@ function handleStreamError(
   stream: AssistantMessageEventStream
 ): void {
   for (const block of output.content) {
-    delete (block as any).index;
-    delete (block as any).partialJson;
+    const mutableBlock = block as { index?: unknown; partialJson?: unknown };
+    delete mutableBlock.index;
+    delete mutableBlock.partialJson;
   }
   output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
   output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);

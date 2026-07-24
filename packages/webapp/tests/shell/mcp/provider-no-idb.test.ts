@@ -4,11 +4,11 @@ import {
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
 import {
-  _testOnly_resetMcpProviderState,
   ensureAllMcpProvidersRegistered,
   ensureMcpProviderRegistered,
   mcpProviderId,
   registerMcpProvider,
+  testOnlyResetMcpProviderState,
 } from '../../../src/shell/mcp/provider.js';
 
 // These tests run in Vitest's node environment where `indexedDB` is
@@ -17,13 +17,13 @@ import {
 
 describe('MCP provider registration without indexedDB', () => {
   beforeEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('weather'));
     unregisterProviderConfig(mcpProviderId('cached'));
   });
 
   afterEach(() => {
-    _testOnly_resetMcpProviderState();
+    testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('weather'));
     unregisterProviderConfig(mcpProviderId('cached'));
   });
@@ -41,6 +41,27 @@ describe('MCP provider registration without indexedDB', () => {
     const ok = await ensureMcpProviderRegistered('weather');
     expect(ok).toBe(false);
     expect(getRegisteredProviderConfig(mcpProviderId('weather'))).toBeUndefined();
+  });
+
+  it('treats present-but-undefined indexedDB as unavailable', async () => {
+    const key = 'indexedDB' as const;
+    const prior = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+
+    try {
+      await expect(ensureAllMcpProvidersRegistered()).resolves.toEqual([]);
+      await expect(ensureMcpProviderRegistered('weather')).resolves.toBe(false);
+    } finally {
+      if (prior) {
+        Object.defineProperty(globalThis, key, prior);
+      } else {
+        delete (globalThis as { indexedDB?: unknown }).indexedDB;
+      }
+    }
   });
 
   it('still returns true for providers already in the in-session cache', async () => {

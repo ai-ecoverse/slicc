@@ -362,31 +362,47 @@ async function launchOAuthExtension(
   authorizeUrl: string,
   opts?: { interactive?: boolean }
 ): Promise<string | null> {
+  const runtime = (
+    chrome as unknown as {
+      runtime: {
+        onMessage: {
+          addListener(callback: (message: unknown) => void): void;
+          removeListener(callback: (message: unknown) => void): void;
+        };
+        sendMessage(message: unknown): Promise<unknown>;
+      };
+    }
+  ).runtime;
   return new Promise<string | null>((resolve) => {
     let resolved = false;
     const cleanup = () => {
       if (resolved) return;
       resolved = true;
-      (chrome as any).runtime.onMessage.removeListener(handler);
+      runtime.onMessage.removeListener(handler);
       clearTimeout(timer);
     };
 
-    const handler = (message: any) => {
-      if (message?.source !== 'service-worker') return;
-      if (message?.payload?.type !== 'oauth-result') return;
+    const handler = (message: unknown) => {
+      if (typeof message !== 'object' || message === null) return;
+      const envelope = message as {
+        source?: string;
+        payload?: { type?: string; error?: string; redirectUrl?: string };
+      };
+      if (envelope.source !== 'service-worker') return;
+      if (envelope.payload?.type !== 'oauth-result') return;
       cleanup();
 
-      if (message.payload.error) {
-        console.error('[oauth-service] Extension OAuth error:', message.payload.error);
+      if (envelope.payload.error) {
+        console.error('[oauth-service] Extension OAuth error:', envelope.payload.error);
         resolve(null);
         return;
       }
 
-      resolve(message.payload.redirectUrl ?? null);
+      resolve(envelope.payload.redirectUrl ?? null);
     };
 
-    (chrome as any).runtime.onMessage.addListener(handler);
-    (chrome as any).runtime
+    runtime.onMessage.addListener(handler);
+    runtime
       .sendMessage({
         source: 'panel',
         payload: {

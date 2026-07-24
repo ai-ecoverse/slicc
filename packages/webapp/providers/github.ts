@@ -238,7 +238,10 @@ async function resolveClientId(): Promise<string> {
 
 // ── Runtime detection ──────────────────────────────────────────────
 
-const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+const isExtension =
+  typeof globalThis !== 'undefined' &&
+  typeof (globalThis as { chrome?: { runtime?: { id?: string } } }).chrome?.runtime?.id ===
+    'string';
 
 // ── Helpers ────────────────────────────────────────────────────────
 

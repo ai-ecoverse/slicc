@@ -239,7 +239,7 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
   }
 
   /** Test seam: inject a raw envelope as if the SW posted it. */
-  __test_receive(raw: unknown): void {
+  testReceive(raw: unknown): void {
     this.handleHandshake(raw);
   }
 

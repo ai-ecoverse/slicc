@@ -310,9 +310,6 @@ export async function tryLoadTypeScriptSourceFromNodeModules(
  */
 function evaluateTypeScriptModule(source: string): TypeScriptModule {
   const module: { exports: Record<string, unknown> } = { exports: {} };
-  // biome-ignore lint/security/noGlobalEval: typescript.js is the
-  // ipk-installed package source — same trust boundary as the realm
-  // CJS evaluator in `module-loader.ts`.
   const evaluator = new Function('module', 'exports', source);
   evaluator(module, module.exports);
   return module.exports as unknown as TypeScriptModule;
