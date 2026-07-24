@@ -468,3 +468,116 @@ describe('collectActiveTranscriptSources — snapshot stability', () => {
     expect(loadCount).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: message-generation signature (Fix 2 — wave 2 retry)
+// ---------------------------------------------------------------------------
+
+describe('collectActiveTranscriptSources — message-generation signature', () => {
+  it('retries when a complete turn fires (messages added) while processing is false at both checks', async () => {
+    // The race: processing=false before load, a full assistant turn starts and
+    // finishes DURING the async store reads (processing never flip-flops to true
+    // from the outside), but getAgentMessages returns more messages after the load.
+    // The old signature (JID+processing only) would not detect this; the new
+    // signature (includes count+last-msg props) must force a retry.
+    let loadCount = 0;
+    let messages: readonly AgentMessage[] = [{ role: 'user', content: 'hello', timestamp: 1000 }];
+
+    const result = await collectActiveTranscriptSources({
+      listScoops: () => [cone],
+      isProcessing: () => false,
+      getAgentMessages: () => messages,
+      loadPersistedSessions: vi.fn(async () => {
+        loadCount++;
+        if (loadCount === 1) {
+          // Simulate a complete turn: new assistant message arrived
+          messages = [
+            { role: 'user', content: 'hello', timestamp: 1000 },
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'hi' }],
+              timestamp: 2000,
+            } as AgentMessage,
+          ];
+        }
+        return [] as readonly import('../../src/core/types.js').SessionData[];
+      }),
+      loadUiChatSessions: async () => [],
+      wait: async () => {},
+    });
+
+    // Must retry because message count changed between signature checks
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    // The final result must reflect the stable (post-turn) message state
+    expect(result.sources[0].messages).toHaveLength(2);
+  });
+
+  it('retries when the last message role changes (tool-result appended) while processing is false', async () => {
+    // Another message-generation race: a tool-result message is appended between
+    // before and after checks without isProcessing ever returning true.
+    let loadCount = 0;
+    const userMsg: AgentMessage = { role: 'user', content: 'task', timestamp: 1000 };
+    const toolResultMsg: AgentMessage = {
+      role: 'toolResult',
+      toolCallId: 'tc-1',
+      toolName: 'bash',
+      content: [{ type: 'text', text: 'done' }],
+      isError: false,
+      timestamp: 3000,
+    } as unknown as AgentMessage;
+
+    let messages: readonly AgentMessage[] = [userMsg];
+
+    await collectActiveTranscriptSources({
+      listScoops: () => [cone],
+      isProcessing: () => false,
+      getAgentMessages: () => messages,
+      loadPersistedSessions: vi.fn(async () => {
+        loadCount++;
+        if (loadCount === 1) {
+          messages = [userMsg, toolResultMsg];
+        }
+        return [] as readonly import('../../src/core/types.js').SessionData[];
+      }),
+      loadUiChatSessions: async () => [],
+      wait: async () => {},
+    });
+
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not retry when getAgentMessages returns null (persisted-only path stays stable)', async () => {
+    // When getAgentMessages returns null, the signature encodes 'null' for that
+    // scoop on both before and after checks. If persisted-only before and after,
+    // no spurious retry should occur.
+    let loadCount = 0;
+
+    const persistedMessages: AgentMessage[] = [
+      { role: 'user', content: 'persisted', timestamp: 1 },
+    ];
+    const persisted = [
+      {
+        id: cone.jid,
+        messages: persistedMessages,
+        config: {} as never,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ];
+
+    await collectActiveTranscriptSources({
+      listScoops: () => [cone],
+      isProcessing: () => false,
+      getAgentMessages: () => null,
+      loadPersistedSessions: vi.fn(async () => {
+        loadCount++;
+        return persisted as readonly import('../../src/core/types.js').SessionData[];
+      }),
+      loadUiChatSessions: async () => [],
+      wait: async () => {},
+    });
+
+    // Stable null on both sides — no retry
+    expect(loadCount).toBe(1);
+  });
+});

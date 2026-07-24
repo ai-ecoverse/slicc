@@ -51,15 +51,30 @@ function uiSessionId(scoop: RegisteredScoop): string {
 }
 
 /**
- * Compute a stable string signature of the current scoop list + processing
- * states. Two signatures are equal iff the scoop membership and per-scoop
- * processing flags are identical. Used to detect mid-load state changes.
+ * Compute a stable string signature of the current scoop list, processing
+ * states, and live message generation. Two signatures are equal iff the scoop
+ * membership, per-scoop processing flags, and per-scoop live message state
+ * (count, last-message role, last-message timestamp, last-message toolCallId)
+ * are all identical. Used to detect mid-load state changes, including a
+ * complete turn that starts and finishes while stores are loading.
  */
 function computeSnapshotSignature(
   scoops: readonly RegisteredScoop[],
   deps: TranscriptCollectionDeps
 ): string {
-  return scoops.map((s) => `${s.jid}:${deps.isProcessing(s.jid) ? '1' : '0'}`).join(',');
+  return scoops
+    .map((s) => {
+      const proc = deps.isProcessing(s.jid) ? '1' : '0';
+      const msgs = deps.getAgentMessages(s.jid);
+      if (msgs === null) return `${s.jid}:${proc}:null`;
+      const count = msgs.length;
+      const last = msgs[count - 1];
+      const lastRole = last?.role ?? '';
+      const lastTs = last && 'timestamp' in last ? (last.timestamp as number) : -1;
+      const lastTcid = last && 'toolCallId' in last ? (last.toolCallId as string) : '';
+      return `${s.jid}:${proc}:${count}:${lastRole}:${lastTs}:${lastTcid}`;
+    })
+    .join(',');
 }
 
 /**
