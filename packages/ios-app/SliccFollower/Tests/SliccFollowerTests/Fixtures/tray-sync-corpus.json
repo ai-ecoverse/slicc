@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 1,
-  "leaderVariantCount": 26,
-  "followerVariantCount": 22,
+  "leaderVariantCount": 30,
+  "followerVariantCount": 26,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -72,6 +72,44 @@
       "message": {
         "type": "error",
         "error": "boom"
+      }
+    },
+    {
+      "type": "exec.chunk",
+      "ios": "unknown",
+      "message": {
+        "type": "exec.chunk",
+        "requestId": "exec-1",
+        "stream": "stdout",
+        "data": "aGVsbG8K"
+      }
+    },
+    {
+      "type": "exec.request",
+      "ios": "unknown",
+      "message": {
+        "type": "exec.request",
+        "requestId": "exec-1",
+        "command": "echo hello",
+        "cwd": "/workspace"
+      }
+    },
+    {
+      "type": "exec.response",
+      "ios": "unknown",
+      "message": {
+        "type": "exec.response",
+        "requestId": "exec-1",
+        "exitCode": 0
+      }
+    },
+    {
+      "type": "exec.signal",
+      "ios": "unknown",
+      "message": {
+        "type": "exec.signal",
+        "requestId": "exec-1",
+        "signal": "SIGINT"
       }
     },
     {
@@ -366,6 +404,44 @@
         "detail": {
           "fields": 2
         }
+      }
+    },
+    {
+      "type": "exec.chunk",
+      "ios": "undecodable",
+      "message": {
+        "type": "exec.chunk",
+        "requestId": "exec-2",
+        "stream": "stderr",
+        "data": "ZXJyb3IK"
+      }
+    },
+    {
+      "type": "exec.request",
+      "ios": "undecodable",
+      "message": {
+        "type": "exec.request",
+        "requestId": "exec-2",
+        "command": "ls -la"
+      }
+    },
+    {
+      "type": "exec.response",
+      "ios": "undecodable",
+      "message": {
+        "type": "exec.response",
+        "requestId": "exec-2",
+        "exitCode": 1,
+        "error": "boom"
+      }
+    },
+    {
+      "type": "exec.signal",
+      "ios": "undecodable",
+      "message": {
+        "type": "exec.signal",
+        "requestId": "exec-2",
+        "signal": "SIGKILL"
       }
     },
     {

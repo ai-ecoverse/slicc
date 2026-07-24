@@ -34,6 +34,7 @@ import {
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { runLeaderExecInShell } from '../leader-exec-runner.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { type PageFollowerTrayHandle, startPageFollowerTray } from '../page-follower-tray.js';
 import {
@@ -208,6 +209,10 @@ function createLeaderOptionsFactory(
     sendWebhookEvent: (webhookId, headers, body) =>
       client.sendWebhookEvent(webhookId, headers, body),
     onAgentEvent: (handler) => deps.agentHandle.onEvent(handler),
+    // Run a CLI follower's `slicc … exec` in the leader's own shell, streaming
+    // output back over the tray. Uses a headless terminal session against the
+    // kernel worker (same surface as the panel terminals).
+    execInShell: (command, execOpts) => runLeaderExecInShell(client, { command, ...execOpts }),
     browserAPI: deps.browser,
     browserTransport: deps.realCdpTransport,
     // Lazy VFS proxy for preview.request handling — the kernel worker owns
@@ -232,13 +237,15 @@ function createLeaderHookSetup(
 ): { wireLeaderHooks(handle: PageLeaderTrayHandle): void; clearLeaderHooks(): void } {
   return {
     wireLeaderHooks: (handle) => {
-      setConnectedFollowersGetter(() =>
-        handle.peers.getPeers().map((p) => ({
+      setConnectedFollowersGetter(() => {
+        const execIds = handle.sync.getExecCapableBootstrapIds();
+        return handle.peers.getPeers().map((p) => ({
           runtimeId: canonicalRuntimeId(p.bootstrapId),
           runtime: p.runtime,
           connectedAt: p.connectedAt ?? undefined,
-        }))
-      );
+          exec: execIds.has(p.bootstrapId),
+        }));
+      });
       setTrayResetter(() => handle.reset());
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)

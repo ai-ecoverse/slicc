@@ -21,6 +21,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                     |
 | `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                     |
 | `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM, not npm)        |
+| `packages/slicc-cli/`         | `slicc` — headless Go (pion) follower CLI: `prompt`/`exec`/`follow`; cross-compiled binaries (Go module, not npm) |
 | `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template                    |
 | `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace) |
 

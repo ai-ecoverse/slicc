@@ -57,6 +57,7 @@ import { createServeCommand } from './serve-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
+import { createSshCommand } from './ssh-command.js';
 import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
 import { createTarCommand } from './tar-command.js';
 import { createTestCommand } from './test-command.js';
@@ -149,6 +150,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       getWorkflowCommands: options.getWorkflowCommands,
     }),
     createHostCommand(),
+    createSshCommand(),
     createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(options.browserAPI),
     createImgcatCommand(options),

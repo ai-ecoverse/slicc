@@ -21,6 +21,8 @@ export interface ConnectedFollowerInfo {
   runtimeId: string;
   runtime?: string;
   connectedAt?: string;
+  /** True when the follower advertised `exec` capability (a `slicc … follow` CLI). */
+  exec?: boolean;
 }
 
 /**
@@ -204,6 +206,10 @@ export function formatLeaderOutput(
       if (f.connectedAt) {
         const ago = Math.round((Date.now() - new Date(f.connectedAt).getTime()) / 1000);
         parts.push(`connected ${formatDuration(ago)}`);
+      }
+      if (f.exec) {
+        // A `slicc … follow` CLI: the leader can run commands on it via `ssh`.
+        parts.push('[exec]');
       }
       lines.push(`  - ${parts.join(' ')}`);
     }

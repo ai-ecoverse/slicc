@@ -1,0 +1,167 @@
+// Package execrun runs a shell command on the local machine and streams its
+// stdout/stderr as they arrive. It backs the `follow` subcommand: the leader's
+// `exec.request` runs here, as the user who started `slicc … follow`.
+package execrun
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"runtime"
+	"sync"
+	"syscall"
+)
+
+// chunkBytes bounds each streamed output block. Small enough that the tray data
+// channel's backpressure stays responsive on chatty commands.
+const chunkBytes = 16 * 1024
+
+// ChunkFunc receives one streamed output block ("stdout"/"stderr", raw bytes).
+type ChunkFunc func(stream string, data []byte)
+
+// Options configures Run.
+type Options struct {
+	Cwd     string
+	Env     map[string]string
+	OnChunk ChunkFunc
+	// Control forwards signal names ("SIGINT"/"SIGTERM"/"SIGKILL") to the running
+	// process. Optional.
+	Control <-chan string
+}
+
+// Result is the terminal outcome of a run.
+type Result struct {
+	ExitCode int
+	// Signal is set (best-effort) when the process was terminated by a signal.
+	Signal string
+	// Err is set only when the command could not be started at all.
+	Err error
+}
+
+// Run executes command via the platform shell, streams output through
+// opts.OnChunk, and returns the exit code. It never returns an error for a
+// non-zero exit — that's reported in Result.ExitCode; Result.Err is set only
+// when the process could not be launched.
+func Run(ctx context.Context, command string, opts Options) Result {
+	name, args := shellCommand(command)
+	cmd := exec.Command(name, args...)
+	if opts.Cwd != "" {
+		cmd.Dir = opts.Cwd
+	}
+	cmd.Env = mergedEnv(opts.Env)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return Result{ExitCode: 126, Err: err}
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return Result{ExitCode: 126, Err: err}
+	}
+	if err := cmd.Start(); err != nil {
+		return Result{ExitCode: 127, Err: err}
+	}
+
+	finished := make(chan struct{})
+	go forwardSignals(ctx, cmd, opts.Control, finished)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go pump(stdout, "stdout", opts.OnChunk, &wg)
+	go pump(stderr, "stderr", opts.OnChunk, &wg)
+	wg.Wait()
+
+	err = cmd.Wait()
+	close(finished)
+
+	if err == nil {
+		return Result{ExitCode: 0}
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		code := ee.ExitCode()
+		if code < 0 {
+			// Terminated by a signal (Unix reports -1). Use a conventional code.
+			return Result{ExitCode: 137, Signal: "killed"}
+		}
+		return Result{ExitCode: code}
+	}
+	return Result{ExitCode: 1, Err: err}
+}
+
+func pump(r io.Reader, stream string, onChunk ChunkFunc, wg *sync.WaitGroup) {
+	defer wg.Done()
+	buf := make([]byte, chunkBytes)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 && onChunk != nil {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			onChunk(stream, chunk)
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func forwardSignals(ctx context.Context, cmd *exec.Cmd, control <-chan string, finished <-chan struct{}) {
+	for {
+		select {
+		case <-finished:
+			return
+		case <-ctx.Done():
+			signalProcess(cmd.Process, "SIGKILL")
+			return
+		case name, ok := <-control:
+			if !ok {
+				control = nil
+				continue
+			}
+			signalProcess(cmd.Process, name)
+		}
+	}
+}
+
+func signalProcess(p *os.Process, name string) {
+	if p == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		// Windows can't deliver POSIX signals to a child; terminate instead.
+		_ = p.Kill()
+		return
+	}
+	switch name {
+	case "SIGINT":
+		_ = p.Signal(syscall.SIGINT)
+	case "SIGTERM":
+		_ = p.Signal(syscall.SIGTERM)
+	default: // SIGKILL / unknown
+		_ = p.Kill()
+	}
+}
+
+// shellCommand picks the platform shell to interpret a command line.
+func shellCommand(command string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", command}
+	}
+	if path, err := exec.LookPath("bash"); err == nil {
+		return path, []string{"-c", command}
+	}
+	return "/bin/sh", []string{"-c", command}
+}
+
+func mergedEnv(extra map[string]string) []string {
+	if len(extra) == 0 {
+		return os.Environ()
+	}
+	env := os.Environ()
+	for k, v := range extra {
+		env = append(env, k+"="+v)
+	}
+	return env
+}

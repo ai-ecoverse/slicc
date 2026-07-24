@@ -88,6 +88,8 @@ export interface StartPageLeaderTrayOptions {
   onFollowerNewSession?: LeaderSyncManagerOptions['onFollowerNewSession'];
   onFollowerCountChanged?: LeaderSyncManagerOptions['onFollowerCountChanged'];
   onRemoteTransportsCleaned?: LeaderSyncManagerOptions['onRemoteTransportsCleaned'];
+  /** Run a CLI follower's `exec` in the leader's shell (streams output). */
+  execInShell?: LeaderSyncManagerOptions['execInShell'];
 
   // --- Bridge hop to worker LickManager (replaces the pre-regression direct call) ---
   /**
@@ -188,6 +190,7 @@ function buildSyncManager(
     onFollowerNewSession: options.onFollowerNewSession,
     onFollowerCountChanged: options.onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
+    execInShell: options.execInShell,
     onCherryHostEvent: options.onCherryHostEvent,
     onPreviewLick: options.onPreviewLick,
     browserAPI: options.browserAPI,

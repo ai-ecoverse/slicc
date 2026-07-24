@@ -231,6 +231,29 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       response: { ok: true, data: { type: 'void' } },
     },
   },
+  // Streaming remote exec is TS + Go CLI only — no OS shell on iOS, so its
+  // mirror decodes these leader→follower variants to `.unknown` (like fs.*).
+  'exec.request': {
+    ios: 'unknown',
+    message: {
+      type: 'exec.request',
+      requestId: 'exec-1',
+      command: 'echo hello',
+      cwd: '/workspace',
+    },
+  },
+  'exec.chunk': {
+    ios: 'unknown',
+    message: { type: 'exec.chunk', requestId: 'exec-1', stream: 'stdout', data: 'aGVsbG8K' },
+  },
+  'exec.response': {
+    ios: 'unknown',
+    message: { type: 'exec.response', requestId: 'exec-1', exitCode: 0 },
+  },
+  'exec.signal': {
+    ios: 'unknown',
+    message: { type: 'exec.signal', requestId: 'exec-1', signal: 'SIGINT' },
+  },
   'cherry.slicc_event': {
     ios: 'decoded',
     message: {
@@ -367,6 +390,24 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       requestId: 'fs-4',
       response: { ok: false, error: 'ENOENT', code: 'ENOENT' },
     },
+  },
+  // Follower-originated streaming exec (the `slicc … exec` CLI) is TS + Go only;
+  // iOS never originates it, so its follower decoder throws (`undecodable`).
+  'exec.request': {
+    ios: 'undecodable',
+    message: { type: 'exec.request', requestId: 'exec-2', command: 'ls -la' },
+  },
+  'exec.chunk': {
+    ios: 'undecodable',
+    message: { type: 'exec.chunk', requestId: 'exec-2', stream: 'stderr', data: 'ZXJyb3IK' },
+  },
+  'exec.response': {
+    ios: 'undecodable',
+    message: { type: 'exec.response', requestId: 'exec-2', exitCode: 1, error: 'boom' },
+  },
+  'exec.signal': {
+    ios: 'undecodable',
+    message: { type: 'exec.signal', requestId: 'exec-2', signal: 'SIGKILL' },
   },
   'cherry.host_event': {
     ios: 'undecodable',
