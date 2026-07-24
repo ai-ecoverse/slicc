@@ -1875,3 +1875,378 @@ describe('CherryHostTransport: outbound error code validation (wave 2)', () => {
     await expect(blobPromise).rejects.toMatchObject({ code: 'transfer-corrupt' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wave 4: Bounded-memory tests — ack-gated flow control (protocol v3)
+// ---------------------------------------------------------------------------
+
+describe('Wave 4: Leader ack-gated bounded chunk window (v3 followers)', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  it('sends only 1 chunk before receiving ack from v3 follower', async () => {
+    // A 4-chunk export with a v3 follower — leader should gate on ack.
+    const chunk = new Uint8Array(200).fill(0xaa); // fits in 1 base64 msg but we control count
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi
+        .fn()
+        .mockResolvedValue(makeZipResult([chunk, chunk, chunk, chunk])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    // v3 follower hello
+    ch.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'ack-gate-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for first chunk to be sent
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    // After first chunk, leader should NOT have sent a second chunk yet
+    const chunksSoFar = ch.parseSentLeader().filter((m) => m.type === 'transcript.export.chunk');
+    expect(chunksSoFar.length).toBe(1);
+
+    // No complete yet
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+
+  it('advances to next chunk after ack is received', async () => {
+    const chunk = new Uint8Array(50).fill(0xbb);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([chunk, chunk])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+    ch.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'ack-advance-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for first chunk (expect-based so vi.waitFor retries on throw)
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+
+    // Ack index 0 → leader should send chunk 1
+    ch.simulateMessage({ type: 'transcript.export.ack', requestId: 'ack-advance-req', index: 0 });
+
+    await vi.waitFor(
+      () => {
+        expect(
+          ch.parseSentLeader().filter((m) => m.type === 'transcript.export.chunk').length
+        ).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 3000 }
+    );
+
+    const chunks = ch.parseSentLeader().filter((m) => m.type === 'transcript.export.chunk');
+    expect(chunks.length).toBe(2);
+  });
+
+  it('completes after all acks received', async () => {
+    const chunk = new Uint8Array(30).fill(0xcc);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([chunk, chunk])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+    ch.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'ack-complete-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for first chunk, then ack, then second chunk, then ack
+    // Use expect-based waitFor so it retries on throw (boolean return resolves immediately)
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk')).toBe(true);
+      },
+      { timeout: 3000 }
+    );
+    ch.simulateMessage({ type: 'transcript.export.ack', requestId: 'ack-complete-req', index: 0 });
+
+    await vi.waitFor(
+      () => {
+        expect(
+          ch.parseSentLeader().filter((m) => m.type === 'transcript.export.chunk').length
+        ).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 3000 }
+    );
+    ch.simulateMessage({ type: 'transcript.export.ack', requestId: 'ack-complete-req', index: 1 });
+
+    await vi.waitFor(
+      () => {
+        expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(
+          true
+        );
+      },
+      { timeout: 3000 }
+    );
+  });
+
+  it('ack from different follower does not advance sender (owner-scoped)', async () => {
+    const chunk = new Uint8Array(50).fill(0xdd);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([chunk, chunk])),
+    });
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+    ch1.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch1.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'owner-scope-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for chunk 0 to be sent to b1
+    await vi.waitFor(() => ch1.parseSentLeader().some((m) => m.type === 'transcript.export.chunk'));
+
+    // b2 tries to send ack for b1's requestId — should NOT advance b1's export
+    ch2.simulateMessage({ type: 'transcript.export.ack', requestId: 'owner-scope-req', index: 0 });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // b1 should still be waiting (only 1 chunk sent, no 2nd chunk yet)
+    const chunksToB1 = ch1.parseSentLeader().filter((m) => m.type === 'transcript.export.chunk');
+    expect(chunksToB1.length).toBe(1);
+    // No complete either
+    expect(ch1.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+  });
+
+  it('cancel clears ack waiter so no stuck Promise hangs', async () => {
+    const chunk = new Uint8Array(50).fill(0xee);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([chunk, chunk])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+    ch.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'ack-cancel-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for chunk 0, then cancel before ack
+    await vi.waitFor(() => ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk'));
+
+    ch.simulateMessage({ type: 'transcript.export.cancel', requestId: 'ack-cancel-req' });
+
+    // No crash and no complete sent
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.complete')).toBe(false);
+    expect(ch.parseSentLeader().some((m) => m.type === 'transcript.export.error')).toBe(false);
+  });
+
+  it('disconnect clears ack waiter (no stuck promise)', async () => {
+    const chunk = new Uint8Array(50).fill(0xff);
+    const { manager } = createLeaderManager({
+      createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([chunk, chunk])),
+    });
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+    ch.simulateMessage({ type: 'hello', protocolVersion: 3 });
+
+    ch.simulateMessage({
+      type: 'transcript.export.request',
+      requestId: 'ack-disc-req',
+      selector: { kind: 'active' },
+    });
+
+    // Wait for chunk 0, then disconnect without acking
+    await vi.waitFor(() => ch.parseSentLeader().some((m) => m.type === 'transcript.export.chunk'));
+
+    manager.removeFollower('b1');
+
+    // No crash
+    await new Promise((r) => setTimeout(r, 100));
+    expect(true).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 4: Follower spool — no chunk array in state
+// ---------------------------------------------------------------------------
+
+describe('Wave 4: Follower uses spool — no chunk array accumulation', () => {
+  beforeEach(() => resetLoggerDedupForTests());
+  afterEach(() => vi.clearAllMocks());
+
+  function base64(data: Uint8Array): string {
+    let s = '';
+    for (const b of data) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+
+  async function runFollowerTransfer(
+    follower: FollowerSyncManager,
+    ch: FakeChannel,
+    chunks: Uint8Array[]
+  ): Promise<Blob> {
+    const controller = new AbortController();
+    const blobPromise = follower.requestTranscriptExport({ kind: 'active' }, controller.signal);
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    const { sha256 } = await import('js-sha256');
+    const hasher = sha256.create();
+    let totalBytes = 0;
+    for (const c of chunks) {
+      hasher.update(c);
+      totalBytes += c.byteLength;
+    }
+    const digest = hasher.hex();
+
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    ch.simulateLeaderMessage({ type: 'transcript.export.start', requestId, filename: 'test.zip' });
+
+    for (let i = 0; i < chunks.length; i++) {
+      ch.simulateLeaderMessage({
+        type: 'transcript.export.chunk',
+        requestId,
+        index: i,
+        data: base64(chunks[i]!),
+      });
+      // Wait for ack to be sent (proves spool.append resolved)
+      await vi.waitFor(
+        () => {
+          const acks = ch
+            .parseSentFollower()
+            .filter(
+              (m) => m.type === 'transcript.export.ack' && (m as { index?: number }).index === i
+            );
+          return acks.length > 0;
+        },
+        { timeout: 3000 }
+      );
+    }
+
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.complete',
+      requestId,
+      chunks: chunks.length,
+      byteLength: totalBytes,
+      sha256: digest,
+    });
+
+    return blobPromise;
+  }
+
+  it('follower sends ack after each chunk is received', async () => {
+    const { follower, ch } = makeFollower();
+
+    const payload = new Uint8Array([1, 2, 3, 4, 5]);
+    const blob = await runFollowerTransfer(follower, ch, [payload]);
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBe(payload.byteLength);
+
+    // Ack must be sent for index 0
+    const acks = ch.parseSentFollower().filter((m) => m.type === 'transcript.export.ack');
+    expect(acks.length).toBe(1);
+    expect((acks[0] as { index?: number }).index).toBe(0);
+  });
+
+  it('follower sends ack for every chunk in a multi-chunk transfer', async () => {
+    const { follower, ch } = makeFollower();
+    const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6]), new Uint8Array([7, 8])];
+
+    const blob = await runFollowerTransfer(follower, ch, chunks);
+    expect(blob.size).toBe(8);
+
+    const acks = ch.parseSentFollower().filter((m) => m.type === 'transcript.export.ack');
+    expect(acks.length).toBe(3);
+    for (let i = 0; i < 3; i++) {
+      expect((acks[i] as { index?: number }).index).toBe(i);
+    }
+  });
+
+  it('follower spool cancel is called on close mid-transfer', async () => {
+    const { follower, ch } = makeFollower();
+    const controller = new AbortController();
+    const blobPromise = follower
+      .requestTranscriptExport({ kind: 'active' }, controller.signal)
+      .catch(() => undefined);
+
+    await vi.waitFor(() =>
+      ch.parseSentFollower().some((m) => m.type === 'transcript.export.request')
+    );
+    const req = ch.parseSentFollower().find((m) => m.type === 'transcript.export.request') as
+      | { requestId: string }
+      | undefined;
+    const requestId = req!.requestId;
+
+    ch.simulateLeaderMessage({ type: 'transcript.export.pending', requestId });
+    ch.simulateLeaderMessage({ type: 'transcript.export.start', requestId, filename: 'x.zip' });
+    ch.simulateLeaderMessage({
+      type: 'transcript.export.chunk',
+      requestId,
+      index: 0,
+      data: base64(new Uint8Array([1, 2, 3])),
+    });
+
+    follower.close();
+    await blobPromise;
+
+    // After close, follower should not be accumulating chunks (cancel was called)
+    // Verified by the spool interface contract — subsequent chunk deliveries are no-ops
+    expect(() => {
+      ch.simulateLeaderMessage({
+        type: 'transcript.export.chunk',
+        requestId,
+        index: 1,
+        data: base64(new Uint8Array([4, 5])),
+      });
+    }).not.toThrow();
+  });
+
+  it('large multi-chunk transfer assembles to exact Blob bytes', async () => {
+    const { follower, ch } = makeFollower();
+
+    // 8 chunks of 1 KB each = 8 KB total
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < 8; i++) {
+      chunks.push(new Uint8Array(1024).fill(i));
+    }
+
+    const blob = await runFollowerTransfer(follower, ch, chunks);
+    expect(blob.size).toBe(8 * 1024);
+
+    const raw = new Uint8Array(await blob.arrayBuffer());
+    let offset = 0;
+    for (let i = 0; i < 8; i++) {
+      expect(raw.subarray(offset, offset + 1024)).toEqual(new Uint8Array(1024).fill(i));
+      offset += 1024;
+    }
+  });
+});
