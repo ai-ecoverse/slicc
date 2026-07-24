@@ -336,3 +336,136 @@ describe('OpfsSpool — fake OPFS failure injection (CV-2)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// OpfsSpool — independent Blob: stream-before-delete (CV-3)
+// ---------------------------------------------------------------------------
+
+describe('OpfsSpool — independent Blob before temp-file deletion (CV-3)', () => {
+  it('returned Blob is readable after the temp OPFS file is deleted', async () => {
+    // Simulate a real zip-ish payload so content integrity is verifiable.
+    const content = bytes([0x50, 0x4b, 0x03, 0x04, 0x01, 0x02, 0x03, 0x04, 0x05]);
+    const hasher = sha256.create();
+    hasher.update(content);
+    const digest = hasher.hex();
+
+    const removeEntry = vi.fn().mockResolvedValue(undefined);
+    // getFileFn returns a real File carrying the expected bytes.
+    const dir = makeFakeOpfsDir({
+      writeFn: () => Promise.resolve(),
+      closeFn: () => Promise.resolve(),
+      getFileFn: () =>
+        Promise.resolve(
+          new File([content as Uint8Array<ArrayBuffer>], 'export.zip', {
+            type: 'application/zip',
+          })
+        ),
+      removeEntryFn: removeEntry,
+    });
+
+    const spool = new OpfsSpool('test-blob-independent');
+    await withFakeOpfs(dir, async () => {
+      await spool.append(content, 0);
+      const blob = await spool.finalize(1, content.byteLength, digest);
+
+      // Temp file was deleted by finalize.
+      expect(removeEntry).toHaveBeenCalledOnce();
+
+      // The Blob is fully readable — bytes intact even though the OPFS entry
+      // has been removed. This would fail in real Chromium with the old
+      // file.slice() + deleteTempFile() ordering.
+      expect(blob).toBeInstanceOf(Blob);
+      expect(blob.type).toBe('application/zip');
+      expect(blob.size).toBe(content.byteLength);
+
+      const raw = new Uint8Array(await blob.arrayBuffer());
+      expect(raw).toEqual(content);
+    });
+  });
+
+  it('cleanup runs and throws transfer-corrupt when stream construction fails', async () => {
+    const content = bytes([0xde, 0xad, 0xbe, 0xef]);
+    const hasher = sha256.create();
+    hasher.update(content);
+    const digest = hasher.hex();
+
+    const removeEntry = vi.fn().mockResolvedValue(undefined);
+
+    // Build a fake File whose stream() throws synchronously, simulating an
+    // invalidated OPFS file handle (e.g. underlying storage unavailable).
+    // Use a plain object cast as File — File.prototype properties are
+    // getter-only and cannot be set via Object.assign.
+    const brokenFile = {
+      name: 'export.zip',
+      size: content.byteLength,
+      type: 'application/zip',
+      lastModified: Date.now(),
+      stream: (): ReadableStream<Uint8Array> => {
+        throw new Error('OPFS handle invalidated: storage unavailable');
+      },
+      arrayBuffer: (): Promise<ArrayBuffer> =>
+        Promise.reject(new Error('OPFS arrayBuffer: storage unavailable')),
+      slice: (start?: number, end?: number, contentType?: string): Blob =>
+        new Blob([content.slice(start ?? 0, end)], { type: contentType }),
+      text: (): Promise<string> => Promise.reject(new Error('OPFS text: storage unavailable')),
+    } as unknown as File;
+
+    const dir = makeFakeOpfsDir({
+      writeFn: () => Promise.resolve(),
+      closeFn: () => Promise.resolve(),
+      getFileFn: () => Promise.resolve(brokenFile),
+      removeEntryFn: removeEntry,
+    });
+
+    const spool = new OpfsSpool('test-stream-fail');
+    await withFakeOpfs(dir, async () => {
+      await spool.append(content, 0);
+      await expect(spool.finalize(1, content.byteLength, digest)).rejects.toMatchObject({
+        code: 'transfer-corrupt',
+      });
+      // Cleanup must still run even when stream/blob construction fails.
+      expect(removeEntry).toHaveBeenCalled();
+    });
+  });
+
+  it('fallback arrayBuffer path returns correct Blob when stream is absent', async () => {
+    const content = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+    const hasher = sha256.create();
+    hasher.update(content);
+    const digest = hasher.hex();
+
+    const removeEntry = vi.fn().mockResolvedValue(undefined);
+
+    // Fake File WITHOUT a stream() method — exercises the arrayBuffer fallback.
+    // Plain object cast: File.prototype properties are getter-only.
+    const noStreamFile = {
+      name: 'export.zip',
+      size: content.byteLength,
+      type: 'application/zip',
+      lastModified: Date.now(),
+      stream: undefined, // absent — triggers fallback
+      arrayBuffer: (): Promise<ArrayBuffer> =>
+        Promise.resolve((content as Uint8Array<ArrayBuffer>).buffer),
+    } as unknown as File;
+
+    const dir = makeFakeOpfsDir({
+      writeFn: () => Promise.resolve(),
+      closeFn: () => Promise.resolve(),
+      getFileFn: () => Promise.resolve(noStreamFile),
+      removeEntryFn: removeEntry,
+    });
+
+    const spool = new OpfsSpool('test-no-stream');
+    await withFakeOpfs(dir, async () => {
+      await spool.append(content, 0);
+      const blob = await spool.finalize(1, content.byteLength, digest);
+
+      expect(removeEntry).toHaveBeenCalledOnce();
+      expect(blob.type).toBe('application/zip');
+      expect(blob.size).toBe(content.byteLength);
+
+      const raw = new Uint8Array(await blob.arrayBuffer());
+      expect(raw).toEqual(content);
+    });
+  });
+});
