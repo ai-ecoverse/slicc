@@ -174,6 +174,67 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 	}
 }
 
+// TestCLIWatchStreamsConeOutput: `slicc <url> watch` — a passive tail. The CLI
+// sends nothing; the leader broadcasts a cone content delta and the CLI prints
+// it to stdout. `watch` never exits on its own, so we read until the marker
+// appears and then kill the long-lived watcher.
+func TestCLIWatchStreamsConeOutput(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+
+	const marker = "WATCH-E2E-OK"
+	leader.dc.OnOpen(func() {
+		_ = sendJSON(leader.dc, protocol.Hello{Type: protocol.TypeHello, ProtocolVersion: 1})
+		_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
+			Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+			Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: marker},
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, leader.joinURL, "watch")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start watch: %v", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	got := make(chan string, 1)
+	go func() {
+		var buf []byte
+		tmp := make([]byte, 128)
+		for {
+			n, rerr := stdout.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				if strings.Contains(string(buf), marker) {
+					got <- string(buf)
+					return
+				}
+			}
+			if rerr != nil {
+				got <- string(buf)
+				return
+			}
+		}
+	}()
+
+	select {
+	case out := <-got:
+		if !strings.Contains(out, marker) {
+			t.Fatalf("watch stdout = %q, want %q; stderr:\n%s", out, marker, stderr.String())
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for watch output; stderr:\n%s", stderr.String())
+	}
+}
+
 // TestCLIPromptCompletesOnLiveFloat: `slicc <url> prompt "…"` against a leader
 // that emits the LIVE browser-float sequence — content deltas + a
 // processing→ready status, and NO `turn_end`. The CLI must print the delta and

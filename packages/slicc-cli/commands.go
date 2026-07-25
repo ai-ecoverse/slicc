@@ -172,6 +172,91 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	}
 }
 
+// cmdWatch connects as a passive follower and tails the leader's agent output
+// for a scoop (default the cone) to stdout — content deltas as they stream, a
+// blank line at each turn boundary — until interrupted. It sends nothing to the
+// leader and never completes on its own: a read-only `tail -f` on what the agent
+// is doing, reconnecting with backoff so it survives leader reloads.
+func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
+	fmt.Fprintf(os.Stderr, "slicc watch: tailing %q output (Ctrl+C to stop)\n", scoopJid)
+	backoff := time.Second
+	failures := 0
+	for {
+		if ctx.Err() != nil {
+			return 0
+		}
+		clean, err := watchOnce(ctx, joinURL, scoopJid)
+		if ctx.Err() != nil {
+			return 0
+		}
+		if clean {
+			failures = 0
+			backoff = time.Second
+		} else {
+			failures++
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "slicc watch: %s\n", err)
+			}
+			if failures >= 20 {
+				fmt.Fprintln(os.Stderr, "slicc watch: giving up after 20 failed attempts")
+				return 1
+			}
+		}
+		fmt.Fprintf(os.Stderr, "slicc watch: reconnecting in %s…\n", backoff)
+		if !sleepCtx(ctx, backoff) {
+			return 0
+		}
+		backoff = minDuration(backoff*2, 30*time.Second)
+	}
+}
+
+func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err error) {
+	sawProcessing := false
+	handler := func(typ string, raw []byte) {
+		switch typ {
+		case protocol.TypeAgentEvent:
+			var env protocol.AgentEventEnvelope
+			if json.Unmarshal(raw, &env) != nil || env.ScoopJid != scoopJid {
+				return
+			}
+			switch env.Event.Type {
+			case protocol.AgentContentDelta:
+				fmt.Print(env.Event.Text)
+			case protocol.AgentTurnEnd:
+				fmt.Println()
+			case protocol.AgentError:
+				fmt.Fprintf(os.Stderr, "\nslicc watch: %s\n", env.Event.Error)
+			}
+		case protocol.TypeStatus:
+			var s protocol.Status
+			if json.Unmarshal(raw, &s) != nil {
+				return
+			}
+			// Live browser floats emit no turn_end; a processing→ready flip is
+			// the turn boundary, so separate turns with a newline there too.
+			if s.ScoopStatus == protocol.ScoopStatusProcessing {
+				sawProcessing = true
+			} else if sawProcessing {
+				sawProcessing = false
+				fmt.Println()
+			}
+		}
+	}
+	conn, dialErr := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
+	if dialErr != nil {
+		return false, dialErr
+	}
+	defer conn.Close()
+	fmt.Fprintln(os.Stderr, "slicc watch: connected")
+	select {
+	case <-ctx.Done():
+		return true, nil
+	case <-conn.Done():
+		fmt.Fprintln(os.Stderr, "slicc watch: connection closed")
+		return true, nil
+	}
+}
+
 // cmdFollow stays connected and runs leader-issued commands locally through the
 // given runner argv, reconnecting with backoff. An empty runner means the leader
 // gets no exec on this box.

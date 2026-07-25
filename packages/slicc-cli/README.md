@@ -8,8 +8,12 @@ Windows — amd64 and arm64), or build from source with `make build`.
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
+slicc <join-url> watch [scoop]                  Tail the agent's output live (default the cone), until Ctrl+C
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; let the leader run commands on THIS machine
 ```
+
+`watch` is read-only: it prints the leader's agent output as it streams (a
+`tail -f` on what the cone is doing) and sends nothing back.
 
 `<join-url>` is a leader's `https://…/join/<token>` link (from the leader's
 "Copy tray join URL", or its `host` command's `join_url`).
