@@ -87,10 +87,13 @@ describe('resolveLatestCliAsset', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it('paginates until it finds a carrier release', async () => {
+  const fullBinarylessPage = () =>
+    Array.from({ length: 100 }, (_, i) => release(`v5.${i}.0`, [`sliccy-5.${i}.0.tgz`]));
+
+  it('paginates past a full page of binary-less releases', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse([release('v5.72.0', [])]))
+      .mockResolvedValueOnce(jsonResponse(fullBinarylessPage()))
       .mockResolvedValueOnce(jsonResponse([release('v5.71.1', ['slicc-darwin-arm64'])]));
 
     const resolved = await resolveLatestCliAsset('slicc-darwin-arm64', fetchImpl);
@@ -100,19 +103,29 @@ describe('resolveLatestCliAsset', () => {
     expect(fetchImpl.mock.calls[1]?.[0]).toContain('page=2');
   });
 
-  it('returns null when the release list is exhausted', async () => {
+  it('stops at a short page instead of fetching further pages', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse([release('v5.72.0', [])]))
-      .mockResolvedValueOnce(jsonResponse([]));
+      .mockResolvedValueOnce(jsonResponse([release('v5.72.0', [])]));
 
     expect(await resolveLatestCliAsset('slicc-darwin-arm64', fetchImpl)).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds each API request with a timeout signal', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([release('v5.71.1', ['slicc-darwin-arm64'])]));
+
+    await resolveLatestCliAsset('slicc-darwin-arm64', fetchImpl);
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('gives up after the page cap even when every page is full', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockImplementation(async () => jsonResponse([release('v5.0.0', ['sliccy-5.0.0.tgz'])]));
+      .mockImplementation(async () => jsonResponse(fullBinarylessPage()));
 
     expect(await resolveLatestCliAsset('slicc-darwin-arm64', fetchImpl)).toBeNull();
     expect(fetchImpl).toHaveBeenCalledTimes(5);
@@ -245,7 +258,7 @@ describe('runInstallCli', () => {
     expect(readdirSync(installDir)).toEqual([]);
   });
 
-  it('names the binary slicc.exe on Windows targets', async () => {
+  it('names the binary slicc.exe on Windows targets and prints Windows PATH hints', async () => {
     const installDir = makeInstallDir();
     const fetchImpl = vi.fn<typeof fetch>(async (url) => {
       if (String(url).includes('api.github.com')) {
@@ -253,11 +266,15 @@ describe('runInstallCli', () => {
       }
       return new Response(Buffer.from('MZ'));
     });
-    const { options } = runOptions(installDir, fetchImpl);
+    const { options, lines } = runOptions(installDir, fetchImpl);
     options.platform = 'win32';
     options.arch = 'x64';
 
     expect(await runInstallCli(options)).toBe(0);
     expect(existsSync(join(installDir, 'slicc.exe'))).toBe(true);
+    // No POSIX `export` on Windows — PowerShell + cmd guidance instead
+    expect(lines.join('\n')).toContain('$env:Path');
+    expect(lines.join('\n')).toContain('setx PATH');
+    expect(lines.join('\n')).not.toContain('export PATH');
   });
 });

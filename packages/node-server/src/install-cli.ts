@@ -13,9 +13,16 @@ import { delimiter, join } from 'path';
  * cloudflare-worker's /download/slicc.dmg scan.
  */
 
-const RELEASES_API = 'https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=30';
+const RELEASES_PER_PAGE = 100;
+const RELEASES_API = `https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=${RELEASES_PER_PAGE}`;
+// Bounded pagination (5 × 100 releases ≈ months of releases even at the
+// current cadence) so a rate-limited or looping API can't hang the installer;
+// the sparse-release gap this must absorb is bounded by how often
+// packages/slicc-cli actually changes.
 const MAX_RELEASE_PAGES = 5;
 const USER_AGENT = 'sliccy-install-cli';
+const API_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 180_000;
 
 interface GithubReleaseAsset {
   name: string;
@@ -67,6 +74,7 @@ export async function resolveLatestCliAsset(
   for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
     const res = await fetchImpl(`${RELEASES_API}&page=${page}`, {
       headers: { 'User-Agent': USER_AGENT },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
     if (!res.ok) {
       throw new Error(`GitHub releases API responded ${res.status} for page ${page}`);
@@ -85,6 +93,10 @@ export async function resolveLatestCliAsset(
         };
       }
     }
+    // Fewer than a full page means we've reached the last page — stop early.
+    if (releases.length < RELEASES_PER_PAGE) {
+      return null;
+    }
   }
   return null;
 }
@@ -98,7 +110,10 @@ async function downloadTo(
   destination: string,
   fetchImpl: typeof fetch
 ): Promise<void> {
-  const res = await fetchImpl(url, { headers: { 'User-Agent': USER_AGENT } });
+  const res = await fetchImpl(url, {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(`download failed with HTTP ${res.status} for ${url}`);
   }
@@ -176,7 +191,20 @@ export async function runInstallCli(options: InstallCliOptions = {}): Promise<nu
   log(`[install-cli] installed ${destination}`);
   if (!isDirOnPath(installDir, env)) {
     log(`[install-cli] ${installDir} is not on your PATH — add it, e.g.:`);
-    log(`[install-cli]   export PATH="${installDir}:$PATH"`);
+    for (const line of pathHintLines(platform, installDir)) {
+      log(`[install-cli]   ${line}`);
+    }
   }
   return 0;
+}
+
+/** Shell-appropriate "add to PATH" instructions: POSIX export vs PowerShell/cmd. */
+function pathHintLines(platform: string, installDir: string): string[] {
+  if (platform === 'win32') {
+    return [
+      `$env:Path += ";${installDir}"    (PowerShell, current session)`,
+      `setx PATH "%PATH%;${installDir}"    (cmd, persistent)`,
+    ];
+  }
+  return [`export PATH="${installDir}:$PATH"`];
 }
