@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cliAssetName,
-  defaultInstallDir,
+  resolveInstallDir,
   resolveLatestCliAsset,
   runInstallCli,
 } from '../src/install-cli.js';
@@ -56,13 +56,38 @@ describe('cliAssetName', () => {
   });
 });
 
-describe('defaultInstallDir', () => {
-  it('prefers HOME, then USERPROFILE, then cwd', () => {
-    expect(defaultInstallDir({ HOME: '/home/me' })).toBe(join('/home/me', '.slicc', 'bin'));
-    expect(defaultInstallDir({ USERPROFILE: 'C:\\Users\\me' })).toBe(
-      join('C:\\Users\\me', '.slicc', 'bin')
+describe('resolveInstallDir', () => {
+  const LOCAL_BIN = join('/home/me', '.local', 'bin');
+
+  it('prefers ~/.local/bin when it is already on PATH', () => {
+    const env = { HOME: '/home/me', PATH: `/usr/bin${delimiter}${LOCAL_BIN}` };
+    expect(resolveInstallDir(env, 'linux', () => true)).toBe(LOCAL_BIN);
+  });
+
+  it('falls back to a writable /usr/local/bin when ~/.local/bin is not on PATH', () => {
+    const env = { HOME: '/home/me', PATH: `/usr/bin${delimiter}/usr/local/bin` };
+    expect(resolveInstallDir(env, 'darwin', (dir) => dir === '/usr/local/bin')).toBe(
+      '/usr/local/bin'
     );
-    expect(defaultInstallDir({})).toBe(join('.', '.slicc', 'bin'));
+  });
+
+  it('uses ~/.local/bin (with a later PATH hint) when /usr/local/bin is not writable', () => {
+    const env = { HOME: '/home/me', PATH: `/usr/bin${delimiter}/usr/local/bin` };
+    expect(resolveInstallDir(env, 'linux', () => false)).toBe(LOCAL_BIN);
+  });
+
+  it('ignores /usr/local/bin when it is not on PATH even if writable', () => {
+    const env = { HOME: '/home/me', PATH: '/usr/bin' };
+    expect(resolveInstallDir(env, 'linux', () => true)).toBe(LOCAL_BIN);
+  });
+
+  it('uses %LOCALAPPDATA%\\Programs\\slicc on Windows', () => {
+    expect(resolveInstallDir({ LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }, 'win32')).toBe(
+      join('C:\\Users\\me\\AppData\\Local', 'Programs', 'slicc')
+    );
+    expect(resolveInstallDir({ USERPROFILE: 'C:\\Users\\me' }, 'win32')).toBe(
+      join('C:\\Users\\me', 'AppData', 'Local', 'Programs', 'slicc')
+    );
   });
 });
 

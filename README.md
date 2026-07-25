@@ -145,7 +145,7 @@ For the full Electron workflow, see [docs/electron.md](docs/electron.md).
 npx sliccy --install-cli
 ```
 
-This finds the newest release carrying CLI binaries (they only attach when the CLI changed), downloads the one for your OS/architecture to `~/.slicc/bin/slicc` (override with `--install-dir <dir>`), marks it executable, and prints a PATH hint if the directory is not on your `PATH`.
+This finds the newest release carrying CLI binaries (they only attach when the CLI changed) and installs the one for your OS/architecture to the idiomatic place: `~/.local/bin` when it is on your `PATH`, otherwise `/usr/local/bin` when writable without privileges, otherwise `~/.local/bin` with a PATH hint (`%LOCALAPPDATA%\Programs\slicc` on Windows; `--install-dir <dir>` overrides).
 
 ## How it works
 

@@ -23,7 +23,7 @@ export interface CliRuntimeFlags {
   hosted: boolean;
   /** Download the released Go `slicc` follower CLI and exit */
   installCli: boolean;
-  /** Target directory for --install-cli (default ~/.slicc/bin) */
+  /** Target directory for --install-cli (default: OS-idiomatic, see install-cli.ts) */
   installDir: string | null;
 }
 

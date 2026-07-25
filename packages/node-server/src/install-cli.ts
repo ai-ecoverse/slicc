@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { accessSync, chmodSync, constants, mkdirSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { delimiter, join } from 'path';
 
 /**
@@ -57,10 +57,41 @@ export function cliAssetName(platform: string, arch: string): string | null {
   return `slicc-${os}-${goArch}${os === 'windows' ? '.exe' : ''}`;
 }
 
-/** `~/.slicc/bin` — the same `~/.slicc` home the server uses for secrets and logs. */
-export function defaultInstallDir(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME ?? env.USERPROFILE ?? '.';
-  return join(home, '.slicc', 'bin');
+function defaultIsWritableDir(dir: string): boolean {
+  try {
+    accessSync(dir, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OS-idiomatic install dir, in preference order:
+ *
+ * POSIX — `~/.local/bin` when it is already on `$PATH` (the XDG user-binaries
+ * dir); otherwise `/usr/local/bin` when it is on `$PATH` and writable without
+ * privileges; otherwise `~/.local/bin` anyway (created, with a PATH hint).
+ * Windows — `%LOCALAPPDATA%\Programs\slicc` (the per-user programs idiom).
+ */
+export function resolveInstallDir(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform,
+  isWritableDir: (dir: string) => boolean = defaultIsWritableDir
+): string {
+  if (platform === 'win32') {
+    const base = env.LOCALAPPDATA ?? join(env.USERPROFILE ?? '.', 'AppData', 'Local');
+    return join(base, 'Programs', 'slicc');
+  }
+  const localBin = join(env.HOME ?? '.', '.local', 'bin');
+  const pathDirs = (env.PATH ?? '').split(delimiter);
+  if (pathDirs.includes(localBin)) {
+    return localBin;
+  }
+  if (pathDirs.includes('/usr/local/bin') && isWritableDir('/usr/local/bin')) {
+    return '/usr/local/bin';
+  }
+  return localBin;
 }
 
 /**
@@ -128,7 +159,7 @@ export interface InstallCliOptions {
   fetchImpl?: typeof fetch;
   platform?: string;
   arch?: string;
-  /** Overrides the `~/.slicc/bin` default (the `--install-dir` flag). */
+  /** Overrides the resolved OS-idiomatic default (the `--install-dir` flag). */
   installDir?: string | null;
   env?: NodeJS.ProcessEnv;
   log?: (line: string) => void;
@@ -157,7 +188,7 @@ export async function runInstallCli(options: InstallCliOptions = {}): Promise<nu
     return 1;
   }
 
-  const installDir = options.installDir ?? defaultInstallDir(env);
+  const installDir = options.installDir ?? resolveInstallDir(env, platform);
   const binaryName = assetName.endsWith('.exe') ? 'slicc.exe' : 'slicc';
   const destination = join(installDir, binaryName);
 

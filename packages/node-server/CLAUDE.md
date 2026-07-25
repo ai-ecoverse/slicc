@@ -25,7 +25,7 @@ npm run package:release
 
 `packages/node-server/src/runtime-flags.ts` is the source of truth for supported flags such as `--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, and `--prompt`.
 
-- **CLI installer (`--install-cli`)**: downloads the released Go `slicc` follower binary (`packages/slicc-cli`) for the current platform and exits — no server boots. `src/install-cli.ts` scans GitHub releases newest→oldest for the first one carrying a `slicc-<os>-<arch>` asset (releases are sparse: binaries only attach when `packages/slicc-cli` changed), installs to `~/.slicc/bin` (or `--install-dir <dir>`), and prints a PATH hint.
+- **CLI installer (`--install-cli`)**: downloads the released Go `slicc` follower binary (`packages/slicc-cli`) for the current platform and exits — no server boots. `src/install-cli.ts` scans GitHub releases newest→oldest for the first one carrying a `slicc-<os>-<arch>` asset (releases are sparse: binaries only attach when `packages/slicc-cli` changed), installs to an OS-idiomatic dir — `~/.local/bin` when on `$PATH`, else `/usr/local/bin` when writable, else `~/.local/bin` with a PATH hint; `%LOCALAPPDATA%\Programs\slicc` on Windows (or `--install-dir <dir>`).
 
 `--serve-only` now honors `--cdp-port` (previously parsed but silently dropped, so the CDP proxy always pointed at 9222); the fake-LLM E2E harness depends on this to keep the proxy, the helper's `readCdpPageState` probe, and Playwright Chrome's `--remote-debugging-port` agreed on the same port.
 
