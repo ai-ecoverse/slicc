@@ -39,6 +39,13 @@ jobs:
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
+      # Go toolchain for the `slicc` CLI binaries, built + signed by
+      # release-native.mjs (semantic-release prepareCmd) when slicc-cli changed.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test

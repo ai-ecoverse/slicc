@@ -26,6 +26,11 @@ export const MACOS_PATH_PREFIXES = [
 ];
 export const IOS_PATH_PREFIXES = ['packages/ios-app/'];
 
+// APPROVED relevant path set for the `slicc` Go CLI binaries. The CLI vendors
+// its own copy of the wire protocol (internal/protocol), so only its own package
+// changes the built binary — no cross-package inputs.
+export const SLICC_CLI_PATH_PREFIXES = ['packages/slicc-cli/'];
+
 // APPROVED extension-relevant path set for the Chrome Web Store publish. Covers
 // the extension entry points plus every web package bundled into the extension
 // artifact (webapp, its UI shell, shared primitives, and the injection/host
@@ -70,6 +75,11 @@ export const MACOS_SCRIPT_CMD =
   'chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh';
 export const IOS_SCRIPT_CMD =
   'chmod +x packages/ios-app/scripts/package-and-upload-testflight.sh && packages/ios-app/scripts/package-and-upload-testflight.sh';
+// Build + Developer ID-sign + notarize the Go CLI binaries, staging them into
+// artifacts/release/ (attached by @semantic-release/github). Reuses the cert +
+// notarytool creds already set up in the macOS release job.
+export const SLICC_CLI_SCRIPT_CMD =
+  'chmod +x packages/slicc-cli/sign-and-package.sh && packages/slicc-cli/sign-and-package.sh';
 // A failing publish must fail the release (fail-fast preserved via execSync).
 export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
 
@@ -105,6 +115,18 @@ export function decideGating({ lastTag, changedFiles = [] } = {}) {
   return {
     macos: changedFiles.some((f) => matchesAnyPrefix(f, MACOS_PATH_PREFIXES)),
     ios: changedFiles.some((f) => matchesAnyPrefix(f, IOS_PATH_PREFIXES)),
+    firstRelease: false,
+  };
+}
+
+// Core gating decision for the `slicc` Go CLI binaries. Kept separate from
+// decideGating so the native macOS/iOS decision shape stays untouched.
+export function decideSliccCliGating({ lastTag, changedFiles = [] } = {}) {
+  if (isFirstRelease(lastTag)) {
+    return { sliccCli: true, firstRelease: true };
+  }
+  return {
+    sliccCli: changedFiles.some((f) => matchesAnyPrefix(f, SLICC_CLI_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
@@ -238,7 +260,8 @@ Behavior:
   - Default (no --gate): diff <tag> against HEAD (or HEAD^ for a generated release commit)
     and build macOS only if one of
     ${MACOS_PATH_PREFIXES.join(', ')} changed, iOS only if
-    ${IOS_PATH_PREFIXES.join(', ')} changed.
+    ${IOS_PATH_PREFIXES.join(', ')} changed, and the signed + notarized slicc CLI
+    binaries only if ${SLICC_CLI_PATH_PREFIXES.join(', ')} changed.
   - --gate=chrome: use the same resolved diff ref and publish to the Chrome Web Store if one of
     ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
   - --gate=worker: use the same resolved diff ref and print deploy only if one of
@@ -279,6 +302,55 @@ function classifyDeployLogFile(path) {
     return 'fatal';
   }
   return isRoutesReconcileOnlyFailure(text) ? 'routes-only' : 'fatal';
+}
+
+// Default native gate: build macOS (+ known-good pointer), iOS, and the signed
+// slicc CLI binaries per their change-since-last-tag decisions. Extracted from
+// main() to keep its cognitive complexity within the biome gate.
+function runNativeGate(args, changedFiles) {
+  const decision = decideGating({ lastTag: args.last, changedFiles });
+
+  if (decision.firstRelease) {
+    console.log('[release-native] First release (no previous tag) — building both native targets.');
+  } else {
+    console.log(`[release-native] Changed since ${args.last}: ${changedFiles.length} file(s).`);
+  }
+
+  if (decision.macos) {
+    runStep('macOS (Sliccstart DMG + update ZIP)', MACOS_SCRIPT_CMD, args.dryRun);
+    // The macOS packaging step succeeded (runStep throws on failure) — record the
+    // DMG-carrying version in the committed pointer. Skipped on dry-run and when
+    // --next is empty (a missing version must not fail the release).
+    if (!args.dryRun) {
+      if (args.next.trim()) {
+        const pointer = writeKnownGoodPointer(args.next);
+        console.log(
+          `[release-native] Updated known-good macOS pointer → ${pointer.version} (${KNOWN_GOOD_MACOS_PATH}).`
+        );
+      } else {
+        console.warn('[release-native] --next is empty; skipping known-good macOS pointer update.');
+      }
+    }
+  } else {
+    console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
+  }
+
+  if (decision.ios) runStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
+  else console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
+
+  const cliDecision = decideSliccCliGating({ lastTag: args.last, changedFiles });
+  if (cliDecision.sliccCli) {
+    // Pass the next version so the binaries stamp the release tag; empty (a
+    // dry-run / manual run) falls back to git describe inside the script.
+    const versionEnv = args.next.trim() ? `SLICC_RELEASE_VERSION='${args.next.trim()}' ` : '';
+    runStep(
+      'slicc CLI (signed + notarized binaries)',
+      `${versionEnv}${SLICC_CLI_SCRIPT_CMD}`,
+      args.dryRun
+    );
+  } else {
+    console.log('[release-native] Skipping slicc CLI binaries (no packages/slicc-cli changes).');
+  }
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -328,36 +400,7 @@ export function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const decision = decideGating({ lastTag: args.last, changedFiles });
-
-  if (decision.firstRelease) {
-    console.log('[release-native] First release (no previous tag) — building both native targets.');
-  } else {
-    console.log(`[release-native] Changed since ${args.last}: ${changedFiles.length} file(s).`);
-  }
-
-  if (decision.macos) {
-    runStep('macOS (Sliccstart DMG + update ZIP)', MACOS_SCRIPT_CMD, args.dryRun);
-    // The macOS packaging step succeeded (runStep throws on failure) — record the
-    // DMG-carrying version in the committed pointer. Skipped on dry-run and when
-    // --next is empty (a missing version must not fail the release).
-    if (!args.dryRun) {
-      if (args.next.trim()) {
-        const pointer = writeKnownGoodPointer(args.next);
-        console.log(
-          `[release-native] Updated known-good macOS pointer → ${pointer.version} (${KNOWN_GOOD_MACOS_PATH}).`
-        );
-      } else {
-        console.warn('[release-native] --next is empty; skipping known-good macOS pointer update.');
-      }
-    }
-  } else {
-    console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
-  }
-
-  if (decision.ios) runStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
-  else console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
-
+  runNativeGate(args, changedFiles);
   return 0;
 }
 

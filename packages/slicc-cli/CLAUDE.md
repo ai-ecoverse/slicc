@@ -96,14 +96,16 @@ make dist           # cross-compiled static binaries → dist/
 
 Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
 complexity, matching the TS side's biome complexity gate) and the `COVER_MIN`
-coverage floor in the Makefile. Both run in the `slicc-cli` CI job. Release
-binaries are attached to each GitHub release by `.github/workflows/slicc-cli-release.yml`
-(decoupled from semantic-release; triggered on `release: published`). That job runs
-on **macOS** and Developer ID-signs + notarizes the two darwin binaries — reusing
-release.yml's `APPLE_CERTIFICATE_BASE64` cert and `APPLE_API_KEY_*` notarytool
-credentials — so they pass Gatekeeper. A bare CLI binary can't be stapled (only
-`.app`/`.dmg`/`.pkg`), so Gatekeeper verifies the notarization online. It stays
-decoupled from the native release so a Go/signing hiccup can't break it.
+coverage floor in the Makefile. Both run in the `slicc-cli` CI job. Release binaries are cut **atomically with the semantic-release flow** and only
+when `packages/slicc-cli/` changed since the last tag. `release-native.mjs`
+(the prepareCmd gate) calls `sign-and-package.sh` when `decideSliccCliGating`
+opens: it cross-compiles every target on the macOS release runner, Developer
+ID-signs + notarizes the two darwin binaries (reusing release.yml's
+`APPLE_CERTIFICATE_BASE64` cert and `APPLE_API_KEY_*` notarytool creds, and the
+`setup-go` toolchain), and stages `artifacts/release/slicc-*` for
+`@semantic-release/github` to attach. A bare CLI binary can't be stapled (only
+`.app`/`.dmg`/`.pkg`), so Gatekeeper verifies the notarization online. With no
+cert (a fork / local run) the binaries build + stage unsigned instead of failing.
 
 **OS matrix:** the follower targets macOS/Linux/Windows, so CI runs `go test ./...`
 on all three (`strategy.matrix.os`) to exercise the real per-OS runtime paths —

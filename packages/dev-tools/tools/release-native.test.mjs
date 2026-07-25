@@ -18,6 +18,7 @@ import {
   buildKnownGoodPointer,
   decideChromeGating,
   decideGating,
+  decideSliccCliGating,
   decideWorkerGating,
   EXTENSION_PATH_PREFIXES,
   getChangedFiles,
@@ -294,6 +295,32 @@ describe('decideGating', () => {
         changedFiles: ['packages/assets/logos/macos-icon.png'],
       })
     ).toEqual({ macos: true, ios: false, firstRelease: false });
+  });
+});
+
+describe('decideSliccCliGating', () => {
+  it('builds on first release regardless of changed files', () => {
+    expect(decideSliccCliGating({ lastTag: '', changedFiles: [] })).toEqual({
+      sliccCli: true,
+      firstRelease: true,
+    });
+  });
+
+  it('builds only when a slicc-cli path changed', () => {
+    expect(
+      decideSliccCliGating({ lastTag: 'v1.0.0', changedFiles: ['packages/slicc-cli/main.go'] })
+    ).toEqual({ sliccCli: true, firstRelease: false });
+  });
+
+  it('skips when only unrelated packages changed', () => {
+    expect(
+      decideSliccCliGating({
+        lastTag: 'v1.0.0',
+        // A shared-ts protocol change does NOT rebuild the CLI (it vendors its
+        // own internal/protocol copy) — only packages/slicc-cli/ counts.
+        changedFiles: ['packages/shared-ts/src/tray-sync-protocol.ts', 'packages/webapp/x.ts'],
+      })
+    ).toEqual({ sliccCli: false, firstRelease: false });
   });
 });
 

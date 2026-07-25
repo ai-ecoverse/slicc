@@ -33,7 +33,7 @@ This file covers the repo's developer-tooling surface.
 - **Coverage gate + ratchet**: `packages/dev-tools/tools/coverage-gate.mjs` reads per-package floors from `coverage-thresholds.json` and runs vitest with those thresholds. `coverage-ratchet.mjs` raises floors nightly toward measured coverage. See `coverage-thresholds.json` and the [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md).
 - **Cross-impl mask vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` — regenerate pinned mask vectors for TS/Swift parity tests after intentional masking changes.
 - **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — fast `npm ci` staleness check wired via `pretypecheck` and `pretest` scripts.
-- **Release gating**: `packages/dev-tools/tools/release-native.mjs` — gates native macOS/iOS packaging and Chrome Web Store/worker publish steps on whether relevant source changed since the last tag.
+- **Release gating**: `packages/dev-tools/tools/release-native.mjs` — gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), and Chrome Web Store/worker publish steps on whether relevant source changed since the last tag.
 
 ### SLICC CDP Debug Toolkit
 
