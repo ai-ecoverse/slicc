@@ -239,11 +239,15 @@ function createLeaderHookSetup(
     wireLeaderHooks: (handle) => {
       setConnectedFollowersGetter(() => {
         const execIds = handle.sync.getExecCapableBootstrapIds();
+        const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
+        const motds = handle.sync.getFollowerMotds();
         return handle.peers.getPeers().map((p) => ({
           runtimeId: canonicalRuntimeId(p.bootstrapId),
           runtime: p.runtime,
           connectedAt: p.connectedAt ?? undefined,
           exec: execIds.has(p.bootstrapId),
+          cdp: cdpIds.has(p.bootstrapId),
+          motd: motds.get(p.bootstrapId),
         }));
       });
       setTrayResetter(() => handle.reset());

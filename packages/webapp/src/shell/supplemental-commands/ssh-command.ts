@@ -69,6 +69,9 @@ function formatTargets(followers: ConnectedFollowerInfo[]): string {
     const parts = [f.runtimeId];
     if (f.runtime) parts.push(`(${f.runtime})`);
     lines.push(`  - ${parts.join(' ')}`);
+    // The follower's advertised MOTD (hello.motd) — who/what/where the target
+    // is, so the agent sees what it's connecting to on first `ssh --list`.
+    if (f.motd) lines.push(`      ${f.motd}`);
   }
   return `${lines.join('\n')}\n`;
 }

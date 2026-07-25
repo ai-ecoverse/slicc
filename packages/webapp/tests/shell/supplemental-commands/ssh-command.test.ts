@@ -9,6 +9,7 @@ const hoisted = vi.hoisted(() => ({
     runtime?: string;
     connectedAt?: string;
     exec?: boolean;
+    motd?: string;
   }>,
 }));
 
@@ -54,6 +55,22 @@ describe('ssh command', () => {
       expect(r.stdout).toContain('follower-a');
       expect(r.stdout).not.toContain('follower-b');
     }
+  });
+
+  it('shows each exec target’s advertised MOTD under it', async () => {
+    hoisted.followers = [
+      {
+        runtimeId: 'follower-a',
+        runtime: 'slicc-cli',
+        exec: true,
+        motd: 'slicc-cli exec target · alice@studio · darwin/arm64 · runner: sh -c',
+      },
+    ];
+    const r = await createSshCommand().execute(['--list'], ctx());
+    expect(r.stdout).toContain('  - follower-a');
+    expect(r.stdout).toContain(
+      '      slicc-cli exec target · alice@studio · darwin/arm64 · runner: sh -c'
+    );
   });
 
   it('reports when no follower is an exec target', async () => {

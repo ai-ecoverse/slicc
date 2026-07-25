@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -63,22 +64,33 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, "slicc prompt: missing prompt text")
 			return 2
 		}
-		return cmdPrompt(ctx, joinURL, strings.Join(rest, " "))
+		text, err := readTextArg(rest, os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "slicc prompt: %s\n", err)
+			return 1
+		}
+		return cmdPrompt(ctx, joinURL, text)
 	case "exec":
 		if len(rest) == 0 {
 			fmt.Fprintln(os.Stderr, "slicc exec: missing command")
 			return 2
 		}
-		return cmdExec(ctx, joinURL, strings.Join(rest, " "))
+		command, err := readTextArg(rest, os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "slicc exec: %s\n", err)
+			return 1
+		}
+		return cmdExec(ctx, joinURL, command)
 	case "follow":
-		// Everything after `follow` is the runner argv (verbatim) the leader's
-		// commands are handed to — no slicc-level flag parsing, so runner flags
-		// like `-i` / `-c` pass straight through. A leading -h/--help is help.
-		if len(rest) > 0 && (rest[0] == "-h" || rest[0] == "--help") {
+		// A leading `--no-banner` (or `--`) is consumed by slicc; everything
+		// after is the runner argv (verbatim), so runner flags like `-i` / `-c`
+		// pass straight through.
+		runner, showBanner, help := parseFollowArgs(rest)
+		if help {
 			usage(os.Stdout)
 			return 0
 		}
-		return cmdFollow(ctx, joinURL, rest)
+		return cmdFollow(ctx, joinURL, runner, showBanner)
 	default:
 		fmt.Fprintf(os.Stderr, "slicc: unknown subcommand %q\n", sub)
 		usage(os.Stderr)
@@ -92,7 +104,7 @@ func usage(w *os.File) {
 Usage:
   slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
-  slicc <join-url> follow [runner...]
+  slicc <join-url> follow [--no-banner] [runner...]
                                       Stay connected as a follower. If a runner is given,
                                       the leader can run commands on THIS machine — each
                                       one is executed as "<runner> <command>", as the user
@@ -103,6 +115,62 @@ Usage:
   slicc --version
   slicc --help
 
+The <text>/<command> argument, curl-style:
+  "some text"    a literal string (multiple words are joined with spaces)
+  @path          read it from the file at <path>
+  @-  or  -      read it from stdin        (echo "hi" | slicc <url> prompt -)
+
 The <join-url> is a leader's https://…/join/<token> link.
 `)
+}
+
+// readTextArg resolves the text/command argument for prompt/exec, curl-style:
+//
+//	"-" or "@-"   → read all of stdin
+//	"@<path>"     → read the file at <path>
+//	otherwise     → the args joined with spaces (verbatim; preserves the old behavior)
+//
+// The @ / - forms only apply when there is exactly one argument, so
+// `prompt hello world` still sends "hello world" and only a lone `@file`
+// (typically quoted) is treated as a file.
+func readTextArg(args []string, stdin io.Reader) (string, error) {
+	if len(args) == 1 {
+		switch a := args[0]; {
+		case a == "-" || a == "@-":
+			b, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", fmt.Errorf("reading stdin: %w", err)
+			}
+			return strings.TrimRight(string(b), "\n"), nil
+		case strings.HasPrefix(a, "@"):
+			b, err := os.ReadFile(a[1:])
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimRight(string(b), "\n"), nil
+		}
+	}
+	return strings.Join(args, " "), nil
+}
+
+// parseFollowArgs consumes slicc's own leading `follow` options (`--no-banner`,
+// `--help`, and the `--` end-of-options terminator) and returns the remaining
+// argv as the runner (verbatim). `--` lets a runner whose first token would
+// otherwise look like a slicc flag pass through untouched.
+func parseFollowArgs(rest []string) (runner []string, showBanner bool, help bool) {
+	showBanner = true
+	for len(rest) > 0 {
+		switch rest[0] {
+		case "-h", "--help":
+			return nil, showBanner, true
+		case "--no-banner":
+			showBanner = false
+			rest = rest[1:]
+			continue
+		case "--":
+			return rest[1:], showBanner, false
+		}
+		break
+	}
+	return rest, showBanner, false
 }

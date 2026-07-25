@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -173,8 +175,8 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 // cmdFollow stays connected and runs leader-issued commands locally through the
 // given runner argv, reconnecting with backoff. An empty runner means the leader
 // gets no exec on this box.
-func cmdFollow(ctx context.Context, joinURL string, runner []string) int {
-	printFollowBanner(runner)
+func cmdFollow(ctx context.Context, joinURL string, runner []string, showBanner bool) int {
+	printFollowBanner(os.Stderr, runner, showBanner)
 	backoff := time.Second
 	failures := 0
 	for {
@@ -222,6 +224,7 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 
 	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
 		Capabilities: caps,
+		Motd:         followMotd(runner),
 		Logf:         debugLogf,
 		OnMessage: func(typ string, raw []byte) {
 			select {
@@ -252,15 +255,106 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 
 // --- helpers -----------------------------------------------------------------
 
-func printFollowBanner(runner []string) {
+// followArt is the small ASCII wordmark printed at `follow` startup (suppress
+// with --no-banner). It greets the human at the terminal; the machine-facing
+// summary the connecting agent sees travels over the wire as followMotd.
+const followArt = `   _____ _ _
+  / ____| (_)
+ | (___ | |_  ___ ___
+  \___ \| | |/ __/ __|
+  ____) | | | (_| (__
+ |_____/|_|_|\___\___|   follow
+`
+
+// printFollowBanner writes the startup banner: the ASCII wordmark (unless
+// suppressed), who the leader would run as, the runner, and — when the runner
+// looks like it won't actually execute commands — a heuristic warning.
+func printFollowBanner(w io.Writer, runner []string, showArt bool) {
+	if showArt {
+		fmt.Fprint(w, followArt)
+	}
 	who := fmt.Sprintf("%s@%s", currentUser(), hostname())
 	if len(runner) == 0 {
-		fmt.Fprintf(os.Stderr, "slicc follow: connecting as %s (exec disabled — no runner given)\n", who)
+		fmt.Fprintf(w, "slicc follow: connecting as %s (exec disabled — no runner given)\n", who)
 		return
 	}
-	fmt.Fprintf(os.Stderr, "⚠️  slicc follow: the leader can run commands on this machine as %s\n", who)
-	fmt.Fprintf(os.Stderr, "    via: %s <command>\n", strings.Join(runner, " "))
-	fmt.Fprintln(os.Stderr, "    Each command is printed here as it runs.")
+	fmt.Fprintf(w, "⚠  the leader can run commands on this machine as %s\n", who)
+	fmt.Fprintf(w, "   via: %s <command>   (each command is printed here as it runs)\n", strings.Join(runner, " "))
+	if warn := runnerExecWarning(runner); warn != "" {
+		fmt.Fprintf(w, "⚠  %s\n", warn)
+	}
+}
+
+// followMotd is the concise, one-line description the follower advertises in its
+// hello handshake. The leader surfaces it to the agent (via `ssh --list`) so the
+// first `ssh` reveals what the target is, who it runs as, and its platform.
+// Empty for a no-runner follower (nothing is exec-capable to describe).
+func followMotd(runner []string) string {
+	if len(runner) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("slicc-cli exec target · %s@%s · %s/%s · runner: %s · runs as this user (RCE by design)",
+		currentUser(), hostname(), runtime.GOOS, runtime.GOARCH, strings.Join(runner, " "))
+}
+
+// knownShells are interactive/POSIX shells that need a `-c` argument to run a
+// command LINE; without it they treat the argument as a script FILE path.
+var knownShells = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "dash": true,
+	"ksh": true, "ash": true, "fish": true, "elvish": true,
+}
+
+// wrapperTools launch another program; the leader's command becomes argv to
+// them, so unless they end in a shell `-c` the command isn't a shell line.
+var wrapperTools = map[string]bool{
+	"docker": true, "podman": true, "nerdctl": true, "container": true,
+	"kubectl": true, "lxc": true, "lxc-attach": true, "flatpak-spawn": true, "ssh": true,
+}
+
+// runnerExecWarning returns a non-empty warning when the runner very likely
+// won't run the leader's command as a shell command line — the classic
+// `follow bash` footgun (bare `bash <arg>` execs <arg> as a script file, so
+// `ls` → "cannot execute binary file", `echo hi` → "No such file or directory").
+func runnerExecWarning(runner []string) string {
+	if len(runner) == 0 {
+		return ""
+	}
+	joined := strings.Join(runner, " ")
+	// A shell must be followed by -c to run a command line, not a script file.
+	// Use the LAST shell token so `docker exec … sh -c` is judged on its `sh`.
+	lastShell := -1
+	for i, tok := range runner {
+		if knownShells[shellBase(tok)] {
+			lastShell = i
+		}
+	}
+	if lastShell >= 0 {
+		for _, tok := range runner[lastShell+1:] {
+			if tok == "-c" {
+				return "" // e.g. `bash -c`, `docker exec -i box sh -c`
+			}
+		}
+		base := shellBase(runner[lastShell])
+		return fmt.Sprintf(
+			"runner %q has no -c: %s treats the leader's command as a script FILE, not a command line — you probably want: %s -c",
+			joined, base, base)
+	}
+	if wrapperTools[shellBase(runner[0])] {
+		return fmt.Sprintf(
+			"runner %q ends without a shell -c: the leader's command is passed as arguments to %s, not a shell line — end it with e.g. `sh -c` if you want shell command lines",
+			joined, shellBase(runner[0]))
+	}
+	return ""
+}
+
+// shellBase reduces a runner token to its command name (drops any directory and
+// a trailing .exe) so `/bin/bash` and `bash.exe` both match `bash`.
+func shellBase(tok string) string {
+	b := tok
+	if i := strings.LastIndexAny(b, `/\`); i >= 0 {
+		b = b[i+1:]
+	}
+	return strings.TrimSuffix(b, ".exe")
 }
 
 func currentUser() string {

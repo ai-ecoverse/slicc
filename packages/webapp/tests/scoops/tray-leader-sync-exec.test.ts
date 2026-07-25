@@ -64,6 +64,37 @@ function addExecFollower(manager: LeaderSyncManager, bootstrapId: string): FakeC
   return ch;
 }
 
+describe('leader follower capability + motd getters (feed host / ssh --list)', () => {
+  it('captures exec capability and motd from a follower hello', () => {
+    const manager = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+    ch.simulateMessage({
+      type: 'hello',
+      protocolVersion: 1,
+      capabilities: { exec: true },
+      motd: 'slicc-cli exec target · alice@box · runner: sh -c',
+    });
+    expect(manager.getExecCapableBootstrapIds().has('b1')).toBe(true);
+    expect(manager.getFollowerMotds().get('b1')).toBe(
+      'slicc-cli exec target · alice@box · runner: sh -c'
+    );
+    // exec-only: never advertised browser targets.
+    expect(manager.getBrowserCapableBootstrapIds().has('b1')).toBe(false);
+  });
+
+  it('marks a follower browser-capable (playwright) once it advertises targets', () => {
+    const manager = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('bBrowser', ch);
+    ch.simulateMessage({ type: 'hello', protocolVersion: 1 }); // browser follower: no exec, no motd
+    ch.simulateMessage({ type: 'targets.advertise', runtimeId: 'follower-browser', targets: [] });
+    expect(manager.getBrowserCapableBootstrapIds().has('bBrowser')).toBe(true);
+    expect(manager.getExecCapableBootstrapIds().has('bBrowser')).toBe(false);
+    expect(manager.getFollowerMotds().size).toBe(0);
+  });
+});
+
 describe('leader exec — CLI exec (follower → leader, runs in leader shell)', () => {
   it('runs exec.request in the leader shell and streams chunks + response', async () => {
     const execInShell = vi.fn(

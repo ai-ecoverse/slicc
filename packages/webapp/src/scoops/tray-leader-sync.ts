@@ -252,6 +252,12 @@ interface ConnectedFollower {
    * iOS followers, which have no OS shell.
    */
   peerCapabilities?: TraySyncCapabilities;
+  /**
+   * One-line description the follower advertised on `hello.motd` (a
+   * `slicc … follow` CLI: who/what/where the exec target is). Surfaced to the
+   * agent by `ssh --list`; absent for browser / iOS followers.
+   */
+  peerMotd?: string;
 }
 
 /** Tracks a leader-initiated remote exec (the `ssh` command) awaiting the follower's streamed reply. */
@@ -1019,6 +1025,25 @@ export class LeaderSyncManager {
   }
 
   /**
+   * bootstrapIds of followers that advertised browser targets — i.e. reachable
+   * via `playwright-cli`. A follower lands in `runtimeToBootstrap` only after it
+   * sends a `targets.registry`, so this excludes headless CLI (`exec`-only)
+   * followers, which have no browser to drive.
+   */
+  getBrowserCapableBootstrapIds(): Set<string> {
+    return new Set(this.runtimeToBootstrap.values());
+  }
+
+  /** Per-follower `hello.motd`, keyed by bootstrapId (exec targets advertise it). */
+  getFollowerMotds(): Map<string, string> {
+    const motds = new Map<string, string>();
+    for (const [bootstrapId, follower] of this.followers) {
+      if (follower.peerMotd) motds.set(bootstrapId, follower.peerMotd);
+    }
+    return motds;
+  }
+
+  /**
    * Resolve a follower by the runtime id the `host` command displays. Prefers
    * the advertised-target mapping (`runtimeToBootstrap`); falls back to the
    * canonical `follower-<bootstrapId>` identity so a CLI follower that never
@@ -1331,6 +1356,7 @@ export class LeaderSyncManager {
         if (follower) {
           follower.peerProtocolVersion = message.protocolVersion;
           follower.peerCapabilities = message.capabilities;
+          follower.peerMotd = message.motd;
           // `exec` capability arrives on `hello` (after the follower is already
           // counted on connect), so re-notify with the unchanged count to let
           // the page re-mirror the followers shim with fresh exec flags — the

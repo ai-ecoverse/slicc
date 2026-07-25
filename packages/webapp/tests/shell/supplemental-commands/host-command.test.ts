@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FollowerTrayRuntimeStatus } from '../../../src/scoops/tray-follower-status.js';
+import type { LeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
 import {
   createHostCommand,
   formatDuration,
@@ -88,14 +89,17 @@ describe('host command', () => {
         },
         error: null,
       }),
-      getFollowers: () => [{ runtimeId: 'follower-abc123' }, { runtimeId: 'follower-def456' }],
+      getFollowers: () => [
+        { runtimeId: 'follower-abc123', exec: true },
+        { runtimeId: 'follower-def456', cdp: true },
+      ],
     });
 
     const result = await cmd.execute([], {} as never);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('followers:');
-    expect(result.stdout).toContain('  - follower-abc123');
-    expect(result.stdout).toContain('  - follower-def456');
+    expect(result.stdout).toContain('  - follower-abc123 [ssh]');
+    expect(result.stdout).toContain('  - follower-def456 [playwright]');
   });
 
   it('does not list stale followers when there is no active session (inactive)', async () => {
@@ -474,13 +478,13 @@ describe('host command', () => {
       );
       (globalThis as { localStorage?: Storage }).localStorage?.setItem(
         'slicc.leaderTrayFollowers',
-        JSON.stringify([{ runtimeId: 'peer-from-storage' }])
+        JSON.stringify([{ runtimeId: 'peer-from-storage', exec: true }])
       );
 
       const result = await createHostCommand().execute([], {} as never);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('followers:');
-      expect(result.stdout).toContain('  - peer-from-storage');
+      expect(result.stdout).toContain('  - peer-from-storage [ssh]');
     });
 
     it('returns inactive output when localStorage key is also inactive', async () => {
@@ -1103,6 +1107,26 @@ describe('host command', () => {
   });
 });
 
+/** A standard active-leader status for follower-listing assertions. */
+function activeLeaderStatus(): LeaderTrayRuntimeStatus {
+  return {
+    state: 'leader',
+    session: {
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-123',
+      createdAt: '2026-03-12T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/controller-1',
+      joinUrl: 'https://tray.example.com/join/tray-123',
+      webhookUrl: 'https://tray.example.com/webhooks/tray-123',
+      leaderKey: 'leader-key',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws',
+      runtime: 'slicc-standalone',
+    },
+    error: null,
+  };
+}
+
 describe('formatLeaderOutput', () => {
   it('formats leader with session and no followers', () => {
     const output = formatLeaderOutput(
@@ -1145,10 +1169,10 @@ describe('formatLeaderOutput', () => {
         },
         error: null,
       },
-      [{ runtimeId: 'follower-abc' }]
+      [{ runtimeId: 'follower-abc', exec: true }]
     );
     expect(output).toContain('followers:');
-    expect(output).toContain('  - follower-abc');
+    expect(output).toContain('  - follower-abc [ssh]');
   });
 
   it('formats leader with follower metadata (runtime + connectedAt)', () => {
@@ -1170,10 +1194,34 @@ describe('formatLeaderOutput', () => {
         },
         error: null,
       },
-      [{ runtimeId: 'follower-abc', runtime: 'slicc-electron', connectedAt }]
+      [{ runtimeId: 'follower-abc', runtime: 'slicc-electron', connectedAt, exec: true }]
     );
     expect(output).toContain('followers:');
-    expect(output).toContain('  - follower-abc (slicc-electron) connected 2m ago');
+    expect(output).toContain('  - follower-abc (slicc-electron) connected 2m ago [ssh]');
+  });
+
+  it('hides capability-less followers and surfaces only their count', () => {
+    const output = formatLeaderOutput(activeLeaderStatus(), [
+      { runtimeId: 'follower-exec', exec: true, motd: 'slicc-cli exec target · alice@box' },
+      { runtimeId: 'follower-plain-1' },
+      { runtimeId: 'follower-plain-2' },
+    ]);
+    // The exec target shows with its [ssh] tag + MOTD; the two plain followers
+    // (transient prompt/exec connections) collapse into a count, not ghost ids.
+    expect(output).toContain('  - follower-exec [ssh]');
+    expect(output).toContain('      slicc-cli exec target · alice@box');
+    expect(output).not.toContain('follower-plain-1');
+    expect(output).toContain('(2 other followers with no exec/browser capability)');
+  });
+
+  it('marks a browser follower [playwright] and a dual-capable one with both', () => {
+    const output = formatLeaderOutput(activeLeaderStatus(), [
+      { runtimeId: 'follower-browser', cdp: true },
+      { runtimeId: 'follower-both', exec: true, cdp: true },
+    ]);
+    expect(output).toContain('  - follower-browser [playwright]');
+    expect(output).toContain('  - follower-both [ssh] [playwright]');
+    expect(output).not.toContain('other follower');
   });
 
   it('formats leader with error and no session', () => {

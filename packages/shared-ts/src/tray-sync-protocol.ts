@@ -72,6 +72,14 @@ export interface TraySyncHelloMessage {
    * that cannot serve it. See the `exec.*` messages below.
    */
   capabilities?: TraySyncCapabilities;
+  /**
+   * Optional one-line description of an exec-capable follower (additive). The
+   * `slicc … follow <runner>` CLI sets it to a concise summary — who/what the
+   * target is, its platform, and its runner — and the leader surfaces it to the
+   * agent (`ssh --list`) so the first `ssh` reveals what the target is. Legacy
+   * and browser/iOS peers omit it.
+   */
+  motd?: string;
 }
 
 /** Peer capability advertisement carried on `hello`. */

@@ -21,12 +21,16 @@ stdout, stderr, and exit code.
 Only a follower started with a **runner** is an exec target. Find them:
 
 ```bash
-host           # lists followers; exec-capable ones are tagged [exec]
-ssh --list     # just the exec-capable followers + their runtime ids
+host           # exec targets tagged [ssh]; browser targets tagged [playwright]
+ssh --list     # just the exec targets + their runtime ids, each with a MOTD line
 ```
 
-A target id looks like `follower-<uuid>`. Browser and iOS followers have no OS
-shell and are never targets.
+A target id looks like `follower-<uuid>`. `ssh --list` prints each target's
+advertised MOTD beneath it — who/what/where it is and its runner — so you know
+what you're connecting to. Browser and iOS followers have no OS shell and are
+never `ssh` targets (they show as `[playwright]`, driven via `playwright-cli`).
+`host` hides capability-less followers (e.g. transient `prompt`/`exec` CLI
+connections) as a count, so the list stays the actionable targets.
 
 ## Run a command
 

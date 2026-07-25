@@ -23,6 +23,9 @@ type Hello struct {
 	ProtocolVersion int           `json:"protocolVersion"`
 	Runtime         string        `json:"runtime,omitempty"`
 	Capabilities    *Capabilities `json:"capabilities,omitempty"`
+	// Motd is an optional one-line description the leader surfaces to the agent
+	// (e.g. `ssh --list`) — who/what the exec target is. Additive + optional.
+	Motd string `json:"motd,omitempty"`
 }
 
 // ExecRequest asks the receiving peer to run a shell command.

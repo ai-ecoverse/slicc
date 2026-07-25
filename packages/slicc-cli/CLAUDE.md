@@ -6,10 +6,16 @@ exposes three verbs. It is a **Go module, not an npm workspace** (like
 `packages/ios-app`), so it is built with `go`/`make`, not `npm`.
 
 ```
-slicc <join-url> prompt "<text>"      Stream one assistant turn, then exit
-slicc <join-url> exec "<command>"     Run a command in the leader's shell, stream output
-slicc <join-url> follow [runner...]   Stay connected; run leader-issued commands via <runner>
+slicc <join-url> prompt "<text>"                Stream one assistant turn, then exit
+slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
+slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
 ```
+
+The `<text>`/`<command>` argument is curl-style: a literal string, `@path` (read a
+file), or `-` / `@-` (read stdin) — so `git log | slicc <url> exec -` and
+`slicc <url> prompt @brief.md` work. Resolution lives in `readTextArg` (main.go)
+and only kicks in for a single `@…`/`-` argument, so multi-word prompts still join
+verbatim.
 
 The trailing argv of `follow` is the **runner** each leader-issued command is handed
 to (command appended as the final arg): `follow bash -c`, `follow sh -c`,
@@ -51,8 +57,22 @@ A `follow` with a runner advertises `hello.capabilities.exec = true`, telling th
 leader it may send `exec.request`. Each command runs as `<runner> <command>` (so
 the runner names — and can sandbox — the exec surface, e.g. a container or a
 restricted shell), as the user who started `slicc`, and is echoed to stderr as it
-runs. The startup banner shows the exact runner. A `follow` with **no** runner
-advertises no capability and refuses every `exec.request` with an error response.
+runs. A `follow` with **no** runner advertises no capability and refuses every
+`exec.request` with an error response.
+
+Startup ergonomics (all in `commands.go`):
+
+- **Banner** — a small ASCII wordmark + the identity/runner/exec warning prints to
+  stderr on start; `--no-banner` drops the art but keeps the safety warning.
+- **Runner heuristic** (`runnerExecWarning`) — a known shell (`bash`/`sh`/`zsh`/…)
+  or wrapper (`docker`/`podman`/…) without a trailing `-c` warns that the leader's
+  command would be treated as a script FILE, not a command line — the `follow bash`
+  (vs `follow bash -c`) footgun.
+- **MOTD** (`hello.motd`, `followMotd`) — a one-line "who/what/where" summary the
+  follower advertises so the leader surfaces it to the agent via `ssh --list`. The
+  leader captures it in `tray-leader-sync.ts` (`getFollowerMotds`) and, alongside
+  `getBrowserCapableBootstrapIds`, tags followers `[ssh]` / `[playwright]` in
+  `host`. Additive + optional on the wire (browser/iOS peers omit it).
 
 ## Build / test
 

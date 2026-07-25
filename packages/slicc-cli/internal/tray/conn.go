@@ -37,6 +37,9 @@ type Options struct {
 	Runtime string
 	// Capabilities advertised on hello (e.g. {Exec:true} for `follow`).
 	Capabilities *protocol.Capabilities
+	// Motd is an optional one-line description advertised on hello; the leader
+	// surfaces it to the agent (e.g. `ssh --list`). Empty → field omitted.
+	Motd string
 	// OnMessage receives every inbound message except ping/pong (auto-handled).
 	// It runs on the data-channel read goroutine; keep it non-blocking.
 	OnMessage func(msgType string, raw []byte)
@@ -393,6 +396,7 @@ func (c *Conn) sendHello() error {
 		ProtocolVersion: protocol.TraySyncProtocolVersion,
 		Runtime:         c.opts.Runtime,
 		Capabilities:    c.opts.Capabilities,
+		Motd:            c.opts.Motd,
 	})
 }
 
