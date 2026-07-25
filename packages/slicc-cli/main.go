@@ -41,6 +41,10 @@ func run(args []string) int {
 	case "-v", "--version", "version":
 		fmt.Println("slicc", version)
 		return 0
+	case "update":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return cmdUpdate(ctx, args[1:])
 	}
 
 	joinURL := args[0]
@@ -58,6 +62,10 @@ func run(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Once-a-day cached upgrade notice (stderr), refreshed in the background;
+	// the deferred flush lets a short-lived verb persist the refresh result.
+	defer startUpdateNotice()()
 
 	switch sub {
 	case "prompt":
@@ -127,6 +135,9 @@ Usage:
                                         follow bash -c
                                         follow sh -c
                                         follow docker exec -i sandbox sh -c
+  slicc update [--check]              Self-update to the newest released CLI binary
+                                      (--check only reports; SLICC_NO_UPDATE_CHECK=1
+                                      disables the once-a-day launch check)
   slicc --version
   slicc --help
 
