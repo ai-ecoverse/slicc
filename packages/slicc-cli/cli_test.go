@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadTextArg(t *testing.T) {
@@ -54,25 +56,27 @@ func TestReadTextArg(t *testing.T) {
 
 func TestParseFollowArgs(t *testing.T) {
 	cases := []struct {
-		name       string
-		in         []string
-		wantRunner []string
-		wantBanner bool
-		wantHelp   bool
+		name string
+		in   []string
+		want followArgs
 	}{
-		{"bare runner", []string{"sh", "-c"}, []string{"sh", "-c"}, true, false},
-		{"no-banner strips flag", []string{"--no-banner", "sh", "-c"}, []string{"sh", "-c"}, false, false},
-		{"help long", []string{"--help"}, nil, true, true},
-		{"help short", []string{"-h"}, nil, true, true},
-		{"terminator lets runner start with a flag", []string{"--", "--no-banner"}, []string{"--no-banner"}, true, false},
-		{"empty", nil, nil, true, false},
+		{"bare runner", []string{"sh", "-c"}, followArgs{runner: []string{"sh", "-c"}, showBanner: true}},
+		{"no-banner strips flag", []string{"--no-banner", "sh", "-c"}, followArgs{runner: []string{"sh", "-c"}}},
+		{"help long", []string{"--help"}, followArgs{showBanner: true, help: true}},
+		{"help short", []string{"-h"}, followArgs{showBanner: true, help: true}},
+		{"terminator lets runner start with a flag", []string{"--", "--no-banner"}, followArgs{runner: []string{"--no-banner"}, showBanner: true}},
+		{"empty", nil, followArgs{showBanner: true}},
+		{"eval mode", []string{"--eval", "python", "-i"}, followArgs{runner: []string{"python", "-i"}, showBanner: true, eval: true}},
+		{"eval quiet equals form", []string{"--eval", "--eval-quiet=750ms", "clojure"}, followArgs{runner: []string{"clojure"}, showBanner: true, eval: true, evalQuiet: 750 * time.Millisecond}},
+		{"eval quiet value form", []string{"--eval", "--eval-quiet", "2s", "node", "-i"}, followArgs{runner: []string{"node", "-i"}, showBanner: true, eval: true, evalQuiet: 2 * time.Second}},
+		{"invalid eval quiet falls back to default", []string{"--eval", "--eval-quiet=soon", "clojure"}, followArgs{runner: []string{"clojure"}, showBanner: true, eval: true}},
+		{"eval composes with no-banner", []string{"--no-banner", "--eval", "python", "-i"}, followArgs{runner: []string{"python", "-i"}, eval: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runner, banner, help := parseFollowArgs(tc.in)
-			if help != tc.wantHelp || banner != tc.wantBanner || strings.Join(runner, " ") != strings.Join(tc.wantRunner, " ") {
-				t.Fatalf("parseFollowArgs(%v) = (%v, banner=%v, help=%v); want (%v, banner=%v, help=%v)",
-					tc.in, runner, banner, help, tc.wantRunner, tc.wantBanner, tc.wantHelp)
+			got := parseFollowArgs(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("parseFollowArgs(%v) = %+v; want %+v", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -105,10 +109,10 @@ func TestRunnerExecWarning(t *testing.T) {
 }
 
 func TestFollowMotd(t *testing.T) {
-	if followMotd(nil) != "" {
+	if followMotd(nil, false) != "" {
 		t.Fatal("no-runner follow should advertise no motd")
 	}
-	motd := followMotd([]string{"sh", "-c"})
+	motd := followMotd([]string{"sh", "-c"}, false)
 	for _, want := range []string{"exec target", "runner: sh -c", "@"} {
 		if !strings.Contains(motd, want) {
 			t.Errorf("motd %q missing %q", motd, want)
@@ -119,7 +123,7 @@ func TestFollowMotd(t *testing.T) {
 func TestPrintFollowBanner(t *testing.T) {
 	t.Run("art + exec warning + heuristic when runner is bare bash", func(t *testing.T) {
 		var buf bytes.Buffer
-		printFollowBanner(&buf, []string{"bash"}, true)
+		printFollowBanner(&buf, followArgs{runner: []string{"bash"}, showBanner: true})
 		out := buf.String()
 		if !strings.Contains(out, "follow") { // the ASCII wordmark ends with "follow"
 			t.Error("expected the ASCII wordmark when showArt=true")
@@ -133,7 +137,7 @@ func TestPrintFollowBanner(t *testing.T) {
 	})
 	t.Run("no art when suppressed, but exec warning stays", func(t *testing.T) {
 		var buf bytes.Buffer
-		printFollowBanner(&buf, []string{"sh", "-c"}, false)
+		printFollowBanner(&buf, followArgs{runner: []string{"sh", "-c"}})
 		out := buf.String()
 		if strings.Contains(out, "_____") {
 			t.Error("art should be suppressed when showArt=false")
@@ -144,7 +148,7 @@ func TestPrintFollowBanner(t *testing.T) {
 	})
 	t.Run("no runner => exec-disabled notice", func(t *testing.T) {
 		var buf bytes.Buffer
-		printFollowBanner(&buf, nil, true)
+		printFollowBanner(&buf, followArgs{showBanner: true})
 		if !strings.Contains(buf.String(), "exec disabled") {
 			t.Error("expected the exec-disabled notice for a no-runner follow")
 		}

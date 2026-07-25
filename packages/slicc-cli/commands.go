@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
 	"github.com/ai-ecoverse/slicc-cli/internal/follow"
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 	"github.com/ai-ecoverse/slicc-cli/internal/tray"
@@ -312,15 +313,32 @@ func truncateOneLine(s string, limit int) string {
 // cmdFollow stays connected and runs leader-issued commands locally through the
 // given runner argv, reconnecting with backoff. An empty runner means the leader
 // gets no exec on this box.
-func cmdFollow(ctx context.Context, joinURL string, runner []string, showBanner bool) int {
-	printFollowBanner(os.Stderr, runner, showBanner)
+func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
+	// Eval mode: spawn the REPL ONCE, before connecting, so a missing binary
+	// fails fast. The session outlives individual connections — REPL state
+	// survives reconnects.
+	var eval *execrun.EvalSession
+	if fa.eval {
+		if len(fa.runner) == 0 {
+			fmt.Fprintln(os.Stderr, "slicc follow --eval: missing REPL runner (e.g. follow --eval python -i)")
+			return 2
+		}
+		var err error
+		eval, err = execrun.StartEval(execrun.EvalOptions{Runner: fa.runner, Quiet: fa.evalQuiet})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "slicc follow --eval: starting %s: %s\n", strings.Join(fa.runner, " "), err)
+			return 1
+		}
+		defer eval.Close()
+	}
+	printFollowBanner(os.Stderr, fa)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
-		connected, err := followOnce(ctx, joinURL, runner)
+		connected, err := followOnce(ctx, joinURL, fa.runner, eval)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -345,7 +363,12 @@ func cmdFollow(ctx context.Context, joinURL string, runner []string, showBanner 
 	}
 }
 
-func followOnce(ctx context.Context, joinURL string, runner []string) (connected bool, err error) {
+func followOnce(
+	ctx context.Context,
+	joinURL string,
+	runner []string,
+	eval *execrun.EvalSession,
+) (connected bool, err error) {
 	// Connection-scoped context: cancelled on ANY return (disconnect, ctx done),
 	// so a leader-issued command that's still running is killed with the
 	// connection instead of surviving on the follower's machine across reconnects.
@@ -361,7 +384,7 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 
 	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
 		Capabilities: caps,
-		Motd:         followMotd(runner),
+		Motd:         followMotd(runner, eval != nil),
 		Logf:         debugLogf,
 		OnMessage: func(typ string, raw []byte) {
 			select {
@@ -374,7 +397,12 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 		return false, dialErr
 	}
 	defer conn.Close()
-	session := follow.NewSession(conn, runner, os.Stderr)
+	var session *follow.Session
+	if eval != nil {
+		session = follow.NewEvalSession(conn, eval, os.Stderr)
+	} else {
+		session = follow.NewSession(conn, runner, os.Stderr)
+	}
 	fmt.Fprintln(os.Stderr, "slicc follow: connected")
 
 	for {
@@ -406,29 +434,57 @@ const followArt = `   _____ _ _
 // printFollowBanner writes the startup banner: the ASCII wordmark (unless
 // suppressed), who the leader would run as, the runner, and — when the runner
 // looks like it won't actually execute commands — a heuristic warning.
-func printFollowBanner(w io.Writer, runner []string, showArt bool) {
-	if showArt {
+func printFollowBanner(w io.Writer, fa followArgs) {
+	if fa.showBanner {
 		fmt.Fprint(w, followArt)
 	}
 	who := fmt.Sprintf("%s@%s", currentUser(), hostname())
-	if len(runner) == 0 {
+	if len(fa.runner) == 0 {
 		fmt.Fprintf(w, "slicc follow: connecting as %s (exec disabled — no runner given)\n", who)
 		return
 	}
 	fmt.Fprintf(w, "⚠  the leader can run commands on this machine as %s\n", who)
-	fmt.Fprintf(w, "   via: %s <command>   (each command is printed here as it runs)\n", strings.Join(runner, " "))
-	if warn := runnerExecWarning(runner); warn != "" {
+	if fa.eval {
+		fmt.Fprintf(w, "   REPL/eval mode: one persistent `%s` process; each command is a line on its stdin\n", strings.Join(fa.runner, " "))
+		fmt.Fprint(w, "   (a response ends once the REPL goes quiet; state persists across commands)\n")
+		if warn := evalRunnerWarning(fa.runner); warn != "" {
+			fmt.Fprintf(w, "⚠  %s\n", warn)
+		}
+		return
+	}
+	fmt.Fprintf(w, "   via: %s <command>   (each command is printed here as it runs)\n", strings.Join(fa.runner, " "))
+	if warn := runnerExecWarning(fa.runner); warn != "" {
 		fmt.Fprintf(w, "⚠  %s\n", warn)
 	}
+}
+
+// evalRunnerWarning flags REPLs that are known to buffer piped stdin instead
+// of evaluating per line — the eval-mode counterpart of the `follow bash`
+// footgun. node reads the WHOLE pipe before running unless forced interactive.
+func evalRunnerWarning(runner []string) string {
+	base := shellBase(runner[0])
+	if base != "node" {
+		return ""
+	}
+	for _, tok := range runner[1:] {
+		if tok == "-i" || tok == "--interactive" {
+			return ""
+		}
+	}
+	return "node buffers piped stdin until EOF — you probably want: follow --eval node -i"
 }
 
 // followMotd is the concise, one-line description the follower advertises in its
 // hello handshake. The leader surfaces it to the agent (via `ssh --list`) so the
 // first `ssh` reveals what the target is, who it runs as, and its platform.
 // Empty for a no-runner follower (nothing is exec-capable to describe).
-func followMotd(runner []string) string {
+func followMotd(runner []string, eval bool) string {
 	if len(runner) == 0 {
 		return ""
+	}
+	if eval {
+		return fmt.Sprintf("slicc-cli REPL target · %s@%s · %s/%s · persistent `%s` session: send %s code, not shell commands; state persists across commands",
+			currentUser(), hostname(), runtime.GOOS, runtime.GOARCH, strings.Join(runner, " "), shellBase(runner[0]))
 	}
 	return fmt.Sprintf("slicc-cli exec target · %s@%s · %s/%s · runner: %s · runs as this user (RCE by design)",
 		currentUser(), hostname(), runtime.GOOS, runtime.GOARCH, strings.Join(runner, " "))

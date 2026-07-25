@@ -28,6 +28,11 @@ type Session struct {
 	// runner is the argv each command is handed to (command appended as the final
 	// arg). Empty means exec is disabled: every exec.request is refused.
 	runner []string
+	// eval, when set, replaces per-command runner spawns with a persistent REPL
+	// session: each command is written as a line to its stdin (see
+	// execrun.EvalSession). The eval session outlives this connection so REPL
+	// state survives reconnects.
+	eval *execrun.EvalSession
 	// Log receives one line per command as it starts (per-command visibility).
 	log io.Writer
 
@@ -40,6 +45,20 @@ type Session struct {
 // log (optional) receives a one-line notice per command.
 func NewSession(sender Sender, runner []string, log io.Writer) *Session {
 	return &Session{sender: sender, runner: runner, log: log, running: make(map[string]chan string)}
+}
+
+// NewEvalSession builds a follow session that routes every exec.request into
+// the persistent REPL session instead of spawning the runner per command.
+func NewEvalSession(sender Sender, eval *execrun.EvalSession, log io.Writer) *Session {
+	return &Session{
+		sender: sender,
+		// non-nil marker so Handle's exec-disabled refusal does not trigger;
+		// commands never spawn through it while eval is set.
+		runner:  []string{"eval"},
+		eval:    eval,
+		log:     log,
+		running: make(map[string]chan string),
+	}
 }
 
 // Handle routes an inbound message. Only exec.request / exec.signal are acted
@@ -86,18 +105,26 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 	s.mu.Unlock()
 
 	go func() {
-		res := execrun.Run(ctx, req.Command, execrun.Options{
-			Runner:  s.runner,
-			Cwd:     req.Cwd,
-			Env:     req.Env,
-			Control: ctrl,
-			OnChunk: func(stream string, data []byte) {
-				_ = s.sender.SendJSON(protocol.ExecChunk{
-					Type: protocol.TypeExecChunk, RequestID: req.RequestID, Stream: stream,
-					Data: base64.StdEncoding.EncodeToString(data),
-				})
-			},
-		})
+		onChunk := func(stream string, data []byte) {
+			_ = s.sender.SendJSON(protocol.ExecChunk{
+				Type: protocol.TypeExecChunk, RequestID: req.RequestID, Stream: stream,
+				Data: base64.StdEncoding.EncodeToString(data),
+			})
+		}
+		var res execrun.Result
+		if s.eval != nil {
+			// Persistent REPL: req.Cwd/req.Env cannot apply to an already-running
+			// process and are intentionally ignored.
+			res = s.eval.Eval(ctx, req.Command, onChunk, ctrl)
+		} else {
+			res = execrun.Run(ctx, req.Command, execrun.Options{
+				Runner:  s.runner,
+				Cwd:     req.Cwd,
+				Env:     req.Env,
+				Control: ctrl,
+				OnChunk: onChunk,
+			})
+		}
 		resp := protocol.ExecResponse{
 			Type: protocol.TypeExecResponse, RequestID: req.RequestID,
 			ExitCode: res.ExitCode, Signal: res.Signal,

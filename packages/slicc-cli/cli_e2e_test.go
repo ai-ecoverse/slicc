@@ -294,3 +294,95 @@ func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
 		t.Fatalf("prompt stdout = %q, want to contain PROMPT-E2E-OK", stdout.String())
 	}
 }
+
+// TestCLIFollowEvalPersistsState: `slicc <url> follow --eval <repl>` — the
+// leader issues two exec.requests into ONE persistent runner process and the
+// second sees state set by the first (the whole point of eval mode; per-command
+// spawning would lose it). The stand-in REPL is the platform shell reading
+// commands line-by-line from its stdin (`sh` / `cmd /q`), so this runs on every
+// OS in the matrix without needing python/node installed.
+func TestCLIFollowEvalPersistsState(t *testing.T) {
+	bin := sliccBinary(t)
+	leader := newBridgedLeader(t)
+
+	evalRunner := []string{"sh"}
+	setCmd := "x=EVAL-STATE-77"
+	echoCmd := "echo $x"
+	if runtime.GOOS == "windows" {
+		evalRunner = []string{"cmd", "/q"}
+		setCmd = "set x=EVAL-STATE-77"
+		echoCmd = "echo %x%"
+	}
+
+	var mu sync.Mutex
+	var got strings.Builder
+	done := make(chan int, 1)
+
+	leader.dc.OnOpen(func() {
+		_ = sendJSON(leader.dc, protocol.Hello{Type: protocol.TypeHello, ProtocolVersion: 1})
+		_ = sendJSON(leader.dc, protocol.ExecRequest{
+			Type: protocol.TypeExecRequest, RequestID: "eval-1", Command: setCmd,
+		})
+	})
+	leader.dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+		var env protocol.Envelope
+		if json.Unmarshal(msg.Data, &env) != nil {
+			return
+		}
+		switch env.Type {
+		case protocol.TypeExecChunk:
+			var ch protocol.ExecChunk
+			if json.Unmarshal(msg.Data, &ch) != nil || ch.RequestID != "eval-2" {
+				return
+			}
+			b, _ := base64.StdEncoding.DecodeString(ch.Data)
+			mu.Lock()
+			got.Write(b)
+			mu.Unlock()
+		case protocol.TypeExecResponse:
+			var r protocol.ExecResponse
+			if json.Unmarshal(msg.Data, &r) != nil {
+				return
+			}
+			switch r.RequestID {
+			case "eval-1":
+				// State planted in the persistent shell; now read it back.
+				_ = sendJSON(leader.dc, protocol.ExecRequest{
+					Type: protocol.TypeExecRequest, RequestID: "eval-2", Command: echoCmd,
+				})
+			case "eval-2":
+				select {
+				case done <- r.ExitCode:
+				default:
+				}
+			}
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	followArgs := append([]string{leader.joinURL, "follow", "--eval", "--eval-quiet=300ms"}, evalRunner...)
+	cmd := exec.CommandContext(ctx, bin, followArgs...)
+	cmd.Env = append(os.Environ(), "SLICC_DEBUG=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start eval follower: %v", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("eval-2 exit=%d; follower stderr:\n%s", code, stderr.String())
+		}
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for the second eval response; follower stderr:\n%s", stderr.String())
+	}
+	mu.Lock()
+	out := got.String()
+	mu.Unlock()
+	if !strings.Contains(out, "EVAL-STATE-77") {
+		t.Fatalf("second command's output %q does not contain the state set by the first — the REPL did not persist", out)
+	}
+}
