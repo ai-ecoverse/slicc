@@ -92,7 +92,12 @@ the _next_ response instead — raise the window if that bites. Exit codes are
 always 0 while the REPL lives (REPLs report errors in their output); if the
 REPL process dies, the command errors and the follower needs a restart for a
 fresh session. `exec.signal` SIGINT interrupts the current computation the way
-Ctrl+C would in that REPL. The leader's agent sees a REPL-flavored MOTD via
+Ctrl+C would in that REPL — the REPL itself survives (on Windows the signal is
+ignored: nothing can interrupt a piped child there without killing it, and
+killing the session would lose its state). A dropped connection never kills
+the REPL either — it outlives reconnects; the in-flight command is interrupted
+and any late output surfaces at the next response. The leader's agent sees a
+REPL-flavored MOTD via
 `ssh --list`, so it knows to send language code rather than shell commands.
 Prompt/banner noise in responses is the REPL's own — quiet it with the REPL's
 flags (`python -q`, etc.). `req.Cwd`/`req.Env` are ignored (the process is

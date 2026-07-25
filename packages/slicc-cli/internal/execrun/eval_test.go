@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,10 @@ func TestEvalHelperProcess(_ *testing.T) {
 	if os.Getenv("SLICC_TEST_EVAL_REPL") == "" {
 		return
 	}
+	// Real REPLs (python, clojure) catch SIGINT to abort the current
+	// computation without dying; mirror that so the interrupt tests exercise
+	// the keep-alive path.
+	signal.Ignore(os.Interrupt)
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -47,6 +52,20 @@ func startTestEval(t *testing.T) *EvalSession {
 	}
 	t.Cleanup(session.Close)
 	return session
+}
+
+// warmUpEval runs one round-trip so the helper REPL is provably past its
+// startup (scanner loop running ⇒ its SIGINT-ignore handler is installed)
+// before a test interrupts it.
+func warmUpEval(t *testing.T, session *EvalSession) {
+	t.Helper()
+	log := &chunkLog{}
+	if res := session.Eval(context.Background(), "warmup", log.add, nil); res.Err != nil {
+		t.Fatalf("warmup Eval: %+v", res)
+	}
+	if !strings.Contains(log.joined(), "echo:warmup") {
+		t.Fatalf("warmup output %q missing echo", log.joined())
+	}
 }
 
 type chunkLog struct {
@@ -159,6 +178,51 @@ func TestEvalHonorsContextCancellation(t *testing.T) {
 	}
 	if res.Err == nil {
 		t.Fatalf("want an error after context cancellation, got %+v", res)
+	}
+}
+
+func TestEvalSurvivesConnectionScopedCancel(t *testing.T) {
+	// A dropped connection cancels the in-flight Eval's context; the shared
+	// REPL must survive it so state persists across reconnects (the P1 from
+	// review: SIGKILLing here handed a dead session to the next connection).
+	session := startTestEval(t)
+	warmUpEval(t, session)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if res := session.Eval(ctx, "during-drop", nil, nil); res.Err == nil {
+		t.Fatalf("want an error for the cancelled eval, got %+v", res)
+	}
+
+	log := &chunkLog{}
+	res := session.Eval(context.Background(), "after-reconnect", log.add, nil)
+	if res.Err != nil || res.ExitCode != 0 {
+		t.Fatalf("post-cancel Eval: %+v", res)
+	}
+	if !strings.Contains(log.joined(), "echo:after-reconnect") {
+		t.Fatalf("output %q missing echo — the REPL did not survive the dropped connection", log.joined())
+	}
+}
+
+func TestEvalSigintKeepsReplAlive(t *testing.T) {
+	// Leader-sent SIGINT means "abort this computation", never "destroy the
+	// session". The fake REPL ignores SIGINT like python/clojure do; on
+	// Windows interruptProcess is a documented no-op — either way the session
+	// must answer the next command.
+	session := startTestEval(t)
+	warmUpEval(t, session)
+	control := make(chan string, 1)
+	control <- "SIGINT"
+	if res := session.Eval(context.Background(), "interrupted", nil, control); res.Err != nil {
+		t.Fatalf("interrupted Eval: %+v", res)
+	}
+
+	log := &chunkLog{}
+	res := session.Eval(context.Background(), "still-alive", log.add, nil)
+	if res.Err != nil || res.ExitCode != 0 {
+		t.Fatalf("post-SIGINT Eval: %+v", res)
+	}
+	if !strings.Contains(log.joined(), "echo:still-alive") {
+		t.Fatalf("output %q missing echo — SIGINT killed the persistent REPL", log.joined())
 	}
 }
 

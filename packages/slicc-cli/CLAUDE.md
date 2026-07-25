@@ -93,10 +93,15 @@ Startup ergonomics (all in `commands.go`):
 `execrun.EvalSession` spawns the runner ONCE and serializes leader commands
 into its stdin as lines; responses are framed by **output quiescence**
 (`--eval-quiet`, default 500 ms) because REPLs never signal completion. The
-session outlives connections (state survives reconnects), late output is
-forwarded at the head of the next response, exec exit codes are always 0
-while the REPL lives, `req.Cwd`/`req.Env` are ignored, and REPL death marks
-the session dead (commands then error until restart). `follow.NewEvalSession`
+session outlives connections AND connection drops — a cancelled per-connection
+context interrupts the in-flight computation (`interruptProcess`, SIGINT to
+the group; no-op on Windows) but never kills the REPL; only `Close` (process
+shutdown) and leader-sent SIGTERM/SIGKILL do. Leader SIGINT likewise
+interrupts without killing (ignored on Windows — a hard kill would destroy
+session state). Late output is forwarded at the head of the next response,
+exec exit codes are always 0 while the REPL lives, `req.Cwd`/`req.Env` are
+ignored, and REPL death marks the session dead (commands then error until
+restart). `follow.NewEvalSession`
 routes `exec.request` into it; the MOTD advertises a REPL target so the
 leader's agent sends language code, not shell. The banner warns about `node`
 without `-i` (it buffers piped stdin until EOF). Tests fake the REPL with a

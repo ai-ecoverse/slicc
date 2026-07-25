@@ -29,3 +29,13 @@ func killProcess(cmd *exec.Cmd, name string) {
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, sig)
 }
+
+// interruptProcess delivers SIGINT to the child's process group — the
+// Ctrl+C-equivalent a REPL can catch to abort its current computation without
+// dying. Returns true when the interrupt was actually sent.
+func interruptProcess(cmd *exec.Cmd) bool {
+	if cmd.Process == nil {
+		return false
+	}
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) == nil
+}

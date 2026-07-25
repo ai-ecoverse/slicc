@@ -188,11 +188,24 @@ func (e *EvalSession) collect(ctx context.Context, onChunk ChunkFunc, control <-
 		case <-timer.C:
 			return Result{ExitCode: 0}
 		case <-ctx.Done():
-			killProcess(e.cmd, "SIGKILL")
-			return e.finishDead()
+			// A connection-scoped cancellation (the tray dropped mid-eval) must
+			// NOT kill the shared REPL — it outlives connections by design so
+			// state survives reconnects. Best-effort interrupt the in-flight
+			// computation (POSIX; no-op on Windows) and stop collecting; late
+			// output surfaces at the head of the next response. Process
+			// shutdown kills the REPL via Close, not here.
+			interruptProcess(e.cmd)
+			return Result{ExitCode: 130, Signal: "interrupted", Err: ctx.Err()}
 		case name, ok := <-control:
 			if !ok {
 				control = nil
+				continue
+			}
+			if name == "SIGINT" {
+				// Ctrl+C semantics: interrupt the computation, keep the REPL.
+				// On Windows nothing can be sent without killing the child —
+				// ignoring the signal beats destroying the session's state.
+				interruptProcess(e.cmd)
 				continue
 			}
 			killProcess(e.cmd, name)
