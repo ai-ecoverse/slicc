@@ -77,9 +77,10 @@ export const IOS_SCRIPT_CMD =
   'chmod +x packages/ios-app/scripts/package-and-upload-testflight.sh && packages/ios-app/scripts/package-and-upload-testflight.sh';
 // Build + Developer ID-sign + notarize the Go CLI binaries, staging them into
 // artifacts/release/ (attached by @semantic-release/github). Reuses the cert +
-// notarytool creds already set up in the macOS release job.
-export const SLICC_CLI_SCRIPT_CMD =
-  'chmod +x packages/slicc-cli/sign-and-package.sh && packages/slicc-cli/sign-and-package.sh';
+// notarytool creds already set up in the macOS release job. The version env is
+// applied to the script invocation (not the preceding `chmod`) by the caller —
+// `VAR=v chmod && script` would scope VAR to `chmod` only.
+export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
 // A failing publish must fail the release (fail-fast preserved via execSync).
 export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
 
@@ -340,12 +341,14 @@ function runNativeGate(args, changedFiles) {
 
   const cliDecision = decideSliccCliGating({ lastTag: args.last, changedFiles });
   if (cliDecision.sliccCli) {
-    // Pass the next version so the binaries stamp the release tag; empty (a
-    // dry-run / manual run) falls back to git describe inside the script.
+    // Pass the next version so the binaries stamp the release tag. The env MUST
+    // sit on the script invocation, not the `chmod` before the `&&` (which would
+    // scope it to `chmod`). Empty (a dry-run / manual run) → the script falls
+    // back to package.json, then git describe.
     const versionEnv = args.next.trim() ? `SLICC_RELEASE_VERSION='${args.next.trim()}' ` : '';
     runStep(
       'slicc CLI (signed + notarized binaries)',
-      `${versionEnv}${SLICC_CLI_SCRIPT_CMD}`,
+      `chmod +x ${SLICC_CLI_SCRIPT} && ${versionEnv}${SLICC_CLI_SCRIPT}`,
       args.dryRun
     );
   } else {
