@@ -60,4 +60,4 @@ schemes:
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 149.0.0
+    exactVersion: 150.0.0
