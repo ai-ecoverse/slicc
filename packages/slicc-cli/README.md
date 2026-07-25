@@ -3,7 +3,9 @@
 A small, self-contained CLI that joins a running SLICC leader session as a
 follower over WebRTC. Download a binary for your platform from the
 [latest release](https://github.com/ai-ecoverse/slicc/releases) (macOS, Linux,
-Windows — amd64 and arm64), or build from source with `make build`.
+Windows — amd64 and arm64), or build from source with `make build`. The macOS
+binaries are Developer ID-signed and notarized, so they run without a Gatekeeper
+override.
 
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
