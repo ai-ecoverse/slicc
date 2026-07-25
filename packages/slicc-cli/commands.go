@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -216,24 +217,21 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
 
 func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err error) {
 	sawProcessing := false
+	// Empty scoopJid = no filter (tail whatever the leader broadcasts).
+	inScoop := func(js string) bool { return scoopJid == "" || js == scoopJid }
 	handler := func(typ string, raw []byte) {
 		switch typ {
+		case protocol.TypeUserMessageEcho:
+			// The human's prompt, echoed to followers — render it so the CLI
+			// shows the same thread as the browser.
+			var m protocol.UserMessageEcho
+			if json.Unmarshal(raw, &m) == nil && inScoop(m.ScoopJid) {
+				fmt.Printf("\n> %s\n", m.Text)
+			}
 		case protocol.TypeAgentEvent:
 			var env protocol.AgentEventEnvelope
-			if json.Unmarshal(raw, &env) != nil {
-				return
-			}
-			// Empty scoopJid = no filter (tail whatever the leader broadcasts).
-			if scoopJid != "" && env.ScoopJid != scoopJid {
-				return
-			}
-			switch env.Event.Type {
-			case protocol.AgentContentDelta:
-				fmt.Print(env.Event.Text)
-			case protocol.AgentTurnEnd:
-				fmt.Println()
-			case protocol.AgentError:
-				fmt.Fprintf(os.Stderr, "\nslicc watch: %s\n", env.Event.Error)
+			if json.Unmarshal(raw, &env) == nil && inScoop(env.ScoopJid) {
+				printWatchEvent(env.Event)
 			}
 		case protocol.TypeStatus:
 			var s protocol.Status
@@ -263,6 +261,52 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err e
 		fmt.Fprintln(os.Stderr, "slicc watch: connection closed")
 		return true, nil
 	}
+}
+
+// printWatchEvent renders one agent event the way the browser thread shows it:
+// assistant text inline, tool calls + a short result on their own lines, errors
+// on stderr. Unmodeled event types are silently skipped.
+func printWatchEvent(ev protocol.AgentEvent) {
+	switch ev.Type {
+	case protocol.AgentContentDelta:
+		fmt.Print(ev.Text)
+	case protocol.AgentToolUseStart:
+		fmt.Printf("\n⚙ %s%s\n", ev.ToolName, compactArgs(ev.ToolInput))
+	case protocol.AgentToolResult:
+		mark := "↳"
+		if ev.IsError != nil && *ev.IsError {
+			mark = "↳ ✗"
+		}
+		fmt.Printf("%s %s\n", mark, truncateOneLine(ev.Result, 200))
+	case protocol.AgentTurnEnd:
+		fmt.Println()
+	case protocol.AgentError:
+		fmt.Fprintf(os.Stderr, "\nslicc watch: %s\n", ev.Error)
+	}
+}
+
+// compactArgs renders a tool's JSON input as a single truncated line for the
+// `⚙ tool …` header ("" when absent or unparseable).
+func compactArgs(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if json.Compact(&buf, raw) != nil {
+		return ""
+	}
+	return " " + truncateOneLine(buf.String(), 160)
+}
+
+// truncateOneLine collapses whitespace runs to single spaces and caps the length
+// at limit runes (so a multibyte char is never split), appending an ellipsis.
+func truncateOneLine(s string, limit int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + "…"
 }
 
 // cmdFollow stays connected and runs leader-issued commands locally through the

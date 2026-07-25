@@ -12,12 +12,14 @@ slicc <join-url> watch [scoop]                  Tail the leader's live agent out
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
 ```
 
-`watch` is a passive `tail -f` on the agent: it sends nothing, prints
-`agent_event` content deltas, and blanks a line at each turn boundary —
-reconnecting with backoff (`cmdWatch`/`watchOnce`). By default it does **not**
-filter by scoop (the cone's `scoopJid` is a generated uid, not the literal
-`"cone"`, and the leader broadcasts the selected scoop — the browser view); pass
-a scoop jid to filter to one.
+`watch` is a passive `tail -f` on the agent that mirrors the browser thread: it
+sends nothing and renders the human's prompt (`user_message_echo` → `> …`),
+assistant text (`content_delta`), and tool calls (`tool_use_start` → `⚙ …`,
+`tool_result` → `↳ …`), blanking a line at each turn boundary — reconnecting with
+backoff (`cmdWatch`/`watchOnce`; `printWatchEvent` does the rendering). By default
+it does **not** filter by scoop (the cone's `scoopJid` is a generated uid, not the
+literal `"cone"`, and the leader broadcasts the selected scoop — the browser
+view); pass a scoop jid to filter to one.
 
 The `<text>`/`<command>` argument is curl-style: a literal string, `@path` (read a
 file), or `-` / `@-` (read stdin) — so `git log | slicc <url> exec -` and

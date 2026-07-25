@@ -5,6 +5,8 @@
 // the TypeScript union exactly — the golden corpus test guards this.
 package protocol
 
+import "encoding/json"
+
 // TraySyncProtocolVersion mirrors TRAY_SYNC_PROTOCOL_VERSION.
 const TraySyncProtocolVersion = 1
 
@@ -101,13 +103,24 @@ type AgentEventEnvelope struct {
 // AgentEvent mirrors the subset of AgentEvent (agent-wire-types.ts) the CLI
 // renders while streaming a turn. Unknown event `type`s are simply not printed.
 type AgentEvent struct {
-	Type      string `json:"type"`
+	Type      string          `json:"type"`
+	MessageID string          `json:"messageId,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	ToolName  string          `json:"toolName,omitempty"`
+	ToolInput json.RawMessage `json:"toolInput,omitempty"`
+	Result    string          `json:"result,omitempty"`
+	IsError   *bool           `json:"isError,omitempty"`
+	Error     string          `json:"error,omitempty"`
+}
+
+// UserMessageEcho is the leader's echo of a user message to followers (the
+// human's prompt); `watch` renders it so the CLI shows the same thread the
+// browser does.
+type UserMessageEcho struct {
+	Type      string `json:"type"` // "user_message_echo"
+	Text      string `json:"text"`
 	MessageID string `json:"messageId,omitempty"`
-	Text      string `json:"text,omitempty"`
-	ToolName  string `json:"toolName,omitempty"`
-	Result    string `json:"result,omitempty"`
-	IsError   *bool  `json:"isError,omitempty"`
-	Error     string `json:"error,omitempty"`
+	ScoopJid  string `json:"scoopJid,omitempty"`
 }
 
 // Envelope is used to sniff the discriminant `type` before full decoding.
@@ -117,16 +130,17 @@ type Envelope struct {
 
 // Message type discriminants used across the CLI.
 const (
-	TypeHello        = "hello"
-	TypePing         = "ping"
-	TypePong         = "pong"
-	TypeExecRequest  = "exec.request"
-	TypeExecChunk    = "exec.chunk"
-	TypeExecResponse = "exec.response"
-	TypeExecSignal   = "exec.signal"
-	TypeAgentEvent   = "agent_event"
-	TypeStatus       = "status"
-	TypeError        = "error"
+	TypeHello           = "hello"
+	TypePing            = "ping"
+	TypePong            = "pong"
+	TypeExecRequest     = "exec.request"
+	TypeExecChunk       = "exec.chunk"
+	TypeExecResponse    = "exec.response"
+	TypeExecSignal      = "exec.signal"
+	TypeAgentEvent      = "agent_event"
+	TypeUserMessageEcho = "user_message_echo"
+	TypeStatus          = "status"
+	TypeError           = "error"
 
 	StreamStdout = "stdout"
 	StreamStderr = "stderr"

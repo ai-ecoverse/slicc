@@ -174,23 +174,38 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 	}
 }
 
-// TestCLIWatchStreamsConeOutput: `slicc <url> watch` — a passive tail. The CLI
-// sends nothing; the leader broadcasts a cone content delta and the CLI prints
-// it to stdout. `watch` never exits on its own, so we read until the marker
+// TestCLIWatchStreamsConeOutput: `slicc <url> watch` — a passive tail that
+// mirrors the browser thread. The CLI sends nothing; the leader broadcasts the
+// user's prompt (user_message_echo), assistant text (content_delta), and a tool
+// call (tool_use_start), all of which must reach stdout. The scoop jid is a
+// generated uid (NOT the literal "cone"), so this also guards the default-filter
+// regression. `watch` never exits on its own, so we read until every marker
 // appears and then kill the long-lived watcher.
 func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
 
-	const marker = "WATCH-E2E-OK"
-	// A real cone jid is a generated uid, NOT the literal "cone". `watch` with no
-	// scoop arg must print it anyway (no filter) — a regression guard for the
-	// default-"cone"-filter bug that dropped every real delta.
+	const (
+		jid        = "cone-7f3a2b91"
+		userMarker = "USER-PROMPT-E2E"
+		asstMarker = "ASSISTANT-E2E"
+		toolMarker = "bash-e2e-tool"
+	)
 	leader.dc.OnOpen(func() {
 		_ = sendJSON(leader.dc, protocol.Hello{Type: protocol.TypeHello, ProtocolVersion: 1})
+		_ = sendJSON(leader.dc, protocol.UserMessageEcho{
+			Type: protocol.TypeUserMessageEcho, ScoopJid: jid, MessageID: "u1", Text: userMarker,
+		})
 		_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
-			Type: protocol.TypeAgentEvent, ScoopJid: "cone-7f3a2b91",
-			Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: marker},
+			Type: protocol.TypeAgentEvent, ScoopJid: jid,
+			Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: asstMarker},
+		})
+		_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
+			Type: protocol.TypeAgentEvent, ScoopJid: jid,
+			Event: protocol.AgentEvent{
+				Type: protocol.AgentToolUseStart, MessageID: "m1",
+				ToolName: toolMarker, ToolInput: json.RawMessage(`{"command":"ls"}`),
+			},
 		})
 	})
 
@@ -211,13 +226,15 @@ func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	got := make(chan string, 1)
 	go func() {
 		var buf []byte
-		tmp := make([]byte, 128)
+		tmp := make([]byte, 256)
 		for {
 			n, rerr := stdout.Read(tmp)
 			if n > 0 {
 				buf = append(buf, tmp[:n]...)
-				if strings.Contains(string(buf), marker) {
-					got <- string(buf)
+				s := string(buf)
+				if strings.Contains(s, userMarker) && strings.Contains(s, asstMarker) &&
+					strings.Contains(s, toolMarker) {
+					got <- s
 					return
 				}
 			}
@@ -230,8 +247,10 @@ func TestCLIWatchStreamsConeOutput(t *testing.T) {
 
 	select {
 	case out := <-got:
-		if !strings.Contains(out, marker) {
-			t.Fatalf("watch stdout = %q, want %q; stderr:\n%s", out, marker, stderr.String())
+		for _, want := range []string{"> " + userMarker, asstMarker, "⚙ " + toolMarker} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("watch stdout = %q, missing %q; stderr:\n%s", out, want, stderr.String())
+			}
 		}
 	case <-ctx.Done():
 		t.Fatalf("timed out waiting for watch output; stderr:\n%s", stderr.String())
