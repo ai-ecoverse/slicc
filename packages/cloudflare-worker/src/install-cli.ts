@@ -16,10 +16,10 @@
  * binary.
  */
 
-const RELEASES_API = 'https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=30';
-const RELEASES_PER_PAGE = 30;
-// Bounded pagination: 5 × 30 releases scanned before giving up, mirroring the
-// DMG route's guard against rate-limit exhaustion.
+const RELEASES_PER_PAGE = 100;
+const RELEASES_API = `https://api.github.com/repos/ai-ecoverse/slicc/releases?per_page=${RELEASES_PER_PAGE}`;
+// Bounded pagination (5 × 100 releases ≈ months of sparse releases) mirroring
+// the DMG route's guard against rate-limit exhaustion.
 const MAX_RELEASE_PAGES = 5;
 
 /** Targets cross-compiled by packages/slicc-cli/Makefile (`PLATFORMS`). */
@@ -118,6 +118,10 @@ export async function handleCliDownload(
 export function buildInstallCliScriptResponse(request: Request): Response {
   const url = new URL(request.url);
   const origin = `${url.protocol}//${url.host}`;
+  // Lock curl to https for real deployments; an http origin only occurs in
+  // local dev (`wrangler dev`), where `--proto '=https'` would reject the
+  // download URL outright.
+  const protoFlag = origin.startsWith('https://') ? "--proto '=https' " : '';
   const body = `#!/bin/sh
 # slicc CLI installer — the headless SLICC follower CLI.
 #
@@ -159,7 +163,7 @@ mkdir -p "$install_dir"
 trap 'rm -f "$tmp"' EXIT
 
 echo "Downloading slicc ($os-$arch) from $url ..."
-curl -fSL --proto '=https' -o "$tmp" "$url"
+curl -fSL ${protoFlag}-o "$tmp" "$url"
 chmod 0755 "$tmp"
 
 # End-to-end sanity check before the binary lands on PATH: the CLI must be

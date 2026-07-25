@@ -3716,6 +3716,22 @@ describe('GET /install-cli', () => {
     );
     expect(response.status).toBe(200);
   });
+
+  it('locks curl to https on https origins but not on the http dev origin', async () => {
+    const { env } = createTestHarness();
+    const httpsBody = await (
+      await handleWorkerRequest(new Request('https://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(httpsBody).toContain("--proto '=https'");
+
+    // `wrangler dev` serves over http, where --proto '=https' would reject the
+    // download URL outright and break the local end-to-end loop.
+    const httpBody = await (
+      await handleWorkerRequest(new Request('http://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(httpBody).not.toContain('--proto');
+    expect(httpBody).toContain('curl -fSL -o');
+  });
 });
 
 describe('GET /download/slicc-cli/:target', () => {
@@ -3823,13 +3839,13 @@ describe('GET /download/slicc-cli/:target', () => {
     const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
     expect(res.status).toBe(404);
     expect(await res.text()).toContain('slicc-darwin-arm64');
-    // Short page (< 30 releases) means last page — no further pagination
+    // Short page (< 100 releases) means last page — no further pagination
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('paginates past a full page of binary-less releases', async () => {
     const { env } = createTestHarness();
-    const page1 = Array.from({ length: 30 }, () => cliRelease([{ name: 'notes.txt', url: 'x' }]));
+    const page1 = Array.from({ length: 100 }, () => cliRelease([{ name: 'notes.txt', url: 'x' }]));
     const page2 = [cliRelease([{ name: 'slicc-darwin-arm64', url: ASSET_URL }])];
     const fetchImpl = vi
       .fn<typeof fetch>()
@@ -3844,7 +3860,7 @@ describe('GET /download/slicc-cli/:target', () => {
 
   it('gives up after the page cap with a 404 instead of unbounded GitHub calls', async () => {
     const { env } = createTestHarness();
-    const fullPage = Array.from({ length: 30 }, () =>
+    const fullPage = Array.from({ length: 100 }, () =>
       cliRelease([{ name: 'notes.txt', url: 'x' }])
     );
     const fetchImpl = vi
