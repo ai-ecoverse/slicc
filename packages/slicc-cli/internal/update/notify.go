@@ -46,10 +46,11 @@ type Notifier struct {
 }
 
 // NewNotifier builds the production Notifier. Returns nil (a no-op for Start)
-// when the check is disabled: dev builds, SLICC_NO_UPDATE_CHECK set, or no
-// resolvable cache dir.
+// when the check is disabled: dev/git-describe builds (anything that is not a
+// stamped release version), SLICC_NO_UPDATE_CHECK set, or no resolvable cache
+// dir.
 func NewNotifier(version string, out io.Writer) *Notifier {
-	if version == "dev" || os.Getenv("SLICC_NO_UPDATE_CHECK") != "" {
+	if !IsReleaseVersion(version) || os.Getenv("SLICC_NO_UPDATE_CHECK") != "" {
 		return nil
 	}
 	statePath, err := DefaultStatePath()

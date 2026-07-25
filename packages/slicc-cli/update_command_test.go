@@ -47,25 +47,25 @@ func TestRunUpdateDispatch(t *testing.T) {
 	}
 }
 
-func TestUpdateCheckReportsNewerRelease(t *testing.T) {
+func TestUpdateCheckReportsOnDevBuild(t *testing.T) {
 	server := releasesStub(t, "v99.0.0")
 	t.Setenv("SLICC_UPDATE_API_BASE", server.URL)
 
-	// version is "dev" in tests — every real release counts as newer, and
-	// --check must report without touching the running executable.
+	// version is "dev" in tests — not a release version, so --check reports
+	// the latest release as not-comparable without touching the executable.
 	if got := run([]string{"update", "--check"}); got != 0 {
 		t.Fatalf("run(update --check) = %d, want 0", got)
 	}
 }
 
-func TestUpdateCheckUpToDate(t *testing.T) {
-	// "v0.0.0" compares equal to the unstamped "dev" version (both parse to
-	// zeros), so the up-to-date path runs without installing anything.
-	server := releasesStub(t, "v0.0.0")
+func TestUpdateRefusesToReplaceDevBuild(t *testing.T) {
+	// A dev/git-describe build must never be silently replaced by a release
+	// binary (its numeric segments read older than the tag it is ahead of).
+	server := releasesStub(t, "v99.0.0")
 	t.Setenv("SLICC_UPDATE_API_BASE", server.URL)
 
-	if got := run([]string{"update"}); got != 0 {
-		t.Fatalf("run(update) = %d, want 0 (up to date)", got)
+	if got := run([]string{"update"}); got != 1 {
+		t.Fatalf("run(update) = %d, want 1 (refuse to replace dev build)", got)
 	}
 }
 

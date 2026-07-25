@@ -34,6 +34,17 @@ func cmdUpdate(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "slicc update: %s\n", err)
 		return 1
 	}
+	// A git-describe / dev build is not comparable to release tags (its
+	// numeric segments read OLDER than the tag it is ahead of), so never
+	// silently replace it with a release binary.
+	if !update.IsReleaseVersion(version) {
+		if checkOnly {
+			fmt.Printf("latest CLI release: %s (you run a development build, %s — not comparable)\n", release.Version, version)
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "slicc update: refusing to replace a development build (%s) with release %s — rebuild with `make build`, or download the release binary explicitly\n", version, release.Version)
+		return 1
+	}
 	if !update.IsNewer(release.Version, version) {
 		fmt.Printf("slicc %s is up to date (latest CLI release: %s)\n", version, release.Version)
 		return 0

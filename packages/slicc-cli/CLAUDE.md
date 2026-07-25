@@ -100,9 +100,11 @@ running binary (Windows: parks the old file at `.old`, swept on later runs).
 Regular verbs call `startUpdateNotice()` (main-package `update.go`): the upgrade
 notice prints from a local cache (`<user-cache-dir>/slicc/update-check.json`)
 and a background refresh runs at most once per 24 h, bounded-flushed at command
-exit so short verbs still persist it. Disabled for `dev` builds and via
-`SLICC_NO_UPDATE_CHECK=1`; `SLICC_UPDATE_API_BASE` overrides the API base
-(tests/mirrors).
+exit so short verbs still persist it. Disabled via `SLICC_NO_UPDATE_CHECK=1`
+and for any non-release-stamped version (`dev`, `git describe` output) —
+`IsReleaseVersion` gates both the notice and the self-replace, so `slicc
+update` refuses to clobber a local build that is ahead of the latest tag.
+`SLICC_UPDATE_API_BASE` overrides the API base (tests/mirrors).
 
 ## Build / test
 

@@ -149,6 +149,9 @@ func TestNewNotifierDisabledForDevAndOptOut(t *testing.T) {
 	if NewNotifier("dev", os.Stderr) != nil {
 		t.Fatal("dev builds must not check for updates")
 	}
+	if NewNotifier("v5.71.1-4-gabc123-dirty", os.Stderr) != nil {
+		t.Fatal("git-describe builds must not check for updates")
+	}
 	t.Setenv("SLICC_NO_UPDATE_CHECK", "1")
 	if NewNotifier("v5.71.1", os.Stderr) != nil {
 		t.Fatal("SLICC_NO_UPDATE_CHECK must disable the check")

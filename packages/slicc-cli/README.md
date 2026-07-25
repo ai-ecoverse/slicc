@@ -66,8 +66,9 @@ On regular launches the CLI also checks for a newer release **at most once a
 day**, in the background, and prints a one-line notice on stderr when one
 exists. The notice comes from a local cache
 (`<user-cache-dir>/slicc/update-check.json`), so launches never wait on the
-network. `SLICC_NO_UPDATE_CHECK=1` disables the launch check entirely; dev
-(unstamped) builds never check.
+network. `SLICC_NO_UPDATE_CHECK=1` disables the launch check entirely. Dev
+builds (any non-release-stamped version, incl. `git describe` output) never
+check, and `slicc update` refuses to replace them with a release binary.
 
 ## Build
 

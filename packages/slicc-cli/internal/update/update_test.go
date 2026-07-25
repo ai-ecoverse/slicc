@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -235,12 +237,14 @@ func TestApplyReplacesExecutable(t *testing.T) {
 	if _, err := os.Stat(exePath + ".new"); !os.IsNotExist(err) {
 		t.Fatal("staging file left behind")
 	}
-	info, err := os.Stat(exePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		t.Fatal("executable bit lost")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(exePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o111 == 0 {
+			t.Fatal("executable bit lost")
+		}
 	}
 }
 
@@ -267,6 +271,61 @@ func TestApplyWindowsParksOldBinary(t *testing.T) {
 	RemoveStaleBinary(exePath)
 	if _, err := os.Stat(exePath + ".old"); !os.IsNotExist(err) {
 		t.Fatal("RemoveStaleBinary left the .old binary")
+	}
+}
+
+func TestIsReleaseVersion(t *testing.T) {
+	cases := []struct {
+		version string
+		want    bool
+	}{
+		{"v5.71.1", true},
+		{"5.71.1", true},
+		{"v5.71", true},
+		{"dev", false},
+		{"", false},
+		{"v5.71.1-4-gabc123", false},
+		{"v5.71.1-dirty", false},
+		{"gabc123", false},
+		{"v5..1", false},
+	}
+	for _, tc := range cases {
+		if got := IsReleaseVersion(tc.version); got != tc.want {
+			t.Errorf("IsReleaseVersion(%q) = %v, want %v", tc.version, got, tc.want)
+		}
+	}
+}
+
+func TestApplyWindowsRollsBackParkedBinaryOnSwapFailure(t *testing.T) {
+	server := assetServer(t, "new-binary", http.StatusOK)
+	checker, exePath, release := applyFixture(t, server)
+	checker.GOOS = "windows"
+
+	original := renameFile
+	renameFile = func(src, dst string) error {
+		// Fail only the staged→exe swap; parking and rollback use real renames.
+		if strings.HasSuffix(src, ".new") {
+			return fmt.Errorf("simulated lock on %s", src)
+		}
+		return original(src, dst)
+	}
+	t.Cleanup(func() { renameFile = original })
+
+	if err := checker.Apply(context.Background(), release, exePath); err == nil {
+		t.Fatal("want error when the final swap fails")
+	}
+	content, err := os.ReadFile(exePath)
+	if err != nil {
+		t.Fatalf("executable missing after failed swap: %v", err)
+	}
+	if string(content) != "old-binary" {
+		t.Fatalf("executable content = %q, want the rolled-back old binary", content)
+	}
+	if _, err := os.Stat(exePath + ".old"); !os.IsNotExist(err) {
+		t.Fatal("rollback left the parked .old binary behind")
+	}
+	if _, err := os.Stat(exePath + ".new"); !os.IsNotExist(err) {
+		t.Fatal("staging file left behind")
 	}
 }
 

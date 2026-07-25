@@ -142,6 +142,29 @@ func (c *Checker) LatestCLIRelease(ctx context.Context) (*Release, error) {
 	return nil, fmt.Errorf("no recent release carries %s (CLI binaries only attach to releases where packages/slicc-cli changed)", asset)
 }
 
+// IsReleaseVersion reports whether v looks like a stamped release version
+// (`v5.71.1` / `5.71.1`). Local builds stamp `git describe` output —
+// `v5.71.1-4-gabc123`, a bare hash, "dev", or a `-dirty` suffix — which must
+// never be compared against releases: segment-wise they read OLDER than the
+// tag they are ahead of, so an update would replace newer local code.
+func IsReleaseVersion(v string) bool {
+	trimmed := strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if trimmed == "" {
+		return false
+	}
+	for _, part := range strings.Split(trimmed, ".") {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // IsNewer reports whether version `latest` is strictly newer than `current`.
 // A leading "v" is tolerated; non-numeric segments count as 0, so a "dev"
 // current always reads as older than a real release.
@@ -172,6 +195,10 @@ func IsNewer(latest, current string) bool {
 	}
 	return false
 }
+
+// renameFile is os.Rename, indirected so tests can fail the final swap and
+// exercise the Windows rollback path.
+var renameFile = os.Rename
 
 func runVersionCheck(ctx context.Context, path string) error {
 	if err := exec.CommandContext(ctx, path, "--version").Run(); err != nil {
@@ -226,15 +253,22 @@ func (c *Checker) Apply(ctx context.Context, release *Release, exePath string) e
 		_ = os.Remove(staging)
 		return err
 	}
+	parked := false
 	if c.GOOS == "windows" {
 		old := exePath + ".old"
 		_ = os.Remove(old)
-		if err := os.Rename(exePath, old); err != nil {
+		if err := renameFile(exePath, old); err != nil {
 			_ = os.Remove(staging)
 			return fmt.Errorf("parking the running executable: %w", err)
 		}
+		parked = true
 	}
-	if err := os.Rename(staging, exePath); err != nil {
+	if err := renameFile(staging, exePath); err != nil {
+		// Roll the parked executable back so a failed swap never leaves the
+		// install path empty (e.g. antivirus locking the staged file).
+		if parked {
+			_ = renameFile(exePath+".old", exePath)
+		}
 		_ = os.Remove(staging)
 		return err
 	}
