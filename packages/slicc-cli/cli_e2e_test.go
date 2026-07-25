@@ -183,10 +183,13 @@ func TestCLIWatchStreamsConeOutput(t *testing.T) {
 	leader := newBridgedLeader(t)
 
 	const marker = "WATCH-E2E-OK"
+	// A real cone jid is a generated uid, NOT the literal "cone". `watch` with no
+	// scoop arg must print it anyway (no filter) — a regression guard for the
+	// default-"cone"-filter bug that dropped every real delta.
 	leader.dc.OnOpen(func() {
 		_ = sendJSON(leader.dc, protocol.Hello{Type: protocol.TypeHello, ProtocolVersion: 1})
 		_ = sendJSON(leader.dc, protocol.AgentEventEnvelope{
-			Type: protocol.TypeAgentEvent, ScoopJid: "cone",
+			Type: protocol.TypeAgentEvent, ScoopJid: "cone-7f3a2b91",
 			Event: protocol.AgentEvent{Type: protocol.AgentContentDelta, MessageID: "m1", Text: marker},
 		})
 	})

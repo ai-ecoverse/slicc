@@ -178,7 +178,11 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 // leader and never completes on its own: a read-only `tail -f` on what the agent
 // is doing, reconnecting with backoff so it survives leader reloads.
 func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
-	fmt.Fprintf(os.Stderr, "slicc watch: tailing %q output (Ctrl+C to stop)\n", scoopJid)
+	what := "the leader's agent output"
+	if scoopJid != "" {
+		what = fmt.Sprintf("scoop %q", scoopJid)
+	}
+	fmt.Fprintf(os.Stderr, "slicc watch: tailing %s (Ctrl+C to stop)\n", what)
 	backoff := time.Second
 	failures := 0
 	for {
@@ -216,7 +220,11 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err e
 		switch typ {
 		case protocol.TypeAgentEvent:
 			var env protocol.AgentEventEnvelope
-			if json.Unmarshal(raw, &env) != nil || env.ScoopJid != scoopJid {
+			if json.Unmarshal(raw, &env) != nil {
+				return
+			}
+			// Empty scoopJid = no filter (tail whatever the leader broadcasts).
+			if scoopJid != "" && env.ScoopJid != scoopJid {
 				return
 			}
 			switch env.Event.Type {

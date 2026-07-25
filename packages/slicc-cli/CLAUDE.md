@@ -8,13 +8,16 @@ exposes three verbs. It is a **Go module, not an npm workspace** (like
 ```
 slicc <join-url> prompt "<text>"                Stream one assistant turn, then exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
-slicc <join-url> watch [scoop]                  Tail the leader's agent output (default cone), read-only
+slicc <join-url> watch [scoop]                  Tail the leader's live agent output, read-only
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
 ```
 
-`watch` is a passive `tail -f` on the agent: it sends nothing, filters
-`agent_event`s to one scoop (default `cone`), prints content deltas, and blanks a
-line at each turn boundary — reconnecting with backoff (`cmdWatch`/`watchOnce`).
+`watch` is a passive `tail -f` on the agent: it sends nothing, prints
+`agent_event` content deltas, and blanks a line at each turn boundary —
+reconnecting with backoff (`cmdWatch`/`watchOnce`). By default it does **not**
+filter by scoop (the cone's `scoopJid` is a generated uid, not the literal
+`"cone"`, and the leader broadcasts the selected scoop — the browser view); pass
+a scoop jid to filter to one.
 
 The `<text>`/`<command>` argument is curl-style: a literal string, `@path` (read a
 file), or `-` / `@-` (read stdin) — so `git log | slicc <url> exec -` and

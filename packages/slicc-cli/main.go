@@ -3,7 +3,7 @@
 //
 //	slicc <join-url> prompt "text"   stream one assistant turn, then exit
 //	slicc <join-url> exec "command"  run a command in the leader's shell, stream output
-//	slicc <join-url> watch [scoop]   tail the leader's agent output (default the cone), until Ctrl+C
+//	slicc <join-url> watch [scoop]   tail the leader's live agent output (a scoop jid filters), until Ctrl+C
 //	slicc <join-url> follow          stay connected; run leader-issued commands locally
 //
 // In `follow` the trailing argv is the runner the leader's commands are handed to
@@ -83,8 +83,10 @@ func run(args []string) int {
 		}
 		return cmdExec(ctx, joinURL, command)
 	case "watch":
-		// Optional positional: the scoop jid to tail (default the cone).
-		scoopJid := "cone"
+		// Optional positional: a scoop jid to filter to. Default empty = tail
+		// whatever the leader broadcasts (the selected scoop — the browser view),
+		// since the cone's jid is a generated uid, not the literal "cone".
+		scoopJid := ""
 		if len(rest) > 0 {
 			if rest[0] == "-h" || rest[0] == "--help" {
 				usage(os.Stdout)
@@ -116,7 +118,7 @@ func usage(w *os.File) {
 Usage:
   slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
-  slicc <join-url> watch [scoop]      Tail the leader's agent output (default the cone) until Ctrl+C
+  slicc <join-url> watch [scoop]      Tail the leader's live agent output (a scoop jid filters) until Ctrl+C
   slicc <join-url> follow [--no-banner] [runner...]
                                       Stay connected as a follower. If a runner is given,
                                       the leader can run commands on THIS machine — each

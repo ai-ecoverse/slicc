@@ -10,7 +10,7 @@ override.
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
-slicc <join-url> watch [scoop]                  Tail the agent's output live (default the cone), until Ctrl+C
+slicc <join-url> watch [scoop]                  Tail the agent's output live (a scoop jid filters), until Ctrl+C
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; let the leader run commands on THIS machine
 ```
 
