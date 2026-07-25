@@ -19,6 +19,7 @@ the built SLICC webapp as static assets to browser visitors.
 | `src/links.ts`                                                                         | `applySliccLinks` — RFC 8288 `Link` rel set on every response                                                       |
 | `src/handoff-page.ts`                                                                  | `/handoff` route — converts `?upskill=`/`?handoff=`/`?msg=` into `Link` response header                             |
 | `src/api-catalog.ts`                                                                   | `/.well-known/api-catalog` (RFC 9264 linkset) builder                                                               |
+| `src/install-cli.ts`                                                                   | `/install-cli` POSIX installer script + `/download/slicc-cli/:target` release-asset resolver                        |
 | `src/llms-txt.ts`                                                                      | `/llms.txt` builder                                                                                                 |
 | `src/rel-docs.ts`                                                                      | `/rel/:name` — dereferenceable docs for SLICC custom rels                                                           |
 | `src/oauth-exchange.ts`, `src/oauth-registry.ts`                                       | OAuth callback relay (`/auth/callback`)                                                                             |
@@ -52,6 +53,8 @@ cloud-core.
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /tray`                          | Create a tray; return join/controller/webhook capability URLs                                                                                             |
 | `GET /handoff`                        | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                                  |
+| `GET /install-cli`                    | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`)                                                                 |
+| `GET /download/slicc-cli/:target`     | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; errors are real HTTP errors (no SPA fallback)      |
 | `GET /.well-known/api-catalog`        | RFC 9264 linkset for all public routes                                                                                                                    |
 | `GET /llms.txt`                       | LLM markdown digest                                                                                                                                       |
 | `GET /status`                         | Health document (`{ status, service, timestamp }`)                                                                                                        |

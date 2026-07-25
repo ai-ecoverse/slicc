@@ -16,6 +16,7 @@ import {
 } from './cloud/handlers.js';
 import { getProxyEndpoint } from './cloud/proxy-config.js';
 import { buildHandoffResponse } from './handoff-page.js';
+import { buildInstallCliScriptResponse, handleCliDownload } from './install-cli.js';
 import knownGoodMacos from './known-good-macos.json';
 import { applySliccLinks } from './links.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
@@ -532,6 +533,8 @@ const ROUTES_INDEX_BODY = {
   routes: [
     'POST /tray',
     'GET /download/slicc.dmg',
+    'GET /install-cli',
+    'GET /download/slicc-cli/:target',
     'GET /handoff',
     'GET /.well-known/api-catalog',
     'GET /llms.txt',
@@ -728,6 +731,18 @@ async function tryHandleInfoRoutes(
     (request.method === 'GET' || request.method === 'HEAD')
   ) {
     return handleDmgDownload(fetchImpl);
+  }
+
+  if (url.pathname === '/install-cli' && (request.method === 'GET' || request.method === 'HEAD')) {
+    return buildInstallCliScriptResponse(request);
+  }
+
+  // Match ANY suffix so a typo'd target gets the route's 404 instead of the
+  // SPA fallback's 200 HTML page (which `curl -f` would happily save as the
+  // "binary"); handleCliDownload validates against the released target list.
+  const cliDownloadMatch = url.pathname.match(/^\/download\/slicc-cli\/([^/]+)$/);
+  if (cliDownloadMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+    return handleCliDownload(cliDownloadMatch[1], fetchImpl);
   }
 
   if (url.pathname === '/handoff' && request.method === 'GET') {
