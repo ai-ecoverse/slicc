@@ -129,12 +129,29 @@ export function buildInstallCliScriptResponse(request: Request): Response {
 #   curl -fsSL ${origin}/install-cli | sh
 #
 # Environment overrides:
-#   SLICC_INSTALL_DIR   install directory (default: $HOME/.slicc/bin)
+#   SLICC_INSTALL_DIR   install directory (default: ~/.local/bin when on
+#                       PATH, else /usr/local/bin when writable, else
+#                       ~/.local/bin with a PATH hint)
 #
 # On Windows, run \`npx sliccy --install-cli\` instead.
 set -eu
 
-install_dir="\${SLICC_INSTALL_DIR:-$HOME/.slicc/bin}"
+# OS-idiomatic install dir: prefer the XDG user-binaries dir when the shell
+# already resolves it, fall back to a writable /usr/local/bin, else create
+# ~/.local/bin and print a PATH hint at the end.
+if [ -n "\${SLICC_INSTALL_DIR:-}" ]; then
+  install_dir="$SLICC_INSTALL_DIR"
+else
+  install_dir="$HOME/.local/bin"
+  case ":$PATH:" in
+    *":$install_dir:"*) ;;
+    *)
+      if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        install_dir=/usr/local/bin
+      fi
+      ;;
+  esac
+fi
 
 os="$(uname -s)"
 case "$os" in

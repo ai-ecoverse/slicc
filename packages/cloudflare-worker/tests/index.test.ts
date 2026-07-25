@@ -3692,8 +3692,11 @@ describe('GET /install-cli', () => {
     expect(body).toContain('x86_64 | amd64) arch="amd64"');
     expect(body).toContain('arm64 | aarch64) arch="arm64"');
     expect(body).toContain('npx sliccy --install-cli');
-    // Installs into the overridable ~/.slicc/bin default
-    expect(body).toContain('${SLICC_INSTALL_DIR:-$HOME/.slicc/bin}');
+    // OS-idiomatic install dir: overridable, ~/.local/bin first, then a
+    // writable /usr/local/bin
+    expect(body).toContain('SLICC_INSTALL_DIR');
+    expect(body).toContain('install_dir="$HOME/.local/bin"');
+    expect(body).toContain('[ -w /usr/local/bin ]');
   });
 
   it('pins the script to a staging origin when served from one', async () => {
