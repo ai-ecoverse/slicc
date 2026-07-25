@@ -44,9 +44,9 @@ Architecture and build:
 
 - `architecture.md` — detailed subsystem/file maps, layer stack, IndexedDB inventory, tray/sync matrix (opens with `architecture-diagram.png`, the float topology overview)
 - `development.md` — build, run, and debug workflows
-- `testing.md` — testing patterns and command selection
-- `verification.md` — pre-push/PR validation pass: lint internals, the boy-scout complexity gate, coverage floors, and other CI-only gates
-- `adding-features.md` — how to add a new shell command, tool, provider, sprinkle, etc.
+- [writing-slicc-tests](../.agents/skills/writing-slicc-tests/SKILL.md) — testing patterns and command selection
+- [verifying-before-push](../.agents/skills/verifying-before-push/SKILL.md) — pre-push/PR validation pass: lint internals, the boy-scout complexity gate, coverage floors, and other CI-only gates
+- [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md) — how to add a new shell command, tool, provider, sprinkle, etc.
 - `kernel/process-model.md` — kernel-host / process-manager deep reference
 
 Subsystems:
@@ -61,7 +61,7 @@ Subsystems:
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
 - `extension-thin-bridge.md` — Chrome extension deep reference: bridge Port protocol, toast attribution/dedup, leader-tab lifecycle rationale, side-panel flow, dev-watch loop, QA recipe, and smoke test
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
-- `tray-worker-operations.md` — tray hub ops runbook: R2 asset archive setup, deploy-gating, ghost-leader reconnect, CI retry logic, and staging test guide
+- [`.agents/skills/deploying-tray-worker/SKILL.md`](../.agents/skills/deploying-tray-worker/SKILL.md) — tray hub ops runbook: R2 asset archive setup, deploy-gating, ghost-leader reconnect, CI retry logic, and staging test guide
 - `link-discovery.md` — the standalone `discover` shell command and the `--discover` flag on `playwright-cli` subcommands (`fetch`, `goto`, `navigate`, `open`, `tab-new`); covers RFC 8288 / RFC 9727 parsing, emission, and the SLICC handoff/upskill rels
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow

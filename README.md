@@ -193,9 +193,9 @@ If you want to go deeper, the detailed docs live here:
 
 - [Development guide](docs/development.md)
 - [Architecture](docs/architecture.md)
-- [Testing](docs/testing.md)
+- [Testing](.agents/skills/writing-slicc-tests/SKILL.md)
 - [Shell reference](docs/shell-reference.md)
 - [Secrets](docs/secrets.md)
 - [Mounts (local + S3 / R2 / DA)](docs/mounts.md)
-- [Adding features](docs/adding-features.md)
+- [Adding features](.agents/skills/adding-slicc-features/SKILL.md)
 - [Electron notes](docs/electron.md)

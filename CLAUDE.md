@@ -6,23 +6,23 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                                                                                 |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                                                 |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                                                   |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                                                    |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, TURN credentials, and the `sliccy.ai/cloud` cone dashboard                         |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                                                  |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — shared sandbox-lifecycle library consumed by both `node-server --cloud …` and the worker                          |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline) shared across all TS packages                      |
-| `packages/webcomponents/`     | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`)                                                          |
-| `packages/spoon/`             | `@ai-ecoverse/spoon` — injection web component (`<slicc-launcher>` overlay + IIFE bootstrap) consumed by webapp, extension, node, swift |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                                                   |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                                        |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                                        |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM project, not an npm workspace)                      |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template for hosted cones                                      |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                                    |
+| Path                          | Purpose                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                              |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                 |
+| `packages/cloudflare-worker/` | Tray hub worker: session coordination, signaling, TURN credentials, `sliccy.ai/cloud` dashboard      |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode               |
+| `packages/cloud-core/`        | `@slicc/cloud-core` — sandbox-lifecycle library shared by `node-server --cloud` and the worker       |
+| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline)                 |
+| `packages/webcomponents/`     | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`)                       |
+| `packages/spoon/`             | `@ai-ecoverse/spoon` — injection overlay web component + IIFE bootstrap, used across all floats      |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                     |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                     |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM, not npm)        |
+| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template                    |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace) |
 
 ### Other Top-Level Directories
 
@@ -122,7 +122,7 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 
 Three primary floats: standalone CLI (Express + Chrome), Chrome extension (thin bridge, no bundled engine), and Electron. Plus hosted-leader (cloud via e2b sandbox) and Cherry (embedded follower iframe). See [`docs/architecture.md`](docs/architecture.md) for the full per-float description and the [float topology diagram](docs/architecture-diagram.png).
 
-Each package `CLAUDE.md` is the authoritative source for its subsystem internals. Shell command reference: [`docs/shell-reference.md`](docs/shell-reference.md). Build targets and `tsc --noEmit` invocations: [`docs/verification.md`](docs/verification.md).
+Each package `CLAUDE.md` is the authoritative source for its subsystem internals. Shell command reference: [`docs/shell-reference.md`](docs/shell-reference.md). Verification commands and CI gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md).
 
 ## Key Conventions
 
@@ -140,7 +140,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 - Add or update tests for behavior changes.
 - TypeScript tests live in `packages/*/tests/`, mirrored by subsystem.
-- See `docs/testing.md` for patterns and command selection.
+- See `.agents/skills/writing-slicc-tests/SKILL.md` for test patterns and command selection.
 - **Coverage thresholds are enforced in CI.** Floors live in `coverage-thresholds.json` and are raised automatically by the nightly ratchet (`packages/dev-tools/tools/coverage-ratchet.mjs`). Never hand-lower these values. TypeScript: `npm run test:coverage:<package>`; Swift: `packages/dev-tools/tools/swift-coverage-check.sh`.
 
 ### Documentation
@@ -155,7 +155,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Verification
 
-Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`docs/verification.md`](docs/verification.md). CI runs these gates in `.github/workflows/ci.yml`.
+Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md). CI runs these gates in `.github/workflows/ci.yml`.
 
 ## Developer Agent Skills (.agents/skills/)
 
@@ -164,9 +164,13 @@ loaded into the system prompt by skill-aware harnesses (Claude Code, pi).
 For harnesses that only read AGENTS.md (Codex, Copilot), this router is the
 discovery channel — read the referenced skill when the moment matches.
 
+- Adding or changing a SLICC feature surface → use `adding-slicc-features`
+- Deploying or debugging the Cloudflare tray hub worker → use `deploying-tray-worker`
 - Recording a UI demo for a PR → use `demo-recording`
 - Handing work off to SLICC → use `slicc-handoff`
 - Smoke-testing a build in a controlled browser → use `cdp-smoke-test`
+- Writing or updating SLICC tests → use `writing-slicc-tests`
+- Committing, pushing, opening or updating a PR, or diagnosing verification CI failures → use `verifying-before-push`
 
 ## Automated PR Review Checklist
 

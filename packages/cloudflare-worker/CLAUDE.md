@@ -82,8 +82,9 @@ Missing any of these causes CI failures.
 - **Last-key-holder-wins reconnect** — a leader reconnect with matching credentials
   closes the stale socket and accepts the new one rather than rejecting. Workerd doesn't
   reliably deliver `webSocketClose` on dropped/half-open connections; rejecting the
-  rightful reconnect would deadlock it. See `docs/tray-worker-operations.md` for the
-  full ghost-leader analysis.
+  rightful reconnect would deadlock it. See the
+  [`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md)
+  for the full ghost-leader analysis.
 - Followers attach through the join capability; bootstrap over HTTP poll.
 - Preview bridge tabs (`serve --bridge`) attach via `/__slicc/bridge` WS. DO relays
   `bridge.cdp.request`/`bridge.cdp.response` between the leader and each bridge socket,
@@ -127,9 +128,10 @@ deploys so long-lived tabs don't 404 on lazy-loaded chunks from older builds.
 `serveAssetWithArchiveFallback` in `src/index.ts` serves from `ASSETS`; falls back to
 R2; degrades to the stale-asset reload if R2 also misses. 14-day bucket lifecycle GC.
 
-See [`docs/tray-worker-operations.md`](../../docs/tray-worker-operations.md) for the
-full ops runbook: bucket creation, lifecycle rules, API token required permissions,
-upload gate mechanics, and the 2026-07-13 incident.
+See the
+[`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md)
+for the full ops runbook: bucket creation, lifecycle rules, API token required
+permissions, upload gate mechanics, and the 2026-07-13 incident.
 
 ## Commands
 
@@ -160,9 +162,10 @@ runs unconditionally before every deploy. Routes-only failures are non-fatal (sc
 already live). Required secrets: `CLOUDFLARE_API_TOKEN` (Workers Edit + R2 R/W + Zone
 Routes Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
-See [`docs/tray-worker-operations.md`](../../docs/tray-worker-operations.md) for: retry
-logic, routes-only failure classification, the staging deployment guide, and the local
-`serve --bridge` test setup.
+See the
+[`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md)
+for retry logic, routes-only failure classification, the staging deployment guide, and
+the local `serve --bridge` test setup.
 
 ## Operational Notes
 
