@@ -16,7 +16,11 @@ import {
 } from './cloud/handlers.js';
 import { getProxyEndpoint } from './cloud/proxy-config.js';
 import { buildHandoffResponse } from './handoff-page.js';
-import { buildInstallCliScriptResponse, handleCliDownload } from './install-cli.js';
+import {
+  buildInstallCliPowershellResponse,
+  buildInstallCliScriptResponse,
+  handleCliDownload,
+} from './install-cli.js';
 import knownGoodMacos from './known-good-macos.json';
 import { applySliccLinks } from './links.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
@@ -534,6 +538,7 @@ const ROUTES_INDEX_BODY = {
     'POST /tray',
     'GET /download/slicc.dmg',
     'GET /install-cli',
+    'GET /install-cli.ps1',
     'GET /download/slicc-cli/:target',
     'GET /handoff',
     'GET /.well-known/api-catalog',
@@ -712,6 +717,31 @@ function handleRuntimeConfig(url: URL, request: Request, env: WorkerEnv): Respon
   );
 }
 
+/** The slicc CLI installer surface: both installer scripts + the binary resolver. */
+async function tryHandleInstallerRoutes(
+  url: URL,
+  request: Request,
+  fetchImpl: typeof fetch
+): Promise<Response | null> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return null;
+  }
+  if (url.pathname === '/install-cli') {
+    return buildInstallCliScriptResponse(request);
+  }
+  if (url.pathname === '/install-cli.ps1') {
+    return buildInstallCliPowershellResponse(request);
+  }
+  // Match ANY suffix so a typo'd target gets the route's 404 instead of the
+  // SPA fallback's 200 HTML page (which `curl -f` would happily save as the
+  // "binary"); handleCliDownload validates against the released target list.
+  const cliDownloadMatch = url.pathname.match(/^\/download\/slicc-cli\/([^/]+)$/);
+  if (cliDownloadMatch) {
+    return handleCliDownload(cliDownloadMatch[1], fetchImpl);
+  }
+  return null;
+}
+
 async function tryHandleInfoRoutes(
   url: URL,
   request: Request,
@@ -733,16 +763,9 @@ async function tryHandleInfoRoutes(
     return handleDmgDownload(fetchImpl);
   }
 
-  if (url.pathname === '/install-cli' && (request.method === 'GET' || request.method === 'HEAD')) {
-    return buildInstallCliScriptResponse(request);
-  }
-
-  // Match ANY suffix so a typo'd target gets the route's 404 instead of the
-  // SPA fallback's 200 HTML page (which `curl -f` would happily save as the
-  // "binary"); handleCliDownload validates against the released target list.
-  const cliDownloadMatch = url.pathname.match(/^\/download\/slicc-cli\/([^/]+)$/);
-  if (cliDownloadMatch && (request.method === 'GET' || request.method === 'HEAD')) {
-    return handleCliDownload(cliDownloadMatch[1], fetchImpl);
+  const installerResponse = await tryHandleInstallerRoutes(url, request, fetchImpl);
+  if (installerResponse) {
+    return installerResponse;
   }
 
   if (url.pathname === '/handoff' && request.method === 'GET') {

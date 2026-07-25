@@ -80,6 +80,12 @@ const ENTRIES: CatalogEntry[] = [
       'POSIX shell installer for the headless slicc follower CLI (curl -fsSL …/install-cli | sh).',
   },
   {
+    anchor: '/install-cli.ps1',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Native-Windows PowerShell installer for the headless slicc follower CLI (irm …/install-cli.ps1 | iex).',
+  },
+  {
     anchor: '/download/slicc-cli/:target',
     methods: ['GET', 'HEAD'],
     description:

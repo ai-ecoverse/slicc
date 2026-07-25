@@ -53,7 +53,8 @@ cloud-core.
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /tray`                          | Create a tray; return join/controller/webhook capability URLs                                                                                             |
 | `GET /handoff`                        | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                                  |
-| `GET /install-cli`                    | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`)                                                                 |
+| `GET /install-cli`                    | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                                |
+| `GET /install-cli.ps1`                | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH                |
 | `GET /download/slicc-cli/:target`     | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; errors are real HTTP errors (no SPA fallback)      |
 | `GET /.well-known/api-catalog`        | RFC 9264 linkset for all public routes                                                                                                                    |
 | `GET /llms.txt`                       | LLM markdown digest                                                                                                                                       |

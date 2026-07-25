@@ -26,7 +26,7 @@ The fastest ways to try it:
 - **Open [www.sliccy.com](https://www.sliccy.com) in Chrome** — the hosted webapp boots SLICC straight in your browser tab.
 - **Install the macOS app** — grab the latest `.dmg` from [releases](https://github.com/ai-ecoverse/slicc/releases). No Windows or Linux UI yet.
 - **Run the CLI** — `npx sliccy` launches Chrome with the local workspace attached. Node 22+ required.
-- **Install the headless follower CLI** — `curl -fsSL https://www.sliccy.ai/install-cli | sh` installs the Go `slicc` follower binary (macOS/Linux) into `~/.local/bin` (or a writable `/usr/local/bin`).
+- **Install the headless follower CLI** — `curl -fsSL https://www.sliccy.ai/install-cli | sh` installs the Go `slicc` follower binary (macOS, Linux, WSL, Git Bash) into `~/.local/bin` (or a writable `/usr/local/bin`). Native Windows: `irm https://www.sliccy.ai/install-cli.ps1 | iex`.
 - **Load the Chrome extension** — a thin bridge that opens SLICC in an on-demand Chrome side panel.
 
 Once you're in, you can:

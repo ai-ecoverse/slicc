@@ -131,16 +131,37 @@ export function buildInstallCliScriptResponse(request: Request): Response {
 # Environment overrides:
 #   SLICC_INSTALL_DIR   install directory (default: ~/.local/bin when on
 #                       PATH, else /usr/local/bin when writable, else
-#                       ~/.local/bin with a PATH hint)
+#                       ~/.local/bin with a PATH hint; ~/bin under Git Bash)
 #
-# On Windows, run \`npx sliccy --install-cli\` instead.
+# Works on macOS, Linux, WSL, and Git Bash/MSYS. Native Windows PowerShell:
+#   irm ${origin}/install-cli.ps1 | iex
 set -eu
+
+# WSL reports Linux and gets the linux binary — that is the right answer
+# there. Git Bash / MSYS / Cygwin get the windows .exe.
+os="$(uname -s)"
+bin_name="slicc"
+case "$os" in
+  Darwin) os="darwin" ;;
+  Linux) os="linux" ;;
+  MINGW* | MSYS* | CYGWIN*)
+    os="windows"
+    bin_name="slicc.exe"
+    ;;
+  *)
+    echo "install-cli: unsupported OS $os (native Windows: irm ${origin}/install-cli.ps1 | iex)" >&2
+    exit 1
+    ;;
+esac
 
 # OS-idiomatic install dir: prefer the XDG user-binaries dir when the shell
 # already resolves it, fall back to a writable /usr/local/bin, else create
-# ~/.local/bin and print a PATH hint at the end.
+# ~/.local/bin and print a PATH hint at the end. Git Bash uses ~/bin, which
+# its /etc/profile puts on PATH once it exists.
 if [ -n "\${SLICC_INSTALL_DIR:-}" ]; then
   install_dir="$SLICC_INSTALL_DIR"
+elif [ "$os" = "windows" ]; then
+  install_dir="$HOME/bin"
 else
   install_dir="$HOME/.local/bin"
   case ":$PATH:" in
@@ -152,16 +173,6 @@ else
       ;;
   esac
 fi
-
-os="$(uname -s)"
-case "$os" in
-  Darwin) os="darwin" ;;
-  Linux) os="linux" ;;
-  *)
-    echo "install-cli: unsupported OS $os (on Windows, run: npx sliccy --install-cli)" >&2
-    exit 1
-    ;;
-esac
 
 arch="$(uname -m)"
 case "$arch" in
@@ -191,10 +202,10 @@ if ! version="$("$tmp" --version 2>/dev/null)"; then
   exit 1
 fi
 
-mv "$tmp" "$install_dir/slicc"
+mv "$tmp" "$install_dir/$bin_name"
 trap - EXIT
 
-echo "Installed $install_dir/slicc ($version)"
+echo "Installed $install_dir/$bin_name ($version)"
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;
@@ -209,6 +220,76 @@ esac
     status: 200,
     headers: {
       'Content-Type': 'text/x-shellscript; charset=utf-8',
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
+}
+
+/**
+ * The native-Windows installer (`irm …/install-cli.ps1 | iex`), mirroring the
+ * POSIX script: arch detection, download via the resolver route, a --version
+ * sanity gate before the binary lands, install to %LOCALAPPDATA%\Programs\slicc
+ * (the per-user programs idiom), and a persistent user-scope PATH update.
+ */
+export function buildInstallCliPowershellResponse(request: Request): Response {
+  const url = new URL(request.url);
+  const origin = `${url.protocol}//${url.host}`;
+  const body = `# slicc CLI installer — the headless SLICC follower CLI (native Windows).
+#
+# Usage:
+#   irm ${origin}/install-cli.ps1 | iex
+#
+# Environment overrides:
+#   SLICC_INSTALL_DIR   install directory (default: %LOCALAPPDATA%\\Programs\\slicc)
+#
+# WSL and Git Bash users: curl -fsSL ${origin}/install-cli | sh
+$ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 defaults to TLS 1.0 — force 1.2 for the download.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$arch = 'amd64'
+if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+  $arch = 'arm64'
+}
+
+$installDir = $env:SLICC_INSTALL_DIR
+if (-not $installDir) {
+  $installDir = Join-Path $env:LOCALAPPDATA 'Programs\\slicc'
+}
+$null = New-Item -ItemType Directory -Force -Path $installDir
+
+$url = "${origin}/download/slicc-cli/windows-$arch"
+$tmp = Join-Path $installDir ".slicc.download.$PID.exe"
+$exe = Join-Path $installDir 'slicc.exe'
+
+Write-Host "Downloading slicc (windows-$arch) from $url ..."
+try {
+  Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+  # Sanity gate before the binary lands on PATH: it must print its version.
+  $version = & $tmp --version
+  if ($LASTEXITCODE -ne 0) {
+    throw "the downloaded file does not run on this system ($url)"
+  }
+  Move-Item -Force $tmp $exe
+} catch {
+  Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+  throw
+}
+
+Write-Host "Installed $exe ($version)"
+
+# Persist the install dir on the user PATH (new terminals pick it up).
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $installDir) {
+  [Environment]::SetEnvironmentVariable('Path', "$userPath;$installDir", 'User')
+  $env:Path = "$env:Path;$installDir"
+  Write-Host "Added $installDir to your user PATH."
+}
+`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/x-powershell; charset=utf-8',
       'Cache-Control': 'public, max-age=300',
     },
   });

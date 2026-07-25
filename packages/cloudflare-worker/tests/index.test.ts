@@ -1208,6 +1208,7 @@ describe('tray worker skeleton', () => {
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /install-cli',
+        'GET /install-cli.ps1',
         'GET /download/slicc-cli/:target',
         'GET /handoff',
         'GET /.well-known/api-catalog',
@@ -3691,7 +3692,7 @@ describe('GET /install-cli', () => {
     expect(body).toContain('Linux) os="linux"');
     expect(body).toContain('x86_64 | amd64) arch="amd64"');
     expect(body).toContain('arm64 | aarch64) arch="arm64"');
-    expect(body).toContain('npx sliccy --install-cli');
+    expect(body).toContain('install-cli.ps1 | iex');
     // OS-idiomatic install dir: overridable, ~/.local/bin first, then a
     // writable /usr/local/bin
     expect(body).toContain('SLICC_INSTALL_DIR');
@@ -3715,6 +3716,45 @@ describe('GET /install-cli', () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
       new Request('https://www.sliccy.ai/install-cli', { method: 'HEAD' }),
+      env
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('maps Git Bash / MSYS unames to the windows .exe and WSL to linux', async () => {
+    const { env } = createTestHarness();
+    const body = await (
+      await handleWorkerRequest(new Request('https://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(body).toContain('MINGW* | MSYS* | CYGWIN*)');
+    expect(body).toContain('bin_name="slicc.exe"');
+    // WSL reports Linux and correctly gets the linux binary
+    expect(body).toContain('Linux) os="linux"');
+    // Native Windows is pointed at the PowerShell installer
+    expect(body).toContain('irm https://www.sliccy.ai/install-cli.ps1 | iex');
+  });
+
+  it('serves the PowerShell installer at /install-cli.ps1 pinned to the serving origin', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli.ps1'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/x-powershell');
+    const body = await response.text();
+    expect(body).toContain('https://www.sliccy.ai/download/slicc-cli/windows-$arch');
+    expect(body).toContain("Join-Path $env:LOCALAPPDATA 'Programs\\slicc'");
+    // Sanity gate + PATH persistence, mirroring the POSIX script
+    expect(body).toContain('& $tmp --version');
+    expect(body).toContain("[Environment]::SetEnvironmentVariable('Path'");
+    expect(body).toContain('$env:SLICC_INSTALL_DIR');
+  });
+
+  it('answers HEAD for the PowerShell installer', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli.ps1', { method: 'HEAD' }),
       env
     );
     expect(response.status).toBe(200);
