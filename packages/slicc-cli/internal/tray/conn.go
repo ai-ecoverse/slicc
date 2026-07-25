@@ -65,6 +65,11 @@ type Conn struct {
 	connected chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// ctx is cancelled when the connection ends (Close or a dead peer), bounding
+	// the lifetime of fire-and-forget ICE candidate posts to the connection.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // Dial attaches to the leader at joinURL and returns once the data channel is
@@ -129,10 +134,13 @@ func attachWait(ctx context.Context, sig *signaling.Client, controllerID, runtim
 }
 
 func dialBootstrap(ctx context.Context, sig *signaling.Client, controllerID string, plan *signaling.AttachPlan, opts Options) (*Conn, error) {
+	connCtx, cancel := context.WithCancel(ctx)
 	c := &Conn{
 		opts:      opts,
 		connected: make(chan struct{}),
 		done:      make(chan struct{}),
+		ctx:       connCtx,
+		cancel:    cancel,
 	}
 	currentBootstrapID := plan.Bootstrap.BootstrapID
 
@@ -268,7 +276,7 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 		if cand == nil {
 			return
 		}
-		c.sendLocalCandidate(ctxOrBackground(), sig, controllerID, bootstrapIDRef, cand)
+		c.sendLocalCandidate(c.ctx, sig, controllerID, bootstrapIDRef, cand)
 	})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		switch state {
@@ -431,7 +439,12 @@ func (c *Conn) Close() {
 }
 
 func (c *Conn) markDone() {
-	c.closeOnce.Do(func() { close(c.done) })
+	c.closeOnce.Do(func() {
+		close(c.done)
+		if c.cancel != nil {
+			c.cancel()
+		}
+	})
 }
 
 // signalConnected marks the connected channel closed exactly once.
@@ -473,8 +486,6 @@ func sleep(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-
-func ctxOrBackground() context.Context { return context.Background() }
 
 func newUUID() string {
 	var b [16]byte

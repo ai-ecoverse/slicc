@@ -259,6 +259,18 @@ interface PendingRemoteExec {
   bootstrapId: string;
   stdout: string;
   stderr: string;
+  /**
+   * Per-stream streaming UTF-8 decoders. The follower reads arbitrary byte
+   * blocks, so a multibyte character can straddle two `exec.chunk`s; a fresh
+   * decoder per chunk would turn both halves into replacement chars. `{stream:
+   * true}` carries the partial sequence across chunks.
+   */
+  stdoutDecoder: TextDecoder;
+  stderrDecoder: TextDecoder;
+  /** Total bytes buffered so far (memory-cap guard). */
+  bytes: number;
+  /** True once output was truncated at the byte cap. */
+  truncated: boolean;
   onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
   resolve: (result: RemoteExecResult) => void;
   reject: (err: Error) => void;
@@ -325,15 +337,19 @@ export class LeaderSyncManager {
       responses: TrayFsResponse[];
     }
   >();
-  /** Leader-initiated remote execs (the `ssh` command) awaiting a follower reply, keyed by requestId. */
+  /** Leader-initiated remote execs (the `ssh` command) awaiting a follower reply, keyed by (unguessable) requestId. */
   private readonly pendingRemoteExecs = new Map<string, PendingRemoteExec>();
-  /** Follower-initiated local execs (a CLI `exec`) running in the leader's shell, keyed by requestId. */
+  /**
+   * Follower-initiated local execs (a CLI `exec`) running in the leader's shell,
+   * keyed by `${bootstrapId}:${requestId}` so one follower's request id can't
+   * collide with (or cancel) another follower's exec.
+   */
   private readonly localExecAborters = new Map<
     string,
     { bootstrapId: string; controller: AbortController }
   >();
-  /** Monotonic counter for leader-minted exec request ids. */
-  private execCounter = 0;
+  /** Cap the buffered output of a single `ssh` command so an unbounded remote command can't exhaust page memory. */
+  private static readonly MAX_REMOTE_EXEC_BYTES = 16 * 1024 * 1024;
   /** Mint map: previewToken → {url, title, quiet} */
   private readonly mintMap = new Map<string, { url: string; title: string; quiet: boolean }>();
   /** Bridge connections: connId → {previewToken, origin, userAgent, connectedAt, url, title, quiet, transport} */
@@ -947,12 +963,18 @@ export class LeaderSyncManager {
         `Follower '${runtimeId}' is not an exec target — only a 'slicc … follow' CLI accepts commands`
       );
     }
-    const requestId = `lexec-${++this.execCounter}-${Date.now()}`;
+    // Unguessable id so a hostile follower can't forge a reply for someone
+    // else's `ssh` command (the reply path also verifies the bootstrapId).
+    const requestId = `lexec-${crypto.randomUUID()}`;
     return new Promise<RemoteExecResult>((resolve, reject) => {
       const pending: PendingRemoteExec = {
         bootstrapId,
         stdout: '',
         stderr: '',
+        stdoutDecoder: new TextDecoder('utf-8'),
+        stderrDecoder: new TextDecoder('utf-8'),
+        bytes: 0,
+        truncated: false,
         onChunk: opts.onChunk,
         resolve,
         reject,
@@ -1031,28 +1053,41 @@ export class LeaderSyncManager {
   }
 
   /** Accumulate + forward a streamed output block from a leader-initiated exec. */
-  private handleRemoteExecChunk(message: TrayExecChunkMessage): void {
+  private handleRemoteExecChunk(bootstrapId: string, message: TrayExecChunkMessage): void {
     const pending = this.pendingRemoteExecs.get(message.requestId);
-    if (!pending) return;
-    let text: string;
+    // Only the follower the request was sent to may stream its output.
+    if (!pending || pending.bootstrapId !== bootstrapId) return;
+    let bytes: Uint8Array;
     try {
-      text = new TextDecoder().decode(base64ToUint8(message.data));
+      bytes = base64ToUint8(message.data);
     } catch {
-      text = '';
+      return;
     }
+    // Memory guard: once the cap is hit, keep draining (so exec.response still
+    // resolves) but stop accumulating.
+    if (pending.truncated) return;
+    pending.bytes += bytes.length;
+    if (pending.bytes > LeaderSyncManager.MAX_REMOTE_EXEC_BYTES) {
+      pending.truncated = true;
+    }
+    const decoder = message.stream === 'stdout' ? pending.stdoutDecoder : pending.stderrDecoder;
+    const text = decoder.decode(bytes, { stream: true });
     if (message.stream === 'stdout') pending.stdout += text;
     else pending.stderr += text;
     pending.onChunk?.(message.stream, text);
   }
 
   /** Resolve a leader-initiated exec on its terminal `exec.response`. */
-  private handleRemoteExecResponse(message: TrayExecResponseMessage): void {
+  private handleRemoteExecResponse(bootstrapId: string, message: TrayExecResponseMessage): void {
     const pending = this.pendingRemoteExecs.get(message.requestId);
-    if (!pending) return;
+    if (!pending || pending.bootstrapId !== bootstrapId) return;
     this.pendingRemoteExecs.delete(message.requestId);
     if (pending.timer) clearTimeout(pending.timer);
+    // Flush any bytes the streaming decoders were holding for a partial char.
+    pending.stdout += pending.stdoutDecoder.decode();
+    pending.stderr += pending.stderrDecoder.decode();
     pending.resolve({
-      stdout: pending.stdout,
+      stdout: pending.truncated ? `${pending.stdout}\n[output truncated at cap]` : pending.stdout,
       stderr: pending.stderr,
       exitCode: message.exitCode,
       error: message.error,
@@ -1075,14 +1110,14 @@ export class LeaderSyncManager {
         break;
       case 'exec.chunk':
         // Streamed output of a leader-initiated `ssh` exec running on a follower.
-        this.handleRemoteExecChunk(message);
+        this.handleRemoteExecChunk(bootstrapId, message);
         break;
       case 'exec.response':
-        this.handleRemoteExecResponse(message);
+        this.handleRemoteExecResponse(bootstrapId, message);
         break;
       case 'exec.signal':
         // The CLI follower cancelled a `slicc … exec` it started; abort it.
-        this.handleFollowerExecSignal(message);
+        this.handleFollowerExecSignal(bootstrapId, message);
         break;
     }
   }
@@ -1109,7 +1144,8 @@ export class LeaderSyncManager {
       return;
     }
     const controller = new AbortController();
-    this.localExecAborters.set(requestId, { bootstrapId, controller });
+    const abortKey = `${bootstrapId}:${requestId}`;
+    this.localExecAborters.set(abortKey, { bootstrapId, controller });
     try {
       const result = await execInShell(command, {
         cwd,
@@ -1138,13 +1174,16 @@ export class LeaderSyncManager {
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      this.localExecAborters.delete(requestId);
+      this.localExecAborters.delete(abortKey);
     }
   }
 
-  /** Abort a local `exec` run when the originating CLI follower cancels it. */
-  private handleFollowerExecSignal(message: TrayExecSignalMessage): void {
-    this.localExecAborters.get(message.requestId)?.controller.abort();
+  /**
+   * Abort a local `exec` run when the originating CLI follower cancels it. Keyed
+   * by `${bootstrapId}:${requestId}` so a follower can only cancel its own exec.
+   */
+  private handleFollowerExecSignal(bootstrapId: string, message: TrayExecSignalMessage): void {
+    this.localExecAborters.get(`${bootstrapId}:${message.requestId}`)?.controller.abort();
   }
 
   /**

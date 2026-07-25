@@ -29,6 +29,11 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		default:
 		}
 	}
+	// A live browser leader emits no `turn_end` — it signals turn completion via
+	// scoopStatus going processing→ready. Track that transition; also honor a real
+	// `turn_end` for non-live floats. (Handler runs single-threaded on the dispatch
+	// goroutine, so `sawProcessing` needs no lock.)
+	sawProcessing := false
 	handler := func(typ string, raw []byte) {
 		switch typ {
 		case protocol.TypeAgentEvent:
@@ -44,6 +49,16 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			case protocol.AgentError:
 				fmt.Fprintf(os.Stderr, "\nslicc prompt: %s\n", env.Event.Error)
 				finish(1)
+			}
+		case protocol.TypeStatus:
+			var s protocol.Status
+			if json.Unmarshal(raw, &s) != nil {
+				return
+			}
+			if s.ScoopStatus == protocol.ScoopStatusProcessing {
+				sawProcessing = true
+			} else if sawProcessing {
+				finish(0) // processing → ready = turn complete
 			}
 		case protocol.TypeError:
 			var e struct {
@@ -77,6 +92,8 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		fmt.Fprintln(os.Stderr, "\nslicc prompt: connection closed before the turn completed")
 		return 1
 	case <-ctx.Done():
+		// Tell the leader to stop the turn so it doesn't keep spending tokens.
+		_ = conn.SendJSON(protocol.Abort{Type: "abort"})
 		return 130
 	}
 }
@@ -190,6 +207,12 @@ func cmdFollow(ctx context.Context, joinURL string, runner []string) int {
 }
 
 func followOnce(ctx context.Context, joinURL string, runner []string) (connected bool, err error) {
+	// Connection-scoped context: cancelled on ANY return (disconnect, ctx done),
+	// so a leader-issued command that's still running is killed with the
+	// connection instead of surviving on the follower's machine across reconnects.
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	msgCh := make(chan inbound, 256)
 
 	var caps *protocol.Capabilities
@@ -197,7 +220,7 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 		caps = &protocol.Capabilities{Exec: true}
 	}
 
-	conn, dialErr := tray.Dial(ctx, joinURL, tray.Options{
+	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
 		Capabilities: caps,
 		Logf:         debugLogf,
 		OnMessage: func(typ string, raw []byte) {
@@ -222,7 +245,7 @@ func followOnce(ctx context.Context, joinURL string, runner []string) (connected
 			fmt.Fprintln(os.Stderr, "slicc follow: connection closed")
 			return true, nil
 		case m := <-msgCh:
-			session.Handle(ctx, m.typ, m.raw)
+			session.Handle(connCtx, m.typ, m.raw)
 		}
 	}
 }

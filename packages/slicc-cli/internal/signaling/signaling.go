@@ -13,7 +13,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
+
+// defaultRequestTimeout bounds each signaling HTTP request. http.DefaultClient
+// has no timeout, so without this a server that accepts the connection and never
+// replies would hang attach/poll forever (the bootstrap deadline is only checked
+// between requests).
+const defaultRequestTimeout = 30 * time.Second
 
 // TurnIceServer mirrors the worker-supplied ICE server list.
 type TurnIceServer struct {
@@ -96,7 +103,7 @@ type Client struct {
 // New builds a signaling client for the given join URL.
 func New(joinURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: defaultRequestTimeout}
 	}
 	return &Client{joinURL: joinURL, http: httpClient}
 }

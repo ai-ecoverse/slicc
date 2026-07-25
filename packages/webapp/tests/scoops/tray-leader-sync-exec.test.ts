@@ -181,4 +181,54 @@ describe('leader exec — ssh (leader → follower via execOnRemote)', () => {
     ch.simulateMessage({ type: 'exec.response', requestId, exitCode: 130 });
     await expect(p).resolves.toMatchObject({ exitCode: 130 });
   });
+
+  it('ignores exec replies forged by a follower other than the target', async () => {
+    const manager = createManager();
+    const chA = addExecFollower(manager, 'bA');
+    const chB = new FakeChannel();
+    manager.addFollower('bB', chB);
+    chB.simulateMessage({ type: 'hello', protocolVersion: 1, capabilities: { exec: true } });
+
+    const p = manager.execOnRemote('follower-bA', 'sleep 30');
+    await vi.waitFor(() => expect(chA.ofType('exec.request')).toHaveLength(1));
+    const requestId = chA.ofType('exec.request')[0].requestId;
+
+    // Follower B forges a reply for A's request — must be ignored (bootstrapId bind).
+    chB.simulateMessage({ type: 'exec.chunk', requestId, stream: 'stdout', data: b64('INJECTED') });
+    chB.simulateMessage({ type: 'exec.response', requestId, exitCode: 0 });
+    await tick();
+
+    // The real target A then replies and resolves the command legitimately.
+    chA.simulateMessage({ type: 'exec.chunk', requestId, stream: 'stdout', data: b64('legit\n') });
+    chA.simulateMessage({ type: 'exec.response', requestId, exitCode: 0 });
+    const result = await p;
+    expect(result.stdout).toBe('legit\n');
+    expect(result.stdout).not.toContain('INJECTED');
+  });
+
+  it('preserves a multibyte UTF-8 char split across two chunks', async () => {
+    const manager = createManager();
+    const ch = addExecFollower(manager, 'b1');
+    const p = manager.execOnRemote('follower-b1', 'cat');
+    await vi.waitFor(() => expect(ch.ofType('exec.request')).toHaveLength(1));
+    const requestId = ch.ofType('exec.request')[0].requestId;
+    // '€' is E2 82 AC; split it across two exec.chunks.
+    const euro = new TextEncoder().encode('€');
+    const b64bytes = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+    ch.simulateMessage({
+      type: 'exec.chunk',
+      requestId,
+      stream: 'stdout',
+      data: b64bytes(euro.slice(0, 1)),
+    });
+    ch.simulateMessage({
+      type: 'exec.chunk',
+      requestId,
+      stream: 'stdout',
+      data: b64bytes(euro.slice(1)),
+    });
+    ch.simulateMessage({ type: 'exec.response', requestId, exitCode: 0 });
+    const result = await p;
+    expect(result.stdout).toBe('€');
+  });
 });

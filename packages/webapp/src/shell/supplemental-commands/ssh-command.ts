@@ -61,7 +61,8 @@ Examples:
 function formatTargets(followers: ConnectedFollowerInfo[]): string {
   const targets = followers.filter((f) => f.exec);
   if (targets.length === 0) {
-    return 'No exec-capable followers connected.\nStart one with: slicc <join-url> follow\n';
+    // `follow` with no runner advertises no exec capability, so name a runner.
+    return 'No exec-capable followers connected.\nStart one with: slicc <join-url> follow sh -c\n';
   }
   const lines = ['exec targets:'];
   for (const f of targets) {

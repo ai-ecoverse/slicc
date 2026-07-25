@@ -7,8 +7,17 @@
  * `wc-tray.ts`. It opens a short-lived headless `TerminalSessionClient` against
  * the kernel-worker's `TerminalSessionHost` — the same streaming surface the
  * panel terminals use — so a CLI `exec` gets the leader's real shell environment
- * (VFS, secrets, mounts). `onEvent` relays each `terminal-output` block live;
+ * (VFS, secrets, mounts). `onEvent` relays each `terminal-output` block live, and
  * the resolved exit code closes the run.
+ *
+ * KNOWN LIMITATION: `TerminalSessionHost` today `await`s the whole
+ * `executeCommand` and emits stdout/stderr only after the command finishes
+ * (`terminal-session-host.ts:23-27`). So for the `slicc … exec` direction (which
+ * runs in the leader's virtual shell) a long-running command's output arrives at
+ * completion, not incrementally — this surface is streaming-*shaped* but the
+ * underlying shell is buffered. The `ssh` direction (a real OS on a Go follower)
+ * DOES stream live. True incremental leader-shell output needs a streaming
+ * just-bash runtime and is tracked as a follow-up.
  */
 
 import { TerminalSessionClient } from '../kernel/terminal-session-client.js';
@@ -48,8 +57,14 @@ export async function runLeaderExecInShell(
   const onAbort = (): void => session.signal('SIGINT');
   try {
     await session.open({ cwd: opts.cwd, env: opts.env });
-    if (opts.signal.aborted) session.signal('SIGINT');
-    else opts.signal.addEventListener('abort', onAbort, { once: true });
+    // Register the abort listener BEFORE the aborted check so a race during
+    // open() can't be lost. If already aborted, return WITHOUT starting exec —
+    // signalling before `terminal-exec` would be dropped by the host (no active
+    // execution) and the command would then run uninterruptibly.
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+    if (opts.signal.aborted) {
+      return { exitCode: 130 };
+    }
     const result = await session.exec(opts.command);
     // stdout/stderr were already streamed via onEvent; only the exit matters.
     return { exitCode: result.exitCode };

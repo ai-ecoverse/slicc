@@ -80,6 +80,14 @@ type Pong struct {
 	Type string `json:"type"` // "pong"
 }
 
+// Status is a scoop processing-state update (leader→follower). On a live browser
+// float the leader emits no `turn_end` agent event; a turn's completion shows up
+// as scoopStatus going "processing" → "ready", which is how `prompt` ends.
+type Status struct {
+	Type        string `json:"type"` // "status"
+	ScoopStatus string `json:"scoopStatus"`
+}
+
 // AgentEventEnvelope wraps a streamed agent event (leader→follower).
 type AgentEventEnvelope struct {
 	Type     string     `json:"type"` // "agent_event"
@@ -114,12 +122,16 @@ const (
 	TypeExecResponse = "exec.response"
 	TypeExecSignal   = "exec.signal"
 	TypeAgentEvent   = "agent_event"
+	TypeStatus       = "status"
 	TypeError        = "error"
 
 	StreamStdout = "stdout"
 	StreamStderr = "stderr"
 
+	ScoopStatusProcessing = "processing"
+
 	AgentContentDelta = "content_delta"
+	AgentContentDone  = "content_done"
 	AgentTurnEnd      = "turn_end"
 	AgentError        = "error"
 	AgentToolUseStart = "tool_use_start"
