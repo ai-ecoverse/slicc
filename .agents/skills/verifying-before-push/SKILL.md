@@ -106,7 +106,7 @@ To check whether a file is exempt, search `biome.json` for its path under the
 ## Coverage
 
 Run `npm run test:coverage` to enforce the per-package floors from
-`coverage-thresholds.json`. See [`docs/testing.md` → Coverage](../../../docs/testing.md#coverage)
+`coverage-thresholds.json`. See [`writing-slicc-tests` → Enforce Coverage](../writing-slicc-tests/SKILL.md#enforce-coverage)
 for how the floors are maintained by the nightly ratchet and for the per-package and Swift
 commands.
 

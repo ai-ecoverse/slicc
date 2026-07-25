@@ -203,6 +203,15 @@ export default defineConfig({
           include: ['packages/swift-launcher/*.test.mjs'],
         },
       },
+      {
+        // Claude Code hook scripts in .claude/hooks/ are plain .mjs, not a
+        // workspace. Co-located *.test.mjs so `npm test` covers them.
+        extends: true,
+        test: {
+          name: 'claude-hooks',
+          include: ['.claude/hooks/**/*.test.mjs'],
+        },
+      },
     ],
   },
 });
