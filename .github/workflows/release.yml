@@ -8,9 +8,16 @@ on:
 permissions:
   contents: read
 
+# A release must never be cancelled: semantic-release publishes npm + the GitHub
+# release/tag + a git commit + signs/notarizes native artifacts, and killing it
+# mid-flight can leave those inconsistent. cancel-in-progress:true also DROPS
+# releases — when two merges land close together, the run on the newer commit can
+# be cancelled by a run on an older one (out-of-order push events), so that
+# commit's changes never get released. Queue instead: each run finishes, and a
+# later run releases whatever is new on its own commit.
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
