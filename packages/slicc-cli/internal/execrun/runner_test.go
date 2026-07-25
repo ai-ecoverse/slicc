@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// testRunner is the platform shell (`echo`/`exit` work under both), so the
+// always-run tests exercise the Windows (`cmd /c`) path instead of skipping.
+func testRunner() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/c"}
+	}
+	return []string{"sh", "-c"}
+}
+
 type capture struct {
 	mu     sync.Mutex
 	stdout strings.Builder
@@ -39,7 +48,7 @@ func (c *capture) err() string {
 
 func TestRunStdoutAndExitZero(t *testing.T) {
 	c := &capture{}
-	res := Run(context.Background(), "echo hello-follower", Options{Runner: []string{"sh", "-c"}, OnChunk: c.onChunk})
+	res := Run(context.Background(), "echo hello-follower", Options{Runner: testRunner(), OnChunk: c.onChunk})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit = %d, want 0 (err=%v)", res.ExitCode, res.Err)
 	}
@@ -50,7 +59,7 @@ func TestRunStdoutAndExitZero(t *testing.T) {
 
 func TestRunNonZeroExit(t *testing.T) {
 	c := &capture{}
-	res := Run(context.Background(), "exit 3", Options{Runner: []string{"sh", "-c"}, OnChunk: c.onChunk})
+	res := Run(context.Background(), "exit 3", Options{Runner: testRunner(), OnChunk: c.onChunk})
 	if res.ExitCode != 3 {
 		t.Fatalf("exit = %d, want 3", res.ExitCode)
 	}

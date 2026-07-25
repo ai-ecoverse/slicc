@@ -41,6 +41,9 @@ func sliccBinary(t *testing.T) string {
 			return
 		}
 		binPath = filepath.Join(dir, "slicc")
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
 		out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput()
 		if err != nil {
 			binErr = fmt.Errorf("go build: %w\n%s", err, out)
@@ -52,17 +55,11 @@ func sliccBinary(t *testing.T) string {
 	return binPath
 }
 
-func skipOnWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("e2e uses `sh -c` and POSIX process handling")
-	}
-}
-
-// TestCLIFollowRunsLeaderCommand: `slicc <url> follow sh -c` — the leader issues
-// an exec.request and the follower runs it on the real OS and streams it back
-// (the `ssh` direction the browser smoke test validated).
+// TestCLIFollowRunsLeaderCommand: `slicc <url> follow <runner>` — the leader
+// issues an exec.request and the follower runs it on the real OS and streams it
+// back (the `ssh` direction the browser smoke test validated). The runner is the
+// platform shell (`sh -c` / `cmd /c`) so this runs on every OS in the matrix.
 func TestCLIFollowRunsLeaderCommand(t *testing.T) {
-	skipOnWindows(t)
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
 
@@ -105,7 +102,8 @@ func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, leader.joinURL, "follow", "sh", "-c")
+	followArgs := append([]string{leader.joinURL, "follow"}, testRunner()...)
+	cmd := exec.CommandContext(ctx, bin, followArgs...)
 	cmd.Env = append(os.Environ(), "SLICC_DEBUG=1")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -134,7 +132,6 @@ func TestCLIFollowRunsLeaderCommand(t *testing.T) {
 // to run a command; the leader (a real shell here, standing in for the browser's
 // virtual shell) runs it and streams output the CLI prints to stdout.
 func TestCLIExecRunsOnLeader(t *testing.T) {
-	skipOnWindows(t)
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
 
@@ -151,7 +148,8 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 			return
 		}
 		go func() {
-			out, _ := exec.Command("sh", "-c", req.Command).CombinedOutput()
+			runner := append(testRunner(), req.Command)
+			out, _ := exec.Command(runner[0], runner[1:]...).CombinedOutput()
 			_ = sendJSON(leader.dc, protocol.ExecChunk{
 				Type: protocol.TypeExecChunk, RequestID: req.RequestID,
 				Stream: protocol.StreamStdout, Data: base64.StdEncoding.EncodeToString(out),
@@ -182,7 +180,6 @@ func TestCLIExecRunsOnLeader(t *testing.T) {
 // EXIT on the ready transition (regression for the "prompt hangs" P1 fix); if it
 // waited for turn_end it would block until the context times out.
 func TestCLIPromptCompletesOnLiveFloat(t *testing.T) {
-	skipOnWindows(t)
 	bin := sliccBinary(t)
 	leader := newBridgedLeader(t)
 

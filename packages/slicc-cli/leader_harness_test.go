@@ -4,11 +4,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 
 	"github.com/pion/webrtc/v4"
 )
+
+// testRunner is the platform shell the exec tests hand commands to
+// (`echo` / `exit` work under both), so the suite runs — not skips — on Windows.
+func testRunner() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/c"}
+	}
+	return []string{"sh", "-c"}
+}
 
 // bridgedLeader is a pion leader peer plus a mock signaling server that bridges a
 // follower's HTTP signaling (attach → poll/answer/ice) to it — the deterministic,

@@ -75,7 +75,7 @@ func TestFollowerExecRoundTripOverWebRTC(t *testing.T) {
 	}
 	defer conn.Close()
 
-	session := follow.NewSession(conn, []string{"sh", "-c"}, nil)
+	session := follow.NewSession(conn, testRunner(), nil)
 	go func() {
 		for {
 			select {

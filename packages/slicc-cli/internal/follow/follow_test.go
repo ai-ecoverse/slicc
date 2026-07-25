@@ -12,6 +12,15 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 )
 
+// testRunner is the platform shell the exec tests hand commands to, so the
+// always-run tests exercise the Windows (`cmd /c`) path instead of skipping.
+func testRunner() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd", "/c"}
+	}
+	return []string{"sh", "-c"}
+}
+
 type fakeSender struct {
 	mu   sync.Mutex
 	msgs []map[string]any
@@ -66,7 +75,7 @@ func waitResponse(t *testing.T, f *fakeSender) map[string]any {
 
 func TestSessionRunsCommandAndStreams(t *testing.T) {
 	sender := newFakeSender()
-	s := NewSession(sender, []string{"sh", "-c"}, nil)
+	s := NewSession(sender, testRunner(), nil)
 	s.Handle(context.Background(), protocol.TypeExecRequest, mustJSON(protocol.ExecRequest{
 		Type: "exec.request", RequestID: "r1", Command: "echo hello-follow",
 	}))

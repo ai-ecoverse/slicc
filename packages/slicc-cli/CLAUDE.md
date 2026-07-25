@@ -70,6 +70,15 @@ coverage floor in the Makefile. Both run in the `slicc-cli` CI job. Release
 binaries are attached to each GitHub release by `.github/workflows/slicc-cli-release.yml`
 (decoupled from semantic-release; triggered on `release: published`).
 
+**OS matrix:** the follower targets macOS/Linux/Windows, so CI runs `go test ./...`
+on all three (`strategy.matrix.os`) to exercise the real per-OS runtime paths —
+process-group signalling and the `cmd /c` vs `sh -c` runner — that a compile-only
+check would miss. Tests pick the platform shell via a `testRunner()` helper so they
+run rather than skip on Windows; only the genuinely POSIX-specific cases (`sleep` +
+signal delivery) stay `runtime.GOOS == "windows"`-skipped. The static gate
+(`make check`) and cross-compile (`make dist`) run once on Linux — they are
+platform-independent, and the coverage floor would under-count where those cases skip.
+
 `integration_test.go` is the real end-to-end test: it drives the whole follower
 path over an actual WebRTC connection (pion ↔ pion on loopback) — a leader peer
 creates the `tray-control` channel, a mock signaling server bridges the SDP/ICE
