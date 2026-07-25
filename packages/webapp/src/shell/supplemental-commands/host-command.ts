@@ -21,6 +21,12 @@ export interface ConnectedFollowerInfo {
   runtimeId: string;
   runtime?: string;
   connectedAt?: string;
+  /** True when the follower advertised `exec` capability (a `slicc … follow` CLI) — reach it with `ssh`. */
+  exec?: boolean;
+  /** True when the follower advertised browser targets — reach its tabs with `playwright-cli`. */
+  cdp?: boolean;
+  /** One-line description the follower advertised on `hello.motd` (exec targets). */
+  motd?: string;
 }
 
 /**
@@ -175,6 +181,51 @@ export function formatDuration(seconds: number): string {
   return `${hours}h ${remainingMinutes}m ago`;
 }
 
+/**
+ * Lines for one actionable follower: the tagged entry (`[ssh]` for an exec
+ * target, `[playwright]` for a browser one) plus, for an exec target, its
+ * advertised MOTD on an indented line beneath it.
+ */
+function formatFollowerEntry(f: ConnectedFollowerInfo): string[] {
+  const parts = [f.runtimeId];
+  if (f.runtime) {
+    parts.push(`(${f.runtime})`);
+  }
+  if (f.connectedAt) {
+    const ago = Math.round((Date.now() - new Date(f.connectedAt).getTime()) / 1000);
+    parts.push(`connected ${formatDuration(ago)}`);
+  }
+  const tags: string[] = [];
+  if (f.exec) tags.push('[ssh]'); // reach it with `ssh <runtime-id> "<cmd>"`
+  if (f.cdp) tags.push('[playwright]'); // drive its tabs with `playwright-cli`
+  if (tags.length > 0) parts.push(tags.join(' '));
+  const lines = [`  - ${parts.join(' ')}`];
+  if (f.exec && f.motd) lines.push(`      ${f.motd}`);
+  return lines;
+}
+
+/**
+ * The `followers:` section. Lists only followers the agent can act on — an exec
+ * target (`[ssh]`) or a browser-control target (`[playwright]`). Transient
+ * `prompt`/`exec` CLI connections advertise no capability and would otherwise
+ * linger as ghost ids until the hub GCs them, so collapse them to a count.
+ */
+function formatFollowersSection(followers: ConnectedFollowerInfo[]): string[] {
+  const actionable = followers.filter((f) => f.exec || f.cdp);
+  const hidden = followers.length - actionable.length;
+  const lines: string[] = [];
+  if (actionable.length > 0) {
+    lines.push('followers:');
+    for (const f of actionable) lines.push(...formatFollowerEntry(f));
+  }
+  if (hidden > 0) {
+    lines.push(
+      `(${hidden} other follower${hidden === 1 ? '' : 's'} with no exec/browser capability)`
+    );
+  }
+  return lines;
+}
+
 export function formatLeaderOutput(
   status: LeaderTrayRuntimeStatus,
   followers: ConnectedFollowerInfo[]
@@ -194,19 +245,8 @@ export function formatLeaderOutput(
   // Only surface followers when there's an active tray session. The followers
   // shim persists across sessions, so without this gate a leftover entry would
   // be shown under an `inactive` leader as if it were still connected.
-  if (status.session && followers.length > 0) {
-    lines.push('followers:');
-    for (const f of followers) {
-      const parts = [f.runtimeId];
-      if (f.runtime) {
-        parts.push(`(${f.runtime})`);
-      }
-      if (f.connectedAt) {
-        const ago = Math.round((Date.now() - new Date(f.connectedAt).getTime()) / 1000);
-        parts.push(`connected ${formatDuration(ago)}`);
-      }
-      lines.push(`  - ${parts.join(' ')}`);
-    }
+  if (status.session) {
+    lines.push(...formatFollowersSection(followers));
   }
 
   return `${lines.join('\n')}\n`;

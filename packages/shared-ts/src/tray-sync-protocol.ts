@@ -63,6 +63,29 @@ export interface TraySyncHelloMessage {
   protocolVersion: number;
   /** Optional runtime tag of the sender (e.g. 'slicc-standalone'). */
   runtime?: string;
+  /**
+   * Optional capability advertisement (additive — legacy peers omit it). The
+   * only capability today is `exec`: this peer will run real OS shell commands
+   * on its counterpart's behalf. It is set exclusively by the `slicc … follow`
+   * CLI (`packages/slicc-cli`); browser and iOS followers have no OS shell and
+   * leave it absent, so the leader never routes an `exec.request` to a peer
+   * that cannot serve it. See the `exec.*` messages below.
+   */
+  capabilities?: TraySyncCapabilities;
+  /**
+   * Optional one-line description of an exec-capable follower (additive). The
+   * `slicc … follow <runner>` CLI sets it to a concise summary — who/what the
+   * target is, its platform, and its runner — and the leader surfaces it to the
+   * agent (`ssh --list`) so the first `ssh` reveals what the target is. Legacy
+   * and browser/iOS peers omit it.
+   */
+  motd?: string;
+}
+
+/** Peer capability advertisement carried on `hello`. */
+export interface TraySyncCapabilities {
+  /** This peer can run OS shell commands via `exec.request` (CLI `follow`). */
+  exec?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +149,10 @@ export type LeaderToFollowerMessage =
   | { type: 'preview.open'; requestId: string; url: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | TrayExecRequestMessage
+  | TrayExecChunkMessage
+  | TrayExecResponseMessage
+  | TrayExecSignalMessage
   | CherrySliccEventMessage
   | { type: 'theme.apply'; themeJson: string | null }
   | TraySyncHelloMessage
@@ -172,6 +199,10 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | TrayExecRequestMessage
+  | TrayExecChunkMessage
+  | TrayExecResponseMessage
+  | TrayExecSignalMessage
   | CherryHostEventMessage
   | TraySyncHelloMessage
   | { type: 'ping' }
@@ -230,6 +261,75 @@ export function isCherrySliccEventMessage(m: unknown): m is CherrySliccEventMess
   return (
     typeof m === 'object' && m !== null && (m as { type?: string }).type === 'cherry.slicc_event'
   );
+}
+
+// ---------------------------------------------------------------------------
+// Remote command execution (streaming, symmetric)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a shell command on the receiving peer. Symmetric like `cdp.request`:
+ * present in BOTH direction unions. The LEADER sends it to a `follow`-mode CLI
+ * follower — the `ssh` supplemental command → the follower runs it on its real
+ * OS as the user who started `slicc … follow`. A CLI follower sends it to the
+ * LEADER — the `slicc … exec` subcommand → the leader runs it in its in-browser
+ * virtual shell. Only a peer that advertised `hello.capabilities.exec` is a
+ * valid OS-exec target; any other follower replies with an error
+ * `exec.response` instead of running anything.
+ */
+export interface TrayExecRequestMessage {
+  type: 'exec.request';
+  requestId: string;
+  /** Command line, interpreted by the receiver's shell. */
+  command: string;
+  /** Optional working directory on the receiver. */
+  cwd?: string;
+  /** Optional environment variables merged over the receiver's own env. */
+  env?: Record<string, string>;
+}
+
+/**
+ * A streamed slice of a running command's output, emitted 0..n times between
+ * an `exec.request` and its terminal `exec.response`. `data` is base64 so
+ * arbitrary bytes (including binary output) survive the JSON/text data channel.
+ * Chunk order within a stream is preserved by the reliable, ordered data
+ * channel; stdout and stderr are independent streams and interleave only
+ * approximately, exactly as a local shell does.
+ */
+export interface TrayExecChunkMessage {
+  type: 'exec.chunk';
+  requestId: string;
+  stream: 'stdout' | 'stderr';
+  /** base64-encoded output bytes. */
+  data: string;
+}
+
+/**
+ * Terminal reply for an `exec.request`. `exitCode` follows POSIX conventions
+ * (128 + signal number when killed by a signal). `error` is set only when the
+ * command could not be started or the receiver refuses to run it (e.g. a
+ * follower that never advertised `exec` capability); `exitCode` is then a
+ * non-zero sentinel.
+ */
+export interface TrayExecResponseMessage {
+  type: 'exec.response';
+  requestId: string;
+  exitCode: number;
+  /** Signal name when the process was terminated by a signal, else omitted. */
+  signal?: string;
+  /** Set when the command could not be run at all. */
+  error?: string;
+}
+
+/**
+ * Cancel a running `exec.request`. The requester sends it when its caller
+ * aborts (the agent interrupts `ssh`, or the `exec` CLI receives SIGINT); the
+ * receiver forwards the signal to the child process.
+ */
+export interface TrayExecSignalMessage {
+  type: 'exec.signal';
+  requestId: string;
+  signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL';
 }
 
 // ---------------------------------------------------------------------------

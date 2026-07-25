@@ -9,6 +9,7 @@ import type {
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
 } from '@slicc/shared-ts';
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -36,8 +37,13 @@ import {
   sendCDPResponse,
   sendSnapshot,
   TRAY_SYNC_PROTOCOL_VERSION,
+  type TrayExecChunkMessage,
+  type TrayExecRequestMessage,
+  type TrayExecResponseMessage,
+  type TrayExecSignalMessage,
   type TrayFsRequest,
   type TrayFsResponse,
+  type TraySyncCapabilities,
   type TraySyncChannel,
   type TrayTargetEntry,
   unhandledProtocolMessage,
@@ -124,6 +130,32 @@ export interface LeaderSyncManagerOptions {
    * Wired by buildSyncManager to leaderTray.sendControlMessage.
    */
   sendControl: (msg: LeaderToWorkerControlMessage) => void;
+  /**
+   * Run a shell command in the leader's own (virtual) shell on behalf of a CLI
+   * follower's `slicc … exec`. Streams output blocks through `onChunk` as they
+   * arrive and resolves with the process exit code. Optional — a leader float
+   * without a worker shell (or a test) leaves it unset, and any inbound
+   * `exec.request` is refused with an error `exec.response`. Wired page-side to
+   * a `TerminalSessionClient` by `wc-tray.ts`.
+   */
+  execInShell?: (
+    command: string,
+    opts: {
+      cwd?: string;
+      env?: Record<string, string>;
+      signal: AbortSignal;
+      onChunk: (stream: 'stdout' | 'stderr', data: string) => void;
+    }
+  ) => Promise<{ exitCode: number; error?: string }>;
+}
+
+/** Buffered result of a remote command executed on a follower (the `ssh` command). */
+export interface RemoteExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /** Set when the follower could not run the command at all. */
+  error?: string;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -214,6 +246,41 @@ interface ConnectedFollower {
   peerProtocolVersion?: number;
   /** True once the no-hello legacy diagnosis has been logged for this follower. */
   legacyPeerLogged?: boolean;
+  /**
+   * Capabilities the follower advertised on `hello`. `exec: true` marks a CLI
+   * `follow` target the leader may send `exec.request` to; absent for browser /
+   * iOS followers, which have no OS shell.
+   */
+  peerCapabilities?: TraySyncCapabilities;
+  /**
+   * One-line description the follower advertised on `hello.motd` (a
+   * `slicc … follow` CLI: who/what/where the exec target is). Surfaced to the
+   * agent by `ssh --list`; absent for browser / iOS followers.
+   */
+  peerMotd?: string;
+}
+
+/** Tracks a leader-initiated remote exec (the `ssh` command) awaiting the follower's streamed reply. */
+interface PendingRemoteExec {
+  bootstrapId: string;
+  stdout: string;
+  stderr: string;
+  /**
+   * Per-stream streaming UTF-8 decoders. The follower reads arbitrary byte
+   * blocks, so a multibyte character can straddle two `exec.chunk`s; a fresh
+   * decoder per chunk would turn both halves into replacement chars. `{stream:
+   * true}` carries the partial sequence across chunks.
+   */
+  stdoutDecoder: TextDecoder;
+  stderrDecoder: TextDecoder;
+  /** Total bytes buffered so far (memory-cap guard). */
+  bytes: number;
+  /** True once output was truncated at the byte cap. */
+  truncated: boolean;
+  onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
+  resolve: (result: RemoteExecResult) => void;
+  reject: (err: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 /** Tracks a CDP request being routed through the leader. */
@@ -276,6 +343,19 @@ export class LeaderSyncManager {
       responses: TrayFsResponse[];
     }
   >();
+  /** Leader-initiated remote execs (the `ssh` command) awaiting a follower reply, keyed by (unguessable) requestId. */
+  private readonly pendingRemoteExecs = new Map<string, PendingRemoteExec>();
+  /**
+   * Follower-initiated local execs (a CLI `exec`) running in the leader's shell,
+   * keyed by `${bootstrapId}:${requestId}` so one follower's request id can't
+   * collide with (or cancel) another follower's exec.
+   */
+  private readonly localExecAborters = new Map<
+    string,
+    { bootstrapId: string; controller: AbortController }
+  >();
+  /** Cap the buffered output of a single `ssh` command so an unbounded remote command can't exhaust page memory. */
+  private static readonly MAX_REMOTE_EXEC_BYTES = 16 * 1024 * 1024;
   /** Mint map: previewToken → {url, title, quiet} */
   private readonly mintMap = new Map<string, { url: string; title: string; quiet: boolean }>();
   /** Bridge connections: connId → {previewToken, origin, userAgent, connectedAt, url, title, quiet, transport} */
@@ -366,6 +446,22 @@ export class LeaderSyncManager {
     follower.unsubscribe();
     follower.sync.close();
     this.followers.delete(bootstrapId);
+
+    // Settle any exec work tied to this follower so callers don't hang.
+    // Leader-initiated `ssh` execs awaiting this follower's reply reject;
+    // follower-initiated local `exec` runs are aborted.
+    for (const [requestId, pending] of this.pendingRemoteExecs) {
+      if (pending.bootstrapId !== bootstrapId) continue;
+      this.pendingRemoteExecs.delete(requestId);
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(new Error('follower disconnected before the command completed'));
+    }
+    for (const [requestId, entry] of this.localExecAborters) {
+      if (entry.bootstrapId !== bootstrapId) continue;
+      entry.controller.abort();
+      this.localExecAborters.delete(requestId);
+    }
+
     // Clear the broadcast-error throttle entry so the map doesn't
     // grow unbounded across reconnects (followers are keyed by
     // bootstrapId; a reconnect mints a fresh one).
@@ -846,6 +942,276 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Run a command on a connected follower (the leader-side `ssh` command) and
+   * resolve with the buffered stdout/stderr/exit code. Streams each output
+   * block to `opts.onChunk` as it arrives, and forwards an abort on
+   * `opts.signal` as an `exec.signal`. Rejects if the follower is unknown,
+   * isn't an exec target, or disconnects before the command finishes.
+   */
+  async execOnRemote(
+    runtimeId: string,
+    command: string,
+    opts: {
+      cwd?: string;
+      env?: Record<string, string>;
+      signal?: AbortSignal;
+      onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
+      timeoutMs?: number;
+    } = {}
+  ): Promise<RemoteExecResult> {
+    const resolved = this.resolveFollowerByRuntimeId(runtimeId);
+    if (!resolved) {
+      throw new Error(`No connected follower for '${runtimeId}'`);
+    }
+    const { bootstrapId, follower } = resolved;
+    if (!follower.peerCapabilities?.exec) {
+      throw new Error(
+        `Follower '${runtimeId}' is not an exec target — only a 'slicc … follow' CLI accepts commands`
+      );
+    }
+    // Unguessable id so a hostile follower can't forge a reply for someone
+    // else's `ssh` command (the reply path also verifies the bootstrapId).
+    const requestId = `lexec-${crypto.randomUUID()}`;
+    return new Promise<RemoteExecResult>((resolve, reject) => {
+      const pending: PendingRemoteExec = {
+        bootstrapId,
+        stdout: '',
+        stderr: '',
+        stdoutDecoder: new TextDecoder('utf-8'),
+        stderrDecoder: new TextDecoder('utf-8'),
+        bytes: 0,
+        truncated: false,
+        onChunk: opts.onChunk,
+        resolve,
+        reject,
+      };
+      if (opts.timeoutMs && opts.timeoutMs > 0) {
+        pending.timer = setTimeout(() => {
+          if (!this.pendingRemoteExecs.delete(requestId)) return;
+          this.sendExecSignal(bootstrapId, requestId, 'SIGKILL');
+          reject(new Error(`exec on '${runtimeId}' timed out after ${opts.timeoutMs}ms`));
+        }, opts.timeoutMs);
+      }
+      this.pendingRemoteExecs.set(requestId, pending);
+
+      if (opts.signal) {
+        const onAbort = (): void => this.sendExecSignal(bootstrapId, requestId, 'SIGINT');
+        if (opts.signal.aborted) onAbort();
+        else opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const sent = follower.sync.send({
+        type: 'exec.request',
+        requestId,
+        command,
+        cwd: opts.cwd,
+        env: opts.env,
+      });
+      if (!sent) {
+        this.pendingRemoteExecs.delete(requestId);
+        if (pending.timer) clearTimeout(pending.timer);
+        reject(new Error(`Failed to send exec.request to follower '${runtimeId}'`));
+      }
+    });
+  }
+
+  /** bootstrapIds of followers that advertised `exec` capability on `hello`. */
+  getExecCapableBootstrapIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const [bootstrapId, follower] of this.followers) {
+      if (follower.peerCapabilities?.exec) ids.add(bootstrapId);
+    }
+    return ids;
+  }
+
+  /**
+   * bootstrapIds of followers that advertised browser targets — i.e. reachable
+   * via `playwright-cli`. A follower lands in `runtimeToBootstrap` only after it
+   * sends a `targets.registry`, so this excludes headless CLI (`exec`-only)
+   * followers, which have no browser to drive.
+   */
+  getBrowserCapableBootstrapIds(): Set<string> {
+    return new Set(this.runtimeToBootstrap.values());
+  }
+
+  /** Per-follower `hello.motd`, keyed by bootstrapId (exec targets advertise it). */
+  getFollowerMotds(): Map<string, string> {
+    const motds = new Map<string, string>();
+    for (const [bootstrapId, follower] of this.followers) {
+      if (follower.peerMotd) motds.set(bootstrapId, follower.peerMotd);
+    }
+    return motds;
+  }
+
+  /**
+   * Resolve a follower by the runtime id the `host` command displays. Prefers
+   * the advertised-target mapping (`runtimeToBootstrap`); falls back to the
+   * canonical `follower-<bootstrapId>` identity so a CLI follower that never
+   * advertised browser targets is still addressable. The fallback mirrors
+   * `canonicalRuntimeId` (ui/runtime-identity.ts), kept inline to avoid a
+   * scoops→ui import.
+   */
+  private resolveFollowerByRuntimeId(
+    runtimeId: string
+  ): { bootstrapId: string; follower: ConnectedFollower } | null {
+    const advertised = this.runtimeToBootstrap.get(runtimeId);
+    if (advertised) {
+      const follower = this.followers.get(advertised);
+      if (follower) return { bootstrapId: advertised, follower };
+    }
+    const candidates = [runtimeId];
+    if (runtimeId.startsWith('follower-')) candidates.push(runtimeId.slice('follower-'.length));
+    for (const candidate of candidates) {
+      const follower = this.followers.get(candidate);
+      if (follower) return { bootstrapId: candidate, follower };
+    }
+    return null;
+  }
+
+  /** Send an `exec.signal` to the follower running a leader-initiated exec. */
+  private sendExecSignal(
+    bootstrapId: string,
+    requestId: string,
+    signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL'
+  ): void {
+    this.followers.get(bootstrapId)?.sync.send({ type: 'exec.signal', requestId, signal });
+  }
+
+  /** Accumulate + forward a streamed output block from a leader-initiated exec. */
+  private handleRemoteExecChunk(bootstrapId: string, message: TrayExecChunkMessage): void {
+    const pending = this.pendingRemoteExecs.get(message.requestId);
+    // Only the follower the request was sent to may stream its output.
+    if (!pending || pending.bootstrapId !== bootstrapId) return;
+    let bytes: Uint8Array;
+    try {
+      bytes = base64ToUint8(message.data);
+    } catch {
+      return;
+    }
+    // Memory guard: once the cap is hit, keep draining (so exec.response still
+    // resolves) but stop accumulating.
+    if (pending.truncated) return;
+    pending.bytes += bytes.length;
+    if (pending.bytes > LeaderSyncManager.MAX_REMOTE_EXEC_BYTES) {
+      pending.truncated = true;
+    }
+    const decoder = message.stream === 'stdout' ? pending.stdoutDecoder : pending.stderrDecoder;
+    const text = decoder.decode(bytes, { stream: true });
+    if (message.stream === 'stdout') pending.stdout += text;
+    else pending.stderr += text;
+    pending.onChunk?.(message.stream, text);
+  }
+
+  /** Resolve a leader-initiated exec on its terminal `exec.response`. */
+  private handleRemoteExecResponse(bootstrapId: string, message: TrayExecResponseMessage): void {
+    const pending = this.pendingRemoteExecs.get(message.requestId);
+    if (!pending || pending.bootstrapId !== bootstrapId) return;
+    this.pendingRemoteExecs.delete(message.requestId);
+    if (pending.timer) clearTimeout(pending.timer);
+    // Flush any bytes the streaming decoders were holding for a partial char.
+    pending.stdout += pending.stdoutDecoder.decode();
+    pending.stderr += pending.stderrDecoder.decode();
+    pending.resolve({
+      stdout: pending.truncated ? `${pending.stdout}\n[output truncated at cap]` : pending.stdout,
+      stderr: pending.stderr,
+      exitCode: message.exitCode,
+      error: message.error,
+    });
+  }
+
+  /** Route the four exec.* messages (kept out of the main switch for length). */
+  private handleFollowerExecMessage(
+    bootstrapId: string,
+    message:
+      | TrayExecRequestMessage
+      | TrayExecChunkMessage
+      | TrayExecResponseMessage
+      | TrayExecSignalMessage
+  ): void {
+    switch (message.type) {
+      case 'exec.request':
+        // A CLI follower's `slicc … exec` — run it in the leader's own shell.
+        void this.handleFollowerExecRequest(bootstrapId, message);
+        break;
+      case 'exec.chunk':
+        // Streamed output of a leader-initiated `ssh` exec running on a follower.
+        this.handleRemoteExecChunk(bootstrapId, message);
+        break;
+      case 'exec.response':
+        this.handleRemoteExecResponse(bootstrapId, message);
+        break;
+      case 'exec.signal':
+        // The CLI follower cancelled a `slicc … exec` it started; abort it.
+        this.handleFollowerExecSignal(bootstrapId, message);
+        break;
+    }
+  }
+
+  /**
+   * Run a CLI follower's `slicc … exec` command in the leader's own shell,
+   * streaming each output block back as an `exec.chunk` and the exit code as a
+   * terminal `exec.response`. Refuses with an error response when no
+   * `execInShell` is wired (a leader float without a worker shell).
+   */
+  private async handleFollowerExecRequest(
+    bootstrapId: string,
+    message: TrayExecRequestMessage
+  ): Promise<void> {
+    const { requestId, command, cwd, env } = message;
+    const execInShell = this.options.execInShell;
+    if (!execInShell) {
+      this.followers.get(bootstrapId)?.sync.send({
+        type: 'exec.response',
+        requestId,
+        exitCode: 127,
+        error: 'exec is not supported on this leader',
+      });
+      return;
+    }
+    const controller = new AbortController();
+    const abortKey = `${bootstrapId}:${requestId}`;
+    this.localExecAborters.set(abortKey, { bootstrapId, controller });
+    try {
+      const result = await execInShell(command, {
+        cwd,
+        env,
+        signal: controller.signal,
+        onChunk: (stream, data) => {
+          this.followers.get(bootstrapId)?.sync.send({
+            type: 'exec.chunk',
+            requestId,
+            stream,
+            data: uint8ToBase64(new TextEncoder().encode(data)),
+          });
+        },
+      });
+      this.followers.get(bootstrapId)?.sync.send({
+        type: 'exec.response',
+        requestId,
+        exitCode: result.exitCode,
+        error: result.error,
+      });
+    } catch (err) {
+      this.followers.get(bootstrapId)?.sync.send({
+        type: 'exec.response',
+        requestId,
+        exitCode: 1,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      this.localExecAborters.delete(abortKey);
+    }
+  }
+
+  /**
+   * Abort a local `exec` run when the originating CLI follower cancels it. Keyed
+   * by `${bootstrapId}:${requestId}` so a follower can only cancel its own exec.
+   */
+  private handleFollowerExecSignal(bootstrapId: string, message: TrayExecSignalMessage): void {
+    this.localExecAborters.get(`${bootstrapId}:${message.requestId}`)?.controller.abort();
+  }
+
+  /**
    * Handle incoming messages from a follower.
    */
   private handleFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
@@ -959,6 +1325,12 @@ export class LeaderSyncManager {
       case 'fs.response':
         this.handleFsResponse(message.requestId, message.response);
         break;
+      case 'exec.request':
+      case 'exec.chunk':
+      case 'exec.response':
+      case 'exec.signal':
+        this.handleFollowerExecMessage(bootstrapId, message);
+        break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
@@ -981,7 +1353,16 @@ export class LeaderSyncManager {
       }
       case 'hello': {
         const follower = this.followers.get(bootstrapId);
-        if (follower) follower.peerProtocolVersion = message.protocolVersion;
+        if (follower) {
+          follower.peerProtocolVersion = message.protocolVersion;
+          follower.peerCapabilities = message.capabilities;
+          follower.peerMotd = message.motd;
+          // `exec` capability arrives on `hello` (after the follower is already
+          // counted on connect), so re-notify with the unchanged count to let
+          // the page re-mirror the followers shim with fresh exec flags — the
+          // `host` / `ssh` listing reads that shim from the kernel worker.
+          this.options.onFollowerCountChanged?.(this.followers.size);
+        }
         if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
           log.warn('Follower speaks a newer tray sync protocol — update this build', {
             bootstrapId,

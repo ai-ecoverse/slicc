@@ -40,6 +40,7 @@ jobs:
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
+      slicc-cli: ${{ steps.filter.outputs.slicc-cli }}
       swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
       speech: ${{ steps.filter.outputs.speech }}
@@ -82,6 +83,11 @@ jobs:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+            slicc-cli:
+              - 'packages/slicc-cli/**'
+              # The Go corpus test decodes the shared golden fixture; a protocol
+              # change regenerates it, so run the Go job when it moves too.
+              - 'packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
             swift-config:
               - '.swiftlint.yml'
               # Swift coverage floors + the gate script live outside the
@@ -760,6 +766,49 @@ jobs:
       - name: Build
         run: npm run build -w @slicc/cloud-core
 
+  slicc-cli:
+    needs: changes
+    if: >-
+      needs.changes.outputs.slicc-cli == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    # The follower runs on macOS/Linux/Windows, so its test suite runs on all three
+    # to exercise the real per-OS runtime paths (process-group signalling, the
+    # cmd.exe vs sh runner) — a compile-only check would miss those. The static
+    # gate + coverage floor run once on Linux: they are platform-independent, and
+    # the floor would under-count where the POSIX-only tests skip.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+      # macOS / Windows: run the suite to exercise the platform runtime paths.
+      - name: Tests
+        if: matrix.os != 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: go test ./...
+      # Linux: the full gate (gofmt + vet + golangci-lint + race tests + coverage
+      # floor) plus the cross-compile of every release target.
+      - name: Install golangci-lint
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Format, lint, vet, race tests, coverage floor
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: make check
+      - name: Cross-compile all targets (mac/linux/windows × amd64/arm64)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: packages/slicc-cli
+        run: make dist
+
   shared:
     needs: changes
     if: >-
@@ -1163,6 +1212,7 @@ jobs:
         swift-server,
         swift-optel,
         ios-app,
+        slicc-cli,
         release-gate,
       ]
     runs-on: ubuntu-latest

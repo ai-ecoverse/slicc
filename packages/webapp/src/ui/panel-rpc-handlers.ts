@@ -138,6 +138,22 @@ export interface StandalonePanelRpcHandlerOptions {
    */
   emitCherrySliccEvent?: (runtimeId: string, name: string, detail?: unknown) => boolean;
   /**
+   * Run a command on a connected follower for the worker-side `ssh` command.
+   * Wired to the page-side `LeaderSyncManager.execOnRemote(...)` (the WebRTC
+   * data channels live on the page). Resolves with the buffered result. Absent
+   * when no leader tray is active — the `tray-exec` handler then rejects.
+   */
+  execOnRemote?: (payload: {
+    runtimeId: string;
+    command: string;
+    cwd?: string;
+    env?: Record<string, string>;
+    execToken: string;
+    timeoutMs?: number;
+  }) => Promise<{ stdout: string; stderr: string; exitCode: number; error?: string }>;
+  /** Cancel an in-flight {@link StandalonePanelRpcHandlerOptions.execOnRemote}, keyed by execToken. */
+  signalRemoteExec?: (payload: { execToken: string }) => void;
+  /**
    * Return the remote (follower) browser targets known to the page-side
    * BrowserAPI. `mainStandaloneWorker` wires this unconditionally to
    * `browser.listAllTargets()`; it returns local-only (no composite
@@ -614,6 +630,18 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('cherry-emit: not available in this environment');
       }
       return { delivered: options.emitCherrySliccEvent(runtimeId, name, detail) };
+    },
+
+    'tray-exec': async (payload) => {
+      if (!options.execOnRemote) {
+        throw new Error('ssh: no active leader tray in this environment');
+      }
+      return await options.execOnRemote(payload);
+    },
+
+    'tray-exec-signal': ({ execToken }) => {
+      options.signalRemoteExec?.({ execToken });
+      return { ok: true };
     },
 
     'oauth-extras-set': ({ providerId, domains }) => {

@@ -36,7 +36,8 @@
           "artifacts/release/*.zip",
           "artifacts/release/*.tgz",
           "artifacts/release/release-artifacts.json",
-          "artifacts/release/sliccstart-v*.dmg"
+          "artifacts/release/sliccstart-v*.dmg",
+          "artifacts/release/slicc-*"
         ]
       }
     ],

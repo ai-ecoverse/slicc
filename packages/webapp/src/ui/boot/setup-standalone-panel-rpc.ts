@@ -87,6 +87,10 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
   const { createStandalonePanelRpcHandlers } = await import('../panel-rpc-handlers.js');
   const { getLeaderPermissionsSurface } = await import('../wc/wc-permissions-registry.js');
   const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
+
+  // Per-run AbortControllers for in-flight `ssh` execs, keyed by the shell's
+  // `execToken` so a `tray-exec-signal` (Ctrl+C) can cancel the matching run.
+  const execAborters = new Map<string, AbortController>();
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
     handlers: createStandalonePanelRpcHandlers({
@@ -111,6 +115,27 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
+      execOnRemote: async ({ runtimeId, command, cwd, env, execToken, timeoutMs }) => {
+        const sync = getLeader()?.currentLeaderSync;
+        if (!sync) throw new Error('ssh: no active leader tray');
+        const controller = new AbortController();
+        execAborters.set(execToken, controller);
+        try {
+          return await sync.execOnRemote(runtimeId, command, {
+            cwd,
+            env,
+            signal: controller.signal,
+            timeoutMs,
+          });
+        } finally {
+          execAborters.delete(execToken);
+        }
+      },
+      signalRemoteExec: ({ execToken }) => {
+        // The AbortController carries no signal name; `execOnRemote` maps any
+        // abort to SIGINT on the follower, which is the Ctrl+C path.
+        execAborters.get(execToken)?.abort();
+      },
       // Worker-side `serve` bridges here so the kernel-worker can mint a preview URL
       // via the page-side leader's controllerToken and broadcast preview.open.
       // Extension uses the in-realm `setPreviewMinter` hook instead.

@@ -1,0 +1,47 @@
+# golangci-lint config for packages/slicc-cli (v2 schema).
+# The default set (errcheck, govet, ineffassign, staticcheck, unused) covers the
+# lint gap left by `go vet`; funlen/gocyclo/gocognit add the complexity gate the
+# TS side has (biome's 150-line function limit).
+version: '2'
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - funlen
+    - gocyclo
+    - gocognit
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+  settings:
+    funlen:
+      lines: 120
+      statements: 70
+    gocyclo:
+      min-complexity: 25
+    gocognit:
+      min-complexity: 30
+    errcheck:
+      # Fire-and-forget stdout/stderr writes and Close-on-defer are intentional
+      # across this CLI; don't require an explicit `_ =` at every site.
+      exclude-functions:
+        - (io.Closer).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Write
+  exclusions:
+    rules:
+      # Test functions are allowed to be longer / more branchy than production.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocyclo
+          - gocognit
+
+formatters:
+  enable:
+    - gofmt

@@ -1,0 +1,5 @@
+# Go build output
+/bin/
+/dist/
+# Coverage profile from `make cover`
+cover.out

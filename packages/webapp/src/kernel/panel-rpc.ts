@@ -238,6 +238,30 @@ export type PanelRpcRequest =
       payload: { joinUrl: string; requestId?: string };
     }
   | {
+      // Run a command on a connected follower for the `ssh` shell command. The
+      // leader tray (WebRTC data channels) lives on the page, so the worker
+      // bridges here; the page-side `LeaderSyncManager.execOnRemote` streams the
+      // follower's output and resolves with the buffered stdout/stderr/exit.
+      // `execToken` is a caller-minted correlation id a `tray-exec-signal` uses
+      // to cancel the in-flight run (Ctrl+C). Handler throws when no leader tray
+      // is active or the target isn't an exec-capable follower.
+      op: 'tray-exec';
+      payload: {
+        runtimeId: string;
+        command: string;
+        cwd?: string;
+        env?: Record<string, string>;
+        execToken: string;
+        timeoutMs?: number;
+      };
+    }
+  | {
+      // Cancel an in-flight `tray-exec` (mapped to SIGINT on the follower),
+      // keyed by its `execToken`. Fire-and-forget from the shell's view.
+      op: 'tray-exec-signal';
+      payload: { execToken: string };
+    }
+  | {
       // Write the user-configured extra-OAuth-domains store for a
       // single provider. Worker writes can't reach page localStorage
       // directly (the kernel-worker shim is page→worker only — see
@@ -555,6 +579,8 @@ export interface PanelRpcResults {
   };
   'tray-leave': TrayLeaveResult;
   'tray-join': { joinUrl: string };
+  'tray-exec': { stdout: string; stderr: string; exitCode: number; error?: string };
+  'tray-exec-signal': { ok: true };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
   'usb-list': { devices: UsbDeviceInfo[] };

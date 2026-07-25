@@ -31,6 +31,10 @@ import {
   type SprinkleSummary,
   sendCDPResponse,
   TRAY_SYNC_PROTOCOL_VERSION,
+  type TrayExecChunkMessage,
+  type TrayExecRequestMessage,
+  type TrayExecResponseMessage,
+  type TrayExecSignalMessage,
   type TrayFsRequest,
   type TrayFsResponse,
   type TraySyncChannel,
@@ -688,27 +692,9 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
 
-      case 'sprinkles.list': {
-        log.info('Sprinkles list received from leader', {
-          sprinkleCount: message.sprinkles.length,
-        });
-        // Treat every list broadcast as a content invalidation barrier.
-        // The leader has no per-file change signal today; broadcasts are
-        // periodic (~5 s default), so a stable `.shtml` re-invalidates
-        // its cache on every tick. This is conservative — the trade-off
-        // is cache effectiveness during steady state in exchange for
-        // never serving stale content to the user when the leader's
-        // file actually changed. Bumping `cacheEpoch` ALSO discards any
-        // in-flight fetch's content reply that arrives AFTER this
-        // barrier — see `handleSprinkleContent`. Without that, a late
-        // pre-barrier reply could poison the cache for the post-barrier
-        // world.
-        this.sprinkleContentCache.clear();
-        this.cacheEpoch++;
-        this.latestSprinkles = message.sprinkles;
-        this.options.onSprinklesList?.(message.sprinkles);
+      case 'sprinkles.list':
+        this.handleSprinklesList(message.sprinkles);
         break;
-      }
 
       case 'sprinkle.content':
         this.handleSprinkleContent(message);
@@ -739,6 +725,12 @@ export class FollowerSyncManager implements AgentHandle {
       case 'hello':
         this.handleLeaderHello(message.protocolVersion);
         break;
+      case 'exec.request':
+      case 'exec.chunk':
+      case 'exec.response':
+      case 'exec.signal':
+        this.handleExecMessage(message);
+        break;
       default: {
         // Exhaustiveness guard: a new LeaderToFollowerMessage variant fails
         // compile here until this dispatcher decides (mirrors the iOS
@@ -751,6 +743,45 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
     }
+  }
+
+  /**
+   * The browser follower has no OS shell and never advertises `exec`
+   * capability. It refuses a leader-issued `exec.request` with a clean error
+   * response; the reply-path variants (`exec.chunk` / `exec.response` /
+   * `exec.signal`) are documented no-ops — only the CLI follower originates an
+   * exec, so a browser follower never has one to reconcile.
+   */
+  private handleExecMessage(
+    message:
+      | TrayExecRequestMessage
+      | TrayExecChunkMessage
+      | TrayExecResponseMessage
+      | TrayExecSignalMessage
+  ): void {
+    if (message.type === 'exec.request') {
+      this.sync.send({
+        type: 'exec.response',
+        requestId: message.requestId,
+        exitCode: 127,
+        error: 'exec is not supported on this follower',
+      });
+    }
+  }
+
+  /**
+   * Apply a `sprinkles.list` broadcast. Every list is a content-invalidation
+   * barrier: the leader has no per-file change signal, so a stable `.shtml`
+   * re-invalidates its cache on each (~5 s) tick. Bumping `cacheEpoch` also
+   * discards any in-flight fetch reply that lands after this barrier (see
+   * `handleSprinkleContent`) so a late pre-barrier reply can't poison the cache.
+   */
+  private handleSprinklesList(sprinkles: SprinkleSummary[]): void {
+    log.info('Sprinkles list received from leader', { sprinkleCount: sprinkles.length });
+    this.sprinkleContentCache.clear();
+    this.cacheEpoch++;
+    this.latestSprinkles = sprinkles;
+    this.options.onSprinklesList?.(sprinkles);
   }
 
   private handleUserMessageEcho(
