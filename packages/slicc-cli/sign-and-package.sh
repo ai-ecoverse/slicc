@@ -19,10 +19,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# nextRelease.version (e.g. "5.70.0") → the v-prefixed tag style the binaries
-# stamp; fall back to git describe for a manual/local run.
+# Version to stamp into the binaries. Priority:
+#   1. SLICC_RELEASE_VERSION (nextRelease.version, e.g. "5.71.0"), passed by
+#      release-native.mjs.
+#   2. package.json — @semantic-release/npm bumps it to the release version in an
+#      earlier prepare step, so this is correct during a release even if (1) is
+#      unset. Reliable belt-and-suspenders against env-passing mistakes.
+#   3. git describe — a manual / local run outside a release.
 if [ -n "${SLICC_RELEASE_VERSION:-}" ]; then
   VERSION="v${SLICC_RELEASE_VERSION#v}"
+elif pkgver="$(node -p "require('./package.json').version" 2>/dev/null)" && [ -n "$pkgver" ]; then
+  VERSION="v${pkgver#v}"
 else
   VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 fi
