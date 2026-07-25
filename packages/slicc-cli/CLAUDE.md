@@ -10,6 +10,7 @@ slicc <join-url> prompt "<text>"                Stream one assistant turn, then 
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
 slicc <join-url> watch [scoop]                  Tail the leader's live agent output, read-only
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
+slicc update [--check]                          Self-update to the newest released CLI binary
 ```
 
 `watch` is a passive `tail -f` on the agent that mirrors the browser thread: it
@@ -49,6 +50,8 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 | `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry), ported from the iOS connector |
 | `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                |
 | `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals)                  |
+| `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                    |
+| `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                         |
 
 ## Protocol parity
 
@@ -83,6 +86,25 @@ Startup ergonomics (all in `commands.go`):
   leader captures it in `tray-leader-sync.ts` (`getFollowerMotds`) and, alongside
   `getBrowserCapableBootstrapIds`, tags followers `[ssh]` / `[playwright]` in
   `host`. Additive + optional on the wire (browser/iOS peers omit it).
+
+## Self-update (`slicc update`)
+
+`internal/update` scans GitHub releases newest→oldest for the first one carrying
+this platform's `slicc-<os>-<arch>[.exe]` asset — releases are **sparse** (CLI
+binaries only attach when `packages/slicc-cli` changed), so `releases/latest` is
+not enough. The same bounded pagination as the worker's `/download/slicc-cli`
+route (30/page, 5 pages max). `Apply` downloads next to the executable, runs the
+staged binary's `--version` as a sanity gate, then atomically renames over the
+running binary (Windows: parks the old file at `.old`, swept on later runs).
+
+Regular verbs call `startUpdateNotice()` (main-package `update.go`): the upgrade
+notice prints from a local cache (`<user-cache-dir>/slicc/update-check.json`)
+and a background refresh runs at most once per 24 h, bounded-flushed at command
+exit so short verbs still persist it. Disabled via `SLICC_NO_UPDATE_CHECK=1`
+and for any non-release-stamped version (`dev`, `git describe` output) —
+`IsReleaseVersion` gates both the notice and the self-replace, so `slicc
+update` refuses to clobber a local build that is ahead of the latest tag.
+`SLICC_UPDATE_API_BASE` overrides the API base (tests/mirrors).
 
 ## Build / test
 
