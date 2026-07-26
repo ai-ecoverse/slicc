@@ -29,6 +29,9 @@ describeIfConfigured('deployed tray worker', () => {
       routes: [
         'POST /tray',
         'GET /download/slicc.dmg',
+        'GET /install-cli',
+        'GET /install-cli.ps1',
+        'GET /download/slicc-cli/:target',
         'GET /handoff',
         'GET /.well-known/api-catalog',
         'GET /llms.txt',

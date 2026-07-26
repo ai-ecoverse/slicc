@@ -73,6 +73,24 @@ const ENTRIES: CatalogEntry[] = [
     methods: ['GET', 'HEAD'],
     description: 'Latest macOS launcher download (302 to the GitHub release).',
   },
+  {
+    anchor: '/install-cli',
+    methods: ['GET', 'HEAD'],
+    description:
+      'POSIX shell installer for the headless slicc follower CLI (curl -fsSL …/install-cli | sh).',
+  },
+  {
+    anchor: '/install-cli.ps1',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Native-Windows PowerShell installer for the headless slicc follower CLI (irm …/install-cli.ps1 | iex).',
+  },
+  {
+    anchor: '/download/slicc-cli/:target',
+    methods: ['GET', 'HEAD'],
+    description:
+      'Latest slicc follower CLI binary for a target such as darwin-arm64 or linux-amd64 (302 to the GitHub release asset).',
+  },
 ];
 
 export function buildApiCatalogResponse(request: Request): Response {

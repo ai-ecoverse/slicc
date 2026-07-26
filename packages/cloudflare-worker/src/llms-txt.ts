@@ -20,6 +20,8 @@ export function buildLlmsTxtResponse(request: Request): Response {
 
 - [API catalog](${origin}/.well-known/api-catalog): RFC 9264 linkset of every public route on this host.
 - [Handoff endpoint](${origin}/handoff): cross-agent handoff convenience URL.
+- [CLI installer](${origin}/install-cli): POSIX shell installer for the headless slicc follower CLI (\`curl -fsSL ${origin}/install-cli | sh\`).
+- [CLI installer, Windows](${origin}/install-cli.ps1): native-Windows PowerShell installer (\`irm ${origin}/install-cli.ps1 | iex\`).
 
 ## Handoff protocol
 

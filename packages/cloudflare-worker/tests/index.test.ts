@@ -1207,6 +1207,9 @@ describe('tray worker skeleton', () => {
       routes: [
         'POST /tray',
         'GET /download/slicc.dmg',
+        'GET /install-cli',
+        'GET /install-cli.ps1',
+        'GET /download/slicc-cli/:target',
         'GET /handoff',
         'GET /.well-known/api-catalog',
         'GET /llms.txt',
@@ -3668,5 +3671,277 @@ describe('asset archive fallback (#1330 retention)', () => {
     expect(res.headers.get('link') ?? '').toContain('rel=');
     // still no SPA frame-ancestors CSP on an asset
     expect(res.headers.get('content-security-policy')).toBeNull();
+  });
+});
+
+describe('GET /install-cli', () => {
+  it('serves the POSIX installer script with download URLs pinned to the serving origin', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/x-shellscript');
+    const body = await response.text();
+    expect(body).toMatch(/^#!\/bin\/sh/);
+    expect(body).toContain('https://www.sliccy.ai/download/slicc-cli/$os-$arch');
+    expect(body).toContain('curl -fsSL https://www.sliccy.ai/install-cli | sh');
+    // OS/arch detection covers the released matrix and bails out elsewhere
+    expect(body).toContain('Darwin) os="darwin"');
+    expect(body).toContain('Linux) os="linux"');
+    expect(body).toContain('x86_64 | amd64) arch="amd64"');
+    expect(body).toContain('arm64 | aarch64) arch="arm64"');
+    expect(body).toContain('install-cli.ps1 | iex');
+    // OS-idiomatic install dir: overridable, ~/.local/bin first, then a
+    // writable /usr/local/bin
+    expect(body).toContain('SLICC_INSTALL_DIR');
+    expect(body).toContain('install_dir="$HOME/.local/bin"');
+    expect(body).toContain('[ -w /usr/local/bin ]');
+  });
+
+  it('pins the script to a staging origin when served from one', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://slicc-tray-hub-staging.minivelos.workers.dev/install-cli'),
+      env
+    );
+    const body = await response.text();
+    expect(body).toContain(
+      'https://slicc-tray-hub-staging.minivelos.workers.dev/download/slicc-cli/$os-$arch'
+    );
+  });
+
+  it('answers HEAD requests', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli', { method: 'HEAD' }),
+      env
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('maps Git Bash / MSYS unames to the windows .exe and WSL to linux', async () => {
+    const { env } = createTestHarness();
+    const body = await (
+      await handleWorkerRequest(new Request('https://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(body).toContain('MINGW* | MSYS* | CYGWIN*)');
+    expect(body).toContain('bin_name="slicc.exe"');
+    // WSL reports Linux and correctly gets the linux binary
+    expect(body).toContain('Linux) os="linux"');
+    // Native Windows is pointed at the PowerShell installer
+    expect(body).toContain('irm https://www.sliccy.ai/install-cli.ps1 | iex');
+  });
+
+  it('serves the PowerShell installer at /install-cli.ps1 pinned to the serving origin', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli.ps1'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/x-powershell');
+    const body = await response.text();
+    expect(body).toContain('https://www.sliccy.ai/download/slicc-cli/windows-$arch');
+    expect(body).toContain("Join-Path $env:LOCALAPPDATA 'Programs\\slicc'");
+    // Sanity gate + PATH persistence, mirroring the POSIX script
+    expect(body).toContain('& $tmp --version');
+    expect(body).toContain("[Environment]::SetEnvironmentVariable('Path'");
+    expect(body).toContain('$env:SLICC_INSTALL_DIR');
+  });
+
+  it('answers HEAD for the PowerShell installer', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/install-cli.ps1', { method: 'HEAD' }),
+      env
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('locks curl to https on https origins but not on the http dev origin', async () => {
+    const { env } = createTestHarness();
+    const httpsBody = await (
+      await handleWorkerRequest(new Request('https://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(httpsBody).toContain("--proto '=https'");
+
+    // `wrangler dev` serves over http, where --proto '=https' would reject the
+    // download URL outright and break the local end-to-end loop.
+    const httpBody = await (
+      await handleWorkerRequest(new Request('http://www.sliccy.ai/install-cli'), env)
+    ).text();
+    expect(httpBody).not.toContain('--proto');
+    expect(httpBody).toContain('curl -fSL -o');
+  });
+});
+
+describe('GET /download/slicc-cli/:target', () => {
+  const CLI_DOWNLOAD_URL = 'https://www.sliccy.ai/download/slicc-cli/darwin-arm64';
+  const ASSET_URL =
+    'https://github.com/ai-ecoverse/slicc/releases/download/v5.71.1/slicc-darwin-arm64';
+
+  function cliRelease(assets: Array<{ name: string; url: string }>, extra = {}) {
+    return {
+      draft: false,
+      prerelease: false,
+      ...extra,
+      assets: assets.map((a) => ({ name: a.name, browser_download_url: a.url })),
+    };
+  }
+
+  it('redirects to the newest release carrying the target binary, skipping binary-less releases', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      cliRelease([{ name: 'sliccy-5.72.0.tgz', url: 'x' }]),
+      cliRelease([
+        { name: 'slicc-darwin-arm64', url: ASSET_URL },
+        { name: 'slicc-linux-amd64', url: 'y' },
+      ]),
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(ASSET_URL);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain('api.github.com');
+  });
+
+  it('skips draft and prerelease releases', async () => {
+    const { env } = createTestHarness();
+    const releases = [
+      cliRelease([{ name: 'slicc-darwin-arm64', url: 'draft' }], { draft: true }),
+      cliRelease([{ name: 'slicc-darwin-arm64', url: 'pre' }], { prerelease: true }),
+      cliRelease([{ name: 'slicc-darwin-arm64', url: ASSET_URL }]),
+    ];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.headers.get('Location')).toBe(ASSET_URL);
+  });
+
+  it('maps windows targets to the .exe asset name', async () => {
+    const { env } = createTestHarness();
+    const exeUrl =
+      'https://github.com/ai-ecoverse/slicc/releases/download/v5.71.1/slicc-windows-amd64.exe';
+    const releases = [cliRelease([{ name: 'slicc-windows-amd64.exe', url: exeUrl }])];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(releases), { status: 200 }));
+
+    const res = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/download/slicc-cli/windows-amd64'),
+      env,
+      fetchImpl
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(exeUrl);
+  });
+
+  it('404s an unknown target without calling GitHub', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>();
+    const res = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/download/slicc-cli/freebsd-amd64'),
+      env,
+      fetchImpl
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain('darwin-arm64');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('404s a typo-cased target instead of falling through to the SPA 200 page', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>();
+    const res = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/download/slicc-cli/DARWIN-ARM64'),
+      env,
+      fetchImpl
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get('Content-Type')).toContain('text/plain');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('404s with an explanation when no recent release carries the binary (sparse releases)', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify([cliRelease([{ name: 'notes.txt', url: 'x' }])]), {
+          status: 200,
+        })
+    );
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain('slicc-darwin-arm64');
+    // Short page (< 100 releases) means last page — no further pagination
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('paginates past a full page of binary-less releases', async () => {
+    const { env } = createTestHarness();
+    const page1 = Array.from({ length: 100 }, () => cliRelease([{ name: 'notes.txt', url: 'x' }]));
+    const page2 = [cliRelease([{ name: 'slicc-darwin-arm64', url: ASSET_URL }])];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(page1), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(page2), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('Location')).toBe(ASSET_URL);
+    expect(fetchImpl.mock.calls[1]?.[0]).toContain('page=2');
+  });
+
+  it('gives up after the page cap with a 404 instead of unbounded GitHub calls', async () => {
+    const { env } = createTestHarness();
+    const fullPage = Array.from({ length: 100 }, () =>
+      cliRelease([{ name: 'notes.txt', url: 'x' }])
+    );
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => new Response(JSON.stringify(fullPage), { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(404);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it('502s when the GitHub API responds non-OK so curl -f fails loudly', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('rate limited', { status: 403 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain('403');
+  });
+
+  it('502s when the GitHub API throws', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('network down'));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain('network down');
+  });
+
+  it('502s on unparseable GitHub JSON', async () => {
+    const { env } = createTestHarness();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('<!doctype html>', { status: 200 }));
+
+    const res = await handleWorkerRequest(new Request(CLI_DOWNLOAD_URL), env, fetchImpl);
+    expect(res.status).toBe(502);
   });
 });
