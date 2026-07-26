@@ -21,6 +21,10 @@ export interface CliRuntimeFlags {
   envFile: string | null;
   version: boolean;
   hosted: boolean;
+  /** Download the released Go `slicc` follower CLI and exit */
+  installCli: boolean;
+  /** Target directory for --install-cli (default: OS-idiomatic, see install-cli.ts) */
+  installDir: string | null;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -51,6 +55,8 @@ function createDefaultFlags(): CliRuntimeFlags {
     envFile: null,
     version: false,
     hosted: false,
+    installCli: false,
+    installDir: null,
   };
 }
 
@@ -76,6 +82,10 @@ function applySimpleFlag(flags: CliRuntimeFlags, arg: string): boolean {
   }
   if (arg === '--kill') {
     flags.kill = true;
+    return true;
+  }
+  if (arg === '--install-cli') {
+    flags.installCli = true;
     return true;
   }
   return false;
@@ -114,6 +124,10 @@ function applyEqualsFlag(flags: CliRuntimeFlags, arg: string): boolean {
     flags.profile = arg.slice('--profile='.length).trim() || null;
     return true;
   }
+  if (arg.startsWith('--install-dir=')) {
+    flags.installDir = arg.slice('--install-dir='.length).trim() || null;
+    return true;
+  }
   if (arg.startsWith('--lead=')) {
     flags.lead = true;
     flags.leadWorkerBaseUrl = arg.slice('--lead='.length).trim() || null;
@@ -132,7 +146,7 @@ function applyEqualsFlag(flags: CliRuntimeFlags, arg: string): boolean {
   return false;
 }
 
-/** `--prompt`/`--env-file`/`--profile` followed by a value token. Returns tokens consumed. */
+/** `--prompt`/`--env-file`/`--profile`/`--install-dir` followed by a value token. Returns tokens consumed. */
 function applyPlainValueFlag(
   flags: CliRuntimeFlags,
   argv: string[],
@@ -147,6 +161,8 @@ function applyPlainValueFlag(
     flags.prompt = next;
   } else if (arg === '--env-file') {
     flags.envFile = next;
+  } else if (arg === '--install-dir') {
+    flags.installDir = next.trim() || null;
   } else {
     flags.profile = next.trim() || null;
   }
@@ -207,7 +223,12 @@ function applyValueFlag(
   index: number,
   arg: string
 ): number {
-  if (arg === '--prompt' || arg === '--env-file' || arg === '--profile') {
+  if (
+    arg === '--prompt' ||
+    arg === '--env-file' ||
+    arg === '--profile' ||
+    arg === '--install-dir'
+  ) {
     return applyPlainValueFlag(flags, argv, index, arg);
   }
   if (arg === '--lead' || arg === '--join') {

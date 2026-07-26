@@ -26,6 +26,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -48,6 +50,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -78,6 +82,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -102,6 +108,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -124,6 +132,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -146,6 +156,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -168,6 +180,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -190,6 +204,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -237,6 +253,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -259,6 +277,8 @@ describe('parseCliRuntimeFlags', () => {
       envFile: null,
       version: false,
       hosted: false,
+      installCli: false,
+      installDir: null,
     });
   });
 
@@ -323,6 +343,31 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--hosted'])).toMatchObject({
       hosted: true,
       serveOnly: false,
+    });
+  });
+
+  it('parses the install-cli flag', () => {
+    expect(parseCliRuntimeFlags(['--install-cli'])).toMatchObject({
+      installCli: true,
+      installDir: null,
+    });
+  });
+
+  it('parses --install-dir in both forms', () => {
+    expect(parseCliRuntimeFlags(['--install-cli', '--install-dir=/opt/bin'])).toMatchObject({
+      installCli: true,
+      installDir: '/opt/bin',
+    });
+    expect(parseCliRuntimeFlags(['--install-cli', '--install-dir', '/opt/bin'])).toMatchObject({
+      installCli: true,
+      installDir: '/opt/bin',
+    });
+  });
+
+  it('does not consume another flag token as the install dir', () => {
+    expect(parseCliRuntimeFlags(['--install-dir', '--install-cli'])).toMatchObject({
+      installCli: true,
+      installDir: null,
     });
   });
 });

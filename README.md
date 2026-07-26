@@ -138,6 +138,16 @@ npm run dev:electron -- /Applications/Slack.app
 
 For the full Electron workflow, see [docs/electron.md](docs/electron.md).
 
+### 7. Headless follower CLI
+
+`slicc` (the Go CLI in `packages/slicc-cli/`) joins a leader session from any terminal — `prompt`, `exec`, `watch`, and `follow` over the same WebRTC tray channel the browser and iOS followers use. Install the released binary for your platform:
+
+```bash
+npx sliccy --install-cli
+```
+
+This finds the newest release carrying CLI binaries (they only attach when the CLI changed) and installs the one for your OS/architecture to the idiomatic place: `~/.local/bin` when it is on your `PATH`, otherwise `/usr/local/bin` when writable without privileges, otherwise `~/.local/bin` with a PATH hint (`%LOCALAPPDATA%\Programs\slicc` on Windows; `--install-dir <dir>` overrides).
+
 ## How it works
 
 SLICC shares one core across every runtime ("float"). The browser is not just where you view the product — it is where the agent runtime lives.

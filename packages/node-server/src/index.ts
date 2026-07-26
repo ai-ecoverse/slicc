@@ -57,6 +57,7 @@ import {
 import { getElectronAppPorts } from './electron-runtime.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
@@ -93,6 +94,12 @@ if (RUNTIME_FLAGS.version) {
   const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8'));
   console.log(pkg.version);
   process.exit(0);
+}
+
+// CLI installer — download the Go `slicc` follower binary and exit, before
+// any server/logger side effects
+if (RUNTIME_FLAGS.installCli) {
+  process.exit(await runInstallCli({ installDir: RUNTIME_FLAGS.installDir }));
 }
 
 const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
