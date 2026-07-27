@@ -90,6 +90,7 @@ jobs:
               - 'packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
             swift-config:
               - '.swiftlint.yml'
+              - '.swift-format'
               # Swift coverage floors + the gate script live outside the
               # swift packages, so a threshold-only ratchet PR must still
               # trigger the swift coverage jobs that consume them.
@@ -945,6 +946,9 @@ jobs:
         run: brew install swiftlint
       - name: Lint (SwiftLint)
         run: cd packages/swift-server && swiftlint lint --reporter github-actions-logging
+      # swift-format ships with the toolchain; config is the root .swift-format.
+      - name: Lint (swift-format)
+        run: cd packages/swift-server && swift format lint --strict --parallel --recursive Sources Tests Package.swift
       - name: Build
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -986,6 +990,9 @@ jobs:
         run: brew install swiftlint
       - name: Lint (SwiftLint)
         run: cd packages/swift-optel && swiftlint lint --reporter github-actions-logging
+      # swift-format ships with the toolchain; config is the root .swift-format.
+      - name: Lint (swift-format)
+        run: cd packages/swift-optel && swift format lint --strict --parallel --recursive Sources Tests Package.swift
       - name: Build
         run: cd packages/swift-optel && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -1040,6 +1047,9 @@ jobs:
         run: brew install swiftlint
       - name: Lint (SwiftLint)
         run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
+      # swift-format ships with the toolchain; config is the root .swift-format.
+      - name: Lint (swift-format)
+        run: cd packages/swift-launcher && swift format lint --strict --parallel --recursive Sliccstart SliccstartTests Package.swift
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -1100,6 +1110,9 @@ jobs:
         run: brew install swiftlint
       - name: Lint (SwiftLint)
         run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
+      # swift-format ships with the toolchain; config is the root .swift-format.
+      - name: Lint (swift-format)
+        run: cd packages/ios-app && swift format lint --strict --parallel --recursive SliccFollower Package.swift
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
