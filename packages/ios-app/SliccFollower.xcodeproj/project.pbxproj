@@ -30,6 +30,7 @@
 		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
 		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
 		7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */; };
+		8017E9416AEB3D7756ADEB3A /* ChunkFramingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */; };
 		8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */; };
 		8EEACE6ED76E43E36FC9F0AB /* ChatFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */; };
 		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
@@ -41,6 +42,7 @@
 		C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */; };
 		CB6A8F9EEAD1D4DAA552E0EC /* SyncProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BBC1002CE4D3E1D940352F4 /* SyncProtocolTests.swift */; };
 		D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */; };
+		E60E295D09FF005492A64FB5 /* TrayChunkFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356386D299A1933A39CB972B /* TrayChunkFraming.swift */; };
 		E9A8037C43172F9E94827567 /* chat.js in Resources */ = {isa = PBXBuildFile; fileRef = 80B1AD93046CF0476B3BBC39 /* chat.js */; };
 		F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */; };
 		F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */; };
@@ -63,6 +65,7 @@
 		1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		293EF6D00AE2A86081777881 /* MessageWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWebView.swift; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
+		356386D299A1933A39CB972B /* TrayChunkFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayChunkFraming.swift; sourceTree = "<group>"; };
 		39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsCarouselView.swift; sourceTree = "<group>"; };
 		3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFixture.swift; sourceTree = "<group>"; };
 		3BBC1002CE4D3E1D940352F4 /* SyncProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocolTests.swift; sourceTree = "<group>"; };
@@ -74,6 +77,7 @@
 		4E99369A8A6B1A9B8EBE996E /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		523A4A068180D7EE98435885 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocol.swift; sourceTree = "<group>"; };
+		639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChunkFramingTests.swift; sourceTree = "<group>"; };
 		7E727142147B0FB449F418D1 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
 		80B1AD93046CF0476B3BBC39 /* chat.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = chat.js; sourceTree = "<group>"; };
 		82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerSyncManager.swift; sourceTree = "<group>"; };
@@ -116,6 +120,7 @@
 		32BEF7BC73FC1288DC470211 /* SliccFollowerTests */ = {
 			isa = PBXGroup;
 			children = (
+				639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */,
 				9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */,
 				3BBC1002CE4D3E1D940352F4 /* SyncProtocolTests.swift */,
 				52A9B6A8BE5EE73A5DF4470C /* Fixtures */,
@@ -147,6 +152,7 @@
 			children = (
 				BBB646EF0D0006D1A43F527D /* ChatMessage.swift */,
 				618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */,
+				356386D299A1933A39CB972B /* TrayChunkFraming.swift */,
 				2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */,
 			);
 			path = Models;
@@ -390,6 +396,7 @@
 				F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */,
 				7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */,
 				58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */,
+				E60E295D09FF005492A64FB5 /* TrayChunkFraming.swift in Sources */,
 				487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */,
 				D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */,
 				8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */,
@@ -401,6 +408,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8017E9416AEB3D7756ADEB3A /* ChunkFramingTests.swift in Sources */,
 				F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */,
 				CB6A8F9EEAD1D4DAA552E0EC /* SyncProtocolTests.swift in Sources */,
 			);

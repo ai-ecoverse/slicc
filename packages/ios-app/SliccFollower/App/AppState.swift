@@ -127,6 +127,8 @@ class AppState: ObservableObject {
     /// Snapshot chunks being accumulated for reassembly.
     private var snapshotChunks: [Int: String] = [:]
     private var snapshotTotalChunks: Int = 0
+    /// Reassembles oversize messages arriving as transport chunk frames.
+    private var chunkReassembler = TrayChunkReassembler()
 
     /// ID of the message currently being streamed.
     private var streamingMessageId: String?
@@ -568,7 +570,21 @@ class AppState: ObservableObject {
     }
 
     /// Called from WebRTCBridge when data arrives on the channel.
+    ///
+    /// Transport chunk frames are intercepted here, BEFORE the message union is
+    /// decoded: reassembly completes into an ordinary message, so
+    /// `routeLeaderMessage` and its switch never see framing (#1700).
     func handleDataChannelMessage(_ data: Data) {
+        if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
+           frame.type == TrayChunkFrame.typeTag {
+            acceptChunkFrame(frame)
+            return
+        }
+        routeLeaderMessage(data)
+    }
+
+    /// Decode one whole (already reassembled) leader message and act on it.
+    private func routeLeaderMessage(_ data: Data) {
         let decoder = JSONDecoder()
 
         let msg: LeaderToFollowerMessage
@@ -929,9 +945,27 @@ class AppState: ObservableObject {
 
     // MARK: - Private: Send to Leader
 
+    /// Send a message to the leader, framing it when it exceeds the SCTP
+    /// per-message limit.
+    ///
+    /// iOS originates only small messages today, but an unbounded one (a large
+    /// pasted user message) would otherwise be dropped by the transport with no
+    /// signal at all.
     private func sendToLeader(_ msg: FollowerToLeaderMessage) {
         guard let data = try? JSONEncoder().encode(msg) else { return }
-        webRTCManager?.sendData(data)
+        if data.count <= TrayChunkLimits.maxMessageBytes {
+            webRTCManager?.sendData(data)
+            return
+        }
+        guard data.count <= TrayChunkLimits.maxTotalBytes,
+              let text = String(bytes: data, encoding: .utf8) else {
+            logger.error("Refusing to send oversize message (\(data.count) bytes)")
+            return
+        }
+        for frame in TrayChunkFraming.frameChunks(text) {
+            guard let encoded = try? JSONEncoder().encode(frame) else { return }
+            webRTCManager?.sendData(encoded)
+        }
     }
 
     // MARK: - Messages flush throttling
@@ -1005,6 +1039,7 @@ class AppState: ObservableObject {
         webRTCDelegate = nil
         signalingClient = nil
         snapshotChunks.removeAll()
+        chunkReassembler.removeAll()
         cancelPendingMessagesFlush()
         // Pause the targets re-advertise timer; we'll restart it once the
         // next data channel comes up. The CDP bridge itself stays alive.
@@ -1022,6 +1057,27 @@ class AppState: ObservableObject {
             joinUrlHistory = Array(joinUrlHistory.prefix(5))
         }
         UserDefaults.standard.set(joinUrlHistory, forKey: "joinUrlHistory")
+    }
+}
+
+// MARK: - Transport chunk reassembly
+
+extension AppState {
+    /// Buffer one inbound frame, routing the reconstructed message once the
+    /// last frame lands (#1700). The framing and eviction rules themselves live
+    /// in `TrayChunkReassembler`, which is unit-tested without an app.
+    func acceptChunkFrame(_ frame: TrayChunkFrame) {
+        let outcome = chunkReassembler.accept(frame)
+        switch outcome.rejection {
+        case .malformed:
+            logger.warning("Dropping malformed chunk frame")
+        case .oversize:
+            logger.error("Dropping oversize chunked message")
+        case nil:
+            break
+        }
+        guard let message = outcome.message else { return }
+        routeLeaderMessage(message)
     }
 }
 
