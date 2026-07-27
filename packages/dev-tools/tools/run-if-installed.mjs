@@ -15,9 +15,11 @@
  */
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
-import { argv, env, exit, stderr } from 'node:process';
+import { extname, join } from 'node:path';
+import { argv, env, exit, platform, stderr } from 'node:process';
 import { pathToFileURL } from 'node:url';
+
+const WINDOWS_DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -39,22 +41,82 @@ export function isExecutableFile(absPath) {
 }
 
 /**
- * Resolve `binary` against a PATH-shaped string.
+ * Read an env var case-insensitively; Windows env var names are not case-sensitive.
+ * @param {Record<string, string | undefined>} source
+ * @param {string} name
+ * @returns {string | undefined}
+ */
+function readEnv(source, name) {
+  const entry = Object.entries(source).find(([key]) => key.toUpperCase() === name);
+  return entry?.[1];
+}
+
+/**
+ * The suffixes to append to an extensionless name, most-specific first.
  *
- * A binary containing a path separator is treated as a path and checked
- * directly, matching how a shell resolves `./foo` versus `foo`.
+ * On Windows an installed toolchain is `gofmt.exe`, never bare `gofmt`, so a
+ * bare-name-only lookup would report every Windows toolchain as missing.
+ *
+ * @param {{ platform?: string, env?: Record<string, string | undefined> }} [context]
+ * @returns {string[]} Always starts with `''` (the name as given).
+ */
+export function executableSuffixes(context = {}) {
+  const { platform: hostPlatform = platform, env: hostEnv = env } = context;
+  if (hostPlatform !== 'win32') return [''];
+  const raw = readEnv(hostEnv, 'PATHEXT') || WINDOWS_DEFAULT_PATHEXT;
+  const suffixes = raw
+    .split(';')
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => (ext.startsWith('.') ? ext : `.${ext}`));
+  return ['', ...(suffixes.length > 0 ? suffixes : WINDOWS_DEFAULT_PATHEXT.split(';'))];
+}
+
+/**
+ * Return true when `binary` should be checked directly instead of via PATH,
+ * matching how a shell resolves `./foo` versus `foo`.
  *
  * @param {string} binary
- * @param {string} [pathEnv]
+ * @param {string} hostPlatform
+ * @returns {boolean}
+ */
+export function isExplicitPath(binary, hostPlatform) {
+  return binary.includes('/') || (hostPlatform === 'win32' && binary.includes('\\'));
+}
+
+/**
+ * Resolve `binary` against a PATH-shaped string.
+ *
+ * @param {string} binary
+ * @param {{
+ *   path?: string,
+ *   platform?: string,
+ *   env?: Record<string, string | undefined>,
+ * }} [context]
  * @returns {string | null} Absolute-or-given path, or null when not found.
  */
-export function findOnPath(binary, pathEnv = env['PATH'] ?? '') {
+export function findOnPath(binary, context = {}) {
   if (!binary) return null;
-  if (binary.includes('/')) return isExecutableFile(binary) ? binary : null;
-  for (const dir of pathEnv.split(delimiter)) {
+  const { platform: hostPlatform = platform, env: hostEnv = env } = context;
+  const pathEnv = context.path ?? readEnv(hostEnv, 'PATH') ?? '';
+  const suffixes = extname(binary)
+    ? ['']
+    : executableSuffixes({ platform: hostPlatform, env: hostEnv });
+
+  if (isExplicitPath(binary, hostPlatform)) {
+    for (const suffix of suffixes) {
+      if (isExecutableFile(binary + suffix)) return binary + suffix;
+    }
+    return null;
+  }
+
+  const pathDelimiter = hostPlatform === 'win32' ? ';' : ':';
+  for (const dir of pathEnv.split(pathDelimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, binary);
-    if (isExecutableFile(candidate)) return candidate;
+    for (const suffix of suffixes) {
+      const candidate = join(dir, binary + suffix);
+      if (isExecutableFile(candidate)) return candidate;
+    }
   }
   return null;
 }
@@ -77,6 +139,22 @@ export function skipMessage(binary) {
 // ---------------------------------------------------------------------------
 
 /**
+ * cmd.exe is the only interpreter for `.bat`/`.cmd`, so those need a shell —
+ * which in turn means quoting the staged paths ourselves.
+ * @param {string} resolved
+ * @param {string[]} args
+ * @param {string} [hostPlatform]
+ * @returns {{ command: string, args: string[], shell: boolean }}
+ */
+export function spawnPlan(resolved, args, hostPlatform = platform) {
+  if (hostPlatform !== 'win32' || !/\.(?:bat|cmd)$/i.test(resolved)) {
+    return { command: resolved, args, shell: false };
+  }
+  const quote = (value) => (/[\s&|<>^"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value);
+  return { command: quote(resolved), args: args.map(quote), shell: true };
+}
+
+/**
  * @param {string[]} args `[binary, ...commandArgs]`
  * @returns {number} process exit code
  */
@@ -91,7 +169,8 @@ export function run(args) {
     stderr.write(skipMessage(binary));
     return 0;
   }
-  const result = spawnSync(resolved, rest, { stdio: 'inherit' });
+  const plan = spawnPlan(resolved, rest);
+  const result = spawnSync(plan.command, plan.args, { stdio: 'inherit', shell: plan.shell });
   return result.status ?? 1;
 }
 
