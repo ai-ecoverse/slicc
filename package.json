@@ -21,7 +21,7 @@
     "url": "https://github.com/ai-ecoverse/slicc"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.18.0"
   },
   "workspaces": [
     "packages/shared-ts",
