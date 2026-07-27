@@ -95,6 +95,7 @@ See `docs/mounts.md`.
 - `supplemental-commands/` — built-ins (see `docs/shell-reference.md`).
   `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser
   `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API.
+- `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` npm-name → built-in redirects.
 - `jsh-discovery.ts` / `bsh-discovery.ts` — raw VFS scans backing the shared catalog.
 - `vfs-adapter.ts` — bridges shell calls into VFS; forwards `canWrite` (duck-typed for
   both `VirtualFS` and `RestrictedFS`).

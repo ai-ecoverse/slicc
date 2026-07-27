@@ -182,6 +182,15 @@ const sayPkg: SyntheticPackage = {
   },
 };
 
+const shadowedBiomePkg: SyntheticPackage = {
+  name: '@biomejs/biome',
+  version: '1.0.0',
+  files: {
+    'package.json': pkgJson({ name: '@biomejs/biome', bin: './cli.js' }),
+    'cli.js': 'console.log("NATIVE-BIOME:" + process.argv.slice(2).join("|"));\n',
+  },
+};
+
 describe('ipx error and usage handling', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {} };
@@ -193,7 +202,7 @@ describe('ipx error and usage handling', () => {
     const { shell, fs } = await newShell();
     const run = await shell.executeCommand('ipx');
     expect(run.stdout).toContain('Usage:');
-    expect(run.stdout).toContain('ipx <pkg-or-bin>');
+    expect(run.stdout).toContain('ipx [--force] <pkg-or-bin>');
     expect(run.exitCode).not.toBe(0);
     // A follow-up command still runs, proving the shell did not crash or hang.
     const after = await shell.executeCommand('echo still-here');
@@ -205,7 +214,39 @@ describe('ipx error and usage handling', () => {
     const { shell, fs } = await newShell();
     const run = await shell.executeCommand('ipx --help');
     expect(run.stdout).toContain('Usage:');
+    expect(run.stdout).toContain('--force');
     expect(run.exitCode).toBe(0);
+    await fs.dispose();
+  });
+
+  it('redirects a shadowed package before any registry fetch or install', async () => {
+    sharedRegistry.current = buildRegistry([shadowedBiomePkg]);
+    const { shell, fs } = await newShell();
+
+    const run = await shell.executeCommand('npx @biomejs/biome check foo.js');
+
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toMatch(/^npx:/);
+    expect(run.stderr).toContain('try: biome check foo.js');
+    expect(fetchCounter.packument).toBe(0);
+    expect(fetchCounter.tarball).toBe(0);
+    expect(await fs.exists('/work/node_modules/@biomejs/biome')).toBe(false);
+    await fs.dispose();
+  });
+
+  it('passes a leading --force through the existing install-and-run path', async () => {
+    sharedRegistry.current = buildRegistry([shadowedBiomePkg]);
+    const { shell, fs } = await newShell();
+
+    const run = await shell.executeCommand('npx --force @biomejs/biome check foo.js');
+
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.trim()).toBe('NATIVE-BIOME:check|foo.js');
+    expect(run.stderr).not.toContain('SLICC has a built-in');
+    expect(fetchCounter.packument).toBeGreaterThan(0);
+    expect(fetchCounter.tarball).toBeGreaterThan(0);
+    expect(await fs.exists('/work/node_modules/@biomejs/biome/package.json')).toBe(true);
     await fs.dispose();
   });
 

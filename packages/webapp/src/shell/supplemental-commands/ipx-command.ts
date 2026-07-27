@@ -25,6 +25,7 @@ import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
 import { installPackages } from '../ipk/installer.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stripShebang } from '../strip-shebang.js';
+import { formatBuiltinShadowHint, lookupBuiltinShadow } from './builtin-shadow-map.js';
 
 export interface IpxCommandDeps {
   fs: VirtualFS;
@@ -44,13 +45,14 @@ function usage(name: string): string {
   return `${name} - run an installed package's executable bin
 
 Usage:
-  ${name} <pkg-or-bin> [args...]
+  ${name} [--force] <pkg-or-bin> [args...]
 
 Resolves <pkg-or-bin> to a bin (nearest node_modules/.bin/<name>, else the
 package's package.json "bin" field) and runs it through the JS runtime,
 forwarding argv and stdin. Exit codes propagate.
 
 Options:
+  --force      Install a package even when a SLICC built-in shadows it
   -h, --help   Show this help message
 `;
 }
@@ -229,6 +231,43 @@ async function validateBinFile(
   return failure(name, `bin file '${binFilePath}' for '${binName}' does not exist`);
 }
 
+async function resolveMissingBin(
+  name: string,
+  binName: string,
+  binArgs: string[],
+  forceInstall: boolean,
+  ctx: CommandContext,
+  deps: IpxCommandDeps
+): Promise<{ resolved: ResolvedBin; installProgress: string } | { error: ExecResult }> {
+  if (await isPackageInstalled(deps.fs, ctx.cwd, binName)) {
+    return { error: failure(name, `package '${binName}' does not expose an executable bin`) };
+  }
+
+  const shadow = forceInstall ? undefined : lookupBuiltinShadow(binName);
+  if (shadow) {
+    return {
+      error: {
+        stdout: '',
+        stderr: formatBuiltinShadowHint(name, binName, binArgs, shadow),
+        exitCode: 1,
+      },
+    };
+  }
+
+  const installed = await autoInstall(name, binName, ctx, deps);
+  if ('error' in installed) return installed;
+  const resolved = await resolveBin(deps.fs, ctx.cwd, binName);
+  if (!resolved) {
+    return {
+      error: failure(
+        name,
+        `package '${binName}' was installed but does not expose an executable bin`
+      ),
+    };
+  }
+  return { resolved, installProgress: installed.progress };
+}
+
 export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
   return {
     name,
@@ -241,8 +280,13 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
         return { stdout: usage(name), stderr: '', exitCode: args.length === 0 ? 1 : 0 };
       }
 
-      const binName = args[0];
-      const binArgs = args.slice(1);
+      const forceInstall = args[0] === '--force';
+      const invocationArgs = forceInstall ? args.slice(1) : args;
+      if (invocationArgs.length === 0) {
+        return { stdout: usage(name), stderr: '', exitCode: 1 };
+      }
+      const binName = invocationArgs[0];
+      const binArgs = invocationArgs.slice(1);
 
       let resolved: ResolvedBin | null;
       try {
@@ -255,22 +299,10 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
       // reinstall); an absent one is installed (full transitive tree) first.
       let installProgress = '';
       if (!resolved) {
-        const alreadyInstalled = await isPackageInstalled(deps.fs, ctx.cwd, binName);
-        if (alreadyInstalled) {
-          return failure(name, `package '${binName}' does not expose an executable bin`);
-        }
-
-        const installed = await autoInstall(name, binName, ctx, deps);
-        if ('error' in installed) return installed.error;
-        installProgress = installed.progress;
-        resolved = await resolveBin(deps.fs, ctx.cwd, binName);
-
-        if (!resolved) {
-          return failure(
-            name,
-            `package '${binName}' was installed but does not expose an executable bin`
-          );
-        }
+        const prepared = await resolveMissingBin(name, binName, binArgs, forceInstall, ctx, deps);
+        if ('error' in prepared) return prepared.error;
+        resolved = prepared.resolved;
+        installProgress = prepared.installProgress;
       }
 
       const invalid = await validateBinFile(name, binName, resolved.binFilePath, deps.fs);
