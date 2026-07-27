@@ -169,21 +169,21 @@ Deep reference: `docs/approvals.md`.
 
 ### Tray Sync (multi-browser leader/follower)
 
-- Path: `packages/webapp/src/scoops/tray-*`, `ui/page-leader-tray.ts`,
-  `ui/page-follower-tray.ts`.
-- `tray-sync-protocol.ts` re-exports the canonical wire format (union + payload types live in
-  `@slicc/shared-ts`). The iOS follower (`packages/ios-app/`) is a **separate Swift
-  implementation** — it does NOT consume `tray-follower-sync.ts`; match its behavior when
-  adding follower-side rendering.
-- `tray-leader-sync.ts` broadcasts agent events, snapshots, scoops, sprinkle content, and
-  federated CDP/FS. `tray-follower-sync.ts` (`FollowerSyncManager`) implements `AgentHandle`
-  — installing it as the WC chat controller's agent forwards user input to the leader.
-- **Lick forwarding**: `LickManager.setForwarder(fn | null)` installs a hook; `dispatch()`
-  is the private chokepoint. When set AND the lick type is in `FORWARDABLE_TO_LEADER`
-  (currently `navigate`), the lick forwards to the leader instead of firing locally.
-- **Cherry events**: `cherry.host_event` (host page → follower → leader → `'cherry'`
-  `LickEvent`) and `cherry.slicc_event` (leader → follower → `slicc.event` postMessage to
-  host); `cherry-emit` supplemental command sends the leader → host direction.
+| Module                 | Responsibility       |
+| ---------------------- | -------------------- |
+| `tray-leader-sync.ts`  | Façade + lifecycle   |
+| `context.ts`           | Shared dependencies  |
+| `follower-registry.ts` | Registry + keepalive |
+| `follower-dispatch.ts` | Exhaustive dispatch  |
+| `broadcast.ts`         | Snapshot + broadcast |
+| `cdp-router.ts`        | CDP routing          |
+| `fs-router.ts`         | Filesystem routing   |
+| `tab-router.ts`        | Tab-open routing     |
+| `remote-exec.ts`       | Remote execution     |
+| `transcript-export.ts` | Transcript streaming |
+| `preview-bridge.ts`    | Preview connections  |
+| `cherry-router.ts`     | Cherry events        |
+| `teleport-pool.ts`     | Target selection     |
 
 See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
