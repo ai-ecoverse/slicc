@@ -289,6 +289,26 @@ describe('tray sync transport chunking', () => {
       expect(received).toContainEqual(second);
     });
 
+    it('drops a single reassembly that grows past the per-message cap', () => {
+      // The aggregate bound (32 MiB) is four times what any sender will emit,
+      // so without a per-message cap one stream could climb to it. Go and Swift
+      // cap per message; this keeps the three receivers consistent.
+      const dc = new LimitedDataChannel(262_144);
+      const sync = new TraySyncChannel<LeaderToFollowerMessage, LeaderToFollowerMessage>(dc);
+      const received: LeaderToFollowerMessage[] = [];
+      sync.onMessage((m) => received.push(m));
+
+      // A *valid* message past the cap, framed as a foreign peer could send it
+      // (our own sender refuses at this size). Without the cap this reassembles
+      // and emits; with it, it is dropped.
+      const oversize = bigEvent(TRAY_MAX_MESSAGE_BYTES + 1024);
+      for (const frame of frameChunks(JSON.stringify(oversize), 262_144, 'flood')) {
+        dc.simulateMessage(JSON.stringify(frame));
+      }
+
+      expect(received).toEqual([]);
+    });
+
     it('drops incomplete reassemblies once too many are in flight', () => {
       const dc = new LimitedDataChannel(262_144);
       const sync = new TraySyncChannel<LeaderToFollowerMessage, LeaderToFollowerMessage>(dc);

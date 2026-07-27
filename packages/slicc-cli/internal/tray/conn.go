@@ -402,7 +402,11 @@ func (c *Conn) setBootstrapID(ref *string, id string) {
 
 // chunkReassembly accumulates the frames of one chunked message.
 type chunkReassembly struct {
-	chunks   []string
+	chunks []string
+	// seen tracks arrival per index. A separate flag rather than an
+	// empty-string sentinel, so an empty ChunkData is distinguished from a
+	// missing frame the way the TS and Swift receivers distinguish them.
+	seen     []bool
 	received int
 	bytes    int
 	started  time.Time
@@ -458,15 +462,20 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 	}
 	entry, ok := c.reassembly[frame.ChunkID]
 	if !ok {
-		entry = &chunkReassembly{chunks: make([]string, frame.TotalChunks), started: time.Now()}
+		entry = &chunkReassembly{
+			chunks:  make([]string, frame.TotalChunks),
+			seen:    make([]bool, frame.TotalChunks),
+			started: time.Now(),
+		}
 		c.reassembly[frame.ChunkID] = entry
 		c.evictOldestReassemblyLocked()
 	}
-	if entry.chunks[frame.ChunkIndex] != "" {
+	if entry.seen[frame.ChunkIndex] {
 		c.reassemblyMu.Unlock() // duplicate frame
 		return
 	}
 	entry.chunks[frame.ChunkIndex] = frame.ChunkData
+	entry.seen[frame.ChunkIndex] = true
 	entry.received++
 	entry.bytes += len(frame.ChunkData)
 	if entry.bytes > maxTotalMessageBytes {

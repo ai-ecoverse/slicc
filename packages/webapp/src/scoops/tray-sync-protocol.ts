@@ -432,6 +432,19 @@ export class TraySyncChannel<
     buffer.bytes += added;
     this.reassemblyBytes += added;
 
+    // Per-message cap, matching the sender's refusal and the Go/Swift
+    // receivers. Without it a single stream could grow to the aggregate bound
+    // (32 MiB) — four times what any sender here will emit.
+    if (buffer.bytes > TRAY_MAX_MESSAGE_BYTES) {
+      log.error('Dropping an oversize chunked tray sync message', {
+        chunkId: frame.chunkId,
+        bytes: buffer.bytes,
+        limit: TRAY_MAX_MESSAGE_BYTES,
+      });
+      this.dropReassembly(frame.chunkId);
+      return;
+    }
+
     if (buffer.received < buffer.totalChunks) {
       this.evictOverflowingReassemblies();
       return;

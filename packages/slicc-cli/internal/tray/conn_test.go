@@ -158,6 +158,32 @@ func TestDispatchIgnoresDuplicateFrames(t *testing.T) {
 	}
 }
 
+func TestDispatchCountsEmptyChunkDataAsArrived(t *testing.T) {
+	calls := 0
+	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
+
+	// A duplicated EMPTY frame must not advance the arrival count. Using the
+	// empty string as a "not received" sentinel would let this 3-frame message
+	// complete after only two distinct frames, emitting a message with a hole in
+	// it. The TS and Swift receivers distinguish empty from missing; so does this
+	// one.
+	empty := protocol.ChunkFrame{
+		Type: protocol.TypeChunk, ChunkID: "e", ChunkIndex: 0, TotalChunks: 3, ChunkData: "",
+	}
+	second := protocol.ChunkFrame{
+		Type: protocol.TypeChunk, ChunkID: "e", ChunkIndex: 1, TotalChunks: 3,
+		ChunkData: `{"type":"user_message_echo","text":"hi"}`,
+	}
+	for _, frame := range []protocol.ChunkFrame{empty, empty, second} {
+		encoded, _ := json.Marshal(frame)
+		c.dispatch(encoded)
+	}
+
+	if calls != 0 {
+		t.Errorf("handler ran %d times before the third frame arrived", calls)
+	}
+}
+
 func TestDispatchWaitsForEveryFrame(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
