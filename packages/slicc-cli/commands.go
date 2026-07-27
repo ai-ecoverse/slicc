@@ -15,6 +15,7 @@ import (
 
 	"github.com/ai-ecoverse/slicc-cli/internal/execrun"
 	"github.com/ai-ecoverse/slicc-cli/internal/follow"
+	"github.com/ai-ecoverse/slicc-cli/internal/logging"
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 	"github.com/ai-ecoverse/slicc-cli/internal/tray"
 )
@@ -566,10 +567,15 @@ func hostname() string {
 	return "localhost"
 }
 
+// diagLogger is the process-wide diagnostic logger. Diagnostics go to stderr so
+// they never interleave with the leader output that `prompt`/`exec`/`watch`
+// stream to stdout.
+var diagLogger = logging.NewFromEnv(os.Stderr)
+
+// debugLogf is the `func(format string, args ...any)` seam consumed by
+// tray.Options.Logf; it forwards into the structured logger.
 func debugLogf(format string, args ...any) {
-	if os.Getenv("SLICC_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[slicc] "+format+"\n", args...)
-	}
+	diagLogger.Logf(format, args...)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
