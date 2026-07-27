@@ -64,12 +64,20 @@ export function executableSuffixes(context = {}) {
   const { platform: hostPlatform = platform, env: hostEnv = env } = context;
   if (hostPlatform !== 'win32') return [''];
   const raw = readEnv(hostEnv, 'PATHEXT') || WINDOWS_DEFAULT_PATHEXT;
-  const suffixes = raw
+  const declared = raw
     .split(';')
     .map((ext) => ext.trim())
     .filter(Boolean)
     .map((ext) => (ext.startsWith('.') ? ext : `.${ext}`));
-  return ['', ...(suffixes.length > 0 ? suffixes : WINDOWS_DEFAULT_PATHEXT.split(';'))];
+  // PATHEXT is conventionally uppercase while the installed file is lowercase
+  // (`gofmt.exe`). Windows resolves that either way, but a case-sensitive
+  // filesystem does not — a Linux host exercising the win32 branch, or a
+  // Windows directory with per-directory case sensitivity enabled. Probe the
+  // lowercase spelling first, keeping PATHEXT's extension precedence intact.
+  const suffixes = (declared.length > 0 ? declared : WINDOWS_DEFAULT_PATHEXT.split(';')).flatMap(
+    (ext) => (ext === ext.toLowerCase() ? [ext] : [ext.toLowerCase(), ext])
+  );
+  return ['', ...new Set(suffixes)];
 }
 
 /**

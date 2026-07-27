@@ -109,13 +109,13 @@ describe('findOnPath', () => {
     const { binDir, path } = makeExecutable('gofmt.exe');
     const win32 = { platform: 'win32', env: { PATHEXT: '.COM;.EXE;.BAT;.CMD' } };
     const found = findOnPath('gofmt', { ...win32, path: `C:\\nowhere;${binDir}` });
-    expect(found?.toLowerCase()).toBe(path.toLowerCase());
+    expect(found).toBe(path);
   });
 
   it('falls back to a default PATHEXT on win32 when the variable is unset', () => {
     const { binDir, path } = makeExecutable('gofmt.exe');
     const found = findOnPath('gofmt', { platform: 'win32', env: {}, path: binDir });
-    expect(found?.toLowerCase()).toBe(path.toLowerCase());
+    expect(found).toBe(path);
   });
 
   it('reads PATHEXT case-insensitively on win32', () => {
@@ -132,7 +132,7 @@ describe('findOnPath', () => {
       env: {},
       path: `C:\\Go\\bin;${binDir}`,
     });
-    expect(found?.toLowerCase()).toBe(path.toLowerCase());
+    expect(found).toBe(path);
   });
 
   it('still prefers a bare name over a PATHEXT candidate on win32', () => {
@@ -163,8 +163,19 @@ describe('executableSuffixes', () => {
   it('keeps the bare name first and normalises missing dots on win32', () => {
     expect(executableSuffixes({ platform: 'win32', env: { PATHEXT: 'EXE; .cmd ;' } })).toEqual([
       '',
+      '.exe',
       '.EXE',
       '.cmd',
+    ]);
+  });
+
+  it('probes each PATHEXT entry lowercase-first without losing precedence', () => {
+    expect(executableSuffixes({ platform: 'win32', env: { PATHEXT: '.COM;.EXE' } })).toEqual([
+      '',
+      '.com',
+      '.COM',
+      '.exe',
+      '.EXE',
     ]);
   });
 });
