@@ -18,6 +18,15 @@ import type { ArgSpec } from '../../shell/arg-parser.js';
  * `diff` / `merge`) still list their value-flags here so help-detection stays
  * position-aware. Commands absent from this map take the empty spec.
  */
+/**
+ * Flag spec for `git clean`. Exported so the subcommand module reuses the same
+ * definition it registers here for position-aware `--help` handling.
+ */
+export const CLEAN_SPEC: ArgSpec = {
+  boolean: ['dry-run', 'force', 'd', 'x', 'X', 'quiet'],
+  alias: { n: 'dry-run', f: 'force', q: 'quiet' },
+};
+
 export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   init: { string: ['initial-branch'], alias: { b: 'initial-branch' } },
   clone: {
@@ -60,6 +69,7 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     alias: { l: 'list', u: 'set-upstream-to', t: 'track' },
   },
   checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
+  clean: CLEAN_SPEC,
   diff: { string: ['format', 'diff-filter'], alias: { pretty: 'format' } },
   show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
   merge: {
