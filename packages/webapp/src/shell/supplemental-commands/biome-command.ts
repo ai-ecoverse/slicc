@@ -114,10 +114,10 @@ const BIOME_WASM_WEB_VERSION = __BIOME_WASM_WEB_VERSION__;
 const BIOME_JS_API_VERSION = __BIOME_JS_API_VERSION__;
 const ESBUILD_WASM_VERSION = ESBUILD_VERSION;
 
-const INSTALL_PACKAGES = `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION} @biomejs/js-api@${BIOME_JS_API_VERSION} esbuild-wasm@${ESBUILD_WASM_VERSION}`;
+export const INSTALL_PACKAGES = `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION} @biomejs/js-api@${BIOME_JS_API_VERSION} esbuild-wasm@${ESBUILD_WASM_VERSION}`;
 
 /** Pinned `ipk add` spec for each backing package, by bare name. */
-const PINNED_SPEC: Record<string, string> = {
+export const PINNED_SPEC: Record<string, string> = {
   '@biomejs/wasm-web': `@biomejs/wasm-web@${BIOME_WASM_WEB_VERSION}`,
   '@biomejs/js-api': `@biomejs/js-api@${BIOME_JS_API_VERSION}`,
   'esbuild-wasm': `esbuild-wasm@${ESBUILD_WASM_VERSION}`,
