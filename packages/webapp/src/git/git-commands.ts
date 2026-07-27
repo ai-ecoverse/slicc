@@ -31,6 +31,7 @@ import { fetch } from './commands/fetch.js';
 import { init } from './commands/init.js';
 import { log } from './commands/log.js';
 import { lsFiles } from './commands/ls-files.js';
+import { lsTree } from './commands/ls-tree.js';
 import { merge } from './commands/merge.js';
 import { mergeFile } from './commands/merge-file.js';
 import { mv } from './commands/mv.js';
@@ -373,6 +374,8 @@ export class GitCommands {
           return await tag(this.ctx, effectiveCwd, rest);
         case 'ls-files':
           return await lsFiles(this.ctx, effectiveCwd, rest);
+        case 'ls-tree':
+          return await lsTree(this.ctx, effectiveCwd, rest);
         case 'show-ref':
           return await showRef(this.ctx, effectiveCwd, rest);
         case 'symbolic-ref':
@@ -504,6 +507,7 @@ Available commands:
   mv          Move or rename a file
   tag         Create, list, or delete tags
   ls-files    Show tracked files
+  ls-tree     List the contents of a tree object
   show-ref    List references (branches and tags)
   symbolic-ref Read, modify, or delete symbolic refs
   config      Get and set repository options

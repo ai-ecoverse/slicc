@@ -108,6 +108,9 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     boolean: ['delete', 'quiet', 'short', 'recurse'],
     alias: { d: 'delete', q: 'quiet' },
   },
+  'ls-tree': {
+    boolean: ['r', 'd', 'name-only'],
+  },
 };
 
 /** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */
