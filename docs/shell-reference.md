@@ -82,6 +82,35 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **afplay / chime**                          | `afplay-command.ts`        | Play a sound file. `chime` is a convenience alias for the bundled notification sounds in `/shared/sounds/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `afplay <path>`, `chime [done\|alert\|...]`                                                                                                                                                                                                                                                                                                     |
 | **pbcopy / pbpaste / xclip / xsel**         | `clipboard-commands.ts`    | Copy stdin to the clipboard / paste clipboard to stdout via the browser Clipboard API. All four aliases share the same implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | `echo hi \| pbcopy`, `pbpaste`                                                                                                                                                                                                                                                                                                                  |
 
+### `ipx` / `npx` built-in redirects
+
+`ipx` runs JavaScript package bins from the nearest installed `node_modules`; `npx` is an
+alias with the same behavior. When no local bin or installed package resolves, the command
+normally installs the requested package and runs its bin. Before that network install,
+`ipx`/`npx` consults `builtin-shadow-map.ts`. A match exits non-zero and prints a stderr hint
+that names the SLICC built-in, suggests an invocation using the user's arguments, and includes
+the exact `ipk add` bootstrap when the built-in needs one.
+
+Prefer the suggested built-in. To deliberately bypass the redirect and install the npm package,
+place `--force` before its name: `npx --force <package> [args...]` (or the equivalent `ipx`
+form). Already-installed packages, locally resolved bins, and unmapped package names retain the
+normal behavior.
+
+`packages/webapp/src/shell/supplemental-commands/builtin-shadow-map.ts` is authoritative. It
+currently maps exactly these npm package names:
+
+| npm package names                                       | SLICC built-in   |
+| ------------------------------------------------------- | ---------------- |
+| `@biomejs/biome`, `biome`                               | `biome`          |
+| `esbuild`                                               | `esbuild`        |
+| `playwright`, `@playwright/test`, `playwright-core`     | `playwright-cli` |
+| `puppeteer`, `puppeteer-core`                           | `puppeteer`      |
+| `typescript`                                            | `tsc`            |
+| `imagemagick`, `imagemagick-cli`, `imagemagick-convert` | `convert`        |
+| `magick-cli`, `@imagemagick/magick-wasm`                | `magick`         |
+| `ffmpeg`, `@ffmpeg/ffmpeg`                              | `ffmpeg`         |
+| `sqlite3`                                               | `sqlite3`        |
+
 **Example usage**:
 
 ```bash
