@@ -1489,6 +1489,46 @@ describe('tray worker skeleton', () => {
     expect(Number.isNaN(Date.parse(body.timestamp))).toBe(false);
   });
 
+  it('reports the deployed worker version from the version_metadata binding', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/status'),
+      Object.assign(env, { CF_VERSION_METADATA: { id: 'b8f1c7e2-0000-4a2b-9c3d-000000000001' } })
+    );
+    const body = (await response.json()) as { version: string };
+    expect(body.version).toBe('b8f1c7e2-0000-4a2b-9c3d-000000000001');
+  });
+
+  it('falls back to an unknown version when the binding is absent or empty', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/status'), env);
+    expect(((await response.json()) as { version: string }).version).toBe('unknown');
+
+    const { env: emptyEnv } = createTestHarness();
+    const emptyResponse = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/status'),
+      Object.assign(emptyEnv, { CF_VERSION_METADATA: { id: '' } })
+    );
+    expect(((await emptyResponse.json()) as { version: string }).version).toBe('unknown');
+  });
+
+  it('leaks no configuration beyond the documented health fields', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/status'), env);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['service', 'status', 'timestamp', 'version']);
+  });
+
+  it('serves GET /status without any authorization header', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/status', { headers: { Cookie: '' } }),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('WWW-Authenticate')).toBeNull();
+  });
+
   it('responds to HEAD /status with the same headers and no body', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(

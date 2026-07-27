@@ -58,7 +58,7 @@ cloud-core.
 | `GET /download/slicc-cli/:target`     | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; errors are real HTTP errors (no SPA fallback)      |
 | `GET /.well-known/api-catalog`        | RFC 9264 linkset for all public routes                                                                                                                    |
 | `GET /llms.txt`                       | LLM markdown digest                                                                                                                                       |
-| `GET /status`                         | Health document (`{ status, service, timestamp }`)                                                                                                        |
+| `GET\|HEAD /status`                   | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                                    |
 | `GET /rel/:name`                      | Dereferenceable docs for SLICC custom rel URIs                                                                                                            |
 | `GET\|POST /join/:token`              | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                                        |
 | `GET\|POST /controller/:token`        | Leader attach and WS upgrade                                                                                                                              |
@@ -174,6 +174,14 @@ the local `serve --bridge` test setup.
 ## Operational Notes
 
 - Treat the worker as coordination infrastructure, not canonical session storage.
+- `GET /status` is the post-deploy liveness probe. Its `version` field comes from the
+  `version_metadata` binding (`CF_VERSION_METADATA` in `wrangler.jsonc`, declared for both
+  the default and `staging` envs). `wrangler dev` binds it to a per-session local UUID; in
+  tests the binding is unbound and the field reads `unknown`. It is unauthenticated — keep
+  the body to
+  `{ status, service, timestamp, version }` and never add config or binding names.
+  Deploy-impact signals for the worker are catalogued in
+  [`docs/operational-telemetry.md`](../../docs/operational-telemetry.md).
 - The `/handoff` page is stateless; query parameters are translated into a single RFC
   8288 `Link` response header.
 - Every worker response is wrapped by `applySliccLinks` (see `src/links.ts`) — standard

@@ -12,6 +12,9 @@
     "not_found_handling": "single-page-application"
   },
   "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive" }],
+  // Surfaces the deployed Worker version ID on `GET /status` so a post-deploy
+  // curl can prove which build is serving traffic. Absent in `wrangler dev`.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "routes": [
     { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" },
     { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" }
@@ -74,6 +77,7 @@
         "not_found_handling": "single-page-application"
       },
       "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive-staging" }],
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "routes": [],
       "vars": {
         "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
