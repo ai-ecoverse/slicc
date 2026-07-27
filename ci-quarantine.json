@@ -1,0 +1,78 @@
+{
+  "$comment": "Registry of every intentional `continue-on-error: true` step in the workflows listed under `workflows`. A quarantined step cannot fail its job, so each one is a hole in CI and must be declared here with a reason, an owning package/area, and a `reviewBy` date. Enforced by packages/dev-tools/tools/check-ci-quarantine.mjs (`npm run lint:ci-quarantine`): an undeclared quarantine FAILS; a quarantine past its `reviewBy`, or a registry entry whose step no longer exists, only WARNS — a date-triggered hard failure would break unrelated PRs, which is worse than the debt it flags. Deleting a quarantine from the workflow is always allowed; delete its entry here in the same PR.",
+  "workflows": [".github/workflows/ci.yml"],
+  "quarantines": [
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "chrome-extension",
+      "step": "Extension smoke test (CDP)",
+      "reason": "Explicitly temporary: the headed-Chrome MV3 side-panel smoke test is permitted to fail loudly while the ffmpeg-core.js bundling work lands. Keeps CI green during that rollout while still uploading the failure artifact. This is the one entry here that is a genuine broken-test quarantine rather than a structural one.",
+      "owner": "chrome-extension",
+      "reviewBy": "2026-09-30"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Emit test timing report",
+      "reason": "Observability only: a second vitest run purely to emit a junit timing report (the coverage gate step builds its own argv and forwards no reporter flags). Runs with `if: always()`, including after a failed suite, so it must never be able to turn a red run redder or a green run red.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-07-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Deploy staging worker (attempt 1)",
+      "reason": "Rung 1 of a 3-attempt staging-deploy retry ladder for the flaky wrangler pending-version race. Individual attempts must not fail the job; the later `Finalize staging deploy` step hard-fails when all three attempts failed, so the deploy itself stays gated.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Upload staging secrets (attempt 1)",
+      "reason": "Second half of retry rung 1: `wrangler secret bulk` only succeeds once the latest version is deployed, so it is run as a separate attempt. Gated by `Finalize staging deploy`, which requires both halves of some rung to have succeeded.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Deploy staging worker (attempt 2)",
+      "reason": "Rung 2 of the staging-deploy retry ladder; same rationale as attempt 1, gated by `Finalize staging deploy`.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Upload staging secrets (attempt 2)",
+      "reason": "Rung 2 secrets upload; same rationale as attempt 1, gated by `Finalize staging deploy`.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Deploy staging worker (attempt 3)",
+      "reason": "Final rung of the staging-deploy retry ladder; same rationale as attempt 1, gated by `Finalize staging deploy`.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Upload staging secrets (attempt 3)",
+      "reason": "Final rung secrets upload; same rationale as attempt 1, gated by `Finalize staging deploy`.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2027-01-31"
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "job": "cloudflare-worker",
+      "step": "Deploy staging preview worker",
+      "reason": "Best-effort deploy of the secret-less, asset-less preview worker after the main worker. Unlike the retry ladder above this one has NO finalize gate, so a failed staging preview-worker deploy really does leave the job green — the preview bridge can silently rot on staging. Fixing that (a finalize/verify step, or dropping continue-on-error) is the intended follow-up.",
+      "owner": "cloudflare-worker",
+      "reviewBy": "2026-12-31"
+    }
+  ]
+}
