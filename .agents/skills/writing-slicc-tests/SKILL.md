@@ -422,6 +422,28 @@ Both arguments are **required**:
   packages/swift-launcher SliccstartPackageTests
 ```
 
+## Retry Flaky Tests
+
+Retries are configured **per vitest project** in `vitest.config.ts` and gated on `CI` so
+local runs still fail fast:
+
+| Project                                               | Retries in CI | Why                                                                         |
+| ----------------------------------------------------- | ------------- | --------------------------------------------------------------------------- |
+| `node-server`                                         | 1             | Spawns Chrome/Electron, binds ports, waits on child-process handshakes      |
+| `chrome-extension`                                    | 1             | Timer- and message-ordering-sensitive state machines over mocked `chrome.*` |
+| Playwright E2E (`packages/webapp/tests/e2e/`)         | 2             | Real browser + CDP + model staging under load                               |
+| every other project (`webapp`, `shared`, `cherry`, …) | 0             | Deterministic in-process suites — a failure is a bug, not noise             |
+
+Rules for changing this:
+
+- **Do not add retries to a project to make a red suite green.** A retry hides
+  nondeterminism; fix the ordering, fake the timer, or isolate the resource instead.
+- Keep the count at 1 unless the flake is provably external (a real browser, a real port).
+  Retried-but-passing tests still show up as `retried` in the run report, so the signal
+  survives; a higher count buries it and doubles worst-case wall-clock.
+- Never enable retries locally. `CI_RETRIES` in `vitest.config.ts` resolves to `0` without
+  `CI`, so `npm run test` on a laptop reports the first failure.
+
 ## Read Test Timing
 
 When `CI` is set, the root `test.reporters` adds vitest's `json` reporter and writes

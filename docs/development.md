@@ -285,14 +285,16 @@ Manual verification in the relevant runtimes:
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
-## Test Timing
+## Test Timing and Flaky Retries
 
-CI-only vitest settings, defined in `vitest.config.ts`:
+CI-only vitest settings, both defined in `vitest.config.ts`:
 
 - **Timing** — when `CI` is set, the root `test.reporters` adds vitest's `json` reporter and
   writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
   `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
   Reproduce locally with `CI=1 npm run test`.
+- **Retries** — the `node-server` and `chrome-extension` projects retry once in CI (`0`
+  locally); Playwright E2E retries twice in CI. Every other project has no retries.
 
 Policy and the artifact's JSON shape:
 [`.agents/skills/writing-slicc-tests/SKILL.md`](../.agents/skills/writing-slicc-tests/SKILL.md).
@@ -469,7 +471,7 @@ log.error('error message');
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                  | Run single file                                                |
 | `npx vitest run packages/webapp/tests/fs/`                                    | Run all tests in directory                                     |
 | `npx vitest run --reporter=verbose`                                           | Verbose test output                                            |
-| `CI=1 npm run test`                                                           | Reproduce the CI run: writes `test-timing/vitest.json`         |
+| `CI=1 npm run test`                                                           | Reproduce the CI run: retries on + `test-timing/vitest.json`   |
 
 ## Multi-Mode Compatibility Checklist
 
