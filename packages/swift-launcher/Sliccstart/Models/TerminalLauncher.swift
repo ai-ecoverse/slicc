@@ -6,6 +6,11 @@ struct TerminalLaunchCommand: Equatable {
     let arguments: [String]
 }
 
+struct TerminalCommandResult: Equatable {
+    let status: Int32
+    let standardError: String
+}
+
 enum LoginShellResolver {
     static let fallbackShell = "/bin/zsh"
 
@@ -34,6 +39,7 @@ struct TerminalLauncher {
     enum LaunchError: LocalizedError, Equatable {
         case couldNotCreateTemporaryScript
         case couldNotStart(String)
+        case automationPermissionDenied(String)
         case processExited(String, Int32)
 
         var errorDescription: String? {
@@ -42,13 +48,17 @@ struct TerminalLauncher {
                 return "Could not prepare a temporary terminal launch script."
             case .couldNotStart(let terminalName):
                 return "Could not start \(terminalName)."
+            case .automationPermissionDenied(let terminalName):
+                return "Sliccstart does not have permission to control \(terminalName). " +
+                    "Open System Settings > Privacy & Security > Automation, " +
+                    "enable \(terminalName) for Sliccstart, then try again."
             case .processExited(let terminalName, let status):
                 return "\(terminalName) launch failed with exit code \(status)."
             }
         }
     }
 
-    typealias CommandRunner = (TerminalLaunchCommand) throws -> Int32
+    typealias CommandRunner = (TerminalLaunchCommand) throws -> TerminalCommandResult
 
     private let commandRunner: CommandRunner
 
@@ -58,14 +68,18 @@ struct TerminalLauncher {
 
     func launch(_ terminal: AppTarget, command: String) throws {
         let launchCommand = try Self.launchCommand(for: terminal, command: command)
-        let status: Int32
+        let result: TerminalCommandResult
         do {
-            status = try commandRunner(launchCommand)
+            result = try commandRunner(launchCommand)
         } catch {
             throw LaunchError.couldNotStart(terminal.name)
         }
-        guard status == 0 else {
-            throw LaunchError.processExited(terminal.name, status)
+        guard result.status == 0 else {
+            if launchCommand.executable == "/usr/bin/osascript",
+               Self.isAutomationPermissionDenial(result.standardError) {
+                throw LaunchError.automationPermissionDenied(terminal.name)
+            }
+            throw LaunchError.processExited(terminal.name, result.status)
         }
     }
 
@@ -166,13 +180,25 @@ struct TerminalLauncher {
         "'\(value.replacingOccurrences(of: "'", with: "'\"'\"'"))'"
     }
 
-    private static func run(_ launchCommand: TerminalLaunchCommand) throws -> Int32 {
+    static func isAutomationPermissionDenial(_ standardError: String) -> Bool {
+        standardError.contains("-1743") || standardError.localizedCaseInsensitiveContains(
+            "not authorized to send Apple events"
+        )
+    }
+
+    private static func run(_ launchCommand: TerminalLaunchCommand) throws -> TerminalCommandResult {
         let process = Process()
+        let errorPipe = Pipe()
         process.executableURL = URL(fileURLWithPath: launchCommand.executable)
         process.arguments = launchCommand.arguments
+        process.standardError = errorPipe
         try process.run()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return process.terminationStatus
+        return TerminalCommandResult(
+            status: process.terminationStatus,
+            standardError: String(bytes: errorData, encoding: .utf8) ?? ""
+        )
     }
 
     private static let terminalAppleScript = """

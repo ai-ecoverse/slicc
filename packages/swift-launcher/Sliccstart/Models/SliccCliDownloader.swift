@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum SliccCliDownloadProgress: Equatable {
     case preparing
@@ -13,6 +14,8 @@ enum SliccCliDownloadError: LocalizedError, Equatable {
     case invalidResponse(statusCode: Int?)
     case truncatedDownload(expectedBytes: Int64?, actualBytes: Int64)
     case nonExecutableResult
+    case invalidCodeSignature
+    case unexpectedSigningTeam(expected: String, actual: String?)
     case versionCheckFailed
     case fileSystemFailure(String)
 
@@ -34,11 +37,84 @@ enum SliccCliDownloadError: LocalizedError, Equatable {
             }
         case .nonExecutableResult:
             "The downloaded slicc CLI could not be made executable."
+        case .invalidCodeSignature:
+            "The downloaded slicc CLI is unsigned or has an invalid signature. It was not executed or installed."
+        case .unexpectedSigningTeam(let expected, let actual):
+            if let actual {
+                "The downloaded slicc CLI was signed by unexpected team \(actual), not \(expected). It was not executed or installed."
+            } else {
+                "The downloaded slicc CLI has no signing team identifier. It was not executed or installed."
+            }
         case .versionCheckFailed:
             "The downloaded slicc CLI failed its version check and was not installed."
         case .fileSystemFailure(let detail):
             "The slicc CLI could not be installed: \(detail)"
         }
+    }
+}
+
+struct SliccCliCodeSignatureInspection: Equatable {
+    let hasValidDeveloperIDSignature: Bool
+    let teamIdentifier: String?
+}
+
+enum SliccCliCodeSignatureValidator {
+    // Matches APPLE_TEAM_ID in the release workflow and the published Developer ID artifacts.
+    static let expectedTeamIdentifier = "S8LB56P782"
+
+    typealias Inspector = (URL) -> SliccCliCodeSignatureInspection
+
+    static func validate(_ url: URL) throws {
+        try validate(url, inspector: inspect)
+    }
+
+    static func validate(_ url: URL, inspector: Inspector) throws {
+        let inspection = inspector(url)
+        guard inspection.hasValidDeveloperIDSignature else {
+            throw SliccCliDownloadError.invalidCodeSignature
+        }
+        guard inspection.teamIdentifier == expectedTeamIdentifier else {
+            throw SliccCliDownloadError.unexpectedSigningTeam(
+                expected: expectedTeamIdentifier,
+                actual: inspection.teamIdentifier
+            )
+        }
+    }
+
+    private static func inspect(_ url: URL) -> SliccCliCodeSignatureInspection {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let staticCode else {
+            return .init(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
+        }
+
+        var requirement: SecRequirement?
+        let developerIDRequirement =
+            "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+        guard SecRequirementCreateWithString(
+            developerIDRequirement as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess,
+              let requirement else {
+            return .init(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
+        }
+
+        let validationFlags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+        guard SecStaticCodeCheckValidity(staticCode, validationFlags, requirement) == errSecSuccess else {
+            return .init(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
+        }
+
+        var signingInformation: CFDictionary?
+        let informationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticCode, informationFlags, &signingInformation) == errSecSuccess,
+              let information = signingInformation as? [CFString: Any] else {
+            return .init(hasValidDeveloperIDSignature: true, teamIdentifier: nil)
+        }
+        return .init(
+            hasValidDeveloperIDSignature: true,
+            teamIdentifier: information[kSecCodeInfoTeamIdentifier] as? String
+        )
     }
 }
 
@@ -48,6 +124,7 @@ final class SliccCliDownloader {
     typealias ProgressHandler = (SliccCliDownloadProgress) -> Void
     typealias PermissionsApplier = (URL) throws -> Void
     typealias ExecutableChecker = (String) -> Bool
+    typealias SignatureValidator = (URL) throws -> Void
     typealias VersionValidator = (URL) throws -> Bool
 
     private let session: URLSession
@@ -59,6 +136,7 @@ final class SliccCliDownloader {
     private let retryDelayNanoseconds: UInt64
     private let permissionsApplier: PermissionsApplier
     private let executableChecker: ExecutableChecker
+    private let signatureValidator: SignatureValidator
     private let versionValidator: VersionValidator
     private let progressHandler: ProgressHandler
 
@@ -72,6 +150,7 @@ final class SliccCliDownloader {
         retryDelayNanoseconds: UInt64 = 500_000_000,
         permissionsApplier: @escaping PermissionsApplier = SliccCliDownloader.applyExecutablePermissions,
         executableChecker: @escaping ExecutableChecker = FileManager.default.isExecutableFile,
+        signatureValidator: @escaping SignatureValidator = SliccCliCodeSignatureValidator.validate,
         versionValidator: @escaping VersionValidator = SliccCliDownloader.validateVersion,
         progressHandler: @escaping ProgressHandler = { _ in }
     ) {
@@ -84,6 +163,7 @@ final class SliccCliDownloader {
         self.retryDelayNanoseconds = retryDelayNanoseconds
         self.permissionsApplier = permissionsApplier
         self.executableChecker = executableChecker
+        self.signatureValidator = signatureValidator
         self.versionValidator = versionValidator
         self.progressHandler = progressHandler
     }
@@ -107,6 +187,7 @@ final class SliccCliDownloader {
         try write(data, to: staging)
 
         progressHandler(.validating)
+        try signatureValidator(staging)
         try makeExecutable(staging)
         guard executableChecker(staging.path) else {
             throw SliccCliDownloadError.nonExecutableResult

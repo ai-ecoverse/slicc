@@ -17,18 +17,27 @@ final class SliccCliDownloaderTests: XCTestCase {
 
     func testSuccessfulDownloadUsesArchitectureRouteAndReportsProgress() async throws {
         var requestedURL: URL?
+        var signatureValidated = false
         CliURLProtocolStub.handler = { request in
             requestedURL = request.url
             return (Self.response(for: request, status: 200), Data("cli-binary".utf8))
         }
         var progress: [SliccCliDownloadProgress] = []
-        let downloader = makeDownloader(progressHandler: { progress.append($0) })
+        let downloader = makeDownloader(
+            signatureValidator: { _ in signatureValidated = true },
+            versionValidator: { _ in
+                XCTAssertTrue(signatureValidated, "Signature validation must precede execution")
+                return true
+            },
+            progressHandler: { progress.append($0) }
+        )
 
         let result = try await downloader.download(architecture: .arm64)
 
         XCTAssertEqual(requestedURL?.absoluteString, "https://download.test/darwin-arm64")
         XCTAssertEqual(try Data(contentsOf: result), Data("cli-binary".utf8))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: result.path))
+        XCTAssertTrue(signatureValidated)
         XCTAssertEqual(progress.first, .preparing)
         XCTAssertTrue(progress.contains(.validating))
         XCTAssertTrue(progress.contains(.installing))
@@ -109,6 +118,77 @@ final class SliccCliDownloaderTests: XCTestCase {
         XCTAssertTrue(stagingFiles.isEmpty)
     }
 
+    func testUnsignedOrTamperedSignatureIsRejectedBeforeVersionExecution() async {
+        stubSuccessfulResponse()
+        var versionExecuted = false
+        let downloader = makeDownloader(
+            signatureValidator: { _ in throw SliccCliDownloadError.invalidCodeSignature },
+            versionValidator: { _ in
+                versionExecuted = true
+                return true
+            }
+        )
+
+        await assertDownloadError(.invalidCodeSignature, from: downloader)
+
+        XCTAssertFalse(versionExecuted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(stagingFiles.isEmpty)
+    }
+
+    func testWrongSigningTeamIsRejectedBeforeVersionExecution() async {
+        stubSuccessfulResponse()
+        let expectedTeam = SliccCliCodeSignatureValidator.expectedTeamIdentifier
+        let downloader = makeDownloader(signatureValidator: { _ in
+            throw SliccCliDownloadError.unexpectedSigningTeam(expected: expectedTeam, actual: "WRONGTEAM1")
+        })
+
+        await assertDownloadError(
+            .unexpectedSigningTeam(expected: expectedTeam, actual: "WRONGTEAM1"),
+            from: downloader
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(stagingFiles.isEmpty)
+    }
+
+    func testCodeSignatureValidatorAcceptsExpectedTeamInspection() throws {
+        try SliccCliCodeSignatureValidator.validate(destination) { _ in
+            SliccCliCodeSignatureInspection(
+                hasValidDeveloperIDSignature: true,
+                teamIdentifier: SliccCliCodeSignatureValidator.expectedTeamIdentifier
+            )
+        }
+    }
+
+    func testCodeSignatureValidatorClassifiesInvalidAndWrongTeamInspections() {
+        XCTAssertThrowsError(try SliccCliCodeSignatureValidator.validate(destination) { _ in
+            SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
+        }) { error in
+            XCTAssertEqual(error as? SliccCliDownloadError, .invalidCodeSignature)
+        }
+
+        XCTAssertThrowsError(try SliccCliCodeSignatureValidator.validate(destination) { _ in
+            SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: true, teamIdentifier: "OTHERTEAM1")
+        }) { error in
+            XCTAssertEqual(
+                error as? SliccCliDownloadError,
+                .unexpectedSigningTeam(
+                    expected: SliccCliCodeSignatureValidator.expectedTeamIdentifier,
+                    actual: "OTHERTEAM1"
+                )
+            )
+        }
+    }
+
+    func testProductionCodeSignatureValidatorRejectsUnsignedFile() throws {
+        try Data("not-a-signed-binary".utf8).write(to: destination)
+
+        XCTAssertThrowsError(try SliccCliCodeSignatureValidator.validate(destination)) { error in
+            XCTAssertEqual(error as? SliccCliDownloadError, .invalidCodeSignature)
+        }
+    }
+
     func testExistingExecutableIsReturnedWithoutNetworkRequest() async throws {
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         try Data("existing".utf8).write(to: destination)
@@ -135,6 +215,7 @@ final class SliccCliDownloaderTests: XCTestCase {
         permissionsApplier: @escaping SliccCliDownloader.PermissionsApplier = {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: $0.path)
         },
+        signatureValidator: @escaping SliccCliDownloader.SignatureValidator = { _ in },
         versionValidator: @escaping SliccCliDownloader.VersionValidator = { _ in true },
         progressHandler: @escaping SliccCliDownloader.ProgressHandler = { _ in }
     ) -> SliccCliDownloader {
@@ -148,6 +229,7 @@ final class SliccCliDownloaderTests: XCTestCase {
             maxAttempts: maxAttempts,
             retryDelayNanoseconds: 0,
             permissionsApplier: permissionsApplier,
+            signatureValidator: signatureValidator,
             versionValidator: versionValidator,
             progressHandler: progressHandler
         )

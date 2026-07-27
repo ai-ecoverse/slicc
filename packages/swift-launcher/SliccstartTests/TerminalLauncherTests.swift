@@ -107,10 +107,43 @@ final class TerminalLauncherTests: XCTestCase {
             XCTAssertEqual(error as? TerminalLauncher.LaunchError, .couldNotStart("Terminal"))
         }
 
-        let exitFailure = TerminalLauncher(commandRunner: { _ in 9 })
+        let exitFailure = TerminalLauncher(commandRunner: { _ in
+            TerminalCommandResult(status: 9, standardError: "launch failed")
+        })
         XCTAssertThrowsError(try exitFailure.launch(target(name: "Terminal"), command: "true")) { error in
             XCTAssertEqual(error as? TerminalLauncher.LaunchError, .processExited("Terminal", 9))
         }
+    }
+
+    func testLaunchSurfacesActionableAutomationPermissionDenial() {
+        let launcher = TerminalLauncher(commandRunner: { _ in
+            TerminalCommandResult(
+                status: 1,
+                standardError: "execution error: Not authorized to send Apple events to Terminal. (-1743)"
+            )
+        })
+
+        XCTAssertThrowsError(try launcher.launch(target(name: "Terminal"), command: "true")) { error in
+            let expected = TerminalLauncher.LaunchError.automationPermissionDenied("Terminal")
+            XCTAssertEqual(error as? TerminalLauncher.LaunchError, expected)
+            XCTAssertTrue(error.localizedDescription.contains("System Settings > Privacy & Security > Automation"))
+        }
+    }
+
+    func testNonAppleScriptFailureIsNotMisclassifiedAsAutomationDenial() {
+        let launcher = TerminalLauncher(commandRunner: { _ in
+            TerminalCommandResult(status: 1, standardError: "Not authorized to send Apple events (-1743)")
+        })
+
+        XCTAssertThrowsError(try launcher.launch(target(name: "Ghostty"), command: "true")) { error in
+            XCTAssertEqual(error as? TerminalLauncher.LaunchError, .processExited("Ghostty", 1))
+        }
+    }
+
+    func testAutomationPermissionDenialDetectionAcceptsCodeAndMessage() {
+        XCTAssertTrue(TerminalLauncher.isAutomationPermissionDenial("execution error (-1743)"))
+        XCTAssertTrue(TerminalLauncher.isAutomationPermissionDenial("NOT AUTHORIZED TO SEND APPLE EVENTS"))
+        XCTAssertFalse(TerminalLauncher.isAutomationPermissionDenial("syntax error (-2741)"))
     }
 
     private func target(name: String) -> AppTarget {

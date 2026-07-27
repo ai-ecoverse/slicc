@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$SCRIPT_DIR/build/Sliccstart.app"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ENTITLEMENTS="$SCRIPT_DIR/Sliccstart.entitlements"
 
 # Single source of truth: root package.json (kept in sync by @semantic-release/git).
 VERSION="$(node -p "require('$PROJECT_ROOT/package.json').version")"
@@ -23,7 +24,8 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   # Sign nested executables first, then the outer app
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
     "$APP_DIR/Contents/Resources/slicc-server"
-  codesign --force --options runtime --sign "$IDENTITY" --timestamp "$APP_DIR"
+  codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
+    --sign "$IDENTITY" --timestamp "$APP_DIR"
 
   # Verify signature
   codesign --verify --verbose "$APP_DIR"
@@ -47,7 +49,7 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
 else
   echo "No APPLE_TEAM_ID set, using ad-hoc signing..."
   codesign --force --sign - "$APP_DIR/Contents/Resources/slicc-server"
-  codesign --force --sign - "$APP_DIR"
+  codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
 fi
 
 # 5. Create DMG
