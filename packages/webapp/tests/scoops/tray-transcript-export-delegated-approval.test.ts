@@ -286,72 +286,202 @@ describe('Leader (interactive): unchanged local-dialog behavior', () => {
 // ---------------------------------------------------------------------------
 
 describe('Follower: delegated approval handler', () => {
-  it('calls the approval callback and replies with the verdict', async () => {
+  /**
+   * Start a real in-flight export, then deliver the leader's prompt for it.
+   * The follower only prompts for requests it is actually waiting on, so the
+   * handshake has to be genuine or the assertions below are vacuous.
+   */
+  async function promptFor(
+    options: ConstructorParameters<typeof FollowerSyncManager>[1],
+    extra: { estimatedBytes?: number } = {}
+  ): Promise<FakeChannel> {
     const ch = new FakeChannel();
-    const onApproval = vi.fn().mockResolvedValue(true);
-    new FollowerSyncManager(ch, { onTranscriptExportApprovalRequest: onApproval });
-
+    const follower = new FollowerSyncManager(ch, options);
+    void follower
+      .requestTranscriptExport({ kind: 'active' }, new AbortController().signal)
+      .catch(() => undefined);
+    const requestId =
+      ch.sent
+        .map((s) => JSON.parse(s) as { type: string; requestId?: string })
+        .find((m) => m.type === 'transcript.export.request')?.requestId ?? '';
     ch.simulate({
       type: 'transcript.export.approve.request',
-      requestId: 'te-1',
+      requestId,
       selector: { kind: 'active' },
-      estimatedBytes: 2048,
+      ...extra,
     } as LeaderToFollowerMessage);
-    await vi.waitFor(() => expect(onApproval).toHaveBeenCalled());
+    await flush();
+    return ch;
+  }
+
+  it('calls the approval callback and replies with the verdict', async () => {
+    const onApproval = vi.fn().mockResolvedValue(true);
+    const ch = await promptFor(
+      { onTranscriptExportApprovalRequest: onApproval },
+      { estimatedBytes: 2048 }
+    );
 
     expect(onApproval).toHaveBeenCalledWith(
       expect.objectContaining({ selector: { kind: 'active' }, estimatedBytes: 2048 })
     );
-    const reply = ch.find<{ type: string; approved: boolean; requestId: string }>(
-      'transcript.export.approve.response'
-    );
-    expect(reply).toMatchObject({ requestId: 'te-1', approved: true });
+    expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: true });
   });
 
   it('replies with the denial when the human denies', async () => {
-    const ch = new FakeChannel();
-    new FollowerSyncManager(ch, {
-      onTranscriptExportApprovalRequest: vi.fn().mockResolvedValue(false),
-    });
+    const onApproval = vi.fn().mockResolvedValue(false);
+    const ch = await promptFor({ onTranscriptExportApprovalRequest: onApproval });
 
-    ch.simulate({
-      type: 'transcript.export.approve.request',
-      requestId: 'te-1',
-      selector: { kind: 'active' },
-    } as LeaderToFollowerMessage);
-    await vi.waitFor(() =>
-      expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false })
-    );
+    expect(onApproval).toHaveBeenCalled();
+    expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false });
   });
 
   it('fails closed when no approval handler is wired', async () => {
-    const ch = new FakeChannel();
-    new FollowerSyncManager(ch);
-
-    ch.simulate({
-      type: 'transcript.export.approve.request',
-      requestId: 'te-1',
-      selector: { kind: 'active' },
-    } as LeaderToFollowerMessage);
-    await vi.waitFor(() =>
-      expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false })
-    );
+    const ch = await promptFor(undefined);
+    expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false });
   });
 
   it('fails closed when the approval dialog throws', async () => {
+    const onApproval = vi.fn().mockRejectedValue(new Error('dialog crashed'));
+    const ch = await promptFor({ onTranscriptExportApprovalRequest: onApproval });
+
+    expect(onApproval).toHaveBeenCalled();
+    expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Follower — the prompt must not outlive its request (PR review)
+// ---------------------------------------------------------------------------
+
+describe('Follower: delegated prompt lifecycle', () => {
+  /** Opens a prompt for a real in-flight export and exposes its control seams. */
+  function openPrompt(): {
+    ch: FakeChannel;
+    follower: FollowerSyncManager;
+    requestId: string;
+    aborted: () => boolean;
+    allow: () => void;
+    exportResult: Promise<Blob | Error>;
+    abortExport: AbortController;
+  } {
     const ch = new FakeChannel();
-    new FollowerSyncManager(ch, {
-      onTranscriptExportApprovalRequest: vi.fn().mockRejectedValue(new Error('dialog crashed')),
+    let settle: ((approved: boolean) => void) | undefined;
+    let signal: AbortSignal | undefined;
+    const follower = new FollowerSyncManager(ch, {
+      onTranscriptExportApprovalRequest: (req) => {
+        signal = req.signal;
+        return new Promise<boolean>((res) => {
+          settle = res;
+          req.signal.addEventListener('abort', () => res(false), { once: true });
+        });
+      },
     });
 
-    ch.simulate({
+    const abortExport = new AbortController();
+    const exportResult = follower
+      .requestTranscriptExport({ kind: 'active' }, abortExport.signal)
+      .catch((err: Error) => err);
+
+    const requestId =
+      ch.sent
+        .map((s) => JSON.parse(s) as { type: string; requestId?: string })
+        .find((m) => m.type === 'transcript.export.request')?.requestId ?? '';
+
+    return {
+      ch,
+      follower,
+      requestId,
+      aborted: () => signal?.aborted === true,
+      allow: () => settle?.(true),
+      exportResult,
+      abortExport,
+    };
+  }
+
+  it('passes an AbortSignal to the dialog', async () => {
+    const p = openPrompt();
+    p.ch.simulate({
       type: 'transcript.export.approve.request',
-      requestId: 'te-1',
+      requestId: p.requestId,
       selector: { kind: 'active' },
     } as LeaderToFollowerMessage);
-    await vi.waitFor(() =>
-      expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false })
+    await flush();
+    expect(p.aborted()).toBe(false);
+  });
+
+  it("closes the dialog when the leader's approval times out (denied arrives)", async () => {
+    const p = openPrompt();
+    p.ch.simulate({
+      type: 'transcript.export.approve.request',
+      requestId: p.requestId,
+      selector: { kind: 'active' },
+    } as LeaderToFollowerMessage);
+    await flush();
+
+    p.ch.simulate({
+      type: 'transcript.export.denied',
+      requestId: p.requestId,
+    } as LeaderToFollowerMessage);
+    await flush();
+
+    expect(p.aborted()).toBe(true);
+    expect(await p.exportResult).toBeInstanceOf(Error);
+  });
+
+  it('closes the dialog when the local export is aborted (Cherry cancel)', async () => {
+    const p = openPrompt();
+    p.ch.simulate({
+      type: 'transcript.export.approve.request',
+      requestId: p.requestId,
+      selector: { kind: 'active' },
+    } as LeaderToFollowerMessage);
+    await flush();
+
+    p.abortExport.abort();
+    await flush();
+    expect(p.aborted()).toBe(true);
+  });
+
+  it('never reports a late "Allow" as an approval after the request is gone', async () => {
+    const p = openPrompt();
+    p.ch.simulate({
+      type: 'transcript.export.approve.request',
+      requestId: p.requestId,
+      selector: { kind: 'active' },
+    } as LeaderToFollowerMessage);
+    await flush();
+
+    // Leader gave up first …
+    p.ch.simulate({
+      type: 'transcript.export.denied',
+      requestId: p.requestId,
+    } as LeaderToFollowerMessage);
+    await flush();
+    // … then the human clicks Allow on the stale dialog.
+    p.allow();
+    await flush();
+
+    const reply = p.ch.find<{ type: string; approved: boolean }>(
+      'transcript.export.approve.response'
     );
+    expect(reply?.approved).toBe(false);
+  });
+
+  it('denies an unsolicited prompt without opening a dialog', async () => {
+    const ch = new FakeChannel();
+    const onApproval = vi.fn().mockResolvedValue(true);
+    new FollowerSyncManager(ch, { onTranscriptExportApprovalRequest: onApproval });
+
+    // No matching transcript.export.request was ever sent by this follower.
+    ch.simulate({
+      type: 'transcript.export.approve.request',
+      requestId: 'te-unsolicited',
+      selector: { kind: 'active' },
+    } as LeaderToFollowerMessage);
+    await flush();
+
+    expect(onApproval).not.toHaveBeenCalled();
+    expect(ch.find('transcript.export.approve.response')).toMatchObject({ approved: false });
   });
 });
 

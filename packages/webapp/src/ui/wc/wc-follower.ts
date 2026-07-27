@@ -494,11 +494,17 @@ export async function mountWcUiFollower(
     // semantics; only the realm it renders in differs.
     onTranscriptExportApprovalRequest: async (request) => {
       const { openTranscriptExportApproval } = await import('./wc-transcript-export.js');
+      // Cherry: the bytes leave SLICC for the embedding page, so name it. Use
+      // the origin the transport already resolved at boot rather than reading
+      // `location.ancestorOrigins` again — that API is absent in Firefox, where
+      // Cherry still boots via the referrer fallback, and re-deriving it would
+      // mislabel the recipient as this device.
+      const cherryHostOrigin = isCherry ? prelude.cherryTransport?.hostOrigin : undefined;
       return openTranscriptExportApproval({
         delegated: true,
         selector: request.selector,
-        // Cherry: the bytes leave SLICC for the embedding page, so name it.
-        ...(isCherry && ancestorOrigin ? { hostOrigin: ancestorOrigin } : {}),
+        signal: request.signal,
+        ...(cherryHostOrigin ? { hostOrigin: cherryHostOrigin } : {}),
         ...(request.estimatedBytes != null ? { estimatedBytes: request.estimatedBytes } : {}),
       });
     },

@@ -240,6 +240,16 @@ where a human can answer it. Every failure mode is a denial: no reply within 120
 disconnect, an unwired handler, or a dialog that throws. Because the leader always sends a
 terminal `denied`, a follower can never be left stuck on "Exporting…".
 
+The prompt is bound to the request's lifecycle:
+
+- The follower only prompts for an export it actually requested and is still waiting on, so an
+  unsolicited or version-skewed `approve.request` is denied without showing anything.
+- The dialog receives an `AbortSignal` that fires on any terminal outcome (leader approval
+  timeout, local cancel, disconnect, error). It closes and resolves as a denial, so a stale
+  prompt cannot outlive its request or stack up behind a retry.
+- A verdict that arrives after the request is gone is always reported as a denial, never as an
+  approval the leader would silently ignore.
+
 All other floats are unaffected and keep the leader-side dialog.
 
 ### Cherry SDK — `handle.exportSession()`

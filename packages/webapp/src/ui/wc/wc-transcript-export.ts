@@ -94,6 +94,11 @@ export async function downloadTranscriptBlob(blob: Blob, filename: string): Prom
  * headless leader hands the prompt to the requesting follower: the approver is
  * then the person who asked, on this device, rather than a leader-side operator
  * vetting someone else's request.
+ *
+ * `signal` tears the dialog down and resolves `false` when the request it
+ * belongs to is settled elsewhere (leader approval timeout, cancel, disconnect)
+ * — without it a stale prompt would survive, and a later "Allow" would look
+ * like consent for a request nobody is waiting on any more.
  */
 export function openTranscriptExportApproval(request: {
   followerLabel?: string;
@@ -101,7 +106,9 @@ export function openTranscriptExportApproval(request: {
   selector: TranscriptExportSelector;
   estimatedBytes?: number;
   delegated?: boolean;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  if (request.signal?.aborted) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     const dialog = document.createElement('slicc-dialog');
     dialog.setAttribute('heading', 'Export transcript request');
@@ -172,9 +179,15 @@ export function openTranscriptExportApproval(request: {
     const settle = (allow: boolean): void => {
       if (resolved) return;
       resolved = true;
+      request.signal?.removeEventListener('abort', onAbort);
       (dialog as HTMLElement & { hide?: () => void }).hide?.();
+      // Remove as well as hide: an aborted prompt must leave no element behind
+      // for a later click to reach.
+      dialog.remove();
       resolve(allow);
     };
+    const onAbort = (): void => settle(false);
+    request.signal?.addEventListener('abort', onAbort, { once: true });
 
     dialog.append(makeBtn('Allow once', true, () => settle(true)));
     dialog.append(makeBtn('Deny', false, () => settle(false)));

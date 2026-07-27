@@ -261,6 +261,14 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
   `transcript.export.approve.request`. When touching approval code, check it still resolves in
   _both_ realms, and that every failure path (timeout, disconnect, unwired handler, throw)
   denies rather than hangs.
+- Approval **lifecycle**: a consent dialog must not outlive the request it authorizes. Prompt
+  only for a request that is still in flight, pass an `AbortSignal` that closes the dialog on
+  every terminal outcome, and report a post-settlement verdict as a denial. A stale prompt whose
+  "Allow" silently does nothing reads to the user as a granted approval.
+- Consent copy must name the **actual recipient** of the bytes, which differs by realm
+  (leader-side / delegated / delegated + Cherry host page). Derive an embedding origin from the
+  value the transport resolved at boot, never by re-reading `location.ancestorOrigins` — it is
+  non-standard and absent in Firefox, where Cherry still boots via the referrer fallback.
 - Cherry protocol: `session.export.request` → approval → `session.export.progress*` →
   `session.export.response` OR `session.export.error`. Confirm cancel (`session.export.cancel`)
   is handled on both sides.
