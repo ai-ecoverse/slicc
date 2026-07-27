@@ -3,3 +3,5 @@
 /dist/
 # Coverage profile from `make cover`
 cover.out
+# Per-test timings from `make test-json`
+test-report.json

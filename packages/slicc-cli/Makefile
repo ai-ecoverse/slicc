@@ -18,13 +18,19 @@ COVER_MIN ?= 58
 # GOOS/GOARCH pairs to cross-compile for `dist`.
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 
-.PHONY: build test check fmt vet lint tidy-check cover dist clean
+.PHONY: build test test-json check fmt vet lint tidy-check cover dist clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(PKG)
 
 test:
 	go test ./...
+
+# Machine-readable per-test timings for CI artifact upload. Kept separate from
+# `test`/`cover` so their console output stays human-readable; the whole suite
+# runs in well under 10s uninstrumented, so the extra pass is cheap.
+test-json:
+	go test -count=1 -json ./... > test-report.json || true
 
 vet:
 	go vet ./...
