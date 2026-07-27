@@ -21,6 +21,11 @@ describe('built-in shadow map', () => {
     expect(lookupBuiltinShadow('some-unmapped-pkg')).toBeUndefined();
   });
 
+  it('ignores inherited keys while resolving own entries', () => {
+    expect(lookupBuiltinShadow('constructor')).toBeUndefined();
+    expect(lookupBuiltinShadow('biome')?.command).toBe('biome');
+  });
+
   it('keeps bootstrap versions tied to the command version constants', () => {
     expect(BUILTIN_SHADOW_MAP.biome.bootstrap).toBe(`ipk add ${INSTALL_PACKAGES}`);
     expect(BUILTIN_SHADOW_MAP.esbuild.bootstrap).toBe(`ipk add esbuild-wasm@${ESBUILD_VERSION}`);

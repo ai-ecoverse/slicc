@@ -71,7 +71,9 @@ export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
 };
 
 export function lookupBuiltinShadow(requestedPackage: string): BuiltinShadow | undefined {
-  return BUILTIN_SHADOW_MAP[requestedPackage];
+  return Object.hasOwn(BUILTIN_SHADOW_MAP, requestedPackage)
+    ? BUILTIN_SHADOW_MAP[requestedPackage]
+    : undefined;
 }
 
 function quoteArg(arg: string): string {
