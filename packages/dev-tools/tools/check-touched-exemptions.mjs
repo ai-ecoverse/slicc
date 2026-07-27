@@ -1,19 +1,24 @@
 #!/usr/bin/env node
-// PR-level "boy-scout" gate for both biome complexity debt lists.
+// PR-level "boy-scout" gate for the repo's debt / exemption lists.
 //
-// Computes the PR's changed files via `git diff --name-only <base>...HEAD`
-// and intersects them with BOTH per-rule exemption globs parsed from
-// `biome.json` (see size-exemption-lib.mjs): the function-size debt list
-// (`complexity.noExcessiveLinesPerFunction: "off"`) and the cognitive-
-// complexity debt list (`complexity.noExcessiveCognitiveComplexity: "off"`).
-// Both rules are evaluated PER FUNCTION/method, not per file.
-// Exits non-zero with a rule-appropriate fix-it message if any touched file
-// is still on EITHER list — the PR author must bring every function in the
-// file under the configured per-function biome cap and delete its
-// `overrides` entry in the same PR.
-// Also exits non-zero if a PR ADDS new globs to either debt list vs the base
-// config (the debt list is frozen — additions are only allowed when the list
-// is being introduced, i.e. base had no entries for that rule).
+// Computes the PR's changed files via `git diff --name-only <base>...HEAD` and
+// enforces, per debt list (see debt-list-sources.mjs for the registry and the
+// reasoning behind the differing semantics):
+//
+//   - biome complexity debt lists (function-size, cognitive-complexity):
+//     frozen AND subject to the touched-file rule — a PR that changes a listed
+//     file must bring every function under the biome cap and delete the
+//     `overrides` entry in the same PR.
+//   - biome non-complexity rule-disabling overrides, `coverageExclude` in
+//     coverage-thresholds.json, `ignore` in jscpd.json: frozen only. These
+//     lists legitimately contain permanent entries, so touching a listed file
+//     is fine; growing the list is not.
+//   - knip ignores: reported only, never fails.
+//
+// Every list carries the bootstrapping exemption: entries in a scope the base
+// ref does not have at all are being introduced, not grown, and are ignored.
+// Base-config reads are non-throwing: an unreadable base skips that list's
+// growth check rather than failing the build.
 // Skips gracefully on non-PR events.
 //
 // Usage:
@@ -27,37 +32,55 @@
 //   4. fallback "origin/main"
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  DEBT_LIST_SOURCES,
+  evaluateDebtSource,
+  evaluateRuleDebtList,
+  formatGrowthReport,
+  formatTouchedReport,
+} from './debt-list-sources.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
-  findAddedExemptions,
-  findTouchedExemptions,
-  readBiomeConfig,
   repoRoot,
   SIZE_RULE_KEY,
 } from './size-exemption-lib.mjs';
 
 const SCRIPT = 'check-touched-exemptions';
 
+const COMPLEXITY_GROWTH_FIX_IT =
+  'Fix: bring every function in the file under the configured per-function biome cap\n' +
+  'instead of adding it to the debt list.';
+
 const RULES = [
   {
+    id: 'function-size',
     key: SIZE_RULE_KEY,
     label: 'function-size',
-    overrideName: 'complexity.noExcessiveLinesPerFunction',
-    fixIt:
+    file: 'biome.json',
+    location: 'biome.json `overrides` → complexity.noExcessiveLinesPerFunction = off',
+    semantics: { touched: true, freeze: true, failOnGrowth: true },
+    touchedFixIt:
       'Fix: in this same PR, refactor each file so every function is under the\n' +
       'configured biome cap (complexity.noExcessiveLinesPerFunction.maxLines), then\n' +
       'remove its entry from the debt-list `overrides` block in biome.json.',
+    growthFixIt: COMPLEXITY_GROWTH_FIX_IT,
   },
   {
+    id: 'cognitive-complexity',
     key: COMPLEXITY_RULE_KEY,
     label: 'cognitive-complexity',
-    overrideName: 'complexity.noExcessiveCognitiveComplexity',
-    fixIt:
+    file: 'biome.json',
+    location: 'biome.json `overrides` → complexity.noExcessiveCognitiveComplexity = off',
+    semantics: { touched: true, freeze: true, failOnGrowth: true },
+    touchedFixIt:
       "Fix: in this same PR, refactor each file so every function's cognitive\n" +
       'complexity is under the configured biome cap\n' +
       '(complexity.noExcessiveCognitiveComplexity.maxAllowedComplexity), then\n' +
       'remove its entry from the debt-list `overrides` block in biome.json.',
+    growthFixIt: COMPLEXITY_GROWTH_FIX_IT,
   },
 ];
 
@@ -102,17 +125,41 @@ function isPullRequestEvent() {
   return process.env.GITHUB_EVENT_NAME === 'pull_request' || !!process.env.GITHUB_BASE_REF;
 }
 
-// Read and parse `biome.json` from the BASE ref via `git show <ref>:biome.json`.
-// Returns the parsed config or null on ANY failure (missing ref, missing file,
-// unfetched base, malformed JSON). Intentionally non-throwing so a missing
-// base config skips the added-entry check rather than failing the build.
-function readBaseBiomeConfig(baseRef) {
+function readCurrentConfig(file) {
+  return JSON.parse(readFileSync(resolve(repoRoot, file), 'utf-8'));
+}
+
+// Read and parse a config file from the BASE ref via `git show <ref>:<file>`.
+// Returns null on ANY failure (missing ref, missing file, unfetched base,
+// malformed JSON). Intentionally non-throwing so a missing base config skips
+// that list's growth check rather than failing the build.
+function readBaseConfig(baseRef, file) {
   try {
-    const out = runGit(['show', `${baseRef}:biome.json`]);
-    return JSON.parse(out);
+    return JSON.parse(runGit(['show', `${baseRef}:${file}`]));
   } catch {
     return null;
   }
+}
+
+function makeConfigReaders(baseRef) {
+  const current = new Map();
+  const base = new Map();
+  return {
+    current(file) {
+      if (!current.has(file)) {
+        try {
+          current.set(file, readCurrentConfig(file));
+        } catch {
+          current.set(file, null);
+        }
+      }
+      return current.get(file);
+    },
+    base(file) {
+      if (!base.has(file)) base.set(file, readBaseConfig(baseRef, file));
+      return base.get(file);
+    },
+  };
 }
 
 function resolveChangedFiles() {
@@ -126,26 +173,48 @@ function resolveChangedFiles() {
   }
 }
 
+function evaluateAll({ readers, changedFiles }) {
+  const results = [];
+  for (const rule of RULES) {
+    const config = readers.current(rule.file);
+    const baseConfig = readers.base(rule.file);
+    results.push(
+      evaluateRuleDebtList(rule, {
+        currentGlobs: extractExemptionGlobsFor(config, rule.key),
+        baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key),
+        baseAvailable: baseConfig !== null,
+        changedFiles,
+      })
+    );
+  }
+  for (const source of DEBT_LIST_SOURCES) {
+    const config = readers.current(source.file);
+    const baseConfig = readers.base(source.file);
+    results.push(
+      evaluateDebtSource(source, {
+        currentEntries: config === null ? [] : source.extract(config),
+        baseEntries: baseConfig === null ? [] : source.extract(baseConfig),
+        baseAvailable: baseConfig !== null,
+      })
+    );
+  }
+  return results;
+}
+
+function reportSkips(results) {
+  for (const r of results) {
+    if (r.skipReason) {
+      console.log(`${SCRIPT}: notice — ${r.source.label} growth check skipped (${r.skipReason})`);
+    }
+  }
+}
+
 function main() {
   // Skip gracefully on non-PR CI events (push, merge_group). The gate is
   // PR-only by design; merge_group runs against the queue commit and has no
   // meaningful merge base to diff against.
   if (process.env.GITHUB_ACTIONS === 'true' && !isPullRequestEvent()) {
     console.log(`${SCRIPT}: skipped (not a pull_request event)`);
-    return 0;
-  }
-
-  const biomeConfig = readBiomeConfig();
-  const baseRef = resolveBaseRef(process.argv);
-  const baseConfig = readBaseBiomeConfig(baseRef);
-  const ruleStates = RULES.map((rule) => ({
-    ...rule,
-    globs: extractExemptionGlobsFor(biomeConfig, rule.key),
-    baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key),
-  }));
-
-  if (ruleStates.every((r) => r.globs.length === 0)) {
-    console.log(`${SCRIPT}: no debt lists found in biome.json — nothing to gate`);
     return 0;
   }
 
@@ -157,55 +226,30 @@ function main() {
   }
   const { changedFiles } = resolved;
 
-  const touchedViolations = ruleStates
-    .map((rule) => ({ rule, touched: findTouchedExemptions(changedFiles, rule.globs) }))
-    .filter((v) => v.touched.length > 0);
+  const readers = makeConfigReaders(resolveBaseRef(process.argv));
+  const results = evaluateAll({ readers, changedFiles });
+  reportSkips(results);
 
-  // Added-entry check: a PR may not GROW either debt list vs the base config.
-  // Bootstrapping exemption: if base has no entries for a rule, the list is
-  // being introduced — skip the added-entry check for that rule. If we
-  // couldn't read the base config at all, skip the check entirely (do not
-  // fail the build on infra/read errors); the touched-files check still runs.
-  let addedViolations = [];
-  if (baseConfig === null) {
-    console.log(
-      `${SCRIPT}: notice — could not read biome.json at ${baseRef}; skipping added-entry check`
-    );
-  } else {
-    addedViolations = ruleStates
-      .filter((rule) => rule.baseGlobs.length > 0)
-      .map((rule) => ({ rule, added: findAddedExemptions(rule.baseGlobs, rule.globs) }))
-      .filter((v) => v.added.length > 0);
+  const failures = results.filter((r) => r.failed);
+  const warnings = results.filter((r) => r.warned);
+
+  for (const result of warnings) {
+    for (const line of formatGrowthReport(result)) console.log(line);
   }
 
-  if (touchedViolations.length === 0 && addedViolations.length === 0) {
+  if (failures.length === 0) {
     console.log(`${SCRIPT}: OK (${changedFiles.length} changed file(s), 0 still on any debt list)`);
     return 0;
   }
 
   console.error(`${SCRIPT}: FAIL`);
-  for (const { rule, touched } of touchedViolations) {
-    console.error('');
-    console.error(`The following changed files are still on the ${rule.label} debt list`);
-    console.error(`(biome.json \`overrides\` → ${rule.overrideName} = off):`);
-    console.error('');
-    for (const f of touched) console.error(`  - ${f}  [${rule.label}]`);
-    console.error('');
-    console.error(rule.fixIt);
-  }
-  for (const { rule, added } of addedViolations) {
-    console.error('');
-    console.error(
-      `The ${rule.label} debt list is frozen and must not grow; this PR adds new entries`
-    );
-    console.error(`(biome.json \`overrides\` → ${rule.overrideName} = off):`);
-    console.error('');
-    for (const g of added) console.error(`  + ${g}  [${rule.label}]`);
-    console.error('');
-    console.error(
-      `Fix: bring every function in the file under the configured per-function biome cap\n` +
-        `instead of adding it to the ${rule.label} debt list.`
-    );
+  for (const result of failures) {
+    if (result.touched?.length) {
+      for (const line of formatTouchedReport(result)) console.error(line);
+    }
+    if (result.added.length) {
+      for (const line of formatGrowthReport(result)) console.error(line);
+    }
   }
   return 1;
 }
