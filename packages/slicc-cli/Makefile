@@ -2,7 +2,8 @@
 #
 # `make build`     local binary → bin/slicc
 # `make test`      go test ./...
-# `make check`     gofmt check + go vet + go test
+# `make check`     gofmt check + go mod tidy check + go vet + golangci-lint + race tests + coverage floor
+# `make tidy-check` fail when go.mod/go.sum drift from the tree's imports
 # `make dist`      cross-compiled static binaries for mac/linux/windows × amd64/arm64
 
 BINARY    := slicc
@@ -12,12 +13,12 @@ DIST_DIR  := dist
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS   := -s -w -X main.version=$(VERSION)
 # Total-statement coverage floor (raise as coverage improves; keep in sync with CLAUDE.md).
-COVER_MIN ?= 48
+COVER_MIN ?= 58
 
 # GOOS/GOARCH pairs to cross-compile for `dist`.
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 
-.PHONY: build test check fmt vet lint cover dist clean
+.PHONY: build test check fmt vet lint tidy-check cover dist clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(PKG)
@@ -34,6 +35,22 @@ lint:
 fmt:
 	gofmt -w .
 
+# Unused/missing-dependency gate: fails when go.mod or go.sum drifts from the
+# imports actually in the tree. `go mod tidy -diff` needs Go >= 1.23; older
+# toolchains fall back to tidying a copy and diffing it back.
+tidy-check:
+	@if go help mod tidy 2>/dev/null | grep -q -- '-diff'; then \
+		go mod tidy -diff || { echo "go.mod/go.sum are not tidy — run 'go mod tidy'"; exit 1; }; \
+	else \
+		cp go.mod go.mod.tidybak && cp go.sum go.sum.tidybak; \
+		go mod tidy; \
+		status=0; \
+		diff -u go.mod.tidybak go.mod || status=1; \
+		diff -u go.sum.tidybak go.sum || status=1; \
+		mv go.mod.tidybak go.mod && mv go.sum.tidybak go.sum; \
+		if [ $$status -ne 0 ]; then echo "go.mod/go.sum are not tidy — run 'go mod tidy'"; exit 1; fi; \
+	fi
+
 # Race-checked tests + total-coverage floor. -coverpkg=./... attributes coverage
 # of code exercised across package boundaries (e.g. internal/tray via the
 # main-package WebRTC integration test).
@@ -43,12 +60,14 @@ cover:
 	echo "total coverage: $$total% (floor $(COVER_MIN)%)"; \
 	awk -v t="$$total" -v m="$(COVER_MIN)" 'BEGIN { if (t+0 < m+0) { printf "FAIL: coverage %.1f%% is below the %d%% floor\n", t, m; exit 1 } }'
 
-# CI gate: gofmt clean, go vet, golangci-lint (lint + complexity), race tests + coverage floor.
+# CI gate: gofmt clean, tidy go.mod, go vet, golangci-lint (lint + complexity),
+# race tests + coverage floor.
 check:
 	@unformatted="$$(gofmt -l .)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needs to run on:"; echo "$$unformatted"; exit 1; \
 	fi
+	$(MAKE) tidy-check
 	go vet ./...
 	golangci-lint run
 	$(MAKE) cover

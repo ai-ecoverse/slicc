@@ -53,6 +53,7 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 | `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals) + `EvalSession` (persistent-REPL `--eval` mode) |
 | `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                                                   |
 | `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                                                        |
+| `internal/logging/`   | `log/slog` structured diagnostic logger (text/JSON handler, env-driven level) + the `Logf` adapter the `tray` seam consumes                 |
 
 ## Protocol parity
 
@@ -64,6 +65,23 @@ produces/consumes (`exec.*`, `hello`), so a wire change that breaks the CLI fail
 `go test`. When the
 tray protocol changes, regenerate the corpus JSON and update the Go structs +
 `corpus_test.go` alongside the TS and Swift mirrors.
+
+## Diagnostics vs user-facing output
+
+Two output paths, deliberately separate:
+
+- **User-facing streaming** — `prompt`/`exec`/`watch` write the leader's bytes
+  straight to stdout (and their own status lines to stderr). Never route this
+  through the logger; the CLI is meant to be pipeable.
+- **Diagnostics** — signaling retries, supersede redirects, ICE failures and
+  unparseable frames go through `internal/logging`, a `log/slog` logger built
+  once in `commands.go` (`diagLogger`) and written to stderr. `debugLogf` is the
+  thin `func(format string, args ...any)` adapter that satisfies the existing
+  `tray.Options.Logf` seam, so `internal/tray` keeps its callback-shaped API.
+
+Off by default. Enable with `SLICC_DEBUG=1` (legacy switch, equals
+`SLICC_LOG_LEVEL=debug`) or `SLICC_LOG_LEVEL=debug|info|warn|error`;
+`SLICC_LOG_FORMAT=json` swaps `slog.TextHandler` for `slog.JSONHandler`.
 
 ## Exec safety (`follow`)
 
@@ -132,15 +150,18 @@ update` refuses to clobber a local build that is ahead of the latest tag.
 
 ```bash
 make build          # → bin/slicc
-make check          # CI gate: gofmt + go vet + golangci-lint + race tests + coverage floor
+make check          # CI gate: gofmt + tidy-check + go vet + golangci-lint + race tests + coverage floor
 make lint           # golangci-lint run (config in .golangci.yml)
-make cover          # race tests + total-coverage floor (COVER_MIN, default 48%)
+make tidy-check     # fail when go.mod/go.sum drift from the tree's imports
+make cover          # race tests + total-coverage floor (COVER_MIN, default 58%)
 make dist           # cross-compiled static binaries → dist/
 ```
 
 Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
-complexity, matching the TS side's biome complexity gate) and the `COVER_MIN`
-coverage floor in the Makefile. Both run in the `slicc-cli` CI job. Release binaries are cut **atomically with the semantic-release flow** and only
+complexity, matching the TS side's biome complexity gate), `make tidy-check`
+(unused/missing module dependencies — the Go analogue of the TS side's knip run)
+and the `COVER_MIN` coverage floor in the Makefile. All run in the `slicc-cli` CI
+job via `make check`. Release binaries are cut **atomically with the semantic-release flow** and only
 when `packages/slicc-cli/` changed since the last tag. `release-native.mjs`
 (the prepareCmd gate) calls `sign-and-package.sh` when `decideSliccCliGating`
 opens: it cross-compiles every target on the macOS release runner, Developer
