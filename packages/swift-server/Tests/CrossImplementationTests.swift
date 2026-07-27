@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 /// Pinned cross-implementation mask vectors.
@@ -138,7 +139,8 @@ final class CrossImplementationTests: XCTestCase {
 
     func testCdpFrameUnmaskCallFunctionOnStringArgsOnly() throws {
         let masked = Self.frameSecret.maskedValue
-        let argsJSON = "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
+        let argsJSON =
+            "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
             + "{\"value\":\"prefix \(masked) suffix\"}]"
         let paramsJSON = "{\"functionDeclaration\":\"function(v){this.value=v}\"," + "\"arguments\":\(argsJSON)}"
         let frame = "{\"sessionId\":\"S1\",\"method\":\"Runtime.callFunctionOn\",\"params\":\(paramsJSON)}"

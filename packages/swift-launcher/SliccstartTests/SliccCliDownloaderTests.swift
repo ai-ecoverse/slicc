@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 final class SliccCliDownloaderTests: XCTestCase {
@@ -162,15 +163,19 @@ final class SliccCliDownloaderTests: XCTestCase {
     }
 
     func testCodeSignatureValidatorClassifiesInvalidAndWrongTeamInspections() {
-        XCTAssertThrowsError(try SliccCliCodeSignatureValidator.validate(destination) { _ in
-            SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
-        }) { error in
+        XCTAssertThrowsError(
+            try SliccCliCodeSignatureValidator.validate(destination) { _ in
+                SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
+            }
+        ) { error in
             XCTAssertEqual(error as? SliccCliDownloadError, .invalidCodeSignature)
         }
 
-        XCTAssertThrowsError(try SliccCliCodeSignatureValidator.validate(destination) { _ in
-            SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: true, teamIdentifier: "OTHERTEAM1")
-        }) { error in
+        XCTAssertThrowsError(
+            try SliccCliCodeSignatureValidator.validate(destination) { _ in
+                SliccCliCodeSignatureInspection(hasValidDeveloperIDSignature: true, teamIdentifier: "OTHERTEAM1")
+            }
+        ) { error in
             XCTAssertEqual(
                 error as? SliccCliDownloadError,
                 .unexpectedSigningTeam(
@@ -193,7 +198,10 @@ final class SliccCliDownloaderTests: XCTestCase {
         try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         try Data("existing".utf8).write(to: destination)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
-        CliURLProtocolStub.handler = { _ in XCTFail("Network should not be used"); throw URLError(.badURL) }
+        CliURLProtocolStub.handler = { _ in
+            XCTFail("Network should not be used")
+            throw URLError(.badURL)
+        }
 
         let result = try await makeDownloader().download()
 

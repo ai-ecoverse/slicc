@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 /// Canonical SigV4 v4 test vectors from AWS's official suite, mirrored from

@@ -101,25 +101,28 @@ enum SignAndForward {
     /// `secret set` command.
     static func resolveS3Profile(name: String, lookup: (String) -> String? = defaultSecretLookup) -> Result<S3Profile, SignAndForwardError> {
         guard let accessKeyId = lookup("s3.\(name).access_key_id"), !accessKeyId.isEmpty else {
-            return .failure(.profileNotConfigured(
-                message: "profile '\(name)' missing required field 'access_key_id'. "
-                    + "Set it via: secret set s3.\(name).access_key_id <value>"
-            ))
+            return .failure(
+                .profileNotConfigured(
+                    message: "profile '\(name)' missing required field 'access_key_id'. "
+                        + "Set it via: secret set s3.\(name).access_key_id <value>"
+                ))
         }
         guard let secretAccessKey = lookup("s3.\(name).secret_access_key"), !secretAccessKey.isEmpty else {
-            return .failure(.profileNotConfigured(
-                message: "profile '\(name)' missing required field 'secret_access_key'. "
-                    + "Set it via: secret set s3.\(name).secret_access_key <value>"
-            ))
+            return .failure(
+                .profileNotConfigured(
+                    message: "profile '\(name)' missing required field 'secret_access_key'. "
+                        + "Set it via: secret set s3.\(name).secret_access_key <value>"
+                ))
         }
-        return .success(S3Profile(
-            accessKeyId: accessKeyId,
-            secretAccessKey: secretAccessKey,
-            sessionToken: lookup("s3.\(name).session_token"),
-            region: lookup("s3.\(name).region") ?? "us-east-1",
-            endpoint: lookup("s3.\(name).endpoint"),
-            pathStyle: lookup("s3.\(name).path_style") == "true"
-        ))
+        return .success(
+            S3Profile(
+                accessKeyId: accessKeyId,
+                secretAccessKey: secretAccessKey,
+                sessionToken: lookup("s3.\(name).session_token"),
+                region: lookup("s3.\(name).region") ?? "us-east-1",
+                endpoint: lookup("s3.\(name).endpoint"),
+                pathStyle: lookup("s3.\(name).path_style") == "true"
+            ))
     }
 
     /// Default lookup that reads from the macOS Keychain via `SecretStore`.
@@ -180,7 +183,8 @@ enum SignAndForward {
         var out = ""
         out.reserveCapacity(s.utf8.count)
         for byte in s.utf8 {
-            let isUnreserved = (byte >= 0x41 && byte <= 0x5A)
+            let isUnreserved =
+                (byte >= 0x41 && byte <= 0x5A)
                 || (byte >= 0x61 && byte <= 0x7A)
                 || (byte >= 0x30 && byte <= 0x39)
                 || byte == 0x2D || byte == 0x5F || byte == 0x2E || byte == 0x7E

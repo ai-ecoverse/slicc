@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 /// Pins the focus-driven re-probe behavior of `AppManagementPermission`.

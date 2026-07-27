@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 final class OptelClickCoordinatorTests: XCTestCase {

@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 final class TerminalLauncherTests: XCTestCase {
@@ -40,16 +41,18 @@ final class TerminalLauncherTests: XCTestCase {
     }
 
     func testStrategiesAreKeyedByBundleIdentifier() {
-        XCTAssertNotNil(TerminalLauncher.directLaunchCommand(
-            bundleIdentifier: "com.mitchellh.ghostty",
-            command: "true",
-            loginShell: "/bin/zsh"
-        ))
-        XCTAssertNil(TerminalLauncher.directLaunchCommand(
-            bundleIdentifier: "com.example.unsupported",
-            command: "true",
-            loginShell: "/bin/zsh"
-        ))
+        XCTAssertNotNil(
+            TerminalLauncher.directLaunchCommand(
+                bundleIdentifier: "com.mitchellh.ghostty",
+                command: "true",
+                loginShell: "/bin/zsh"
+            ))
+        XCTAssertNil(
+            TerminalLauncher.directLaunchCommand(
+                bundleIdentifier: "com.example.unsupported",
+                command: "true",
+                loginShell: "/bin/zsh"
+            ))
     }
 
     func testLoginShellResolverAcceptsExecutablePasswordDatabaseShell() {

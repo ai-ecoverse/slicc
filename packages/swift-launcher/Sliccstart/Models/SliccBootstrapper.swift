@@ -68,7 +68,8 @@ final class SliccBootstrapper {
         task.standardError = FileHandle.nullDevice
         try? task.run()
         task.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        let output =
+            String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return output.isEmpty ? nil : output
     }
@@ -215,7 +216,8 @@ final class SliccBootstrapper {
         task.waitUntilExit()
 
         guard task.terminationStatus == 0 else {
-            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            let stderr =
+                String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let detail = stderr.isEmpty ? "" : "\n\(stderr.suffix(300))"
             throw BootstrapError.commandFailed("\(command) \(args.joined(separator: " "))\(detail)")

@@ -1,5 +1,6 @@
 import Logging
 import XCTest
+
 @testable import slicc_server
 
 final class ConsoleForwarderTests: XCTestCase {
@@ -75,7 +76,7 @@ final class ConsoleForwarderTests: XCTestCase {
     func testSelectConsolePageTargetSkipsTargetsWithoutDebuggerURL() {
         let targets = [
             ConsolePageTarget(type: "page", url: "http://localhost:5710/", webSocketDebuggerURL: nil),
-            ConsolePageTarget(type: "page", url: "http://localhost:5710/foo", webSocketDebuggerURL: "ws://ok")
+            ConsolePageTarget(type: "page", url: "http://localhost:5710/foo", webSocketDebuggerURL: "ws://ok"),
         ]
         let match = selectConsolePageTarget(from: targets, matching: "5710")
         XCTAssertEqual(match?.webSocketDebuggerURL, "ws://ok")
@@ -90,7 +91,7 @@ final class ConsoleForwarderTests: XCTestCase {
     func testConsoleTaggedLineJoinsArgsWithSpaces() {
         let args = [
             ConsoleRemoteObject(type: "string", value: .string("hi"), description: nil),
-            ConsoleRemoteObject(type: "number", value: .number(42), description: nil)
+            ConsoleRemoteObject(type: "number", value: .number(42), description: nil),
         ]
         XCTAssertEqual(consoleTaggedLine(args: args), "[page] hi 42")
     }
@@ -117,8 +118,8 @@ final class ConsoleForwarderTests: XCTestCase {
 
     func testConsolePageTargetDecodesWebSocketDebuggerUrlKey() throws {
         let json = """
-        {"type":"page","url":"http://localhost:5710/","webSocketDebuggerUrl":"ws://x/1"}
-        """.data(using: .utf8)!
+            {"type":"page","url":"http://localhost:5710/","webSocketDebuggerUrl":"ws://x/1"}
+            """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ConsolePageTarget.self, from: json)
         XCTAssertEqual(decoded.type, "page")
         XCTAssertEqual(decoded.webSocketDebuggerURL, "ws://x/1")
@@ -128,8 +129,8 @@ final class ConsoleForwarderTests: XCTestCase {
 
     func testConsoleEventDecodesArgsArray() throws {
         let json = """
-        {"type":"log","args":[{"type":"string","value":"hi"},{"type":"object","description":"{ a: 1 }"}]}
-        """.data(using: .utf8)!
+            {"type":"log","args":[{"type":"string","value":"hi"},{"type":"object","description":"{ a: 1 }"}]}
+            """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ConsoleEvent.self, from: json)
         XCTAssertEqual(decoded.type, "log")
         XCTAssertEqual(decoded.args.count, 2)
@@ -197,8 +198,8 @@ final class ConsoleForwarderTests: XCTestCase {
 
     func testConsoleEventEnvelopeDecodesPartialEnvelope() throws {
         let json = """
-        {"method":"Runtime.consoleAPICalled","params":{"type":"log","args":[]}}
-        """.data(using: .utf8)!
+            {"method":"Runtime.consoleAPICalled","params":{"type":"log","args":[]}}
+            """.data(using: .utf8)!
         let envelope = try JSONDecoder().decode(ConsoleEventEnvelope.self, from: json)
         XCTAssertEqual(envelope.method, "Runtime.consoleAPICalled")
         XCTAssertEqual(envelope.params?.type, "log")

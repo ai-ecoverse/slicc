@@ -51,11 +51,13 @@ struct LaunchRecordStore {
     }
 
     static var defaultStoreURL: URL {
-        let support = FileManager.default
+        let support =
+            FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        return support
+        return
+            support
             .appendingPathComponent("Sliccstart", isDirectory: true)
             .appendingPathComponent("launch-records.json", isDirectory: false)
     }

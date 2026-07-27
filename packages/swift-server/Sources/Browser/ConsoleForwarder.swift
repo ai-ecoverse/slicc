@@ -101,10 +101,12 @@ actor ConsoleForwarder {
             } catch let error as CancellationError {
                 throw error
             } catch {
-                logger.debug("Console target discovery attempt failed", metadata: [
-                    "attempt": .stringConvertible(attempt + 1),
-                    "error": .string(error.localizedDescription),
-                ])
+                logger.debug(
+                    "Console target discovery attempt failed",
+                    metadata: [
+                        "attempt": .stringConvertible(attempt + 1),
+                        "error": .string(error.localizedDescription),
+                    ])
             }
 
             if attempt + 1 < consoleForwarderPollAttempts {
@@ -167,8 +169,9 @@ actor ConsoleForwarder {
         }
 
         guard let envelope = try? JSONDecoder().decode(ConsoleEventEnvelope.self, from: data),
-              envelope.method == "Runtime.consoleAPICalled",
-              let event = envelope.params else {
+            envelope.method == "Runtime.consoleAPICalled",
+            let event = envelope.params
+        else {
             return nil
         }
         return event
@@ -294,8 +297,9 @@ func matchesConsolePageURL(_ targetURL: String, expectedPageURL: String) -> Bool
     guard !expected.isEmpty else { return false }
 
     if let expectedPort = Int(expected),
-       let components = URLComponents(string: targetURL),
-       let host = components.host?.lowercased() {
+        let components = URLComponents(string: targetURL),
+        let host = components.host?.lowercased()
+    {
         return ["localhost", "127.0.0.1"].contains(host) && components.port == expectedPort
     }
 

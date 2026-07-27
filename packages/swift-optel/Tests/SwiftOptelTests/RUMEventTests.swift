@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 final class RUMEventTests: XCTestCase {
@@ -78,14 +79,15 @@ final class RUMEventTests: XCTestCase {
         )
         let actualData = try JSONEncoder().encode(event)
         let fixture = """
-        {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
-        "checkpoint":"click","t":1234,"source":".button#submit",\
-        "target":"/api/checkout","value":42}
-        """
+            {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
+            "checkpoint":"click","t":1234,"source":".button#submit",\
+            "target":"/api/checkout","value":42}
+            """
         let actualObject = try JSONSerialization.jsonObject(with: actualData) as? NSDictionary
-        let expectedObject = try JSONSerialization.jsonObject(
-            with: Data(fixture.utf8)
-        ) as? NSDictionary
+        let expectedObject =
+            try JSONSerialization.jsonObject(
+                with: Data(fixture.utf8)
+            ) as? NSDictionary
         XCTAssertEqual(actualObject, expectedObject)
     }
 

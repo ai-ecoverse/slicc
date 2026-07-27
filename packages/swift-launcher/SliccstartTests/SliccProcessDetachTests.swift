@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Regression tests for `SliccProcess.detachAll()`. The Phase A
@@ -89,8 +90,9 @@ final class SliccProcessDetachTests: XCTestCase {
 
         let snapshot = proc.detachAll()
         XCTAssertEqual(snapshot.first?.bridgeToken, "persisted-token-xyz")
-        XCTAssertEqual(store.load().first?.bridgeToken, "persisted-token-xyz",
-                       "the launch token must be persisted for the next launch's reattach")
+        XCTAssertEqual(
+            store.load().first?.bridgeToken, "persisted-token-xyz",
+            "the launch token must be persisted for the next launch's reattach")
     }
 
     func testDetachAllWithNoRecords_LeavesPreviouslyPersistedSnapshotIntactOnRecall() throws {
@@ -119,7 +121,8 @@ final class SliccProcessDetachTests: XCTestCase {
         // Idempotency check — we don't claim the seeded data survives
         // the *first* call (there was nothing to detach), only that the
         // second call doesn't make things worse.
-        XCTAssertEqual(proc.detachAll().count, store.load().count,
-                       "repeated detachAll() calls must agree on the persisted state")
+        XCTAssertEqual(
+            proc.detachAll().count, store.load().count,
+            "repeated detachAll() calls must agree on the persisted state")
     }
 }

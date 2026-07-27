@@ -28,8 +28,8 @@ struct SprinkleSidebarView: View {
                 conversationRow
                     .tag(DetailRoute.conversation)
                 #if DEBUG
-                fixtureRow
-                    .tag(DetailRoute.fixture)
+                    fixtureRow
+                        .tag(DetailRoute.fixture)
                 #endif
             }
 
@@ -82,7 +82,8 @@ struct SprinkleSidebarView: View {
                 .foregroundStyle(.primary)
             Spacer()
             if let activeJid = appState.leaderActiveScoopJid,
-               let active = appState.scoops.first(where: { $0.jid == activeJid }) {
+                let active = appState.scoops.first(where: { $0.jid == activeJid })
+            {
                 Text(active.assistantLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -92,24 +93,24 @@ struct SprinkleSidebarView: View {
     }
 
     #if DEBUG
-    @ViewBuilder
-    private var fixtureRow: some View {
-        HStack {
-            Image(systemName: "paintbrush.pointed.fill")
-                .foregroundStyle(.pink)
-                .frame(width: 22)
-            Text("UI Fixture")
-                .foregroundStyle(.primary)
-            Spacer()
-            Text("DEBUG")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.pink.opacity(0.18)))
+        @ViewBuilder
+        private var fixtureRow: some View {
+            HStack {
+                Image(systemName: "paintbrush.pointed.fill")
+                    .foregroundStyle(.pink)
+                    .frame(width: 22)
+                Text("UI Fixture")
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("DEBUG")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.pink.opacity(0.18)))
+            }
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
-    }
     #endif
 
     @ViewBuilder

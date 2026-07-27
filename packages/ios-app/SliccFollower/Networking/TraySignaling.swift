@@ -195,7 +195,7 @@ actor TraySignalingClient {
         let rawText = String(data: data, encoding: .utf8) ?? "(empty)"
 
         guard let raw = try? JSONDecoder().decode(RawFollowerBootstrapResponse.self, from: data),
-              raw.role == "follower"
+            raw.role == "follower"
         else {
             throw TraySignalingError.invalidBootstrapResponse(
                 statusCode: response.statusCode, body: rawText)
@@ -219,8 +219,9 @@ actor TraySignalingClient {
         let r = raw.result
         switch r.action {
         case "wait":
-            guard (r.code == "LEADER_NOT_ELECTED" || r.code == "LEADER_NOT_CONNECTED"),
-                  r.retryAfterMs != nil else {
+            guard r.code == "LEADER_NOT_ELECTED" || r.code == "LEADER_NOT_CONNECTED",
+                r.retryAfterMs != nil
+            else {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         case "signal":
@@ -228,8 +229,9 @@ actor TraySignalingClient {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         case "fail":
-            guard (r.code == "INVALID_JOIN_CAPABILITY" || r.code == "TRAY_EXPIRED"),
-                  r.error != nil else {
+            guard r.code == "INVALID_JOIN_CAPABILITY" || r.code == "TRAY_EXPIRED",
+                r.error != nil
+            else {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         default:
@@ -254,4 +256,3 @@ actor TraySignalingClient {
         )
     }
 }
-

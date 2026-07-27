@@ -79,7 +79,8 @@ struct ServerCommand: AsyncParsableCommand {
         let environment = ProcessInfo.processInfo.environment
 
         let servePort = try await Self.resolveServePort(from: environment)
-        var cdpPort = config.serveOnly
+        var cdpPort =
+            config.serveOnly
             ? config.cdpPort
             : try await findAvailablePort(startingFrom: config.cdpPort)
 
@@ -316,7 +317,8 @@ struct ServerCommand: AsyncParsableCommand {
                     injector.start()
                     overlayInjector = injector
                 } else {
-                    let message = "Cannot start Electron overlay injector: no bridge token resolved. "
+                    let message =
+                        "Cannot start Electron overlay injector: no bridge token resolved. "
                         + "The thin-bridge overlay requires a per-process bridge token "
                         + "(set SLICC_HOSTED_LEADER_ORIGIN to enable thin-electron mode)."
                     logger.error("\(message)")
@@ -411,7 +413,8 @@ struct ServerConfig: Sendable, Equatable {
         let resolvedElectron = command.electron || normalizedElectronApp != nil
         let resolvedLead = command.lead || normalizedLeadWorkerBaseUrl != nil
         let resolvedJoin = normalizedJoinUrl != nil
-        let resolvedCdpPort = resolvedElectron && !explicitCdpPort
+        let resolvedCdpPort =
+            resolvedElectron && !explicitCdpPort
             ? defaultElectronAttachCdpPort
             : positiveCdpPort
 
@@ -441,7 +444,8 @@ struct ServerConfig: Sendable, Equatable {
 
     private static func normalizedText(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
+            !trimmed.isEmpty
+        else {
             return nil
         }
         return trimmed
@@ -548,8 +552,9 @@ extension ServerCommand {
 
     static func preferredServePort(from environment: [String: String]) -> Int? {
         guard let rawPort = environment["PORT"],
-              let port = Int(rawPort.trimmingCharacters(in: .whitespacesAndNewlines)),
-              (1...65_535).contains(port) else {
+            let port = Int(rawPort.trimmingCharacters(in: .whitespacesAndNewlines)),
+            (1...65_535).contains(port)
+        else {
             return nil
         }
         return port
@@ -677,7 +682,8 @@ extension ServerCommand {
         }
 
         let isThinBridge = bridgeWsUrl != nil && bridgeToken != nil
-        let baseHref = isThinBridge
+        let baseHref =
+            isThinBridge
             ? Self.resolveThinLeaderOrigin(config: config, environment: environment)
             : serveOrigin
 
@@ -690,9 +696,11 @@ extension ServerCommand {
             }
             launchURL = try buildTrayJoinLaunchURL(locationHref: baseHref, joinURL: joinURL)
         } else if config.lead {
-            guard let workerBaseURL = normalizeTrayWorkerBaseURL(
-                config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
-            ) else {
+            guard
+                let workerBaseURL = normalizeTrayWorkerBaseURL(
+                    config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
+                )
+            else {
                 throw ValidationError(
                     "The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL."
                 )
@@ -728,8 +736,9 @@ extension ServerCommand {
 
     static func parseTrayJoinURL(_ raw: String?) -> ParsedTrayJoinURL? {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              var components = URLComponents(string: raw) else {
+            !raw.isEmpty,
+            var components = URLComponents(string: raw)
+        else {
             return nil
         }
 
@@ -745,8 +754,9 @@ extension ServerCommand {
         let token = segments.last?.removingPercentEncoding ?? segments.last ?? ""
         let tokenParts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard tokenParts.count == 2,
-              !tokenParts[0].isEmpty,
-              !tokenParts[1].isEmpty else {
+            !tokenParts[0].isEmpty,
+            !tokenParts[1].isEmpty
+        else {
             return nil
         }
 
@@ -755,10 +765,11 @@ extension ServerCommand {
 
     static func normalizeTrayWorkerBaseURL(_ raw: String?) -> String? {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty,
-              var components = URLComponents(string: raw),
-              components.scheme != nil,
-              components.host != nil else {
+            !raw.isEmpty,
+            var components = URLComponents(string: raw),
+            components.scheme != nil,
+            components.host != nil
+        else {
             return nil
         }
 

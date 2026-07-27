@@ -40,12 +40,13 @@ final class CliLogDedup: @unchecked Sendable {
                 }
             }
 
-            entries.append(Entry(
-                fingerprint: fingerprint,
-                count: 0,
-                firstSeen: now,
-                sample: String(message.prefix(120))
-            ))
+            entries.append(
+                Entry(
+                    fingerprint: fingerprint,
+                    count: 0,
+                    firstSeen: now,
+                    sample: String(message.prefix(120))
+                ))
             return (true, flushedMessages)
         }
 
@@ -90,7 +91,8 @@ private func makeFingerprint(_ message: String) -> String {
         .stringByReplacingMatches(in: message, range: message.nsRange, withTemplate: "<id>")
         .replacingMatches(of: hexRegex, with: "<hex>")
         .replacingMatches(of: objectRegex, with: "{…}")
-        .replacingMatches(of: arrayRegex, with: "[…]"
+        .replacingMatches(
+            of: arrayRegex, with: "[…]"
         )
         .replacingMatches(of: numberRegex, with: "<n>")
 }
@@ -104,12 +106,12 @@ private let objectRegex = try! NSRegularExpression(pattern: #"\{[^}]{20,}\}"#)
 private let arrayRegex = try! NSRegularExpression(pattern: #"\[[^\]]{20,}\]"#)
 private let numberRegex = try! NSRegularExpression(pattern: #"\b\d+(\.\d+)?\b"#)
 
-private extension String {
-    var nsRange: NSRange {
+extension String {
+    fileprivate var nsRange: NSRange {
         NSRange(startIndex..<endIndex, in: self)
     }
 
-    func replacingMatches(of regex: NSRegularExpression, with template: String) -> String {
+    fileprivate func replacingMatches(of regex: NSRegularExpression, with template: String) -> String {
         regex.stringByReplacingMatches(in: self, range: nsRange, withTemplate: template)
     }
 }

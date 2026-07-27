@@ -1,6 +1,7 @@
 import Foundation
+
 #if canImport(os)
-import os
+    import os
 #endif
 
 /// Fire-and-forget beacon transport. Implementations send a single
@@ -41,7 +42,7 @@ public final class URLSessionOptelTransport: OptelTransport {
     private let timeout: TimeInterval
     private let encoder: JSONEncoder
     #if canImport(os)
-    private let logger: Logger?
+        private let logger: Logger?
     #endif
 
     /// Construct a transport.
@@ -60,42 +61,45 @@ public final class URLSessionOptelTransport: OptelTransport {
         self.timeout = timeout
         self.encoder = JSONEncoder()
         #if canImport(os)
-        self.logger = debugLogging
-            ? Logger(subsystem: Self.loggerSubsystem, category: Self.loggerCategory)
-            : nil
+            self.logger =
+                debugLogging
+                ? Logger(subsystem: Self.loggerSubsystem, category: Self.loggerCategory)
+                : nil
         #endif
     }
 
     public func send(_ event: RUMEvent, collectBaseURL: URL) {
-        guard let request = Self.makeRequest(
-            event: event,
-            collectBaseURL: collectBaseURL,
-            timeout: timeout,
-            encoder: encoder
-        ) else {
+        guard
+            let request = Self.makeRequest(
+                event: event,
+                collectBaseURL: collectBaseURL,
+                timeout: timeout,
+                encoder: encoder
+            )
+        else {
             return
         }
         #if canImport(os)
-        let logger = self.logger
-        let urlString = request.url?.absoluteString ?? "<unknown>"
-        let bodySize = request.httpBody?.count ?? 0
-        logger?.debug("optel beacon → \(urlString, privacy: .public) (\(bodySize) bytes)")
-        let task = session.dataTask(with: request) { _, response, _ in
-            // Fire-and-forget: beacon failures are non-actionable; never
-            // propagate them back to the caller. This is the Swift analogue
-            // of the JS `.catch(() => {})` swallow.
-            if let http = response as? HTTPURLResponse {
-                logger?.debug(
-                    "optel beacon ← \(urlString, privacy: .public) status=\(http.statusCode)"
-                )
+            let logger = self.logger
+            let urlString = request.url?.absoluteString ?? "<unknown>"
+            let bodySize = request.httpBody?.count ?? 0
+            logger?.debug("optel beacon → \(urlString, privacy: .public) (\(bodySize) bytes)")
+            let task = session.dataTask(with: request) { _, response, _ in
+                // Fire-and-forget: beacon failures are non-actionable; never
+                // propagate them back to the caller. This is the Swift analogue
+                // of the JS `.catch(() => {})` swallow.
+                if let http = response as? HTTPURLResponse {
+                    logger?.debug(
+                        "optel beacon ← \(urlString, privacy: .public) status=\(http.statusCode)"
+                    )
+                }
             }
-        }
         #else
-        let task = session.dataTask(with: request) { _, _, _ in
-            // Fire-and-forget: beacon failures are non-actionable; never
-            // propagate them back to the caller. This is the Swift analogue
-            // of the JS `.catch(() => {})` swallow.
-        }
+            let task = session.dataTask(with: request) { _, _, _ in
+                // Fire-and-forget: beacon failures are non-actionable; never
+                // propagate them back to the caller. This is the Swift analogue
+                // of the JS `.catch(() => {})` swallow.
+            }
         #endif
         task.resume()
     }

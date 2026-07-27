@@ -180,9 +180,10 @@ public final class SecretInjector: @unchecked Sendable {
                 // semantics still replace any Keychain / env-file entry of
                 // the same name.
                 if entry.value.utf16.count < minMaskableSecretLength {
-                    FileHandle.standardError.write(Data(
-                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                    ))
+                    FileHandle.standardError.write(
+                        Data(
+                            "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                        ))
                     let shortEntry = LoadedSecret(
                         name: entry.name,
                         realValue: entry.value,
@@ -215,7 +216,8 @@ public final class SecretInjector: @unchecked Sendable {
         // Scrubber `pairs` are built from MASKABLE entries only — short
         // consumables have identity masking, so adding them would scrub
         // their literal real value out of arbitrary responses.
-        let pairs = loaded
+        let pairs =
+            loaded
             .filter { $0.isMaskable }
             .map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
@@ -228,7 +230,8 @@ public final class SecretInjector: @unchecked Sendable {
         let loaded = loadSecretsKeychainAndEnvSnapshot()
         // Scrubber `pairs` mirror the maskable subset only — see `reload()`
         // for the rationale.
-        let pairs = loaded
+        let pairs =
+            loaded
             .filter { $0.isMaskable }
             .map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
@@ -250,33 +253,37 @@ public final class SecretInjector: @unchecked Sendable {
             // their "masked" value (identity masking). Warn by NAME only —
             // never the value.
             if secret.value.utf16.count < minMaskableSecretLength {
-                FileHandle.standardError.write(Data(
-                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                ))
-                loaded.append(LoadedSecret(
-                    name: secret.name,
-                    realValue: secret.value,
-                    maskedValue: secret.value,
-                    domains: secret.domains,
-                    isMaskable: false
-                ))
+                FileHandle.standardError.write(
+                    Data(
+                        "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                    ))
+                loaded.append(
+                    LoadedSecret(
+                        name: secret.name,
+                        realValue: secret.value,
+                        maskedValue: secret.value,
+                        domains: secret.domains,
+                        isMaskable: false
+                    ))
                 continue
             }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
-            loaded.append(LoadedSecret(
-                name: secret.name,
-                realValue: secret.value,
-                maskedValue: masked,
-                domains: secret.domains
-            ))
+            loaded.append(
+                LoadedSecret(
+                    name: secret.name,
+                    realValue: secret.value,
+                    maskedValue: masked,
+                    domains: secret.domains
+                ))
         }
 
         // Merge env-file secrets: override existing by name, append new ones
         for secret in _envFileSecrets {
             if secret.value.utf16.count < minMaskableSecretLength {
-                FileHandle.standardError.write(Data(
-                    "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
-                ))
+                FileHandle.standardError.write(
+                    Data(
+                        "[slicc:secrets] secret \"\(secret.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                    ))
                 // Env-file override semantics: a too-short env-file entry
                 // replaces any Keychain entry with the same name with a
                 // consumable-only short entry (the user explicitly opted
@@ -339,11 +346,12 @@ public final class SecretInjector: @unchecked Sendable {
         let fm = FileManager.default
         let path = dir.appendingPathComponent("session-id")
         if fm.fileExists(atPath: path.path),
-           let data = try? Data(contentsOf: path),
-           let raw = String(data: data, encoding: .utf8)?
-               .trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty,
-           UUID(uuidString: raw) != nil {
+            let data = try? Data(contentsOf: path),
+            let raw = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !raw.isEmpty,
+            UUID(uuidString: raw) != nil
+        {
             return raw
         }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -455,10 +463,12 @@ public final class SecretInjector: @unchecked Sendable {
     func unmaskAuthorizationBasic(value: String, targetHostname: String) -> BasicResult {
         // ^Basic\s+(.+)$ — same regex shape as TS pipeline.
         let trimmedHeader = value
-        guard let match = trimmedHeader.range(
-            of: #"^Basic\s+(.+)$"#,
-            options: .regularExpression
-        ), match.lowerBound == trimmedHeader.startIndex else {
+        guard
+            let match = trimmedHeader.range(
+                of: #"^Basic\s+(.+)$"#,
+                options: .regularExpression
+            ), match.lowerBound == trimmedHeader.startIndex
+        else {
             return BasicResult(value: value, forbidden: nil)
         }
         let payload = String(trimmedHeader[match])
@@ -626,9 +636,10 @@ public final class SecretInjector: @unchecked Sendable {
         if let timestampHeader, timestampHeader.isEmpty { return empty() }
 
         guard let secret = secrets.first(where: { $0.name == secretName }) else {
-            FileHandle.standardError.write(Data(
-                "[slicc:secrets] signHmac: no secret named \"\(secretName)\"\n".utf8
-            ))
+            FileHandle.standardError.write(
+                Data(
+                    "[slicc:secrets] signHmac: no secret named \"\(secretName)\"\n".utf8
+                ))
             return empty()
         }
         guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else {
@@ -687,10 +698,11 @@ public final class SecretInjector: @unchecked Sendable {
         // Short secrets: replace real value only (maskedValue == realValue for these).
         let base = maskableSecrets.count
         for (index, secret) in shortSecrets.enumerated() {
-            allMarkers.append(MarkerSpec(
-                values: [secret.realValue],
-                marker: "⟦REDACTED:known-secret:k\(base + index + 1)⟧"
-            ))
+            allMarkers.append(
+                MarkerSpec(
+                    values: [secret.realValue],
+                    marker: "⟦REDACTED:known-secret:k\(base + index + 1)⟧"
+                ))
         }
         var redactionCount = 0
         let redacted: [String] = texts.map { input in
@@ -742,7 +754,8 @@ private func decodeBase64ToString(_ s: String) -> String? {
         return trimmed + String(repeating: "=", count: 4 - rem)
     }()
     if let data = Data(base64Encoded: padded, options: [.ignoreUnknownCharacters]),
-       let text = String(data: data, encoding: .utf8) {
+        let text = String(data: data, encoding: .utf8)
+    {
         return text
     }
     return nil

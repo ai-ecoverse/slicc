@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 final class KeychainSecretStoreTests: XCTestCase {
@@ -138,4 +139,3 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(SecretStore.get(name: name)?.value, "ghp_noninteractive")
     }
 }
-

@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+
 @testable import slicc_server
 
 final class GracefulShutdownHandlerTests: XCTestCase {
@@ -28,14 +29,15 @@ final class GracefulShutdownHandlerTests: XCTestCase {
             }
         )
 
-        await handler.runShutdownSequence(context: ShutdownContext(
-            browserLabel: "Chrome",
-            cdpPort: 9222,
-            overlayInjector: overlay,
-            cdpProxy: cdpProxy,
-            clientSockets: clientSockets,
-            server: server
-        ))
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserLabel: "Chrome",
+                cdpPort: 9222,
+                overlayInjector: overlay,
+                cdpProxy: cdpProxy,
+                clientSockets: clientSockets,
+                server: server
+            ))
 
         let cdpShutdownCount = await cdpProxy.shutdownCount()
         let clientShutdownCount = await clientSockets.shutdownCount()
@@ -84,11 +86,12 @@ final class GracefulShutdownHandlerTests: XCTestCase {
             browserExitPollNanoseconds: 10_000_000
         )
 
-        await handler.runShutdownSequence(context: ShutdownContext(
-            browserProcess: process,
-            browserLabel: "Chrome",
-            cdpPort: 9555
-        ))
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserLabel: "Chrome",
+                cdpPort: 9555
+            ))
 
         XCTAssertEqual(browserEvents.eventsSnapshot(), ["discover", "browser-close", "kill"])
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
@@ -257,12 +260,13 @@ final class GracefulShutdownHandlerTests: XCTestCase {
             browserExitPollNanoseconds: 10_000_000
         )
 
-        await handler.runShutdownSequence(context: ShutdownContext(
-            browserProcess: process,
-            browserKillPid: fakeChromePid,
-            browserLabel: "Chrome",
-            cdpPort: 9555
-        ))
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserKillPid: fakeChromePid,
+                browserLabel: "Chrome",
+                cdpPort: 9555
+            ))
 
         XCTAssertEqual(killTargets.snapshot(), [fakeChromePid])
         XCTAssertNotEqual(killTargets.snapshot(), [openPid])
@@ -301,11 +305,12 @@ final class GracefulShutdownHandlerTests: XCTestCase {
             browserExitPollNanoseconds: 10_000_000
         )
 
-        await handler.runShutdownSequence(context: ShutdownContext(
-            browserProcess: process,
-            browserLabel: "Chrome",
-            cdpPort: 9556
-        ))
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserLabel: "Chrome",
+                cdpPort: 9556
+            ))
 
         XCTAssertEqual(killTargets.snapshot(), [chromePid])
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)

@@ -165,7 +165,7 @@ public func domainMatches(pattern: String, hostname: String) -> Bool {
     }
 
     // Wildcard: `*.example.com`
-    let suffix = String(p.dropFirst(1)) // `.example.com`
+    let suffix = String(p.dropFirst(1))  // `.example.com`
     return h.count > suffix.count && h.hasSuffix(suffix)
 }
 
@@ -173,4 +173,3 @@ public func domainMatches(pattern: String, hostname: String) -> Bool {
 public func isAllowedDomain(patterns: [String], hostname: String) -> Bool {
     patterns.contains { domainMatches(pattern: $0, hostname: hostname) }
 }
-

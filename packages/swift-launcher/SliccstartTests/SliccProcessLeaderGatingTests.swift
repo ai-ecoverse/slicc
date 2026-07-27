@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 /// End-to-end gating: `runtimeState(for:)` must flip an Electron target

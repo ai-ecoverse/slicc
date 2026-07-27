@@ -166,4 +166,3 @@ struct InputBar: View {
     }
     .preferredColorScheme(.dark)
 }
-

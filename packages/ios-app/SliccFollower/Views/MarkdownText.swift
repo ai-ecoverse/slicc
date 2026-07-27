@@ -62,7 +62,8 @@ struct MarkdownText: View {
 
         for line in lines {
             if !inCodeBlock && line.hasPrefix("```") {
-                flushQuote(); flushText()
+                flushQuote()
+                flushText()
                 inCodeBlock = true
                 let langStr = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 codeLang = langStr.isEmpty ? nil : langStr
@@ -75,7 +76,8 @@ struct MarkdownText: View {
             } else if inCodeBlock {
                 codeLines.append(line)
             } else if let heading = parseAtxHeading(line) {
-                flushQuote(); flushText()
+                flushQuote()
+                flushText()
                 result.append(.heading(level: heading.level, text: heading.text))
             } else if line.hasPrefix(">") {
                 flushText()
@@ -309,25 +311,26 @@ func styledInlineCode(
 
 #Preview {
     ScrollView {
-        MarkdownText(content: """
-        # Hello World
+        MarkdownText(
+            content: """
+                # Hello World
 
-        This is **bold** and *italic* and `inline code`.
+                This is **bold** and *italic* and `inline code`.
 
-        ```swift
-        func hello() {
-            print("Hello, world!")
-        }
-        ```
+                ```swift
+                func hello() {
+                    print("Hello, world!")
+                }
+                ```
 
-        - Item one
-        - Item two
-        - Item three
+                - Item one
+                - Item two
+                - Item three
 
-        Some more text with a [link](https://example.com).
-        """)
+                Some more text with a [link](https://example.com).
+                """
+        )
         .padding()
     }
     .background(Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255))
 }
-

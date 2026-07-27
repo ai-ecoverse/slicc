@@ -66,7 +66,8 @@ enum SecretsKeychain {
             throw SecretsError.keychainError(status: status)
         }
         guard let data = result as? Data,
-              let text = String(data: data, encoding: .utf8) else {
+            let text = String(data: data, encoding: .utf8)
+        else {
             throw SecretsError.keychainError(status: errSecDecode)
         }
         return text
@@ -131,7 +132,8 @@ enum EnvFileFormat {
         var secrets: [Secret] = []
         for name in order {
             guard let value = values[name],
-                  let domainsLine = domains[name] else { continue }
+                let domainsLine = domains[name]
+            else { continue }
             let parsed = parseDomains(domainsLine)
             guard !parsed.isEmpty else { continue }
             secrets.append(Secret(name: name, value: value, domains: parsed))

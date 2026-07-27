@@ -1,6 +1,7 @@
-import XCTest
 import AppUpdater
 import Version
+import XCTest
+
 @testable import Sliccstart
 
 /// Integration tests that hit the real GitHub API to verify release fetching
@@ -44,7 +45,7 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         XCTAssertFalse(
             nonNullVersions.isEmpty,
             "Expected at least one release with a parsed version (not 0.0.0). "
-            + "All \(releases.count) releases decoded as Version.null — tolerant decoding may be broken."
+                + "All \(releases.count) releases decoded as Version.null — tolerant decoding may be broken."
         )
 
         // At least one release should have a Sliccstart asset (zip),
@@ -82,8 +83,8 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         XCTAssertFalse(
             nullVersions.isEmpty,
             "Expected at least one release decoded with the strict default to have tagName == "
-            + "Version(0,0,0) (proving the v-prefix bug), but none did. If this is the new "
-            + "normal, TolerantGithubReleaseProvider can be removed."
+                + "Version(0,0,0) (proving the v-prefix bug), but none did. If this is the new "
+                + "normal, TolerantGithubReleaseProvider can be removed."
         )
     }
 

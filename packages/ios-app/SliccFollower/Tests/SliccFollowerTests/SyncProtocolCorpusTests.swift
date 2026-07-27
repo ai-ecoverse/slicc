@@ -1,5 +1,6 @@
-import XCTest
 import Foundation
+import XCTest
+
 @testable import SliccFollower
 
 /// Golden-fixture corpus tests (#1294 P0-2).
@@ -40,11 +41,12 @@ final class SyncProtocolCorpusTests: XCTestCase {
         }
         let data = try Data(contentsOf: url)
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = root["traySyncProtocolVersion"] as? Int,
-              let leaderCount = root["leaderVariantCount"] as? Int,
-              let followerCount = root["followerVariantCount"] as? Int,
-              let leader = root["leaderToFollower"] as? [[String: Any]],
-              let follower = root["followerToLeader"] as? [[String: Any]] else {
+            let version = root["traySyncProtocolVersion"] as? Int,
+            let leaderCount = root["leaderVariantCount"] as? Int,
+            let followerCount = root["followerVariantCount"] as? Int,
+            let leader = root["leaderToFollower"] as? [[String: Any]],
+            let follower = root["followerToLeader"] as? [[String: Any]]
+        else {
             throw CorpusError(description: "tray-sync-corpus.json has an unexpected shape — regenerate it")
         }
         func entries(_ items: [[String: Any]]) throws -> [(String, String, Data)] {

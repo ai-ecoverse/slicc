@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 private enum TestTimeoutError: Error {
@@ -71,11 +72,12 @@ final class LickSystemTests: XCTestCase {
         XCTAssertEqual(request["includeFollowers"], LickSystem.JSONValue.bool(true))
 
         let requestId = try XCTUnwrap(request["requestId"]?.stringValue)
-        await lickSystem.handleMessage(text: try LickSystem.encode([
-            "type": .string("response"),
-            "requestId": .string(requestId),
-            "data": .object(["joined": .bool(true)])
-        ]))
+        await lickSystem.handleMessage(
+            text: try LickSystem.encode([
+                "type": .string("response"),
+                "requestId": .string(requestId),
+                "data": .object(["joined": .bool(true)]),
+            ]))
 
         let response = try await responseTask.value
         XCTAssertEqual(response, .object(["joined": .bool(true)]))
@@ -104,16 +106,18 @@ final class LickSystemTests: XCTestCase {
         let firstRecorder = MessageRecorder()
         let secondRecorder = MessageRecorder()
 
-        await lickSystem.addClient(WebSocketClient { text in
-            await firstRecorder.append(text)
-        })
-        await lickSystem.addClient(WebSocketClient { text in
-            await secondRecorder.append(text)
-        })
+        await lickSystem.addClient(
+            WebSocketClient { text in
+                await firstRecorder.append(text)
+            })
+        await lickSystem.addClient(
+            WebSocketClient { text in
+                await secondRecorder.append(text)
+            })
 
         await lickSystem.broadcastEvent([
             "type": .string("webhook_event"),
-            "id": .string("abc123")
+            "id": .string("abc123"),
         ])
 
         let firstMessages = try await firstRecorder.allMessages(count: 1)
@@ -128,9 +132,10 @@ final class LickSystemTests: XCTestCase {
         let firstRecorder = MessageRecorder()
         let secondRecorder = MessageRecorder()
 
-        await lickSystem.addClient(WebSocketClient { text in
-            await firstRecorder.append(text)
-        })
+        await lickSystem.addClient(
+            WebSocketClient { text in
+                await firstRecorder.append(text)
+            })
         let activeClient = WebSocketClient { text in
             await secondRecorder.append(text)
         }
@@ -152,11 +157,12 @@ final class LickSystemTests: XCTestCase {
         }
 
         let requestId = try XCTUnwrap(request["requestId"]?.stringValue)
-        await lickSystem.handleMessage(text: try LickSystem.encode([
-            "type": .string("response"),
-            "requestId": .string(requestId),
-            "data": .object([:])
-        ]))
+        await lickSystem.handleMessage(
+            text: try LickSystem.encode([
+                "type": .string("response"),
+                "requestId": .string(requestId),
+                "data": .object([:]),
+            ]))
 
         let response = try await responseTask.value
         XCTAssertEqual(response, .object([:]))

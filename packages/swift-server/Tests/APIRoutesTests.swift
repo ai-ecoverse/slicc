@@ -1,12 +1,13 @@
 import AsyncHTTPClient
 import CommonCrypto
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
-import HTTPTypes
 import NIOCore
 import NIOPosix
 import XCTest
+
 @testable import slicc_server
 
 /// Independent HMAC-SHA256 hex reference for `x-slicc-hmac-sign` assertions —
@@ -439,7 +440,7 @@ final class APIRoutesTests: XCTestCase {
                         uri: "/api/fetch-proxy",
                         method: .get,
                         headers: [
-                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+                            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream"
                         ]
                     ) { response in
                         XCTAssertEqual(response.status, .ok, "upstream 200 must flow back to the client")
@@ -480,7 +481,7 @@ final class APIRoutesTests: XCTestCase {
     func testFetchProxySignsRequestBodyViaHmacSentinelAndStripsSentinel() async throws {
         let hmacSecret = "job-signing-secret-abcdefghijklmnop"
         let injector = SecretInjector(secrets: [
-            .init(name: "SIGNING_KEY", realValue: hmacSecret, maskedValue: "masked-signing-key", domains: ["localhost"]),
+            .init(name: "SIGNING_KEY", realValue: hmacSecret, maskedValue: "masked-signing-key", domains: ["localhost"])
         ])
         let captured = HeaderCaptureBox()
 
@@ -550,7 +551,7 @@ final class APIRoutesTests: XCTestCase {
     /// to a different domain than the target must 403, not silently sign.
     func testFetchProxySignHmacReturns403ForOutOfScopeDomain() async throws {
         let injector = SecretInjector(secrets: [
-            .init(name: "SIGNING_KEY", realValue: "job-signing-secret-value", maskedValue: "masked-signing-key", domains: ["api.github.com"]),
+            .init(name: "SIGNING_KEY", realValue: "job-signing-secret-value", maskedValue: "masked-signing-key", domains: ["api.github.com"])
         ])
         try await self.withHTTPClient { httpClient in
             let router = Router()

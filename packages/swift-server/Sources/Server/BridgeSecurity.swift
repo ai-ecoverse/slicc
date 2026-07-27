@@ -66,8 +66,8 @@ enum BridgeSecurity {
         }
         if candidate.isEmpty { return nil }
         guard let components = URLComponents(string: candidate),
-              let scheme = components.scheme, !scheme.isEmpty,
-              let host = components.host, !host.isEmpty
+            let scheme = components.scheme, !scheme.isEmpty,
+            let host = components.host, !host.isEmpty
         else {
             return nil
         }
@@ -234,7 +234,8 @@ enum BridgeSecurity {
     /// The header is a comma-separated list per RFC 6455.
     static func parseSubprotocolHeader(_ header: String?) -> [String] {
         guard let header, !header.isEmpty else { return [] }
-        return header
+        return
+            header
             .split(separator: ",", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }

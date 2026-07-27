@@ -1,5 +1,5 @@
-import Foundation
 import AppKit
+import Foundation
 
 /// Creates debug builds of Electron apps by patching fuses and bypassing CDP auth checks
 final class DebugBuildCreator {
@@ -92,7 +92,8 @@ final class DebugBuildCreator {
 
         // Bundled mode: use node + the script directly from node_modules/.bin/
         if let nodePath = SliccBootstrapper.bundledNodePath,
-           let sliccDir = SliccBootstrapper.bundledSliccDir {
+            let sliccDir = SliccBootstrapper.bundledSliccDir
+        {
             // node_modules/.bin/<name> is a symlink to the actual script
             let binPath = sliccDir + "/node_modules/.bin/" + bin
             if FileManager.default.fileExists(atPath: binPath) {
@@ -109,13 +110,14 @@ final class DebugBuildCreator {
         let (executable, argsPrefix) = resolveModuleBin("@electron/fuses", binName: "electron-fuses")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = argsPrefix + [
-            "write",
-            "--app", appPath,
-            "EnableNodeCliInspectArguments=on",
-            "EnableEmbeddedAsarIntegrityValidation=off",
-            "OnlyLoadAppFromAsar=off"
-        ]
+        process.arguments =
+            argsPrefix + [
+                "write",
+                "--app", appPath,
+                "EnableNodeCliInspectArguments=on",
+                "EnableEmbeddedAsarIntegrityValidation=off",
+                "OnlyLoadAppFromAsar=off",
+            ]
 
         let pipe = Pipe()
         process.standardOutput = pipe

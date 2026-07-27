@@ -76,7 +76,8 @@ enum EnvFileFormat {
         var result: [Secret] = []
         for name in order {
             guard let value = values[name],
-                  let domainsLine = domains[name] else { continue }
+                let domainsLine = domains[name]
+            else { continue }
             let parsed = parseDomains(domainsLine)
             guard !parsed.isEmpty else { continue }
             result.append(Secret(name: name, value: value, domains: parsed))
@@ -90,10 +91,11 @@ enum EnvFileFormat {
         var entries: [EnvEntry] = []
         for secret in secrets {
             entries.append(EnvEntry(key: secret.name, value: secret.value))
-            entries.append(EnvEntry(
-                key: secret.name + domainsSuffix,
-                value: secret.domains.joined(separator: ",")
-            ))
+            entries.append(
+                EnvEntry(
+                    key: secret.name + domainsSuffix,
+                    value: secret.domains.joined(separator: ",")
+                ))
         }
         return serialize(entries)
     }

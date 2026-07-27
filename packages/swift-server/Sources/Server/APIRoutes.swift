@@ -1,7 +1,7 @@
 import AsyncHTTPClient
 import Foundation
-import Hummingbird
 import HTTPTypes
+import Hummingbird
 import NIOHTTP1
 
 private let oauthResultStore = OAuthResultStore()
@@ -74,10 +74,12 @@ func registerAPIRoutes(
     router.get("/api/runtime-config") { _, _ in
         let envWorkerBaseUrl: String? = {
             guard let raw = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !raw.isEmpty else { return nil }
+                !raw.isEmpty
+            else { return nil }
             return raw
         }()
-        let trayWorkerBaseUrl = config.leadWorkerBaseUrl
+        let trayWorkerBaseUrl =
+            config.leadWorkerBaseUrl
             ?? envWorkerBaseUrl
             // MUST match SLICC_HOSTED_ORIGIN in packages/shared-ts/src/bridge-protocol.ts
             ?? "https://www.sliccy.ai"
@@ -182,7 +184,8 @@ func registerAPIRoutes(
             return try jsonResponse(await lickSystem.sendRequest(type: "create_crontask", data: payload, timeout: 5))
         } catch {
             let message = errorMessage(error)
-            let status: HTTPResponse.Status = message.contains("Invalid") || message.contains("required")
+            let status: HTTPResponse.Status =
+                message.contains("Invalid") || message.contains("required")
                 ? .badRequest
                 : .serviceUnavailable
             return try jsonErrorResponse(status: status, message: message)
@@ -282,11 +285,12 @@ func registerAPIRoutes(
             return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
         }
         await secretInjector.reload()
-        return try jsonResponse(.object([
-            "ok": .bool(true),
-            "name": .string(name),
-            "fromSession": .bool(false),
-        ]))
+        return try jsonResponse(
+            .object([
+                "ok": .bool(true),
+                "name": .string(name),
+                "fromSession": .bool(false),
+            ]))
     }
 
     // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
@@ -345,10 +349,11 @@ func registerAPIRoutes(
         do {
             let result = secretInjector.redactForExport(texts: texts)
             let jsonTexts = LickSystem.JSONValue.array(result.texts.map { .string($0) })
-            return try jsonResponse(.object([
-                "texts": jsonTexts,
-                "redactionCount": .number(Double(result.redactionCount)),
-            ]))
+            return try jsonResponse(
+                .object([
+                    "texts": jsonTexts,
+                    "redactionCount": .number(Double(result.redactionCount)),
+                ]))
         } catch {
             return try jsonErrorResponse(status: .serviceUnavailable, message: "redaction-unavailable")
         }
@@ -382,12 +387,13 @@ func registerAPIRoutes(
             }
             await secretInjector.reload()
             let masked = secretInjector.maskedValue(for: name)
-            return try jsonResponse(.object([
-                "providerId": .string(payload.providerId),
-                "name": .string(name),
-                "maskedValue": jsonStringOrNull(masked),
-                "domains": .array(payload.domains.map { .string($0) }),
-            ]))
+            return try jsonResponse(
+                .object([
+                    "providerId": .string(payload.providerId),
+                    "name": .string(name),
+                    "maskedValue": jsonStringOrNull(masked),
+                    "domains": .array(payload.domains.map { .string($0) }),
+                ]))
         }
 
         router.delete("/api/secrets/oauth/:providerId") { _, context in
@@ -453,7 +459,8 @@ func registerAPIRoutes(
                 // send an Authorization header, attach the synthetic one
                 // built from the unmasked userinfo.
                 if let synthetic = urlCreds.syntheticAuthorization,
-                   injectedHeaders[.authorization] == nil {
+                    injectedHeaders[.authorization] == nil
+                {
                     injectedHeaders[.authorization] = synthetic
                 }
                 for field in request.headers {
@@ -461,7 +468,8 @@ func registerAPIRoutes(
                     // (hidden inside base64) gets decoded, unmasked, and
                     // re-encoded — substring `inject` cannot see it.
                     if field.name == .authorization,
-                       field.value.lowercased().hasPrefix("basic ") {
+                        field.value.lowercased().hasPrefix("basic ")
+                    {
                         let basic = secretInjector.unmaskAuthorizationBasic(
                             value: field.value,
                             targetHostname: targetHostname
@@ -499,14 +507,16 @@ func registerAPIRoutes(
                 // matches TS — avoids false 403s from LLM conversation context).
                 if rawBody.readableBytes > 0 {
                     let contentType = (injectedHeaders[.contentType] ?? "").lowercased()
-                    let isText = contentType.isEmpty
+                    let isText =
+                        contentType.isEmpty
                         || contentType.hasPrefix("text/")
                         || contentType.contains("json")
                         || contentType.contains("xml")
                         || contentType.contains("urlencoded")
                         || contentType.contains("javascript")
                     if isText,
-                       let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes) {
+                        let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes)
+                    {
                         let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
                         if replaced != bodyString {
                             rawBody = ByteBuffer(string: replaced)
@@ -534,12 +544,14 @@ func registerAPIRoutes(
                         )
                     }
                     if let headerName = signResult.headerName, let signatureHex = signResult.signatureHex,
-                       let field = HTTPField.Name(headerName) {
+                        let field = HTTPField.Name(headerName)
+                    {
                         injectedHeaders[field] = signatureHex
                     }
                     if let timestampHeaderName = signResult.timestampHeaderName,
-                       let timestampValue = signResult.timestampValue,
-                       let field = HTTPField.Name(timestampHeaderName) {
+                        let timestampValue = signResult.timestampValue,
+                        let field = HTTPField.Name(timestampHeaderName)
+                    {
                         injectedHeaders[field] = timestampValue
                     }
                 }
@@ -597,41 +609,41 @@ private struct OAuthUpdatePayload: Decodable {
 }
 
 private let oauthCallbackHTML = """
-<!DOCTYPE html><html><body><script>
-  var q = new URLSearchParams(location.search);
-  var h = new URLSearchParams(location.hash.replace(/^#/, ''));
-  var payload = {
-    type: 'oauth-callback',
-    redirectUrl: location.href,
-    code: q.get('code'),
-    state: q.get('state') || h.get('state'),
-    error: q.get('error') || h.get('error'),
-    access_token: h.get('access_token'),
-    expires_in: h.get('expires_in'),
-    token_type: h.get('token_type')
-  };
-  if (window.opener) {
-    try {
-      window.opener.postMessage(payload, '*');
-    } catch (e) {
-      console.warn('[oauth-callback] postMessage to opener failed:', e);
-    }
-  }
-  var closed = false;
-  function closeWindow() {
-    if (closed) return;
-    closed = true;
-    window.close();
-  }
-  setTimeout(closeWindow, 2000);
-  fetch('/api/oauth-result', {
-    method: 'POST',
-    keepalive: true,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); }).finally(closeWindow);
-</script><p>Completing login... you can close this window.</p></body></html>
-"""
+    <!DOCTYPE html><html><body><script>
+      var q = new URLSearchParams(location.search);
+      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+      var payload = {
+        type: 'oauth-callback',
+        redirectUrl: location.href,
+        code: q.get('code'),
+        state: q.get('state') || h.get('state'),
+        error: q.get('error') || h.get('error'),
+        access_token: h.get('access_token'),
+        expires_in: h.get('expires_in'),
+        token_type: h.get('token_type')
+      };
+      if (window.opener) {
+        try {
+          window.opener.postMessage(payload, '*');
+        } catch (e) {
+          console.warn('[oauth-callback] postMessage to opener failed:', e);
+        }
+      }
+      var closed = false;
+      function closeWindow() {
+        if (closed) return;
+        closed = true;
+        window.close();
+      }
+      setTimeout(closeWindow, 2000);
+      fetch('/api/oauth-result', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); }).finally(closeWindow);
+    </script><p>Completing login... you can close this window.</p></body></html>
+    """
 
 private func decodeJSONObjectBody<Context: RequestContext>(from request: Request, context: Context) async throws -> LickSystem.JSONObject {
     let body = try await collectBody(from: request)
@@ -824,8 +836,9 @@ private func makeStreamingProxyResponse(
     headers[HTTPField.Name.contentLength] = nil
 
     if !setCookies.isEmpty,
-       let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
-       let jsonString = String(data: jsonData, encoding: .utf8) {
+        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
+        let jsonString = String(data: jsonData, encoding: .utf8)
+    {
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
 
@@ -843,7 +856,8 @@ private func makeStreamingProxyResponse(
     headers[cacheControlHeader] = "no-store, no-cache"
 
     let contentType = (headers[HTTPField.Name.contentType] ?? "").lowercased()
-    let isText = contentType.hasPrefix("text/")
+    let isText =
+        contentType.hasPrefix("text/")
         || contentType.hasPrefix("application/json")
         || contentType.contains("charset=")
         || contentType.contains("event-stream")
@@ -858,11 +872,12 @@ private func makeStreamingProxyResponse(
     // `writer.write` inside a for-try-await over upstreamBody, which is
     // identical to Hummingbird's own AsyncSequence-backed body but lets us
     // fold in scrub without an intermediate map operator.
-    let body = ResponseBody(asyncSequence: ScrubbingAsyncStream(
-        upstream: upstreamBody,
-        shouldScrub: shouldScrub,
-        scrubber: scrubber
-    ))
+    let body = ResponseBody(
+        asyncSequence: ScrubbingAsyncStream(
+            upstream: upstreamBody,
+            shouldScrub: shouldScrub,
+            scrubber: scrubber
+        ))
 
     return Response(
         status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
@@ -977,18 +992,28 @@ private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
     }
     let lead = bytes[i - 1]
     let needed: Int
-    if lead & 0x80 == 0 { needed = 1 }            // 0xxxxxxx
-    else if lead & 0xE0 == 0xC0 { needed = 2 }    // 110xxxxx
-    else if lead & 0xF0 == 0xE0 { needed = 3 }    // 1110xxxx
-    else if lead & 0xF8 == 0xF0 { needed = 4 }    // 11110xxx
-    else { return bytes.count }                   // malformed — pass through
+    if lead & 0x80 == 0 {
+        needed = 1
+    }  // 0xxxxxxx
+    else if lead & 0xE0 == 0xC0 {
+        needed = 2
+    }  // 110xxxxx
+    else if lead & 0xF0 == 0xE0 {
+        needed = 3
+    }  // 1110xxxx
+    else if lead & 0xF8 == 0xF0 {
+        needed = 4
+    }  // 11110xxx
+    else {
+        return bytes.count
+    }  // malformed — pass through
     let have = bytes.count - (i - 1)
     if have >= needed { return bytes.count }
     return i - 1
 }
 
-private extension HTTPMethod {
-    init(_ method: HTTPRequest.Method) {
+extension HTTPMethod {
+    fileprivate init(_ method: HTTPRequest.Method) {
         switch method {
         case .connect: self = .CONNECT
         case .delete: self = .DELETE
@@ -1004,8 +1029,8 @@ private extension HTTPMethod {
     }
 }
 
-private extension HTTPHeaders {
-    init(_ headers: HTTPFields) {
+extension HTTPHeaders {
+    fileprivate init(_ headers: HTTPFields) {
         self.init()
         for field in headers {
             self.add(name: field.name.canonicalName, value: field.value)
@@ -1013,8 +1038,8 @@ private extension HTTPHeaders {
     }
 }
 
-private extension HTTPFields {
-    init(_ headers: HTTPHeaders) {
+extension HTTPFields {
+    fileprivate init(_ headers: HTTPHeaders) {
         self.init()
         for field in headers {
             if let name = HTTPField.Name(field.name) {

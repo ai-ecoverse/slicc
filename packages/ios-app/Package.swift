@@ -26,9 +26,8 @@ let package = Package(
                 .copy("WebView/chat.html"),
                 .copy("WebView/chat.css"),
                 .copy("WebView/chat.js"),
-                .process("Resources/Assets.xcassets")
+                .process("Resources/Assets.xcassets"),
             ]
         )
     ]
 )
-

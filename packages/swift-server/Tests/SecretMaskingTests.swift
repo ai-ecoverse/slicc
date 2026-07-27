@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 final class SecretMaskingTests: XCTestCase {
@@ -154,8 +155,8 @@ final class SecretMaskingTests: XCTestCase {
 
     func testScrubberBoundaryMixedShortAndLong() {
         let scrub = buildScrubber(secrets: [
-            SecretPair(realValue: "short78", maskedValue: "mask7777"), // 7 chars — skipped
-            SecretPair(realValue: "longSecret123", maskedValue: "longMasked123"), // 13 — kept
+            SecretPair(realValue: "short78", maskedValue: "mask7777"),  // 7 chars — skipped
+            SecretPair(realValue: "longSecret123", maskedValue: "longMasked123"),  // 13 — kept
         ])
         XCTAssertEqual(scrub("short78 and longSecret123"), "short78 and longMasked123")
     }
@@ -208,4 +209,3 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertFalse(isAllowedDomain(patterns: [], hostname: "anything.com"))
     }
 }
-
