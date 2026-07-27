@@ -285,6 +285,18 @@ Manual verification in the relevant runtimes:
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
+## Test Timing
+
+CI-only vitest settings, defined in `vitest.config.ts`:
+
+- **Timing** — when `CI` is set, the root `test.reporters` adds vitest's `json` reporter and
+  writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
+  `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
+  Reproduce locally with `CI=1 npm run test`.
+
+Policy and the artifact's JSON shape:
+[`.agents/skills/writing-slicc-tests/SKILL.md`](../.agents/skills/writing-slicc-tests/SKILL.md).
+
 ## Cloudflare Worker Deploy Pipeline
 
 The tray hub now assumes **`POST /tray` is the only canonical tray-creation endpoint**. `POST /session` and `POST /trays` are intentionally rejected with `410` so callers move to the single public route.
@@ -457,6 +469,7 @@ log.error('error message');
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                  | Run single file                                                |
 | `npx vitest run packages/webapp/tests/fs/`                                    | Run all tests in directory                                     |
 | `npx vitest run --reporter=verbose`                                           | Verbose test output                                            |
+| `CI=1 npm run test`                                                           | Reproduce the CI run: writes `test-timing/vitest.json`         |
 
 ## Multi-Mode Compatibility Checklist
 
