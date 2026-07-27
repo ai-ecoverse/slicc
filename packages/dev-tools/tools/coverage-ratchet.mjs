@@ -308,11 +308,9 @@ if (enabled('bundle')) {
 const bundleChanges = bundleUpdates.flatMap((u) =>
   u.changes.map((c) => ({ pkgDir: u.pkgDir, ...c }))
 );
-const changed =
-  changes.length > 0 ||
-  timingChanges.length > 0 ||
-  bundleChanges.length > 0 ||
-  duplicationChange !== null;
+const ceilingChanged =
+  timingChanges.length > 0 || bundleChanges.length > 0 || duplicationChange !== null;
+const changed = changes.length > 0 || ceilingChanged;
 
 console.log('\n=== Coverage ratchet ===');
 if (changes.length === 0) {
@@ -347,7 +345,7 @@ for (const c of timingChanges) {
     `  ${c.project} ${c.metric}: ${c.from ?? '(unset)'} -> ${c.to} (measured p95 ${c.actual}ms)`
   );
 }
-if (!changed) console.log('  No ceilings tightened.');
+if (!ceilingChanged) console.log('  No ceilings tightened.');
 
 if (changed && write) {
   if (changes.length > 0 || timingChanges.length > 0) {
