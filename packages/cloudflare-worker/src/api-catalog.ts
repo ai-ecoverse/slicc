@@ -31,7 +31,7 @@ const ENTRIES: CatalogEntry[] = [
     anchor: '/status',
     methods: ['GET', 'HEAD'],
     description:
-      'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp }`.',
+      'Public health document (RFC 8631 status rel). Returns JSON `{ status, service, timestamp, version }`.',
   },
   {
     anchor: '/join/:token',
