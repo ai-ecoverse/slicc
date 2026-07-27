@@ -30,7 +30,7 @@ export class FsRouter {
 
   constructor(private readonly context: LeaderSyncContext) {
     context.followers.onFollowerRemoved({
-      beforeRegistryCleanup: (bootstrapId) => this.rejectPendingForFollower(bootstrapId),
+      afterRegistryCleanup: (bootstrapId) => this.rejectPendingForFollower(bootstrapId),
     });
   }
 

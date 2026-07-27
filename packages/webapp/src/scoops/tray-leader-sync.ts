@@ -214,13 +214,13 @@ export class LeaderSyncManager {
         this.cdpRouter.cleanupOrphanedRemoteTransports(runtimeId),
       getPreviewTargetEntries: () => this.previewBridge.getTargetEntries(),
     });
+    this.transcriptExport = new TranscriptExportManager(context);
     this.fsRouter = new FsRouter(context);
     this.tabRouter = new TabRouter(context, {
       getTargetEntries: () => this.teleportPool.getRegistryEntries(),
       isCherryTarget,
     });
     this.cherryRouter = new CherryRouter(context);
-    this.transcriptExport = new TranscriptExportManager(context);
     this.followerDispatch = new FollowerDispatch(context, {
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,

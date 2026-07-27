@@ -30,7 +30,7 @@ export class TabRouter {
     private readonly options: TabRouterOptions
   ) {
     context.followers.onFollowerRemoved({
-      beforeRegistryCleanup: (bootstrapId) => this.rejectPendingForFollower(bootstrapId),
+      afterRegistryCleanup: (bootstrapId) => this.rejectPendingForFollower(bootstrapId),
     });
   }
 
