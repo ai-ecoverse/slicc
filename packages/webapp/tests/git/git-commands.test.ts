@@ -2626,6 +2626,61 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('tracked.txt');
       expect(result.stdout).not.toContain('untracked.txt');
     });
+
+    it('honors a pathspec argument (scopes output to a subtree)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/root.txt', 'r');
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 's');
+      await vfs.writeFile('/project/skills/garmin/scripts/garmin.jsh', 'g');
+      await vfs.writeFile('/project/skills/other/SKILL.md', 'o');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'skills/garmin'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/scripts/garmin.jsh']);
+    });
+
+    it('honors a pathspec argument with a trailing slash', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/root.txt', 'r');
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 's');
+      await vfs.writeFile('/project/skills/garmin/scripts/garmin.jsh', 'g');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'skills/garmin/'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/scripts/garmin.jsh']);
+    });
+
+    it('honors an exact-file pathspec', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'a.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('a.txt\n');
+    });
+
+    it('unions multiple pathspecs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/a/x.txt', 'x');
+      await vfs.writeFile('/project/b/y.txt', 'y');
+      await vfs.writeFile('/project/c/z.txt', 'z');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      const result = await git.execute(['ls-files', 'a', 'b'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['a/x.txt', 'b/y.txt']);
+    });
   });
 
   describe('show-ref', () => {

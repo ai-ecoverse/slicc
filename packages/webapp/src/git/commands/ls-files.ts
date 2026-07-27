@@ -12,19 +12,32 @@ export async function lsFiles(
   const others = args.includes('--others') || args.includes('-o');
   const deleted = args.includes('--deleted') || args.includes('-d');
 
+  const pathspecs = args
+    .filter((a) => !a.startsWith('-'))
+    .map((p) => p.replace(/\/+$/, ''))
+    .filter((p) => p.length > 0);
+
   const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
   const files: string[] = [];
 
   const mode = others ? 'others' : modified ? 'modified' : deleted ? 'deleted' : 'cached';
   for (const [file, head, workdir, stage] of matrix) {
-    if (lsFilesMatch(mode, head, workdir, stage)) {
-      files.push(file);
-    }
+    if (!lsFilesMatch(mode, head, workdir, stage)) continue;
+    if (pathspecs.length > 0 && !matchesPathspec(file, pathspecs)) continue;
+    files.push(file);
   }
 
   files.sort();
   const output = files.map((f) => `${f}\n`).join('');
   return { stdout: output, stderr: '', exitCode: 0 };
+}
+
+/** Prefix-match a file against any of the given pathspecs (trailing slashes already stripped). */
+function matchesPathspec(file: string, pathspecs: string[]): boolean {
+  for (const spec of pathspecs) {
+    if (file === spec || file.startsWith(spec + '/')) return true;
+  }
+  return false;
 }
 
 /** Determine if a file matches the given ls-files mode. */
