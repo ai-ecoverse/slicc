@@ -25,6 +25,7 @@ import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
+import { BroadcastManager } from './tray-leader/broadcast.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
 import {
   type ConnectedFollower,
@@ -43,7 +44,6 @@ import {
   type ScoopSummary,
   type SprinkleSummary,
   sendCDPResponse,
-  sendSnapshot,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayExecChunkMessage,
   type TrayExecRequestMessage,
@@ -349,6 +349,7 @@ interface PendingFsRoute {
 export class LeaderSyncManager {
   private readonly followerRegistry: FollowerRegistry;
   private readonly context: LeaderSyncContext;
+  private readonly broadcast: BroadcastManager;
   private readonly registry = new TrayTargetRegistry();
   private get followers(): Map<string, ConnectedFollower> {
     return this.context.followers.followers;
@@ -516,6 +517,7 @@ export class LeaderSyncManager {
       log,
       sendControl: options.sendControl,
     };
+    this.broadcast = new BroadcastManager(this.context);
     this.followerRegistry.onFollowerRemoved({
       beforeRegistryCleanup: (bootstrapId) => {
         for (const [requestId, pending] of this.pendingRemoteExecs) {
@@ -565,11 +567,11 @@ export class LeaderSyncManager {
     sync.send({ type: 'hello', protocolVersion: TRAY_SYNC_PROTOCOL_VERSION });
 
     // Send initial snapshot
-    void this.sendSnapshotToFollower(bootstrapId);
+    void this.broadcast.sendSnapshotToFollower(bootstrapId);
 
     // Send scoops list and sprinkles list so the follower can populate its UI
-    this.sendScoopsListToFollower(bootstrapId);
-    this.sendSprinklesListToFollower(bootstrapId);
+    this.broadcast.sendScoopsListToFollower(bootstrapId);
+    this.broadcast.sendSprinklesListToFollower(bootstrapId);
 
     // Send current target registry to the new follower
     const entries = this.getFollowerBroadcastEntries();
@@ -586,34 +588,11 @@ export class LeaderSyncManager {
   }
 
   /**
-   * Send a message to every connected follower. Each `follower.sync.send`
-   * is wrapped in its own try/catch so a single dead/closing channel
-   * doesn't abort the iteration and silently strand subsequent
-   * siblings without the message (`RTCDataChannel.send()` throws
-   * `InvalidStateError` for closed/closing channels and
-   * `OperationError` when the SCTP send buffer overflows).
-   *
-   * Failures are throttled per-follower (~1 log per 60s) so a stuck
-   * channel can't flood logs during a high-event turn. Successful
-   * sends clear the throttle so a recovered channel logs immediately
-   * if it fails again. Does NOT auto-remove the broken follower —
-   * keepalive timeout owns that decision; ripping a follower out
-   * mid-broadcast risks deadlocking the next iteration if it
-   * observes a partial `followers` map.
-   */
-  private broadcastToAllFollowers(message: LeaderToFollowerMessage): void {
-    this.followerRegistry.broadcastToAllFollowers(message);
-  }
-
-  /**
    * Broadcast an agent event to all connected followers.
    * Called from the orchestrator callback wiring in main.ts.
    */
   broadcastEvent(event: AgentEvent): void {
-    if (this.followers.size === 0) return;
-    const scoopJid = this.options.getScoopJid();
-    const message: LeaderToFollowerMessage = { type: 'agent_event', event, scoopJid };
-    this.broadcastToAllFollowers(message);
+    this.broadcast.broadcastEvent(event);
   }
 
   /**
@@ -631,65 +610,14 @@ export class LeaderSyncManager {
    * shipped raw to every follower, where they're meaningless.
    */
   broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
-    if (this.followers.size === 0) return;
-    const scoopJid = this.options.getScoopJid();
-    const safeAttachments = attachments?.length
-      ? stripLocalPathsForRemote(attachments)
-      : attachments;
-    const message: LeaderToFollowerMessage = {
-      type: 'user_message_echo',
-      text,
-      messageId,
-      scoopJid,
-      attachments: safeAttachments,
-    };
-    this.broadcastToAllFollowers(message);
+    this.broadcast.broadcastUserMessage(text, messageId, attachments);
   }
 
   /**
    * Broadcast a status change to all connected followers.
    */
   broadcastStatus(status: string): void {
-    if (this.followers.size === 0) return;
-    const message: LeaderToFollowerMessage = { type: 'status', scoopStatus: status };
-    this.broadcastToAllFollowers(message);
-  }
-
-  /**
-   * Send a snapshot of current messages to a specific follower.
-   * Automatically chunks large snapshots to avoid exceeding SCTP message size limits.
-   *
-   * If `scoopJid` is provided (or the follower has a selected scoop), the snapshot
-   * is loaded for that specific scoop via `getMessagesForScoop`. Otherwise the
-   * leader's currently active scoop (`getMessages`) is used.
-   */
-  private async sendSnapshotToFollower(bootstrapId: string, scoopJid?: string): Promise<void> {
-    const follower = this.followers.get(bootstrapId);
-    if (!follower) return;
-
-    const targetJid = scoopJid ?? follower.selectedScoopJid ?? this.options.getScoopJid();
-    let messages: ChatMessage[];
-    if (this.options.getMessagesForScoop && targetJid !== this.options.getScoopJid()) {
-      try {
-        messages = await Promise.resolve(this.options.getMessagesForScoop(targetJid));
-      } catch (err) {
-        log.warn('getMessagesForScoop failed, falling back to active scoop', {
-          targetJid,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        messages = this.options.getMessages();
-      }
-    } else {
-      messages = this.options.getMessages();
-    }
-
-    follower.selectedScoopJid = targetJid;
-    sendSnapshot(follower.sync, messages, targetJid);
-    log.debug('Snapshot sent to follower', {
-      bootstrapId,
-      messageCount: messages.length,
-      scoopJid: targetJid,
-    });
+    this.broadcast.broadcastStatus(status);
   }
 
   /**
@@ -700,51 +628,7 @@ export class LeaderSyncManager {
    * `request_snapshot`.
    */
   broadcastSnapshot(): void {
-    if (this.followers.size === 0) return;
-    for (const bootstrapId of this.followers.keys()) {
-      void this.sendSnapshotToFollower(bootstrapId);
-    }
-  }
-
-  /**
-   * Send the scoop list to a specific follower, so its scoop picker / swipe view
-   * has up-to-date metadata. No-op when the leader didn't supply `getScoops`.
-   */
-  private sendScoopsListToFollower(bootstrapId: string): void {
-    const follower = this.followers.get(bootstrapId);
-    if (!follower) return;
-    const getScoops = this.options.getScoops;
-    if (!getScoops) return;
-    try {
-      const scoops = getScoops();
-      const activeScoopJid = this.options.getScoopJid();
-      follower.sync.send({ type: 'scoops.list', scoops, activeScoopJid });
-    } catch (err) {
-      log.warn('Failed to send scoops.list', {
-        bootstrapId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
-   * Send the sprinkles list to a specific follower.
-   * No-op when the leader didn't supply `getSprinkles`.
-   */
-  private sendSprinklesListToFollower(bootstrapId: string): void {
-    const follower = this.followers.get(bootstrapId);
-    if (!follower) return;
-    const getSprinkles = this.options.getSprinkles;
-    if (!getSprinkles) return;
-    try {
-      const sprinkles = getSprinkles();
-      follower.sync.send({ type: 'sprinkles.list', sprinkles });
-    } catch (err) {
-      log.warn('Failed to send sprinkles.list', {
-        bootstrapId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    this.broadcast.broadcastSnapshot();
   }
 
   /**
@@ -752,21 +636,7 @@ export class LeaderSyncManager {
    * Call when scoops are added/removed or the active selection changes.
    */
   broadcastScoopsList(): void {
-    if (this.followers.size === 0) return;
-    const getScoops = this.options.getScoops;
-    if (!getScoops) return;
-    let scoops: ScoopSummary[];
-    try {
-      scoops = getScoops();
-    } catch (err) {
-      log.warn('Failed to compute scoops list', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    const activeScoopJid = this.options.getScoopJid();
-    const message: LeaderToFollowerMessage = { type: 'scoops.list', scoops, activeScoopJid };
-    this.broadcastToAllFollowers(message);
+    this.broadcast.broadcastScoopsList();
   }
 
   /**
@@ -774,20 +644,7 @@ export class LeaderSyncManager {
    * Call when sprinkles are added/removed or visibility changes.
    */
   broadcastSprinklesList(): void {
-    if (this.followers.size === 0) return;
-    const getSprinkles = this.options.getSprinkles;
-    if (!getSprinkles) return;
-    let sprinkles: SprinkleSummary[];
-    try {
-      sprinkles = getSprinkles();
-    } catch (err) {
-      log.warn('Failed to compute sprinkles list', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    const message: LeaderToFollowerMessage = { type: 'sprinkles.list', sprinkles };
-    this.broadcastToAllFollowers(message);
+    this.broadcast.broadcastSprinklesList();
   }
 
   /**
@@ -796,18 +653,11 @@ export class LeaderSyncManager {
    * gets the same data that the leader's local instance would receive.
    */
   broadcastSprinkleUpdate(sprinkleName: string, data: unknown): void {
-    if (this.followers.size === 0) return;
-    const message: LeaderToFollowerMessage = {
-      type: 'sprinkle.update',
-      sprinkleName,
-      data,
-    };
-    this.broadcastToAllFollowers(message);
+    this.broadcast.broadcastSprinkleUpdate(sprinkleName, data);
   }
 
   broadcastTheme(themeJson: string | null): void {
-    if (this.followers.size === 0) return;
-    this.broadcastToAllFollowers({ type: 'theme.apply', themeJson });
+    this.broadcast.broadcastTheme(themeJson);
   }
 
   /**
@@ -815,8 +665,7 @@ export class LeaderSyncManager {
    * and should be re-fetched and re-rendered in place.
    */
   broadcastSprinkleReloaded(sprinkleName: string): void {
-    if (this.followers.size === 0) return;
-    this.broadcastToAllFollowers({ type: 'sprinkle.reloaded', sprinkleName });
+    this.broadcast.broadcastSprinkleReloaded(sprinkleName);
   }
 
   /**
@@ -824,88 +673,7 @@ export class LeaderSyncManager {
    * Phase 1: fire-and-forget; followers don't ack (no preview.opened reply).
    */
   broadcastPreviewOpen(url: string): void {
-    if (this.followers.size === 0) return;
-    const requestId = `prv-${crypto.randomUUID()}`;
-    this.broadcastToAllFollowers({ type: 'preview.open', requestId, url });
-  }
-
-  /** Chunk size for sprinkle content responses. Mirrors snapshot chunking. */
-  private static readonly SPRINKLE_CHUNK_SIZE = 32 * 1024; // 32 KB
-  private static readonly SPRINKLE_CHUNK_THRESHOLD = 64 * 1024; // 64 KB
-
-  /**
-   * Handle a follower's `sprinkle.fetch` request: load the .shtml content from
-   * the leader's VFS via `readSprinkleContent` and reply with a `sprinkle.content`
-   * message (chunked when oversized).
-   */
-  private async handleSprinkleFetch(
-    bootstrapId: string,
-    requestId: string,
-    sprinkleName: string
-  ): Promise<void> {
-    const follower = this.followers.get(bootstrapId);
-    if (!follower) return;
-
-    const reader = this.options.readSprinkleContent;
-    if (!reader) {
-      follower.sync.send({
-        type: 'sprinkle.content',
-        requestId,
-        sprinkleName,
-        content: '',
-        error: 'Leader has no sprinkle content reader',
-      });
-      return;
-    }
-
-    let content: string | null = null;
-    try {
-      content = await Promise.resolve(reader(sprinkleName));
-    } catch (err) {
-      follower.sync.send({
-        type: 'sprinkle.content',
-        requestId,
-        sprinkleName,
-        content: '',
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-
-    if (content === null || content === undefined) {
-      follower.sync.send({
-        type: 'sprinkle.content',
-        requestId,
-        sprinkleName,
-        content: '',
-        error: `Sprinkle not found: ${sprinkleName}`,
-      });
-      return;
-    }
-
-    if (content.length <= LeaderSyncManager.SPRINKLE_CHUNK_THRESHOLD) {
-      follower.sync.send({
-        type: 'sprinkle.content',
-        requestId,
-        sprinkleName,
-        content,
-      });
-      return;
-    }
-
-    const chunkSize = LeaderSyncManager.SPRINKLE_CHUNK_SIZE;
-    const totalChunks = Math.ceil(content.length / chunkSize);
-    for (let i = 0; i < totalChunks; i++) {
-      const slice = content.slice(i * chunkSize, (i + 1) * chunkSize);
-      follower.sync.send({
-        type: 'sprinkle.content',
-        requestId,
-        sprinkleName,
-        content: slice,
-        chunkIndex: i,
-        totalChunks,
-      });
-    }
+    this.broadcast.broadcastPreviewOpen(url);
   }
 
   private handleFollowerUserMessage(
@@ -1313,23 +1081,27 @@ export class LeaderSyncManager {
           bootstrapId,
           scoopJid: message.scoopJid,
         });
-        void this.sendSnapshotToFollower(bootstrapId, message.scoopJid);
+        void this.broadcast.sendSnapshotToFollower(bootstrapId, message.scoopJid);
         break;
       case 'scoops.select': {
         log.info('Follower selected scoop', { bootstrapId, scoopJid: message.scoopJid });
         const follower = this.followers.get(bootstrapId);
         if (follower) {
           follower.selectedScoopJid = message.scoopJid;
-          void this.sendSnapshotToFollower(bootstrapId, message.scoopJid);
+          void this.broadcast.sendSnapshotToFollower(bootstrapId, message.scoopJid);
         }
         break;
       }
       case 'sprinkles.refresh':
         log.info('Follower requested sprinkles refresh', { bootstrapId });
-        this.sendSprinklesListToFollower(bootstrapId);
+        this.broadcast.sendSprinklesListToFollower(bootstrapId);
         break;
       case 'sprinkle.fetch':
-        void this.handleSprinkleFetch(bootstrapId, message.requestId, message.sprinkleName);
+        void this.broadcast.handleSprinkleFetch(
+          bootstrapId,
+          message.requestId,
+          message.sprinkleName
+        );
         break;
       case 'sprinkle.lick':
         this.handleFollowerSprinkleLick(bootstrapId, message);
@@ -2008,7 +1780,7 @@ export class LeaderSyncManager {
     if (this.followers.size === 0) return;
     const entries = this.getFollowerBroadcastEntries();
     const message: LeaderToFollowerMessage = { type: 'targets.registry', targets: entries };
-    this.broadcastToAllFollowers(message);
+    this.followerRegistry.broadcastToAllFollowers(message);
   }
 
   /**
