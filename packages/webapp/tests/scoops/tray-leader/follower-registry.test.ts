@@ -72,13 +72,15 @@ describe('FollowerRegistry', () => {
 
   it('removes a dead follower before invoking onFollowerDead', () => {
     const calls: string[] = [];
+    const channel = new FakeChannel();
     const registry = createRegistry({
       onFollowerDead: (bootstrapId) => {
         calls.push(bootstrapId);
         expect(registry.followers.has(bootstrapId)).toBe(false);
       },
     });
-    registry.addFollower('dead', new FakeChannel());
+    registry.addFollower('dead', channel);
+    channel.readyState = 'closed';
 
     vi.advanceTimersByTime(40_000);
 
