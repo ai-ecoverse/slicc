@@ -23,13 +23,18 @@ import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
-import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
+import type { LeaderSyncContext } from './tray-leader/context.js';
+import {
+  type ConnectedFollower,
+  type FloatType,
+  FollowerRegistry,
+  labelForFollower,
+} from './tray-leader/follower-registry.js';
 import {
   CHERRY_RUNTIME_TAG,
   type CherryHostEventMessage,
-  createLeaderSyncChannel,
   type FollowerToLeaderMessage,
   isCherryHostEventMessage,
   type LeaderToFollowerMessage,
@@ -46,8 +51,6 @@ import {
   type TrayExecSignalMessage,
   type TrayFsRequest,
   type TrayFsResponse,
-  type TraySyncCapabilities,
-  type TraySyncChannel,
   type TrayTargetEntry,
   unhandledProtocolMessage,
 } from './tray-sync-protocol.js';
@@ -55,6 +58,9 @@ import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
+
+export type { FloatType };
+export { labelForFollower };
 
 export interface LeaderSyncManagerOptions {
   /** Get current chat messages for the active scoop. */
@@ -193,35 +199,6 @@ export interface RemoteExecResult {
   error?: string;
 }
 
-/** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
-export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
-
-/** Derive a FloatType from the follower's runtime string. */
-function deriveFloatType(runtime?: string): FloatType {
-  if (!runtime) return 'unknown';
-  if (runtime.includes('ios')) return 'ios';
-  if (runtime.includes('standalone')) return 'standalone';
-  if (runtime.includes('extension')) return 'extension';
-  if (runtime.includes('electron')) return 'electron';
-  return 'unknown';
-}
-
-/** Human-readable origin label for a forwarded lick, for the agent. */
-export function labelForFollower(floatType: FloatType, runtime?: string): string {
-  switch (floatType) {
-    case 'extension':
-      return 'extension follower';
-    case 'standalone':
-      return 'standalone follower';
-    case 'electron':
-      return 'Electron follower';
-    case 'ios':
-      return 'iOS follower';
-    default:
-      return runtime ? `follower (${runtime})` : 'follower';
-  }
-}
-
 /**
  * True when a target is a cooperative cherry host page rather than a real
  * browser page. Cherry targets only lend the capabilities they advertise, so
@@ -318,49 +295,6 @@ async function waitForBufferedAmountLow(
   }
 }
 
-interface ConnectedFollower {
-  bootstrapId: string;
-  sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
-  unsubscribe: () => void;
-  keepalive: DataChannelKeepalive;
-  runtime?: string;
-  connectedAt?: string;
-  lastActivity: number;
-  floatType: FloatType;
-  /**
-   * For Cherry followers (`runtime === CHERRY_RUNTIME_TAG`): the URL origin
-   * of the host page derived from the first cherry target in targets.advertise.
-   * Populated when `targets.advertise` arrives; absent for non-Cherry followers
-   * or when the target URL is malformed.
-   */
-  hostOrigin?: string;
-  /**
-   * The scoop this follower has currently selected for viewing.
-   * Defaults to the leader's active scoop until the follower sends `scoops.select`.
-   */
-  selectedScoopJid?: string;
-  /**
-   * Tray sync protocol version from the follower's `hello`. `undefined` until
-   * a hello arrives; a follower that sends other traffic first is a legacy
-   * (pre-versioning) build — logged once via `legacyPeerLogged`.
-   */
-  peerProtocolVersion?: number;
-  /** True once the no-hello legacy diagnosis has been logged for this follower. */
-  legacyPeerLogged?: boolean;
-  /**
-   * Capabilities the follower advertised on `hello`. `exec: true` marks a CLI
-   * `follow` target the leader may send `exec.request` to; absent for browser /
-   * iOS followers, which have no OS shell.
-   */
-  peerCapabilities?: TraySyncCapabilities;
-  /**
-   * One-line description the follower advertised on `hello.motd` (a
-   * `slicc … follow` CLI: who/what/where the exec target is). Surfaced to the
-   * agent by `ssh --list`; absent for browser / iOS followers.
-   */
-  peerMotd?: string;
-}
-
 /** Tracks a leader-initiated remote exec (the `ssh` command) awaiting the follower's streamed reply. */
 interface PendingRemoteExec {
   bootstrapId: string;
@@ -413,10 +347,15 @@ interface PendingFsRoute {
 }
 
 export class LeaderSyncManager {
-  private readonly followers = new Map<string, ConnectedFollower>();
+  private readonly followerRegistry: FollowerRegistry;
+  private readonly context: LeaderSyncContext;
   private readonly registry = new TrayTargetRegistry();
-  /** Maps runtimeId → bootstrapId so we can clean up registry on disconnect. */
-  private readonly runtimeToBootstrap = new Map<string, string>();
+  private get followers(): Map<string, ConnectedFollower> {
+    return this.context.followers.followers;
+  }
+  private get runtimeToBootstrap(): Map<string, string> {
+    return this.context.followers.runtimeToBootstrap;
+  }
   /** Maps requestId → routing info for CDP requests in flight through the leader. */
   private readonly pendingCDPRoutes = new Map<string, PendingCDPRoute>();
   /** Chunk buffers for reassembling chunked CDP responses from followers. */
@@ -564,7 +503,52 @@ export class LeaderSyncManager {
    */
   private static readonly ACK_PROTOCOL_VERSION_MIN = 3;
 
-  constructor(private readonly options: LeaderSyncManagerOptions) {}
+  constructor(private readonly options: LeaderSyncManagerOptions) {
+    this.followerRegistry = new FollowerRegistry({
+      log,
+      onMessage: (bootstrapId, message) => this.handleFollowerMessage(bootstrapId, message),
+      onFollowerDead: (bootstrapId) => this.options.onFollowerDead?.(bootstrapId),
+      onFollowerCountChanged: (count) => this.options.onFollowerCountChanged?.(count),
+    });
+    this.context = {
+      options,
+      followers: this.followerRegistry,
+      log,
+      sendControl: options.sendControl,
+    };
+    this.followerRegistry.onFollowerRemoved({
+      beforeRegistryCleanup: (bootstrapId) => {
+        for (const [requestId, pending] of this.pendingRemoteExecs) {
+          if (pending.bootstrapId !== bootstrapId) continue;
+          this.pendingRemoteExecs.delete(requestId);
+          if (pending.timer) clearTimeout(pending.timer);
+          pending.reject(new Error('follower disconnected before the command completed'));
+        }
+        for (const [requestId, entry] of this.localExecAborters) {
+          if (entry.bootstrapId !== bootstrapId) continue;
+          entry.controller.abort();
+          this.localExecAborters.delete(requestId);
+        }
+      },
+      removeRuntime: (_bootstrapId, runtimeId) => {
+        this.cleanupRemoteTransports(runtimeId);
+        this.registry.removeRuntime(runtimeId);
+      },
+      afterRegistryCleanup: (bootstrapId) => {
+        if (this.registry.hasChanged()) this.broadcastTargetRegistry();
+        for (const [key, entry] of this.activeExports) {
+          if (entry.bootstrapId !== bootstrapId) continue;
+          entry.abort.abort();
+          const requestId = key.slice(bootstrapId.length + 1);
+          this.clearAckWaiters(bootstrapId, requestId);
+          this.activeExports.delete(key);
+        }
+        for (const key of [...this.approvalWaiters.keys()]) {
+          if (key.startsWith(`${bootstrapId}:`)) this.settleApproval(key, false);
+        }
+      },
+    });
+  }
 
   /**
    * Add a connected follower's data channel.
@@ -575,50 +559,7 @@ export class LeaderSyncManager {
     channel: TrayDataChannelLike,
     meta?: { runtime?: string; connectedAt?: string }
   ): void {
-    // Clean up existing connection for same bootstrap
-    this.removeFollower(bootstrapId);
-
-    const sync = createLeaderSyncChannel(channel);
-
-    const unsubscribe = sync.onMessage((message: FollowerToLeaderMessage) => {
-      this.handleFollowerMessage(bootstrapId, message);
-    });
-
-    const keepalive = new DataChannelKeepalive({
-      sendPing: () => sync.send({ type: 'ping' }),
-      // Mirror of the follower guard: evicting a follower closes its data
-      // channel, so a follower that is merely slow to answer (throttled tab,
-      // busy main thread) would be disconnected while its transport is fine.
-      // Only evict once the channel itself is gone or the hard deadline hits.
-      isTransportOpen: () => sync.isOpen,
-      onStalled: () => {
-        log.warn('Follower stopped answering pings; channel still open, keeping it', {
-          bootstrapId,
-        });
-      },
-      onRecovered: () => {
-        log.info('Follower is answering pings again', { bootstrapId });
-      },
-      onDead: () => {
-        log.warn('Follower keepalive dead, removing follower', { bootstrapId });
-        this.removeFollower(bootstrapId);
-        this.options.onFollowerDead?.(bootstrapId);
-      },
-    });
-    keepalive.start();
-
-    this.followers.set(bootstrapId, {
-      bootstrapId,
-      sync,
-      unsubscribe,
-      keepalive,
-      runtime: meta?.runtime,
-      connectedAt: meta?.connectedAt,
-      lastActivity: Date.now(),
-      floatType: deriveFloatType(meta?.runtime),
-    });
-    log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
-    this.options.onFollowerCountChanged?.(this.followers.size);
+    const { sync } = this.followerRegistry.addFollower(bootstrapId, channel, meta);
 
     // Version handshake first — additive; legacy followers drop it harmlessly.
     sync.send({ type: 'hello', protocolVersion: TRAY_SYNC_PROTOCOL_VERSION });
@@ -641,79 +582,8 @@ export class LeaderSyncManager {
    * Remove a follower's data channel and clean up.
    */
   removeFollower(bootstrapId: string): void {
-    const follower = this.followers.get(bootstrapId);
-    if (!follower) return;
-    follower.keepalive.stop();
-    follower.unsubscribe();
-    follower.sync.close();
-    this.followers.delete(bootstrapId);
-
-    // Settle any exec work tied to this follower so callers don't hang.
-    // Leader-initiated `ssh` execs awaiting this follower's reply reject;
-    // follower-initiated local `exec` runs are aborted.
-    for (const [requestId, pending] of this.pendingRemoteExecs) {
-      if (pending.bootstrapId !== bootstrapId) continue;
-      this.pendingRemoteExecs.delete(requestId);
-      if (pending.timer) clearTimeout(pending.timer);
-      pending.reject(new Error('follower disconnected before the command completed'));
-    }
-    for (const [requestId, entry] of this.localExecAborters) {
-      if (entry.bootstrapId !== bootstrapId) continue;
-      entry.controller.abort();
-      this.localExecAborters.delete(requestId);
-    }
-
-    // Clear the broadcast-error throttle entry so the map doesn't
-    // grow unbounded across reconnects (followers are keyed by
-    // bootstrapId; a reconnect mints a fresh one).
-    this.followerBroadcastErrorLogAt.delete(bootstrapId);
-
-    // Remove this follower's targets from the registry
-    // Find the runtimeId that maps to this bootstrapId
-    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
-      if (bId === bootstrapId) {
-        // Clean up any cached RemoteCDPTransport instances for this runtime
-        this.cleanupRemoteTransports(runtimeId);
-        this.registry.removeRuntime(runtimeId);
-        this.runtimeToBootstrap.delete(runtimeId);
-        break;
-      }
-    }
-    if (this.registry.hasChanged()) {
-      this.broadcastTargetRegistry();
-    }
-
-    // Abort any in-flight transcript exports for this follower
-    for (const [key, entry] of this.activeExports) {
-      if (entry.bootstrapId === bootstrapId) {
-        entry.abort.abort();
-        // Reject ack waiters for this export so sendExportChunks exits.
-        const requestId = key.slice(bootstrapId.length + 1);
-        this.clearAckWaiters(bootstrapId, requestId);
-        this.activeExports.delete(key);
-      }
-    }
-
-    // Deny any delegated approval this follower was still being asked about,
-    // so `handleTranscriptExportRequest` resumes and releases its slot.
-    for (const key of [...this.approvalWaiters.keys()]) {
-      if (key.startsWith(`${bootstrapId}:`)) this.settleApproval(key, false);
-    }
-
-    log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
-    this.options.onFollowerCountChanged?.(this.followers.size);
+    this.followerRegistry.removeFollower(bootstrapId);
   }
-
-  /**
-   * Per-follower throttle for broadcast send failures. A stuck channel
-   * (closed/closing, full SCTP buffer) would otherwise log on every
-   * broadcast — and broadcasters include per-pi-event traffic during
-   * tool streaming, so a single bad follower could produce hundreds
-   * of identical error logs in a single turn before keepalive evicts
-   * it. Cleared on success and on `removeFollower`.
-   */
-  private readonly followerBroadcastErrorLogAt = new Map<string, number>();
-  private static readonly BROADCAST_ERROR_THROTTLE_MS = 60_000;
 
   /**
    * Send a message to every connected follower. Each `follower.sync.send`
@@ -732,26 +602,7 @@ export class LeaderSyncManager {
    * observes a partial `followers` map.
    */
   private broadcastToAllFollowers(message: LeaderToFollowerMessage): void {
-    const now = performance.now();
-    for (const [bootstrapId, follower] of this.followers) {
-      try {
-        follower.sync.send(message);
-        // Clear throttle on success so a follower that just recovered
-        // logs immediately if its channel fails again.
-        this.followerBroadcastErrorLogAt.delete(bootstrapId);
-      } catch (err) {
-        const lastLogAt =
-          this.followerBroadcastErrorLogAt.get(bootstrapId) ?? Number.NEGATIVE_INFINITY;
-        if (now - lastLogAt > LeaderSyncManager.BROADCAST_ERROR_THROTTLE_MS) {
-          this.followerBroadcastErrorLogAt.set(bootstrapId, now);
-          log.error('Broadcast send to follower failed (channel may be stuck)', {
-            bootstrapId,
-            messageType: message.type,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
+    this.followerRegistry.broadcastToAllFollowers(message);
   }
 
   /**
@@ -1154,7 +1005,7 @@ export class LeaderSyncManager {
         log.debug('Cleaned up orphaned remote transport on advertise', { key });
       }
     }
-    this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
+    this.followerRegistry.setRuntimeId(message.runtimeId, bootstrapId);
     this.registry.setTargets(message.runtimeId, message.targets);
 
     // Derive Cherry host origin from the first cherry-kind target URL.
@@ -1250,11 +1101,7 @@ export class LeaderSyncManager {
 
   /** bootstrapIds of followers that advertised `exec` capability on `hello`. */
   getExecCapableBootstrapIds(): Set<string> {
-    const ids = new Set<string>();
-    for (const [bootstrapId, follower] of this.followers) {
-      if (follower.peerCapabilities?.exec) ids.add(bootstrapId);
-    }
-    return ids;
+    return this.followerRegistry.getExecCapableBootstrapIds();
   }
 
   /**
@@ -1264,16 +1111,12 @@ export class LeaderSyncManager {
    * followers, which have no browser to drive.
    */
   getBrowserCapableBootstrapIds(): Set<string> {
-    return new Set(this.runtimeToBootstrap.values());
+    return this.followerRegistry.getBrowserCapableBootstrapIds();
   }
 
   /** Per-follower `hello.motd`, keyed by bootstrapId (exec targets advertise it). */
   getFollowerMotds(): Map<string, string> {
-    const motds = new Map<string, string>();
-    for (const [bootstrapId, follower] of this.followers) {
-      if (follower.peerMotd) motds.set(bootstrapId, follower.peerMotd);
-    }
-    return motds;
+    return this.followerRegistry.getFollowerMotds();
   }
 
   /**
@@ -1287,18 +1130,7 @@ export class LeaderSyncManager {
   private resolveFollowerByRuntimeId(
     runtimeId: string
   ): { bootstrapId: string; follower: ConnectedFollower } | null {
-    const advertised = this.runtimeToBootstrap.get(runtimeId);
-    if (advertised) {
-      const follower = this.followers.get(advertised);
-      if (follower) return { bootstrapId: advertised, follower };
-    }
-    const candidates = [runtimeId];
-    if (runtimeId.startsWith('follower-')) candidates.push(runtimeId.slice('follower-'.length));
-    for (const candidate of candidates) {
-      const follower = this.followers.get(candidate);
-      if (follower) return { bootstrapId: candidate, follower };
-    }
-    return null;
+    return this.followerRegistry.resolveFollowerByRuntimeId(runtimeId);
   }
 
   /** Send an `exec.signal` to the follower running a leader-initiated exec. */
@@ -1631,7 +1463,7 @@ export class LeaderSyncManager {
       // counted on connect), so re-notify with the unchanged count to let
       // the page re-mirror the followers shim with fresh exec flags — the
       // `host` / `ssh` listing reads that shim from the kernel worker.
-      this.options.onFollowerCountChanged?.(this.followers.size);
+      this.followerRegistry.notifyFollowerCountChanged();
     }
     if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
       log.warn('Follower speaks a newer tray sync protocol — update this build', {
@@ -2327,16 +2159,7 @@ export class LeaderSyncManager {
     lastActivity?: number;
     floatType?: FloatType;
   }[] {
-    return [...this.runtimeToBootstrap.entries()].map(([runtimeId, bootstrapId]) => {
-      const follower = this.followers.get(bootstrapId);
-      return {
-        runtimeId,
-        runtime: follower?.runtime,
-        connectedAt: follower?.connectedAt,
-        lastActivity: follower?.lastActivity,
-        floatType: follower?.floatType,
-      };
-    });
+    return this.followerRegistry.getConnectedFollowers();
   }
 
   /**
@@ -2563,10 +2386,7 @@ export class LeaderSyncManager {
 
   /** Resolve the advertised runtimeId for a follower's bootstrapId, if known. */
   private runtimeIdForBootstrap(bootstrapId: string): string | undefined {
-    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
-      if (bId === bootstrapId) return runtimeId;
-    }
-    return undefined;
+    return this.followerRegistry.runtimeIdForBootstrap(bootstrapId);
   }
 
   // ---------------------------------------------------------------------------
