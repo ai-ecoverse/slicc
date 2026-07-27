@@ -41,6 +41,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
       handleTranscriptExportRequest: vi.fn(async () => {}),
       handleTranscriptExportCancel: vi.fn(),
       handleTranscriptExportAck: vi.fn(),
+      handleTranscriptExportApprovalResponse: vi.fn(),
     },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
   };
@@ -197,6 +198,13 @@ describe('FollowerDispatch', () => {
       'follower',
       'export',
       2
+    );
+    route(
+      { type: 'transcript.export.approve.response', requestId: 'export', approved: true },
+      c.transcriptExport.handleTranscriptExportApprovalResponse,
+      'follower',
+      'export',
+      true
     );
     const cherry = {
       type: 'cherry.host_event',
