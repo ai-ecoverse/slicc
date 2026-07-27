@@ -39,6 +39,7 @@ import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import { type BiomeConfiguration, resolveBiomeConfiguration } from './biome-configuration.js';
+import { htmlDiagnosticsToText } from './biome-diagnostics-text.js';
 import { ESBUILD_VERSION } from './esbuild-wasm.js';
 import {
   biomeVirtualPath,
@@ -140,24 +141,29 @@ Subcommands:
   format        Print formatted output (check with --check or write with --write)
 
 Flags:
-  --write                    Write formatted output back to disk (format / check)
-  --check                    Report unformatted files instead of printing (format only)
+  --write                    Write formatting changes (format / check)
+  --check                    Check formatting without printing changes (format only)
   --stdin-file-path <path>   Virtual file path for stdin mode
-  --config-path <file>       Use this config instead of discovering biome.json / biome.jsonc
+  --config-path <file>       Use this config instead of automatic discovery
   --reporter <plain|json>    Reporter selection (parsed only; default: plain)
   --json                     Alias for --reporter json (parsed only)
   -h, --help                 Show this help
   -v, --version              Show installed @biomejs/wasm-web version
 
 Configuration:
-  Discovers the nearest biome.json, then biome.jsonc, walking toward /. Config
-  files may contain comments and trailing commas. Config "extends" is unsupported.
+  Without --config-path, starts at the first target's directory (or cwd for
+  stdin), then walks toward /. At each directory biome.json is preferred over
+  biome.jsonc. Comments and trailing commas are accepted. Config "extends" is
+  unsupported and is not resolved.
+
+Output:
+  Diagnostics use plain text without HTML tags, entities, or ANSI escapes.
 
 Exit codes:
-  0  No findings
-  1  Errors (including fatal), warnings, unformatted files under check / format --check,
-     or missing packages / files
-  2  Usage error
+  0  No findings; checked files are formatted
+  1  Error/fatal/warning diagnostics, unformatted files under check or
+     format --check, missing packages/files, or an invalid discovered config
+  2  Usage error, including a missing or invalid explicit --config-path
 
 Install:
   Inert until the backing packages are installed in node_modules:
@@ -693,7 +699,7 @@ export async function finalizeOutcome(
   let warningCount = 0;
   let changed = 0;
   for (const r of outcome.results) {
-    if (r.diagnosticsText) stderrParts.push(r.diagnosticsText);
+    if (r.diagnosticsText) stderrParts.push(htmlDiagnosticsToText(r.diagnosticsText));
     errorCount += r.errorCount;
     warningCount += r.warningCount;
     if (parsed.write && r.formatted !== null && !r.unchanged) {

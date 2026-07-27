@@ -558,11 +558,12 @@ describe('biome --help / argument errors', () => {
     expect(res.stdout).toMatch(/ipk add @biomejs\/wasm-web/);
     expect(res.stdout).toMatch(/lint\s+Lint only/);
     expect(res.stdout).toContain('--check');
-    expect(res.stdout).toContain(
-      '--config-path <file>       Use this config instead of discovering'
-    );
-    expect(res.stdout).toContain('Discovers the nearest biome.json, then biome.jsonc');
-    expect(res.stdout).toContain('Config "extends" is unsupported');
+    expect(res.stdout).toContain('--config-path <file>       Use this config instead of automatic');
+    expect(res.stdout).toContain("starts at the first target's directory (or cwd for");
+    expect(res.stdout).toContain('biome.json is preferred over');
+    expect(res.stdout).toContain('Config "extends" is');
+    expect(res.stdout).toContain('unsupported and is not resolved');
+    expect(res.stdout).toContain('Diagnostics use plain text without HTML tags, entities');
     expect(res.stdout).toContain(
       '--reporter <plain|json>    Reporter selection (parsed only; default: plain)'
     );
@@ -571,7 +572,7 @@ describe('biome --help / argument errors', () => {
     );
     expect(res.stdout).not.toContain('Select output reporter');
     expect(res.stdout).toMatch(
-      /Exit codes:[\s\S]*0\s+No findings[\s\S]*1\s+Errors \(including fatal\), warnings/
+      /Exit codes:[\s\S]*0\s+No findings[\s\S]*1\s+Error\/fatal\/warning diagnostics[\s\S]*2\s+Usage error/
     );
   });
 
@@ -635,6 +636,36 @@ describe('biome --help / argument errors', () => {
 });
 
 describe('finalizeOutcome', () => {
+  it('converts helper HTML diagnostics to plain stderr text', async () => {
+    const ctx = createMockCtx();
+    const source = 'if (left < right) return;\n';
+    const result = await finalizeOutcome(
+      ctx,
+      parseBiomeArgs(['lint', 'a.ts']),
+      [{ path: '/workspace/a.ts', source }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted: null,
+            diagnosticsText:
+              '<strong>error</strong>: left &lt; right &amp;&amp; value &gt; 0<br><span>lint/rule</span>\n',
+            errorCount: 1,
+            warningCount: 0,
+            unchanged: true,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.stderr).toBe('error: left < right && value > 0\nlint/rule\n');
+    expect(result.stderr).not.toMatch(
+      /<\/?[A-Za-z][^>]*>|&(?:amp|lt|gt|quot|apos|nbsp|#[xX]?[0-9A-Fa-f]+);/
+    );
+  });
+
   it('exits 1 when warnings are the only findings', async () => {
     const ctx = createMockCtx();
     const source = 'const value = 1;\n';
@@ -834,6 +865,9 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
     );
     expect(enabled.exitCode).toBe(1);
     expect(enabled.stderr).toContain('lint/suspicious/noDebugger');
+    expect(enabled.stderr).not.toMatch(
+      /<\/?[A-Za-z][^>]*>|&(?:amp|lt|gt|quot|apos|nbsp|#[xX]?[0-9A-Fa-f]+);/
+    );
 
     const configured = await createBiomeCommand().execute(['check', '--write', sourcePath], ctx);
     expect(configured).toMatchObject({ exitCode: 0, stdout: '' });
