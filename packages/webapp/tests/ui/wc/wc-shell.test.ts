@@ -166,14 +166,72 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('html,body{margin:0');
   });
 
-  it('the browser dock item never opens a workspace pane (the overlay is the surface)', () => {
-    const root = mount();
-    const dock = root.querySelector('slicc-dock') as HTMLElement;
-    const shell = root.querySelector('slicc-shell') as HTMLElement;
-    dock.dispatchEvent(
+  // Regression (#1706): the dock handler used to hardcode `id === 'browser'`
+  // and skip the pane for EVERY float, while only standalone leaders wired the
+  // replacement overlay. Followers were left with an inert globe. The skip is
+  // now driven by `refs.overlaySurfaces`, which the overlay claims for itself.
+  it('an UNCLAIMED browser dock item opens the workspace pane (follower fallback)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'follower',
+      placeholder: 'p',
+    });
+
+    refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
     );
-    expect(shell.hasAttribute('open')).toBe(false);
+
+    expect(refs.shell.hasAttribute('open')).toBe(true);
+    expect(refs.workbenchBody.getAttribute('active')).toBe('browser');
+  });
+
+  it('a CLAIMED browser dock item opens no pane (the overlay is the surface)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'leader',
+      placeholder: 'p',
+    });
+    refs.overlaySurfaces.add('browser'); // what wireWcBrowser does
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+
+    expect(refs.shell.hasAttribute('open')).toBe(false);
+  });
+
+  // The claim lands after mountWcShell (the overlay module is imported lazily),
+  // so the handler must read the set at click time, not capture it at wiring.
+  it('a claim registered AFTER mount still suppresses the pane', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'leader',
+      placeholder: 'p',
+    });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
+    );
+    expect(refs.shell.hasAttribute('open')).toBe(true);
+
+    refs.overlaySurfaces.add('browser');
+    refs.shell.removeAttribute('open');
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+    expect(refs.shell.hasAttribute('open')).toBe(false);
   });
 
   it('describes the tab switcher on the browser surface', () => {

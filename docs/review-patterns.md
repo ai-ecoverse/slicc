@@ -196,6 +196,12 @@ regression test for each bug fix, and keep coverage at or above the package floo
   UI surface.
 - A new follower-side handler in `tray-follower-sync.ts` with no corresponding UI action
   wired in `ui/wc/wc-follower.ts` (or vice versa).
+- **Removing a fallback from a shared helper** (e.g. `wc-shell.ts`) because a
+  leader-only replacement now covers it. `wireDockToWorkbench`, `prepareWcShell` and
+  friends run on every boot path; the replacement usually does not.
+- **Gating behavior on a float name** (`isCherry`, `isExtensionRealm()`, `ui-only=1`)
+  where the real condition is a capability. Float lists go stale the moment a new float
+  ships; capability checks do not.
 
 **Historical precedents**
 
@@ -205,6 +211,15 @@ regression test for each bug fix, and keep coverage at or above the package floo
   buttons had no action handler, so clicking them silently no-oped.
 - **PR #1261**: a fix landed on the non-primary boot path first, then caused a 5-second
   pill-reset regression that had to be fixed the next day.
+- **Issue #1706** (both shapes above, four months undetected). `a99a5faa4` added
+  `if (id === 'browser') return;` to `wireDockToWorkbench` so the leader's new
+  full-screen tab overlay had no dead pane behind it — but that helper is shared, and
+  the overlay is wired only when `options.standalone` is set. Leaders traded a pane for
+  an overlay; followers lost the pane and got nothing, leaving an inert dock item and an
+  unreachable `slicc-surface`. Separately, the follower's CDP advertisement was gated on
+  `isCherry && ui-only=1` rather than "has a local CDP bridge", so hosted-tab followers
+  — a float that shipped nine days after the gate was written — dialed
+  `wss://<hosted-origin>/cdp` every 5s indefinitely.
 
 **Class size** — ~30–40 commits since 2026-03; the largest empirical failure class in the
 repo.
@@ -213,6 +228,12 @@ repo.
 _and_ that the UI surface wires the user action back to the leader. Check all three boot
 paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`). Record the iOS
 mirror decision in the corpus (`packages/ios-app/`).
+
+When a leader-only feature supersedes shared behavior, let the feature **claim** what it
+replaces at wiring time rather than teaching the shared helper about it (see
+`WcShellRefs.overlaySurfaces`). The fallback then survives by default on every path that
+does not wire the feature — including a leader whose lazy import fails — instead of
+depending on two files agreeing forever.
 
 ### 9. Origin / bridge routing contract
 
@@ -295,7 +316,7 @@ follower (tray) and Cherry paths. See [docs/transcript-export.md](transcript-exp
 
 ---
 
-## Approval gate changes in `wc-tray.ts` or `wc-transcript-export.ts`.
+## Approval gate changes in `wc-tray.ts` or `wc-transcript-export.ts`
 
 When the approval dialog is changed: verify that Deny still resolves with `permission-denied`,
 that no approval escapes require a new prompt, and that the binary-attachment warning is

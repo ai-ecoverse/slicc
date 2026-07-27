@@ -35,12 +35,25 @@ function makeFakeBrowser() {
 function makeRefs(): WcShellRefs {
   const dock = document.createElement('slicc-dock');
   document.body.append(dock);
-  return { dock } as unknown as WcShellRefs;
+  return { dock, overlaySurfaces: new Set<string>() } as unknown as WcShellRefs;
 }
 
 type OverlayEl = HTMLElement & { tabs: Array<{ id: string; screenshot?: string }> };
 
 describe('wireWcBrowser', () => {
+  // Regression (#1706): the shell's dock handler skips the workbench pane only
+  // for surfaces an overlay has claimed. Claiming here — rather than the shell
+  // hardcoding 'browser' — is what keeps the pane fallback alive on floats that
+  // never reach this wiring (followers, cherry, extension).
+  it('claims the browser surface so the shell stops opening a pane behind it', () => {
+    const refs = makeRefs();
+    expect(refs.overlaySurfaces.has('browser')).toBe(false);
+
+    wireWcBrowser({ refs, browser: makeFakeBrowser() as unknown as BrowserAPI, log });
+
+    expect(refs.overlaySurfaces.has('browser')).toBe(true);
+  });
+
   it('opens the overlay on the browser dock item with every target + lazy thumbnails', async () => {
     const refs = makeRefs();
     const browser = makeFakeBrowser();

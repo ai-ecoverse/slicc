@@ -582,7 +582,7 @@ describe('mountWcUiFollower', () => {
     expect(app.querySelector('.wc-signin-redirect')).toBeNull();
   });
 
-  it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {
+  it('reads ?ui-only=1 and suppresses CDP advertisement via startPageFollowerTray when cherry', async () => {
     // Change the URL to include ui-only=1
     Object.defineProperty(window, 'location', {
       value: {
@@ -598,7 +598,7 @@ describe('mountWcUiFollower', () => {
 
     expect(startFollowerSpy).toHaveBeenCalledTimes(1);
     const opts = startFollowerSpy.mock.calls[0]![0];
-    expect(opts.uiOnly).toBe(true);
+    expect(opts.advertisesCdpTargets).toBe(false);
 
     // The ui-only follower is the extension side-panel cockpit — a cross-origin
     // iframe where getUserMedia can't be granted. So mic/camera capture is
@@ -656,7 +656,11 @@ describe('mountWcUiFollower', () => {
     expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
-  it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
+  // Regression (#1706): a hosted-tab follower has no local CDP bridge, so it
+  // must not advertise — regardless of `ui-only`, which is a cherry-only
+  // parameter. The pre-fix gate (`isCherry && ui-only=1`) evaluated false here
+  // and left the follower dialing `wss://www.sliccy.ai/cdp` on a 5s loop.
+  it('suppresses CDP advertisement for a hosted-tab follower (no bridge params, NOT cherry)', async () => {
     // Regular follower with ui-only param should ignore it. This is a NON-cherry
     // follower, so it starts the follower-navigate-watcher, which calls
     // `realCdpTransport.on(...)`. Establish our own prelude mock with a complete
@@ -686,8 +690,49 @@ describe('mountWcUiFollower', () => {
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
 
     const opts = startFollowerSpy.mock.calls[0]![0];
-    // uiOnly should be undefined or false for non-cherry
-    expect(opts.uiOnly).toBeFalsy();
+    // No `?bridge=`/`?bridgeToken=` on this URL — no local Chrome to enumerate.
+    expect(opts.advertisesCdpTargets).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// followerAdvertisesCdpTargets — the predicate in isolation (#1706)
+// ---------------------------------------------------------------------------
+
+describe('followerAdvertisesCdpTargets', () => {
+  const BRIDGE = '?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp&bridgeToken=tok';
+
+  it('non-cherry WITH bridge params advertises (node-server-launched follower)', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, BRIDGE)).toBe(true);
+  });
+
+  it('non-cherry WITHOUT bridge params does not advertise (hosted-tab follower)', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, '')).toBe(false);
+    expect(followerAdvertisesCdpTargets(false, '?ws=files')).toBe(false);
+  });
+
+  it('a bridge param missing its token does not count as a local bridge', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, '?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp')).toBe(
+      false
+    );
+  });
+
+  it('cherry advertises its synthetic target by default', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(true, '?cherry=1')).toBe(true);
+  });
+
+  it('cherry with ?ui-only=1 does not advertise (extension drives chrome.debugger)', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(true, '?cherry=1&ui-only=1')).toBe(false);
+  });
+
+  it('ui-only is cherry-only — it does not flip a bridged non-cherry follower', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, `${BRIDGE}&ui-only=1`)).toBe(true);
   });
 });
 
