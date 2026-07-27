@@ -285,6 +285,33 @@ Manual verification in the relevant runtimes:
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
+## Pre-commit Hooks
+
+`.husky/pre-commit` runs `npx lint-staged`, which formats and lints only the files you
+staged. The root `package.json` `lint-staged` block covers four toolchains:
+
+| Staged files                             | Command                                 | Installed by |
+| ---------------------------------------- | --------------------------------------- | ------------ |
+| `.ts .tsx .js .jsx .mjs .cjs .json .css` | `biome check --write`                   | `npm ci`     |
+| `.md .html .yaml .yml`                   | `prettier --write`                      | `npm ci`     |
+| `.swift`                                 | `swiftlint --fix` then `swiftlint lint` | Homebrew     |
+| `.go`                                    | `gofmt -w`                              | Go toolchain |
+
+### Optional native toolchains
+
+SwiftLint and gofmt are **not** installed by `npm ci`. Install them only if you edit Swift
+or Go sources:
+
+```bash
+brew install swiftlint   # packages/swift-server, packages/swift-optel, packages/swift-launcher, packages/ios-app
+brew install go          # packages/slicc-cli (provides gofmt)
+```
+
+Both commands run through `packages/dev-tools/tools/run-if-installed.mjs`, which warns and
+exits `0` when the binary is missing rather than failing the commit. Combined with
+`lint-staged`'s glob scoping, a TypeScript-only commit never invokes either binary, and a
+Swift or Go commit on a machine without them still succeeds — CI remains the hard gate.
+
 ## Test Timing and Flaky Retries
 
 CI-only vitest settings, both defined in `vitest.config.ts`:

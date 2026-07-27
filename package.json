@@ -135,6 +135,13 @@
     ],
     "**/*.{md,html,yaml,yml}": [
       "prettier --write"
+    ],
+    "**/*.swift": [
+      "node packages/dev-tools/tools/run-if-installed.mjs swiftlint --fix --quiet",
+      "node packages/dev-tools/tools/run-if-installed.mjs swiftlint lint --quiet"
+    ],
+    "**/*.go": [
+      "node packages/dev-tools/tools/run-if-installed.mjs gofmt -w"
     ]
   }
 }
