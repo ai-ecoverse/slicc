@@ -68,7 +68,7 @@ export function skipMessage(binary) {
   return (
     `run-if-installed: "${binary}" is not installed — skipping.\n` +
     `  Staged files were left unformatted; CI still lints them.\n` +
-    `  See docs/development.md ("Pre-commit hooks") for the install command.\n`
+    `  See docs/development.md ("Pre-commit Hooks") for the install command.\n`
   );
 }
 
