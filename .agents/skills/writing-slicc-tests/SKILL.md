@@ -403,6 +403,13 @@ Run `npm run test:coverage:<package>` — this invokes `vitest --coverage` (v8 p
 then `coverage-gate.mjs`, which reads the package's floors from
 `coverage-thresholds.json`. CI runs the same script as the package's only test step.
 
+Anything after the package name is forwarded verbatim to vitest, so a run-wide option can
+be added without paying for a second pass over the same suite:
+
+```bash
+node packages/dev-tools/tools/coverage-gate.mjs webapp --reporter=json --outputFile=report.json
+```
+
 ### Check Swift Packages
 
 Run `packages/dev-tools/tools/swift-coverage-check.sh <package-dir> <test-bundle-name>`,
