@@ -558,6 +558,19 @@ export class LeaderSyncManager {
 
     const keepalive = new DataChannelKeepalive({
       sendPing: () => sync.send({ type: 'ping' }),
+      // Mirror of the follower guard: evicting a follower closes its data
+      // channel, so a follower that is merely slow to answer (throttled tab,
+      // busy main thread) would be disconnected while its transport is fine.
+      // Only evict once the channel itself is gone or the hard deadline hits.
+      isTransportOpen: () => sync.isOpen,
+      onStalled: () => {
+        log.warn('Follower stopped answering pings; channel still open, keeping it', {
+          bootstrapId,
+        });
+      },
+      onRecovered: () => {
+        log.info('Follower is answering pings again', { bootstrapId });
+      },
       onDead: () => {
         log.warn('Follower keepalive dead, removing follower', { bootstrapId });
         this.removeFollower(bootstrapId);

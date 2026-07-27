@@ -1301,7 +1301,51 @@ describe('FollowerSyncManager', () => {
       expect(onDisconnect).toHaveBeenCalledTimes(1);
     });
 
-    it('calls onDisconnect when keepalive declares dead', () => {
+    it('does NOT disconnect while the channel is open — a stalled leader is not a dead one', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const onDead = vi.fn();
+        const onDisconnect = vi.fn();
+        const events: AgentEvent[] = [];
+        const follower = new FollowerSyncManager(channel, { onDead, onDisconnect });
+        follower.onEvent((event) => events.push(event));
+
+        // Ten ticks with no pong: far past the 3-missed stall threshold. The
+        // hosted leader is CPU-starved, not gone — its data channel is still
+        // open, so tearing down here would close a healthy connection and
+        // force a pointless renegotiation.
+        vi.advanceTimersByTime(10 * 10_000);
+
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(onDead).not.toHaveBeenCalled();
+        expect(channel.readyState).toBe('open');
+        expect(events).toHaveLength(0);
+        expect(getFollowerTrayRuntimeStatus().state).toBe('connected');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resumes normally when a stalled leader starts answering again', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const onDisconnect = vi.fn();
+        const follower = new FollowerSyncManager(channel, { onDisconnect });
+
+        vi.advanceTimersByTime(10 * 10_000); // stalled
+        channel.simulateLeaderMessage({ type: 'pong' });
+        vi.advanceTimersByTime(10 * 10_000); // and stalls again
+
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(channel.readyState).toBe('open');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('calls onDisconnect once the keepalive hard deadline passes', () => {
       vi.useFakeTimers();
       try {
         const channel = new FakeChannel();
@@ -1309,12 +1353,9 @@ describe('FollowerSyncManager', () => {
         const onDisconnect = vi.fn();
         const follower = new FollowerSyncManager(channel, { onDead, onDisconnect });
 
-        // Let keepalive tick enough times to declare dead (default: 10s interval, 3 missed)
-        // 4 ticks: first sends ping, then 3 misses
-        vi.advanceTimersByTime(10_000); // tick 1: ping sent
-        vi.advanceTimersByTime(10_000); // tick 2: missed=1
-        vi.advanceTimersByTime(10_000); // tick 3: missed=2
-        vi.advanceTimersByTime(10_000); // tick 4: missed=3 → dead
+        // Default keepalive: 10s interval, hard deadline at 30 missed pongs
+        // (~5 minutes). Tick 31 is the one that declares death.
+        vi.advanceTimersByTime(31 * 10_000);
 
         expect(onDead).toHaveBeenCalledTimes(1);
         expect(onDisconnect).toHaveBeenCalledTimes(1);
@@ -1323,6 +1364,24 @@ describe('FollowerSyncManager', () => {
         const status = getFollowerTrayRuntimeStatus();
         expect(status.state).toBe('error');
         expect(status.error).toBe('Keepalive timeout — leader not responding');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('disconnects promptly when the channel is closed, not stalled', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const onDisconnect = vi.fn();
+        const follower = new FollowerSyncManager(channel, { onDisconnect });
+
+        // A genuinely gone peer takes the channel down with it; the stall
+        // grace only applies while the transport is still usable.
+        channel.readyState = 'closed';
+        vi.advanceTimersByTime(4 * 10_000);
+
+        expect(onDisconnect).toHaveBeenCalledWith('Keepalive timeout — leader not responding');
       } finally {
         vi.useRealTimers();
       }

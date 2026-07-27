@@ -263,6 +263,19 @@ export class FollowerSyncManager implements AgentHandle {
     });
     this.keepalive = new DataChannelKeepalive({
       sendPing: () => this.sync.send({ type: 'ping' }),
+      // A leader that stops answering while the data channel is still open is
+      // busy, not gone. The hosted-leader float shares one small sandbox
+      // between Chromium, the kernel worker, and node-server, so a working
+      // cone routinely starves its own main thread past the ping deadline.
+      // Disconnecting there used to close a healthy channel and force a full
+      // renegotiation — the drop was self-inflicted. Wait it out instead.
+      isTransportOpen: () => this.sync.isOpen,
+      onStalled: () => {
+        log.warn('Leader stopped answering pings; channel still open, waiting for it to catch up');
+      },
+      onRecovered: () => {
+        log.info('Leader is answering pings again');
+      },
       onDead: () => {
         log.warn('Leader keepalive dead, cleaning up');
         this.handleDisconnect('Keepalive timeout — leader not responding');
