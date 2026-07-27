@@ -98,6 +98,94 @@ xcodebuild -project SliccFollower.xcodeproj …    # IPA / TestFlight builds
 swiftlint lint                                   # SwiftLint (config inherits repo-root .swiftlint.yml)
 ```
 
+## Test + coverage
+
+Plain `swift test` cannot run on a macOS host (iOS-only WebRTC binary), so the
+suite runs through `xcodebuild test` on a simulator. Use the shared coverage
+gate: it picks a simulator, enables coverage + parallel testing + on-failure
+retries, and enforces the `ios-app` floors in `coverage-thresholds.json`.
+
+```bash
+./packages/dev-tools/tools/swift-coverage-check.sh \
+  --xcodebuild SliccFollower packages/ios-app SliccFollower
+```
+
+Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`,
+`ios-app.xcresult` with per-test durations). Tests run `parallelizable` with
+`randomExecutionOrder`, so a new test must not depend on another test's side
+effects. Coverage is measured against
+`SliccFollower.app/SliccFollower.debug.dylib`, not the same-named launcher stub
+beside it — debug builds put the code, and the coverage mapping, in the dylib.
+
+## Simulator QA path
+
+Running the app by hand — the only way to check the SwiftUI surfaces, which the
+unit tests (protocol decoder only) do not touch.
+
+**Prerequisites.** `brew install xcodegen`, plus a simulator runtime matching the
+Xcode SDK. If `xcodebuild -showdestinations …` lists no `platform:iOS Simulator`
+entries and only `iOS <x> is not installed` errors, install the platform with
+`xcodebuild -downloadPlatform iOS` (~8.5 GB, tens of minutes).
+
+**Boot, build, install, launch.**
+
+```bash
+cd packages/ios-app
+xcodegen generate
+UDID=$(xcrun simctl list devices available --json \
+  | jq -r '[.devices[][] | select(.isAvailable and (.name | test("iPhone")))] | first | .udid')
+xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
+open -a Simulator                                # optional: watch live
+xcodebuild build -project SliccFollower.xcodeproj -scheme SliccFollower \
+  -destination "platform=iOS Simulator,id=$UDID" \
+  -derivedDataPath .build/xcodebuild CODE_SIGNING_ALLOWED=NO
+APP=.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app
+xcrun simctl uninstall "$UDID" com.sliccy.follower   # drop any stored joinUrl
+xcrun simctl install "$UDID" "$APP"
+xcrun simctl launch "$UDID" com.sliccy.follower
+xcrun simctl io "$UDID" screenshot /tmp/slicc-ios-launch.png
+```
+
+With no stored `joinUrl`, `ChatView.onAppear` opens the Settings sheet — the
+screenshot should show **Settings → Connection → Join URL** with
+`Status: Disconnected`. The uninstall matters: a `joinUrl` from an earlier run
+persists in the app container, and the app then boots straight into the
+conversation and auto-connects.
+
+**Driving an interaction without tapping.** `simctl` cannot synthesize taps, but
+`UserDefaults` reads the argument domain, so launch arguments seed
+`@AppStorage`-backed state. A Join URL skips the Settings sheet and drives the
+real connect path:
+
+```bash
+xcrun simctl terminate "$UDID" com.sliccy.follower
+xcrun simctl launch "$UDID" com.sliccy.follower \
+  -joinUrl "https://www.sliccy.ai/join/<token>"
+sleep 10
+xcrun simctl io "$UDID" screenshot /tmp/slicc-ios-connect.png
+```
+
+The conversation view replaces the Settings sheet and the status pill under the
+`SLICC` title reports the outcome — `Connected` against a live leader,
+`Connection Failed` against a synthetic token. `SettingsView` persists the seeded
+value, so later plain launches reuse it. That pill is the only signal: the
+pre-connect path emits no `os_log`, so
+`simctl spawn "$UDID" log stream --predicate 'subsystem == "com.slicc.follower"'`
+stays silent until a data channel opens.
+
+**Getting a real Join URL.** Start a local leader
+(`npm run dev:standalone:fresh`, see [`docs/development.md`](../../docs/development.md)),
+then use the avatar menu's **Enable multi-browser sync** (copies it) or ask the
+agent to run `host` and report its `join_url` — the same URL the CLI follower
+takes, see [`packages/slicc-cli/README.md`](../slicc-cli/README.md).
+
+**Known limitation.** A synthetic token verifies boot → install → launch → Join
+URL read → connect → failure state, but not the connected surfaces. Chat,
+sprinkles, and the CDP carousel need a real WebRTC peer. The sidebar's **UI
+Fixture** route (`FixtureConversationView`) renders every chat variant
+leaderless, but reaching it needs a tap — a human, or an XCUITest target that
+does not exist yet.
+
 ## Linting
 
 `packages/ios-app/.swiftlint.yml` inherits the shared rule set from the
@@ -105,6 +193,18 @@ repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
 `.build`/`SliccFollower.xcodeproj`. Warnings surface code-quality issues; only
 `error`-severity violations fail CI. Use `swiftlint --fix` to auto-correct
 fixable violations.
+
+## Formatting
+
+SwiftLint lints; `swift format` (Swift 6+ toolchain) formats, against the single
+repo-root `.swift-format` it finds by walking up from each input file. No
+`package.json` here, so invoke it directly — or use the repo-root
+`npm run lint:swift:format` / `npm run format:swift`, which include this package:
+
+```bash
+swift format lint --strict --parallel --recursive SliccFollower Package.swift   # CI gate
+swift format --in-place --parallel --recursive SliccFollower Package.swift
+```
 
 TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consumes secrets via `setup-testflight-secrets.sh`).
 

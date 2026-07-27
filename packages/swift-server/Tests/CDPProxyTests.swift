@@ -2,6 +2,7 @@ import Logging
 import NIOCore
 import NIOWebSocket
 import XCTest
+
 @testable import slicc_server
 
 final class CDPProxyTests: XCTestCase {
@@ -189,10 +190,12 @@ final class CDPProxyTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        XCTAssertEqual(harness.connectedURLsSnapshot(), [
-            "ws://127.0.0.1:9222/devtools/browser/first",
-            "ws://127.0.0.1:9222/devtools/browser/second",
-        ])
+        XCTAssertEqual(
+            harness.connectedURLsSnapshot(),
+            [
+                "ws://127.0.0.1:9222/devtools/browser/first",
+                "ws://127.0.0.1:9222/devtools/browser/second",
+            ])
         let discovererCallCount = await discoverer.callCount()
         XCTAssertEqual(discovererCallCount, 2)
     }
@@ -347,7 +350,8 @@ final class CDPProxyTests: XCTestCase {
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
         // Seed session→URL via a sniffed Target.attachedToTarget event.
-        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/path"}}}"#
+        let attached =
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/path"}}}"#
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -371,7 +375,8 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://evil.example.org/"}}}"#
+        let attached =
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://evil.example.org/"}}}"#
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -401,7 +406,8 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        let attached =
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -429,7 +435,8 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        let attached =
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
@@ -449,11 +456,13 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        let attached = #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
+        let attached =
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#
         await harness.emitText(attached)
 
         let masked = Self.inDomainSecret.maskedValue
-        let argsJSON = "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
+        let argsJSON =
+            "[{\"value\":\"\(masked)\"},{\"value\":42},{\"objectId\":\"obj-1\"},"
             + "{\"value\":\"prefix \(masked) suffix\"}]"
         let paramsJSON = "{\"functionDeclaration\":\"function(v){this.value=v}\"," + "\"arguments\":\(argsJSON)}"
         let outbound = "{\"id\":3,\"method\":\"Runtime.callFunctionOn\",\"params\":\(paramsJSON),\"sessionId\":\"S1\"}"
@@ -476,9 +485,12 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        await harness.emitText(#"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#)
+        await harness.emitText(
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/"}}}"#)
         // Subframe navigation should NOT update the tracked URL.
-        await harness.emitText(#"{"method":"Page.frameNavigated","params":{"frame":{"id":"sub-frame","parentId":"main-frame","url":"https://evil.example.org/"}},"sessionId":"S1"}"#)
+        await harness.emitText(
+            #"{"method":"Page.frameNavigated","params":{"frame":{"id":"sub-frame","parentId":"main-frame","url":"https://evil.example.org/"}},"sessionId":"S1"}"#
+        )
         let urlsAfterSub = await proxy.sessionURLSnapshot()
         XCTAssertEqual(urlsAfterSub["S1"], "https://example.com/")
 
@@ -494,7 +506,8 @@ final class CDPProxyTests: XCTestCase {
         let client = ClientRecorder()
         await self.setupClientWithFlush(proxy: proxy, client: client)
 
-        await harness.emitText(#"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/old"}}}"#)
+        await harness.emitText(
+            #"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page","url":"https://example.com/old"}}}"#)
         await harness.emitText(#"{"method":"Target.targetInfoChanged","params":{"targetInfo":{"targetId":"T1","url":"https://example.com/new"}}}"#)
         let urls = await proxy.sessionURLSnapshot()
         XCTAssertEqual(urls["S1"], "https://example.com/new")

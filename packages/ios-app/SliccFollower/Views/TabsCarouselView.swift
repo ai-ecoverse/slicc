@@ -103,13 +103,15 @@ struct TabsCarouselView: View {
                 .foregroundStyle(.secondary)
             Text("No browser tabs")
                 .font(.headline)
-            Text(canControlTabs
-                 ? "The leader can drive WKWebView tabs over the CDP bridge — they appear here as a paged carousel. You can also open a blank tab manually."
-                 : "Connect to a leader (Settings → Join URL) to host browser tabs here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+            Text(
+                canControlTabs
+                    ? "The leader can drive WKWebView tabs over the CDP bridge — they appear here as a paged carousel. You can also open a blank tab manually."
+                    : "Connect to a leader (Settings → Join URL) to host browser tabs here."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 40)
             Button {
                 presentNewTabPrompt()
             } label: {
@@ -193,7 +195,8 @@ struct TabsCarouselView: View {
 
     private func currentTabTitle() -> String {
         guard let id = effectiveSelectedTabId(),
-              let target = appState.cdpTargets.first(where: { $0.id == id }) else {
+            let target = appState.cdpTargets.first(where: { $0.id == id })
+        else {
             return "Tabs"
         }
         if !target.title.isEmpty { return target.title }

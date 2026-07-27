@@ -6,11 +6,11 @@ enum SliccCliArchitecture: String, CaseIterable {
 
     static var current: SliccCliArchitecture {
         #if arch(arm64)
-        return .arm64
+            return .arm64
         #elseif arch(x86_64)
-        return .amd64
+            return .amd64
         #else
-        return from(machine: ProcessInfo.processInfo.machineHardwareName) ?? .amd64
+            return from(machine: ProcessInfo.processInfo.machineHardwareName) ?? .amd64
         #endif
     }
 
@@ -38,11 +38,12 @@ struct SliccCliLocator {
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
         self.repositoryRoots = repositoryRoots ?? Self.defaultRepositoryRoots(fileManager: fileManager)
-        self.pathDirectories = pathDirectories ?? [
-            URL(fileURLWithPath: "/usr/local/bin"),
-            homeDirectory.appendingPathComponent(".local/bin"),
-            URL(fileURLWithPath: "/opt/homebrew/bin"),
-        ]
+        self.pathDirectories =
+            pathDirectories ?? [
+                URL(fileURLWithPath: "/usr/local/bin"),
+                homeDirectory.appendingPathComponent(".local/bin"),
+                URL(fileURLWithPath: "/opt/homebrew/bin"),
+            ]
     }
 
     func findCliBinary(architecture: SliccCliArchitecture = .current) -> String? {
@@ -89,8 +90,8 @@ struct SliccCliLocator {
     }
 }
 
-private extension ProcessInfo {
-    var machineHardwareName: String {
+extension ProcessInfo {
+    fileprivate var machineHardwareName: String {
         var systemInfo = utsname()
         uname(&systemInfo)
         return withUnsafePointer(to: &systemInfo.machine) {

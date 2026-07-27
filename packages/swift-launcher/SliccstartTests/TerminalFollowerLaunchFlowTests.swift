@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 @MainActor
@@ -95,7 +96,10 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
         var launchedCommand: String?
         let service = TerminalFollowerLaunchService(
             findCliBinary: { managed.path },
-            downloadCli: { _ in XCTFail("download should be skipped"); return managed },
+            downloadCli: { _ in
+                XCTFail("download should be skipped")
+                return managed
+            },
             exposeCli: { XCTAssertEqual(exposure.expose($0), .failed) },
             resolveLoginShell: { "/bin/zsh" },
             loadTemplate: { FollowCommandTemplate.defaultTemplate },

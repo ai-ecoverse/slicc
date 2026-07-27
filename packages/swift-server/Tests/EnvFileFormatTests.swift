@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 final class EnvFileFormatTests: XCTestCase {
@@ -8,12 +9,12 @@ final class EnvFileFormatTests: XCTestCase {
     func testParseSkipsBlankLinesAndComments() {
         let blob = """
 
-        # this is a comment
-        FOO=bar
+            # this is a comment
+            FOO=bar
 
-        # another comment
-        BAZ=qux
-        """
+            # another comment
+            BAZ=qux
+            """
         let entries = EnvFileFormat.parse(blob)
         XCTAssertEqual(entries.map(\.key), ["FOO", "BAZ"])
         XCTAssertEqual(entries.map(\.value), ["bar", "qux"])
@@ -63,7 +64,7 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testSecretsBlobPreservesQuotedValues() {
         let original = [
-            Secret(name: "TOKEN", value: #"value with "quotes" and #hash"#, domains: ["a.com"]),
+            Secret(name: "TOKEN", value: #"value with "quotes" and #hash"#, domains: ["a.com"])
         ]
         let blob = EnvFileFormat.blobFromSecrets(original)
         let parsed = EnvFileFormat.secretsFromBlob(blob)
@@ -72,10 +73,10 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testSecretsFromBlobSkipsKeysWithoutDomains() {
         let blob = """
-        ORPHAN=value-no-domains
-        VALID=v
-        VALID_DOMAINS=a.com
-        """
+            ORPHAN=value-no-domains
+            VALID=v
+            VALID_DOMAINS=a.com
+            """
         let secrets = EnvFileFormat.secretsFromBlob(blob)
         XCTAssertEqual(secrets.count, 1)
         XCTAssertEqual(secrets.first?.name, "VALID")
@@ -83,17 +84,17 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testSecretsFromBlobSkipsEmptyDomainsList() {
         let blob = """
-        EMPTY=v
-        EMPTY_DOMAINS=
-        """
+            EMPTY=v
+            EMPTY_DOMAINS=
+            """
         XCTAssertTrue(EnvFileFormat.secretsFromBlob(blob).isEmpty)
     }
 
     func testSecretsFromBlobAcceptsAnyDeclarationOrder() {
         let blob = """
-        TOKEN_DOMAINS=api.example.com
-        TOKEN=hello
-        """
+            TOKEN_DOMAINS=api.example.com
+            TOKEN=hello
+            """
         let secrets = EnvFileFormat.secretsFromBlob(blob)
         XCTAssertEqual(secrets, [Secret(name: "TOKEN", value: "hello", domains: ["api.example.com"])])
     }

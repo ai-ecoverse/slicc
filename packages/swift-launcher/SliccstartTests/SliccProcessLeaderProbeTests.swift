@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Drives the re-schedule outer loop in `SliccProcess.startLeaderProbe`
@@ -15,7 +16,10 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
 
         actor Counter {
             var n = 0
-            func tick() -> Int { n += 1; return n }
+            func tick() -> Int {
+                n += 1
+                return n
+            }
         }
         let counter = Counter()
         // First two inner probes give up (4 connecting fetches each), then
@@ -58,7 +62,10 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         let connecting = Data(#"{"state":"connecting"}"#.utf8)
         actor Counter {
             var n = 0
-            func tick() -> Int { n += 1; return n }
+            func tick() -> Int {
+                n += 1
+                return n
+            }
             func snapshot() -> Int { n }
         }
         let counter = Counter()
@@ -114,7 +121,10 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
 
         actor Counter {
             var n = 0
-            func tick() -> Int { n += 1; return n }
+            func tick() -> Int {
+                n += 1
+                return n
+            }
         }
         let counter = Counter()
         // After 6 fetches return the URL — gives the test enough room to

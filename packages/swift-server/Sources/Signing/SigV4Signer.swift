@@ -222,7 +222,8 @@ extension SigV4Signer {
             if lhs.0 != rhs.0 { return lhs.0 < rhs.0 }
             return lhs.1 < rhs.1
         }
-        return sorted
+        return
+            sorted
             .map { "\(percentEncode($0.0))=\(percentEncode($0.1))" }
             .joined(separator: "&")
     }

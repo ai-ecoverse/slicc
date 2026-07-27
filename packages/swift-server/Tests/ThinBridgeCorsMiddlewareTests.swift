@@ -1,8 +1,9 @@
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
-import HTTPTypes
 import NIOCore
 import XCTest
+
 @testable import slicc_server
 
 /// HTTP-level coverage for the thin-bridge CORS + PNA middleware. Parity
@@ -19,7 +20,8 @@ final class ThinBridgeCorsMiddlewareTests: XCTestCase {
     private static let testToken = "test-bridge-token-123"
 
     private func buildRouter(bridgeToken: String? = ThinBridgeCorsMiddlewareTests.testToken)
-        -> Router<BasicRequestContext> {
+        -> Router<BasicRequestContext>
+    {
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(ThinBridgeCorsMiddleware<BasicRequestContext>(bridgeToken: bridgeToken))
         router.get("/api/status") { _, _ in

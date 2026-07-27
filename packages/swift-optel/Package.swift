@@ -8,7 +8,7 @@ let package = Package(
         .library(
             name: "SwiftOptel",
             targets: ["SwiftOptel"]
-        ),
+        )
     ],
     targets: [
         .target(

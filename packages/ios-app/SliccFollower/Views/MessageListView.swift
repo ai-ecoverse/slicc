@@ -154,12 +154,13 @@ private struct MessageGroup: Identifiable {
 #Preview {
     MessageListView(
         messages: [
-            ChatMessage(id: "1", role: .user, content: "Hello!",
-                        timestamp: Date().timeIntervalSince1970 * 1000),
-            ChatMessage(id: "2", role: .assistant, content: "Hi there! How can I help?",
-                        timestamp: Date().timeIntervalSince1970 * 1000),
+            ChatMessage(
+                id: "1", role: .user, content: "Hello!",
+                timestamp: Date().timeIntervalSince1970 * 1000),
+            ChatMessage(
+                id: "2", role: .assistant, content: "Hi there! How can I help?",
+                timestamp: Date().timeIntervalSince1970 * 1000),
         ],
         isStreaming: false
     )
 }
-

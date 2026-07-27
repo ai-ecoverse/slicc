@@ -1,23 +1,24 @@
-import XCTest
 import AppUpdater
 import Version
+import XCTest
+
 @testable import Sliccstart
 
 final class VersionDecodingTests: XCTestCase {
     private let json = """
-    [{
-      "tag_name": "v1.36.0",
-      "prerelease": false,
-      "name": "v1.36.0",
-      "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/v1.36.0",
-      "body": "test release",
-      "assets": [{
-        "name": "Sliccstart-1.36.0.zip",
-        "browser_download_url": "https://example.com/Sliccstart-1.36.0.zip",
-        "content_type": "application/zip"
-      }]
-    }]
-    """.data(using: .utf8)!
+        [{
+          "tag_name": "v1.36.0",
+          "prerelease": false,
+          "name": "v1.36.0",
+          "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/v1.36.0",
+          "body": "test release",
+          "assets": [{
+            "name": "Sliccstart-1.36.0.zip",
+            "browser_download_url": "https://example.com/Sliccstart-1.36.0.zip",
+            "content_type": "application/zip"
+          }]
+        }]
+        """.data(using: .utf8)!
 
     func testStrictDecoderRejectsVPrefixedTags() throws {
         let decoder = JSONDecoder()
@@ -35,4 +36,3 @@ final class VersionDecodingTests: XCTestCase {
         XCTAssertEqual(releases[0].tagName, Version(1, 36, 0))
     }
 }
-

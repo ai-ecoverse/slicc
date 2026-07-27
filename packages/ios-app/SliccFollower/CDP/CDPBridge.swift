@@ -138,8 +138,9 @@ final class CDPBridge {
                 respondNotImplemented(requestId: requestId, method: method)
             }
         } catch let CDPError.targetNotFound(method) {
-            respondError(requestId: requestId,
-                         error: "CDP: target not found for \(method) (id=\(localTargetId))")
+            respondError(
+                requestId: requestId,
+                error: "CDP: target not found for \(method) (id=\(localTargetId))")
         } catch {
             respondError(requestId: requestId, error: error.localizedDescription)
         }
@@ -180,7 +181,8 @@ final class CDPBridge {
 
         case "Target.closeTarget":
             guard let targetId = params["targetId"] as? String,
-                  let target = targets.removeValue(forKey: targetId) else {
+                let target = targets.removeValue(forKey: targetId)
+            else {
                 respond(requestId: requestId, result: ["success": false])
                 return
             }
@@ -197,17 +199,20 @@ final class CDPBridge {
 
         case "Target.attachToTarget":
             guard let targetId = params["targetId"] as? String,
-                  let target = targets[targetId] else {
+                let target = targets[targetId]
+            else {
                 respondError(requestId: requestId, error: "Target not found: \(params["targetId"] ?? "?")")
                 return
             }
             let sid = "session-\(targetId)"
             target.sessionId = sid
-            emitEvent(method: "Target.attachedToTarget", params: [
-                "sessionId": sid,
-                "targetInfo": target.targetInfo(),
-                "waitingForDebugger": false,
-            ], sessionId: nil)
+            emitEvent(
+                method: "Target.attachedToTarget",
+                params: [
+                    "sessionId": sid,
+                    "targetInfo": target.targetInfo(),
+                    "waitingForDebugger": false,
+                ], sessionId: nil)
             respond(requestId: requestId, result: ["sessionId": sid])
 
         case "Target.detachFromTarget":
@@ -221,8 +226,8 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
 
         case "Target.setDiscoverTargets",
-             "Target.setAutoAttach",
-             "Target.setDiscoverTargetsFilter":
+            "Target.setAutoAttach",
+            "Target.setDiscoverTargetsFilter":
             respond(requestId: requestId, result: [:])
 
         case "Target.activateTarget":
@@ -266,9 +271,9 @@ final class CDPBridge {
                 Task { @MainActor in
                     guard let self else { return }
                     switch result {
-                    case let .success(data):
+                    case .success(let data):
                         self.respond(requestId: requestId, result: ["data": data])
-                    case let .failure(err):
+                    case .failure(let err):
                         self.respondError(requestId: requestId, error: err.localizedDescription)
                     }
                 }
@@ -289,17 +294,19 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
 
         case "Page.getFrameTree":
-            respond(requestId: requestId, result: [
-                "frameTree": [
-                    "frame": [
-                        "id": target.frameId,
-                        "loaderId": "loader-\(target.targetId)-1",
-                        "url": target.currentURL,
-                        "securityOrigin": "",
-                        "mimeType": "text/html",
+            respond(
+                requestId: requestId,
+                result: [
+                    "frameTree": [
+                        "frame": [
+                            "id": target.frameId,
+                            "loaderId": "loader-\(target.targetId)-1",
+                            "url": target.currentURL,
+                            "securityOrigin": "",
+                            "mimeType": "text/html",
+                        ]
                     ]
-                ]
-            ])
+                ])
 
         case "Page.setLifecycleEventsEnabled":
             respond(requestId: requestId, result: [:])
@@ -343,7 +350,8 @@ final class CDPBridge {
             let argExprs = args.map { arg -> String in
                 if let v = arg["value"] {
                     if let s = try? JSONSerialization.data(withJSONObject: ["v": v]),
-                       let json = String(data: s, encoding: .utf8) {
+                        let json = String(data: s, encoding: .utf8)
+                    {
                         return "(\(json)).v"
                     }
                 }
@@ -381,14 +389,16 @@ final class CDPBridge {
             respond(requestId: requestId, result: [:])
         case "DOM.getDocument":
             // Return a minimal document node so callers can chain DOM.querySelector.
-            respond(requestId: requestId, result: [
-                "root": [
-                    "nodeId": 1, "backendNodeId": 1, "nodeType": 9,
-                    "nodeName": "#document", "localName": "", "nodeValue": "",
-                    "documentURL": target.currentURL,
-                    "baseURL": target.currentURL, "xmlVersion": "",
-                ]
-            ])
+            respond(
+                requestId: requestId,
+                result: [
+                    "root": [
+                        "nodeId": 1, "backendNodeId": 1, "nodeType": 9,
+                        "nodeName": "#document", "localName": "", "nodeValue": "",
+                        "documentURL": target.currentURL,
+                        "baseURL": target.currentURL, "xmlVersion": "",
+                    ]
+                ])
         case "DOM.querySelector":
             let selector = (params["selector"] as? String) ?? ""
             let escaped = selector.replacingOccurrences(of: "\\", with: "\\\\")
@@ -405,9 +415,11 @@ final class CDPBridge {
         case "DOM.resolveNode":
             // We can't fully model nodeId↔objectId across CDP without state; return a
             // shim object so the agent can fall through to Runtime.evaluate.
-            respond(requestId: requestId, result: [
-                "object": ["type": "object", "objectId": "shim-\(target.targetId)"]
-            ])
+            respond(
+                requestId: requestId,
+                result: [
+                    "object": ["type": "object", "objectId": "shim-\(target.targetId)"]
+                ])
         default:
             respondNotImplemented(requestId: requestId, method: method)
         }
@@ -430,18 +442,18 @@ final class CDPBridge {
             default: evt = type
             }
             let js = """
-            (function() {
-              var el = document.elementFromPoint(\(x), \(y));
-              if (!el) return false;
-              var ev = new MouseEvent('\(evt)', {bubbles:true, cancelable:true, clientX:\(x), clientY:\(y), button:0});
-              el.dispatchEvent(ev);
-              if ('\(evt)' === 'mouseup') {
-                var clickEv = new MouseEvent('click', {bubbles:true, cancelable:true, clientX:\(x), clientY:\(y), button:0});
-                el.dispatchEvent(clickEv);
-              }
-              return true;
-            })()
-            """
+                (function() {
+                  var el = document.elementFromPoint(\(x), \(y));
+                  if (!el) return false;
+                  var ev = new MouseEvent('\(evt)', {bubbles:true, cancelable:true, clientX:\(x), clientY:\(y), button:0});
+                  el.dispatchEvent(ev);
+                  if ('\(evt)' === 'mouseup') {
+                    var clickEv = new MouseEvent('click', {bubbles:true, cancelable:true, clientX:\(x), clientY:\(y), button:0});
+                    el.dispatchEvent(clickEv);
+                  }
+                  return true;
+                })()
+                """
             target.runtimeEvaluate(
                 expression: js, awaitPromise: false, returnByValue: true
             ) { [weak self] _ in
@@ -465,27 +477,27 @@ final class CDPBridge {
             let js: String
             if evt == "input" {
                 js = """
-                (function() {
-                  var el = document.activeElement;
-                  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
-                    if (el.value !== undefined) { el.value += '\(escapedText)'; }
-                    else { el.textContent += '\(escapedText)'; }
-                    el.dispatchEvent(new Event('input', {bubbles:true}));
-                    el.dispatchEvent(new Event('change', {bubbles:true}));
-                    return true;
-                  }
-                  return false;
-                })()
-                """
+                    (function() {
+                      var el = document.activeElement;
+                      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+                        if (el.value !== undefined) { el.value += '\(escapedText)'; }
+                        else { el.textContent += '\(escapedText)'; }
+                        el.dispatchEvent(new Event('input', {bubbles:true}));
+                        el.dispatchEvent(new Event('change', {bubbles:true}));
+                        return true;
+                      }
+                      return false;
+                    })()
+                    """
             } else {
                 js = """
-                (function() {
-                  var el = document.activeElement || document.body;
-                  var ev = new KeyboardEvent('\(evt)', {bubbles:true, cancelable:true, key:'\(escapedKey)'});
-                  el.dispatchEvent(ev);
-                  return true;
-                })()
-                """
+                    (function() {
+                      var el = document.activeElement || document.body;
+                      var ev = new KeyboardEvent('\(evt)', {bubbles:true, cancelable:true, key:'\(escapedKey)'});
+                      el.dispatchEvent(ev);
+                      return true;
+                    })()
+                    """
             }
             target.runtimeEvaluate(
                 expression: js, awaitPromise: false, returnByValue: true
@@ -497,18 +509,18 @@ final class CDPBridge {
             let escaped = text.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
             let js = """
-            (function() {
-              var el = document.activeElement;
-              if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
-                if (el.value !== undefined) { el.value += '\(escaped)'; }
-                else { el.textContent += '\(escaped)'; }
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.dispatchEvent(new Event('change', {bubbles:true}));
-                return true;
-              }
-              return false;
-            })()
-            """
+                (function() {
+                  var el = document.activeElement;
+                  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+                    if (el.value !== undefined) { el.value += '\(escaped)'; }
+                    else { el.textContent += '\(escaped)'; }
+                    el.dispatchEvent(new Event('input', {bubbles:true}));
+                    el.dispatchEvent(new Event('change', {bubbles:true}));
+                    return true;
+                  }
+                  return false;
+                })()
+                """
             target.runtimeEvaluate(
                 expression: js, awaitPromise: false, returnByValue: true
             ) { [weak self] _ in
@@ -528,7 +540,7 @@ final class CDPBridge {
             target.webView.customUserAgent = ua.isEmpty ? nil : ua
             respond(requestId: requestId, result: [:])
         case "Emulation.setDeviceMetricsOverride",
-             "Emulation.clearDeviceMetricsOverride":
+            "Emulation.clearDeviceMetricsOverride":
             // No-op: viewport size on iOS depends on the host view bounds.
             respond(requestId: requestId, result: [:])
         default:
@@ -544,15 +556,19 @@ final class CDPBridge {
         // Estimate serialized size for chunk decision.
         let data = (try? JSONSerialization.data(withJSONObject: result)) ?? Data()
         if data.count <= 64 * 1024 {
-            send(.cdpResponse(requestId: requestId, result: codable, error: nil,
-                              chunkData: nil, chunkIndex: nil, totalChunks: nil))
+            send(
+                .cdpResponse(
+                    requestId: requestId, result: codable, error: nil,
+                    chunkData: nil, chunkIndex: nil, totalChunks: nil))
             return
         }
         // Chunk the serialized JSON.
         guard let json = String(data: data, encoding: .utf8) else {
-            send(.cdpResponse(requestId: requestId, result: nil,
-                              error: "Result not utf-8 serializable",
-                              chunkData: nil, chunkIndex: nil, totalChunks: nil))
+            send(
+                .cdpResponse(
+                    requestId: requestId, result: nil,
+                    error: "Result not utf-8 serializable",
+                    chunkData: nil, chunkIndex: nil, totalChunks: nil))
             return
         }
         let chunkSize = 32 * 1024
@@ -562,23 +578,28 @@ final class CDPBridge {
         while i < json.endIndex {
             let end = json.index(i, offsetBy: chunkSize, limitedBy: json.endIndex) ?? json.endIndex
             let slice = String(json[i..<end])
-            send(.cdpResponse(requestId: requestId, result: nil, error: nil,
-                              chunkData: slice, chunkIndex: idx, totalChunks: total))
+            send(
+                .cdpResponse(
+                    requestId: requestId, result: nil, error: nil,
+                    chunkData: slice, chunkIndex: idx, totalChunks: total))
             idx += 1
             i = end
         }
     }
 
     func respondError(requestId: String, error: String) {
-        send(.cdpResponse(requestId: requestId, result: nil, error: error,
-                          chunkData: nil, chunkIndex: nil, totalChunks: nil))
+        send(
+            .cdpResponse(
+                requestId: requestId, result: nil, error: error,
+                chunkData: nil, chunkIndex: nil, totalChunks: nil))
     }
 
     func respondNotImplemented(requestId: String, method: String) {
-        send(.cdpResponse(
-            requestId: requestId, result: nil,
-            error: "CDP method not implemented in WKWebView bridge: \(method)",
-            chunkData: nil, chunkIndex: nil, totalChunks: nil))
+        send(
+            .cdpResponse(
+                requestId: requestId, result: nil,
+                error: "CDP method not implemented in WKWebView bridge: \(method)",
+                chunkData: nil, chunkIndex: nil, totalChunks: nil))
     }
 
     func emitEvent(method: String, params: [String: Any], sessionId: String?) {

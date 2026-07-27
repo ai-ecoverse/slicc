@@ -1,5 +1,5 @@
-import Foundation
 import AppUpdater
+import Foundation
 import Version
 
 /// A custom `ReleaseProvider` that uses tolerant version decoding so that

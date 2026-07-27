@@ -43,9 +43,9 @@ enum ElectronLaunchError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .appAlreadyRunning(let message),
-             .cdpNotAvailable(let message),
-             .remotDebuggingDisabled(let message),
-             .overlayConfigUnresolved(let message):
+            .cdpNotAvailable(let message),
+            .remotDebuggingDisabled(let message),
+            .overlayConfigUnresolved(let message):
             return message
         }
     }
@@ -103,11 +103,13 @@ final class ElectronLauncher {
         let resolved = try resolveApp(appPath)
         return workspace.runningApplications.filter { application in
             if let bundleURL = resolved.bundleURL,
-               application.bundleURL?.standardizedFileURL == bundleURL.standardizedFileURL {
+                application.bundleURL?.standardizedFileURL == bundleURL.standardizedFileURL
+            {
                 return true
             }
             if let executableURL = application.executableURL?.standardizedFileURL,
-               executableURL == resolved.executableURL.standardizedFileURL {
+                executableURL == resolved.executableURL.standardizedFileURL
+            {
                 return true
             }
             return false
@@ -155,17 +157,19 @@ final class ElectronLauncher {
             process.arguments = [
                 "-n", "-a", bundleURL.path,
                 "-W", "--args",
-                "--remote-debugging-port=\(cdpPort)"
+                "--remote-debugging-port=\(cdpPort)",
             ]
         } else {
             process.executableURL = resolved.executableURL
             process.arguments = ["--remote-debugging-port=\(cdpPort)"]
         }
 
-        logger.info("Launching Electron app", metadata: [
-            "app": .string(resolved.displayName),
-            "cdpPort": .stringConvertible(cdpPort)
-        ])
+        logger.info(
+            "Launching Electron app",
+            metadata: [
+                "app": .string(resolved.displayName),
+                "cdpPort": .stringConvertible(cdpPort),
+            ])
         try process.run()
 
         enum LaunchOutcome {
@@ -192,7 +196,8 @@ final class ElectronLauncher {
             logger.info("Electron CDP became available", metadata: ["cdpPort": .stringConvertible(cdpPort)])
             return ElectronProcess(process: process, cdpPort: cdpPort, displayName: resolved.displayName)
         case .processExited(let code):
-            let message = "\(resolved.displayName) exited with code \(code) before remote debugging was available. This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse)."
+            let message =
+                "\(resolved.displayName) exited with code \(code) before remote debugging was available. This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse)."
             throw ElectronLaunchError.remotDebuggingDisabled(message)
         }
     }
@@ -314,9 +319,10 @@ private func waitForCDPAvailability(
         request.timeoutInterval = 0.5
 
         if let (data, response) = try? await session.data(for: request),
-           let http = response as? HTTPURLResponse,
-           http.statusCode == 200,
-           !data.isEmpty {
+            let http = response as? HTTPURLResponse,
+            http.statusCode == 200,
+            !data.isEmpty
+        {
             logger.debug("Electron CDP probe succeeded", metadata: ["attempt": .stringConvertible(attempt + 1)])
             return
         }
@@ -424,7 +430,8 @@ func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -
     // this because it doesn't register an all-frames script.
     let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
     let originGuard = "try{if(location.origin===new URL(\"\(escapedAppURL)\").origin)return;}catch(e){}"
-    let injectBody = "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
+    let injectBody =
+        "if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});}else{document.addEventListener('DOMContentLoaded',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\(escapedAppURL)\"});});}"
     let injectionCall = "(function(){\(frameGuard)\(originGuard)\(injectBody)})();"
     return bundleSource + "\n" + injectionCall
 }
@@ -577,18 +584,21 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
         self.thinBridge = nil
-        self.testingThinBootstraps = thinBootstraps
+        self.testingThinBootstraps =
+            thinBootstraps
             ?? ThinBootstrapSet(leader: "/* test-leader */", follower: "/* test-follower */")
     }
 
     func start() {
         let alreadyRunning = stateQueue.sync { pollTask != nil }
         guard !alreadyRunning else { return }
-        logger.info("Starting overlay injector polling loop", metadata: [
-            "cdpPort": .stringConvertible(cdpPort),
-            "servePort": .stringConvertible(servePort),
-            "projectRoot": .string(projectRoot.path)
-        ])
+        logger.info(
+            "Starting overlay injector polling loop",
+            metadata: [
+                "cdpPort": .stringConvertible(cdpPort),
+                "servePort": .stringConvertible(servePort),
+                "projectRoot": .string(projectRoot.path),
+            ])
         let task = Task { [weak self] in
             guard let self else { return }
             await self.runPollingLoop()
@@ -644,7 +654,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             if shouldStop() { return false }
             if await probe() { return true }
             if elapsed >= budgetNanoseconds { return false }
-            let step = intervalNanoseconds == 0
+            let step =
+                intervalNanoseconds == 0
                 ? budgetNanoseconds - elapsed
                 : min(intervalNanoseconds, budgetNanoseconds - elapsed)
             try? await Task.sleep(nanoseconds: step)
@@ -812,10 +823,12 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
         let targets = try JSONDecoder().decode([ElectronInspectableTarget].self, from: data)
         let selectedTargets = selectBestOverlayTargets(targets)
-        logger.debug("syncTargets", metadata: [
-            "totalTargets": .stringConvertible(targets.count),
-            "selectedTargets": .stringConvertible(selectedTargets.count)
-        ])
+        logger.debug(
+            "syncTargets",
+            metadata: [
+                "totalTargets": .stringConvertible(targets.count),
+                "selectedTargets": .stringConvertible(selectedTargets.count),
+            ])
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
 
         // Drop the elected leader if its target is no longer present so the
@@ -995,7 +1008,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         let candidates = [
             projectRoot,
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-            projectRoot.deletingLastPathComponent()
+            projectRoot.deletingLastPathComponent(),
         ]
         let relativePaths = ["dist/ui/electron-overlay.js", "dist/ui/electron-overlay-entry.js"]
 
@@ -1105,7 +1118,8 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     func start() {
         guard let urlString = target.webSocketDebuggerURL,
-              let url = URL(string: urlString) else { return }
+            let url = URL(string: urlString)
+        else { return }
         let task = urlSession.webSocketTask(with: url)
         stateQueue.sync { socket = task }
         task.resume()
@@ -1178,10 +1192,12 @@ final class OverlayTargetSession: @unchecked Sendable {
     func gracefulShutdown() async {
         let alreadyClosed = stateQueue.sync { closed }
         if alreadyClosed { return }
-        _ = await sendCommand(method: "Runtime.evaluate", params: [
-            "expression": ElectronOverlayInjector.overlayHostRemovalExpression(),
-            "awaitPromise": false
-        ])
+        _ = await sendCommand(
+            method: "Runtime.evaluate",
+            params: [
+                "expression": ElectronOverlayInjector.overlayHostRemovalExpression(),
+                "awaitPromise": false,
+            ])
         stop()
     }
 
@@ -1189,10 +1205,12 @@ final class OverlayTargetSession: @unchecked Sendable {
 
     private func runConnectFlow() async {
         let alreadyBypassed = isAlreadyBypassed(target.url)
-        logger.info("Overlay target connection opening", metadata: [
-            "target": .string(target.url),
-            "alreadyBypassed": .stringConvertible(alreadyBypassed)
-        ])
+        logger.info(
+            "Overlay target connection opening",
+            metadata: [
+                "target": .string(target.url),
+                "alreadyBypassed": .stringConvertible(alreadyBypassed),
+            ])
 
         _ = await sendCommand(method: "Runtime.enable", awaitResponse: true)
         _ = await sendCommand(method: "Page.enable", awaitResponse: true)
@@ -1256,8 +1274,9 @@ final class OverlayTargetSession: @unchecked Sendable {
             do {
                 let message = try await activeSocket.receive()
                 guard case .string(let text) = message,
-                      let data = text.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    let data = text.data(using: .utf8),
+                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
                     continue
                 }
                 if let id = json["id"] as? Int {
@@ -1271,11 +1290,13 @@ final class OverlayTargetSession: @unchecked Sendable {
             } catch {
                 if !isClosed() {
                     let pendingCount = stateQueue.sync { responseWaiters.count }
-                    logger.warning("Overlay session disconnected, failing in-flight CDP requests", metadata: [
-                        "target": .string(target.url),
-                        "error": .string(error.localizedDescription),
-                        "pendingWaiters": .stringConvertible(pendingCount)
-                    ])
+                    logger.warning(
+                        "Overlay session disconnected, failing in-flight CDP requests",
+                        metadata: [
+                            "target": .string(target.url),
+                            "error": .string(error.localizedDescription),
+                            "pendingWaiters": .stringConvertible(pendingCount),
+                        ])
                 }
                 let targetID = target.webSocketDebuggerURL ?? target.url
                 // Fail all pending continuations and cancel the socket so the
@@ -1345,14 +1366,18 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
         switch decision {
         case .done, .noEscalationRequested:
-            logger.info("Overlay iframe loaded successfully after CSP reload — no proxy needed", metadata: [
-                "target": .string(target.url),
-                "decision": .string(String(describing: decision))
-            ])
+            logger.info(
+                "Overlay iframe loaded successfully after CSP reload — no proxy needed",
+                metadata: [
+                    "target": .string(target.url),
+                    "decision": .string(String(describing: decision)),
+                ])
         case .escalateToFetchProxy:
-            logger.warning("Overlay iframe still blocked after bypass reload — escalating to Fetch proxy", metadata: [
-                "target": .string(target.url)
-            ])
+            logger.warning(
+                "Overlay iframe still blocked after bypass reload — escalating to Fetch proxy",
+                metadata: [
+                    "target": .string(target.url)
+                ])
             await activateFetchProxy()
         }
     }
@@ -1362,17 +1387,21 @@ final class OverlayTargetSession: @unchecked Sendable {
         // overlay iframe's own http origin — Fetch.enable patterns must be
         // http(s) and the iframe is what we ultimately need unblocked.
         let origin = OverlayTargetSession.fetchProxyOrigin(targetURL: target.url, servePort: servePort)
-        logger.warning("CSP reload insufficient, escalating to Fetch proxy", metadata: [
-            "target": .string(target.url),
-            "origin": .string(origin)
-        ])
+        logger.warning(
+            "CSP reload insufficient, escalating to Fetch proxy",
+            metadata: [
+                "target": .string(target.url),
+                "origin": .string(origin),
+            ])
         stateQueue.sync {
             fetchProxyActive = true
             pendingReload = true
         }
-        _ = await sendCommand(method: "Fetch.enable", params: [
-            "patterns": [["urlPattern": "\(origin)/*", "requestStage": "Request"]]
-        ], awaitResponse: true)
+        _ = await sendCommand(
+            method: "Fetch.enable",
+            params: [
+                "patterns": [["urlPattern": "\(origin)/*", "requestStage": "Request"]]
+            ], awaitResponse: true)
         _ = await sendCommand(method: "Page.reload", params: ["ignoreCache": true])
     }
 
@@ -1406,24 +1435,30 @@ final class OverlayTargetSession: @unchecked Sendable {
             // here is what previously tripped the 10s command timeout on
             // every cycle, producing the "CDP command timed out" /
             // "Client disconnected" loop in AEM Desktop.
-            _ = await sendCommand(method: "Fetch.fulfillRequest", params: [
-                "requestId": requestId,
-                "responseCode": proxied.statusCode,
-                "responseHeaders": proxied.headers,
-                "body": proxied.bodyBase64
-            ])
+            _ = await sendCommand(
+                method: "Fetch.fulfillRequest",
+                params: [
+                    "requestId": requestId,
+                    "responseCode": proxied.statusCode,
+                    "responseHeaders": proxied.headers,
+                    "body": proxied.bodyBase64,
+                ])
             if proxied.strippedCSP {
                 logger.info("Stripped CSP", metadata: ["url": .string(String(urlString.prefix(80)))])
             }
         } catch {
-            logger.error("Fetch-proxy request failed", metadata: [
-                "url": .string(String(urlString.prefix(80))),
-                "error": .string(error.localizedDescription)
-            ])
-            _ = await sendCommand(method: "Fetch.failRequest", params: [
-                "requestId": requestId,
-                "errorReason": "Failed"
-            ])
+            logger.error(
+                "Fetch-proxy request failed",
+                metadata: [
+                    "url": .string(String(urlString.prefix(80))),
+                    "error": .string(error.localizedDescription),
+                ])
+            _ = await sendCommand(
+                method: "Fetch.failRequest",
+                params: [
+                    "requestId": requestId,
+                    "errorReason": "Failed",
+                ])
         }
     }
 
@@ -1462,7 +1497,7 @@ final class OverlayTargetSession: @unchecked Sendable {
             "content-security-policy-report-only",
             "transfer-encoding",
             "connection",
-            "keep-alive"
+            "keep-alive",
         ]
         var responseHeaders: [[String: String]] = []
         var strippedCSP = false
@@ -1491,10 +1526,12 @@ final class OverlayTargetSession: @unchecked Sendable {
     // MARK: Helpers
 
     private func sendBootstrap() async {
-        _ = await sendCommand(method: "Runtime.evaluate", params: [
-            "expression": bootstrapScript,
-            "awaitPromise": false
-        ])
+        _ = await sendCommand(
+            method: "Runtime.evaluate",
+            params: [
+                "expression": bootstrapScript,
+                "awaitPromise": false,
+            ])
     }
 
     /// Periodic presence re-check loop: every `presenceCheckIntervalNanoseconds`
@@ -1520,16 +1557,20 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// Mirrors node-server's `reinjectIfEvicted`.
     private func reinjectIfEvicted() async {
         let before: (closed: Bool, pendingReload: Bool) = stateQueue.sync { (closed, pendingReload) }
-        guard ElectronOverlayInjector.shouldAttemptEvictionReinject(
-            closed: before.closed,
-            pendingReload: before.pendingReload
-        ) else { return }
+        guard
+            ElectronOverlayInjector.shouldAttemptEvictionReinject(
+                closed: before.closed,
+                pendingReload: before.pendingReload
+            )
+        else { return }
         let evicted = await probeOverlayEvicted()
         let after: (closed: Bool, pendingReload: Bool) = stateQueue.sync { (closed, pendingReload) }
-        guard evicted, ElectronOverlayInjector.shouldAttemptEvictionReinject(
-            closed: after.closed,
-            pendingReload: after.pendingReload
-        ) else { return }
+        guard evicted,
+            ElectronOverlayInjector.shouldAttemptEvictionReinject(
+                closed: after.closed,
+                pendingReload: after.pendingReload
+            )
+        else { return }
         logger.info("Overlay evicted, re-injecting", metadata: ["target": .string(target.url)])
         await sendBootstrap()
     }
@@ -1539,11 +1580,13 @@ final class OverlayTargetSession: @unchecked Sendable {
     /// SPA-DOM-root eviction case re-injection must repair. Mirrors
     /// node-server's `probeOverlayEvicted`.
     private func probeOverlayEvicted() async -> Bool {
-        let result = await sendCommand(method: "Runtime.evaluate", params: [
-            "expression": ElectronOverlayInjector.overlayEvictedProbeExpression(),
-            "awaitPromise": false,
-            "returnByValue": true
-        ], awaitResponse: true)
+        let result = await sendCommand(
+            method: "Runtime.evaluate",
+            params: [
+                "expression": ElectronOverlayInjector.overlayEvictedProbeExpression(),
+                "awaitPromise": false,
+                "returnByValue": true,
+            ], awaitResponse: true)
         let value = (result?["result"] as? [String: Any])?["value"] as? String ?? ""
         return ElectronOverlayInjector.shouldReinjectForEvictionProbe(value)
     }
@@ -1556,25 +1599,33 @@ final class OverlayTargetSession: @unchecked Sendable {
     private func registerNewDocumentScript() async {
         let currentIdentifier = stateQueue.sync { addedScriptIdentifier }
         if ElectronOverlayInjector.shouldSkipNewDocumentRegistration(currentIdentifier: currentIdentifier) {
-            logger.debug("Overlay bootstrap already registered, skipping", metadata: [
-                "target": .string(target.url),
-                "identifier": .string(currentIdentifier ?? "")
-            ])
+            logger.debug(
+                "Overlay bootstrap already registered, skipping",
+                metadata: [
+                    "target": .string(target.url),
+                    "identifier": .string(currentIdentifier ?? ""),
+                ])
             return
         }
-        let result = await sendCommand(method: "Page.addScriptToEvaluateOnNewDocument", params: [
-            "source": bootstrapScript
-        ], awaitResponse: true)
+        let result = await sendCommand(
+            method: "Page.addScriptToEvaluateOnNewDocument",
+            params: [
+                "source": bootstrapScript
+            ], awaitResponse: true)
         if let identifier = result?["identifier"] as? String {
             stateQueue.sync { addedScriptIdentifier = identifier }
-            logger.debug("Registered new-document overlay bootstrap", metadata: [
-                "target": .string(target.url),
-                "identifier": .string(identifier)
-            ])
+            logger.debug(
+                "Registered new-document overlay bootstrap",
+                metadata: [
+                    "target": .string(target.url),
+                    "identifier": .string(identifier),
+                ])
         } else {
-            logger.warning("Page.addScriptToEvaluateOnNewDocument returned no identifier", metadata: [
-                "target": .string(target.url)
-            ])
+            logger.warning(
+                "Page.addScriptToEvaluateOnNewDocument returned no identifier",
+                metadata: [
+                    "target": .string(target.url)
+                ])
         }
     }
 
@@ -1585,33 +1636,39 @@ final class OverlayTargetSession: @unchecked Sendable {
     @discardableResult
     private func verifyOverlayPresent(context: String) async -> Bool {
         let expression = """
-        (function() {
-          try {
-            var hasGlobal = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
-            var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
-            return (hasGlobal ? 'g' : '-') + (hasRoot ? 'r' : '-');
-          } catch (e) { return 'err:' + String(e); }
-        })()
-        """
-        let result = await sendCommand(method: "Runtime.evaluate", params: [
-            "expression": expression,
-            "awaitPromise": false,
-            "returnByValue": true
-        ], awaitResponse: true)
+            (function() {
+              try {
+                var hasGlobal = typeof window.__SLICC_ELECTRON_OVERLAY__ !== 'undefined';
+                var hasRoot = !!document.getElementById('slicc-electron-overlay-root');
+                return (hasGlobal ? 'g' : '-') + (hasRoot ? 'r' : '-');
+              } catch (e) { return 'err:' + String(e); }
+            })()
+            """
+        let result = await sendCommand(
+            method: "Runtime.evaluate",
+            params: [
+                "expression": expression,
+                "awaitPromise": false,
+                "returnByValue": true,
+            ], awaitResponse: true)
         let value = (result?["result"] as? [String: Any])?["value"] as? String ?? ""
         let stuck = value.hasPrefix("g")
         if stuck {
-            logger.info("Overlay inject verified present", metadata: [
-                "target": .string(target.url),
-                "context": .string(context),
-                "marker": .string(value)
-            ])
+            logger.info(
+                "Overlay inject verified present",
+                metadata: [
+                    "target": .string(target.url),
+                    "context": .string(context),
+                    "marker": .string(value),
+                ])
         } else {
-            logger.warning("Overlay inject did NOT take effect — likely stale execution context", metadata: [
-                "target": .string(target.url),
-                "context": .string(context),
-                "marker": .string(value)
-            ])
+            logger.warning(
+                "Overlay inject did NOT take effect — likely stale execution context",
+                metadata: [
+                    "target": .string(target.url),
+                    "context": .string(context),
+                    "marker": .string(value),
+                ])
         }
         return stuck
     }
@@ -1621,13 +1678,16 @@ final class OverlayTargetSession: @unchecked Sendable {
         // `<slicc-launcher>` host → (open) shadowRoot → iframe and only reports
         // success when the iframe actually navigated away from `about:blank`.
         let expression = ElectronOverlayInjector.overlayLoadedProbeExpression()
-        let result = await sendCommand(method: "Runtime.evaluate", params: [
-            "expression": expression,
-            "awaitPromise": false,
-            "returnByValue": true
-        ], awaitResponse: true)
+        let result = await sendCommand(
+            method: "Runtime.evaluate",
+            params: [
+                "expression": expression,
+                "awaitPromise": false,
+                "returnByValue": true,
+            ], awaitResponse: true)
         if let inner = result?["result"] as? [String: Any],
-           let value = inner["value"] as? String {
+            let value = inner["value"] as? String
+        {
             return value == "ok"
         }
         return false
@@ -1667,11 +1727,13 @@ final class OverlayTargetSession: @unchecked Sendable {
                         self.responseWaiters.removeValue(forKey: id)
                     }
                     if let waiter {
-                        self.logger.warning("CDP command timed out, failing waiter", metadata: [
-                            "target": .string(self.target.url),
-                            "method": .string(methodName),
-                            "id": .stringConvertible(id)
-                        ])
+                        self.logger.warning(
+                            "CDP command timed out, failing waiter",
+                            metadata: [
+                                "target": .string(self.target.url),
+                                "method": .string(methodName),
+                                "id": .stringConvertible(id),
+                            ])
                         waiter.resume(returning: nil)
                     }
                 }
@@ -1699,10 +1761,12 @@ final class OverlayTargetSession: @unchecked Sendable {
                     try await activeSocket.send(.string(text))
                 }
             } catch {
-                logger.debug("Failed to send CDP command", metadata: [
-                    "method": .string(method),
-                    "error": .string(error.localizedDescription)
-                ])
+                logger.debug(
+                    "Failed to send CDP command",
+                    metadata: [
+                        "method": .string(method),
+                        "error": .string(error.localizedDescription),
+                    ])
             }
             return nil
         }
@@ -1738,9 +1802,10 @@ final class OverlayTargetSession: @unchecked Sendable {
         // back to the overlay iframe's `http://localhost:<servePort>` origin
         // for any non-http parent — file://, app://, etc.
         guard let url = URL(string: urlString),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = url.host else {
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https",
+            let host = url.host
+        else {
             return nil
         }
         if let port = url.port { return "\(scheme)://\(host):\(port)" }

@@ -37,13 +37,15 @@ public final class OptelCollector: @unchecked Sendable {
 
     /// Snapshot of currently buffered events. Test/debug aid.
     public var bufferedCount: Int {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return buffered.count
     }
 
     /// Whether a sampling session has been attached.
     public var hasSession: Bool {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return session != nil
     }
 

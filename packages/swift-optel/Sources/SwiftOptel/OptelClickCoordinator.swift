@@ -44,7 +44,8 @@ public enum OptelClickCoordinator {
     /// the deferred emission.
     @discardableResult
     public static func beginMonitorEvent() -> UInt64 {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         pendingEpoch &+= 1
         return pendingEpoch
     }
@@ -53,21 +54,24 @@ public enum OptelClickCoordinator {
     /// handler. Called by ``OptelTapModifier`` / ``OptelButton`` right before
     /// they emit their own `click`.
     public static func claimByRefined() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         refinedClaimEpoch = pendingEpoch
     }
 
     /// Whether a refined handler claimed the supplied monitor `epoch`. Used
     /// by the monitor's deferred emission to decide whether to skip.
     public static func wasClaimedByRefined(epoch: UInt64) -> Bool {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return refinedClaimEpoch == epoch
     }
 
     /// Test-only reset of every counter and claim. Mirrors the install-latch
     /// resets exposed by the other macOS hooks.
     internal static func _testing_reset() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         pendingEpoch = 0
         refinedClaimEpoch = nil
     }

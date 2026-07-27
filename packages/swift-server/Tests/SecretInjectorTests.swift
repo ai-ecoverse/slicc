@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 final class SecretInjectorTests: XCTestCase {
@@ -182,7 +183,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com", "*.github.com"]
-            ),
+            )
         ])
         let header = "Basic \(base64("x-access-token:ghp_masked999abc"))"
         let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "github.com")
@@ -202,7 +203,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let header = "Basic \(base64("u:ghp_masked999abc"))"
         let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "evil.example.com")
@@ -245,7 +246,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let url = "https://x-access-token:ghp_masked999abc@github.com/owner/repo.git"
         let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
@@ -269,7 +270,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let url = "https://u:ghp_masked999abc@evil.example.com/"
         let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
@@ -320,7 +321,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let body = Data("hello ghp_masked999abc world".utf8)
         let out = injector.unmaskBodyBytes(bytes: body, targetHostname: "github.com")
@@ -334,7 +335,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let before = Data([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80])
         let out = injector.unmaskBodyBytes(bytes: before, targetHostname: "github.com")
@@ -348,7 +349,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         var input = Data([0xff, 0xfe, 0x00])
         input.append(Data("ghp_masked999abc".utf8))
@@ -367,7 +368,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let body = Data("hello ghp_masked999abc world".utf8)
         let out = injector.unmaskBodyBytes(bytes: body, targetHostname: "evil.example.com")
@@ -383,7 +384,7 @@ final class SecretInjectorTests: XCTestCase {
                 realValue: "ghp_realToken123",
                 maskedValue: "ghp_masked999abc",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let body = Data("hello ghp_realToken123 world".utf8)
         let out = injector.scrubResponseBytes(bytes: body)
@@ -467,8 +468,9 @@ final class SecretInjectorTests: XCTestCase {
         await injector.reload()
 
         // Consumable: `secret get` / env-injection feed sees identity mask.
-        XCTAssertEqual(injector.maskedValue(for: name), "shortie8",
-                       "Short env-file value must remain consumable with identity masking")
+        XCTAssertEqual(
+            injector.maskedValue(for: name), "shortie8",
+            "Short env-file value must remain consumable with identity masking")
         XCTAssertEqual(injector.maskedEnvironment[name], "shortie8")
         let masked = injector.maskedEntries.first(where: { $0.name == name })
         XCTAssertNotNil(masked, "Short value must appear in maskedEntries")
@@ -484,8 +486,9 @@ final class SecretInjectorTests: XCTestCase {
             return XCTFail("Short consumable must not produce a domainBlocked result")
         }
         XCTAssertEqual(text, "header carrying shortie8 verbatim")
-        XCTAssertEqual(injector.scrub(text: "response with shortie8 in body"),
-                       "response with shortie8 in body")
+        XCTAssertEqual(
+            injector.scrub(text: "response with shortie8 in body"),
+            "response with shortie8 in body")
     }
 
     func testOAuthShortValueIsConsumableAndOverridesEnvEntry() async throws {
@@ -507,18 +510,20 @@ final class SecretInjectorTests: XCTestCase {
         // The short OAuth value wins over the env-file long value: identity-
         // masked, but NOT a scrubber pattern (the env-file real value must
         // no longer be redacted from responses).
-        XCTAssertEqual(injector.maskedValue(for: name), "tiny8chr",
-                       "Too-short OAuth value overrides env-file entry as consumable-only")
-        XCTAssertEqual(injector.scrub(text: "saw env-file-realLong here"),
-                       "saw env-file-realLong here",
-                       "Overridden env-file real value must not be scrubbed")
+        XCTAssertEqual(
+            injector.maskedValue(for: name), "tiny8chr",
+            "Too-short OAuth value overrides env-file entry as consumable-only")
+        XCTAssertEqual(
+            injector.scrub(text: "saw env-file-realLong here"),
+            "saw env-file-realLong here",
+            "Overridden env-file real value must not be scrubbed")
     }
 
     // MARK: - signHmac()
 
     func testSignHmacComputesSignatureAndNamesTargetHeader() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"])
         ])
         let body = Array("{\"step\":3,\"status\":\"running\"}".utf8)
         let expected = hmacSHA256Hex(key: "job-signing-secret-value", message: body)
@@ -532,17 +537,17 @@ final class SecretInjectorTests: XCTestCase {
     func testSignHmacDiffersByRealValueNotJustMaskedValue() {
         let body = Array("same body".utf8)
         let a = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "real-value-one", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "real-value-one", domains: ["worker.example.com"])
         ]).signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
         let b = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "real-value-two", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "real-value-two", domains: ["worker.example.com"])
         ]).signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
         XCTAssertNotEqual(a.signatureHex, b.signatureHex)
     }
 
     func testSignHmacReturnsForbiddenForOutOfScopeDomain() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"])
         ])
         let result = injector.signHmac(spec: "SIGNING_KEY:x-job-signature", body: [], targetHostname: "evil.example.com")
         XCTAssertEqual(result.forbidden, SecretInjector.ForbiddenInfo(secretName: "SIGNING_KEY", hostname: "evil.example.com"))
@@ -569,7 +574,7 @@ final class SecretInjectorTests: XCTestCase {
 
     func testSignHmacTimestampBoundSignsPrefixedMessageAndReturnsTimestamp() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"])
         ])
         let body = Array("{\"step\":3,\"status\":\"running\"}".utf8)
         let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
@@ -591,7 +596,7 @@ final class SecretInjectorTests: XCTestCase {
 
     func testSignHmacTimestampBoundDiffersFromRawBodyForm() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"])
         ])
         let body = Array("{}".utf8)
         let raw = injector.signHmac(spec: "SIGNING_KEY:x-job-signature", body: body, targetHostname: "worker.example.com")
@@ -606,7 +611,7 @@ final class SecretInjectorTests: XCTestCase {
 
     func testSignHmacTimestampBoundReturnsForbiddenForOutOfScopeDomain() {
         let injector = makeInjector(secrets: [
-            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"]),
+            makeSecret(name: "SIGNING_KEY", realValue: "job-signing-secret-value", domains: ["worker.example.com"])
         ])
         let result = injector.signHmac(
             spec: "SIGNING_KEY:x-job-signature:x-job-timestamp",

@@ -1,5 +1,6 @@
-import XCTest
 import Foundation
+import XCTest
+
 @testable import SliccFollower
 
 // Compiled into the `SliccFollowerTests` bundle (see project.yml) and run in CI
@@ -23,10 +24,10 @@ final class SyncProtocolTranscriptExportTests: XCTestCase {
     func testExportResponseMessagesDecodeToUnknown() throws {
         for msgType in exportTypes {
             let json = """
-            {"type":"\(msgType)","requestId":"te-1"}
-            """.data(using: .utf8)!
+                {"type":"\(msgType)","requestId":"te-1"}
+                """.data(using: .utf8)!
             let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
-            guard case let .unknown(type) = msg else {
+            guard case .unknown(let type) = msg else {
                 XCTFail("\(msgType) should decode to .unknown, got \(msg)")
                 continue
             }
@@ -53,9 +54,9 @@ final class SyncProtocolTranscriptExportTests: XCTestCase {
 final class SyncProtocolCherryTests: XCTestCase {
     func testRemoteTargetInfoDecodesCherryKindAndCapabilities() throws {
         let json = """
-        {"targetId":"c","title":"Host","url":"https://host.example",
-         "kind":"cherry","capabilities":{"navigate":true,"network":false,"screenshot":true}}
-        """.data(using: .utf8)!
+            {"targetId":"c","title":"Host","url":"https://host.example",
+             "kind":"cherry","capabilities":{"navigate":true,"network":false,"screenshot":true}}
+            """.data(using: .utf8)!
         let target = try JSONDecoder().decode(RemoteTargetInfo.self, from: json)
         XCTAssertEqual(target.kind, "cherry")
         XCTAssertEqual(target.capabilities?.network, false)
@@ -65,10 +66,10 @@ final class SyncProtocolCherryTests: XCTestCase {
 
     func testCherrySliccEventMessageDecodes() throws {
         let json = """
-        {"type":"cherry.slicc_event","targetId":"c","name":"open-url","detail":{"url":"https://x"}}
-        """.data(using: .utf8)!
+            {"type":"cherry.slicc_event","targetId":"c","name":"open-url","detail":{"url":"https://x"}}
+            """.data(using: .utf8)!
         let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
-        guard case let .cherrySliccEvent(targetId, name, detail) = msg else {
+        guard case .cherrySliccEvent(let targetId, let name, let detail) = msg else {
             return XCTFail("expected cherrySliccEvent, got \(msg)")
         }
         XCTAssertEqual(targetId, "c")

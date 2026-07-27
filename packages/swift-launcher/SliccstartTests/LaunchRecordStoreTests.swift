@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 final class LaunchRecordStoreTests: XCTestCase {
@@ -66,18 +67,18 @@ final class LaunchRecordStoreTests: XCTestCase {
         // `bridgeToken == nil`) so reattach falls back to the freshly-minted
         // static token instead of failing the whole snapshot.
         let legacyJSON = """
-        [
-          {
-            "targetId": "/Applications/Google Chrome.app",
-            "targetName": "Google Chrome",
-            "targetType": "chromiumBrowser",
-            "electronAppPath": null,
-            "servePort": 5710,
-            "cdpPort": 9222,
-            "joinUrl": null
-          }
-        ]
-        """
+            [
+              {
+                "targetId": "/Applications/Google Chrome.app",
+                "targetName": "Google Chrome",
+                "targetType": "chromiumBrowser",
+                "electronAppPath": null,
+                "servePort": 5710,
+                "cdpPort": 9222,
+                "joinUrl": null
+              }
+            ]
+            """
         try legacyJSON.write(to: storeURL, atomically: true, encoding: .utf8)
 
         let loaded = store.load()
@@ -91,18 +92,18 @@ final class LaunchRecordStoreTests: XCTestCase {
         // `joinUrl` key. Persisted records must continue to load with
         // `joinUrl == nil` instead of failing the whole snapshot.
         let legacyJSON = """
-        [
-          {
-            "targetId": "/Applications/Slack.app",
-            "targetName": "Slack",
-            "targetType": "electronApp",
-            "electronAppPath": "/Applications/Slack.app",
-            "servePort": 5711,
-            "cdpPort": 9223,
-            "staticRoot": null
-          }
-        ]
-        """
+            [
+              {
+                "targetId": "/Applications/Slack.app",
+                "targetName": "Slack",
+                "targetType": "electronApp",
+                "electronAppPath": "/Applications/Slack.app",
+                "servePort": 5711,
+                "cdpPort": 9223,
+                "staticRoot": null
+              }
+            ]
+            """
         try legacyJSON.write(to: storeURL, atomically: true, encoding: .utf8)
 
         let loaded = store.load()
@@ -134,7 +135,8 @@ final class LaunchRecordStoreTests: XCTestCase {
     }
 
     func testSaveCreatesParentDirectory() throws {
-        let nested = tempDir
+        let nested =
+            tempDir
             .appendingPathComponent("deep", isDirectory: true)
             .appendingPathComponent("nested", isDirectory: true)
             .appendingPathComponent("records.json")

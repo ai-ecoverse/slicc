@@ -121,24 +121,25 @@ final class CDPTarget: NSObject {
             // that defaulted to awaitPromise=true (which is most callers,
             // including playwright eval / snapshot).
             let wrapped = """
-            try {
-              const __r = await (\(expression));
-              return { ok: true, value: __r };
-            } catch (e) {
-              return { ok: false, error: String((e && e.stack) || e) };
-            }
-            """
+                try {
+                  const __r = await (\(expression));
+                  return { ok: true, value: __r };
+                } catch (e) {
+                  return { ok: false, error: String((e && e.stack) || e) };
+                }
+                """
             webView.callAsyncJavaScript(wrapped, in: nil, in: .page) { result in
                 switch result {
-                case let .success(value):
+                case .success(let value):
                     completion(self.encodeEvaluateResult(value, returnByValue: returnByValue))
-                case let .failure(err):
+                case .failure(let err):
                     completion(self.encodeException(err.localizedDescription))
                 }
             }
         } else {
             // Synchronous evaluate via an IIFE expression.
-            let wrapped = "(function() { try { return { ok: true, value: (\(expression)) }; } catch(e) { return { ok: false, error: String((e && e.stack) || e) }; } })()"
+            let wrapped =
+                "(function() { try { return { ok: true, value: (\(expression)) }; } catch(e) { return { ok: false, error: String((e && e.stack) || e) }; } })()"
             webView.evaluateJavaScript(wrapped) { value, error in
                 if let error {
                     completion(self.encodeException(error.localizedDescription))
@@ -228,9 +229,11 @@ final class CDPTarget: NSObject {
                 return
             }
             guard let image else {
-                completion(.failure(NSError(
-                    domain: "CDP", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Snapshot returned no image"])))
+                completion(
+                    .failure(
+                        NSError(
+                            domain: "CDP", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Snapshot returned no image"])))
                 return
             }
             let data: Data?
@@ -244,9 +247,11 @@ final class CDPTarget: NSObject {
             if let data {
                 completion(.success(data.base64EncodedString()))
             } else {
-                completion(.failure(NSError(
-                    domain: "CDP", code: -1,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to encode screenshot data"])))
+                completion(
+                    .failure(
+                        NSError(
+                            domain: "CDP", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Failed to encode screenshot data"])))
             }
         }
     }
@@ -285,24 +290,28 @@ final class CDPTarget: NSObject {
     }
 
     fileprivate func emitFrameNavigated() {
-        emit("Page.frameNavigated", [
-            "frame": [
-                "id": frameId,
-                "loaderId": "loader-\(targetId)-\(loaderCounter)",
-                "url": currentURL,
-                "securityOrigin": "",
-                "mimeType": "text/html",
-            ]
-        ])
+        emit(
+            "Page.frameNavigated",
+            [
+                "frame": [
+                    "id": frameId,
+                    "loaderId": "loader-\(targetId)-\(loaderCounter)",
+                    "url": currentURL,
+                    "securityOrigin": "",
+                    "mimeType": "text/html",
+                ]
+            ])
     }
 
     fileprivate func emitLifecycle(_ name: String) {
-        emit("Page.lifecycleEvent", [
-            "frameId": frameId,
-            "loaderId": "loader-\(targetId)-\(loaderCounter)",
-            "name": name,
-            "timestamp": Date().timeIntervalSince1970,
-        ])
+        emit(
+            "Page.lifecycleEvent",
+            [
+                "frameId": frameId,
+                "loaderId": "loader-\(targetId)-\(loaderCounter)",
+                "name": name,
+                "timestamp": Date().timeIntervalSince1970,
+            ])
     }
 }
 
@@ -337,12 +346,14 @@ extension CDPTarget: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard pageEnabled else { return }
-        emit("Page.lifecycleEvent", [
-            "frameId": frameId,
-            "loaderId": "loader-\(targetId)-\(loaderCounter)",
-            "name": "load",
-            "timestamp": Date().timeIntervalSince1970,
-        ])
+        emit(
+            "Page.lifecycleEvent",
+            [
+                "frameId": frameId,
+                "loaderId": "loader-\(targetId)-\(loaderCounter)",
+                "name": "load",
+                "timestamp": Date().timeIntervalSince1970,
+            ])
         emit("Page.loadEventFired", ["timestamp": Date().timeIntervalSince1970])
     }
 
@@ -363,9 +374,11 @@ extension CDPTarget: WKUIDelegate {
         completionHandler: @escaping () -> Void
     ) {
         if pageEnabled {
-            emit("Page.javascriptDialogOpening", [
-                "url": currentURL, "message": message, "type": "alert", "defaultPrompt": "",
-            ])
+            emit(
+                "Page.javascriptDialogOpening",
+                [
+                    "url": currentURL, "message": message, "type": "alert", "defaultPrompt": "",
+                ])
         }
         completionHandler()
     }
@@ -377,9 +390,11 @@ extension CDPTarget: WKUIDelegate {
         completionHandler: @escaping (Bool) -> Void
     ) {
         if pageEnabled {
-            emit("Page.javascriptDialogOpening", [
-                "url": currentURL, "message": message, "type": "confirm", "defaultPrompt": "",
-            ])
+            emit(
+                "Page.javascriptDialogOpening",
+                [
+                    "url": currentURL, "message": message, "type": "confirm", "defaultPrompt": "",
+                ])
         }
         completionHandler(false)
     }

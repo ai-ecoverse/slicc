@@ -4,6 +4,7 @@ import Hummingbird
 import HummingbirdTesting
 import NIOCore
 import XCTest
+
 @testable import slicc_server
 
 /// Tests for the `/api/sudo-approve` handler and its helpers. Mirrors the
@@ -127,7 +128,8 @@ final class SudoApproveTests: XCTestCase {
 
     private func runEnvelope(body: String, expectInvalid: Bool) async throws {
         let router = Router()
-        let runner: SudoApprove.OsascriptRunner = expectInvalid
+        let runner: SudoApprove.OsascriptRunner =
+            expectInvalid
             ? self.badRequestRunner()
             : { @Sendable _ in "button returned:Allow Once" }
         SudoApprove.registerRoutes(router: router, runner: runner)

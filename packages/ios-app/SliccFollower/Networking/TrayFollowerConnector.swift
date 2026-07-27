@@ -190,8 +190,9 @@ class TrayFollowerConnector: NSObject {
             } catch {
                 // Check if retryable
                 if let failure = currentBootstrap.failure,
-                   failure.retryable,
-                   currentBootstrap.retriesRemaining > 0 {
+                    failure.retryable,
+                    currentBootstrap.retriesRemaining > 0
+                {
                     let retry = try await signaling.retryBootstrap(
                         controllerId: controllerId,
                         bootstrapId: currentBootstrap.bootstrapId
@@ -283,7 +284,7 @@ class TrayFollowerConnector: NSObject {
             do {
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             } catch {
-                break // Task cancelled
+                break  // Task cancelled
             }
 
             guard !stopped else { break }
@@ -390,4 +391,3 @@ extension TrayFollowerConnector: WebRTCManagerDelegate {
         startReconnectLoop(reason: reason)
     }
 }
-

@@ -1,5 +1,6 @@
 import HTTPTypes
 import XCTest
+
 @testable import slicc_server
 
 /// Mirrors `packages/node-server/tests/bridge-security.test.ts`. Cross-runtime
@@ -19,7 +20,7 @@ final class BridgeSecurityTests: XCTestCase {
     func testOriginAllowlistRejectsArbitraryOrigins() {
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://evil.example.com"))
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin("http://localhost:5711"))
-        XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://sliccy.ai")) // missing www.
+        XCTAssertFalse(BridgeSecurity.isAllowedOrigin("https://sliccy.ai"))  // missing www.
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin(nil))
         XCTAssertFalse(BridgeSecurity.isAllowedOrigin(""))
     }
@@ -229,11 +230,11 @@ final class BridgeSecurityTests: XCTestCase {
     }
 
     func testValidateBridgeTokenRejectsMismatchAndEdgeCases() {
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "abc124")) // same length, different
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc", "abc123")) // length mismatch
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken(nil, "abc123")) // missing presented
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("", "abc123")) // empty presented
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", nil)) // missing expected
-        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "")) // empty expected
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", "abc124"))  // same length, different
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc", "abc123"))  // length mismatch
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken(nil, "abc123"))  // missing presented
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("", "abc123"))  // empty presented
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", nil))  // missing expected
+        XCTAssertFalse(BridgeSecurity.validateBridgeToken("abc123", ""))  // empty expected
     }
 }

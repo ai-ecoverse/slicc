@@ -1,6 +1,7 @@
-import XCTest
 import AppUpdater
 import Version
+import XCTest
+
 @testable import Sliccstart
 
 /// Unit coverage for `TolerantGithubReleaseProvider.filterViableReleases`,
@@ -24,25 +25,25 @@ final class ReleaseAssetFilterTests: XCTestCase {
         let assets: String
         if let assetName {
             assets = """
-            [{
-              "name": "\(assetName)",
-              "browser_download_url": "https://example.com/\(assetName)",
-              "content_type": "\(contentType)"
-            }]
-            """
+                [{
+                  "name": "\(assetName)",
+                  "browser_download_url": "https://example.com/\(assetName)",
+                  "content_type": "\(contentType)"
+                }]
+                """
         } else {
             assets = "[]"
         }
         return """
-        {
-          "tag_name": "\(tag)",
-          "prerelease": false,
-          "name": "\(tag)",
-          "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/\(tag)",
-          "body": "test",
-          "assets": \(assets)
-        }
-        """
+            {
+              "tag_name": "\(tag)",
+              "prerelease": false,
+              "name": "\(tag)",
+              "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/\(tag)",
+              "body": "test",
+              "assets": \(assets)
+            }
+            """
     }
 
     private var provider: TolerantGithubReleaseProvider {
@@ -67,13 +68,12 @@ final class ReleaseAssetFilterTests: XCTestCase {
         // A `.tar` asset (content type maps to `.tar`) must be kept as viable:
         // `name` is the extension-stripped asset name, so it equals the prefix
         // and the tar case matches on content type + "tar" extension.
-        let releases = try decode("""
-        [\(release(
+        let asset = release(
             tag: "v1.36.0",
             assetName: "Sliccstart-1.36.0.tar",
             contentType: "application/x-gzip"
-        ))]
-        """)
+        )
+        let releases = try decode("[\(asset)]")
         let kept = provider.filterViableReleases(releases)
         XCTAssertEqual(kept.count, 1)
         XCTAssertEqual(kept.first?.tagName, Version(1, 36, 0))
@@ -96,23 +96,22 @@ final class ReleaseAssetFilterTests: XCTestCase {
 
     func testDropsReleaseWithWrongContentType() throws {
         // Correct name and extension but a non-zip content type must not match.
-        let releases = try decode("""
-        [\(release(
+        let asset = release(
             tag: "1.36.0",
             assetName: "Sliccstart-1.36.0.zip",
             contentType: "application/octet-stream"
-        ))]
-        """)
+        )
+        let releases = try decode("[\(asset)]")
         XCTAssertTrue(provider.filterViableReleases(releases).isEmpty)
     }
 
     func testDropsNewestBinarylessButKeepsOlderViableRelease() throws {
         let json = """
-        [
-          \(release(tag: "v2.0.0", assetName: nil)),
-          \(release(tag: "v1.36.0", assetName: "Sliccstart-1.36.0.zip"))
-        ]
-        """
+            [
+              \(release(tag: "v2.0.0", assetName: nil)),
+              \(release(tag: "v1.36.0", assetName: "Sliccstart-1.36.0.zip"))
+            ]
+            """
         let kept = provider.filterViableReleases(try decode(json))
         XCTAssertEqual(kept.count, 1)
         XCTAssertEqual(kept.first?.tagName, Version(1, 36, 0))

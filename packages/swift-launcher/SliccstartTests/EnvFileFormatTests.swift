@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 final class EnvFileFormatTests: XCTestCase {
@@ -15,7 +16,7 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testRoundTripPreservesValuesWithQuotesAndHash() {
         let original = [
-            Secret(name: "TOKEN", value: #"value with "quotes" and #hash"#, domains: ["a.com"]),
+            Secret(name: "TOKEN", value: #"value with "quotes" and #hash"#, domains: ["a.com"])
         ]
         let blob = EnvFileFormat.serialize(original)
         let parsed = EnvFileFormat.parseSecrets(blob)
@@ -24,10 +25,10 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testParseSkipsKeysWithoutDomains() {
         let blob = """
-        ORPHAN=value-no-domains
-        VALID=v
-        VALID_DOMAINS=a.com
-        """
+            ORPHAN=value-no-domains
+            VALID=v
+            VALID_DOMAINS=a.com
+            """
         let secrets = EnvFileFormat.parseSecrets(blob)
         XCTAssertEqual(secrets.count, 1)
         XCTAssertEqual(secrets.first?.name, "VALID")
@@ -35,9 +36,9 @@ final class EnvFileFormatTests: XCTestCase {
 
     func testParseAcceptsReversedOrder() {
         let blob = """
-        TOKEN_DOMAINS=api.example.com
-        TOKEN=hello
-        """
+            TOKEN_DOMAINS=api.example.com
+            TOKEN=hello
+            """
         let parsed = EnvFileFormat.parseSecrets(blob)
         XCTAssertEqual(parsed, [Secret(name: "TOKEN", value: "hello", domains: ["api.example.com"])])
     }
@@ -45,12 +46,12 @@ final class EnvFileFormatTests: XCTestCase {
     func testParseSkipsBlankAndCommentLines() {
         let blob = """
 
-        # comment
-        FOO=bar
-        FOO_DOMAINS=a.com
+            # comment
+            FOO=bar
+            FOO_DOMAINS=a.com
 
-        # another comment
-        """
+            # another comment
+            """
         let parsed = EnvFileFormat.parseSecrets(blob)
         XCTAssertEqual(parsed, [Secret(name: "FOO", value: "bar", domains: ["a.com"])])
     }

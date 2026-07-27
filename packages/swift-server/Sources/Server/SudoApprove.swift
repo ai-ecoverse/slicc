@@ -70,7 +70,8 @@ enum SudoApprove {
     /// Quote a string for AppleScript. Mirrors `q` in node-server: escape
     /// backslash, then double-quote.
     static func q(_ s: String) -> String {
-        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
+        "\""
+            + s.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 

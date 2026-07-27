@@ -57,34 +57,34 @@ enum AgentEvent: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .messageStart(messageId):
+        case .messageStart(let messageId):
             try container.encode("message_start", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
-        case let .contentDelta(messageId, text):
+        case .contentDelta(let messageId, let text):
             try container.encode("content_delta", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(text, forKey: .text)
-        case let .contentDone(messageId):
+        case .contentDone(let messageId):
             try container.encode("content_done", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
-        case let .toolUseStart(messageId, toolName, toolInput):
+        case .toolUseStart(let messageId, let toolName, let toolInput):
             try container.encode("tool_use_start", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(toolName, forKey: .toolName)
             try container.encodeIfPresent(toolInput, forKey: .toolInput)
-        case let .toolResult(messageId, toolName, result, isError):
+        case .toolResult(let messageId, let toolName, let result, let isError):
             try container.encode("tool_result", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(toolName, forKey: .toolName)
             try container.encode(result, forKey: .result)
             try container.encodeIfPresent(isError, forKey: .isError)
-        case let .turnEnd(messageId):
+        case .turnEnd(let messageId):
             try container.encode("turn_end", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
-        case let .error(error):
+        case .error(let error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)
-        case let .unknown(type):
+        case .unknown(let type):
             try container.encode(type, forKey: .type)
         }
     }
@@ -306,14 +306,14 @@ enum LeaderToFollowerMessage: Codable {
         // Transcript export response variants — iOS never requests exports;
         // decode these to `.unknown` so the tray session is not torn down.
         case "transcript.export.pending",
-             "transcript.export.denied",
-             "transcript.export.start",
-             "transcript.export.chunk",
-             "transcript.export.complete",
-             "transcript.export.error",
-             // Delegated approval prompt from a headless (cloud) leader. iOS
-             // never originates an export, so it is never asked to approve one.
-             "transcript.export.approve.request":
+            "transcript.export.denied",
+            "transcript.export.start",
+            "transcript.export.chunk",
+            "transcript.export.complete",
+            "transcript.export.error",
+            // Delegated approval prompt from a headless (cloud) leader. iOS
+            // never originates an export, so it is never asked to approve one.
+            "transcript.export.approve.request":
             self = .unknown(type: type)
         case "hello":
             self = .hello(
@@ -331,39 +331,39 @@ enum LeaderToFollowerMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .snapshot(messages, scoopJid):
+        case .snapshot(let messages, let scoopJid):
             try container.encode("snapshot", forKey: .type)
             try container.encode(messages, forKey: .messages)
             try container.encode(scoopJid, forKey: .scoopJid)
-        case let .snapshotChunk(chunkData, chunkIndex, totalChunks, scoopJid):
+        case .snapshotChunk(let chunkData, let chunkIndex, let totalChunks, let scoopJid):
             try container.encode("snapshot_chunk", forKey: .type)
             try container.encode(chunkData, forKey: .chunkData)
             try container.encode(chunkIndex, forKey: .chunkIndex)
             try container.encode(totalChunks, forKey: .totalChunks)
             try container.encode(scoopJid, forKey: .scoopJid)
-        case let .agentEvent(event, scoopJid):
+        case .agentEvent(let event, let scoopJid):
             try container.encode("agent_event", forKey: .type)
             try container.encode(event, forKey: .event)
             try container.encode(scoopJid, forKey: .scoopJid)
-        case let .userMessageEcho(text, messageId, scoopJid):
+        case .userMessageEcho(let text, let messageId, let scoopJid):
             try container.encode("user_message_echo", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(scoopJid, forKey: .scoopJid)
-        case let .status(scoopStatus):
+        case .status(let scoopStatus):
             try container.encode("status", forKey: .type)
             try container.encode(scoopStatus, forKey: .scoopStatus)
-        case let .error(error):
+        case .error(let error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)
-        case let .scoopsList(scoops, activeScoopJid):
+        case .scoopsList(let scoops, let activeScoopJid):
             try container.encode("scoops.list", forKey: .type)
             try container.encode(scoops, forKey: .scoops)
             try container.encode(activeScoopJid, forKey: .activeScoopJid)
-        case let .sprinklesList(sprinkles):
+        case .sprinklesList(let sprinkles):
             try container.encode("sprinkles.list", forKey: .type)
             try container.encode(sprinkles, forKey: .sprinkles)
-        case let .sprinkleContent(requestId, sprinkleName, content, chunkIndex, totalChunks, error):
+        case .sprinkleContent(let requestId, let sprinkleName, let content, let chunkIndex, let totalChunks, let error):
             try container.encode("sprinkle.content", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(sprinkleName, forKey: .sprinkleName)
@@ -371,40 +371,40 @@ enum LeaderToFollowerMessage: Codable {
             try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
             try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
             try container.encodeIfPresent(error, forKey: .error)
-        case let .sprinkleUpdate(sprinkleName, data):
+        case .sprinkleUpdate(let sprinkleName, let data):
             try container.encode("sprinkle.update", forKey: .type)
             try container.encode(sprinkleName, forKey: .sprinkleName)
             try container.encodeIfPresent(data, forKey: .data)
-        case let .sprinkleReloaded(sprinkleName):
+        case .sprinkleReloaded(let sprinkleName):
             try container.encode("sprinkle.reloaded", forKey: .type)
             try container.encode(sprinkleName, forKey: .sprinkleName)
-        case let .cdpRequest(requestId, localTargetId, method, params, sessionId):
+        case .cdpRequest(let requestId, let localTargetId, let method, let params, let sessionId):
             try container.encode("cdp.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(localTargetId, forKey: .localTargetId)
             try container.encode(method, forKey: .method)
             try container.encodeIfPresent(params, forKey: .params)
             try container.encodeIfPresent(sessionId, forKey: .sessionId)
-        case let .targetsRegistry(targets):
+        case .targetsRegistry(let targets):
             try container.encode("targets.registry", forKey: .type)
             try container.encode(targets, forKey: .targets)
-        case let .tabOpen(requestId, url):
+        case .tabOpen(let requestId, let url):
             try container.encode("tab.open", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(url, forKey: .url)
-        case let .previewOpen(requestId, url):
+        case .previewOpen(let requestId, let url):
             try container.encode("preview.open", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(url, forKey: .url)
-        case let .cherrySliccEvent(targetId, name, detail):
+        case .cherrySliccEvent(let targetId, let name, let detail):
             try container.encode("cherry.slicc_event", forKey: .type)
             try container.encode(targetId, forKey: .targetId)
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(detail, forKey: .detail)
-        case let .themeApply(themeJson):
+        case .themeApply(let themeJson):
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
-        case let .hello(protocolVersion, runtime):
+        case .hello(let protocolVersion, let runtime):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
             try container.encodeIfPresent(runtime, forKey: .runtime)
@@ -412,7 +412,7 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("ping", forKey: .type)
         case .pong:
             try container.encode("pong", forKey: .type)
-        case let .unknown(type):
+        case .unknown(let type):
             try container.encode(type, forKey: .type)
         }
     }
@@ -524,42 +524,43 @@ enum FollowerToLeaderMessage: Codable {
             self = .pong
         default:
             throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "Unknown FollowerToLeaderMessage type: \(type)"))
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unknown FollowerToLeaderMessage type: \(type)"))
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .userMessage(text, messageId):
+        case .userMessage(let text, let messageId):
             try container.encode("user_message", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
         case .abort:
             try container.encode("abort", forKey: .type)
-        case let .requestSnapshot(scoopJid):
+        case .requestSnapshot(let scoopJid):
             try container.encode("request_snapshot", forKey: .type)
             try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
-        case let .scoopsSelect(scoopJid):
+        case .scoopsSelect(let scoopJid):
             try container.encode("scoops.select", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)
         case .sprinklesRefresh:
             try container.encode("sprinkles.refresh", forKey: .type)
-        case let .sprinkleFetch(requestId, sprinkleName):
+        case .sprinkleFetch(let requestId, let sprinkleName):
             try container.encode("sprinkle.fetch", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(sprinkleName, forKey: .sprinkleName)
-        case let .sprinkleLick(sprinkleName, body, targetScoop):
+        case .sprinkleLick(let sprinkleName, let body, let targetScoop):
             try container.encode("sprinkle.lick", forKey: .type)
             try container.encode(sprinkleName, forKey: .sprinkleName)
             try container.encodeIfPresent(body, forKey: .body)
             try container.encodeIfPresent(targetScoop, forKey: .targetScoop)
-        case let .targetsAdvertise(targets, runtimeId):
+        case .targetsAdvertise(let targets, let runtimeId):
             try container.encode("targets.advertise", forKey: .type)
             try container.encode(targets, forKey: .targets)
             try container.encode(runtimeId, forKey: .runtimeId)
-        case let .cdpResponse(requestId, result, error, chunkData, chunkIndex, totalChunks):
+        case .cdpResponse(let requestId, let result, let error, let chunkData, let chunkIndex, let totalChunks):
             try container.encode("cdp.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encodeIfPresent(result, forKey: .result)
@@ -567,20 +568,20 @@ enum FollowerToLeaderMessage: Codable {
             try container.encodeIfPresent(chunkData, forKey: .chunkData)
             try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
             try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
-        case let .cdpEvent(method, params, sessionId):
+        case .cdpEvent(let method, let params, let sessionId):
             try container.encode("cdp.event", forKey: .type)
             try container.encode(method, forKey: .method)
             try container.encode(params, forKey: .params)
             try container.encodeIfPresent(sessionId, forKey: .sessionId)
-        case let .tabOpened(requestId, targetId):
+        case .tabOpened(let requestId, let targetId):
             try container.encode("tab.opened", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(targetId, forKey: .targetId)
-        case let .tabOpenError(requestId, error):
+        case .tabOpenError(let requestId, let error):
             try container.encode("tab.open.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
-        case let .hello(protocolVersion, runtime):
+        case .hello(let protocolVersion, let runtime):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
             try container.encodeIfPresent(runtime, forKey: .runtime)

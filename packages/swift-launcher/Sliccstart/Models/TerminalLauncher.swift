@@ -19,8 +19,9 @@ enum LoginShellResolver {
         isExecutableFile: (String) -> Bool = FileManager.default.isExecutableFile(atPath:)
     ) -> String {
         guard let shell = shellFromPasswordDatabase(),
-              !shell.isEmpty,
-              isExecutableFile(shell) else {
+            !shell.isEmpty,
+            isExecutableFile(shell)
+        else {
             return fallbackShell
         }
         return shell
@@ -28,7 +29,8 @@ enum LoginShellResolver {
 
     static func passwordDatabaseShell() -> String? {
         guard let passwordRecord = getpwuid(getuid()),
-              let shellPointer = passwordRecord.pointee.pw_shell else {
+            let shellPointer = passwordRecord.pointee.pw_shell
+        else {
             return nil
         }
         return String(cString: shellPointer)
@@ -49,9 +51,8 @@ struct TerminalLauncher {
             case .couldNotStart(let terminalName):
                 return "Could not start \(terminalName)."
             case .automationPermissionDenied(let terminalName):
-                return "Sliccstart does not have permission to control \(terminalName). " +
-                    "Open System Settings > Privacy & Security > Automation, " +
-                    "enable \(terminalName) for Sliccstart, then try again."
+                return "Sliccstart does not have permission to control \(terminalName). " + "Open System Settings > Privacy & Security > Automation, "
+                    + "enable \(terminalName) for Sliccstart, then try again."
             case .processExited(let terminalName, let status):
                 return "\(terminalName) launch failed with exit code \(status)."
             }
@@ -76,7 +77,8 @@ struct TerminalLauncher {
         }
         guard result.status == 0 else {
             if launchCommand.executable == "/usr/bin/osascript",
-               Self.isAutomationPermissionDenial(result.standardError) {
+                Self.isAutomationPermissionDenial(result.standardError)
+            {
                 throw LaunchError.automationPermissionDenied(terminal.name)
             }
             throw LaunchError.processExited(terminal.name, result.status)
@@ -110,9 +112,11 @@ struct TerminalLauncher {
         command: String,
         loginShell: String
     ) -> TerminalLaunchCommand? {
-        guard let bundleIdentifier = AppTarget.knownTerminals.first(where: {
-            $0.name == terminal.name
-        })?.bundleId else {
+        guard
+            let bundleIdentifier = AppTarget.knownTerminals.first(where: {
+                $0.name == terminal.name
+            })?.bundleId
+        else {
             return nil
         }
         return directLaunchCommand(
@@ -181,9 +185,10 @@ struct TerminalLauncher {
     }
 
     static func isAutomationPermissionDenial(_ standardError: String) -> Bool {
-        standardError.contains("-1743") || standardError.localizedCaseInsensitiveContains(
-            "not authorized to send Apple events"
-        )
+        standardError.contains("-1743")
+            || standardError.localizedCaseInsensitiveContains(
+                "not authorized to send Apple events"
+            )
     }
 
     private static func run(_ launchCommand: TerminalLaunchCommand) throws -> TerminalCommandResult {
@@ -202,21 +207,21 @@ struct TerminalLauncher {
     }
 
     private static let terminalAppleScript = """
-    on run argv
-        tell application "Terminal"
-            do script (item 1 of argv)
-            activate
-        end tell
-    end run
-    """
+        on run argv
+            tell application "Terminal"
+                do script (item 1 of argv)
+                activate
+            end tell
+        end run
+        """
 
     private static let itermAppleScript = """
-    on run argv
-        tell application "iTerm2"
-            set newWindow to (create window with default profile)
-            tell current session of newWindow to write text (item 1 of argv)
-            activate
-        end tell
-    end run
-    """
+        on run argv
+            tell application "iTerm2"
+                set newWindow to (create window with default profile)
+                tell current session of newWindow to write text (item 1 of argv)
+                activate
+            end tell
+        end run
+        """
 }

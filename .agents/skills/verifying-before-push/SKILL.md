@@ -158,6 +158,43 @@ Run `npm run test:coverage` to enforce the per-package floors from
 for how the floors are maintained by the nightly ratchet and for the per-package and Swift
 commands.
 
+## Native gates (Swift / Go)
+
+`npm run verify` covers only the JS/TS tree. The five native CI jobs
+(`swift-server`, `swift-optel`, `swift-launcher`, `ios-app`, `slicc-cli`) have their own
+gates; run them when you touched a native package:
+
+```bash
+npm run lint:swift                     # SwiftLint across all four Swift/iOS packages
+npm run lint:swift:format              # swift format lint --strict (config: root .swift-format)
+npm run format:swift                   # swift format --in-place (fixes the above)
+npm run deadcode:swift                 # Periphery on the 3 SPM packages (informational)
+cd packages/slicc-cli && make check    # gofmt + tidy-check + vet + golangci-lint + race + coverage
+```
+
+`ios-app` has no `package.json`, so its Periphery scan lives only in its CI job —
+`knip.json` (off-limits to hand-edits here) does not allow `periphery` as a root-script
+binary, unlike the per-package scripts, which sit inside knip's ignore list.
+
+`swift format` ships with the Swift 6+ toolchain — no install step. It is a formatter;
+SwiftLint remains the linter, and the two configs are deliberately consistent (4-space
+indentation, 160-column lines).
+
+Swift coverage floors come from the same `coverage-thresholds.json` as the TypeScript ones:
+
+```bash
+./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-server SliccServerPackageTests
+./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-optel SwiftOptelPackageTests
+./packages/dev-tools/tools/swift-coverage-check.sh packages/swift-launcher SliccstartPackageTests
+./packages/dev-tools/tools/swift-coverage-check.sh --xcodebuild SliccFollower packages/ios-app SliccFollower
+```
+
+`ios-app` cannot use `swift test` (its WebRTC dependency is iOS-only), so it takes the
+script's `--xcodebuild` mode, which runs `xcodebuild test` on a simulator and reports over
+the same `llvm-cov` path as the SPM packages. See
+[`packages/ios-app/CLAUDE.md`](../../../packages/ios-app/CLAUDE.md) for the simulator
+prerequisites.
+
 ## Other CI-only gates
 
 If local checks pass but CI still fails, inspect

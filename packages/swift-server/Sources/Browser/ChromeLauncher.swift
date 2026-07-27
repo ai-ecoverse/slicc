@@ -151,14 +151,16 @@ struct ChromeLauncher: Sendable {
         },
         runningPidsForBundle: @escaping @Sendable (URL) -> Set<pid_t> = { bundleURL in
             let canonical = bundleURL.standardizedFileURL
-            return Set(NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
-                guard let appBundleURL = app.bundleURL?.standardizedFileURL,
-                      appBundleURL == canonical,
-                      app.processIdentifier > 0 else {
-                    return nil
-                }
-                return app.processIdentifier
-            })
+            return Set(
+                NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
+                    guard let appBundleURL = app.bundleURL?.standardizedFileURL,
+                        appBundleURL == canonical,
+                        app.processIdentifier > 0
+                    else {
+                        return nil
+                    }
+                    return app.processIdentifier
+                })
         }
     ) {
         self.logger = logger
@@ -249,13 +251,14 @@ struct ChromeLauncher: Sendable {
     }
 
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
-        let baseDir = normalizedPath(tmpDir)
+        let baseDir =
+            normalizedPath(tmpDir)
             ?? URL(fileURLWithPath: homeDirectoryProvider(), isDirectory: true)
-                .appendingPathComponent("Library", isDirectory: true)
-                .appendingPathComponent("Application Support", isDirectory: true)
-                .appendingPathComponent("Slicc", isDirectory: true)
-                .appendingPathComponent("profiles", isDirectory: true)
-                .path
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("Slicc", isDirectory: true)
+            .appendingPathComponent("profiles", isDirectory: true)
+            .path
         let suffix = (servePort != nil && servePort != defaultServePort) ? "-\(servePort!)" : ""
         return URL(fileURLWithPath: baseDir, isDirectory: true)
             .appendingPathComponent("\(defaultChromeUserDataDirName)\(suffix)", isDirectory: true)
@@ -276,7 +279,8 @@ struct ChromeLauncher: Sendable {
                     logger.info("Migrated Chrome profile: \(candidate) → \(newDir)")
                 } catch {
                     try? FileManager.default.removeItem(atPath: newDir)
-                    logger.warning("Chrome profile migration failed (\(candidate) → \(newDir)): \(error.localizedDescription); continuing with a fresh profile.")
+                    logger.warning(
+                        "Chrome profile migration failed (\(candidate) → \(newDir)): \(error.localizedDescription); continuing with a fresh profile.")
                 }
                 return
             }
@@ -324,17 +328,17 @@ struct ChromeLauncher: Sendable {
             .appendingPathComponent("Default", isDirectory: true)
             .appendingPathComponent("Preferences")
         guard let data = try? Data(contentsOf: prefsPath) else {
-            return // no Preferences yet (first run) — nothing to restore
+            return  // no Preferences yet (first run) — nothing to restore
         }
         guard
             let parsed = try? JSONSerialization.jsonObject(with: data),
             var prefs = parsed as? [String: Any]
         else {
-            return // corrupt / not an object — leave it for Chrome to regenerate
+            return  // corrupt / not an object — leave it for Chrome to regenerate
         }
         var profile = prefs["profile"] as? [String: Any] ?? [:]
         if profile["exit_type"] as? String == "Normal", profile["exited_cleanly"] as? Bool == true {
-            return // already clean — avoid a needless rewrite
+            return  // already clean — avoid a needless rewrite
         }
         profile["exit_type"] = "Normal"
         profile["exited_cleanly"] = true
@@ -374,12 +378,14 @@ struct ChromeLauncher: Sendable {
             candidates: legacyChromeCandidates(profileDirName: profileDirName)
         )
 
-        let executable = config.executablePath ?? findChromeExecutable(
-            projectRoot: config.projectRoot,
-            environment: config.environment,
-            currentDirectory: config.currentDirectoryPath ?? currentDirectoryProvider(),
-            homeDirectory: homeDirectoryProvider()
-        )
+        let executable =
+            config.executablePath
+            ?? findChromeExecutable(
+                projectRoot: config.projectRoot,
+                environment: config.environment,
+                currentDirectory: config.currentDirectoryPath ?? currentDirectoryProvider(),
+                homeDirectory: homeDirectoryProvider()
+            )
         guard let executable else {
             throw ChromeLauncherError.chromeExecutableNotFound
         }
@@ -556,8 +562,9 @@ struct ChromeLauncher: Sendable {
             do {
                 let (data, response) = try await fetchData(versionURL)
                 if let httpResponse = response as? HTTPURLResponse,
-                   (200..<300).contains(httpResponse.statusCode),
-                   Self.extractWebSocketDebuggerURL(from: data) != nil {
+                    (200..<300).contains(httpResponse.statusCode),
+                    Self.extractWebSocketDebuggerURL(from: data) != nil
+                {
                     return
                 }
             } catch {
@@ -579,8 +586,9 @@ struct ChromeLauncher: Sendable {
             do {
                 let (data, response) = try await fetchData(versionURL)
                 if let httpResponse = response as? HTTPURLResponse,
-                   (200..<300).contains(httpResponse.statusCode),
-                   let webSocketDebuggerURL = Self.extractWebSocketDebuggerURL(from: data) {
+                    (200..<300).contains(httpResponse.statusCode),
+                    let webSocketDebuggerURL = Self.extractWebSocketDebuggerURL(from: data)
+                {
                     return webSocketDebuggerURL
                 }
             } catch {
@@ -598,9 +606,10 @@ struct ChromeLauncher: Sendable {
     static func parseCdpPortFromStderr(_ line: String) -> Int? {
         let range = NSRange(line.startIndex..<line.endIndex, in: line)
         guard let match = cdpPortRegex.firstMatch(in: line, options: [], range: range),
-              let portRange = Range(match.range(at: 1), in: line),
-              let port = Int(line[portRange]),
-              port > 0 else {
+            let portRange = Range(match.range(at: 1), in: line),
+            let port = Int(line[portRange]),
+            port > 0
+        else {
             return nil
         }
         return port
@@ -668,9 +677,11 @@ struct ChromeLauncher: Sendable {
             return nil
         }
 
-        for entry in entries
+        for entry
+            in entries
             .filter({ $0.lowercased().hasPrefix("mac") })
-            .sorted(by: { $0.localizedStandardCompare($1) == .orderedDescending }) {
+            .sorted(by: { $0.localizedStandardCompare($1) == .orderedDescending })
+        {
             for suffix in [
                 "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
                 "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
@@ -706,8 +717,9 @@ struct ChromeLauncher: Sendable {
 
     private static func extractWebSocketDebuggerURL(from data: Data) -> String? {
         guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let value = jsonObject["webSocketDebuggerUrl"] as? String,
-              !value.isEmpty else {
+            let value = jsonObject["webSocketDebuggerUrl"] as? String,
+            !value.isEmpty
+        else {
             return nil
         }
         return value
@@ -737,7 +749,8 @@ struct ChromeLauncher: Sendable {
         do {
             let (data, response) = try await fetchData(versionURL)
             guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
+                (200..<300).contains(httpResponse.statusCode)
+            else {
                 return nil
             }
             // Require both the Browser field and a CDP websocket URL so we

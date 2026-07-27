@@ -1,5 +1,5 @@
-import SwiftUI
 import AppUpdater
+import SwiftUI
 
 struct AppListView: View {
     let targets: [AppTarget]
@@ -127,7 +127,9 @@ struct AppListView: View {
     @ViewBuilder
     private var extensionSection: some View {
         SectionHeader("Extension")
-        Button { sliccProcess.openChromeWebStore() } label: {
+        Button {
+            sliccProcess.openChromeWebStore()
+        } label: {
             HStack(spacing: 10) {
                 Image(systemName: "puzzlepiece.extension")
                     .font(.system(size: 15))
@@ -310,7 +312,9 @@ struct AppRow: View {
     }
 
     var body: some View {
-        Button { onLaunch() } label: {
+        Button {
+            onLaunch()
+        } label: {
             HStack(spacing: 10) {
                 ZStack(alignment: .bottomTrailing) {
                     Image(nsImage: target.icon)

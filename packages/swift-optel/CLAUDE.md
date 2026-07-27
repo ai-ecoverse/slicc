@@ -22,6 +22,18 @@ repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
 `.build`. Run `npm run lint:fix -w @slicc/swift-optel` to auto-correct fixable
 violations.
 
+## Formatting
+
+SwiftLint is a linter, not a formatter. Formatting is `swift format` (bundled with
+the Swift 6+ toolchain) against the single repo-root `.swift-format`; swift-format
+resolves its config by walking up from each input file, so there is no per-package
+copy to keep in sync.
+
+```bash
+npm run lint:format -w @slicc/swift-optel   # swift format lint --strict (CI gate)
+npm run format -w @slicc/swift-optel        # swift format --in-place
+```
+
 ## Package Layout
 
 - `Sources/SwiftOptel/` — library sources

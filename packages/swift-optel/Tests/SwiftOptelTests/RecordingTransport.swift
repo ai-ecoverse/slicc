@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import SwiftOptel
 
 /// Thread-safe mock ``OptelTransport`` that records every call instead of
@@ -13,7 +14,8 @@ final class RecordingTransport: OptelTransport, @unchecked Sendable {
     private var calls: [Call] = []
 
     var sent: [Call] {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return calls
     }
 

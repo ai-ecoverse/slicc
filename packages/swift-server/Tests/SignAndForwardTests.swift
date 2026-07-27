@@ -6,6 +6,7 @@ import HummingbirdTesting
 import NIOCore
 import NIOHTTP1
 import XCTest
+
 @testable import slicc_server
 
 /// Tests for the `/api/s3-sign-and-forward` and `/api/da-sign-and-forward`
@@ -491,7 +492,8 @@ final class SignAndForwardTests: XCTestCase {
             status: 200, headers: HTTPHeaders(), body: ByteBuffer(bytes: original)
         )
         guard case .object(let obj) = envelope,
-              case .string(let b64) = obj["bodyBase64"] else {
+            case .string(let b64) = obj["bodyBase64"]
+        else {
             return XCTFail("expected envelope with bodyBase64 string")
         }
         let decoded = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters])
@@ -542,4 +544,3 @@ final class SignAndForwardTests: XCTestCase {
         }
     }
 }
-

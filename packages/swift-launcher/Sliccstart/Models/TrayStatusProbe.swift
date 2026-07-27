@@ -57,7 +57,8 @@ struct TrayStatusProbe {
             do {
                 let (status, data) = try await fetch(url)
                 if status == 200,
-                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                {
                     if let joinUrl = json["joinUrl"] as? String, !joinUrl.isEmpty {
                         log.info("discoverJoinUrl: found join URL on attempt \(attempt + 1)")
                         return joinUrl

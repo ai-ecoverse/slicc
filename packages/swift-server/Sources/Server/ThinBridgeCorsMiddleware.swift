@@ -1,5 +1,5 @@
-import Hummingbird
 import HTTPTypes
+import Hummingbird
 import NIOCore
 
 /// Thin-bridge CORS + PNA middleware. The hosted leader at sliccy.ai is a
@@ -63,12 +63,13 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
         // unchanged. The 403 still carries the CORS headers so the browser
         // can read the error cross-origin.
         if let corsHeaders,
-           request.uri.path.hasPrefix("/api/"),
-           !BridgeSecurity.isLoopbackBridgeOrigin(origin),
-           !BridgeSecurity.validateBridgeToken(
-               request.headers[HTTPField.Name(BridgeSecurity.bridgeTokenHeader)!],
-               bridgeToken
-           ) {
+            request.uri.path.hasPrefix("/api/"),
+            !BridgeSecurity.isLoopbackBridgeOrigin(origin),
+            !BridgeSecurity.validateBridgeToken(
+                request.headers[HTTPField.Name(BridgeSecurity.bridgeTokenHeader)!],
+                bridgeToken
+            )
+        {
             var responseHeaders = corsHeaders
             responseHeaders[Self.contentTypeHeader] = "application/json"
             return Response(

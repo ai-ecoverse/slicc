@@ -1,8 +1,8 @@
 import AsyncHTTPClient
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdWebSocket
-import HTTPTypes
 import Logging
 import NIOCore
 import NIOHTTP1
@@ -78,20 +78,23 @@ actor CDPProxy {
         self.logger = logger
         self.maxMessageSize = maxMessageSize
         self.discoverer = discoverer ?? Self.defaultDiscoverCDPURL(port:)
-        self.chromeConnector = chromeConnector ?? { url, onMessage, onEvent in
-            try await Self.defaultChromeConnector(
-                url: url,
-                maxFrameSize: maxMessageSize,
-                onMessage: onMessage,
-                onEvent: onEvent
-            )
-        }
+        self.chromeConnector =
+            chromeConnector ?? { url, onMessage, onEvent in
+                try await Self.defaultChromeConnector(
+                    url: url,
+                    maxFrameSize: maxMessageSize,
+                    onMessage: onMessage,
+                    onEvent: onEvent
+                )
+            }
         self.reconnectDelayNanoseconds = reconnectDelayNanoseconds
         self.sleep = sleep
         self.secretInjector = secretInjector
-        self.logDedup = CliLogDedup(prefix: "[cdp-proxy]", sink: { summary in
-            logger.debug("\(summary)")
-        })
+        self.logDedup = CliLogDedup(
+            prefix: "[cdp-proxy]",
+            sink: { summary in
+                logger.debug("\(summary)")
+            })
     }
 
     /// Install the `/cdp` route on `router`.
@@ -441,17 +444,20 @@ actor CDPProxy {
 
     private func sniffSessionTracking(text: String) {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
             return
         }
         guard let method = obj["method"] as? String,
-              let params = obj["params"] as? [String: Any] else {
+            let params = obj["params"] as? [String: Any]
+        else {
             return
         }
         switch method {
         case "Target.attachedToTarget":
             guard let sid = params["sessionId"] as? String,
-                  let info = params["targetInfo"] as? [String: Any] else { return }
+                let info = params["targetInfo"] as? [String: Any]
+            else { return }
             if let url = info["url"] as? String, !url.isEmpty {
                 self.sessionToUrl[sid] = url
             }
@@ -466,14 +472,16 @@ actor CDPProxy {
             }
         case "Target.targetInfoChanged":
             guard let info = params["targetInfo"] as? [String: Any],
-                  let tid = info["targetId"] as? String,
-                  let url = info["url"] as? String, !url.isEmpty else { return }
+                let tid = info["targetId"] as? String,
+                let url = info["url"] as? String, !url.isEmpty
+            else { return }
             for (sid, mappedTid) in self.sessionToTargetId where mappedTid == tid {
                 self.sessionToUrl[sid] = url
             }
         case "Page.frameNavigated":
             guard let sid = obj["sessionId"] as? String,
-                  let frame = params["frame"] as? [String: Any] else { return }
+                let frame = params["frame"] as? [String: Any]
+            else { return }
             // Only update on main-frame navigations. CDP frames carry a
             // `parentId` field for subframes; main frames omit it (or send
             // an empty string).
@@ -507,17 +515,19 @@ actor CDPProxy {
     ) -> String? {
         guard !injector.isEmpty else { return nil }
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let method = obj["method"] as? String else {
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let method = obj["method"] as? String
+        else {
             return nil
         }
         let targets: Set<String> = ["Runtime.callFunctionOn", "Runtime.evaluate", "Input.insertText"]
         guard targets.contains(method) else { return nil }
         // Fail closed: any missing piece (sessionId, URL, hostname) → no unmask.
         guard let sid = obj["sessionId"] as? String,
-              let url = urlForSession(sid),
-              let host = URL(string: url)?.host,
-              !host.isEmpty else {
+            let url = urlForSession(sid),
+            let host = URL(string: url)?.host,
+            !host.isEmpty
+        else {
             return nil
         }
         guard var params = obj["params"] as? [String: Any] else { return nil }
@@ -544,7 +554,8 @@ actor CDPProxy {
             var argsChanged = false
             for i in args.indices {
                 guard var arg = args[i] as? [String: Any],
-                      let value = arg["value"] as? String else { continue }
+                    let value = arg["value"] as? String
+                else { continue }
                 let unmasked = injector.injectBody(text: value, hostname: host)
                 if unmasked != value {
                     arg["value"] = unmasked
@@ -563,7 +574,8 @@ actor CDPProxy {
         var newObj = obj
         newObj["params"] = params
         guard let newData = try? JSONSerialization.data(withJSONObject: newObj, options: []),
-              let newText = String(data: newData, encoding: .utf8) else {
+            let newText = String(data: newData, encoding: .utf8)
+        else {
             return nil
         }
         return newText
@@ -723,9 +735,10 @@ actor CDPProxy {
             socket.onText { _, text in
                 let result = messagePump.enqueue(.text(text))
                 if case .overflow = result,
-                   terminationState.markOverflow(
-                       reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
-                   ) {
+                    terminationState.markOverflow(
+                        reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
+                    )
+                {
                     Task {
                         try? await socket.close(code: .messageTooLarge)
                     }
@@ -734,9 +747,10 @@ actor CDPProxy {
             socket.onBinary { _, buffer in
                 let result = messagePump.enqueue(.binary(buffer))
                 if case .overflow = result,
-                   terminationState.markOverflow(
-                       reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
-                   ) {
+                    terminationState.markOverflow(
+                        reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
+                    )
+                {
                     Task {
                         try? await socket.close(code: .messageTooLarge)
                     }
@@ -990,11 +1004,12 @@ struct ChromeSocketHandle: Sendable {
     let isOpen: @Sendable () -> Bool
 }
 
-typealias ChromeSocketConnector = @Sendable (
-    String,
-    @escaping @Sendable (ProxyMessage) async -> Void,
-    @escaping @Sendable (ChromeSocketEvent) async -> Void
-) async throws -> ChromeSocketHandle
+typealias ChromeSocketConnector =
+    @Sendable (
+        String,
+        @escaping @Sendable (ProxyMessage) async -> Void,
+        @escaping @Sendable (ChromeSocketEvent) async -> Void
+    ) async throws -> ChromeSocketHandle
 
 enum ChromeSocketEvent: Sendable {
     case closed(String)

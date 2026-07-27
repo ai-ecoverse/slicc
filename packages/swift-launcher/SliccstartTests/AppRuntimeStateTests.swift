@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 final class AppRuntimeStateTests: XCTestCase {

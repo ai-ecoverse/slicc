@@ -116,11 +116,11 @@ struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 switch segment {
-                case let .markdown(text):
+                case .markdown(let text):
                     if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         MarkdownText(content: text)
                     }
-                case let .sprinkle(fragment, frameId):
+                case .sprinkle(let fragment, let frameId):
                     InlineSprinkleHost(
                         id: "\(message.id)-\(frameId)",
                         html: fragment,
@@ -206,13 +206,15 @@ struct MessageBubble: View {
                         .textSelection(.enabled)
                 }
                 if let result = tc.result {
-                    let abbreviated = result.count > 300
+                    let abbreviated =
+                        result.count > 300
                         ? String(result.prefix(300)) + "…" : result
                     Text(abbreviated)
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(
                             tc.isError == true
-                                ? Color.red.opacity(0.8) : .white.opacity(0.6))
+                                ? Color.red.opacity(0.8) : .white.opacity(0.6)
+                        )
                         .textSelection(.enabled)
                 }
             }
@@ -447,10 +449,12 @@ struct LickRow: View {
     /// Sprinkle event name parsed from `[Sprinkle Event: <name>]` header.
     private func parseSprinkleName() -> String? {
         guard channel == "sprinkle" else { return nil }
-        guard let m = LickRow.headerRegex.firstMatch(
-            in: message.content,
-            range: NSRange(message.content.startIndex..., in: message.content)
-        ) else { return nil }
+        guard
+            let m = LickRow.headerRegex.firstMatch(
+                in: message.content,
+                range: NSRange(message.content.startIndex..., in: message.content)
+            )
+        else { return nil }
         if let r = Range(m.range(at: 2), in: message.content) {
             return String(message.content[r]).trimmingCharacters(in: .whitespaces)
         }
@@ -532,32 +536,39 @@ struct LickRow: View {
     static func parseLickContent(_ content: String) -> (preview: String, body: String) {
         let full = NSRange(content.startIndex..., in: content)
         if let m = scoopWaitHeaderRegex.firstMatch(in: content, range: full),
-           let summary = Range(m.range(at: 1), in: content),
-           let header = Range(m.range, in: content) {
+            let summary = Range(m.range(at: 1), in: content),
+            let header = Range(m.range, in: content)
+        {
             let preview = String(content[summary]).trimmingCharacters(in: .whitespaces)
-            let body = stripFences(String(content[header.upperBound...])
-                .trimmingCharacters(in: .whitespaces))
+            let body = stripFences(
+                String(content[header.upperBound...])
+                    .trimmingCharacters(in: .whitespaces))
             return (preview, body)
         }
         if let m = scoopHeaderRegex.firstMatch(in: content, range: full),
-           let nameR = Range(m.range(at: 1), in: content),
-           let kwR = Range(m.range(at: 2), in: content),
-           let header = Range(m.range, in: content) {
+            let nameR = Range(m.range(at: 1), in: content),
+            let kwR = Range(m.range(at: 2), in: content),
+            let header = Range(m.range, in: content)
+        {
             let name = String(content[nameR]).trimmingCharacters(in: .whitespaces)
             let kw = String(content[kwR])
-            let body = stripFences(String(content[header.upperBound...])
-                .trimmingCharacters(in: .whitespaces))
+            let body = stripFences(
+                String(content[header.upperBound...])
+                    .trimmingCharacters(in: .whitespaces))
             return ("\(name) \(kw)", body)
         }
         if let m = headerRegex.firstMatch(in: content, range: full),
-           let nameR = Range(m.range(at: 2), in: content),
-           let header = Range(m.range, in: content) {
+            let nameR = Range(m.range(at: 2), in: content),
+            let header = Range(m.range, in: content)
+        {
             let preview = String(content[nameR]).trimmingCharacters(in: .whitespaces)
-            let body = stripFences(String(content[header.upperBound...])
-                .trimmingCharacters(in: .whitespaces))
+            let body = stripFences(
+                String(content[header.upperBound...])
+                    .trimmingCharacters(in: .whitespaces))
             return (preview, body)
         }
-        let firstLine = content.split(whereSeparator: \.isNewline)
+        let firstLine =
+            content.split(whereSeparator: \.isNewline)
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map(String.init) ?? ""
         let preview = String(firstLine.prefix(80))
@@ -602,14 +613,15 @@ private struct PulsingDot: ViewModifier {
 
 #Preview {
     VStack(spacing: 12) {
-        MessageBubble(message: ChatMessage(
-            id: "1", role: .user, content: "Hello!",
-            timestamp: Date().timeIntervalSince1970 * 1000))
-        MessageBubble(message: ChatMessage(
-            id: "2", role: .assistant, content: "Hi! How can I help you today?",
-            timestamp: Date().timeIntervalSince1970 * 1000, isStreaming: true))
+        MessageBubble(
+            message: ChatMessage(
+                id: "1", role: .user, content: "Hello!",
+                timestamp: Date().timeIntervalSince1970 * 1000))
+        MessageBubble(
+            message: ChatMessage(
+                id: "2", role: .assistant, content: "Hi! How can I help you today?",
+                timestamp: Date().timeIntervalSince1970 * 1000, isStreaming: true))
     }
     .padding()
     .background(Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255))
 }
-

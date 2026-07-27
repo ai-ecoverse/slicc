@@ -1,5 +1,6 @@
 import Hummingbird
 import XCTest
+
 @testable import slicc_server
 
 final class RequestLoggerTests: XCTestCase {
