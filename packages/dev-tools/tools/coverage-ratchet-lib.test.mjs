@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyRatchet,
+  BYTES_MARGIN_RATIO,
+  DUPLICATION_GRANULARITY,
+  DUPLICATION_MARGIN,
+  FLOOR_GROUPS,
+  nextCeiling,
   nextFloor,
   parseVitestSummary,
   ratchetPackage,
+  TIMING_GRANULARITY_MS,
+  TIMING_MARGIN_RATIO,
 } from './coverage-ratchet-lib.mjs';
 
 describe('nextFloor', () => {
@@ -33,6 +40,55 @@ describe('nextFloor', () => {
   it('keeps the floor when measurement is within the margin of the next integer (PR #1015 miss)', () => {
     expect(nextFloor(62, 63.06)).toBe(62);
     expect(nextFloor(62, 63.6)).toBe(63);
+  });
+});
+
+describe('nextCeiling', () => {
+  const duplication = {
+    granularity: DUPLICATION_GRANULARITY,
+    margin: DUPLICATION_MARGIN,
+  };
+
+  it('tightens a ceiling toward the measurement at the configured granularity', () => {
+    expect(nextCeiling(7.5, 7.07, duplication)).toBe(7.4);
+    expect(nextCeiling(7.4, 6.5, duplication)).toBe(6.8);
+  });
+
+  it('never raises a ceiling', () => {
+    expect(nextCeiling(7.5, 7.4, duplication)).toBe(7.5);
+    expect(nextCeiling(7.5, 9, duplication)).toBe(7.5);
+  });
+
+  it('returns the current ceiling unchanged when tightening is not justified', () => {
+    // The whole-point mirror of nextFloor would propose Math.ceil(7.07 + 0.5)
+    // = 8 here, i.e. a *looser* budget than the 7.5 already in the tree.
+    expect(nextCeiling(7.5, 7.07, { granularity: 1, margin: 0.5 })).toBe(7.5);
+  });
+
+  it('applies a proportional margin for byte budgets', () => {
+    const bytes = { granularity: 1, marginRatio: BYTES_MARGIN_RATIO };
+    expect(nextCeiling(24, 21.39, bytes)).toBe(23);
+    expect(nextCeiling(60, 55.86, bytes)).toBe(59);
+    // 29.62 MB * 1.05 = 31.1 MB, which does not fit under a 31 MB budget.
+    expect(nextCeiling(31, 29.62, bytes)).toBe(31);
+  });
+
+  it('keeps 2x headroom at 50 ms steps for durations', () => {
+    const timing = { granularity: TIMING_GRANULARITY_MS, marginRatio: TIMING_MARGIN_RATIO };
+    expect(nextCeiling(4000, 620, timing)).toBe(1250);
+    expect(nextCeiling(1250, 700, timing)).toBe(1250);
+  });
+
+  it('adopts the measurement when no ceiling exists yet', () => {
+    expect(nextCeiling(undefined, 7.07, duplication)).toBe(7.4);
+    expect(nextCeiling(null, 7.07, duplication)).toBe(7.4);
+  });
+
+  it('never moves on a missing or nonsense measurement', () => {
+    expect(nextCeiling(7.5, Number.NaN, duplication)).toBe(7.5);
+    expect(nextCeiling(7.5, undefined, duplication)).toBe(7.5);
+    expect(nextCeiling(7.5, -1, duplication)).toBe(7.5);
+    expect(nextCeiling(undefined, Number.NaN, duplication)).toBe(null);
   });
 });
 
@@ -90,6 +146,27 @@ describe('applyRatchet', () => {
       'swift-server.lines',
       'swift-server.regions',
     ]);
+  });
+
+  it('ratchets every declared floor group, including go', () => {
+    const thresholds = {
+      typescript: {},
+      swift: {},
+      go: { 'slicc-cli': { statements: 58 } },
+      testTiming: { webapp: { p95Ms: 1250 } },
+    };
+    const { thresholds: next, changes } = applyRatchet(thresholds, {
+      go: { 'slicc-cli': { statements: 61.4 } },
+    });
+    expect(next.go['slicc-cli'].statements).toBe(60);
+    expect(next.testTiming).toEqual({ webapp: { p95Ms: 1250 } });
+    expect(changes).toEqual([
+      { group: 'go', package: 'slicc-cli', metric: 'statements', from: 58, to: 60, actual: 61.4 },
+    ]);
+  });
+
+  it('declares one metric list per floor group', () => {
+    expect(Object.keys(FLOOR_GROUPS)).toEqual(['typescript', 'swift', 'go']);
   });
 
   it('skips packages with no measurement', () => {
