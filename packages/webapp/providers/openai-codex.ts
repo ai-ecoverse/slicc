@@ -38,6 +38,7 @@ import {
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
 } from '@earendil-works/pi-ai/compat';
+import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../src/providers/pkce.js';
 import type {
   InterceptingOAuthLauncher,
   ModelMetadata,
@@ -98,34 +99,6 @@ const CODEX_MODELS: CodexModelDef[] = [
   max_tokens: 128000,
   thinkingLevelMap: CODEX_THINKING_LEVEL_MAP,
 }));
-
-// ── PKCE helpers ───────────────────────────────────────────────────
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  let str = '';
-  for (const b of bytes) str += String.fromCharCode(b);
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function randomBytes(n: number): Uint8Array {
-  const out = new Uint8Array(n);
-  crypto.getRandomValues(out);
-  return out;
-}
-
-function generateCodeVerifier(): string {
-  return base64UrlEncode(randomBytes(32));
-}
-
-async function deriveCodeChallenge(verifier: string): Promise<string> {
-  const data = new TextEncoder().encode(verifier);
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
-  return base64UrlEncode(digest);
-}
-
-function randomState(): string {
-  return base64UrlEncode(randomBytes(16));
-}
 
 // ── Token exchange ─────────────────────────────────────────────────
 
