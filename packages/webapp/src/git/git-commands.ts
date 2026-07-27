@@ -23,6 +23,7 @@ import { add } from './commands/add.js';
 import { branch } from './commands/branch.js';
 import { checkout } from './commands/checkout.js';
 import { cherryPick } from './commands/cherry-pick.js';
+import { clean } from './commands/clean.js';
 import { clone } from './commands/clone.js';
 import { commit } from './commands/commit.js';
 import { config } from './commands/config.js';
@@ -343,6 +344,8 @@ export class GitCommands {
           return await branch(this.ctx, effectiveCwd, rest);
         case 'checkout':
           return await checkout(this.ctx, effectiveCwd, rest);
+        case 'clean':
+          return await clean(this.ctx, effectiveCwd, rest);
         case 'diff':
           return await diff(this.ctx, effectiveCwd, rest);
         case 'show':
@@ -487,6 +490,7 @@ Available commands:
   log         Show commit logs
   branch      List, create, or delete branches
   checkout    Switch branches or restore files
+  clean       Remove untracked files from the working tree
   diff        Show changes between commits
   show        Show commit details and diffs
   remote      Manage remote repositories

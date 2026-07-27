@@ -3571,6 +3571,146 @@ describe('GitCommands', () => {
       expect(await vfs.exists('/project/.git/rebase-merge/onto')).toBe(false);
     });
   });
+
+  describe('clean', () => {
+    async function initWithTrackedFile(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'tracked');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+    }
+
+    it('refuses to run without -f, -n, or -i', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/untracked.txt', 'x');
+
+      const result = await git.execute(['clean'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('clean.requireForce');
+      expect(await vfs.exists('/project/untracked.txt')).toBe(true);
+    });
+
+    it('-n lists untracked files without removing them', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+
+      const result = await git.execute(['clean', '-n'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Would remove a.txt');
+      expect(result.stdout).toContain('Would remove b.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(true);
+      expect(await vfs.exists('/project/b.txt')).toBe(true);
+    });
+
+    it('-f removes untracked files', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+
+      const result = await git.execute(['clean', '-f'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing a.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+      expect(await vfs.exists('/project/tracked.txt')).toBe(true);
+    });
+
+    it('without -d, silently skips untracked directories', async () => {
+      await initWithTrackedFile();
+      await vfs.mkdir('/project/subdir', { recursive: true });
+      await vfs.writeFile('/project/subdir/inside.txt', 'x');
+      await vfs.writeFile('/project/top.txt', 'top');
+
+      const result = await git.execute(['clean', '-n'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Would remove top.txt');
+      expect(result.stdout).not.toContain('subdir');
+    });
+
+    it('-fd removes untracked directories recursively', async () => {
+      await initWithTrackedFile();
+      await vfs.mkdir('/project/subdir/deep', { recursive: true });
+      await vfs.writeFile('/project/subdir/deep/inside.txt', 'x');
+      await vfs.writeFile('/project/top.txt', 'top');
+
+      const result = await git.execute(['clean', '-fd'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing top.txt');
+      expect(result.stdout).toContain('Removing subdir/');
+      expect(await vfs.exists('/project/top.txt')).toBe(false);
+      expect(await vfs.exists('/project/subdir')).toBe(false);
+      expect(await vfs.exists('/project/tracked.txt')).toBe(true);
+    });
+
+    it('keeps untracked files inside directories that also contain tracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.mkdir('/project/mixed', { recursive: true });
+      await vfs.writeFile('/project/mixed/kept.txt', 'kept');
+      await git.execute(['add', 'mixed/kept.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await vfs.writeFile('/project/mixed/dropped.txt', 'x');
+
+      const result = await git.execute(['clean', '-fd'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing mixed/dropped.txt');
+      expect(result.stdout).not.toContain('Removing mixed/\n');
+      expect(await vfs.exists('/project/mixed/kept.txt')).toBe(true);
+      expect(await vfs.exists('/project/mixed/dropped.txt')).toBe(false);
+    });
+
+    it('pathspec limits which untracked files are considered', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+      await vfs.writeFile('/project/b.txt', 'b');
+
+      const result = await git.execute(['clean', '-f', 'a.txt'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing a.txt');
+      expect(result.stdout).not.toContain('b.txt');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+      expect(await vfs.exists('/project/b.txt')).toBe(true);
+    });
+
+    it('-q suppresses per-file output', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/a.txt', 'a');
+
+      const result = await git.execute(['clean', '-fq'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(await vfs.exists('/project/a.txt')).toBe(false);
+    });
+
+    it('by default leaves .gitignore-matched files alone', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/.gitignore', 'ignored.log\n');
+      await git.execute(['add', '.gitignore'], '/project');
+      await git.execute(['commit', '-m', 'add gitignore'], '/project');
+      await vfs.writeFile('/project/ignored.log', 'log');
+      await vfs.writeFile('/project/kept.txt', 'kept');
+
+      const result = await git.execute(['clean', '-f'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing kept.txt');
+      expect(result.stdout).not.toContain('ignored.log');
+      expect(await vfs.exists('/project/ignored.log')).toBe(true);
+    });
+
+    it('-X removes only ignored files, leaving other untracked files alone', async () => {
+      await initWithTrackedFile();
+      await vfs.writeFile('/project/.gitignore', 'ignored.log\n');
+      await git.execute(['add', '.gitignore'], '/project');
+      await git.execute(['commit', '-m', 'add gitignore'], '/project');
+      await vfs.writeFile('/project/ignored.log', 'log');
+      await vfs.writeFile('/project/other.txt', 'other');
+
+      const result = await git.execute(['clean', '-fX'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Removing ignored.log');
+      expect(result.stdout).not.toContain('other.txt');
+      expect(await vfs.exists('/project/ignored.log')).toBe(false);
+      expect(await vfs.exists('/project/other.txt')).toBe(true);
+    });
+  });
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because
