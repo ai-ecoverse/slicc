@@ -13,13 +13,13 @@
       "name": "webapp: main entry chunk",
       "path": "../../dist/ui/assets/main-*.js",
       "brotli": false,
-      "limit": "24 kB"
+      "limit": "23 kB"
     },
     {
       "name": "webapp: kernel worker",
       "path": "../../dist/ui/assets/kernel-worker-*.js",
       "brotli": false,
-      "limit": "1850 kB"
+      "limit": "1767 kB"
     },
     {
       "name": "webapp: total JS payload",
