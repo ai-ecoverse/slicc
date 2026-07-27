@@ -220,24 +220,51 @@ export class FollowerRegistry {
     });
   }
 
-  broadcastToAllFollowers(message: LeaderToFollowerMessage): void {
+  /**
+   * Send a message to every connected follower, reporting which ones refused it.
+   *
+   * `TraySyncChannel.send` catches every throw internally and reports failure
+   * through its return value, so this reads that value rather than wrapping the
+   * call in a try/catch — the catch this method used to carry could never run,
+   * which is what made oversize-message failures invisible here (#1700).
+   *
+   * Failures are throttled per-follower (~1 log per 60s) so a stuck channel
+   * can't flood logs during a high-event turn. Successful sends clear the
+   * throttle so a recovered channel logs immediately if it fails again. Does
+   * NOT auto-remove the broken follower — keepalive timeout owns that decision.
+   *
+   * @returns bootstrapIds of followers whose send failed.
+   */
+  broadcastToAllFollowers(message: LeaderToFollowerMessage): string[] {
     const now = performance.now();
+    const failed: string[] = [];
     for (const [bootstrapId, follower] of this.followers) {
+      let sent = false;
+      let thrown: unknown;
       try {
-        follower.sync.send(message);
-        this.followerBroadcastErrorLogAt.delete(bootstrapId);
+        sent = follower.sync.send(message);
       } catch (err) {
-        const lastLogAt =
-          this.followerBroadcastErrorLogAt.get(bootstrapId) ?? Number.NEGATIVE_INFINITY;
-        if (now - lastLogAt > BROADCAST_ERROR_THROTTLE_MS) {
-          this.followerBroadcastErrorLogAt.set(bootstrapId, now);
-          this.options.log.error('Broadcast send to follower failed (channel may be stuck)', {
-            bootstrapId,
-            messageType: message.type,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        // Backstop, not the primary signal: `TraySyncChannel.send` reports
+        // failure by returning false. This keeps one hostile or stubbed channel
+        // from aborting the loop and stranding the followers behind it.
+        thrown = err;
+      }
+      if (sent) {
+        this.followerBroadcastErrorLogAt.delete(bootstrapId);
+        continue;
+      }
+      failed.push(bootstrapId);
+      const lastLogAt =
+        this.followerBroadcastErrorLogAt.get(bootstrapId) ?? Number.NEGATIVE_INFINITY;
+      if (now - lastLogAt > BROADCAST_ERROR_THROTTLE_MS) {
+        this.followerBroadcastErrorLogAt.set(bootstrapId, now);
+        this.options.log.error('Broadcast send to follower failed', {
+          bootstrapId,
+          messageType: message.type,
+          ...(thrown ? { error: thrown instanceof Error ? thrown.message : String(thrown) } : {}),
+        });
       }
     }
+    return failed;
   }
 }

@@ -13,13 +13,71 @@ import type { LeaderSyncContext } from './context.js';
 export const SPRINKLE_CHUNK_SIZE = 32 * 1024;
 export const SPRINKLE_CHUNK_THRESHOLD = 64 * 1024;
 
+/** Stand-in text for a payload the tray could not carry to a follower. */
+const OVERSIZE_MARKER = '[content too large to sync — view on leader]';
+
+/**
+ * Rebuild an agent event with its unbounded field replaced by a marker, for
+ * followers whose channel refused the real thing.
+ *
+ * Only the variants that can realistically exceed the transport limit are
+ * degraded. The rest (`message_start`, `content_done`, `tool_ui_done`,
+ * `turn_end`, `error`) carry no unbounded field, so a refusal there is a
+ * genuine channel fault rather than a size problem and there is nothing useful
+ * to substitute — hence `null`, meaning "don't retry".
+ *
+ * `screenshot` degrades to an `error` event rather than a stubbed `base64`:
+ * a marker string in an image field renders as a broken image, which reads as
+ * a bug rather than as a deliberate omission.
+ */
+export function degradeOversizeAgentEvent(event: AgentEvent): AgentEvent | null {
+  switch (event.type) {
+    case 'tool_result':
+      return { ...event, result: OVERSIZE_MARKER };
+    case 'tool_use_start':
+      return { ...event, toolInput: { note: OVERSIZE_MARKER } };
+    case 'tool_ui':
+      return { ...event, html: `<p>${OVERSIZE_MARKER}</p>` };
+    case 'content_delta':
+      return { ...event, text: OVERSIZE_MARKER };
+    case 'terminal_output':
+      return { ...event, text: OVERSIZE_MARKER };
+    case 'screenshot':
+      return { type: 'error', error: `Screenshot ${OVERSIZE_MARKER}` };
+    default:
+      return null;
+  }
+}
+
 export class BroadcastManager {
   constructor(private readonly context: LeaderSyncContext) {}
 
+  /**
+   * Broadcast an agent event to all connected followers.
+   *
+   * Events are chunked transparently by `TraySyncChannel`, so the ordinary
+   * oversize case — an `open --view --size high` screenshot inlined into shell
+   * stdout, or a large untruncated `tool_result` — now arrives intact. A send
+   * can still be refused past the hard cap or under channel congestion; those
+   * followers get a marker event instead, so the transcript shows a gap rather
+   * than hiding one (#1700).
+   */
   broadcastEvent(event: AgentEvent): void {
     if (this.context.followers.followers.size === 0) return;
     const scoopJid = this.context.options.getScoopJid();
-    this.broadcast({ type: 'agent_event', event, scoopJid });
+    const failed = this.context.followers.broadcastToAllFollowers({
+      type: 'agent_event',
+      event,
+      scoopJid,
+    });
+    if (failed.length === 0) return;
+    const degraded = degradeOversizeAgentEvent(event);
+    if (!degraded) return;
+    for (const bootstrapId of failed) {
+      this.context.followers.followers
+        .get(bootstrapId)
+        ?.sync.send({ type: 'agent_event', event: degraded, scoopJid });
+    }
   }
 
   broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
