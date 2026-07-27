@@ -13,7 +13,6 @@ import type {
 import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
-import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
@@ -25,6 +24,7 @@ import type { ChatMessage } from './chat-types.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
+import { CDPRouter } from './tray-leader/cdp-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
 import {
   type ConnectedFollower,
@@ -40,10 +40,8 @@ import {
   isCherryHostEventMessage,
   type LeaderToFollowerMessage,
   type RemoteTargetInfo,
-  reassembleCDPResponse,
   type ScoopSummary,
   type SprinkleSummary,
-  sendCDPResponse,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayExecChunkMessage,
   type TrayExecRequestMessage,
@@ -252,14 +250,6 @@ interface PendingRemoteExec {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** Tracks a CDP request being routed through the leader. */
-interface PendingCDPRoute {
-  /** bootstrapId of the follower that originated the request */
-  requesterBootstrapId: string;
-  /** The original requestId from the requester */
-  requestId: string;
-}
-
 /** Tracks a tab.open request being routed through the leader. */
 interface PendingTabOpenRoute {
   /** bootstrapId of the follower that originated the request (or '__leader__') */
@@ -284,6 +274,7 @@ export class LeaderSyncManager {
   private readonly followerRegistry: FollowerRegistry;
   private readonly context: LeaderSyncContext;
   private readonly broadcast: BroadcastManager;
+  private readonly cdpRouter: CDPRouter;
   private readonly transcriptExport: TranscriptExportManager;
   private readonly registry = new TrayTargetRegistry();
   private get followers(): Map<string, ConnectedFollower> {
@@ -292,15 +283,6 @@ export class LeaderSyncManager {
   private get runtimeToBootstrap(): Map<string, string> {
     return this.context.followers.runtimeToBootstrap;
   }
-  /** Maps requestId → routing info for CDP requests in flight through the leader. */
-  private readonly pendingCDPRoutes = new Map<string, PendingCDPRoute>();
-  /** Chunk buffers for reassembling chunked CDP responses from followers. */
-  private readonly cdpChunkBuffers = new Map<
-    string,
-    { chunks: string[]; received: number; totalChunks: number }
-  >();
-  /** Active RemoteCDPTransport instances for the leader's own BrowserAPI (keyed by runtimeId:localTargetId). */
-  private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Maps requestId → routing info for tab.open requests in flight through the leader. */
   private readonly pendingTabOpenRoutes = new Map<string, PendingTabOpenRoute>();
   /** Resolvers for leader-originated tab.open requests. */
@@ -366,6 +348,9 @@ export class LeaderSyncManager {
       sendControl: options.sendControl,
     };
     this.broadcast = new BroadcastManager(this.context);
+    this.cdpRouter = new CDPRouter(this.context, {
+      getBridgeTransport: (connId) => this.getBridgeTransport(connId),
+    });
     this.followerRegistry.onFollowerRemoved({
       beforeRegistryCleanup: (bootstrapId) => {
         for (const [requestId, pending] of this.pendingRemoteExecs) {
@@ -381,7 +366,6 @@ export class LeaderSyncManager {
         }
       },
       removeRuntime: (_bootstrapId, runtimeId) => {
-        this.cleanupRemoteTransports(runtimeId);
         this.registry.removeRuntime(runtimeId);
       },
       afterRegistryCleanup: (bootstrapId) => {
@@ -599,22 +583,7 @@ export class LeaderSyncManager {
       runtimeId: message.runtimeId,
       targetCount: message.targets.length,
     });
-    // Clean up stale remote transports for runtimeIds that are no longer
-    // in runtimeToBootstrap (e.g. a follower reconnected with a new
-    // runtimeId but old transports linger)
-    for (const key of [...this.remoteTransports.keys()]) {
-      const runtimeId = key.substring(0, key.indexOf(':'));
-      if (
-        runtimeId !== 'leader' &&
-        !this.runtimeToBootstrap.has(runtimeId) &&
-        runtimeId !== message.runtimeId
-      ) {
-        const transport = this.remoteTransports.get(key);
-        transport?.disconnect();
-        this.remoteTransports.delete(key);
-        log.debug('Cleaned up orphaned remote transport on advertise', { key });
-      }
-    }
+    this.cdpRouter.cleanupOrphanedRemoteTransports(message.runtimeId);
     this.followerRegistry.setRuntimeId(message.runtimeId, bootstrapId);
     this.registry.setTargets(message.runtimeId, message.targets);
 
@@ -954,28 +923,19 @@ export class LeaderSyncManager {
       case 'targets.advertise':
         this.handleFollowerTargetsAdvertise(bootstrapId, message);
         break;
-      case 'cdp.request': {
-        const { requestId, targetRuntimeId, localTargetId, method, params, sessionId } = message;
-        if (targetRuntimeId === 'leader') {
-          this.executeLocalCDP(requestId, localTargetId, method, params, sessionId, bootstrapId);
-        } else {
-          this.forwardCDPRequest(
-            requestId,
-            targetRuntimeId,
-            localTargetId,
-            method,
-            params,
-            sessionId,
-            bootstrapId
-          );
-        }
+      case 'cdp.request':
+        this.cdpRouter.handleCDPRequest(bootstrapId, message);
         break;
-      }
       case 'cdp.response':
-        this.handleCDPResponse(message);
+        this.cdpRouter.handleCDPResponse(message);
         break;
       case 'cdp.event':
-        this.handleCDPEvent(bootstrapId, message.method, message.params, message.sessionId);
+        this.cdpRouter.handleCDPEvent(
+          bootstrapId,
+          message.method,
+          message.params,
+          message.sessionId
+        );
         break;
       case 'tab.open': {
         const { requestId, targetRuntimeId, url } = message;
@@ -1166,95 +1126,14 @@ export class LeaderSyncManager {
    * BrowserAPI to a follower or bridge-connected preview target.
    */
   createRemoteTransport(targetRuntimeId: string, localTargetId: string): CDPTransport {
-    // Special-case preview: scheme → return the bridge transport
-    if (targetRuntimeId === 'preview') {
-      // localTargetId format is "<token>:<connId>"; extract connId after first colon
-      const colonIdx = localTargetId.indexOf(':');
-      if (colonIdx === -1) {
-        throw new Error(
-          `Invalid preview localTargetId format: expected "<token>:<connId>", got "${localTargetId}"`
-        );
-      }
-      const connId = localTargetId.slice(colonIdx + 1);
-      const transport = this.getBridgeTransport(connId);
-      if (!transport) {
-        throw new Error(`Preview bridge connection "${connId}" not found`);
-      }
-      return transport;
-    }
-
-    // Follower path: create a RemoteCDPTransport that routes to a connected follower
-    const sender: RemoteCDPSender = {
-      sendCDPRequest: (requestId, method, params, sessionId) => {
-        const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-        const targetFollower = targetBootstrapId
-          ? this.followers.get(targetBootstrapId)
-          : undefined;
-        if (!targetFollower) {
-          // Immediately resolve as error — the transport will handle it
-          const transport = this.remoteTransports.get(`${targetRuntimeId}:${localTargetId}`);
-          transport?.handleResponse(
-            requestId,
-            undefined,
-            `Target runtime "${targetRuntimeId}" not connected`
-          );
-          return;
-        }
-        // Track the route so the response can be delivered to the RemoteCDPTransport
-        this.pendingCDPRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
-        targetFollower.sync.send({
-          type: 'cdp.request',
-          requestId,
-          localTargetId,
-          method,
-          params,
-          sessionId,
-        });
-      },
-    };
-    const transport = new RemoteCDPTransport(sender);
-    this.remoteTransports.set(`${targetRuntimeId}:${localTargetId}`, transport);
-    return transport;
+    return this.cdpRouter.createRemoteTransport(targetRuntimeId, localTargetId);
   }
 
   /**
    * Remove a remote transport created for the leader's BrowserAPI.
    */
   removeRemoteTransport(targetRuntimeId: string, localTargetId: string): void {
-    const key = `${targetRuntimeId}:${localTargetId}`;
-    const transport = this.remoteTransports.get(key);
-    if (transport) {
-      transport.disconnect();
-      this.remoteTransports.delete(key);
-    }
-  }
-
-  /**
-   * Clean up all cached RemoteCDPTransport instances for a given runtimeId.
-   * Called when a follower disconnects to prevent stale transports from lingering.
-   */
-  private cleanupRemoteTransports(runtimeId: string): void {
-    const prefix = `${runtimeId}:`;
-    for (const key of [...this.remoteTransports.keys()]) {
-      if (key.startsWith(prefix)) {
-        const transport = this.remoteTransports.get(key);
-        transport?.disconnect();
-        this.remoteTransports.delete(key);
-        log.debug('Cleaned up stale remote transport', { key });
-      }
-    }
-    // Guard the consumer callback: it runs inside `removeFollower` before
-    // the registry/runtime-map cleanup, so a throwing handler would abort
-    // follower teardown and leave a stale entry. Matches the defensive
-    // pattern around `onSprinkleLick` / `onCherryHostEvent`.
-    try {
-      this.options.onRemoteTransportsCleaned?.(runtimeId);
-    } catch (err) {
-      log.warn('onRemoteTransportsCleaned handler threw', {
-        runtimeId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    this.cdpRouter.removeRemoteTransport(targetRuntimeId, localTargetId);
   }
 
   /**
@@ -1348,148 +1227,6 @@ export class LeaderSyncManager {
     this.bridgeConns.clear();
     this.mintMap.clear();
     this.previewLickLastEmitAt.clear();
-  }
-
-  // ---------------------------------------------------------------------------
-  // CDP routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute a CDP command on the leader's own browser transport.
-   * Sends the response back to the requesting follower, chunking if necessary.
-   */
-  private async executeLocalCDP(
-    requestId: string,
-    localTargetId: string,
-    method: string,
-    params: Record<string, unknown> | undefined,
-    sessionId: string | undefined,
-    requesterBootstrapId: string
-  ): Promise<void> {
-    const follower = this.followers.get(requesterBootstrapId);
-    if (!follower) return;
-
-    const transport = this.options.browserTransport;
-    if (!transport) {
-      follower.sync.send({
-        type: 'cdp.response',
-        requestId,
-        error: 'Leader has no browser transport',
-      });
-      return;
-    }
-
-    try {
-      const result = await transport.send(method, params, sessionId);
-      sendCDPResponse(follower.sync, requestId, result);
-    } catch (err) {
-      follower.sync.send({
-        type: 'cdp.response',
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
-   * Forward a CDP request from one follower to another follower that owns the target.
-   */
-  private forwardCDPRequest(
-    requestId: string,
-    targetRuntimeId: string,
-    localTargetId: string,
-    method: string,
-    params: Record<string, unknown> | undefined,
-    sessionId: string | undefined,
-    requesterBootstrapId: string
-  ): void {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-    const requester = this.followers.get(requesterBootstrapId);
-
-    if (!targetFollower) {
-      if (requester) {
-        requester.sync.send({
-          type: 'cdp.response',
-          requestId,
-          error: `Target runtime "${targetRuntimeId}" not connected`,
-        });
-      }
-      return;
-    }
-
-    // Track the pending route so we can return the response to the requester
-    this.pendingCDPRoutes.set(requestId, { requesterBootstrapId, requestId });
-
-    // Forward to the target follower (without targetRuntimeId — it's always for their local target)
-    targetFollower.sync.send({
-      type: 'cdp.request',
-      requestId,
-      localTargetId,
-      method,
-      params,
-      sessionId,
-    });
-  }
-
-  /**
-   * Handle a CDP response from a follower (forwarding back to the original requester).
-   * Supports chunked responses: reassembles chunks before forwarding, then re-chunks
-   * for the outbound channel.
-   */
-  private handleCDPResponse(message: FollowerToLeaderMessage & { type: 'cdp.response' }): void {
-    const { requestId } = message;
-    const route = this.pendingCDPRoutes.get(requestId);
-    if (!route) return;
-
-    // Reassemble chunked response from the follower
-    const assembled = reassembleCDPResponse(this.cdpChunkBuffers, message);
-    if (!assembled) return; // Still waiting for more chunks
-
-    this.pendingCDPRoutes.delete(requestId);
-
-    // Route to the leader's own RemoteCDPTransport if the requester is the leader itself
-    if (route.requesterBootstrapId === '__leader__') {
-      for (const transport of this.remoteTransports.values()) {
-        transport.handleResponse(requestId, assembled.result, assembled.error);
-      }
-      return;
-    }
-
-    // Forward to the requesting follower, re-chunking if necessary
-    const requester = this.followers.get(route.requesterBootstrapId);
-    if (requester) {
-      sendCDPResponse(requester.sync, requestId, assembled.result, assembled.error);
-    }
-  }
-
-  /**
-   * Handle a CDP event from a follower. Routes the event to the leader's
-   * RemoteCDPTransport for that follower so that `remoteTransport.on(event, handler)` fires.
-   */
-  private handleCDPEvent(
-    bootstrapId: string,
-    method: string,
-    params: Record<string, unknown>,
-    sessionId?: string
-  ): void {
-    // Find the runtimeId for this follower
-    let followerRuntimeId: string | undefined;
-    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
-      if (bId === bootstrapId) {
-        followerRuntimeId = runtimeId;
-        break;
-      }
-    }
-    if (!followerRuntimeId) return;
-
-    // Deliver the event to all RemoteCDPTransports for this follower's runtime
-    const prefix = `${followerRuntimeId}:`;
-    for (const [key, transport] of this.remoteTransports) {
-      if (key.startsWith(prefix)) {
-        transport.handleEvent(method, params);
-      }
-    }
   }
 
   /** Resolve the advertised runtimeId for a follower's bootstrapId, if known. */
