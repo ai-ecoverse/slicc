@@ -213,7 +213,7 @@ function mergeFlake(existing, record, runId) {
  * Each input describes one artifact: `{ text, project, runId }`. `runId`
  * identifies the CI run so a flake seen in three different runs reports
  * `runs: 3` — frequency is what makes one flake worth fixing before another.
- * @param {Array<{text?: string|null, project?: string, runId?: string|number}>} inputs
+ * @param {Iterable<{text?: string|null, project?: string, runId?: string|number}>} inputs
  * @returns {Array<object>} aggregated flakes, most frequent first
  */
 export function aggregateFlakes(inputs) {

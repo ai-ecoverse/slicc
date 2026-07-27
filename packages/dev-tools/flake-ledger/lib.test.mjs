@@ -312,6 +312,14 @@ describe('aggregateFlakes', () => {
     expect(flakes[1].project).toBe('chrome-extension');
   });
 
+  it('accepts a lazy iterable so the sweep need not buffer every artifact', () => {
+    function* lazy() {
+      yield { text: JSON.stringify(LEDGER_JSON), runId: 1 };
+      yield { text: JSON.stringify(LEDGER_JSON), runId: 2 };
+    }
+    expect(aggregateFlakes(lazy())[0].runs).toBe(2);
+  });
+
   it('skips artifacts that could not be downloaded without losing the rest', () => {
     const flakes = aggregateFlakes([
       { text: null, runId: 1 },

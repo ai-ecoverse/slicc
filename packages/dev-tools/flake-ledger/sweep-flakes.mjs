@@ -120,13 +120,18 @@ function fetchRunArtifacts(runId) {
   }
 }
 
-function collectInputs(runs) {
-  const inputs = [];
+/**
+ * Yield one artifact at a time. A single `test-timing-webapp` report is ~4 MB,
+ * so buffering a whole sweep's worth would cost hundreds of megabytes; lazily
+ * yielding lets each payload be collected once it has been parsed.
+ */
+function* collectInputs(runs, stats) {
   for (const run of runs) {
-    const texts = fetchRunArtifacts(run.databaseId);
-    for (const text of texts) inputs.push({ text, runId: run.databaseId });
+    for (const text of fetchRunArtifacts(run.databaseId)) {
+      stats.artifacts += 1;
+      yield { text, runId: run.databaseId };
+    }
   }
-  return inputs;
 }
 
 function fetchFiledIssues() {
@@ -192,10 +197,9 @@ function main() {
   const runs = listRuns();
   console.log(`   ${runs.length} completed run(s) in window.`);
 
-  const inputs = collectInputs(runs);
-  console.log(`   ${inputs.length} test-timing artifact file(s) downloaded.`);
-
-  const flakes = aggregateFlakes(inputs);
+  const stats = { artifacts: 0 };
+  const flakes = aggregateFlakes(collectInputs(runs, stats));
+  console.log(`   ${stats.artifacts} test-timing artifact file(s) inspected.`);
   writeFileSync(
     OUTPUT_PATH,
     JSON.stringify({ window: WINDOW, runs: runs.length, flakes }, null, 2)
