@@ -1,10 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createProxiedFetch } from '../proxied-fetch.js';
-
-const RESOLVER_URL = 'https://cloudflare-dns.com/dns-query';
-
-const SUPPORTED_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'CNAME', 'NS', 'SOA', 'SRV', 'PTR', 'CAA'];
+import { DIG_VERSION, type DigQueryArgs, parseDigArgs, SUPPORTED_TYPES } from './dig-args.js';
 
 // DoH numeric type → symbolic name (used to render answers).
 const TYPE_NUM_TO_NAME: Record<number, string> = {
@@ -41,21 +38,35 @@ interface DohResponse {
   Answer?: DohAnswer[];
 }
 
+interface DigOutput {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+type ProxiedFetch = ReturnType<typeof createProxiedFetch>;
+
 function digHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: dig <name> [type] [+short] [--json]\n' +
+      'usage: dig <name> [type] [@server] [+opts] [--json]\n' +
+      '       dig -x <address> [@server] [+opts] [--json]\n' +
+      '       dig -v | --version\n' +
       '\n' +
-      'Resolve DNS records via Cloudflare DNS-over-HTTPS.\n' +
+      'Resolve DNS records via DNS-over-HTTPS.\n' +
       '\n' +
       'Supported types: ' +
       SUPPORTED_TYPES.join(', ') +
       ' (default: A).\n' +
       '\n' +
       'Flags:\n' +
-      '  +short    one answer value per line, no headers\n' +
-      '  --json    raw resolver JSON (pretty-printed)\n' +
-      '  -h, --help  show this help\n',
+      '  @server       use a supported Cloudflare, Google, or Quad9 resolver\n' +
+      '  -x <address>  reverse lookup (PTR) for an IPv4 or IPv6 address\n' +
+      '  -v, --version show version information\n' +
+      '  +short        one answer value per line, no headers\n' +
+      '  +opts         other dig +options are accepted as no-ops\n' +
+      '  --json        raw resolver JSON (pretty-printed)\n' +
+      '  -h, --help    show this help\n',
     stderr: '',
     exitCode: 0,
   };
@@ -63,6 +74,82 @@ function digHelp(): { stdout: string; stderr: string; exitCode: number } {
 
 function renderType(type: number): string {
   return TYPE_NUM_TO_NAME[type] ?? `TYPE${type}`;
+}
+
+function renderAnswers(payload: DohResponse, query: DigQueryArgs): DigOutput {
+  const { fallbackNote, json, name, short } = query;
+  if (typeof payload.Status === 'number' && payload.Status !== 0) {
+    const rcode = RCODE_NAMES[payload.Status] ?? String(payload.Status);
+    return { stdout: '', stderr: `${fallbackNote}dig: ${name}: ${rcode}\n`, exitCode: 1 };
+  }
+  if (json) {
+    return {
+      stdout: `${JSON.stringify(payload, null, 2)}\n`,
+      stderr: fallbackNote,
+      exitCode: 0,
+    };
+  }
+
+  const answers = payload.Answer ?? [];
+  if (answers.length === 0) {
+    const stdout = short ? '' : ';; no records found\n';
+    return { stdout, stderr: fallbackNote, exitCode: 0 };
+  }
+  if (short) {
+    return {
+      stdout: `${answers.map((answer) => answer.data).join('\n')}\n`,
+      stderr: fallbackNote,
+      exitCode: 0,
+    };
+  }
+  const lines = answers
+    .map(
+      (answer) =>
+        `${answer.name}\t${answer.TTL ?? 0}\tIN\t${renderType(answer.type)}\t${answer.data}`
+    )
+    .join('\n');
+  return { stdout: `${lines}\n`, stderr: fallbackNote, exitCode: 0 };
+}
+
+async function runDig(args: string[], proxiedFetch: ProxiedFetch): Promise<DigOutput> {
+  const parsedArgs = parseDigArgs(args);
+  if (parsedArgs.kind === 'version') {
+    return { stdout: `${DIG_VERSION}\n`, stderr: '', exitCode: 0 };
+  }
+  if (parsedArgs.kind === 'error') {
+    return { stdout: '', stderr: parsedArgs.message, exitCode: 1 };
+  }
+
+  const { fallbackNote, name, resolverUrl, type } = parsedArgs;
+  const url = `${resolverUrl}?name=${encodeURIComponent(name)}&type=${type}`;
+  let response: Awaited<ReturnType<ProxiedFetch>>;
+  try {
+    response = await proxiedFetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/dns-json' },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { stdout: '', stderr: `${fallbackNote}dig: ${message}\n`, exitCode: 1 };
+  }
+  if (response.status < 200 || response.status >= 300) {
+    return {
+      stdout: '',
+      stderr: `${fallbackNote}dig: lookup failed: ${response.status} ${response.statusText}\n`,
+      exitCode: 1,
+    };
+  }
+
+  try {
+    const text = new TextDecoder('utf-8').decode(response.body);
+    return renderAnswers(JSON.parse(text) as DohResponse, parsedArgs);
+  } catch {
+    return {
+      stdout: '',
+      stderr: `${fallbackNote}dig: invalid response from resolver\n`,
+      exitCode: 1,
+    };
+  }
 }
 
 export function createDigCommand(): Command {
@@ -76,114 +163,6 @@ export function createDigCommand(): Command {
     if (args.includes('--help') || args.includes('-h')) {
       return digHelp();
     }
-
-    let short = false;
-    let json = false;
-    const positional: string[] = [];
-    for (const arg of args) {
-      if (arg === '+short') {
-        short = true;
-      } else if (arg === '--json') {
-        json = true;
-      } else if (arg.startsWith('--')) {
-        return { stdout: '', stderr: `dig: unknown option: ${arg}\n`, exitCode: 1 };
-      } else if (arg.startsWith('+')) {
-        return { stdout: '', stderr: `dig: unknown option: ${arg}\n`, exitCode: 1 };
-      } else {
-        positional.push(arg);
-      }
-    }
-
-    if (short && json) {
-      return {
-        stdout: '',
-        stderr: 'dig: +short and --json are mutually exclusive\n',
-        exitCode: 1,
-      };
-    }
-
-    const name = positional[0]?.trim();
-    if (!name) {
-      return {
-        stdout: '',
-        stderr: 'dig: missing domain name\nusage: dig <name> [type] [+short] [--json]\n',
-        exitCode: 1,
-      };
-    }
-
-    const typeArg = positional[1]?.trim().toUpperCase() ?? 'A';
-    if (!SUPPORTED_TYPES.includes(typeArg)) {
-      return {
-        stdout: '',
-        stderr: `dig: unsupported record type: ${typeArg}\n`,
-        exitCode: 1,
-      };
-    }
-
-    const url = `${RESOLVER_URL}?name=${encodeURIComponent(name)}&type=${typeArg}`;
-
-    let response: Awaited<ReturnType<typeof proxiedFetch>>;
-    try {
-      response = await proxiedFetch(url, {
-        method: 'GET',
-        headers: { Accept: 'application/dns-json' },
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { stdout: '', stderr: `dig: ${message}\n`, exitCode: 1 };
-    }
-
-    if (response.status < 200 || response.status >= 300) {
-      return {
-        stdout: '',
-        stderr: `dig: lookup failed: ${response.status} ${response.statusText}\n`,
-        exitCode: 1,
-      };
-    }
-
-    const text = new TextDecoder('utf-8').decode(response.body);
-    let payload: DohResponse;
-    try {
-      payload = JSON.parse(text) as DohResponse;
-    } catch {
-      return {
-        stdout: '',
-        stderr: 'dig: invalid response from resolver\n',
-        exitCode: 1,
-      };
-    }
-
-    if (typeof payload.Status === 'number' && payload.Status !== 0) {
-      const rcode = RCODE_NAMES[payload.Status] ?? String(payload.Status);
-      return { stdout: '', stderr: `dig: ${name}: ${rcode}\n`, exitCode: 1 };
-    }
-
-    if (json) {
-      return {
-        stdout: `${JSON.stringify(payload, null, 2)}\n`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
-    const answers = payload.Answer ?? [];
-
-    if (answers.length === 0) {
-      if (short) {
-        return { stdout: '', stderr: '', exitCode: 0 };
-      }
-      return { stdout: ';; no records found\n', stderr: '', exitCode: 0 };
-    }
-
-    if (short) {
-      const lines = answers.map((a) => a.data).join('\n');
-      return { stdout: `${lines}\n`, stderr: '', exitCode: 0 };
-    }
-
-    const lines = answers
-      .map((a) => `${a.name}\t${a.TTL ?? 0}\tIN\t${renderType(a.type)}\t${a.data}`)
-      .join('\n');
-
-    return { stdout: `${lines}\n`, stderr: '', exitCode: 0 };
+    return runDig(args, proxiedFetch);
   });
 }

@@ -45,6 +45,10 @@ describe('dig command', () => {
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toLowerCase()).toContain('usage');
+    expect(result.stdout).toContain('@server');
+    expect(result.stdout).toContain('-x <address>');
+    expect(result.stdout).toContain('--version');
+    expect(result.stdout).toContain('+opts');
   });
 
   it('shows help with -h', async () => {
@@ -69,11 +73,13 @@ describe('dig command', () => {
     expect(result.stderr).toContain('missing domain name');
   });
 
-  it('errors on unsupported record type', async () => {
+  it('errors on an unclassifiable record type', async () => {
     const cmd = createDigCommand();
     const result = await cmd.execute(['example.com', 'BOGUS'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('unsupported record type: BOGUS');
+    expect(result.stderr).toBe(
+      "dig: 'BOGUS' is not a valid record type; usage: dig <name> [type] [@server] [+short] [--json]\n"
+    );
   });
 
   it('errors when +short and --json are both supplied', async () => {
@@ -83,11 +89,15 @@ describe('dig command', () => {
     expect(result.stderr).toContain('mutually exclusive');
   });
 
-  it('errors on unknown +flag', async () => {
+  it('accepts unknown +flags as no-ops', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchResponse(200, noAnswerBody)));
     const cmd = createDigCommand();
-    const result = await cmd.execute(['example.com', '+trace'], createMockCtx());
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('unknown option: +trace');
+    const result = await cmd.execute(
+      ['+noall', '+answer', 'example.com', '+trace'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
   });
 
   it('errors on unknown --flag', async () => {
@@ -113,6 +123,83 @@ describe('dig command', () => {
       'https://cloudflare-dns.com/dns-query?name=example.com&type=A'
     );
     expect(init.headers['Accept']).toBe('application/dns-json');
+  });
+
+  it.each(['-v', '--version'])('prints the version without resolving: %s', async (arg) => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await createDigCommand().execute([arg], createMockCtx());
+    expect(result).toEqual({
+      stdout: 'DiG 9.20.0-slicc (DNS-over-HTTPS)\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts the record type before the name', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fetchResponse(200, noAnswerBody));
+    vi.stubGlobal('fetch', fetchSpy);
+    await createDigCommand().execute(['AAAA', 'example.com'], createMockCtx());
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init.headers['X-Target-URL']).toBe(
+      'https://cloudflare-dns.com/dns-query?name=example.com&type=AAAA'
+    );
+  });
+
+  it.each([
+    ['8.8.8.8', 'https://dns.google/resolve'],
+    ['9.9.9.9', 'https://dns.quad9.net:5053/dns-query'],
+  ])('routes @%s to the selected resolver', async (server, endpoint) => {
+    const fetchSpy = vi.fn().mockResolvedValue(fetchResponse(200, noAnswerBody));
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await createDigCommand().execute(
+      ['example.com', `@${server}`, 'A'],
+      createMockCtx()
+    );
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init.headers['X-Target-URL']).toBe(`${endpoint}?name=example.com&type=A`);
+    expect(result.stderr).toBe('');
+  });
+
+  it('uses the default resolver and prints a note for an unsupported @server', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(fetchResponse(200, noAnswerBody));
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await createDigCommand().execute(
+      ['@ns.example.com', 'example.com'],
+      createMockCtx()
+    );
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init.headers['X-Target-URL']).toBe(
+      'https://cloudflare-dns.com/dns-query?name=example.com&type=A'
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      'dig: note: @ns.example.com not supported over DoH; using cloudflare-dns.com\n'
+    );
+  });
+
+  it.each([
+    ['8.8.8.8', '8.8.8.8.in-addr.arpa'],
+    ['2001:db8::1', '1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa'],
+  ])('issues a PTR query for -x %s', async (address, reverseName) => {
+    const fetchSpy = vi.fn().mockResolvedValue(fetchResponse(200, noAnswerBody));
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await createDigCommand().execute(['-x', address], createMockCtx());
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(init.headers['X-Target-URL']).toBe(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(reverseName)}&type=PTR`
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('rejects an invalid -x address without fetching', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await createDigCommand().execute(['-x', 'not-an-ip'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("dig: 'not-an-ip' is not a valid IP address for -x\n");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('upper-cases the record type in the URL', async () => {
@@ -269,6 +356,7 @@ describe('dig command', () => {
     const cmd = createDigCommand();
     const result = await cmd.execute(['example.com', 'BOGUS'], createMockCtx());
     expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("'BOGUS' is not a valid record type");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
