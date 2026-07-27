@@ -1215,6 +1215,10 @@ jobs:
   # `size-limit` block, and are measured on raw (non-brotli) bytes to match
   # the asset-cap framing of the worker gate. They are ratchets: tighten them
   # as payloads shrink; raising one needs a reason in the PR body.
+  #
+  # `dev-tools` is in the filter list because the webapp inlines
+  # `packages/dev-tools/providers.build.json` at build time to decide which
+  # providers get bundled, so editing it alone moves the shipped size.
   bundle-size:
     needs: changes
     if: >-
@@ -1226,6 +1230,7 @@ jobs:
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.webcomponents == 'true' ||
       needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
