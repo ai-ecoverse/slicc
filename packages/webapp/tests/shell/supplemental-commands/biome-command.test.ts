@@ -20,6 +20,10 @@ import {
   unwrapFormattedJsh,
   wrapJshForBiome,
 } from '../../../src/shell/supplemental-commands/biome-command.js';
+import {
+  parseBiomeJsonc,
+  resolveBiomeConfiguration,
+} from '../../../src/shell/supplemental-commands/biome-configuration.js';
 
 // The install-hint versions are derived from packages/webapp/package.json
 // (via the Vite/vitest `__BIOME_*__` defines), so the test reads the same
@@ -40,7 +44,7 @@ function createMockCtx(
     stdin: string;
   }> = {}
 ): Parameters<ReturnType<typeof createBiomeCommand>['execute']>[1] {
-  const fileStore = new Map<string, string>();
+  const fileStore = new Map<string, string | Uint8Array>();
   const dirSet = new Set<string>(['/workspace']);
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) =>
@@ -49,10 +53,10 @@ function createMockCtx(
     readFile: vi.fn().mockImplementation(async (p: string) => {
       const v = fileStore.get(p);
       if (v === undefined) throw new Error(`ENOENT: ${p}`);
-      return v;
+      return typeof v === 'string' ? v : new TextDecoder().decode(v);
     }),
     writeFile: vi.fn().mockImplementation(async (p: string, content: string | Uint8Array) => {
-      fileStore.set(p, typeof content === 'string' ? content : new TextDecoder().decode(content));
+      fileStore.set(p, content);
       const parts = p.split('/').slice(0, -1);
       for (let i = 1; i <= parts.length; i++) {
         const seg = parts.slice(0, i).join('/') || '/';
@@ -61,7 +65,8 @@ function createMockCtx(
     }),
     stat: vi.fn().mockImplementation(async (p: string) => {
       if (fileStore.has(p)) {
-        return { isFile: true, isDirectory: false, size: fileStore.get(p)!.length };
+        const value = fileStore.get(p)!;
+        return { isFile: true, isDirectory: false, size: value.length };
       }
       if (dirSet.has(p)) {
         return { isFile: false, isDirectory: true, size: 0 };
@@ -79,7 +84,11 @@ function createMockCtx(
       }
       return [...out];
     }),
-    readFileBuffer: vi.fn().mockImplementation(async () => new Uint8Array()),
+    readFileBuffer: vi.fn().mockImplementation(async (p: string) => {
+      const value = fileStore.get(p);
+      if (value === undefined) throw new Error(`ENOENT: ${p}`);
+      return typeof value === 'string' ? new TextEncoder().encode(value) : value;
+    }),
     ...overrides.fs,
   };
   return {
@@ -93,6 +102,41 @@ function createMockCtx(
     env: Map<string, string>;
     stdin: string;
   };
+}
+
+async function stageRealBiomePackages(ctx: ReturnType<typeof createMockCtx>): Promise<void> {
+  const require = createRequire(import.meta.url);
+  const packages = [
+    {
+      hostRoot: dirname(require.resolve('@biomejs/wasm-web/package.json')),
+      vfsRoot: '/workspace/node_modules/@biomejs/wasm-web',
+      files: ['package.json', 'biome_wasm.js'],
+      binaries: ['biome_wasm_bg.wasm'],
+    },
+    {
+      hostRoot: dirname(require.resolve('@biomejs/js-api/package.json')),
+      vfsRoot: '/workspace/node_modules/@biomejs/js-api',
+      files: ['package.json', 'dist/web.js', 'dist/common.js', 'dist/wasm.js'],
+      binaries: [],
+    },
+    {
+      hostRoot: dirname(require.resolve('esbuild-wasm/package.json')),
+      vfsRoot: '/workspace/node_modules/esbuild-wasm',
+      files: ['package.json'],
+      binaries: [],
+    },
+  ];
+  for (const pkg of packages) {
+    for (const file of pkg.files) {
+      await ctx.fs.writeFile(`${pkg.vfsRoot}/${file}`, readFileSync(resolve(pkg.hostRoot, file)));
+    }
+    for (const file of pkg.binaries) {
+      await ctx.fs.writeFile(
+        `${pkg.vfsRoot}/${file}`,
+        new Uint8Array(readFileSync(resolve(pkg.hostRoot, file)))
+      );
+    }
+  }
 }
 
 describe('parseBiomeArgs', () => {
@@ -310,6 +354,123 @@ describe('expandPaths', () => {
   });
 });
 
+describe('Biome configuration resolution', () => {
+  it('uses an explicit --config-path relative to cwd', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/biome.json', '{ invalid discovered config }');
+    await ctx.fs.writeFile('/workspace/config/biome.json', '{ "formatter": { "enabled": false } }');
+    const result = await resolveBiomeConfiguration(
+      ctx.fs,
+      ctx.cwd,
+      '/workspace/src',
+      'config/biome.json'
+    );
+    expect(result).toEqual({
+      ok: true,
+      resolved: {
+        path: '/workspace/config/biome.json',
+        configuration: { formatter: { enabled: false } },
+      },
+    });
+  });
+
+  it('discovers the nearest config upward and prefers biome.json', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/biome.jsonc', '{ "root": false }');
+    await ctx.fs.writeFile('/workspace/packages/biome.json', '{ "root": true }');
+    await ctx.fs.writeFile('/workspace/packages/biome.jsonc', '{ "root": false }');
+    const result = await resolveBiomeConfiguration(
+      ctx.fs,
+      ctx.cwd,
+      '/workspace/packages/app/src',
+      null
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      resolved: { path: '/workspace/packages/biome.json', configuration: { root: true } },
+    });
+  });
+
+  it('parses JSONC comments and trailing commas without altering string content', () => {
+    expect(
+      parseBiomeJsonc(`{
+        // line comment
+        "url": "https://example.test/a//b",
+        /* block comment */
+        "javascript": { "formatter": { "quoteStyle": "single", }, },
+      }`)
+    ).toEqual({
+      url: 'https://example.test/a//b',
+      javascript: { formatter: { quoteStyle: 'single' } },
+    });
+  });
+
+  it('returns exit 2 for a missing explicit config', async () => {
+    const ctx = createMockCtx();
+    const result = await resolveBiomeConfiguration(
+      ctx.fs,
+      ctx.cwd,
+      '/workspace/src',
+      'missing.json'
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: 'biome: configuration file not found: /workspace/missing.json',
+      exitCode: 2,
+    });
+  });
+
+  it('returns exit 2 for an unparseable explicit config', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/custom.jsonc', '{ invalid }');
+    const result = await resolveBiomeConfiguration(
+      ctx.fs,
+      ctx.cwd,
+      '/workspace/src',
+      'custom.jsonc'
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(2);
+      expect(result.error).toMatch(/failed to parse configuration \/workspace\/custom\.jsonc/);
+    }
+  });
+
+  it('returns exit 1 for an unparseable discovered config', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/biome.json', '{ invalid }');
+    const result = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, '/workspace/src', null);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.exitCode).toBe(1);
+      expect(result.error).toMatch(/failed to parse configuration \/workspace\/biome\.json/);
+    }
+  });
+
+  it('returns the default null configuration when no config exists', async () => {
+    const ctx = createMockCtx();
+    await expect(
+      resolveBiomeConfiguration(ctx.fs, ctx.cwd, '/workspace/src/nested', null)
+    ).resolves.toEqual({ ok: true, resolved: null });
+  });
+
+  it('does not discover configs inside node_modules while walking upward', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/biome.json', '{ "root": true }');
+    await ctx.fs.writeFile('/workspace/node_modules/pkg/biome.json', '{ "root": false }');
+    const result = await resolveBiomeConfiguration(
+      ctx.fs,
+      ctx.cwd,
+      '/workspace/node_modules/pkg/src',
+      null
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      resolved: { path: '/workspace/biome.json', configuration: { root: true } },
+    });
+  });
+});
+
 describe('install-required guidance', () => {
   it('tryReadBiomeWasmVersion returns null when wasm-web is absent', async () => {
     const ctx = createMockCtx();
@@ -398,15 +559,16 @@ describe('biome --help / argument errors', () => {
     expect(res.stdout).toMatch(/lint\s+Lint only/);
     expect(res.stdout).toContain('--check');
     expect(res.stdout).toContain(
-      '--config-path <file>       Configuration path override (parsed only)'
+      '--config-path <file>       Use this config instead of discovering'
     );
+    expect(res.stdout).toContain('Discovers the nearest biome.json, then biome.jsonc');
+    expect(res.stdout).toContain('Config "extends" is unsupported');
     expect(res.stdout).toContain(
       '--reporter <plain|json>    Reporter selection (parsed only; default: plain)'
     );
     expect(res.stdout).toContain(
       '--json                     Alias for --reporter json (parsed only)'
     );
-    expect(res.stdout).not.toContain('Use the specified Biome configuration file');
     expect(res.stdout).not.toContain('Select output reporter');
     expect(res.stdout).toMatch(
       /Exit codes:[\s\S]*0\s+No findings[\s\S]*1\s+Errors \(including fatal\), warnings/
@@ -438,6 +600,37 @@ describe('biome --help / argument errors', () => {
     const res = await createBiomeCommand().execute([...args], createMockCtx());
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toMatch(message);
+  });
+
+  it('exits 2 for a missing explicit configuration before loading Biome', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/a.ts', 'const value = 1;');
+    const res = await createBiomeCommand().execute(
+      ['check', '--config-path', 'missing.json', 'a.ts'],
+      ctx
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toContain('configuration file not found: /workspace/missing.json');
+  });
+
+  it('exits 1 for an unparseable discovered configuration before loading Biome', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/a.ts', 'const value = 1;');
+    await ctx.fs.writeFile('/workspace/biome.jsonc', '{ invalid }');
+    const res = await createBiomeCommand().execute(['check', 'a.ts'], ctx);
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/failed to parse configuration \/workspace\/biome\.jsonc/);
+  });
+
+  it('starts stdin configuration discovery from cwd, not --stdin-file-path', async () => {
+    const ctx = createMockCtx({ cwd: '/workspace/project', stdin: 'const value = 1;' });
+    await ctx.fs.writeFile('/workspace/project/biome.json', '{ invalid }');
+    const res = await createBiomeCommand().execute(
+      ['check', '--stdin-file-path', '/elsewhere/stdin.ts'],
+      ctx
+    );
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toMatch(/failed to parse configuration \/workspace\/project\/biome\.json/);
   });
 });
 
@@ -573,4 +766,80 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
     expect(printed).toContain('/t/real.jsh:2:');
     expect(printed).not.toContain('__slicc');
   });
+
+  it('applies a configuration that disables a lint rule', () => {
+    const enabledProject = biome.openProject('/lint-enabled').projectKey;
+    biome.applyConfiguration(enabledProject, {
+      linter: {
+        enabled: true,
+        rules: { preset: 'recommended', suspicious: { noDebugger: 'error' } },
+      },
+    });
+    const disabledProject = biome.openProject('/lint-disabled').projectKey;
+    biome.applyConfiguration(disabledProject, {
+      linter: {
+        enabled: true,
+        rules: { preset: 'recommended', suspicious: { noDebugger: 'off' } },
+      },
+    });
+    const source = 'debugger;\n';
+    const categories = (key: number) =>
+      biome
+        .lintContent(key, source, { filePath: '/t/configured.js' })
+        .diagnostics.map((diagnostic: { category?: string }) => diagnostic.category);
+    expect(categories(enabledProject)).toContain('lint/suspicious/noDebugger');
+    expect(categories(disabledProject)).not.toContain('lint/suspicious/noDebugger');
+  });
+
+  it('applies javascript formatter quoteStyle', () => {
+    const configuredProject = biome.openProject('/format-configured').projectKey;
+    biome.applyConfiguration(configuredProject, {
+      javascript: { formatter: { quoteStyle: 'single' } },
+    });
+    const formatted = biome.formatContent(configuredProject, 'const greeting = "hello";\n', {
+      filePath: '/t/configured.js',
+    });
+    expect(formatted.content).toContain("const greeting = 'hello';");
+  });
+
+  it('applies explicit and discovered configuration through the real command helper', async () => {
+    const ctx = createMockCtx();
+    await stageRealBiomePackages(ctx);
+    await ctx.fs.writeFile(
+      '/workspace/project/enabled.json',
+      JSON.stringify({
+        linter: {
+          enabled: true,
+          rules: { preset: 'recommended', suspicious: { noDebugger: 'error' } },
+        },
+      })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/project/biome.jsonc',
+      `{
+        // The discovered config must reach BIOME_HELPER_SCRIPT.
+        "linter": {
+          "enabled": true,
+          "rules": { "preset": "recommended", "suspicious": { "noDebugger": "off" } },
+        },
+        "javascript": { "formatter": { "quoteStyle": "single" } },
+      }`
+    );
+    const sourcePath = '/workspace/project/src/configured.js';
+    await ctx.fs.writeFile(sourcePath, 'debugger;\nconst greeting = "hello";\nvoid greeting;\n');
+
+    const enabled = await createBiomeCommand().execute(
+      ['lint', '--config-path', '/workspace/project/enabled.json', sourcePath],
+      ctx
+    );
+    expect(enabled.exitCode).toBe(1);
+    expect(enabled.stderr).toContain('lint/suspicious/noDebugger');
+
+    const configured = await createBiomeCommand().execute(['check', '--write', sourcePath], ctx);
+    expect(configured).toMatchObject({ exitCode: 0, stdout: '' });
+    expect(configured.stderr).toContain('biome: wrote 1 file(s)');
+    const written = await ctx.fs.readFile(sourcePath);
+    expect(written).toContain("const greeting = 'hello';");
+    expect(written).not.toContain('const greeting = "hello";');
+  }, 120_000);
 });

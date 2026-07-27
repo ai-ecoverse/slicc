@@ -38,6 +38,7 @@ import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
+import { type BiomeConfiguration, resolveBiomeConfiguration } from './biome-configuration.js';
 import { ESBUILD_VERSION } from './esbuild-wasm.js';
 import {
   biomeVirtualPath,
@@ -142,11 +143,15 @@ Flags:
   --write                    Write formatted output back to disk (format / check)
   --check                    Report unformatted files instead of printing (format only)
   --stdin-file-path <path>   Virtual file path for stdin mode
-  --config-path <file>       Configuration path override (parsed only)
+  --config-path <file>       Use this config instead of discovering biome.json / biome.jsonc
   --reporter <plain|json>    Reporter selection (parsed only; default: plain)
   --json                     Alias for --reporter json (parsed only)
   -h, --help                 Show this help
   -v, --version              Show installed @biomejs/wasm-web version
+
+Configuration:
+  Discovers the nearest biome.json, then biome.jsonc, walking toward /. Config
+  files may contain comments and trailing commas. Config "extends" is unsupported.
 
 Exit codes:
   0  No findings
@@ -405,7 +410,7 @@ interface BiomeRequest {
   op: BiomeSubcommand;
   write: boolean;
   check: boolean;
-  configPath: string | null;
+  configuration: BiomeConfiguration | null;
   reporter: BiomeReporter;
   files: { path: string; biomePath: string; source: string; wrap: boolean }[];
 }
@@ -481,6 +486,7 @@ async function main() {
   if (!Biome) throw new Error('@biomejs/js-api/web does not export Biome');
   const biome = new Biome();
   const { projectKey } = biome.openProject();
+  if (req.configuration !== null) biome.applyConfiguration(projectKey, req.configuration);
   const results = [];
   for (const file of req.files) {
     let formatted = null;
@@ -577,7 +583,7 @@ async function runBiomeOps(
   op: BiomeSubcommand,
   write: boolean,
   check: boolean,
-  configPath: string | null,
+  configuration: BiomeConfiguration | null,
   reporter: BiomeReporter,
   files: { path: string; source: string }[],
   wasmPath: string
@@ -586,7 +592,7 @@ async function runBiomeOps(
     op,
     write,
     check,
-    configPath,
+    configuration,
     reporter,
     files: files.map((f) => ({
       path: f.path,
@@ -748,18 +754,25 @@ export function createBiomeCommand(): Command {
       };
     }
 
-    const pre = await preflight(ctx, ipk);
-    if ('exitCode' in pre) return pre;
-
     const gathered = await gatherInputs(ctx, parsed);
     if ('exitCode' in gathered) return gathered;
+
+    const searchFrom =
+      parsed.paths.length === 0 && ctx.stdin ? ctx.cwd : splitPath(gathered.inputs[0].path).dir;
+    const config = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, searchFrom, parsed.configPath);
+    if (!config.ok) {
+      return { stdout: '', stderr: `${config.error}\n`, exitCode: config.exitCode };
+    }
+
+    const pre = await preflight(ctx, ipk);
+    if ('exitCode' in pre) return pre;
 
     const outcome = await runBiomeOps(
       ctx,
       parsed.subcommand,
       parsed.write,
       parsed.check,
-      parsed.configPath,
+      config.resolved?.configuration ?? null,
       parsed.reporter,
       gathered.inputs,
       pre.wasmPath
