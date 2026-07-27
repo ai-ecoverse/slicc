@@ -39,6 +39,10 @@ const SWIFT_BUNDLES = {
   'swift-server': 'SliccServerPackageTests',
   'swift-optel': 'SwiftOptelPackageTests',
   'swift-launcher': 'SliccstartPackageTests',
+  // ios-app cannot run `swift test` at all (iOS-only WebRTC dependency), so it
+  // is measured through the coverage script's --xcodebuild simulator mode. The
+  // "bundle" there is the app target carrying the code under test.
+  'ios-app': { bundle: 'SliccFollower', xcodebuildScheme: 'SliccFollower' },
 };
 
 // Packages whose coverage is produced by a dedicated vitest config (e.g.
@@ -73,15 +77,17 @@ function measureTs(pkg, floors) {
 }
 
 function measureSwift(pkg) {
-  const bundle = SWIFT_BUNDLES[pkg];
-  if (!bundle) {
+  const entry = SWIFT_BUNDLES[pkg];
+  if (!entry) {
     console.error(`  [skip] ${pkg}: unknown Swift test bundle`);
     return null;
   }
+  const { bundle, xcodebuildScheme } = typeof entry === 'string' ? { bundle: entry } : entry;
+  const mode = xcodebuildScheme ? ['--xcodebuild', xcodebuildScheme] : [];
   const script = resolve(repoRoot, 'packages/dev-tools/tools/swift-coverage-check.sh');
   // Pass `0 0 0` floors so measurement never fails here; the JSON summary is
   // written regardless and the real gate still runs in CI.
-  spawnSync(script, [`packages/${pkg}`, bundle, '0', '0', '0'], {
+  spawnSync(script, [...mode, `packages/${pkg}`, bundle, '0', '0', '0'], {
     cwd: repoRoot,
     stdio: 'inherit',
     env: process.env,
