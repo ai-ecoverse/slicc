@@ -1,0 +1,29 @@
+{
+  "$comment": "Copy/paste-detection floor for every application package, consumed by `npm run lint:duplication` (chained into `lint` and `lint:ci`). `threshold` is the maximum total duplicated-line percentage across all scanned formats; the measured baseline is 7.08%, so the floor keeps ~0.4pp of headroom in the same spirit as coverage-thresholds.json. Treat it as a one-way ratchet: lower it as duplication is paid down (the nightly `debt:duplication` triage rotation in .github/workflows/agentic-debt-triage.yml is the intended driver), never raise it to turn a red run green. jscpd's config parser rejects JSONC comments and prints a harmless `unknown field '$comment'` warning for this key — that warning is the price of documenting the floor here, do not silence it by deleting the key.",
+  "path": ["packages"],
+  "format": ["typescript", "tsx", "javascript", "jsx", "swift", "go"],
+  "minTokens": 50,
+  "minLines": 5,
+  "threshold": 7.5,
+  "reporters": ["silent", "threshold"],
+  "absolute": false,
+  "ignore": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/.build/**",
+    "**/coverage/**",
+    "**/.vite/**",
+    "**/playwright-report/**",
+    "**/test-results/**",
+    "**/*.d.ts",
+    "**/*.min.js",
+    "**/tests/fixtures/**",
+    "packages/dev-tools/**",
+    "packages/vfs-root/**",
+    "packages/assets/**",
+    "packages/webapp/src/ui/lucide-icons.ts",
+    "packages/webapp/src/ui/rum.js",
+    "packages/webapp/src/scoops/tray-sync-protocol-corpus.ts",
+    "packages/cloudflare-worker/src/preview-bridge-assets.ts"
+  ]
+}
