@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mountSliccImpl } from '../src/mount.js';
+import { CHERRY_PROTOCOL_VERSION } from '../src/protocol.js';
 import { TranscriptExportError } from '../src/transcript-types.js';
+
+interface VersionMismatchShape {
+  kind?: string;
+  cherry?: number;
+  channelId?: string;
+  peerVersion?: number;
+}
 
 describe('mountSliccImpl', () => {
   it('creates an iframe in the container pointed at ?cherry=1', () => {
@@ -328,6 +336,84 @@ describe('mountSliccImpl', () => {
     handle.emitHostEvent('too-early');
     expect(posted.find((e) => (e as { kind?: string }).kind === 'host.event')).toBeUndefined();
     expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    handle.destroy();
+  });
+});
+
+describe('protocol version skew', () => {
+  function mountWithCapture(hooks?: { onProtocolMismatch?: (peer: number, sdk: number) => void }) {
+    const container = document.createElement('div');
+    const posted: VersionMismatchShape[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      ...(hooks ? { hooks } : {}),
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    const iframe = container.querySelector('iframe')!;
+    const dispatch = (data: unknown, origin = 'https://app.example', source?: unknown) =>
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data,
+          origin,
+          source: (source === undefined ? iframe.contentWindow : source) as MessageEventSource,
+        })
+      );
+    return { handle, posted, dispatch };
+  }
+
+  it('replies handshake.version-mismatch to a version-skewed hello from its own iframe', () => {
+    const onProtocolMismatch = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture({ onProtocolMismatch });
+    dispatch({ cherry: 99, channelId: 'ch-skew', kind: 'handshake.hello' });
+    const reply = posted.find((e) => e.kind === 'handshake.version-mismatch');
+    expect(reply).toBeTruthy();
+    expect(reply?.cherry).toBe(CHERRY_PROTOCOL_VERSION);
+    expect(reply?.channelId).toBe('ch-skew'); // echoed so the follower's gate accepts it
+    expect(reply?.peerVersion).toBe(99);
+    expect(onProtocolMismatch).toHaveBeenCalledWith(99, CHERRY_PROTOCOL_VERSION);
+    warn.mockRestore();
+    handle.destroy();
+  });
+
+  it('does not reply to the companion lower-version hello of a completed handshake', () => {
+    // The follower posts one hello per version it speaks (same channelId).
+    // After the own-version hello completes the handshake, the lower-version
+    // companion must be warn-dropped — not answered, not re-handshaken.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture();
+    dispatch({ cherry: CHERRY_PROTOCOL_VERSION, channelId: 'ch-dual', kind: 'handshake.hello' });
+    expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true);
+    dispatch({ cherry: 1, channelId: 'ch-dual', kind: 'handshake.hello' });
+    expect(posted.find((e) => e.kind === 'handshake.version-mismatch')).toBeUndefined();
+    expect(posted.filter((e) => e.kind === 'handshake.welcome').length).toBe(1);
+    warn.mockRestore();
+    handle.destroy();
+  });
+
+  it('ignores a version-skewed hello from an untrusted origin or source', () => {
+    const onProtocolMismatch = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture({ onProtocolMismatch });
+    // Wrong origin — a hostile frame must not be able to probe the SDK version.
+    dispatch({ cherry: 99, channelId: 'ch-evil', kind: 'handshake.hello' }, 'https://evil.example');
+    // Right origin, wrong source window.
+    dispatch({ cherry: 99, channelId: 'ch-forged', kind: 'handshake.hello' }, undefined, {});
+    expect(posted.find((e) => e.kind === 'handshake.version-mismatch')).toBeUndefined();
+    expect(onProtocolMismatch).not.toHaveBeenCalled();
+    warn.mockRestore();
+    handle.destroy();
+  });
+
+  it('does not reply to version-skewed non-handshake envelopes', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture();
+    dispatch({ cherry: 99, channelId: 'ch-ev', kind: 'slicc.event', name: 'x' });
+    expect(posted.find((e) => e.kind === 'handshake.version-mismatch')).toBeUndefined();
     warn.mockRestore();
     handle.destroy();
   });

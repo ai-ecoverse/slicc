@@ -60,6 +60,14 @@ export interface HostHooks {
   onPermissionRequest?: (domain: string) => boolean | Promise<boolean>;
   /** Called once the Cherry postMessage handshake completes (welcome sent to follower). */
   onHandshakeComplete?: () => void;
+  /**
+   * Called when the follower iframe attempts a handshake with a cherry
+   * protocol version this SDK build cannot speak (after the follower's own
+   * version fallbacks are exhausted). The mount will not come up until the
+   * older side (this vendored SDK or the SLICC origin) is updated — surface
+   * this to telemetry instead of waiting out the handshake timeout.
+   */
+  onProtocolMismatch?: (peerVersion: number, sdkVersion: number) => void;
 }
 
 /** Effort / thinking level the cone should use. Locked — the UI picker is hidden. */

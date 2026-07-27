@@ -314,6 +314,26 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           peerVersion: event.data.cherry,
           ourVersion: CHERRY_PROTOCOL_VERSION,
         });
+        // Reply to a version-skewed HANDSHAKE attempt so the follower fails its
+        // connect() fast with an actionable error instead of eating the full
+        // handshake timeout (the follower can't otherwise tell "host SDK too
+        // old/new" from "no host SDK at all"). Reply ONLY when origin + source
+        // prove the sender is OUR iframe, and never for the companion
+        // lower-version hello of an already-completed handshake (the follower
+        // posts one hello per version it speaks, all with the same channelId).
+        if (
+          passesTrust(event) &&
+          event.data.kind === 'handshake.hello' &&
+          event.data.channelId !== channelId
+        ) {
+          post({
+            cherry: CHERRY_PROTOCOL_VERSION,
+            channelId: event.data.channelId,
+            kind: 'handshake.version-mismatch',
+            peerVersion: event.data.cherry,
+          });
+          options.hooks?.onProtocolMismatch?.(event.data.cherry, CHERRY_PROTOCOL_VERSION);
+        }
       } else if (isCherryEnvelope(event.data)) {
         console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
           origin: event.origin,
