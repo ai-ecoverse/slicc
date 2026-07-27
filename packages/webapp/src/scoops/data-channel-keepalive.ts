@@ -31,6 +31,14 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('data-channel-keepalive');
 
+function assertPositiveInt(name: string, value: number): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError(
+      `DataChannelKeepalive ${name} must be a positive integer; got ${String(value)}`
+    );
+  }
+}
+
 export interface DataChannelKeepaliveOptions {
   /** Send a ping message over the data channel. */
   sendPing: () => void;
@@ -89,6 +97,19 @@ export class DataChannelKeepalive {
     this.intervalMs = options.intervalMs ?? 10_000;
     this.maxMissed = options.maxMissed ?? 3;
     this.hardMaxMissed = options.hardMaxMissed ?? 30;
+    assertPositiveInt('intervalMs', this.intervalMs);
+    assertPositiveInt('maxMissed', this.maxMissed);
+    assertPositiveInt('hardMaxMissed', this.hardMaxMissed);
+    // `tick` only consults the hard deadline after `maxMissed` is crossed, so a
+    // hard deadline below the soft one would silently never apply — death would
+    // land at `maxMissed` instead, later than the configured hard deadline
+    // promises. Reject the contradiction here rather than surprising the caller
+    // with a threshold that quietly does nothing.
+    if (this.hardMaxMissed < this.maxMissed) {
+      throw new RangeError(
+        `DataChannelKeepalive hardMaxMissed (${this.hardMaxMissed}) must be >= maxMissed (${this.maxMissed})`
+      );
+    }
   }
 
   /** Start the keepalive interval. Safe to call multiple times. */
@@ -97,9 +118,14 @@ export class DataChannelKeepalive {
     this.timer = setInterval(() => this.tick(), this.intervalMs);
   }
 
-  /** Stop the keepalive. Once stopped, cannot be restarted. */
+  /**
+   * Stop the keepalive. Once stopped, cannot be restarted. Terminal: any stall
+   * is cleared without notifying, so a late pong can't report a recovery for a
+   * state machine that has already given up.
+   */
   stop(): void {
     this.stopped = true;
+    this.stalled = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -108,6 +134,7 @@ export class DataChannelKeepalive {
 
   /** Call when a pong is received from the remote side. */
   receivePong(): void {
+    if (this.stopped) return;
     this.awaitingPong = false;
     this.missedPongs = 0;
     this.clearStall();
@@ -115,6 +142,7 @@ export class DataChannelKeepalive {
 
   /** Call when a ping is received — the caller should send a pong in response. */
   receivePing(): void {
+    if (this.stopped) return;
     // Receiving a ping also proves the channel is alive, reset counters.
     this.missedPongs = 0;
     this.awaitingPong = false;

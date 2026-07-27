@@ -358,6 +358,48 @@ describe('DataChannelKeepalive', () => {
       keepalive.stop();
     });
 
+    it('rejects a hard deadline that would never apply', () => {
+      // `tick` only consults the hard deadline after maxMissed is crossed, so a
+      // smaller hardMaxMissed would silently never fire.
+      expect(
+        () =>
+          new DataChannelKeepalive({
+            sendPing: vi.fn(),
+            onDead: vi.fn(),
+            maxMissed: 60,
+            hardMaxMissed: 30,
+          })
+      ).toThrow(RangeError);
+    });
+
+    it.each([
+      ['intervalMs', { intervalMs: 0 }],
+      ['maxMissed', { maxMissed: -1 }],
+      ['hardMaxMissed', { hardMaxMissed: 2.5 }],
+    ])('rejects a non-positive-integer %s', (_name, overrides) => {
+      expect(
+        () => new DataChannelKeepalive({ sendPing: vi.fn(), onDead: vi.fn(), ...overrides })
+      ).toThrow(RangeError);
+    });
+
+    it('does not report a recovery after it has already declared death', () => {
+      const open = { value: true };
+      const { keepalive, onDead, onRecovered } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(7000); // stalled, then past the hard deadline
+      expect(onDead).toHaveBeenCalledTimes(1);
+      expect(keepalive.isStalled).toBe(false);
+
+      // A pong that arrives after the state machine gave up must not resurrect
+      // it or claim a recovery.
+      keepalive.receivePong();
+      keepalive.receivePing();
+
+      expect(onRecovered).not.toHaveBeenCalled();
+      expect(keepalive.isStalled).toBe(false);
+    });
+
     it('dies at maxMissed once an open transport closes mid-stall', () => {
       const open = { value: true };
       const { keepalive, onDead, onStalled } = makeStalling(open);
