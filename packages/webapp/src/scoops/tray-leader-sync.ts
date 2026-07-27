@@ -11,7 +11,7 @@ import type {
   WorkerBridgeDisconnected,
 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
+import type { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
@@ -23,6 +23,7 @@ import type { ChatMessage } from './chat-types.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
+import { CherryRouter } from './tray-leader/cherry-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
 import {
   type ConnectedFollower,
@@ -31,15 +32,13 @@ import {
   labelForFollower,
 } from './tray-leader/follower-registry.js';
 import { FsRouter } from './tray-leader/fs-router.js';
+import { PreviewBridgeManager } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { TabRouter } from './tray-leader/tab-router.js';
+import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
 import { TranscriptExportManager } from './tray-leader/transcript-export.js';
 import {
-  CHERRY_RUNTIME_TAG,
-  type CherryHostEventMessage,
   type FollowerToLeaderMessage,
-  isCherryHostEventMessage,
-  type LeaderToFollowerMessage,
   type RemoteTargetInfo,
   type ScoopSummary,
   type SprinkleSummary,
@@ -49,13 +48,12 @@ import {
   type TrayTargetEntry,
   unhandledProtocolMessage,
 } from './tray-sync-protocol.js';
-import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-leader-sync');
 
 export type { FloatType, RemoteExecResult };
-export { labelForFollower };
+export { isCherryTarget, labelForFollower, selectTeleportPool };
 
 export interface LeaderSyncManagerOptions {
   /** Get current chat messages for the active scoop. */
@@ -178,43 +176,6 @@ export interface LeaderSyncManagerOptions {
   ) => Promise<TranscriptZipResult>;
 }
 
-/**
- * True when a target is a cooperative cherry host page rather than a real
- * browser page. Cherry targets only lend the capabilities they advertise, so
- * teleport routing must treat them specially (see `selectTeleportPool`).
- */
-export function isCherryTarget(t: Pick<RemoteTargetInfo, 'kind'>): boolean {
-  return t.kind === 'cherry';
-}
-
-/**
- * Filter a list of advertised targets down to those eligible for a teleport.
- * Real browser targets always qualify. A cherry host page is included for a
- * network-requiring teleport (`requireNetwork: true`) only when it explicitly
- * advertises `capabilities.network === true` — honoring the field the protocol
- * doc on `RemoteTargetInfo.capabilities` says "gates whether the target may
- * serve `Network.*` CDP for teleport-pool selection." When the teleport does
- * not need network, cherry targets are always kept.
- *
- * Consumed by `getBestFollowerForTeleport` (auto-select) via
- * `canRuntimeServeTeleport`. The explicit `teleport --runtime <id>` path is
- * gated separately in `playwright-command.ts` at arm time, which rejects a
- * runtime advertising the `CHERRY_RUNTIME_TAG` before any watcher is created.
- */
-export function selectTeleportPool<
-  T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
->(targets: T[], opts: { requireNetwork: boolean }): T[] {
-  return targets.filter((t) => {
-    // Preview targets have no Network.* support, always exclude
-    if (t.kind === 'preview') return false;
-    if (!isCherryTarget(t)) return true;
-    // Cherry hosts drive a host-page realm over postMessage; they can only
-    // serve a network-requiring teleport if they explicitly advertise it.
-    if (opts.requireNetwork) return t.capabilities?.network === true;
-    return true;
-  });
-}
-
 export class LeaderSyncManager {
   private readonly followerRegistry: FollowerRegistry;
   private readonly context: LeaderSyncContext;
@@ -223,33 +184,13 @@ export class LeaderSyncManager {
   private readonly remoteExec: RemoteExecRouter;
   private readonly fsRouter: FsRouter;
   private readonly tabRouter: TabRouter;
+  private readonly previewBridge: PreviewBridgeManager;
+  private readonly cherryRouter: CherryRouter;
+  private readonly teleportPool: TeleportPool;
   private readonly transcriptExport: TranscriptExportManager;
-  private readonly registry = new TrayTargetRegistry();
   private get followers(): Map<string, ConnectedFollower> {
     return this.context.followers.followers;
   }
-  private get runtimeToBootstrap(): Map<string, string> {
-    return this.context.followers.runtimeToBootstrap;
-  }
-  /** Mint map: previewToken → {url, title, quiet} */
-  private readonly mintMap = new Map<string, { url: string; title: string; quiet: boolean }>();
-  /** Bridge connections: connId → {previewToken, origin, userAgent, connectedAt, url, title, quiet, transport} */
-  private readonly bridgeConns = new Map<
-    string,
-    {
-      previewToken: string;
-      origin: string;
-      userAgent: string;
-      connectedAt: string;
-      url: string;
-      title: string;
-      quiet: boolean;
-      transport: PreviewBridgeCdpTransport;
-    }
-  >();
-  /** Rate-limit preview lick bursts: previewToken → last emit timestamp */
-  private readonly previewLickLastEmitAt = new Map<string, number>();
-  private static readonly PREVIEW_LICK_THROTTLE_MS = 2000;
 
   constructor(private readonly options: LeaderSyncManagerOptions) {
     this.followerRegistry = new FollowerRegistry({
@@ -265,26 +206,27 @@ export class LeaderSyncManager {
       sendControl: options.sendControl,
     };
     this.broadcast = new BroadcastManager(this.context);
+    this.previewBridge = new PreviewBridgeManager(this.context);
     this.cdpRouter = new CDPRouter(this.context, {
-      getBridgeTransport: (connId) => this.getBridgeTransport(connId),
+      getBridgeTransport: (connId) => this.previewBridge.getBridgeTransport(connId),
     });
     this.remoteExec = new RemoteExecRouter(this.context);
-    this.followerRegistry.onFollowerRemoved({
-      removeRuntime: (_bootstrapId, runtimeId) => {
-        this.registry.removeRuntime(runtimeId);
-      },
-      afterRegistryCleanup: (bootstrapId) => {
-        if (this.registry.hasChanged()) this.broadcastTargetRegistry();
-      },
+    this.teleportPool = new TeleportPool(this.context, {
+      cleanupOrphanedRemoteTransports: (runtimeId) =>
+        this.cdpRouter.cleanupOrphanedRemoteTransports(runtimeId),
+      getPreviewTargetEntries: () => this.previewBridge.getTargetEntries(),
     });
     this.fsRouter = new FsRouter(this.context);
     this.tabRouter = new TabRouter(this.context, {
-      getTargetEntries: () => this.registry.getEntries(),
+      getTargetEntries: () => this.teleportPool.getRegistryEntries(),
       isCherryTarget,
     });
+    this.cherryRouter = new CherryRouter(this.context);
     this.transcriptExport = new TranscriptExportManager(this.context);
-    Object.defineProperty(this, 'activeExports', {
-      get: () => this.transcriptExport.activeExports,
+    Object.defineProperties(this, {
+      activeExports: { get: () => this.transcriptExport.activeExports },
+      bridgeConns: { get: () => this.previewBridge.bridgeConns },
+      mintMap: { get: () => this.previewBridge.mintMap },
     });
   }
 
@@ -310,10 +252,7 @@ export class LeaderSyncManager {
     this.broadcast.sendSprinklesListToFollower(bootstrapId);
 
     // Send current target registry to the new follower
-    const entries = this.getFollowerBroadcastEntries();
-    if (entries.length > 0) {
-      sync.send({ type: 'targets.registry', targets: entries });
-    }
+    this.teleportPool.sendTargetRegistryToFollower(bootstrapId);
   }
 
   /**
@@ -484,36 +423,6 @@ export class LeaderSyncManager {
     }
   }
 
-  private handleFollowerTargetsAdvertise(
-    bootstrapId: string,
-    message: FollowerToLeaderMessage & { type: 'targets.advertise' }
-  ): void {
-    log.info('Follower targets advertised', {
-      bootstrapId,
-      runtimeId: message.runtimeId,
-      targetCount: message.targets.length,
-    });
-    this.cdpRouter.cleanupOrphanedRemoteTransports(message.runtimeId);
-    this.followerRegistry.setRuntimeId(message.runtimeId, bootstrapId);
-    this.registry.setTargets(message.runtimeId, message.targets);
-
-    // Derive Cherry host origin from the first cherry-kind target URL.
-    // Stored for the approval dialog; never accepted from the request payload.
-    const follower = this.followers.get(bootstrapId);
-    if (follower && follower.runtime === CHERRY_RUNTIME_TAG) {
-      const cherryTarget = message.targets.find((t) => t.kind === 'cherry');
-      if (cherryTarget) {
-        try {
-          follower.hostOrigin = new URL(cherryTarget.url).origin;
-        } catch {
-          // Malformed URL — omit hostOrigin
-        }
-      }
-    }
-
-    this.broadcastTargetRegistry();
-  }
-
   /**
    * Run a command on a connected follower (the leader-side `ssh` command) and
    * resolve with the buffered stdout/stderr/exit code. Streams each output
@@ -621,7 +530,7 @@ export class LeaderSyncManager {
         this.handleFollowerLick(bootstrapId, message);
         break;
       case 'targets.advertise':
-        this.handleFollowerTargetsAdvertise(bootstrapId, message);
+        this.teleportPool.handleFollowerTargetsAdvertise(bootstrapId, message);
         break;
       case 'cdp.request':
         this.cdpRouter.handleCDPRequest(bootstrapId, message);
@@ -695,7 +604,7 @@ export class LeaderSyncManager {
         );
         break;
       case 'cherry.host_event':
-        this.routeCherryHostEvent(bootstrapId, message);
+        this.cherryRouter.routeCherryHostEvent(bootstrapId, message);
         break;
       case 'ping': {
         const follower = this.followers.get(bootstrapId);
@@ -763,20 +672,14 @@ export class LeaderSyncManager {
    * Broadcasts the updated registry if targets changed.
    */
   setLocalTargets(targets: RemoteTargetInfo[]): void {
-    this.registry.setTargets('leader', targets);
-    if (this.registry.hasChanged()) {
-      this.broadcastTargetRegistry();
-    }
+    this.teleportPool.setLocalTargets(targets);
   }
 
   /**
    * Broadcast the merged target registry to all connected followers.
    */
   broadcastTargetRegistry(): void {
-    if (this.followers.size === 0) return;
-    const entries = this.getFollowerBroadcastEntries();
-    const message: LeaderToFollowerMessage = { type: 'targets.registry', targets: entries };
-    this.followerRegistry.broadcastToAllFollowers(message);
+    this.teleportPool.broadcastTargetRegistry();
   }
 
   /**
@@ -784,41 +687,7 @@ export class LeaderSyncManager {
    * Used to implement TrayTargetProvider for the leader's BrowserAPI.
    */
   getTargets(): TrayTargetEntry[] {
-    return this.getConnectedEntries();
-  }
-
-  /**
-   * Follower-facing subset of the target registry. Preview bridge targets
-   * (`kind: 'preview'`) are leader-only — only the leader's own BrowserAPI can
-   * drive them (the follower `cdp.request` path has no `runtimeId: 'preview'`
-   * route), so they must never be advertised to followers.
-   */
-  private getFollowerBroadcastEntries(): TrayTargetEntry[] {
-    return this.getConnectedEntries().filter((t) => t.kind !== 'preview');
-  }
-
-  private getConnectedEntries(): TrayTargetEntry[] {
-    const registryEntries = this.registry.getEntries().filter((target) => {
-      if (target.runtimeId === 'leader') return true;
-      const bootstrapId = this.runtimeToBootstrap.get(target.runtimeId);
-      return bootstrapId ? this.followers.has(bootstrapId) : false;
-    });
-
-    // Add bridge connections as preview targets
-    const bridgeEntries: TrayTargetEntry[] = [];
-    for (const [connId, entry] of this.bridgeConns) {
-      bridgeEntries.push({
-        targetId: `preview:${entry.previewToken}:${connId}`,
-        localTargetId: connId,
-        runtimeId: 'preview',
-        title: entry.title,
-        url: entry.url,
-        isLocal: false,
-        kind: 'preview',
-      });
-    }
-
-    return [...registryEntries, ...bridgeEntries];
+    return this.teleportPool.getTargets();
   }
 
   /**
@@ -850,25 +719,6 @@ export class LeaderSyncManager {
   }
 
   /**
-   * Whether a runtime can serve a (network-requiring) cookie teleport. A cherry
-   * host can never serve `Network.*`, so it is excluded two ways: the
-   * `CHERRY_RUNTIME_TAG` runtime tag short-circuits even before the follower has
-   * advertised any targets (closing the pre-advertisement window), and once
-   * targets exist they must pass `selectTeleportPool` with `requireNetwork`.
-   * A runtime with no registry entries yet (and a non-cherry tag) is given the
-   * benefit of the doubt — same posture as `canRuntimeOpenTab`.
-   */
-  private canRuntimeServeTeleport(runtimeId: string, follower: ConnectedFollower): boolean {
-    if (follower.runtime === CHERRY_RUNTIME_TAG) return false;
-    // `getEntries()` clears the registry dirty flag — benign here for the same
-    // reason documented on `canRuntimeOpenTab`: advertise paths broadcast
-    // synchronously before any teleport selection can interleave.
-    const entries = this.registry.getEntries().filter((e) => e.runtimeId === runtimeId);
-    if (entries.length === 0) return true;
-    return selectTeleportPool(entries, { requireNetwork: true }).length > 0;
-  }
-
-  /**
    * Find the best follower for a cookie teleport.
    * Prefers standalone floats, then sorts by most recent activity.
    * Excludes cherry hosts and any runtime that cannot serve `Network.*`.
@@ -879,29 +729,7 @@ export class LeaderSyncManager {
     bootstrapId: string;
     floatType: FloatType;
   } | null {
-    const candidates: {
-      runtimeId: string;
-      bootstrapId: string;
-      floatType: FloatType;
-      lastActivity: number;
-    }[] = [];
-    for (const [runtimeId, bootstrapId] of this.runtimeToBootstrap) {
-      const follower = this.followers.get(bootstrapId);
-      if (!follower) continue;
-      if (!this.canRuntimeServeTeleport(runtimeId, follower)) continue;
-      candidates.push({
-        runtimeId,
-        bootstrapId,
-        floatType: follower.floatType,
-        lastActivity: follower.lastActivity,
-      });
-    }
-    if (candidates.length === 0) return null;
-    // Prefer standalone, then sort by most recent activity
-    const standalone = candidates.filter((c) => c.floatType === 'standalone');
-    const pool = standalone.length > 0 ? standalone : candidates;
-    pool.sort((a, b) => b.lastActivity - a.lastActivity);
-    return pool[0];
+    return this.teleportPool.getBestFollowerForTeleport();
   }
 
   /**
@@ -918,52 +746,12 @@ export class LeaderSyncManager {
     for (const bootstrapId of [...this.followers.keys()]) {
       this.removeFollower(bootstrapId);
     }
-    // Tear down any live preview-bridge transports (each holds pending CDP
-    // timeout timers) and clear the bridge/mint/rate-limit registries so a
-    // stopped leader leaves no leaked transports or stale state behind.
-    for (const entry of this.bridgeConns.values()) {
-      entry.transport.disconnect();
-    }
-    this.bridgeConns.clear();
-    this.mintMap.clear();
-    this.previewLickLastEmitAt.clear();
-  }
-
-  /** Resolve the advertised runtimeId for a follower's bootstrapId, if known. */
-  private runtimeIdForBootstrap(bootstrapId: string): string | undefined {
-    return this.followerRegistry.runtimeIdForBootstrap(bootstrapId);
+    this.previewBridge.stop();
   }
 
   // ---------------------------------------------------------------------------
   // Cherry event routing
   // ---------------------------------------------------------------------------
-
-  /**
-   * Route an inbound `cherry.host_event` (a named event emitted by a cherry
-   * host page on a follower) to the cone as a `'cherry'` lick. The host origin
-   * is not carried at this protocol layer, so it is left undefined.
-   */
-  private routeCherryHostEvent(bootstrapId: string, message: CherryHostEventMessage): void {
-    if (!isCherryHostEventMessage(message)) return;
-    const onCherryHostEvent = this.options.onCherryHostEvent;
-    if (!onCherryHostEvent) {
-      log.debug('cherry.host_event received but no onCherryHostEvent wired', {
-        bootstrapId,
-        name: message.name,
-      });
-      return;
-    }
-    const cherryRuntimeId = this.runtimeIdForBootstrap(bootstrapId);
-    try {
-      onCherryHostEvent(cherryRuntimeId, message.name, message.detail);
-    } catch (err) {
-      log.warn('Failed to route cherry.host_event to cone', {
-        bootstrapId,
-        name: message.name,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
 
   /**
    * Send a `cherry.slicc_event` (cone → host page) to the follower that owns
@@ -973,15 +761,7 @@ export class LeaderSyncManager {
    * follower is not connected.
    */
   emitCherrySliccEvent(targetId: string, name: string, detail?: unknown): boolean {
-    const sep = targetId.indexOf(':');
-    const targetRuntimeId = sep >= 0 ? targetId.slice(0, sep) : targetId;
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-    if (!targetFollower) {
-      log.warn('emitCherrySliccEvent: owning follower not connected', { targetId, name });
-      return false;
-    }
-    return targetFollower.sync.send({ type: 'cherry.slicc_event', targetId, name, detail });
+    return this.cherryRouter.emitCherrySliccEvent(targetId, name, detail);
   }
 
   /**
@@ -1011,7 +791,7 @@ export class LeaderSyncManager {
     previewToken: string,
     meta: { url: string; title: string; quiet: boolean }
   ): void {
-    this.mintMap.set(previewToken, meta);
+    this.previewBridge.registerMintedPreview(previewToken, meta);
   }
 
   /**
@@ -1020,9 +800,7 @@ export class LeaderSyncManager {
    * across repeated serve/stop cycles in a long-lived leader session.
    */
   dropMintedPreview(previewToken: string): void {
-    this.mintMap.delete(previewToken);
-    this.previewLickLastEmitAt.delete(`${previewToken}:connected`);
-    this.previewLickLastEmitAt.delete(`${previewToken}:disconnected`);
+    this.previewBridge.dropMintedPreview(previewToken);
   }
 
   /**
@@ -1032,49 +810,7 @@ export class LeaderSyncManager {
    * Emits a 'preview' lifecycle lick (unless quiet) with rate-limiting per previewToken.
    */
   onBridgeConnected(msg: WorkerBridgeConnected): void {
-    const { connId, previewToken, origin, userAgent, connectedAt } = msg;
-    // Idempotent: the DO replays `bridge.connected` when a leader (re)connects,
-    // so a connId we already track must not spawn a second transport (which would
-    // leak the first and its pending-CDP timers). A fresh leader after a page
-    // reload has an empty map, so a genuine replay still registers.
-    if (this.bridgeConns.has(connId)) return;
-    const mint = this.mintMap.get(previewToken);
-    const url = mint?.url ?? origin;
-    const title = mint?.title ?? 'Preview';
-    const quiet = mint?.quiet ?? false;
-
-    const transport = new PreviewBridgeCdpTransport({
-      connId,
-      targetUrl: url,
-      targetOrigin: origin,
-      title,
-      send: (m) => this.options.sendControl(m),
-    });
-
-    // Connect the transport immediately
-    void transport.connect();
-
-    this.bridgeConns.set(connId, {
-      previewToken,
-      origin,
-      userAgent,
-      connectedAt,
-      url,
-      title,
-      quiet,
-      transport,
-    });
-
-    log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
-
-    this.emitPreviewLifecycleLick('connected', {
-      connId,
-      previewToken,
-      origin,
-      userAgent,
-      connectedAt,
-      quiet,
-    });
+    this.previewBridge.onBridgeConnected(msg);
   }
 
   /**
@@ -1086,69 +822,7 @@ export class LeaderSyncManager {
    * the mint entry is dropped on stop.
    */
   onBridgeDisconnected(msg: WorkerBridgeDisconnected): void {
-    const { connId, reason } = msg;
-    const entry = this.bridgeConns.get(connId);
-    if (!entry) return;
-
-    const { previewToken, origin, userAgent, connectedAt, quiet } = entry;
-
-    entry.transport.disconnect();
-    this.bridgeConns.delete(connId);
-
-    log.info('Preview bridge disconnected', { connId, reason });
-
-    this.emitPreviewLifecycleLick('disconnected', {
-      connId,
-      previewToken,
-      origin,
-      userAgent,
-      connectedAt,
-      quiet,
-    });
-  }
-
-  /**
-   * Emit a preview lifecycle lick (connected/disconnected) unless the preview is
-   * `--quiet`. Rate-limited per (previewToken, lifecycle) so a connect lick never
-   * suppresses the paired disconnect lick within the throttle window (and vice
-   * versa) — a quick visit must still surface its disconnect, or the cone would
-   * believe a gone tab is still live.
-   */
-  private emitPreviewLifecycleLick(
-    lifecycle: 'connected' | 'disconnected',
-    conn: {
-      connId: string;
-      previewToken: string;
-      origin: string;
-      userAgent: string;
-      connectedAt: string;
-      quiet: boolean;
-    }
-  ): void {
-    if (conn.quiet || !this.options.onPreviewLick) return;
-    const throttleKey = `${conn.previewToken}:${lifecycle}`;
-    const now = Date.now();
-    const lastEmit = this.previewLickLastEmitAt.get(throttleKey) ?? 0;
-    if (now - lastEmit < LeaderSyncManager.PREVIEW_LICK_THROTTLE_MS) return;
-    this.previewLickLastEmitAt.set(throttleKey, now);
-    const event: LickEvent = {
-      type: 'preview',
-      previewLifecycle: lifecycle,
-      previewConnId: conn.connId,
-      previewToken: conn.previewToken,
-      previewOrigin: conn.origin,
-      previewUserAgent: conn.userAgent,
-      previewConnectedAt: conn.connectedAt,
-      timestamp: new Date().toISOString(),
-      body: {},
-    };
-    try {
-      this.options.onPreviewLick(event);
-    } catch (err) {
-      log.warn('onPreviewLick handler threw', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    this.previewBridge.onBridgeDisconnected(msg);
   }
 
   /**
@@ -1156,13 +830,7 @@ export class LeaderSyncManager {
    * Delivers the response to the per-conn transport.
    */
   onBridgeCdpResponse(msg: WorkerBridgeCdpResponse): void {
-    const { connId, id, result, error } = msg;
-    const entry = this.bridgeConns.get(connId);
-    if (!entry) {
-      log.warn('Received bridge.cdp.response for unknown connId', { connId, id });
-      return;
-    }
-    entry.transport.deliverResponse(id, { result, error });
+    this.previewBridge.onBridgeCdpResponse(msg);
   }
 
   /**
@@ -1170,6 +838,6 @@ export class LeaderSyncManager {
    * Returns undefined if the connection is not tracked.
    */
   getBridgeTransport(connId: string): PreviewBridgeCdpTransport | undefined {
-    return this.bridgeConns.get(connId)?.transport;
+    return this.previewBridge.getBridgeTransport(connId);
   }
 }
