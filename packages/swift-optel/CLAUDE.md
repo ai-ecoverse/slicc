@@ -4,7 +4,7 @@ This file covers the Swift Operational Telemetry / RUM library in `packages/swif
 
 ## Scope
 
-`packages/swift-optel/` is a pure-Swift library (`SwiftOptel`) that will host the shared RUM / Operational Telemetry instrumentation consumed by the iOS follower app and the macOS native server / launcher. Skeleton only at this stage — actual RUM logic lands in later tasks. Supports `.iOS(.v16)` and `.macOS(.v13)`; no third-party dependencies.
+`packages/swift-optel/` is a pure-Swift library (`SwiftOptel`) that hosts the shared RUM / Operational Telemetry instrumentation consumed by the iOS follower app and the macOS native server / launcher (Sliccstart wires `.optelAutoInstrument(appID:)` once on its `WindowGroup` root; see `packages/swift-launcher/CLAUDE.md`). Supports `.iOS(.v16)` and `.macOS(.v13)`; no third-party dependencies.
 
 ## Build and Test Commands
 
