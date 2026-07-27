@@ -56,7 +56,7 @@ enum AppRuntimeState: Equatable {
         // attached (debugPort set above) we no longer care — the follower
         // is already wired into the leader and surviving the leader going
         // away is a separate problem.
-        if targetType == .electronApp && !leaderAvailable {
+        if (targetType == .electronApp || targetType == .terminal) && !leaderAvailable {
             return .cannotStart(.needsLeader)
         }
         if targetType == .electronApp && appIsRunning {
@@ -109,6 +109,10 @@ final class SliccProcess {
     private var launchRecords: [String: LaunchRecord] = [:]
     private var startFailures: [String: String] = [:]
     private var intentionallyStoppingTargets: Set<String> = []
+    private let terminalFollowerLaunchService: TerminalFollowerLaunchService
+
+    var isLaunchingTerminalFollower = false
+    var terminalCliDownloadProgress: SliccCliDownloadProgress?
 
     /// Set by the AppUpdater install flow so `applicationWillTerminate`
     /// takes the detach path (browsers survive, records persisted) instead
@@ -145,11 +149,13 @@ final class SliccProcess {
     init(
         recordStore: LaunchRecordStore = LaunchRecordStore(),
         cdpLiveProbe: CDPLiveProbe = .default,
-        trayStatusProbe: TrayStatusProbe = .default
+        trayStatusProbe: TrayStatusProbe = .default,
+        terminalFollowerLaunchService: TerminalFollowerLaunchService = .live
     ) {
         self.recordStore = recordStore
         self.cdpLiveProbe = cdpLiveProbe
         self.trayStatusProbe = trayStatusProbe
+        self.terminalFollowerLaunchService = terminalFollowerLaunchService
     }
 
     var resolvedSliccDir: String { sliccDir }
@@ -204,7 +210,8 @@ final class SliccProcess {
         // Browser rows never gate on leader availability; for Electron
         // followers the row stays disabled until we have both a running
         // browser leader and a discovered join URL.
-        let leaderAvailable = target.type != .electronApp || isLeaderReady()
+        let requiresLeader = target.type == .electronApp || target.type == .terminal
+        let leaderAvailable = !requiresLeader || isLeaderReady()
         return AppRuntimeState.resolve(
             targetType: target.type,
             debugSupport: target.debugSupport,
@@ -316,6 +323,41 @@ final class SliccProcess {
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
+            throw error
+        }
+    }
+
+    // MARK: - Terminal follower mode
+
+    func isTerminalCliAvailable() -> Bool {
+        terminalFollowerLaunchService.isCliAvailable()
+    }
+
+    @MainActor
+    func launchTerminalFollower(_ target: AppTarget) async throws {
+        guard target.type == .terminal else { throw LaunchError.invalidTerminalTarget }
+        guard !isLaunchingTerminalFollower else { return }
+        guard isLeaderReady(), let joinURL = leaderJoinUrl, !joinURL.isEmpty else {
+            throw LaunchError.leaderUnavailable
+        }
+
+        startFailures.removeValue(forKey: target.id)
+        isLaunchingTerminalFollower = true
+        terminalCliDownloadProgress = nil
+        defer { isLaunchingTerminalFollower = false }
+
+        do {
+            try await terminalFollowerLaunchService.launch(
+                target: target,
+                joinURL: joinURL,
+                progressHandler: { [weak self] progress in
+                    Task { @MainActor in
+                        self?.terminalCliDownloadProgress = progress
+                    }
+                }
+            )
+        } catch {
+            recordStartFailure(for: target, message: error.localizedDescription)
             throw error
         }
     }
@@ -489,7 +531,8 @@ final class SliccProcess {
                 let joinUrl = await probe.discoverJoinUrl(
                     serveOrigin: serveOrigin,
                     maxAttempts: innerMaxAttempts,
-                    retryDelay: innerRetryDelay
+                    retryDelay: innerRetryDelay,
+                    exhaustion: .retryable
                 )
                 if let joinUrl {
                     await MainActor.run { [weak self] in
@@ -506,7 +549,7 @@ final class SliccProcess {
                     return
                 }
 
-                // discoverJoinUrl gave up — wait a short outer backoff
+                // The inner attempt window exhausted — wait a short outer backoff
                 // then re-check the stop conditions and probe again.
                 try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
             }
@@ -802,7 +845,8 @@ final class SliccProcess {
         bridgeToken: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
-        log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
+        let loggedArguments = Self.redactedSpawnArguments(launchConfig.arguments).joined(separator: " ")
+        log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(loggedArguments, privacy: .public)")
         log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
 
         let proc = Process()
@@ -870,6 +914,27 @@ final class SliccProcess {
             joinUrl: joinUrl,
             bridgeToken: bridgeToken
         )
+    }
+
+    static func redactedSpawnArguments(_ arguments: [String]) -> [String] {
+        var redactNextValue = false
+        return arguments.map { argument in
+            if redactNextValue {
+                redactNextValue = false
+                return "<redacted>"
+            }
+
+            let parts = argument.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let option = parts[0].lowercased()
+            let isSensitive = option.hasPrefix("--")
+                && (option.contains("join") || option.contains("token"))
+            guard isSensitive else { return argument }
+            guard parts.count == 2 else {
+                redactNextValue = true
+                return argument
+            }
+            return "\(parts[0])=<redacted>"
+        }
     }
 
     private func refreshRuntimeState(for target: AppTarget) {
@@ -1081,10 +1146,14 @@ final class SliccProcess {
     enum LaunchError: LocalizedError {
         case serverBinaryNotFound
         case portInUse(UInt16)
+        case invalidTerminalTarget
+        case leaderUnavailable
         var errorDescription: String? {
             switch self {
             case .serverBinaryNotFound: return "SLICC server binary not found. Build or bundle slicc-server before launching."
             case .portInUse(let port): return "Port \(port) is already in use."
+            case .invalidTerminalTarget: return "The selected app is not a supported terminal."
+            case .leaderUnavailable: return "Start a browser session before opening a terminal follower."
             }
         }
     }

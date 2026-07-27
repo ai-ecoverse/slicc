@@ -30,6 +30,21 @@ final class AppScannerTests: XCTestCase {
         XCTAssertEqual(knownBundleIds, expectedBundleIds)
     }
 
+    func testKnownTerminalBundleIdsMatchCanonicalSet() {
+        let knownBundleIds = Set(AppTarget.knownTerminals.map(\.bundleId))
+
+        let expectedBundleIds: Set<String> = [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "com.mitchellh.ghostty",
+            "com.github.wez.wezterm",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
+        ]
+
+        XCTAssertEqual(knownBundleIds, expectedBundleIds)
+    }
+
     func testIsChromiumBrowserMatchesExpandedBrowserList() {
         XCTAssertTrue(AppScanner.isChromiumBrowser(bundleId: "company.thebrowser.dia"))
         XCTAssertTrue(AppScanner.isChromiumBrowser(bundleId: "com.openai.atlas"))

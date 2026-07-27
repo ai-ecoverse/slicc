@@ -52,6 +52,26 @@ final class AppScanner {
             ))
         }
 
+        // Known terminal emulators by bundle ID
+        for (bundleId, displayName) in AppTarget.knownTerminals {
+            guard let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: bundleId
+            ) else { continue }
+            let path = url.path
+            let name = appName(fromPath: path)
+            let icon = NSWorkspace.shared.icon(forFile: path)
+            let executable = Bundle(url: url)?.executableURL?.path
+                ?? executablePath(forApp: path, name: name)
+            targets.append(AppTarget(
+                id: path, name: displayName, path: path,
+                executablePath: executable,
+                type: .terminal, icon: icon,
+                debugSupport: .unknown,
+                isDebugBuild: false,
+                originalAppPath: nil
+            ))
+        }
+
         // Without App Management permission we can't peek inside app bundles
         // (each fileExists on Contents/Frameworks/ triggers a TCC prompt).
         // Instead, discover known Electron apps by bundle ID — no TCC needed.

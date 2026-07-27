@@ -3,6 +3,7 @@ import AppKit
 enum AppTargetType: String, Codable {
     case chromiumBrowser
     case electronApp
+    case terminal
 }
 
 /// Indicates whether an Electron app supports remote debugging
@@ -43,6 +44,15 @@ struct AppTarget: Identifiable {
         ("company.thebrowser.dia", "Dia"),
         ("com.openai.atlas", "ChatGPT Atlas"),
         ("org.chromium.Chromium", "Chromium"),
+    ]
+
+    static let knownTerminals: [(bundleId: String, name: String)] = [
+        ("com.apple.Terminal", "Terminal"),
+        ("com.googlecode.iterm2", "iTerm2"),
+        ("com.mitchellh.ghostty", "Ghostty"),
+        ("com.github.wez.wezterm", "WezTerm"),
+        ("net.kovidgoyal.kitty", "kitty"),
+        ("org.alacritty", "Alacritty"),
     ]
 
     /// Known Electron apps by bundle ID. Used to discover apps without

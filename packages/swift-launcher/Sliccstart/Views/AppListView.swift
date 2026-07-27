@@ -13,75 +13,18 @@ struct AppListView: View {
     let onBeginUpdate: () -> Void
     let onRescan: () -> Void
 
+    @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
+    @State private var pendingTerminalTarget: AppTarget?
+    @State private var showTerminalWarning = false
+    @State private var suppressWarningAfterApproval = false
+    @State private var showTerminalDownloadPrompt = false
+    @State private var terminalLaunchError: String?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            let browsers = targets.filter { $0.type == .chromiumBrowser }
-            let electronApps = targets.filter { $0.type == .electronApp }
-
-            if !browsers.isEmpty {
-                SectionHeader("Browsers")
-                ForEach(browsers) { target in
-                    AppRow(
-                        target: target,
-                        runtimeState: sliccProcess.runtimeState(for: target),
-                        onLaunch: { onLaunchStandalone(target) },
-                        onCreateDebugBuild: nil
-                    )
-                }
+            ForEach(AppListSection.visibleSections(for: targets), id: \.self) { section in
+                sectionContent(section)
             }
-
-            if !electronApps.isEmpty {
-                SectionHeader("Desktop Apps")
-                ForEach(electronApps) { target in
-                    let runtimeState = sliccProcess.runtimeState(
-                        for: target,
-                        hasAppManagementPermission: appManagementPermission.isGranted
-                    )
-
-                    AppRow(
-                        target: target,
-                        runtimeState: runtimeState,
-                        onLaunch: {
-                            if runtimeState == .cannotStart(.needsDebugBuild) {
-                                onCreateDebugBuild(target)
-                            } else if runtimeState == .cannotStart(.needsPermission) {
-                                appManagementPermission.openSystemSettings()
-                            } else if runtimeState == .cannotStart(.needsLeader) {
-                                // Row is disabled in this state, but defend
-                                // against future call sites: do nothing.
-                                return
-                            } else {
-                                onLaunchElectron(target)
-                            }
-                        },
-                        onCreateDebugBuild: target.debugSupport == .disabled ? { onCreateDebugBuild(target) } : nil
-                    )
-                }
-            }
-
-            SectionHeader("Extension")
-            Button { sliccProcess.openChromeWebStore() } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "puzzlepiece.extension")
-                        .font(.system(size: 15))
-                        .frame(width: 28, height: 28)
-                        .foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Get Extension")
-                            .font(.system(size: 13))
-                        Text("Install from Chrome Web Store")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("get-extension")
-            .accessibilityLabel("Get Extension")
 
             Spacer(minLength: 0)
 
@@ -100,6 +43,177 @@ struct AppListView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
         }
+        .alert("Allow terminal access?", isPresented: $showTerminalWarning) {
+            Toggle("Don't show this again", isOn: $suppressWarningAfterApproval)
+            Button("Cancel", role: .cancel) { clearPendingTerminalLaunch() }
+            Button("Continue") { approveTerminalWarning() }
+        } message: {
+            Text("SLICC will be able to run shell commands on this machine through the terminal follower.")
+        }
+        .alert("Download the slicc CLI?", isPresented: $showTerminalDownloadPrompt) {
+            Button("Cancel", role: .cancel) { clearPendingTerminalLaunch() }
+            Button("Download and Open") { launchPendingTerminal() }
+        } message: {
+            Text("The slicc command is required to attach this terminal. Download it from sliccy.ai and install it in Application Support?")
+        }
+        .alert(
+            "Could not open terminal",
+            isPresented: Binding(
+                get: { terminalLaunchError != nil },
+                set: { if !$0 { terminalLaunchError = nil } }
+            )
+        ) {
+            Button("OK") { terminalLaunchError = nil }
+        } message: {
+            Text(terminalLaunchError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func sectionContent(_ section: AppListSection) -> some View {
+        switch section {
+        case .browsers:
+            SectionHeader("Browsers")
+            ForEach(targets.filter { $0.type == .chromiumBrowser }) { target in
+                AppRow(
+                    target: target,
+                    runtimeState: sliccProcess.runtimeState(for: target),
+                    onLaunch: { onLaunchStandalone(target) },
+                    onCreateDebugBuild: nil
+                )
+            }
+        case .desktopApps:
+            desktopAppsSection
+        case .terminals:
+            terminalsSection
+        case .browserExtension:
+            extensionSection
+        }
+    }
+
+    @ViewBuilder
+    private var desktopAppsSection: some View {
+        SectionHeader("Desktop Apps")
+        ForEach(targets.filter { $0.type == .electronApp }) { target in
+            let runtimeState = sliccProcess.runtimeState(
+                for: target,
+                hasAppManagementPermission: appManagementPermission.isGranted
+            )
+            AppRow(
+                target: target,
+                runtimeState: runtimeState,
+                onLaunch: { handleElectronRow(target, runtimeState: runtimeState) },
+                onCreateDebugBuild: target.debugSupport == .disabled ? { onCreateDebugBuild(target) } : nil
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var terminalsSection: some View {
+        SectionHeader("Terminals")
+        ForEach(targets.filter { $0.type == .terminal }) { target in
+            let runtimeState = sliccProcess.runtimeState(for: target)
+            AppRow(
+                target: target,
+                runtimeState: runtimeState,
+                onLaunch: { beginTerminalLaunch(target) },
+                onCreateDebugBuild: nil,
+                subtitleOverride: terminalSubtitle(runtimeState: runtimeState),
+                interactionDisabled: sliccProcess.isLaunchingTerminalFollower
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var extensionSection: some View {
+        SectionHeader("Extension")
+        Button { sliccProcess.openChromeWebStore() } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "puzzlepiece.extension")
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Get Extension").font(.system(size: 13))
+                    Text("Install from Chrome Web Store")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("get-extension")
+        .accessibilityLabel("Get Extension")
+    }
+
+    private func handleElectronRow(_ target: AppTarget, runtimeState: AppRuntimeState) {
+        if runtimeState == .cannotStart(.needsDebugBuild) {
+            onCreateDebugBuild(target)
+        } else if runtimeState == .cannotStart(.needsPermission) {
+            appManagementPermission.openSystemSettings()
+        } else if runtimeState != .cannotStart(.needsLeader) {
+            onLaunchElectron(target)
+        }
+    }
+
+    private func terminalSubtitle(runtimeState: AppRuntimeState) -> String? {
+        if sliccProcess.isLaunchingTerminalFollower {
+            return sliccProcess.terminalCliDownloadProgress?.statusText ?? "Opening terminal…"
+        }
+        if runtimeState == .cannotStart(.needsLeader) {
+            return "Start a browser session first"
+        }
+        return nil
+    }
+
+    private func beginTerminalLaunch(_ target: AppTarget, warningAcknowledged: Bool = false) {
+        let nextStep = TerminalLaunchDecision.nextStep(
+            leaderReady: sliccProcess.isLeaderReady(),
+            warningSuppressed: suppressTerminalWarning,
+            warningAcknowledged: warningAcknowledged,
+            cliAvailable: sliccProcess.isTerminalCliAvailable()
+        )
+        pendingTerminalTarget = target
+        switch nextStep {
+        case .blockedByMissingLeader:
+            clearPendingTerminalLaunch()
+        case .showWarning:
+            suppressWarningAfterApproval = false
+            showTerminalWarning = true
+        case .confirmDownload:
+            showTerminalDownloadPrompt = true
+        case .launch:
+            launchPendingTerminal()
+        }
+    }
+
+    private func approveTerminalWarning() {
+        suppressTerminalWarning = suppressWarningAfterApproval
+        guard let target = pendingTerminalTarget else { return }
+        beginTerminalLaunch(target, warningAcknowledged: true)
+    }
+
+    private func launchPendingTerminal() {
+        guard let target = pendingTerminalTarget else { return }
+        Task { @MainActor in
+            do {
+                try await sliccProcess.launchTerminalFollower(target)
+                clearPendingTerminalLaunch()
+            } catch {
+                terminalLaunchError = "\(error.localizedDescription) Try again, or install the slicc CLI manually."
+                clearPendingTerminalLaunch(keepError: true)
+            }
+        }
+    }
+
+    private func clearPendingTerminalLaunch(keepError: Bool = false) {
+        pendingTerminalTarget = nil
+        suppressWarningAfterApproval = false
+        if !keepError { terminalLaunchError = nil }
     }
 
     @ViewBuilder
@@ -172,9 +286,27 @@ struct AppRow: View {
     let runtimeState: AppRuntimeState
     let onLaunch: () -> Void
     let onCreateDebugBuild: (() -> Void)?
+    let subtitleOverride: String?
+    let interactionDisabled: Bool
+
+    init(
+        target: AppTarget,
+        runtimeState: AppRuntimeState,
+        onLaunch: @escaping () -> Void,
+        onCreateDebugBuild: (() -> Void)?,
+        subtitleOverride: String? = nil,
+        interactionDisabled: Bool = false
+    ) {
+        self.target = target
+        self.runtimeState = runtimeState
+        self.onLaunch = onLaunch
+        self.onCreateDebugBuild = onCreateDebugBuild
+        self.subtitleOverride = subtitleOverride
+        self.interactionDisabled = interactionDisabled
+    }
 
     private var isDisabled: Bool {
-        runtimeState == .cannotStart(.needsLeader)
+        runtimeState == .cannotStart(.needsLeader) || interactionDisabled
     }
 
     var body: some View {
@@ -248,6 +380,7 @@ struct AppRow: View {
     }
 
     private var subtitle: String? {
+        if let subtitleOverride { return subtitleOverride }
         switch runtimeState {
         case .notRunning:
             return target.isDebugBuild ? "Debug Build" : nil

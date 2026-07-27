@@ -8,6 +8,10 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Settings"
 /// "None". Read at app startup by `SliccstartApp.initialize`.
 let autoLaunchAppIdKey = "autoLaunchAppId"
 
+/// UserDefaults keys shared with the terminal launch flow.
+let terminalFollowCommandKey = "terminalFollowCommand"
+let suppressTerminalWarningKey = "suppressTerminalWarning"
+
 /// Validation rules for secret names entered in the Settings → Secrets
 /// editor. Accepted set: `^[a-zA-Z0-9._-]+$` (ASCII letters/digits plus
 /// dot, underscore, hyphen, non-empty). Mount-profile keys use the shape
@@ -45,6 +49,8 @@ struct SettingsView: View {
         TabView {
             StartupSettingsView()
                 .tabItem { Label("Startup", systemImage: "power") }
+            TerminalsSettingsView()
+                .tabItem { Label("Terminals", systemImage: "terminal") }
             SecretsSettingsView()
                 .tabItem { Label("Secrets", systemImage: "key.fill") }
         }
@@ -79,6 +85,60 @@ struct StartupSettingsView: View {
             browsers = AppScanner.scan(hasAppManagementPermission: false)
                 .filter { $0.type == .chromiumBrowser }
         }
+    }
+}
+
+// MARK: - Terminals tab
+
+struct TerminalsSettingsView: View {
+    @AppStorage(terminalFollowCommandKey) private var followCommand = FollowCommandTemplate.defaultTemplate
+    @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
+
+    private var preview: String {
+        FollowCommandTemplate.preview(
+            template: followCommand,
+            sliccPath: "/path/to/slicc",
+            shellPath: LoginShellResolver.resolve()
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section("Follow command") {
+                TextField("Command template", text: $followCommand, axis: .vertical)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(2...5)
+
+                Text("Available placeholders: {slicc}, {joinUrl}, and {shell}.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Restore default") {
+                    followCommand = FollowCommandTemplate.defaultTemplate
+                }
+                .disabled(followCommand == FollowCommandTemplate.defaultTemplate)
+            }
+
+            Section("Preview") {
+                Text(preview)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                Text("The session join URL is always redacted in this preview.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Terminal access warning") {
+                Button("Show warning again") {
+                    suppressTerminalWarning = false
+                }
+                .disabled(!suppressTerminalWarning)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(20)
+        .frame(width: 560)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

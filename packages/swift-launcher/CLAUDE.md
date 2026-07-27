@@ -4,7 +4,7 @@ This file covers the native macOS launcher in `packages/swift-launcher/`.
 
 ## Scope
 
-`Sliccstart` is a SwiftUI launcher that finds supported browsers and Electron apps, starts the right SLICC runtime, and helps create debug-friendly Electron builds when needed.
+`Sliccstart` is a SwiftUI launcher that finds supported browsers, Electron apps, and terminal emulators, starts the right SLICC runtime, and helps create debug-friendly Electron builds when needed.
 
 ## Build and Test Commands
 
@@ -53,6 +53,24 @@ Key launcher controls carry stable `.accessibilityIdentifier` values (`get-exten
 - Known Chromium browsers are discovered by bundle ID.
 - `/Applications` is scanned for Electron or WebView2-style app bundles with CDP-capable frameworks.
 - `~/Applications` is scanned first for `* Debug.app` builds so patched debug builds win over originals.
+- Terminal.app, iTerm2, Ghostty, WezTerm, kitty, and Alacritty are discovered by bundle ID. Installed terminals appear in a **Terminals** category between **Desktop Apps** and **Extension**.
+
+## Terminal Followers
+
+Terminal rows attach the selected terminal to the current leader through `slicc <join-url> follow`. They remain disabled until `leaderJoinUrl` is known and never auto-start a leader. The first launch warns that the leader can run commands on this machine; the user can persist suppression or reset it in Settings.
+
+The **Terminals** Settings tab persists these `UserDefaults` keys:
+
+- `terminalFollowCommand` — user-editable template with `{slicc}`, `{joinUrl}`, and `{shell}` placeholders; the default is `{slicc} {joinUrl} follow {shell} -c`.
+- `suppressTerminalWarning` — one-time access-warning suppression.
+
+`{shell}` is the login shell from the password database (`getpwuid`), falling back to `/bin/zsh`. The Settings preview always redacts the join URL.
+
+`SliccCliLocator` resolves an executable in this order: the managed `~/Library/Application Support/Sliccstart/bin/slicc`, the repository's local `make build` output, its architecture-specific `make dist` output, then `/usr/local/bin`, `~/.local/bin`, and `/opt/homebrew/bin`. The CLI is never bundled in `Sliccstart.app`. If none is found, the launcher asks before downloading the current Darwin release from `https://www.sliccy.ai/download/slicc-cli/darwin-<arch>`, validates its Developer ID Application signature and release team identifier (`S8LB56P782`) before making it executable or running `--version`, then atomically installs it in the managed location. A successful terminal launch exposes that managed binary through `~/.local/bin/slicc`; the best-effort symlink step preserves regular files and unrelated user symlinks, and only re-points stale links under Sliccstart's own Application Support root.
+
+Release Darwin binaries are Developer ID-signed with hardened runtime and notarized by `packages/slicc-cli/sign-and-package.sh`. A bare Mach-O executable cannot have a notarization ticket stapled, so a quarantined copy may require Apple's online Gatekeeper lookup on first execution. The launcher's `URLSession` data download followed by `Data.write` does not create or propagate `com.apple.quarantine`, so Sliccstart does not need to remove that attribute. Verification against the release channel also confirmed that a manually quarantined signed release binary runs `--version` without a Gatekeeper override. (`spctl --assess --type execute` is not a useful check here because it rejects bare CLI executables as “not an app.”)
+
+Terminal.app and iTerm2 launch through Apple Events. `assemble-app.mjs` supplies the user-facing usage description, and `sign-and-package.sh` signs the outer app with `Sliccstart.entitlements`, including `com.apple.security.automation.apple-events`. A TCC denial is surfaced with a direct path to the Sliccstart controls in System Settings → Privacy & Security → Automation.
 
 ## Debug Build Creation
 

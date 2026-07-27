@@ -5,7 +5,9 @@ follower over WebRTC. Download a binary for your platform from the
 [latest release](https://github.com/ai-ecoverse/slicc/releases) (macOS, Linux,
 Windows — amd64 and arm64), or build from source with `make build`. The macOS
 binaries are Developer ID-signed and notarized, so they run without a Gatekeeper
-override.
+override. Bare executables cannot carry a stapled notarization ticket, so a copy
+that has a quarantine attribute may require Apple's online Gatekeeper lookup on
+first run.
 
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
@@ -55,6 +57,15 @@ slicc <url> follow docker exec -i sandbox sh -c  # scope the leader to a contain
 ⚠️ **`follow <runner>` is remote code execution by design.** The leader gets to
 run commands on your machine. Only point it at leaders you trust, and prefer a
 sandboxing runner. Set `SLICC_DEBUG=1` to see connection diagnostics on stderr.
+
+On macOS, [Sliccstart](../swift-launcher/) can open `follow` mode in Terminal.app,
+iTerm2, Ghostty, WezTerm, kitty, or Alacritty after a leader session is running.
+It shows a one-time access warning and defaults the runner to the user's login
+shell with `-c`; the command template is editable in **Settings → Terminals**.
+Sliccstart resolves an existing managed, development-tree, or PATH-style binary
+first and, with confirmation, downloads the signed and notarized Darwin release
+into `~/Library/Application Support/Sliccstart/bin/slicc` when none is available.
+The CLI is downloaded on demand and is not bundled in `Sliccstart.app`.
 
 ## update — keep the binary fresh
 

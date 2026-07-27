@@ -5,7 +5,7 @@ import XCTest
 /// injectable `fetch` closure so we don't touch the network. The behaviors
 /// pinned here are the contract Sliccstart relies on for follower auto-
 /// attach: returns the join URL once present, treats `state == "connecting"`
-/// as "retry", swallows transport errors, and gives up after the cap.
+/// as "retry", swallows transport errors, and classifies cap exhaustion.
 final class TrayStatusProbeTests: XCTestCase {
 
     func testReturnsJoinUrlOnFirstSuccessfulRead() async {
@@ -114,5 +114,16 @@ final class TrayStatusProbeTests: XCTestCase {
 
         let count = await hits.n
         XCTAssertEqual(count, 4, "probe must respect the attempt cap")
+    }
+
+    func testExhaustionMessagesDistinguishRetryableFromTerminalGiveUp() {
+        XCTAssertEqual(
+            TrayStatusProbeExhaustion.retryable.message(maxAttempts: 8),
+            "discoverJoinUrl: attempt window exhausted after 8 attempts; outer probe will retry"
+        )
+        XCTAssertEqual(
+            TrayStatusProbeExhaustion.terminal.message(maxAttempts: 8),
+            "discoverJoinUrl: gave up after 8 attempts; no further retries scheduled"
+        )
     }
 }

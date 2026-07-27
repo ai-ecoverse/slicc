@@ -145,6 +145,8 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the camera for sites you visit (Google Meet, Zoom, etc.). Grant access if you want camera-enabled sites to work inside Slicc.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the microphone for sites you visit (Google Meet, Zoom, etc.). Grant access if you want microphone-enabled sites to work inside Slicc.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Sliccstart uses Apple Events to open a new Terminal or iTerm2 window and attach it to your running SLICC session.</string>
 </dict>
 </plist>
 `;

@@ -104,6 +104,29 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertFalse(args.contains { $0.hasPrefix("--join=") })
     }
 
+    func testSpawnLogArgumentsRedactJoinAndTokenValues() {
+        let arguments = [
+            "--electron-app=/Applications/Slack.app",
+            "--join=https://example.test/join/secret.value",
+            "--bridge-token=bridge-secret",
+            "--token",
+            "separate-secret",
+            "--cdp-port=9223",
+        ]
+
+        let redacted = SliccProcess.redactedSpawnArguments(arguments)
+
+        XCTAssertEqual(redacted, [
+            "--electron-app=/Applications/Slack.app",
+            "--join=<redacted>",
+            "--bridge-token=<redacted>",
+            "--token",
+            "<redacted>",
+            "--cdp-port=9223",
+        ])
+        XCTAssertFalse(redacted.joined(separator: " ").contains("secret"))
+    }
+
     // MARK: - Reattach args (smooth-update respawn path)
 
     func testReattachArgsChromiumBrowserOmitsJoinAndElectronFlags() {

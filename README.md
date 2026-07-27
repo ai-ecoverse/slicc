@@ -148,6 +148,8 @@ npx sliccy --install-cli
 
 This finds the newest release carrying CLI binaries (they only attach when the CLI changed) and installs the one for your OS/architecture to the idiomatic place: `~/.local/bin` when it is on your `PATH`, otherwise `/usr/local/bin` when writable without privileges, otherwise `~/.local/bin` with a PATH hint (`%LOCALAPPDATA%\Programs\slicc` on Windows; `--install-dir <dir>` overrides).
 
+On macOS, launching a terminal follower from Sliccstart also exposes its managed CLI at `~/.local/bin/slicc`. Existing user installs are never replaced, and failure to create the symlink does not block the terminal launch.
+
 ## How it works
 
 SLICC shares one core across every runtime ("float"). The browser is not just where you view the product — it is where the agent runtime lives.
