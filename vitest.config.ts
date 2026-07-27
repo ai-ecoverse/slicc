@@ -25,6 +25,18 @@ const wasmVersionDefines = {
   __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
 };
 
+const isCI = Boolean(process.env['CI']);
+
+// Machine-readable per-test durations, uploaded by CI as `test-timing-<package>`
+// so slow-test drift is reviewable instead of invisible. Gitignored.
+const TIMING_OUTPUT_FILE = 'test-timing/vitest.json';
+
+// Retries for the two projects that own genuinely environment-dependent work
+// (child processes, ports, timers). One retry absorbs a single infrastructure
+// hiccup while still leaving a `retried` marker in the run report; anything
+// higher starts hiding real nondeterminism.
+const CI_RETRIES = isCI ? 1 : 0;
+
 const baseCoverageExclude = [
   '**/node_modules/**',
   '**/dist/**',
@@ -50,6 +62,14 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // `reporters` and `outputFile` are root-only options in vitest 4 (they sit
+    // in `NonProjectOptions`), so per-test timing is configured once here and
+    // applies to every project, including the per-package
+    // `vitest run --project <name>` invocations that `coverage-gate.mjs` makes.
+    // Local runs stay on the default reporter alone so no stray file appears in
+    // a developer's working tree.
+    reporters: isCI ? ['default', 'json'] : ['default'],
+    outputFile: { json: TIMING_OUTPUT_FILE },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],
@@ -129,6 +149,10 @@ export default defineConfig({
           name: 'node-server',
           include: ['packages/node-server/tests/**/*.test.ts'],
           exclude: ['packages/node-server/tests/integration/**/*.test.ts'],
+          // Spawns Chrome/Electron, binds ports, and waits on child-process
+          // handshakes — all sensitive to shared-runner load. Retry only in CI
+          // so local runs still fail fast.
+          retry: CI_RETRIES,
         },
       },
       {
@@ -159,6 +183,10 @@ export default defineConfig({
         test: {
           name: 'chrome-extension',
           include: ['packages/chrome-extension/tests/**/*.test.ts'],
+          // Service-worker lifecycle and leader-tab reconciliation tests drive
+          // timer- and message-ordering-sensitive state machines over mocked
+          // `chrome.*` APIs. Retry only in CI so local runs still fail fast.
+          retry: CI_RETRIES,
         },
       },
       {

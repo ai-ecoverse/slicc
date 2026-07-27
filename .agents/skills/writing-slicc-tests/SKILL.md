@@ -403,6 +403,13 @@ Run `npm run test:coverage:<package>` — this invokes `vitest --coverage` (v8 p
 then `coverage-gate.mjs`, which reads the package's floors from
 `coverage-thresholds.json`. CI runs the same script as the package's only test step.
 
+Anything after the package name is forwarded verbatim to vitest, so a run-wide option can
+be added without paying for a second pass over the same suite:
+
+```bash
+node packages/dev-tools/tools/coverage-gate.mjs webapp --reporter=json --outputFile=report.json
+```
+
 ### Check Swift Packages
 
 Run `packages/dev-tools/tools/swift-coverage-check.sh <package-dir> <test-bundle-name>`,
@@ -421,6 +428,71 @@ Both arguments are **required**:
 ./packages/dev-tools/tools/swift-coverage-check.sh \
   packages/swift-launcher SliccstartPackageTests
 ```
+
+## Retry Flaky Tests
+
+Retries are configured **per vitest project** in `vitest.config.ts` and gated on `CI` so
+local runs still fail fast:
+
+| Project                                               | Retries in CI | Why                                                                         |
+| ----------------------------------------------------- | ------------- | --------------------------------------------------------------------------- |
+| `node-server`                                         | 1             | Spawns Chrome/Electron, binds ports, waits on child-process handshakes      |
+| `chrome-extension`                                    | 1             | Timer- and message-ordering-sensitive state machines over mocked `chrome.*` |
+| Playwright E2E (`packages/webapp/tests/e2e/`)         | 2             | Real browser + CDP + model staging under load                               |
+| every other project (`webapp`, `shared`, `cherry`, …) | 0             | Deterministic in-process suites — a failure is a bug, not noise             |
+
+Rules for changing this:
+
+- **Do not add retries to a project to make a red suite green.** A retry hides
+  nondeterminism; fix the ordering, fake the timer, or isolate the resource instead.
+- Keep the count at 1 unless the flake is provably external (a real browser, a real port).
+  Retried-but-passing tests still show up as `retried` in the run report, so the signal
+  survives; a higher count buries it and doubles worst-case wall-clock.
+- Never enable retries locally. `CI_RETRIES` in `vitest.config.ts` resolves to `0` without
+  `CI`, so `npm run test` on a laptop reports the first failure.
+
+## Read Test Timing
+
+When `CI` is set, the root `test.reporters` adds vitest's `json` reporter and writes
+per-test durations to `test-timing/vitest.json` (gitignored). `reporters` and `outputFile`
+are root-only options in vitest 4, so this covers every project — including the
+`vitest run --project <name>` invocations made by
+`packages/dev-tools/tools/coverage-gate.mjs`.
+
+CI uploads the file from the `webapp`, `node-server`, and `chrome-extension` jobs as
+`test-timing-webapp` / `test-timing-node-server` / `test-timing-chrome-extension`
+(`if: always()`, so a failing run still produces it).
+
+Shape: `testResults[]` is one entry per file with `startTime` / `endTime`, and
+`assertionResults[]` is one entry per test with a `duration` in milliseconds.
+
+```json
+{
+  "numTotalTests": 341,
+  "testResults": [
+    {
+      "name": "/…/packages/shared-ts/tests/base64.test.ts",
+      "startTime": 1785156911234,
+      "endTime": 1785156911814,
+      "assertionResults": [
+        {
+          "fullName": "base64 codec round-trips an empty Uint8Array",
+          "status": "passed",
+          "duration": 1.2396669999999972
+        }
+      ]
+    }
+  ]
+}
+```
+
+To find the slowest tests in a downloaded artifact:
+
+```bash
+node -e "const r=require('./test-timing/vitest.json').testResults.flatMap(f=>f.assertionResults.map(a=>[a.duration,a.fullName]));r.sort((a,b)=>b[0]-a[0]);console.log(r.slice(0,20))"
+```
+
+Reproduce it locally with `CI=1 npm run test`.
 
 ## Run Tests
 

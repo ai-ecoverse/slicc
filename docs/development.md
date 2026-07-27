@@ -285,6 +285,47 @@ Manual verification in the relevant runtimes:
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
+## Pre-commit Hooks
+
+`.husky/pre-commit` runs `npx lint-staged`, which formats and lints only the files you
+staged. The root `package.json` `lint-staged` block covers four toolchains:
+
+| Staged files                             | Command                                 | Installed by |
+| ---------------------------------------- | --------------------------------------- | ------------ |
+| `.ts .tsx .js .jsx .mjs .cjs .json .css` | `biome check --write`                   | `npm ci`     |
+| `.md .html .yaml .yml`                   | `prettier --write`                      | `npm ci`     |
+| `.swift`                                 | `swiftlint --fix` then `swiftlint lint` | Homebrew     |
+| `.go`                                    | `gofmt -w`                              | Go toolchain |
+
+### Optional native toolchains
+
+SwiftLint and gofmt are **not** installed by `npm ci`. Install them only if you edit Swift
+or Go sources:
+
+```bash
+brew install swiftlint   # packages/swift-server, packages/swift-optel, packages/swift-launcher, packages/ios-app
+brew install go          # packages/slicc-cli (provides gofmt)
+```
+
+Both commands run through `packages/dev-tools/tools/run-if-installed.mjs`, which warns and
+exits `0` when the binary is missing rather than failing the commit. Combined with
+`lint-staged`'s glob scoping, a TypeScript-only commit never invokes either binary, and a
+Swift or Go commit on a machine without them still succeeds — CI remains the hard gate.
+
+## Test Timing and Flaky Retries
+
+CI-only vitest settings, both defined in `vitest.config.ts`:
+
+- **Timing** — when `CI` is set, the root `test.reporters` adds vitest's `json` reporter and
+  writes per-test durations to `test-timing/vitest.json` (gitignored). The `webapp`,
+  `node-server`, and `chrome-extension` CI jobs upload it as `test-timing-<package>`.
+  Reproduce locally with `CI=1 npm run test`.
+- **Retries** — the `node-server` and `chrome-extension` projects retry once in CI (`0`
+  locally); Playwright E2E retries twice in CI. Every other project has no retries.
+
+Policy and the artifact's JSON shape:
+[`.agents/skills/writing-slicc-tests/SKILL.md`](../.agents/skills/writing-slicc-tests/SKILL.md).
+
 ## Cloudflare Worker Deploy Pipeline
 
 The tray hub now assumes **`POST /tray` is the only canonical tray-creation endpoint**. `POST /session` and `POST /trays` are intentionally rejected with `410` so callers move to the single public route.
@@ -457,6 +498,7 @@ log.error('error message');
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                  | Run single file                                                |
 | `npx vitest run packages/webapp/tests/fs/`                                    | Run all tests in directory                                     |
 | `npx vitest run --reporter=verbose`                                           | Verbose test output                                            |
+| `CI=1 npm run test`                                                           | Reproduce the CI run: retries on + `test-timing/vitest.json`   |
 
 ## Multi-Mode Compatibility Checklist
 

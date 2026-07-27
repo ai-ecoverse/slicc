@@ -19,6 +19,7 @@ providers.json
 !/providers/adobe-config.json
 .superpowers/
 test-results/
+test-timing/
 playwright-report/
 .playwright-cli/
 packages/swift-launcher/.node-cache/
