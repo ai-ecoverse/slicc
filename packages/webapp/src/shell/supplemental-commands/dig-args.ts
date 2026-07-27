@@ -63,8 +63,18 @@ function parseIpv4(address: string): number[] | undefined {
 }
 
 function ipv6Words(address: string): string[] | undefined {
-  if (address.includes('.') || address.includes('%')) return undefined;
-  const halves = address.split('::');
+  if (address.includes('%')) return undefined;
+  let normalized = address;
+  if (address.includes('.')) {
+    const suffixIndex = address.lastIndexOf(':');
+    const ipv4 = suffixIndex >= 0 ? parseIpv4(address.slice(suffixIndex + 1)) : undefined;
+    if (!ipv4) return undefined;
+    const suffixWords = [ipv4[0] * 256 + ipv4[1], ipv4[2] * 256 + ipv4[3]].map((word) =>
+      word.toString(16)
+    );
+    normalized = `${address.slice(0, suffixIndex + 1)}${suffixWords.join(':')}`;
+  }
+  const halves = normalized.split('::');
   if (halves.length > 2) return undefined;
   const left = halves[0] ? halves[0].split(':') : [];
   const right = halves[1] ? halves[1].split(':') : [];

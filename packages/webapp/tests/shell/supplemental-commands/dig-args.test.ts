@@ -56,12 +56,29 @@ describe('dig argument parser', () => {
     });
   });
 
+  it('builds an IPv6 reverse lookup with an embedded IPv4 suffix', () => {
+    expect(query(['-x', '::ffff:192.0.2.1'])).toMatchObject({
+      name: '1.0.2.0.0.0.0.c.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa',
+      type: 'PTR',
+    });
+  });
+
   it('rejects an invalid reverse lookup address', () => {
     expect(parseDigArgs(['-x', '999.1.2.3'])).toEqual({
       kind: 'error',
       message: "dig: '999.1.2.3' is not a valid IP address for -x\n",
     });
   });
+
+  it.each(['::ffff:999.0.2.1', '::ffff:192.0.2'])(
+    'rejects an invalid IPv4 suffix: %s',
+    (address) => {
+      expect(parseDigArgs(['-x', address])).toEqual({
+        kind: 'error',
+        message: `dig: '${address}' is not a valid IP address for -x\n`,
+      });
+    }
+  );
 
   it('accepts unknown +options as no-ops while preserving +short', () => {
     expect(query(['+noall', '+answer', '+trace', 'example.com', '+short'])).toMatchObject({
