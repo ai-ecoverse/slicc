@@ -6,10 +6,31 @@
     "build": "vite build --config vite.config.ts",
     "dev:extension": "SLICC_EXT_DEV=1 SLICC_EXT_DEV_WATCH=1 vite build --config vite.config.ts --watch",
     "postbuild:check": "bash ../dev-tools/tools/check-extension-rhc.sh",
+    "size": "size-limit",
     "test": "vitest run",
     "test:extension-smoke": "tsx ../dev-tools/tools/extension-smoke-test.ts",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
+  "size-limit": [
+    {
+      "name": "extension: service worker",
+      "path": "../../dist/extension/service-worker.js",
+      "brotli": false,
+      "limit": "60 kB"
+    },
+    {
+      "name": "extension: side panel entry",
+      "path": "../../dist/extension/sidepanel.js",
+      "brotli": false,
+      "limit": "14 kB"
+    },
+    {
+      "name": "extension: total JS payload",
+      "path": "../../dist/extension/**/*.js",
+      "brotli": false,
+      "limit": "105 kB"
+    }
+  ],
   "dependencies": {
     "@ai-ecoverse/cherry": "*",
     "@earendil-works/pi-ai": "^0.82.0",

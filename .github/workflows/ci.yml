@@ -1189,6 +1189,43 @@ jobs:
             sleep 30
           done
 
+  # Bundle-size budgets for the two Vite-bundled browser apps. Before this
+  # job the only shipped-size gate in the repo was the worker's
+  # `wrangler deploy --dry-run` (Cloudflare's 25 MiB per-file asset cap), so
+  # webapp and extension growth was invisible until someone noticed a slow
+  # cold load. Budgets live next to the code they guard, in each package's
+  # `size-limit` block, and are measured on raw (non-brotli) bytes to match
+  # the asset-cap framing of the worker gate. They are ratchets: tighten them
+  # as payloads shrink; raising one needs a reason in the PR body.
+  bundle-size:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build webapp
+        run: npm run build -w @slicc/webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Build extension
+        run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle-size budgets
+        run: npm run bundle-size
+
   # Summary job — the single required status check for branch protection
   ci:
     if: always()
@@ -1207,6 +1244,7 @@ jobs:
         shared,
         webcomponents,
         spoon,
+        bundle-size,
         global-install,
         swift-launcher,
         swift-server,
