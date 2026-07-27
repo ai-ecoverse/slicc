@@ -34,6 +34,22 @@ repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
 fail CI. Run `npm run lint:fix -w @slicc/swift-server` to auto-correct fixable
 violations.
 
+## Formatting
+
+SwiftLint is a linter, not a formatter. Formatting is `swift format` (bundled with
+the Swift 6+ toolchain) against the single repo-root `.swift-format`; swift-format
+resolves its config by walking up from each input file, so there is no per-package
+copy to keep in sync.
+
+```bash
+npm run lint:format -w @slicc/swift-server   # swift format lint --strict (CI gate)
+npm run format -w @slicc/swift-server        # swift format --in-place
+```
+
+Avoid multi-line string interpolations inside a multi-line string literal:
+swift-format re-indents the two independently and can emit non-compiling Swift.
+Hoist the interpolated expression into a local instead.
+
 ## Main Package Layout
 
 - `Sources/Browser/` — Chrome and Electron launchers plus console forwarding

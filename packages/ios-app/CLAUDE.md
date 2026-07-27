@@ -106,6 +106,20 @@ repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
 `error`-severity violations fail CI. Use `swiftlint --fix` to auto-correct
 fixable violations.
 
+## Formatting
+
+SwiftLint is a linter, not a formatter. Formatting is `swift format` (bundled with
+the Swift 6+ toolchain) against the single repo-root `.swift-format`; swift-format
+resolves its config by walking up from each input file, so there is no per-package
+copy to keep in sync. `ios-app` has no `package.json`, so invoke it directly:
+
+```bash
+swift format lint --strict --parallel --recursive SliccFollower Package.swift   # CI gate
+swift format --in-place --parallel --recursive SliccFollower Package.swift
+```
+
+Both are covered by the repo-root `npm run lint:swift:format` / `npm run format:swift`.
+
 TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consumes secrets via `setup-testflight-secrets.sh`).
 
 ## Related Guides
