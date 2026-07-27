@@ -336,6 +336,7 @@ final class SliccProcess {
     @MainActor
     func launchTerminalFollower(_ target: AppTarget) async throws {
         guard target.type == .terminal else { throw LaunchError.invalidTerminalTarget }
+        guard !isLaunchingTerminalFollower else { return }
         guard isLeaderReady(), let joinURL = leaderJoinUrl, !joinURL.isEmpty else {
             throw LaunchError.leaderUnavailable
         }
@@ -843,7 +844,8 @@ final class SliccProcess {
         bridgeToken: String? = nil
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
-        log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
+        let loggedArguments = Self.redactedSpawnArguments(launchConfig.arguments).joined(separator: " ")
+        log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(loggedArguments, privacy: .public)")
         log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
 
         let proc = Process()
@@ -911,6 +913,27 @@ final class SliccProcess {
             joinUrl: joinUrl,
             bridgeToken: bridgeToken
         )
+    }
+
+    static func redactedSpawnArguments(_ arguments: [String]) -> [String] {
+        var redactNextValue = false
+        return arguments.map { argument in
+            if redactNextValue {
+                redactNextValue = false
+                return "<redacted>"
+            }
+
+            let parts = argument.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let option = parts[0].lowercased()
+            let isSensitive = option.hasPrefix("--")
+                && (option.contains("join") || option.contains("token"))
+            guard isSensitive else { return argument }
+            guard parts.count == 2 else {
+                redactNextValue = true
+                return argument
+            }
+            return "\(parts[0])=<redacted>"
+        }
     }
 
     private func refreshRuntimeState(for target: AppTarget) {

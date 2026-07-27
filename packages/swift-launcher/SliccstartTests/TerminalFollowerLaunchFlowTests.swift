@@ -122,6 +122,86 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
         }
     }
 
+    func testSliccProcessCoalescesConcurrentTerminalLaunches() async throws {
+        var downloadContinuation: CheckedContinuation<URL, Never>?
+        var downloadCount = 0
+        var launchCount = 0
+        let service = TerminalFollowerLaunchService(
+            findCliBinary: { nil },
+            downloadCli: { _ in
+                downloadCount += 1
+                return await withCheckedContinuation { downloadContinuation = $0 }
+            },
+            resolveLoginShell: { "/bin/zsh" },
+            loadTemplate: { FollowCommandTemplate.defaultTemplate },
+            launchTerminal: { _, _ in launchCount += 1 }
+        )
+        let process = SliccProcess(terminalFollowerLaunchService: service)
+        let browserHelper = try launchSleeper()
+        addTeardownBlock { if browserHelper.isRunning { browserHelper.terminate() } }
+        process._testing_seedLaunchRecord(
+            id: "browser",
+            process: browserHelper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39_222,
+            servePort: 35_710,
+            targetName: "Browser"
+        )
+        process.leaderJoinUrl = "https://example.test/join/token.secret"
+        let terminal = target(type: .terminal)
+
+        let firstLaunch = Task { try await process.launchTerminalFollower(terminal) }
+        while downloadContinuation == nil { await Task.yield() }
+        try await process.launchTerminalFollower(terminal)
+
+        XCTAssertEqual(downloadCount, 1)
+        XCTAssertTrue(process.isLaunchingTerminalFollower)
+        downloadContinuation?.resume(returning: URL(fileURLWithPath: "/managed/slicc"))
+        try await firstLaunch.value
+        XCTAssertEqual(launchCount, 1)
+        XCTAssertFalse(process.isLaunchingTerminalFollower)
+    }
+
+    func testSliccProcessReleasesLaunchGuardAfterError() async throws {
+        var launchCount = 0
+        let expected = TerminalLauncher.LaunchError.couldNotStart("Terminal")
+        let service = TerminalFollowerLaunchService(
+            findCliBinary: { "/usr/local/bin/slicc" },
+            downloadCli: { _ in URL(fileURLWithPath: "/unused") },
+            resolveLoginShell: { "/bin/zsh" },
+            loadTemplate: { FollowCommandTemplate.defaultTemplate },
+            launchTerminal: { _, _ in
+                launchCount += 1
+                if launchCount == 1 { throw expected }
+            }
+        )
+        let process = SliccProcess(terminalFollowerLaunchService: service)
+        let browserHelper = try launchSleeper()
+        addTeardownBlock { if browserHelper.isRunning { browserHelper.terminate() } }
+        process._testing_seedLaunchRecord(
+            id: "browser",
+            process: browserHelper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39_222,
+            servePort: 35_710,
+            targetName: "Browser"
+        )
+        process.leaderJoinUrl = "https://example.test/join/token.secret"
+        let terminal = target(type: .terminal)
+
+        do {
+            try await process.launchTerminalFollower(terminal)
+            XCTFail("expected first launch to fail")
+        } catch {
+            XCTAssertEqual(error as? TerminalLauncher.LaunchError, expected)
+        }
+        XCTAssertFalse(process.isLaunchingTerminalFollower)
+
+        try await process.launchTerminalFollower(terminal)
+        XCTAssertEqual(launchCount, 2)
+        XCTAssertFalse(process.isLaunchingTerminalFollower)
+    }
+
     private func nextStep(
         _ leaderReady: Bool,
         _ warningSuppressed: Bool,
