@@ -302,6 +302,9 @@ jobs:
           name: test-timing-webapp
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- webapp
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -441,6 +444,9 @@ jobs:
           name: test-timing-node-server
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- node-server
       - name: Build @slicc/shared-ts (runtime dependency)
         run: npm run build -w @slicc/shared-ts
       - name: Build
@@ -482,6 +488,9 @@ jobs:
           name: test-timing-chrome-extension
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- chrome-extension
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build extension

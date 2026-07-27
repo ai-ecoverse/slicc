@@ -198,6 +198,20 @@ export function summarizeTiming(report, pathPrefix) {
   };
 }
 
+// The gate side of the timing ceiling. Separated from the IO so the compare
+// is unit-testable; `null` inputs mean "nothing to gate on", never a failure.
+export function evaluateTiming(summary, ceilingMs) {
+  if (!summary) return { status: 'skip', reason: 'no per-test durations in the report' };
+  if (typeof ceilingMs !== 'number' || !Number.isFinite(ceilingMs)) {
+    return { status: 'skip', reason: 'no ceiling configured', summary };
+  }
+  return {
+    status: summary[TIMING_METRIC] > ceilingMs ? 'fail' : 'pass',
+    ceilingMs,
+    summary,
+  };
+}
+
 // Tighten the testTiming section of coverage-thresholds.json. `measured` is
 // { project: { p95Ms } }; an unmeasured project is left alone.
 export function ratchetTiming(ceilings, measured) {

@@ -64,6 +64,7 @@
     "test:coverage:webcomponents": "npm run test:coverage -w @slicc/webcomponents",
     "test:coverage:spoon": "npm run test:coverage -w @ai-ecoverse/spoon",
     "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
+    "test:timing": "node packages/dev-tools/tools/test-timing-gate.mjs",
     "bundle-size": "npm run size -w @slicc/webapp && npm run size -w @slicc/chrome-extension",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",

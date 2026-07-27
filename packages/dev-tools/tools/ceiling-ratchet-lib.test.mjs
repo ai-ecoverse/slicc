@@ -258,22 +258,22 @@ describe('summarizeTiming', () => {
 });
 
 describe('ratchetTiming', () => {
-  it('tightens a ceiling with 2x headroom at 50 ms steps', () => {
+  it('tightens a ceiling with 4x headroom at 50 ms steps', () => {
     const { ceilings, changes } = ratchetTiming(
       { webapp: { p95Ms: 4000 }, 'node-server': { p95Ms: 1000 } },
       { webapp: { p95Ms: 620 }, 'node-server': { p95Ms: 700 } }
     );
-    expect(ceilings.webapp.p95Ms).toBe(1250);
+    expect(ceilings.webapp.p95Ms).toBe(2500);
     expect(ceilings['node-server'].p95Ms).toBe(1000);
     expect(changes).toEqual([
-      { project: 'webapp', metric: 'p95Ms', from: 4000, to: 1250, actual: 620 },
+      { project: 'webapp', metric: 'p95Ms', from: 4000, to: 2500, actual: 620 },
     ]);
   });
 
   it('seeds a ceiling for a project that has none yet', () => {
     const { ceilings, changes } = ratchetTiming({}, { webapp: { p95Ms: 300 } });
-    expect(ceilings.webapp).toEqual({ p95Ms: 600 });
-    expect(changes[0]).toMatchObject({ from: null, to: 600 });
+    expect(ceilings.webapp).toEqual({ p95Ms: 1200 });
+    expect(changes[0]).toMatchObject({ from: null, to: 1200 });
   });
 
   it('leaves unmeasured projects and unknown keys alone', () => {

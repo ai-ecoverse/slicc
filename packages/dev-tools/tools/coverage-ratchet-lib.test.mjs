@@ -73,10 +73,10 @@ describe('nextCeiling', () => {
     expect(nextCeiling(31, 29.62, bytes)).toBe(31);
   });
 
-  it('keeps 2x headroom at 50 ms steps for durations', () => {
+  it('keeps 4x headroom at 50 ms steps for durations', () => {
     const timing = { granularity: TIMING_GRANULARITY_MS, marginRatio: TIMING_MARGIN_RATIO };
-    expect(nextCeiling(4000, 620, timing)).toBe(1250);
-    expect(nextCeiling(1250, 700, timing)).toBe(1250);
+    expect(nextCeiling(4000, 620, timing)).toBe(2500);
+    expect(nextCeiling(2500, 700, timing)).toBe(2500);
   });
 
   it('adopts the measurement when no ceiling exists yet', () => {

@@ -91,12 +91,14 @@ export const BYTES_MARGIN_RATIO = 0.05;
 
 // Test durations are the noisiest signal of the three: the nightly ratchet
 // measures on macos-latest while the gate runs on ubuntu-latest, and both are
-// shared runners under variable load. Cross-runner spread dwarfs the ~0.5pp
-// jitter MARGIN was sized for, so the timing ceiling keeps 100% headroom
-// (2x measured) rounded to 50 ms. That is deliberately loose: the metric
-// exists to catch order-of-magnitude drift (a 200 ms test becoming a 3 s
-// test), not to police 10% regressions.
-export const TIMING_MARGIN_RATIO = 1;
+// shared runners under variable load — a factor-of-two spread between the two
+// for the same test is ordinary. That dwarfs the ~0.5pp jitter MARGIN was
+// sized for, so the timing ceiling keeps 4x the measured p95, rounded to
+// 50 ms. Deliberately loose: the metric exists to catch order-of-magnitude
+// drift (every test suddenly waiting on a 500 ms timeout), not to police 10%
+// regressions, and a ceiling that fires on unrelated PRs would discredit the
+// whole ratchet faster than the drift it watches.
+export const TIMING_MARGIN_RATIO = 3;
 export const TIMING_GRANULARITY_MS = 50;
 
 // Compute ratcheted floors for one package against measured percentages.

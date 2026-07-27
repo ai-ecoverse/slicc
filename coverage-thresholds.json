@@ -1,5 +1,5 @@
 {
-  "$comment": "Single source of truth for per-package coverage floors. Edited automatically by the nightly coverage ratchet (packages/dev-tools/tools/coverage-ratchet.mjs), which only ever raises floors and keeps a ~0.5-1.5pp headroom below measured coverage (a half-point safety margin then floored to a whole percentage). Consumed by the CI gates via coverage-gate.mjs (TypeScript), swift-coverage-check.sh (Swift) and the COVER_MIN floor in packages/slicc-cli/Makefile (Go). Do not hand-lower these values.",
+  "$comment": "Single source of truth for per-package coverage floors. Edited automatically by the nightly coverage ratchet (packages/dev-tools/tools/coverage-ratchet.mjs), which only ever raises floors and keeps a ~0.5-1.5pp headroom below measured coverage (a half-point safety margin then floored to a whole percentage). Consumed by the CI gates via coverage-gate.mjs (TypeScript), swift-coverage-check.sh (Swift) and the COVER_MIN floor in packages/slicc-cli/Makefile (Go). Do not hand-lower these values. The `testTiming` section is the one *ceiling* in this file: a per-vitest-project p95 per-test duration in milliseconds, gated by test-timing-gate.mjs and only ever tightened by the same nightly ratchet (4x the measured p95, rounded to 50 ms, because the ratchet measures on macOS while the gate runs on Linux). Do not hand-raise those.",
   "typescript": {
     "cloudflare-worker": {
       "lines": 86,
@@ -153,6 +153,17 @@
   "go": {
     "slicc-cli": {
       "statements": 58
+    }
+  },
+  "testTiming": {
+    "webapp": {
+      "p95Ms": 250
+    },
+    "node-server": {
+      "p95Ms": 150
+    },
+    "chrome-extension": {
+      "p95Ms": 250
     }
   }
 }
