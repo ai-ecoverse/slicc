@@ -151,6 +151,15 @@ export interface StartPageFollowerTrayOptions {
    */
   onConnectionChange?: (connected: boolean) => void;
   /**
+   * Called with `true` when the leader stops answering keepalive pings while
+   * the data channel is still open, and `false` when it answers again. The
+   * connection survives a stall untouched, so this is deliberately NOT routed
+   * through `onConnectionChange`: a mount must be able to say "the leader is
+   * busy" without claiming a disconnect (and, for cherry, without emitting
+   * `slicc.follower.disconnected` to the host page).
+   */
+  onLeaderStalled?: (stalled: boolean) => void;
+  /**
    * Called when auto-reconnect gives up (no more attempts). The mount surfaces
    * a "couldn't reach the leader" state. `lastError` is the final failure.
    */
@@ -286,6 +295,7 @@ export function startPageFollowerTray(
       },
       onSprinkleUpdate: (name, data) => sprinkleController?.handleSprinkleUpdate(name, data),
       onSprinkleReloaded: (name) => void sprinkleController?.handleSprinkleReloaded(name),
+      onLeaderStalled: (stalled) => options.onLeaderStalled?.(stalled),
       onDisconnect: (reason) => {
         log.warn('Follower sync disconnected', { reason });
         detachSync();

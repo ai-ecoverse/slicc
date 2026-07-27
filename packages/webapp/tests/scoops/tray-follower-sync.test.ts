@@ -1327,6 +1327,52 @@ describe('FollowerSyncManager', () => {
       }
     });
 
+    it('reports the stall so the UI can say "busy" instead of "disconnected"', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const onLeaderStalled = vi.fn();
+        const onDisconnect = vi.fn();
+        const follower = new FollowerSyncManager(channel, { onLeaderStalled, onDisconnect });
+
+        vi.advanceTimersByTime(10 * 10_000);
+
+        expect(onLeaderStalled).toHaveBeenCalledTimes(1);
+        expect(onLeaderStalled).toHaveBeenCalledWith(true);
+        expect(onDisconnect).not.toHaveBeenCalled();
+        // Still `connected` — a stall is an overlay, not a state change.
+        const status = getFollowerTrayRuntimeStatus();
+        expect(status.state).toBe('connected');
+        expect(status.stalled).toBe(true);
+
+        channel.simulateLeaderMessage({ type: 'pong' });
+
+        expect(onLeaderStalled).toHaveBeenLastCalledWith(false);
+        expect(getFollowerTrayRuntimeStatus().stalled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the stall overlay when the connection really ends', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const follower = new FollowerSyncManager(channel, {});
+
+        vi.advanceTimersByTime(10 * 10_000); // stalled
+        expect(getFollowerTrayRuntimeStatus().stalled).toBe(true);
+
+        channel.simulateClose();
+
+        const status = getFollowerTrayRuntimeStatus();
+        expect(status.state).toBe('error');
+        expect(status.stalled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('resumes normally when a stalled leader starts answering again', () => {
       vi.useFakeTimers();
       try {

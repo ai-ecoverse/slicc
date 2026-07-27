@@ -25,6 +25,7 @@ import type { LickEvent } from './lick-manager.js';
 import {
   getFollowerTrayRuntimeStatus,
   setFollowerLastPingTime,
+  setFollowerStalled,
   setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
 import { handleFsRequest } from './tray-fs-handler.js';
@@ -75,6 +76,14 @@ export interface FollowerSyncManagerOptions {
   onDead?: () => void;
   /** Called after the connection has been cleaned up due to keepalive death or channel failure. Higher-level code can use this to trigger reconnection. */
   onDisconnect?: (reason: string) => void;
+  /**
+   * Called with `true` when the leader stops answering keepalive pings while
+   * its data channel is still open, and `false` when it answers again. The
+   * connection is intact throughout — the leader is busy, not gone — so this
+   * is a transient hint for connection UX, NOT a disconnect. Distinct from
+   * `onDisconnect`, which fires only once the connection is really finished.
+   */
+  onLeaderStalled?: (stalled: boolean) => void;
   /** VirtualFS instance for handling remote fs requests targeting this follower. */
   vfs?: VirtualFS;
   /** Called when local browser targets may have changed (e.g. after a tab is opened or closed). */
@@ -272,9 +281,13 @@ export class FollowerSyncManager implements AgentHandle {
       isTransportOpen: () => this.sync.isOpen,
       onStalled: () => {
         log.warn('Leader stopped answering pings; channel still open, waiting for it to catch up');
+        setFollowerStalled(true);
+        this.options.onLeaderStalled?.(true);
       },
       onRecovered: () => {
         log.info('Leader is answering pings again');
+        setFollowerStalled(false);
+        this.options.onLeaderStalled?.(false);
       },
       onDead: () => {
         log.warn('Leader keepalive dead, cleaning up');
@@ -605,6 +618,9 @@ export class FollowerSyncManager implements AgentHandle {
       ...current,
       state: 'error',
       error: reason,
+      // The connection is over; a lingering "busy" overlay would outlive the
+      // thing it described.
+      stalled: false,
     });
 
     // Emit error to UI listeners

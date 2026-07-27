@@ -6,6 +6,7 @@ import {
   getFollowerTrayRuntimeStatus,
   resetReconnectAttempts,
   setFollowerLastPingTime,
+  setFollowerStalled,
   setFollowerTrayRuntimeStatus,
   subscribeToFollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
@@ -309,5 +310,32 @@ describe('getFollowerStatusWithFallback (standalone-worker path)', () => {
   it('swallows a malformed shim value and falls back to the module global', () => {
     store.set(FOLLOWER_STATUS_STORAGE_KEY, '{not json');
     expect(getFollowerStatusWithFallback().state).toBe('inactive');
+  });
+
+  describe('setFollowerStalled', () => {
+    it('overlays the stall without disturbing the rest of the status', () => {
+      setFollowerTrayRuntimeStatus(makeStatus({ state: 'connected', trayId: 'tray-1' }));
+
+      setFollowerStalled(true);
+
+      const status = getFollowerTrayRuntimeStatus();
+      expect(status.stalled).toBe(true);
+      // A stalled follower is still connected — the channel never dropped.
+      expect(status.state).toBe('connected');
+      expect(status.trayId).toBe('tray-1');
+    });
+
+    it('notifies subscribers only when the flag actually changes', () => {
+      setFollowerTrayRuntimeStatus(makeStatus({ state: 'connected' }));
+      const seen: Array<boolean | undefined> = [];
+      const unsubscribe = subscribeToFollowerTrayRuntimeStatus((s) => seen.push(s.stalled));
+
+      setFollowerStalled(true);
+      setFollowerStalled(true); // idempotent — no second notification
+      setFollowerStalled(false);
+
+      expect(seen).toEqual([true, false]);
+      unsubscribe();
+    });
   });
 });
