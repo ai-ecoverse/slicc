@@ -54,6 +54,7 @@ import { createScreencaptureCommand } from './screencapture-command.js';
 import { createSecretCommand } from './secret-command.js';
 import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
+import { createSessionCommand } from './session-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
@@ -234,6 +235,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       syncScriptCommands: options.syncScriptCommands,
     }),
     createWfProgressCommand(),
+    createSessionCommand(),
   ];
 
   if (options.fs) {

@@ -690,3 +690,136 @@ describe('mountWcUiFollower', () => {
     expect(opts.uiOnly).toBeFalsy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cherry follower export selector tests (Fix 1 — wave 2 retry)
+// ---------------------------------------------------------------------------
+
+type ExportRequestFn = (
+  requestId: string,
+  sessionId: string | undefined,
+  signal: AbortSignal,
+  onProgress: () => void
+) => Promise<Blob>;
+
+/** Mount a cherry follower with a controllable currentSync and capture the
+ *  wired onExportRequest callback so selector tests can call it directly. */
+async function mountCherryWithExportCapture(): Promise<{
+  onExportRequest: ExportRequestFn;
+  requestTranscriptExport: ReturnType<typeof vi.fn>;
+}> {
+  const requestTranscriptExport = vi.fn(
+    async (_selector: unknown) => new Blob(['zip'], { type: 'application/zip' })
+  );
+  const currentSync = { requestTranscriptExport };
+
+  // Capture the callback wired onto cherryTransport.onExportRequest via a
+  // plain mutable container — avoids the getter/setter + property name clash
+  // that TypeScript rejects when mixing them in an object literal.
+  const exportCapture: { fn: ExportRequestFn | null } = { fn: null };
+
+  // Build a proxy-like object so wc-follower can assign onExportRequest and we
+  // intercept the assignment without a getter+setter name collision.
+  const cherryTransport = new Proxy(
+    {
+      emitSliccEventToHost: vi.fn(),
+      onHostEvent: null as ((name: string, detail?: unknown) => void) | null,
+      onExportRequest: null as ExportRequestFn | null,
+      features: {
+        terminal: true,
+        files: true,
+        memory: true,
+        browser: true,
+        modelPicker: true,
+        history: true,
+        nav: true,
+        newSprinkle: true,
+        monitor: true,
+      },
+    },
+    {
+      set(target, prop, value) {
+        if (prop === 'onExportRequest') exportCapture.fn = value as ExportRequestFn | null;
+        (target as Record<string | symbol, unknown>)[prop] = value;
+        return true;
+      },
+    }
+  );
+
+  vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+    setupStandalonePrelude: vi.fn(async () => ({
+      browser: { getTransport: () => ({}), listPages: async () => [] },
+      realCdpTransport: {},
+      cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+      cherryTransport,
+      instanceId: 'i',
+    })),
+  }));
+
+  // Override startFollowerSpy to return a follower whose currentSync is non-null.
+  // Cast to `never` to satisfy the strict return type check on the spy.
+  startFollowerSpy.mockImplementationOnce(
+    (_opts: StartPageFollowerTrayOptions) => ({ stop: vi.fn(), currentSync }) as never
+  );
+
+  vi.resetModules();
+  const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+  const app = document.getElementById('app')!;
+  await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+  if (!exportCapture.fn) throw new Error('onExportRequest was not wired');
+  return { onExportRequest: exportCapture.fn, requestTranscriptExport };
+}
+
+describe('cherry onExportRequest selector routing', () => {
+  beforeEach(() => {
+    startFollowerSpy.mockClear();
+    document.body.innerHTML = '<div id="app"></div>';
+  });
+
+  it('maps undefined sessionId to the active selector', async () => {
+    const { onExportRequest, requestTranscriptExport } = await mountCherryWithExportCapture();
+    await onExportRequest('req-1', undefined, new AbortController().signal, () => {});
+    expect(requestTranscriptExport).toHaveBeenCalledWith(
+      { kind: 'active' },
+      expect.any(AbortSignal),
+      expect.any(Function)
+    );
+  });
+
+  it('maps literal "active" sessionId to the active selector', async () => {
+    const { onExportRequest, requestTranscriptExport } = await mountCherryWithExportCapture();
+    await onExportRequest('req-2', 'active', new AbortController().signal, () => {});
+    expect(requestTranscriptExport).toHaveBeenCalledWith(
+      { kind: 'active' },
+      expect.any(AbortSignal),
+      expect.any(Function)
+    );
+  });
+
+  it('maps a valid non-"active" sessionId to a frozen selector', async () => {
+    const { onExportRequest, requestTranscriptExport } = await mountCherryWithExportCapture();
+    await onExportRequest('req-3', 'sess-abc123', new AbortController().signal, () => {});
+    expect(requestTranscriptExport).toHaveBeenCalledWith(
+      { kind: 'frozen', sessionId: 'sess-abc123' },
+      expect.any(AbortSignal),
+      expect.any(Function)
+    );
+  });
+
+  it('rejects with session-not-found for an empty sessionId — does not start a tray export', async () => {
+    const { onExportRequest, requestTranscriptExport } = await mountCherryWithExportCapture();
+    await expect(
+      onExportRequest('req-4', '', new AbortController().signal, () => {})
+    ).rejects.toMatchObject({ code: 'session-not-found' });
+    expect(requestTranscriptExport).not.toHaveBeenCalled();
+  });
+
+  it('rejects with session-not-found for a whitespace-only sessionId — does not start a tray export', async () => {
+    const { onExportRequest, requestTranscriptExport } = await mountCherryWithExportCapture();
+    await expect(
+      onExportRequest('req-5', '   ', new AbortController().signal, () => {})
+    ).rejects.toMatchObject({ code: 'session-not-found' });
+    expect(requestTranscriptExport).not.toHaveBeenCalled();
+  });
+});

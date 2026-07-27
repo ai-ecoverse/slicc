@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.sliccy.ai/schemas/transcript/v1.json",
+  "title": "SLICC Transcript Bundle v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "export",
+    "session",
+    "privacy",
+    "conversations",
+    "delegations",
+    "attachments"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "export": { "$ref": "#/$defs/TranscriptExport" },
+    "session": { "$ref": "#/$defs/TranscriptSession" },
+    "privacy": { "$ref": "#/$defs/TranscriptPrivacy" },
+    "conversations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TranscriptConversation" }
+    },
+    "delegations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TranscriptDelegation" }
+    },
+    "attachments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TranscriptAttachment" }
+    }
+  },
+  "$defs": {
+    "TranscriptExport": {
+      "type": "object",
+      "required": ["id", "generatedAt", "producer", "format"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "producer": {
+          "type": "object",
+          "required": ["application", "version"],
+          "additionalProperties": true,
+          "properties": {
+            "application": { "const": "slicc" },
+            "version": { "type": "string" }
+          }
+        },
+        "format": { "const": "slicc-transcript" }
+      }
+    },
+    "TranscriptSession": {
+      "type": "object",
+      "required": ["id", "title", "state", "completeness"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "state": { "enum": ["active", "frozen"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "frozenAt": { "type": "string", "format": "date-time" },
+        "snapshotAt": { "type": "string", "format": "date-time" },
+        "completeness": {
+          "type": "object",
+          "required": ["status", "missing"],
+          "additionalProperties": true,
+          "properties": {
+            "status": { "enum": ["complete", "partial"] },
+            "missing": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/TranscriptCompletenessReason" }
+            }
+          }
+        }
+      }
+    },
+    "TranscriptCompletenessReason": {
+      "enum": [
+        "canonical-agent-history-unavailable",
+        "tool-data-may-be-truncated",
+        "model-metadata-unavailable",
+        "scoop-history-unavailable",
+        "attachment-file-missing",
+        "attachment-association-unavailable",
+        "complete-snapshot-unavailable"
+      ]
+    },
+    "TranscriptPrivacy": {
+      "type": "object",
+      "required": [
+        "reasoningExcluded",
+        "excludedReasoningBlocks",
+        "binaryAttachments",
+        "redactionCounts",
+        "redactions"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "reasoningExcluded": { "const": true },
+        "excludedReasoningBlocks": { "type": "integer", "minimum": 0 },
+        "binaryAttachments": { "const": "included-unchanged" },
+        "redactionCounts": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "redactions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TranscriptRedaction" }
+        }
+      }
+    },
+    "TranscriptRedaction": {
+      "type": "object",
+      "required": ["id", "category", "detector", "target"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "category": { "type": "string" },
+        "detector": { "enum": ["known-secret", "credential-pattern", "pre-obfuscated"] },
+        "target": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["kind", "pointer"],
+              "additionalProperties": true,
+              "properties": {
+                "kind": { "const": "json" },
+                "pointer": { "type": "string" }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["kind", "attachmentId"],
+              "additionalProperties": true,
+              "properties": {
+                "kind": { "const": "attachment" },
+                "attachmentId": { "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TranscriptConversation": {
+      "type": "object",
+      "required": ["id", "kind", "name", "messages"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["cone", "scoop"] },
+        "name": { "type": "string" },
+        "folder": { "type": "string" },
+        "parentConversationId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "messages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TranscriptMessage" }
+        }
+      }
+    },
+    "TranscriptMessage": {
+      "type": "object",
+      "required": ["id", "sequence", "role", "timestamp", "content"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "role": { "enum": ["user", "assistant", "tool-result"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "content": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TranscriptContentBlock" }
+        },
+        "toolCallId": { "type": "string" },
+        "isError": { "type": "boolean" },
+        "source": { "type": "string" },
+        "channel": { "type": "string" },
+        "model": {
+          "type": "object",
+          "required": ["provider", "id"],
+          "additionalProperties": true,
+          "properties": {
+            "provider": { "type": "string" },
+            "id": { "type": "string" },
+            "api": { "type": "string" }
+          }
+        },
+        "usage": { "$ref": "#/$defs/TranscriptUsage" },
+        "stopReason": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    },
+    "TranscriptContentBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "text"],
+          "additionalProperties": true,
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "name", "input"],
+          "additionalProperties": true,
+          "properties": {
+            "type": { "const": "tool-call" },
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "input": {}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "attachmentId"],
+          "additionalProperties": true,
+          "properties": {
+            "type": { "const": "attachment-ref" },
+            "attachmentId": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "TranscriptUsage": {
+      "type": "object",
+      "required": ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"],
+      "additionalProperties": true,
+      "properties": {
+        "input": { "type": "integer", "minimum": 0 },
+        "output": { "type": "integer", "minimum": 0 },
+        "cacheRead": { "type": "integer", "minimum": 0 },
+        "cacheWrite": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "cost": {
+          "type": "object",
+          "required": ["input", "output", "cacheRead", "cacheWrite", "total"],
+          "additionalProperties": true,
+          "properties": {
+            "input": { "type": "number", "minimum": 0 },
+            "output": { "type": "number", "minimum": 0 },
+            "cacheRead": { "type": "number", "minimum": 0 },
+            "cacheWrite": { "type": "number", "minimum": 0 },
+            "total": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "TranscriptDelegation": {
+      "type": "object",
+      "required": ["sourceConversationId", "targetConversationId"],
+      "additionalProperties": true,
+      "properties": {
+        "sourceConversationId": { "type": "string" },
+        "targetConversationId": { "type": "string" },
+        "toolCallId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "TranscriptAttachment": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "originalName",
+        "mimeType",
+        "byteLength",
+        "sha256",
+        "sourceConversationId",
+        "sourceMessageId",
+        "handling",
+        "present"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "path": { "type": "string" },
+        "originalName": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$|^$" },
+        "sourceConversationId": { "type": "string" },
+        "sourceMessageId": { "type": "string" },
+        "handling": { "enum": ["text-redacted", "binary-unchanged"] },
+        "present": { "type": "boolean" },
+        "missingReason": { "const": "attachment-file-missing" }
+      }
+    }
+  }
+}

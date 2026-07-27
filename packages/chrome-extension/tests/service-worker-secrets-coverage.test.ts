@@ -454,4 +454,46 @@ describe('service-worker secrets handlers — branch coverage', () => {
     expect(kept).toBe(true);
     expect(response.error).toBe('plain-string-reject');
   });
+
+  // --- secrets.redact-export handler -------------------------------------------
+
+  it('secrets.redact-export returns false when texts field is missing', async () => {
+    const { kept } = await dispatch({ type: 'secrets.redact-export' });
+    expect(kept).toBe(false);
+  });
+
+  it('secrets.redact-export returns false when texts is the wrong type (not array)', async () => {
+    const { kept } = await dispatch({ type: 'secrets.redact-export', texts: 'not-an-array' });
+    expect(kept).toBe(false);
+  });
+
+  it('secrets.redact-export success path returns { texts, redactionCount }', async () => {
+    const { kept, response } = await dispatch({
+      type: 'secrets.redact-export',
+      texts: ['hello world'],
+    });
+    expect(kept).toBe(true);
+    expect(Array.isArray(response.texts)).toBe(true);
+    expect(response.texts).toHaveLength(1);
+    expect(typeof response.redactionCount).toBe('number');
+    expect(response.error).toBeUndefined();
+  });
+
+  it('secrets.redact-export degrades to { error } without original texts when pipeline fails', async () => {
+    buildChromeMock({
+      localGet: vi.fn(async () => {
+        throw new Error('pipeline-fail');
+      }),
+    });
+    const sensitiveText = 'my-real-secret-value';
+    const { kept, response } = await dispatch({
+      type: 'secrets.redact-export',
+      texts: [sensitiveText],
+    });
+    expect(kept).toBe(true);
+    expect(typeof response.error).toBe('string');
+    // Fail-closed: must never echo input texts
+    expect(JSON.stringify(response)).not.toContain(sensitiveText);
+    expect(response.texts).toBeUndefined();
+  });
 });

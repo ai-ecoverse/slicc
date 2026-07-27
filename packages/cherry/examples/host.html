@@ -150,6 +150,15 @@
           <code>[cherry]</code> lick on the cone.</span
         >
       </div>
+      <div class="row">
+        <label>export</label>
+        <button id="exportBtn" disabled>Export active transcript</button>
+        <button id="cancelExportBtn" disabled>Cancel export</button>
+        <span class="hint"
+          >Calls <code>handle.exportSession()</code>, logs progress phases, and downloads the
+          returned zip. Does not log transcript content or byte contents.</span
+        >
+      </div>
     </header>
     <main>
       <div id="mount"></div>
@@ -277,6 +286,9 @@
       const mountBtn = document.getElementById('mountBtn');
       const destroyBtn = document.getElementById('destroyBtn');
       const emitBtn = document.getElementById('emitBtn');
+      const exportBtn = document.getElementById('exportBtn');
+      const cancelExportBtn = document.getElementById('cancelExportBtn');
+      let activeExportController = null;
 
       mountBtn.addEventListener('click', () => {
         if (handle) return;
@@ -339,6 +351,7 @@
         mountBtn.disabled = true;
         destroyBtn.disabled = false;
         emitBtn.disabled = false;
+        exportBtn.disabled = false;
       });
 
       destroyBtn.addEventListener('click', () => {
@@ -349,6 +362,7 @@
         mountBtn.disabled = false;
         destroyBtn.disabled = true;
         emitBtn.disabled = true;
+        exportBtn.disabled = true;
       });
 
       emitBtn.addEventListener('click', () => {
@@ -370,6 +384,42 @@
         }
         handle.emitHostEvent(name, detail);
         log('emitHostEvent', name, detail ?? {});
+      });
+
+      exportBtn.addEventListener('click', async () => {
+        if (!handle) return;
+        exportBtn.disabled = true;
+        cancelExportBtn.disabled = false;
+        const controller = new AbortController();
+        activeExportController = controller;
+        log('export: requesting active transcript…');
+        try {
+          const blob = await handle.exportSession({
+            sessionId: 'active',
+            signal: controller.signal,
+            onProgress: ({ phase }) => log('export: phase →', phase),
+          });
+          // Download the Blob without logging its content or byte size
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `transcript-${Date.now()}.zip`;
+          a.click();
+          URL.revokeObjectURL(url);
+          log('export: download started.');
+        } catch (err) {
+          log('export failed:', err instanceof Error ? err.message : String(err));
+        } finally {
+          activeExportController = null;
+          exportBtn.disabled = !handle;
+          cancelExportBtn.disabled = true;
+        }
+      });
+
+      cancelExportBtn.addEventListener('click', () => {
+        if (!activeExportController) return;
+        activeExportController.abort();
+        log('export: cancellation requested.');
       });
 
       const themeSelect = document.getElementById('theme');

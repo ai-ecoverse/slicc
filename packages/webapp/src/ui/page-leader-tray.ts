@@ -106,6 +106,10 @@ export interface StartPageLeaderTrayOptions {
    */
   onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
   onPreviewLick?: LeaderSyncManagerOptions['onPreviewLick'];
+  /** Show approval dialog for a follower transcript export request. */
+  requestTranscriptExportApproval?: LeaderSyncManagerOptions['requestTranscriptExportApproval'];
+  /** Create a transcript ZIP for an approved follower export. */
+  createTranscriptExport?: LeaderSyncManagerOptions['createTranscriptExport'];
 
   // --- Agent event tap (helper owns the subscription) ---
   /**
@@ -193,6 +197,8 @@ function buildSyncManager(
     execInShell: options.execInShell,
     onCherryHostEvent: options.onCherryHostEvent,
     onPreviewLick: options.onPreviewLick,
+    requestTranscriptExportApproval: options.requestTranscriptExportApproval,
+    createTranscriptExport: options.createTranscriptExport,
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,

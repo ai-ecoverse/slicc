@@ -249,6 +249,15 @@ the original `html2canvas@1.4.1` throws on CSS Color 4 syntax (`color()`,
 screenshot is a best-effort DOM raster of `document.body`, not a pixel-level CDP
 capture.
 
+## Transcript export
+
+Cherry hosts can request a transcript export via `handle.exportSession()`. The export
+flows through the `session.export.*` wire protocol (request → approval on the leader →
+progress events → response or error). Approval is one-time per request.
+
+See [`docs/transcript-export.md`](../../docs/transcript-export.md) for the full protocol,
+error codes, and `TranscriptExportError` usage.
+
 ## Related Guides
 
 - `packages/webapp/CLAUDE.md` — `CherryHostTransport`, the `?cherry=1` boot mode,
@@ -256,4 +265,6 @@ capture.
 - `packages/cloudflare-worker/CLAUDE.md` — the `?cherry=1` `frame-ancestors` CSP,
   `ALLOWED_CHERRY_HOST_ORIGINS`, and cache isolation.
 - `packages/vfs-root/workspace/skills/cherry/SKILL.md` — the cone-facing skill.
+- `docs/transcript-export.md` — transcript export full reference (bundle layout,
+  privacy guarantees, Cherry SDK API, approval semantics).
 - `docs/architecture.md` — float topology + the synthetic-CDP translation matrix.

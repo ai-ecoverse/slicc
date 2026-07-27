@@ -5,7 +5,8 @@ description: |
   smoke tests against the latest build. Two tiers: Tier 1 needs no AI
   provider (boot, panels, terminal, accounts dialog); Tier 2 exercises the
   agent loop through a connected provider (chat, shell tool, browser
-  control, scoops, sprinkles). Use when asked to start a SLICC dev instance
+  control, scoops, sprinkles, transcript export). Use when asked to start a
+  SLICC dev instance
   in a browser you control, smoke-test a build, or run
   an autonomous debugging session against the UI.
 ---
@@ -54,7 +55,8 @@ Checks and tier-specific pitfalls:
 ## Tier 2 — AI provider required (chat interaction)
 
 Validates the agent loop: provider connect (with user credential handoff),
-streaming, tool use, scoops, sprinkles. Checks and tier-specific pitfalls:
+streaming, tool use, scoops, sprinkles, and transcript export (cone + scoop
+bundle via `session export`). Checks and tier-specific pitfalls:
 [tier2-agent-loop.md](tier2-agent-loop.md).
 
 ## Report

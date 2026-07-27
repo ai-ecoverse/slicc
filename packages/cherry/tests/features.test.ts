@@ -17,7 +17,7 @@ describe('cherry features', () => {
 
     // Simulate the iframe sending handshake.hello
     await handle.testReceive({
-      cherry: 1,
+      cherry: 2,
       channelId: 'cherry-test-123',
       kind: 'handshake.hello',
       capabilities: { navigate: true, screenshot: true, openUrl: true },
@@ -52,7 +52,7 @@ describe('cherry features', () => {
     });
 
     await handle.testReceive({
-      cherry: 1,
+      cherry: 2,
       channelId: 'cherry-test-456',
       kind: 'handshake.hello',
       capabilities: { navigate: true, screenshot: true, openUrl: true },

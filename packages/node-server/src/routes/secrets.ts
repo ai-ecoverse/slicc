@@ -47,6 +47,59 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
+ * Scope edit handler — updates allowed domains of an existing secret without
+ * changing its value. Checks session store first, then falls back to persisted.
+ */
+async function handleScopeEdit(
+  res: Response,
+  name: unknown,
+  domains: unknown,
+  secretStore: EnvSecretStore,
+  secretProxy: SecretProxyManager
+): Promise<Response> {
+  if (typeof name !== 'string' || !isStringArray(domains)) {
+    return res.status(400).json({ error: 'bad-request' });
+  }
+  try {
+    if (secretProxy.sessionStore.has(name)) {
+      secretProxy.sessionStore.setDomains(name, domains);
+    } else {
+      const existing = secretStore.get(name);
+      if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
+      secretStore.set(name, existing.value, domains);
+    }
+    await secretProxy.reload();
+    return res.json({ ok: true });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
+  }
+}
+
+/**
+ * Fail-closed export redaction handler. Batch-replaces all known secret values
+ * with stable anonymous markers. Returns 400 for malformed input; 503 on
+ * pipeline failure. Never echoes request texts in any error response.
+ */
+function handleRedactExport(
+  res: Response,
+  texts: unknown,
+  secretProxy: SecretProxyManager
+): Response {
+  if (!isStringArray(texts)) {
+    return res.status(400).json({ error: 'bad-request' });
+  }
+  try {
+    const result = secretProxy.rawPipeline.redactForExport(texts);
+    return res.json(result);
+  } catch (err) {
+    console.error('[secrets] redact-export failed', err instanceof Error ? err.message : err);
+    return res.status(503).json({ error: 'redaction-unavailable' });
+  }
+}
+
+/**
  * Persisted/session delete handler — checks the session store first so a
  * session shadow does not leak through after deletion, then falls back to the
  * persisted store. Reloads the masking pipeline either way.
@@ -123,26 +176,9 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
 
   // Scope edit — update the allowed domains of an existing secret (persisted or
   // session), preserving the value. Gated by the agent before sending.
-  app.post('/api/secrets/scope', express.json(), async (req, res) => {
+  app.post('/api/secrets/scope', express.json(), (req, res) => {
     const { name, domains } = req.body ?? {};
-    if (typeof name !== 'string' || !isStringArray(domains)) {
-      return res.status(400).json({ error: 'bad-request' });
-    }
-    try {
-      if (secretProxy.sessionStore.has(name)) {
-        secretProxy.sessionStore.setDomains(name, domains);
-      } else {
-        const existing = secretStore.get(name);
-        if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
-        secretStore.set(name, existing.value, domains);
-      }
-      await secretProxy.reload();
-      res.json({ ok: true });
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
-    }
+    return handleScopeEdit(res, name, domains, secretStore, secretProxy);
   });
 
   // Session secrets — in-memory only, never written to disk. Free for the agent
@@ -208,6 +244,14 @@ export function registerSecretRoutes(app: Express, deps: SecretRoutesDeps): void
       respondSignAndForwardError(res, err, devMode, 'DA');
     }
   });
+
+  // Fail-closed export redaction. Batch-replaces all known secret values
+  // (both real and masked forms) with stable anonymous markers for transcript
+  // export. Returns 400 for malformed input; 503 (without echoing input) on
+  // trusted-pipeline failure. Never echoes real values in any response path.
+  app.post('/api/secrets/redact-export', express.json({ limit: '32mb' }), (req, res) =>
+    handleRedactExport(res, req.body?.texts, secretProxy)
+  );
 
   // Tool-output real→masked scrub. The browser-side agent realm never holds
   // real secret values, so the defense-in-depth scrub of bash / read_file /

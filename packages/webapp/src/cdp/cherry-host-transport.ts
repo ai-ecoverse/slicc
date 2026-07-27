@@ -10,11 +10,13 @@
  * and implements the postMessage backhaul.
  */
 
+import { type TranscriptExportProgress, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
 import {
   acceptEnvelope,
   CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
+  type CherrySessionExportProgress,
   isCherryEnvelope,
   isCherryVersionMismatch,
 } from './cherry-host-protocol.js';
@@ -78,6 +80,25 @@ export class CherryHostTransport extends SyntheticCdpTransport {
    * tray channel, where it surfaces as a `cherry` lick.
    */
   onHostEvent: ((name: string, detail?: unknown) => void) | null = null;
+
+  /**
+   * Invoked when the host SDK posts a `session.export.request` envelope.
+   * The cherry boot path wires this to `FollowerSyncManager.requestTranscriptExport`.
+   * The callback must return the verified application/zip Blob or reject with a
+   * `TranscriptExportError`. Progress phases are forwarded via the supplied
+   * `onProgress` helper without leaking filename, sha256, or byte size.
+   */
+  onExportRequest:
+    | ((
+        requestId: string,
+        sessionId: string | undefined,
+        signal: AbortSignal,
+        onProgress: (progress: TranscriptExportProgress) => void
+      ) => Promise<Blob>)
+    | null = null;
+
+  /** AbortControllers for in-flight host-initiated exports, keyed by requestId. */
+  private readonly pendingHostExports = new Map<string, AbortController>();
 
   constructor(opts: CherryHostTransportOptions) {
     // Call super with injected metadata. Read the CONSTRUCTOR PARAMETER opts
@@ -215,6 +236,9 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     }
     for (const [, p] of this.pending) p.reject(new Error('Cherry transport disconnected'));
     this.pending.clear();
+    // Abort any in-flight host-initiated exports so their Promises reject cleanly.
+    for (const [, ctrl] of this.pendingHostExports) ctrl.abort();
+    this.pendingHostExports.clear();
     this._state = 'disconnected';
     this.channelId = null;
   }
@@ -377,8 +401,83 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       case 'host.event':
         this.onHostEvent?.(env.name, env.detail);
         return;
+      case 'session.export.request':
+        this.handleExportRequest(env);
+        return;
+      case 'session.export.cancel': {
+        const ctrl = this.pendingHostExports.get(env.requestId);
+        if (ctrl) {
+          ctrl.abort();
+          this.pendingHostExports.delete(env.requestId);
+        }
+        return;
+      }
       default:
         return;
     }
+  }
+
+  private handleExportRequest(
+    env: Extract<CherryEnvelope, { kind: 'session.export.request' }>
+  ): void {
+    const { requestId, sessionId } = env;
+    if (!this.onExportRequest || !this.channelId) {
+      this.postExportError(requestId, 'transfer-aborted');
+      return;
+    }
+    const abort = new AbortController();
+    this.pendingHostExports.set(requestId, abort);
+    const channelId = this.channelId;
+    const onProgress = (progress: TranscriptExportProgress): void => {
+      // Only post progress if the request is still live.
+      if (!this.pendingHostExports.has(requestId)) return;
+      this.post({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId,
+        kind: 'session.export.progress',
+        requestId,
+        phase: progress.phase as CherrySessionExportProgress['phase'],
+        ...(progress.processedBytes !== undefined
+          ? { processedBytes: progress.processedBytes }
+          : {}),
+        ...(progress.estimatedBytes !== undefined
+          ? { estimatedBytes: progress.estimatedBytes }
+          : {}),
+      });
+    };
+    this.onExportRequest(requestId, sessionId, abort.signal, onProgress)
+      .then((blob) => {
+        this.pendingHostExports.delete(requestId);
+        this.post({
+          cherry: CHERRY_PROTOCOL_VERSION,
+          channelId,
+          kind: 'session.export.response',
+          requestId,
+          blob,
+        });
+      })
+      .catch((err: unknown) => {
+        this.pendingHostExports.delete(requestId);
+        const maybeCode = (err as Record<string, unknown>)?.code;
+        // Clamp to a canonical error code so the host SDK always receives a
+        // well-typed value. An unknown or non-string code falls back to
+        // 'transfer-corrupt', which is the generic "something went wrong" sentinel.
+        const code =
+          typeof maybeCode === 'string' && VALID_EXPORT_ERROR_CODES.has(maybeCode as never)
+            ? maybeCode
+            : 'transfer-corrupt';
+        this.postExportError(requestId, code);
+      });
+  }
+
+  private postExportError(requestId: string, code: string): void {
+    if (!this.channelId) return;
+    this.post({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: this.channelId,
+      kind: 'session.export.error',
+      requestId,
+      code,
+    });
   }
 }

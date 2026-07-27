@@ -1187,3 +1187,68 @@ describe('defaultResolveModel', () => {
     expect(defaultResolveModel('llama')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// parentJid propagation to RegisteredScoop (Fix: task-5-review P1)
+// ---------------------------------------------------------------------------
+
+describe('createAgentBridge — parentJid propagation', () => {
+  it('sets parentJid on the registered scoop when options.parentJid is provided', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'cone_main_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-04-19T00:00:00Z',
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'birch-lime',
+    });
+    scripts.set('agent_birch_lime', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: 'cone_main_1' });
+
+    expect(registerCalls[0].parentJid).toBe('cone_main_1');
+  });
+
+  it('leaves parentJid undefined on the registered scoop when options.parentJid is absent', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'cedar-fig',
+    });
+    scripts.set('agent_cedar_fig', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(registerCalls[0].parentJid).toBeUndefined();
+  });
+
+  it('does not set originToolCallId (never inferred in agent-bridge path)', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'scoop_worker_1',
+      name: 'worker',
+      folder: 'worker',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'worker',
+      addedAt: '2026-04-19T00:00:00Z',
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'elm-kiwi',
+    });
+    scripts.set('agent_elm_kiwi', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_worker_1' });
+
+    expect(registerCalls[0].originToolCallId).toBeUndefined();
+  });
+});

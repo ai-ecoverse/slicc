@@ -527,3 +527,127 @@ describe('SecretsPipeline.signHmac', () => {
     });
   });
 });
+
+describe('SecretsPipeline.redactForExport', () => {
+  function source(
+    entries: { name: string; value: string; domains: string[] }[]
+  ): import('../src/secrets-pipeline.js').FetchProxySecretSource {
+    return {
+      get: async (name) => entries.find((e) => e.name === name)?.value,
+      listAll: async () => entries.map((e) => ({ ...e })),
+    };
+  }
+
+  it('redacts known values across a batch with stable anonymous markers', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'API_TOKEN', value: 'real-token-value', domains: ['api.example.test'] },
+      ]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport(['a real-token-value', 'b real-token-value']);
+    expect(result).toEqual({
+      texts: ['a ⟦REDACTED:known-secret:k1⟧', 'b ⟦REDACTED:known-secret:k1⟧'],
+      redactionCount: 2,
+    });
+    expect(JSON.stringify(result)).not.toContain('real-token-value');
+    expect(JSON.stringify(result)).not.toContain('API_TOKEN');
+  });
+
+  it('replaces both realValue and maskedValue occurrences with the same marker', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'API_TOKEN', value: 'real-token-value', domains: ['api.example.test'] },
+      ]),
+    });
+    await pipeline.reload();
+    const masked = pipeline.getMaskedEntries()[0]!.maskedValue;
+    const result = pipeline.redactForExport([`a real-token-value b ${masked}`]);
+    expect(result.texts[0]).toBe('a ⟦REDACTED:known-secret:k1⟧ b ⟦REDACTED:known-secret:k1⟧');
+    expect(result.redactionCount).toBe(2);
+  });
+
+  it('returns empty texts and zero count for empty input', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([]);
+    expect(result).toEqual({ texts: [], redactionCount: 0 });
+  });
+
+  it('leaves text unchanged when no secrets are configured', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport(['nothing sensitive here']);
+    expect(result).toEqual({ texts: ['nothing sensitive here'], redactionCount: 0 });
+  });
+
+  it('uses stable markers across multiple secrets', async () => {
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'TOKEN_A', value: 'secret-alpha-one', domains: [] },
+        { name: 'TOKEN_B', value: 'secret-beta-two', domains: [] },
+      ]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport(['has secret-alpha-one and secret-beta-two']);
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k1⟧');
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k2⟧');
+    expect(result.redactionCount).toBe(2);
+    expect(result.texts[0]).not.toContain('secret-alpha-one');
+    expect(result.texts[0]).not.toContain('secret-beta-two');
+  });
+
+  it('redacts short secrets (below MIN_MASKABLE_SECRET_LENGTH) by real value only', async () => {
+    // Construct a value shorter than the minimum maskable length.
+    const shortVal = 'x'.repeat(MIN_MASKABLE_SECRET_LENGTH - 1);
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([{ name: 'SHORT_KEY', value: shortVal, domains: [] }]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([`prefix ${shortVal} suffix`]);
+    // Short secret has no maskable form, so it gets its own k<n> marker.
+    expect(result.texts[0]).not.toContain(shortVal);
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k1⟧');
+    expect(result.redactionCount).toBe(1);
+  });
+
+  it('short secret markers continue after maskable-secret markers', async () => {
+    const shortVal = 'y'.repeat(MIN_MASKABLE_SECRET_LENGTH - 1);
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'LONG_TOKEN', value: 'long-maskable-token-val', domains: [] },
+        { name: 'SHORT_KEY', value: shortVal, domains: [] },
+      ]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([`long-maskable-token-val and ${shortVal}`]);
+    // Maskable secret → k1, short secret → k2
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k1⟧');
+    expect(result.texts[0]).toContain('⟦REDACTED:known-secret:k2⟧');
+    expect(result.texts[0]).not.toContain('long-maskable-token-val');
+    expect(result.texts[0]).not.toContain(shortVal);
+    expect(result.redactionCount).toBe(2);
+  });
+
+  it('short secret real value is never echoed in the result', async () => {
+    const shortVal = 'abc';
+    const pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([{ name: 'TINY', value: shortVal, domains: [] }]),
+    });
+    await pipeline.reload();
+    const result = pipeline.redactForExport([shortVal, `prefix ${shortVal} suffix`]);
+    expect(JSON.stringify(result)).not.toContain(shortVal);
+  });
+});

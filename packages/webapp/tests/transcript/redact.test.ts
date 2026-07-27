@@ -1,0 +1,233 @@
+import { redactCredentialPatterns, TranscriptExportError } from '@slicc/shared-ts';
+import { describe, expect, it, vi } from 'vitest';
+import { redactTranscript } from '../../src/transcript/redact.js';
+import { makeTranscriptDocument } from './fixtures.js';
+
+describe('redactTranscript', () => {
+  it('walks nested JSON and text attachments with stable export-local markers', async () => {
+    const knownSecrets = {
+      redact: vi.fn(async (texts: readonly string[]) =>
+        texts.map((t) => t.replaceAll('known-real-secret', '⟦REDACTED:known-secret:k1⟧'))
+      ),
+    };
+    const document = makeTranscriptDocument({
+      toolInput: { token: 'known-real-secret', apiKey: 'sk-live-1234567890' },
+    });
+    const result = await redactTranscript(
+      document,
+      new Map([['att-1', 'password=hunter2']]),
+      knownSecrets
+    );
+    expect(JSON.stringify(result.document)).not.toContain('known-real-secret');
+    expect(JSON.stringify(result.document)).not.toContain('sk-live-1234567890');
+    expect(result.textAttachments.get('att-1')).toContain('⟦REDACTED:password:');
+    expect(result.document.privacy.redactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: { kind: 'attachment', attachmentId: 'att-1' } }),
+      ])
+    );
+  });
+
+  it('throws redaction-unavailable on batch failure', async () => {
+    const knownSecrets = {
+      redact: vi.fn(async () => {
+        throw new Error('service down');
+      }),
+    };
+    const doc = makeTranscriptDocument({ text: 'hello' });
+    await expect(redactTranscript(doc, new Map(), knownSecrets)).rejects.toMatchObject({
+      code: 'redaction-unavailable',
+    });
+  });
+
+  it('throws redaction-unavailable on length mismatch', async () => {
+    const knownSecrets = {
+      redact: vi.fn(async (texts: readonly string[]) => texts.slice(0, -1)),
+    };
+    const doc = makeTranscriptDocument({ text: 'hello' });
+    await expect(redactTranscript(doc, new Map(), knownSecrets)).rejects.toMatchObject({
+      code: 'redaction-unavailable',
+    });
+  });
+
+  it('throws redaction-unavailable on abort', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: 'hello' });
+    const ctrl = new AbortController();
+    ctrl.abort();
+    await expect(redactTranscript(doc, new Map(), knownSecrets, ctrl.signal)).rejects.toMatchObject(
+      { code: 'redaction-unavailable' }
+    );
+  });
+
+  it('treats existing ⟦REDACTED: markers as pre-obfuscated', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: '⟦REDACTED:jwt:old-1⟧ preserved' });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    expect(JSON.stringify(result.document)).toContain('⟦REDACTED:jwt:old-1⟧');
+    expect(result.document.privacy.redactions.some((r) => r.detector === 'pre-obfuscated')).toBe(
+      true
+    );
+  });
+
+  it('populates redactionCounts keyed by category', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({
+      toolInput: { key: 'sk-live-abcdefghij' },
+    });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    expect(result.document.privacy.redactionCounts['api-key']).toBeGreaterThanOrEqual(1);
+  });
+
+  it('returns empty textAttachments when none provided', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument();
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    expect(result.textAttachments.size).toBe(0);
+  });
+
+  it('validates output document with validateTranscriptDocumentV1', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ toolInput: { key: 'sk-live-abcdefghij' } });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    const { validateTranscriptDocumentV1 } = await import('@slicc/shared-ts');
+    expect(validateTranscriptDocumentV1(result.document)).toEqual({ ok: true });
+  });
+
+  it('knownSecrets redact is called with all string leaves', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: 'inspect' });
+    await redactTranscript(doc, new Map([['a', 'attached']]), knownSecrets);
+    const allCalls = knownSecrets.redact.mock.calls.flat(2) as string[];
+    expect(allCalls).toContain('inspect');
+    expect(allCalls).toContain('attached');
+  });
+
+  it('does not expose TranscriptExportError as plain Error', async () => {
+    const knownSecrets = {
+      redact: vi.fn(async () => {
+        throw new Error('oops');
+      }),
+    };
+    const doc = makeTranscriptDocument();
+    try {
+      await redactTranscript(doc, new Map(), knownSecrets);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TranscriptExportError);
+    }
+  });
+
+  it('deduplicates repeated pre-obfuscated markers for the same target', async () => {
+    // Same marker appearing twice in one string → one record, not two.
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({
+      text: '⟦REDACTED:jwt:old-1⟧ and ⟦REDACTED:jwt:old-1⟧',
+    });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    const preObs = result.document.privacy.redactions.filter(
+      (r) => r.detector === 'pre-obfuscated'
+    );
+    expect(preObs).toHaveLength(1);
+    expect(result.document.privacy.redactionCounts['jwt']).toBe(1);
+  });
+
+  it('classifies same-id marker as known-secret when occurrence count grows', async () => {
+    // Original has ⟦REDACTED:known-secret:k1⟧ (pre-obfuscated). knownSecrets
+    // replaces another occurrence of the same secret with the same marker text.
+    // Multiset comparison detects the count increase and classifies it known-secret.
+    const knownSecrets = {
+      redact: vi.fn(async (texts: readonly string[]) =>
+        texts.map((t) => t.replaceAll('real-secret', '⟦REDACTED:known-secret:k1⟧'))
+      ),
+    };
+    const doc = makeTranscriptDocument({ text: '⟦REDACTED:known-secret:k1⟧ real-secret' });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    const preObs = result.document.privacy.redactions.filter(
+      (r) => r.detector === 'pre-obfuscated'
+    );
+    const ks = result.document.privacy.redactions.filter((r) => r.detector === 'known-secret');
+    expect(preObs).toHaveLength(1);
+    expect(ks.some((r) => r.id === 'k1' && r.category === 'known-secret')).toBe(true);
+  });
+
+  it('does not send privacy metadata strings to knownSecrets', async () => {
+    // Privacy subtree is skipped during leaf collection. To make this test
+    // falsifiable: inject a sentinel string as a string-leaf value inside
+    // privacy.redactions[0].id. Without the docWithoutPrivacy optimization,
+    // collectLeaves would walk the privacy subtree and send the sentinel to
+    // knownSecrets. Removing the optimization causes this test to fail.
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const sentinel = 'PRIVACY-SENTINEL-DO-NOT-REDACT-9f3a';
+    const doc = makeTranscriptDocument({ text: 'hello' });
+    const docWithPrivacyData: typeof doc = {
+      ...doc,
+      privacy: {
+        ...doc.privacy,
+        redactions: [
+          {
+            id: sentinel,
+            category: 'jwt',
+            detector: 'pre-obfuscated',
+            target: { kind: 'json', pointer: '/conversations/0' },
+          },
+        ],
+      },
+    };
+    await redactTranscript(docWithPrivacyData, new Map(), knownSecrets);
+    const allTexts = knownSecrets.redact.mock.calls.flat(2) as string[];
+    // sentinel is a string leaf in privacy.redactions[0].id — it reaches
+    // knownSecrets only if the privacy subtree is walked. Must stay absent.
+    expect(allTexts).not.toContain(sentinel);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bearer-token case-insensitive detection (wave 2, item 5)
+// ---------------------------------------------------------------------------
+
+describe('redactCredentialPatterns — bearer-token case-insensitive', () => {
+  it('redacts title-case Bearer token', () => {
+    const { text, matches } = redactCredentialPatterns('Auth: Bearer abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts lowercase bearer token', () => {
+    const { text, matches } = redactCredentialPatterns('bearer abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts uppercase BEARER token', () => {
+    const { text, matches } = redactCredentialPatterns('BEARER abc123XYZ', 'r', 1);
+    expect(text).not.toContain('abc123XYZ');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts mixed-case bEaReR token', () => {
+    const { text, matches } = redactCredentialPatterns('bEaReR myToken.abc', 'r', 1);
+    expect(text).not.toContain('myToken.abc');
+    expect(matches.some((m) => m.category === 'bearer-token')).toBe(true);
+  });
+
+  it('redacts bearer token inside a larger string', () => {
+    const { text } = redactCredentialPatterns(
+      'Authorization: BEARER tok_abc123 and other data',
+      'r',
+      1
+    );
+    expect(text).not.toContain('tok_abc123');
+    expect(text).toContain('other data');
+  });
+
+  it('redacts bearer token in redactTranscript end-to-end', async () => {
+    const knownSecrets = { redact: vi.fn(async (ts: readonly string[]) => [...ts]) };
+    const doc = makeTranscriptDocument({ text: 'BEARER secret-token-xyz' });
+    const result = await redactTranscript(doc, new Map(), knownSecrets);
+    expect(JSON.stringify(result.document)).not.toContain('secret-token-xyz');
+    expect(result.document.privacy.redactions.some((r) => r.category === 'bearer-token')).toBe(
+      true
+    );
+  });
+});

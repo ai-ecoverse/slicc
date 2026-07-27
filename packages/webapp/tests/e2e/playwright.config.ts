@@ -5,10 +5,15 @@ import { fileURLToPath } from 'url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
+function resolvePort(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : fallback;
+}
+
 /** Fixed port for the fake OpenAI-compatible LLM webServer.
  *  Pinned so `seedLocalLlmProvider` can derive a stable baseUrl
  *  without a global setup step. */
-export const FAKE_LLM_PORT = 5781;
+export const FAKE_LLM_PORT = resolvePort('SLICC_E2E_FAKE_LLM_PORT', 5781);
 
 /**
  * Standalone-topology ports. node-server no longer serves the UI (the static
@@ -19,9 +24,9 @@ export const FAKE_LLM_PORT = 5781;
  * target stays {@link CDP_PORT}, matching the `--remote-debugging-port` the
  * CDP-binding scenarios launch Playwright Chrome with.
  */
-export const WRANGLER_PORT = 8787;
-export const BRIDGE_PORT = 5710;
-export const CDP_PORT = 9222;
+export const WRANGLER_PORT = resolvePort('SLICC_E2E_WRANGLER_PORT', 8787);
+export const BRIDGE_PORT = resolvePort('SLICC_E2E_BRIDGE_PORT', 5710);
+export const CDP_PORT = resolvePort('SLICC_E2E_CDP_PORT', 9222);
 
 /**
  * Fixed per-process bridge token shared between node-server (`SLICC_BRIDGE_TOKEN`
@@ -42,11 +47,22 @@ export const BRIDGE_WS_URL = `ws://localhost:${BRIDGE_PORT}/cdp`;
 
 /** Default fixture the harness loads when nothing else is wired. Points
  *  at the reference scenario consumed by `reference-scenario.test.ts`;
- *  override via `FAKE_LLM_FIXTURE` when a test needs different turns. */
-const DEFAULT_FAKE_LLM_FIXTURE = resolve(
-  repoRoot,
-  'packages/webapp/tests/e2e/fake-llm/fixtures/reference-scenario.json'
-);
+ *  override via `FAKE_LLM_FIXTURE` when a test needs different turns.
+ *
+ *  Short-name form: `FAKE_LLM_FIXTURE=transcript-export` expands to
+ *  `packages/webapp/tests/e2e/fake-llm/fixtures/transcript-export.json`
+ *  so callers do not need to type the full path. */
+const FIXTURES_DIR = resolve(repoRoot, 'packages/webapp/tests/e2e/fake-llm/fixtures');
+const DEFAULT_FAKE_LLM_FIXTURE = resolve(FIXTURES_DIR, 'reference-scenario.json');
+
+/** Resolve FAKE_LLM_FIXTURE to an absolute path.
+ *  A bare name (no path separators, no .json) is looked up in FIXTURES_DIR. */
+function resolveFixturePath(value: string): string {
+  if (value.includes('/') || value.includes('\\') || value.endsWith('.json')) {
+    return resolve(repoRoot, value);
+  }
+  return resolve(FIXTURES_DIR, `${value}.json`);
+}
 
 export default defineConfig({
   testDir: '.',
@@ -90,7 +106,9 @@ export default defineConfig({
       env: {
         FAKE_LLM_PORT: String(FAKE_LLM_PORT),
         FAKE_LLM_HOST: '127.0.0.1',
-        FAKE_LLM_FIXTURE: process.env['FAKE_LLM_FIXTURE'] ?? DEFAULT_FAKE_LLM_FIXTURE,
+        FAKE_LLM_FIXTURE: process.env['FAKE_LLM_FIXTURE']
+          ? resolveFixturePath(process.env['FAKE_LLM_FIXTURE'])
+          : DEFAULT_FAKE_LLM_FIXTURE,
       },
     },
   ],

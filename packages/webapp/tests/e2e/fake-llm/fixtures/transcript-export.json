@@ -1,0 +1,33 @@
+{
+  "model": "fake-exporter",
+  "turns": [
+    {
+      "whenUserMessageMatches": "export",
+      "content": "Running the credential check and spawning a verification scoop.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "echo 'integration_token=sk-proj-1234abcd5678efgh9012ijkl3456mnop'"
+          }
+        },
+        {
+          "name": "scoop_scoop",
+          "arguments": {
+            "name": "verifier",
+            "prompt": "verify-export-scoop"
+          }
+        }
+      ]
+    },
+    {
+      "whenUserMessageMatches": "verify-export-scoop",
+      "content": "Verification complete."
+    },
+    {
+      "whenUserMessageMatches": "export",
+      "content": "Done. The credential-shaped token appeared and the scoop verified the export."
+    }
+  ],
+  "onOverflow": "repeat-last"
+}

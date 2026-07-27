@@ -5,8 +5,15 @@
 
 import { mountSliccImpl } from './mount.js';
 import type { SliccTheme } from './theme-types.js';
+import type { ExportSessionOptions } from './transcript-types.js';
 
 export type { SliccTheme, ThemeComponent, ThemeComponents } from './theme-types.js';
+export type {
+  ExportSessionOptions,
+  TranscriptExportErrorCode,
+  TranscriptExportProgress,
+} from './transcript-types.js';
+export { TranscriptExportError } from './transcript-types.js';
 
 export interface HostCapabilities {
   /** Allow the leader to navigate the host page top-level frame. */
@@ -108,7 +115,15 @@ export interface SliccHandle {
    * `cherry` lick). No-ops with a warning if the handshake has not completed.
    */
   emitHostEvent(name: string, detail?: unknown): void;
-  /** Tear down the channel and remove the iframe. */
+  /**
+   * Request a leader-approved transcript export from the embedded follower.
+   *
+   * Resolves with a verified `application/zip` Blob. Rejects with
+   * `TranscriptExportError` on denial, abort, or corruption. Requires the
+   * handshake to have completed; calling before handshake rejects immediately.
+   */
+  exportSession(options?: ExportSessionOptions): Promise<Blob>;
+  /** Tear down the channel, reject all pending exports, and remove the iframe. */
   destroy(): void;
 }
 

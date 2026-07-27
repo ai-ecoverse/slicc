@@ -145,6 +145,14 @@ export class SecretsPipeline {
   private readonly source: FetchProxySecretSource;
   private readonly sessionStore?: SessionSecretStore;
   private maskedToSecret = new Map<string, MaskedSecret>();
+  /** Ordered array of maskable secret pairs for export redaction. Order is stable within a reload cycle. */
+  private exportPairs: readonly MaskedSecret[] = [];
+  /**
+   * Ordered array of short (below MIN_MASKABLE_SECRET_LENGTH) secret pairs for export redaction.
+   * Short secrets cannot be safely masked (identity masking), so only their real value is
+   * replaced during export. Indices continue from where exportPairs ends.
+   */
+  private exportShortPairs: readonly MaskedSecret[] = [];
   // Short secrets (length < MIN_MASKABLE_SECRET_LENGTH) are kept CONSUMABLE
   // here — env injection and `secret get` still see them — but they are
   // deliberately absent from `maskedToSecret`, so the scrubber and every
@@ -205,6 +213,8 @@ export class SecretsPipeline {
       });
     }
     this.maskedToSecret = next;
+    this.exportPairs = Array.from(next.values());
+    this.exportShortPairs = Array.from(nextShort.values());
     this.consumableShortSecrets = nextShort;
     // Invariant: a secret name is unique across {next, nextShort} — reload()
     // partitions each source secret into exactly one of the two maps, so a
@@ -459,5 +469,46 @@ export class SecretsPipeline {
       out[k] = this.scrubber(v);
     });
     return out;
+  }
+
+  /**
+   * Batch-redact an array of strings for transcript export.
+   *
+   * Replaces every occurrence of each known secret's real value AND masked
+   * value with a stable anonymous marker `⟦REDACTED:known-secret:k<n>⟧`.
+   * The index `n` is 1-based and stable within a single reload cycle.
+   *
+   * Returns the transformed texts plus the total number of replacements made.
+   * Secret names and real values never appear in the return value.
+   */
+  redactForExport(texts: readonly string[]): { texts: string[]; redactionCount: number } {
+    const base = this.exportPairs.length;
+    // Maskable secrets: replace both realValue and maskedValue with stable marker.
+    const markers = this.exportPairs.map((pair, index) => ({
+      values: [pair.realValue, pair.maskedValue].filter(Boolean),
+      marker: `⟦REDACTED:known-secret:k${index + 1}⟧`,
+    }));
+    // Short secrets (below MIN_MASKABLE_SECRET_LENGTH): replace real value only.
+    // Their maskedValue equals realValue (identity masking), so there is no separate masked form.
+    const shortMarkers = this.exportShortPairs.map((pair, index) => ({
+      values: [pair.realValue],
+      marker: `⟦REDACTED:known-secret:k${base + index + 1}⟧`,
+    }));
+    const allMarkers = [...markers, ...shortMarkers];
+    let redactionCount = 0;
+    return {
+      texts: texts.map((input) => {
+        let output = input;
+        for (const { values, marker } of allMarkers) {
+          for (const value of values) {
+            const occurrences = output.split(value).length - 1;
+            redactionCount += occurrences;
+            output = output.replaceAll(value, marker);
+          }
+        }
+        return output;
+      }),
+      redactionCount,
+    };
   }
 }

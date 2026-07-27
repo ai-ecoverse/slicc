@@ -53,6 +53,29 @@ export async function resetFakeLlm(baseUrl: string = FAKE_LLM_BASE_URL): Promise
   }
 }
 
+/**
+ * Swap the fake-LLM server's active fixture at runtime. The shared E2E
+ * `webServer` boots with the default reference-scenario fixture; a test whose
+ * turns differ POSTs its own fixture object here (resetting the cursor). Throws
+ * on a non-2xx response so a bad fixture surfaces loudly.
+ */
+export async function loadFakeLlmFixture(
+  fixture: unknown,
+  baseUrl: string = FAKE_LLM_BASE_URL
+): Promise<void> {
+  const origin = baseUrl.replace(/\/v1\/?$/, '');
+  const res = await fetch(`${origin}/__fixture`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fixture),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `loadFakeLlmFixture: HTTP ${res.status} loading fixture at ${origin}/__fixture`
+    );
+  }
+}
+
 /** Provider id of the built-in OpenAI-compat local provider. */
 const LOCAL_LLM_PROVIDER_ID = 'local-llm';
 

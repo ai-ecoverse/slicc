@@ -17,7 +17,7 @@
  * per-mount channelId nonce — before any synthetic CDP is acted on.
  */
 
-export const CHERRY_PROTOCOL_VERSION = 1;
+export const CHERRY_PROTOCOL_VERSION = 2;
 
 export interface CherryHandshakeHello {
   cherry: typeof CHERRY_PROTOCOL_VERSION;
@@ -111,6 +111,71 @@ export interface CherrySliccEvent {
   detail?: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// Session export envelopes (host → iframe and iframe → host)
+// ---------------------------------------------------------------------------
+
+/** Host → iframe: initiate a transcript export for the given session. */
+export interface CherrySessionExportRequest {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.request';
+  requestId: string;
+  /** `'active'` (default) or a frozen session ID. */
+  sessionId?: 'active' | string;
+}
+
+/** Host → iframe: cancel an in-flight export (AbortSignal fired). */
+export interface CherrySessionExportCancel {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.cancel';
+  requestId: string;
+}
+
+/**
+ * Iframe → host: incremental progress update.
+ * All fields are JSON-cloneable; no Blob or binary here.
+ */
+export interface CherrySessionExportProgress {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.progress';
+  requestId: string;
+  phase:
+    | 'waiting-for-conversations'
+    | 'collecting'
+    | 'redacting'
+    | 'packaging'
+    | 'transferring'
+    | 'complete';
+  processedBytes?: number;
+  estimatedBytes?: number;
+}
+
+/**
+ * Iframe → host: the verified application/zip Blob.
+ * Blob is the only non-JSON-cloneable field; all other envelopes are
+ * JSON-cloneable and may be structured-cloned through any postMessage bridge.
+ */
+export interface CherrySessionExportResponse {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.response';
+  requestId: string;
+  /** Verified application/zip. Reject if blob.type !== 'application/zip'. */
+  blob: Blob;
+}
+
+/** Iframe → host: the export failed with a terminal error code. */
+export interface CherrySessionExportError {
+  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  channelId: string;
+  kind: 'session.export.error';
+  requestId: string;
+  code: string;
+}
+
 export type CherryEnvelope =
   | CherryHandshakeHello
   | CherryHandshakeWelcome
@@ -120,7 +185,12 @@ export type CherryEnvelope =
   | CherryPermissionRequest
   | CherryPermissionResponse
   | CherryHostEvent
-  | CherrySliccEvent;
+  | CherrySliccEvent
+  | CherrySessionExportRequest
+  | CherrySessionExportCancel
+  | CherrySessionExportProgress
+  | CherrySessionExportResponse
+  | CherrySessionExportError;
 
 const KINDS = new Set<CherryEnvelope['kind']>([
   'handshake.hello',
@@ -132,17 +202,38 @@ const KINDS = new Set<CherryEnvelope['kind']>([
   'permission.response',
   'host.event',
   'slicc.event',
+  'session.export.request',
+  'session.export.cancel',
+  'session.export.progress',
+  'session.export.response',
+  'session.export.error',
 ]);
 
 export function isCherryEnvelope(value: unknown): value is CherryEnvelope {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return (
-    v.cherry === CHERRY_PROTOCOL_VERSION &&
-    typeof v.channelId === 'string' &&
-    typeof v.kind === 'string' &&
-    KINDS.has(v.kind as CherryEnvelope['kind'])
-  );
+  if (
+    v.cherry !== CHERRY_PROTOCOL_VERSION ||
+    typeof v.channelId !== 'string' ||
+    typeof v.kind !== 'string' ||
+    !KINDS.has(v.kind as CherryEnvelope['kind'])
+  )
+    return false;
+  // Export envelopes require a non-empty requestId and kind-specific fields.
+  const k = v.kind as CherryEnvelope['kind'];
+  if (
+    k === 'session.export.request' ||
+    k === 'session.export.cancel' ||
+    k === 'session.export.progress' ||
+    k === 'session.export.response' ||
+    k === 'session.export.error'
+  ) {
+    if (typeof v.requestId !== 'string' || v.requestId === '') return false;
+    if (k === 'session.export.progress' && typeof v.phase !== 'string') return false;
+    if (k === 'session.export.response' && !(v.blob instanceof Blob)) return false;
+    if (k === 'session.export.error' && typeof v.code !== 'string') return false;
+  }
+  return true;
 }
 
 export interface AcceptContext {

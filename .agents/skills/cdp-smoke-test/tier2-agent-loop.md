@@ -71,6 +71,89 @@ confirm.`
    `slicc-cdp eval` a shadow-piercing lookup of `#clock-time` →
    `getComputedStyle(el).color` = `rgb(0, 200, 83)`.
 
+## Transcript export (cone + scoop bundle)
+
+Validates the `session export` shell command end-to-end against a live
+session: normalized bundle, cone + scoop conversations, fail-closed
+credential redaction, and the reasoning-excluded invariant. Runs entirely
+in-browser (shell + VFS) — no host-side download plumbing.
+
+Prereq: a completed turn that spawned at least one scoop (the Scoops check
+above leaves the resident `clock` scoop; any turn with a scoop works). The
+export waits for all scoops to reach idle before packaging.
+
+### Path A — local UI download (preferred; validates the real menu action)
+
+`slicc-cdp download` captures the anchor/blob browser download to a host
+file via CDP `Browser.setDownloadBehavior`, so the bundle lands on disk and
+is validated with ordinary host tooling — no in-browser wrap workaround.
+
+```bash
+# Default trigger = avatar-menu "Export transcript" action.
+slicc-cdp download /tmp/slicc-ui-export.zip
+# → {"ok":true,"outfile":"/tmp/slicc-ui-export.zip",
+#    "suggestedFilename":"slicc-2026-07-24-cone-<id>.zip","bytes":7694,...}
+```
+
+Validate host-side (Python shown; the download landed as a normal file):
+
+```bash
+python3 - <<'PY'
+import zipfile, json
+z = zipfile.ZipFile('/tmp/slicc-ui-export.zip')
+d = json.loads(z.read('transcript.json'))
+c = d.get('conversations', [])
+raw = z.read('transcript.json').decode('utf-8', 'replace')
+assert d['schemaVersion'] == 1
+assert {x['kind'] for x in c} >= {'cone', 'scoop'}
+assert d['privacy']['reasoningExcluded'] is True
+assert 'sk-proj-1234' not in raw          # fail-closed credential redaction
+print('PASS', [x['kind'] for x in c], 'msgs=', sum(len(x['messages']) for x in c))
+PY
+```
+
+Assert the ZIP magic (`PK\x03\x04`), `suggestedFilename` carries the
+export-id suffix, cone + scoop conversations, `reasoningExcluded`, and the
+seeded credential is absent. The console watcher must stay clean.
+
+### Path B — shell command into the VFS (no download plumbing)
+
+Useful when driving the download event is undesirable (headless, or
+asserting the agent-facing command directly).
+
+1. Write the bundle to the VFS (avoids browser-download interception):
+   ```bash
+   slicc-cdp term "session export --output /workspace/transcript.zip"
+   # term-text → "exported /workspace/transcript.zip"
+   slicc-cdp term "unzip /workspace/transcript.zip -d /workspace/tx"
+   ```
+2. Validate with an in-browser `node -e` script that emits a single
+   marker-bracketed line. The terminal hard-wraps at ~28 cols, so bracket
+   the output with `@@B@@`/`@@E@@` and strip newlines between the markers
+   to reconstruct — a one-line payload has no meaningful newlines, unlike
+   the pretty-printed `transcript.json` itself (`JSON.stringify(_, null, 2)`,
+   so never de-wrap the file directly). Keep the script quote-safe: single
+   quotes around `-e`, only double quotes inside.
+   ```bash
+   slicc-cdp term 'node -e '\''const fs=require("fs");const d=JSON.parse(fs.readFileSync("/workspace/tx/transcript.json","utf8"));const c=d.conversations||[];const has=k=>c.some(x=>x.kind===k);const t=JSON.stringify(d);console.log("@@B@@sv="+d.schemaVersion+";cone="+(has("cone")?1:0)+";scoop="+(has("scoop")?1:0)+";cred="+(t.includes("sk-proj-1234")?0:1)+";reason="+(d.privacy&&d.privacy.reasoningExcluded?1:0)+";convs="+c.length+"@@E@@")'\'''
+   ```
+3. Extract and assert the de-wrapped payload. The terminal echoes the
+   command (whose source literally contains the marker strings), so match
+   the value payload — markers followed by `sv=<digit>` — not the echo:
+   ```bash
+   slicc-cdp term-text | tr -d '\n' | grep -oE '@@B@@sv=[0-9][^@]*@@E@@' | tail -1
+   # → @@B@@sv=1;cone=1;scoop=1;cred=1;reason=1;convs=2@@E@@
+   ```
+   Assert `sv=1`, `cone=1`, `scoop=1`, `cred=1` (the seeded credential is
+   absent → redacted), `reason=1` (`reasoningExcluded`), `convs>=2` (cone +
+   each scoop). The console watcher must stay clean — redaction failure is
+   fail-closed and would surface as an export error, not a silent pass.
+
+Both paths should agree (same conversation count, same redaction outcome);
+run Path A to exercise the real menu action and Path B to assert the
+agent-facing command. A custom trigger can be passed as the second arg to
+`slicc-cdp download` for any other blob download.
+
 ## Model switching
 
 Route a prompt through each Adobe model — `claude-opus-4-8` especially,

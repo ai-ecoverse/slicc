@@ -6,6 +6,50 @@ import Foundation
 // via `xcodebuild test` on an iOS Simulator — `swift test` cannot run on a plain
 // macOS host because the package depends on an iOS-only WebRTC binary. The
 // golden-fixture corpus suite lives in SyncProtocolCorpusTests.swift.
+// MARK: - Task 8: Transcript export iOS safety
+
+/// Verify that export response messages from the leader do NOT tear down the
+/// tray session — iOS decodes them to `.unknown` and ignores them safely.
+final class SyncProtocolTranscriptExportTests: XCTestCase {
+    private let exportTypes = [
+        "transcript.export.pending",
+        "transcript.export.denied",
+        "transcript.export.start",
+        "transcript.export.chunk",
+        "transcript.export.complete",
+        "transcript.export.error",
+    ]
+
+    func testExportResponseMessagesDecodeToUnknown() throws {
+        for msgType in exportTypes {
+            let json = """
+            {"type":"\(msgType)","requestId":"te-1"}
+            """.data(using: .utf8)!
+            let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
+            guard case let .unknown(type) = msg else {
+                XCTFail("\(msgType) should decode to .unknown, got \(msg)")
+                continue
+            }
+            XCTAssertEqual(type, msgType)
+        }
+    }
+
+    func testExportRequestMessagesThrowOnDecode() throws {
+        let requestVariants = [
+            "{\"type\":\"transcript.export.request\",\"requestId\":\"te-1\","
+                + "\"selector\":{\"kind\":\"active\"}}",
+            "{\"type\":\"transcript.export.cancel\",\"requestId\":\"te-1\"}",
+        ]
+        for jsonStr in requestVariants {
+            let json = jsonStr.data(using: .utf8)!
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(FollowerToLeaderMessage.self, from: json),
+                "FollowerToLeaderMessage should throw for export variants iOS never originates"
+            )
+        }
+    }
+}
+
 final class SyncProtocolCherryTests: XCTestCase {
     func testRemoteTargetInfoDecodesCherryKindAndCapabilities() throws {
         let json = """

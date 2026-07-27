@@ -18,6 +18,7 @@ import {
   type FrozenSession,
   type FrozenSessionIndexEntry,
   freezeConeSession,
+  markSnapshotUnavailable,
 } from './session-freezer.js';
 import { SessionStore } from './session-store.js';
 
@@ -70,6 +71,16 @@ export interface RunNewSessionFreezeOptions {
    * caller refresh the freezer rail when the rename + icon land late.
    */
   onBackgroundEnriched?: (entry: FrozenSessionIndexEntry | null) => void;
+  /**
+   * Non-blocking hook called after the Markdown archive write succeeds and
+   * before the caller clears histories. Used to produce and persist the full
+   * sanitized transcript snapshot (JSON + redacted attachments).
+   *
+   * Failures are caught, the error code is logged, and the index entry is
+   * updated with `completeSnapshotUnavailable: true`. The Markdown archive
+   * is always retained; this hook never writes a raw fallback.
+   */
+  captureCompleteSnapshot?: (frozen: FrozenSession) => Promise<void>;
 }
 
 type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
@@ -172,6 +183,27 @@ export async function runNewSessionFreeze(
     mode: 'quick',
   });
   if (!frozen) return null; // short session / write failure — nothing to do.
+
+  // 1b. Complete-snapshot hook — called after Markdown write succeeds,
+  // before the caller clears histories. Failures are caught; the index
+  // entry is updated with `completeSnapshotUnavailable: true`.
+  // Never writes a raw fallback.
+  if (opts.captureCompleteSnapshot) {
+    try {
+      await opts.captureCompleteSnapshot(frozen);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? 'unknown';
+      log.warn('captureCompleteSnapshot failed', { code });
+      // Best-effort index update: mark entry so the UI knows the snapshot
+      // bundle was not produced. Ignore failures here.
+      frozen.completeSnapshotUnavailable = true;
+      try {
+        await markSnapshotUnavailable(opts.vfs, frozen.filename);
+      } catch {
+        // Best-effort — the Markdown archive is still present.
+      }
+    }
+  }
 
   // No credentials → nothing to enrich now; leave a durable
   // `pending-*.md` archive. Auto-finish was removed (see #1226);
@@ -277,9 +309,29 @@ export async function runNewSessionFreezeQuick(
     return null;
   }
 
-  return freezeConeSession({
+  const frozen = await freezeConeSession({
     sessionStore,
     vfs: opts.vfs,
     mode: 'quick',
   });
+
+  // Complete-snapshot hook — same non-blocking pattern as runNewSessionFreeze.
+  // Failures are caught; the index entry is updated with completeSnapshotUnavailable.
+  // Never writes a raw fallback.
+  if (frozen && opts.captureCompleteSnapshot) {
+    try {
+      await opts.captureCompleteSnapshot(frozen);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? 'unknown';
+      log.warn('captureCompleteSnapshot failed (quick-freeze)', { code });
+      frozen.completeSnapshotUnavailable = true;
+      try {
+        await markSnapshotUnavailable(opts.vfs, frozen.filename);
+      } catch {
+        // Best-effort — the Markdown archive is still present.
+      }
+    }
+  }
+
+  return frozen;
 }

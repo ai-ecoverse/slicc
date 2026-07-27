@@ -2605,7 +2605,7 @@ describe('version handshake', () => {
 
     const first = JSON.parse(channel.sent[0]) as { type: string; protocolVersion: number };
     expect(first.type).toBe('hello');
-    expect(first.protocolVersion).toBe(1);
+    expect(first.protocolVersion).toBe(3);
   });
 
   it('warns when a follower speaks a newer protocol version', () => {

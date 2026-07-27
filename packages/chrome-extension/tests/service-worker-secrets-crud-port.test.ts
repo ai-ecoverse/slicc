@@ -149,6 +149,22 @@ describe('service-worker secrets.crud external Port', () => {
     expect(reply.response.error).toBe('unknown secrets type: secrets.does-not-exist');
   });
 
+  it('dispatches secrets.redact-export over the Port and returns { texts, redactionCount }', async () => {
+    await import('../src/service-worker.js');
+    const conn = connectPort(PINNED_SENDER);
+    await dispatch(conn, {
+      id: 8,
+      type: 'secrets.redact-export',
+      texts: ['no secrets here'],
+    });
+    const reply = conn.posted.find((m) => m.id === 8);
+    expect(reply).toBeDefined();
+    expect(Array.isArray(reply.response.texts)).toBe(true);
+    expect(reply.response.texts).toHaveLength(1);
+    expect(typeof reply.response.redactionCount).toBe('number');
+    expect(reply.response.error).toBeUndefined();
+  });
+
   it('replies with a pin error and never reaches a handler for a forbidden sender', async () => {
     await import('../src/service-worker.js');
     const conn = connectPort({ origin: 'https://evil.example.com', tab: { id: 99 }, frameId: 0 });

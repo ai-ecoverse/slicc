@@ -293,3 +293,5 @@ details and local debugging knobs.
 - `docs/extension-thin-bridge.md` — bridge protocol, toast dedup, leader-tab
   lifecycle rationale, side-panel flow, dev-watch loop, QA recipe
 - `docs/pitfalls.md` — extension-specific gotchas
+- `docs/transcript-export.md` — transcript export (runs in the hosted leader tab;
+  the extension bridge is transparent)
