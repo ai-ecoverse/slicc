@@ -10,6 +10,8 @@ const EXPORT_CHUNK_B64_MAX = 32 * 1024;
 const EXPORT_BACKPRESSURE_THRESHOLD = 1024 * 1024;
 /** Per-ack deadline for a follower whose durable write stalls. */
 const ACK_TIMEOUT_MS = 30_000;
+/** Deadline for a delegated approval reply from a follower. */
+const APPROVAL_TIMEOUT_MS = 120_000;
 /** Minimum peer protocol version that supports transcript.export.ack. */
 const ACK_PROTOCOL_VERSION_MIN = 3;
 
@@ -71,6 +73,8 @@ export class TranscriptExportManager {
     string,
     { resolve: () => void; reject: (err: Error) => void }
   >();
+  /** Pending delegated approvals keyed by the owner-scoped request key. */
+  private readonly approvalWaiters = new Map<string, (approved: boolean) => void>();
 
   constructor(private readonly context: LeaderSyncContext) {
     context.followers.onFollowerRemoved({
@@ -103,6 +107,9 @@ export class TranscriptExportManager {
       this.clearAckWaiters(bootstrapId, requestId);
       this.activeExports.delete(key);
     }
+    for (const key of [...this.approvalWaiters.keys()]) {
+      if (key.startsWith(`${bootstrapId}:`)) this.settleApproval(key, false);
+    }
   }
 
   async handleTranscriptExportRequest(
@@ -121,8 +128,9 @@ export class TranscriptExportManager {
 
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
-    const { requestTranscriptExportApproval, createTranscriptExport } = this.context.options;
-    if (!requestTranscriptExportApproval || !createTranscriptExport) {
+    const { requestTranscriptExportApproval, createTranscriptExport, headlessLeader } =
+      this.context.options;
+    if ((!requestTranscriptExportApproval && !headlessLeader) || !createTranscriptExport) {
       follower.sync.send({ type: 'transcript.export.denied', requestId });
       return;
     }
@@ -146,14 +154,18 @@ export class TranscriptExportManager {
 
     let approved = false;
     try {
-      approved = await requestTranscriptExportApproval({
-        requestId,
-        followerLabel,
-        hostOrigin: follower.hostOrigin,
-        selector,
-      });
+      if (headlessLeader) {
+        approved = await this.requestDelegatedApproval(bootstrapId, requestId, selector);
+      } else if (requestTranscriptExportApproval) {
+        approved = await requestTranscriptExportApproval({
+          requestId,
+          followerLabel,
+          hostOrigin: follower.hostOrigin,
+          selector,
+        });
+      }
     } catch (err) {
-      this.context.log.warn('requestTranscriptExportApproval threw', {
+      this.context.log.warn('transcript export approval threw', {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -181,6 +193,63 @@ export class TranscriptExportManager {
     entry.abort.abort();
     this.activeExports.delete(key);
     this.clearAckWaiters(bootstrapId, requestId);
+    this.settleApproval(key, false);
+  }
+
+  private requestDelegatedApproval(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector
+  ): Promise<boolean> {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower) return Promise.resolve(false);
+
+    const key = TranscriptExportManager.exportKey(bootstrapId, requestId);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.context.log.warn('Delegated transcript export approval timed out', {
+          bootstrapId,
+          requestId,
+        });
+        this.settleApproval(key, false);
+      }, APPROVAL_TIMEOUT_MS);
+
+      this.approvalWaiters.set(key, (approved) => {
+        clearTimeout(timer);
+        resolve(approved);
+      });
+
+      const sent = follower.sync.send({
+        type: 'transcript.export.approve.request',
+        requestId,
+        selector,
+      });
+      if (!sent) {
+        this.context.log.warn('Failed to send delegated approval prompt — denying', {
+          bootstrapId,
+          requestId,
+        });
+        this.settleApproval(key, false);
+      }
+    });
+  }
+
+  private settleApproval(key: string, approved: boolean): void {
+    const waiter = this.approvalWaiters.get(key);
+    if (!waiter) return;
+    this.approvalWaiters.delete(key);
+    waiter(approved);
+  }
+
+  handleTranscriptExportApprovalResponse(
+    bootstrapId: string,
+    requestId: string,
+    approved: boolean
+  ): void {
+    this.settleApproval(
+      TranscriptExportManager.exportKey(bootstrapId, requestId),
+      approved === true
+    );
   }
 
   handleTranscriptExportAck(bootstrapId: string, requestId: string, index: number): void {
