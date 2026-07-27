@@ -127,13 +127,13 @@ async function loadEsbuild(
   // out to the network.
   if (!ipk) {
     throw new Error(
-      'esbuild-wasm is not available: install via `ipk add esbuild-wasm` or invoke through `ipx esbuild`'
+      `esbuild-wasm is not available: install via \`ipk add esbuild-wasm@${ESBUILD_VERSION}\``
     );
   }
   const bytes = await tryLoadEsbuildWasmFromNodeModules(ipk);
   if (!bytes) {
     throw new Error(
-      'esbuild-wasm is not installed in node_modules: run `ipk add esbuild-wasm` or invoke through `ipx esbuild`'
+      `esbuild-wasm is not installed in node_modules: run \`ipk add esbuild-wasm@${ESBUILD_VERSION}\``
     );
   }
   log(`esbuild.wasm loaded from ipk node_modules (${bytes.byteLength} bytes)`);
