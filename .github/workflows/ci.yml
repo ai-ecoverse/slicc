@@ -844,6 +844,23 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/slicc-cli
         run: make check
+      # Per-test timings for the whole matrix: `go test -json` records each
+      # test's elapsed time, so a regression shows up per-OS. No retry wrapper
+      # here on purpose — every Go test in this module is hermetic (no network,
+      # no real signaling server; the WebRTC integration test drives an in-process
+      # leader harness), so a failure is a real failure and retrying would only
+      # hide it.
+      - name: Test timings (go test -json)
+        if: always()
+        working-directory: packages/slicc-cli
+        run: make test-json
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-slicc-cli-${{ matrix.os }}
+          path: packages/slicc-cli/test-report.json
+          if-no-files-found: ignore
       - name: Cross-compile all targets (mac/linux/windows × amd64/arm64)
         if: matrix.os == 'ubuntu-latest'
         working-directory: packages/slicc-cli
@@ -1001,6 +1018,13 @@ jobs:
           name: coverage-swift-server
           path: packages/swift-server/.build/coverage/
           if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-swift-server
+          path: packages/swift-server/.build/coverage/test-timings*
+          if-no-files-found: ignore
       - name: Install Periphery
         run: brew install peripheryapp/periphery/periphery
       - name: Dead code detection (Periphery)
@@ -1044,6 +1068,13 @@ jobs:
         with:
           name: coverage-swift-optel
           path: packages/swift-optel/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-swift-optel
+          path: packages/swift-optel/.build/coverage/test-timings*
           if-no-files-found: ignore
       - name: Install Periphery
         run: brew install peripheryapp/periphery/periphery
@@ -1108,6 +1139,16 @@ jobs:
           name: coverage-swift-launcher
           path: packages/swift-launcher/.build/coverage/
           if-no-files-found: ignore
+      # UpdateCheckIntegrationTests hits the real GitHub API, so this suite is the
+      # repo's most plausible native flake source; the xUnit report records which
+      # test was slow or failed on any given run.
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-swift-launcher
+          path: packages/swift-launcher/.build/coverage/test-timings*
+          if-no-files-found: ignore
       - name: Build overlay bootstrap (dist/ui/electron-overlay-entry.js)
         # `assemble-app.mjs` copies ONLY `dist/ui/electron-overlay-entry.js`
         # into the bundle so packaged `slicc-server --electron` loads the real
@@ -1142,9 +1183,15 @@ jobs:
     runs-on: macos-latest
     # Simulator boots can wedge on fresh runner images; fail fast instead of
     # holding the merge queue for the 6h default.
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other Swift jobs) instead of relying
+      # on the runner's preinstalled version.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Lint (SwiftLint)
@@ -1171,22 +1218,43 @@ jobs:
             -scheme SliccFollower \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
-      - name: Test (golden-fixture protocol corpus + unit tests)
+      # Golden-fixture protocol corpus + unit tests. The shared coverage script
+      # picks the simulator, runs `xcodebuild test` with coverage + parallel
+      # testing + on-failure retries, and gates the result against the `ios-app`
+      # floors in coverage-thresholds.json.
+      - name: Test (with coverage threshold gate)
         run: |
-          set -o pipefail
-          cd packages/ios-app
-          UDID=$(xcrun simctl list devices available --json \
-            | jq -r '[.devices[][] | select(.isAvailable and (.name | test("iPhone")))] | first | .udid')
-          if [ -z "$UDID" ] || [ "$UDID" = "null" ]; then
-            echo '::error::No available iPhone simulator on this runner'
-            exit 1
-          fi
-          echo "Using simulator $UDID"
-          xcodebuild test \
-            -project SliccFollower.xcodeproj \
-            -scheme SliccFollower \
-            -destination "platform=iOS Simulator,id=$UDID" \
-            CODE_SIGNING_ALLOWED=NO
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            --xcodebuild SliccFollower packages/ios-app SliccFollower
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-ios-app
+          path: packages/ios-app/.build/coverage/lcov.info
+          if-no-files-found: ignore
+      # Per-test timings live in the result bundle; upload it so a slow or flaky
+      # test can be diagnosed without re-running the simulator locally.
+      - name: Upload test timings (xcresult)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-ios-app
+          path: packages/ios-app/.build/coverage/ios-app.xcresult
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          # Unlike the SPM packages, an xcodegen project has no Package.swift for
+          # Periphery to infer from, so the project/scheme/target are explicit.
+          cd packages/ios-app && periphery scan \
+            --project SliccFollower.xcodeproj \
+            --schemes SliccFollower \
+            --targets SliccFollower \
+            --disable-update-check || true
 
   global-install:
     needs: changes

@@ -54,9 +54,13 @@ schemes:
         SliccFollower: all
         SliccFollowerTests: [test]
     test:
-      gatherCoverageData: false
+      gatherCoverageData: true
+      coverageTargets:
+        - SliccFollower
       targets:
-        - SliccFollowerTests
+        - name: SliccFollowerTests
+          parallelizable: true
+          randomExecutionOrder: true
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git

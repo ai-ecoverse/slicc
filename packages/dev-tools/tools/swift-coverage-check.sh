@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# Run `swift test --enable-code-coverage` and enforce minimum coverage
-# thresholds against the resulting profdata. Designed to be invoked from
-# CI for each Swift package; works on macOS (via `xcrun llvm-cov`) and
-# falls back to a plain `llvm-cov` lookup on Linux.
+# Run the package's test suite with coverage instrumentation and enforce minimum
+# coverage thresholds against the resulting profdata. Designed to be invoked from
+# CI for each Swift package; works on macOS (via `xcrun llvm-cov`) and falls back
+# to a plain `llvm-cov` lookup on Linux.
 #
 # Usage:
 #   swift-coverage-check.sh \
+#     [--xcodebuild <scheme>] \
 #     <package-dir> <test-bundle-name> \
 #     [<line-threshold> <function-threshold> <region-threshold>]
+#
+# Default mode drives `swift test --enable-code-coverage`.
+#
+# `--xcodebuild <scheme>` drives `xcodebuild test -enableCodeCoverage YES` on an
+# iOS simulator instead, for packages that cannot be tested from a macOS host at
+# all (ios-app depends on an iOS-only WebRTC binary, so `swift test` cannot even
+# link there). Both modes end in the same `llvm-cov report` over the instrumented
+# binary, so the line/function/region numbers are directly comparable and the
+# nightly ratchet needs no per-mode special-casing.
 #
 # When the three numeric thresholds are omitted, they are read from the
 # repo-root coverage-thresholds.json (key: basename of <package-dir>),
@@ -16,6 +26,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+XCODE_SCHEME=""
+if [[ "${1:-}" == "--xcodebuild" ]]; then
+  XCODE_SCHEME="${2:?scheme required after --xcodebuild}"
+  shift 2
+fi
 
 PACKAGE_DIR="${1:?package directory required}"
 TEST_BUNDLE_NAME="${2:?test bundle name required}"
@@ -43,27 +59,81 @@ cd "$PACKAGE_DIR"
 # own floors independently.
 PACKAGE_ROOT="$PWD"
 
-echo "==> swift test --enable-code-coverage ($PACKAGE_DIR)"
-swift test --enable-code-coverage
+# Both modes leave $PROFDATA and $BINARY pointing at the instrumented binary and
+# its merged profile, which the shared llvm-cov reporting below consumes.
+if [[ -n "$XCODE_SCHEME" ]]; then
+  DERIVED_DATA=".build/xcodebuild"
+  UDID=$(
+    xcrun simctl list devices available --json |
+      node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const d=JSON.parse(s).devices;const m=Object.values(d).flat().find(v=>v.isAvailable&&/iPhone/.test(v.name));process.stdout.write(m?m.udid:"")})'
+  )
+  if [[ -z "$UDID" ]]; then
+    echo "::error::No available iPhone simulator (install one via 'xcodebuild -downloadPlatform iOS')"
+    exit 1
+  fi
+  echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
+  # xcodebuild refuses to overwrite an existing result bundle, so a second local
+  # run would fail before ever reaching the tests.
+  mkdir -p .build/coverage
+  rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
+  set -o pipefail
+  xcodebuild test \
+    -project "${XCODE_SCHEME}.xcodeproj" \
+    -scheme "$XCODE_SCHEME" \
+    -destination "platform=iOS Simulator,id=$UDID" \
+    -derivedDataPath "$DERIVED_DATA" \
+    -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
+    -enableCodeCoverage YES \
+    -parallel-testing-enabled YES \
+    -retry-tests-on-failure \
+    -test-iterations 2 \
+    CODE_SIGNING_ALLOWED=NO
 
-PROFDATA=$(find .build -name "default.profdata" -type f 2>/dev/null | head -1)
-if [[ -z "$PROFDATA" ]]; then
-  echo "::error::No profdata produced by swift test"
-  exit 1
-fi
-
-# Test bundle layout differs between Darwin (.xctest as a directory bundle)
-# and Linux (.xctest as a flat executable). Resolve the binary path once.
-TEST_BUNDLE=$(find .build -name "${TEST_BUNDLE_NAME}.xctest" 2>/dev/null | head -1)
-if [[ -z "$TEST_BUNDLE" ]]; then
-  echo "::error::Test bundle ${TEST_BUNDLE_NAME}.xctest not found under .build/"
-  exit 1
-fi
-if [[ -d "$TEST_BUNDLE" ]]; then
-  BINARY="$TEST_BUNDLE/Contents/MacOS/${TEST_BUNDLE_NAME}"
+  PROFDATA=$(find "$DERIVED_DATA/Build/ProfileData" -name "Coverage.profdata" -type f 2>/dev/null | head -1)
+  if [[ -z "$PROFDATA" ]]; then
+    echo "::error::No Coverage.profdata produced by xcodebuild test"
+    exit 1
+  fi
+  # The app target (not the .xctest bundle) carries the code under test. Debug
+  # builds split the app into a thin launcher stub plus a `.debug.dylib` holding
+  # the actual code — and therefore the coverage mapping — so prefer the dylib
+  # when it exists; llvm-cov reports "no coverage data found" against the stub.
+  APP_DIR="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${TEST_BUNDLE_NAME}.app"
+  BINARY="$APP_DIR/${TEST_BUNDLE_NAME}"
+  if [[ -f "$APP_DIR/${TEST_BUNDLE_NAME}.debug.dylib" ]]; then
+    BINARY="$APP_DIR/${TEST_BUNDLE_NAME}.debug.dylib"
+  fi
 else
-  BINARY="$TEST_BUNDLE"
+  echo "==> swift test --enable-code-coverage ($PACKAGE_DIR)"
+  # Per-test durations, uploaded by CI so a slow or flaky test can be identified
+  # without re-running the suite locally. SwiftPM only writes the XCTest xUnit
+  # report in `--parallel` mode, which would change these suites' isolation, so
+  # the teed console log ("Test Case '-[X testY]' passed (0.001 seconds)") is the
+  # authoritative timing record and the xUnit file covers swift-testing suites.
+  mkdir -p .build/coverage
+  swift test --enable-code-coverage --xunit-output .build/coverage/test-timings.xunit.xml \
+    2>&1 | tee .build/coverage/test-timings.log
+
+  PROFDATA=$(find .build -name "default.profdata" -type f 2>/dev/null | head -1)
+  if [[ -z "$PROFDATA" ]]; then
+    echo "::error::No profdata produced by swift test"
+    exit 1
+  fi
+
+  # Test bundle layout differs between Darwin (.xctest as a directory bundle)
+  # and Linux (.xctest as a flat executable). Resolve the binary path once.
+  TEST_BUNDLE=$(find .build -name "${TEST_BUNDLE_NAME}.xctest" 2>/dev/null | head -1)
+  if [[ -z "$TEST_BUNDLE" ]]; then
+    echo "::error::Test bundle ${TEST_BUNDLE_NAME}.xctest not found under .build/"
+    exit 1
+  fi
+  if [[ -d "$TEST_BUNDLE" ]]; then
+    BINARY="$TEST_BUNDLE/Contents/MacOS/${TEST_BUNDLE_NAME}"
+  else
+    BINARY="$TEST_BUNDLE"
+  fi
 fi
+
 if [[ ! -x "$BINARY" && ! -f "$BINARY" ]]; then
   echo "::error::Test binary not found: $BINARY"
   exit 1

@@ -36,6 +36,12 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (Swift launcher dependency)
         run: cd packages/swift-server && swift build -c release
+      # ios-app is measured via `xcodebuild test` on a simulator, which needs the
+      # generated .xcodeproj (xcodegen output is not committed as authoritative).
+      - name: Install XcodeGen (ios-app coverage)
+        run: brew install xcodegen
+      - name: Generate Xcode project (ios-app coverage)
+        run: cd packages/ios-app && xcodegen generate
 
       # Browser-mode packages (e.g. @slicc/webcomponents) measure coverage in
       # real Chromium via the Playwright provider; install it so the ratchet
