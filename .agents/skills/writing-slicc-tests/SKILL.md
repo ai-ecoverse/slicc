@@ -422,6 +422,49 @@ Both arguments are **required**:
   packages/swift-launcher SliccstartPackageTests
 ```
 
+## Read Test Timing
+
+When `CI` is set, the root `test.reporters` adds vitest's `json` reporter and writes
+per-test durations to `test-timing/vitest.json` (gitignored). `reporters` and `outputFile`
+are root-only options in vitest 4, so this covers every project — including the
+`vitest run --project <name>` invocations made by
+`packages/dev-tools/tools/coverage-gate.mjs`.
+
+CI uploads the file from the `webapp`, `node-server`, and `chrome-extension` jobs as
+`test-timing-webapp` / `test-timing-node-server` / `test-timing-chrome-extension`
+(`if: always()`, so a failing run still produces it).
+
+Shape: `testResults[]` is one entry per file with `startTime` / `endTime`, and
+`assertionResults[]` is one entry per test with a `duration` in milliseconds.
+
+```json
+{
+  "numTotalTests": 341,
+  "testResults": [
+    {
+      "name": "/…/packages/shared-ts/tests/base64.test.ts",
+      "startTime": 1785156911234,
+      "endTime": 1785156911814,
+      "assertionResults": [
+        {
+          "fullName": "base64 codec round-trips an empty Uint8Array",
+          "status": "passed",
+          "duration": 1.2396669999999972
+        }
+      ]
+    }
+  ]
+}
+```
+
+To find the slowest tests in a downloaded artifact:
+
+```bash
+node -e "const r=require('./test-timing/vitest.json').testResults.flatMap(f=>f.assertionResults.map(a=>[a.duration,a.fullName]));r.sort((a,b)=>b[0]-a[0]);console.log(r.slice(0,20))"
+```
+
+Reproduce it locally with `CI=1 npm run test`.
+
 ## Run Tests
 
 | Command                                                      | Purpose                                   |

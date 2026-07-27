@@ -286,6 +286,13 @@ jobs:
           name: coverage-webapp
           path: coverage/
           if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timing-webapp
+          path: test-timing/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -418,6 +425,13 @@ jobs:
           name: coverage-node-server
           path: coverage/
           if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timing-node-server
+          path: test-timing/
+          if-no-files-found: ignore
       - name: Build @slicc/shared-ts (runtime dependency)
         run: npm run build -w @slicc/shared-ts
       - name: Build
@@ -451,6 +465,13 @@ jobs:
         with:
           name: coverage-chrome-extension
           path: coverage/
+          if-no-files-found: ignore
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timing-chrome-extension
+          path: test-timing/
           if-no-files-found: ignore
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
