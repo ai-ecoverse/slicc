@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=…".
@@ -104,15 +105,15 @@ func run(args []string) int {
 		}
 		return cmdWatch(ctx, joinURL, scoopJid)
 	case "follow":
-		// A leading `--no-banner` (or `--`) is consumed by slicc; everything
-		// after is the runner argv (verbatim), so runner flags like `-i` / `-c`
-		// pass straight through.
-		runner, showBanner, help := parseFollowArgs(rest)
-		if help {
+		// Leading slicc-owned options (`--no-banner`, `--eval`, `--eval-quiet`,
+		// `--`) are consumed; everything after is the runner argv (verbatim), so
+		// runner flags like `-i` / `-c` pass straight through.
+		fa := parseFollowArgs(rest)
+		if fa.help {
 			usage(os.Stdout)
 			return 0
 		}
-		return cmdFollow(ctx, joinURL, runner, showBanner)
+		return cmdFollow(ctx, joinURL, fa)
 	default:
 		fmt.Fprintf(os.Stderr, "slicc: unknown subcommand %q\n", sub)
 		usage(os.Stderr)
@@ -135,6 +136,14 @@ Usage:
                                         follow bash -c
                                         follow sh -c
                                         follow docker exec -i sandbox sh -c
+  slicc <join-url> follow --eval [--eval-quiet <dur>] <repl...>
+                                      REPL mode: spawn <repl> ONCE and write each leader
+                                      command as a line to its stdin; the reply is the
+                                      output that follows, ended by <dur> (default 500ms)
+                                      of quiet. State persists across commands.
+                                        follow --eval python -i
+                                        follow --eval node -i
+                                        follow --eval clojure
   slicc update [--check]              Self-update to the newest released CLI binary
                                       (--check only reports; SLICC_NO_UPDATE_CHECK=1
                                       disables the once-a-day launch check)
@@ -179,24 +188,65 @@ func readTextArg(args []string, stdin io.Reader) (string, error) {
 	return strings.Join(args, " "), nil
 }
 
+// followArgs is the parsed `follow` invocation: slicc-owned options plus the
+// runner argv.
+type followArgs struct {
+	runner     []string
+	showBanner bool
+	help       bool
+	// eval switches follow into persistent-REPL mode: the runner is spawned
+	// once and each leader command is written as a line to its stdin.
+	eval bool
+	// evalQuiet overrides the output-quiescence window ending each eval
+	// response (0 = execrun.DefaultEvalQuiet).
+	evalQuiet time.Duration
+}
+
 // parseFollowArgs consumes slicc's own leading `follow` options (`--no-banner`,
-// `--help`, and the `--` end-of-options terminator) and returns the remaining
-// argv as the runner (verbatim). `--` lets a runner whose first token would
-// otherwise look like a slicc flag pass through untouched.
-func parseFollowArgs(rest []string) (runner []string, showBanner bool, help bool) {
-	showBanner = true
+// `--eval`, `--eval-quiet <dur>`, `--help`, and the `--` end-of-options
+// terminator) and returns the remaining argv as the runner (verbatim). `--`
+// lets a runner whose first token would otherwise look like a slicc flag pass
+// through untouched.
+func parseFollowArgs(rest []string) followArgs {
+	fa := followArgs{showBanner: true}
 	for len(rest) > 0 {
-		switch rest[0] {
-		case "-h", "--help":
-			return nil, showBanner, true
-		case "--no-banner":
-			showBanner = false
+		switch {
+		case rest[0] == "-h" || rest[0] == "--help":
+			fa.help = true
+			return fa
+		case rest[0] == "--no-banner":
+			fa.showBanner = false
 			rest = rest[1:]
 			continue
-		case "--":
-			return rest[1:], showBanner, false
+		case rest[0] == "--eval":
+			fa.eval = true
+			rest = rest[1:]
+			continue
+		case strings.HasPrefix(rest[0], "--eval-quiet="):
+			fa.evalQuiet = parseEvalQuiet(rest[0][len("--eval-quiet="):])
+			rest = rest[1:]
+			continue
+		case rest[0] == "--eval-quiet" && len(rest) > 1:
+			fa.evalQuiet = parseEvalQuiet(rest[1])
+			rest = rest[2:]
+			continue
+		case rest[0] == "--":
+			fa.runner = rest[1:]
+			return fa
 		}
 		break
 	}
-	return rest, showBanner, false
+	fa.runner = rest
+	return fa
+}
+
+// parseEvalQuiet parses a `--eval-quiet` duration ("750ms", "2s"); invalid or
+// non-positive values fall back to the default (0), matching how other flags
+// ignore unusable values.
+func parseEvalQuiet(value string) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
 }

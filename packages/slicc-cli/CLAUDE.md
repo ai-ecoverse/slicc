@@ -10,6 +10,7 @@ slicc <join-url> prompt "<text>"                Stream one assistant turn, then 
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
 slicc <join-url> watch [scoop]                  Tail the leader's live agent output, read-only
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
+slicc <join-url> follow --eval [repl]           Same, into ONE persistent REPL (state persists; see README)
 slicc update [--check]                          Self-update to the newest released CLI binary
 ```
 
@@ -42,16 +43,16 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 
 ## Layout
 
-| Path                  | Purpose                                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `main.go`             | Arg parsing + subcommand dispatch + Ctrl+C handling                                                          |
-| `commands.go`         | `prompt` / `exec` / `follow` implementations                                                                 |
-| `internal/protocol/`  | Wire structs mirroring `packages/shared-ts/src/tray-sync-protocol.ts` (the subset the CLI uses)              |
-| `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry), ported from the iOS connector |
-| `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                |
-| `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals)                  |
-| `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                    |
-| `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                         |
+| Path                  | Purpose                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main.go`             | Arg parsing + subcommand dispatch + Ctrl+C handling                                                                                         |
+| `commands.go`         | `prompt` / `exec` / `follow` implementations                                                                                                |
+| `internal/protocol/`  | Wire structs mirroring `packages/shared-ts/src/tray-sync-protocol.ts` (the subset the CLI uses)                                             |
+| `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry), ported from the iOS connector                                |
+| `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                                               |
+| `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals) + `EvalSession` (persistent-REPL `--eval` mode) |
+| `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                                                   |
+| `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                                                        |
 
 ## Protocol parity
 
@@ -86,6 +87,27 @@ Startup ergonomics (all in `commands.go`):
   leader captures it in `tray-leader-sync.ts` (`getFollowerMotds`) and, alongside
   `getBrowserCapableBootstrapIds`, tags followers `[ssh]` / `[playwright]` in
   `host`. Additive + optional on the wire (browser/iOS peers omit it).
+
+## follow `--eval` (persistent REPL)
+
+`execrun.EvalSession` spawns the runner ONCE and serializes leader commands
+into its stdin as lines; responses are framed by **output quiescence**
+(`--eval-quiet`, default 500 ms) because REPLs never signal completion. The
+session outlives connections AND connection drops — a cancelled per-connection
+context interrupts the in-flight computation (`interruptProcess`, SIGINT to
+the group; no-op on Windows) but never kills the REPL; only `Close` (process
+shutdown) and leader-sent SIGTERM/SIGKILL do. Leader SIGINT likewise
+interrupts without killing (ignored on Windows — a hard kill would destroy
+session state). Late output is forwarded at the head of the next response,
+exec exit codes are always 0 while the REPL lives, `req.Cwd`/`req.Env` are
+ignored, and REPL death marks the session dead (commands then error until
+restart). `follow.NewEvalSession`
+routes `exec.request` into it; the MOTD advertises a REPL target so the
+leader's agent sends language code, not shell. The banner warns about `node`
+without `-i` (it buffers piped stdin until EOF). Tests fake the REPL with a
+self-exec helper process (`TestEvalHelperProcess`) so the suite runs on all
+three CI OSes; the e2e (`TestCLIFollowEvalPersistsState`) proves cross-command
+state over real WebRTC using the platform shell as a line-eval stand-in.
 
 ## Self-update (`slicc update`)
 

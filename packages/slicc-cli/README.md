@@ -14,6 +14,7 @@ slicc <join-url> prompt "<text>"                Send one message, stream the ass
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
 slicc <join-url> watch [scoop]                  Tail the agent's output live (a scoop jid filters), until Ctrl+C
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; let the leader run commands on THIS machine
+slicc <join-url> follow --eval [repl]           Same, but into ONE persistent REPL process (state persists)
 slicc update [--check]                          Self-update to the newest released CLI binary
 ```
 
@@ -66,6 +67,41 @@ Sliccstart resolves an existing managed, development-tree, or PATH-style binary
 first and, with confirmation, downloads the signed and notarized Darwin release
 into `~/Library/Application Support/Sliccstart/bin/slicc` when none is available.
 The CLI is downloaded on demand and is not bundled in `Sliccstart.app`.
+
+## follow --eval — lend the leader a persistent REPL
+
+Plain `follow <runner>` spawns a fresh process per command, so REPL runners
+lose all state between commands (and bare `node`/`python` would treat the
+command as a script _file_). `follow --eval <repl>` fixes both: the REPL is
+spawned **once**, each leader command is written as a line to its stdin, and
+the output that follows streams back as the response. Variables, defs, and
+imports persist across commands — and across reconnects, since the REPL
+outlives the connection.
+
+```
+slicc <url> follow --eval python -i     # -i forces per-line eval on a pipe (prompts land on stderr)
+slicc <url> follow --eval node -i       # node BUFFERS piped stdin until EOF without -i
+slicc <url> follow --eval clojure       # clojure's REPL reads forms from a pipe as-is
+```
+
+Because REPLs never signal "this result is complete", a response ends once the
+REPL has been **quiet for a window** (default 500 ms; tune with
+`--eval-quiet <dur>`, e.g. `--eval-quiet 2s` for slow-printing REPLs). Output
+of a long computation that stays silent past the window lands at the head of
+the _next_ response instead — raise the window if that bites. Exit codes are
+always 0 while the REPL lives (REPLs report errors in their output); if the
+REPL process dies, the command errors and the follower needs a restart for a
+fresh session. `exec.signal` SIGINT interrupts the current computation the way
+Ctrl+C would in that REPL — the REPL itself survives (on Windows the signal is
+ignored: nothing can interrupt a piped child there without killing it, and
+killing the session would lose its state). A dropped connection never kills
+the REPL either — it outlives reconnects; the in-flight command is interrupted
+and any late output surfaces at the next response. The leader's agent sees a
+REPL-flavored MOTD via
+`ssh --list`, so it knows to send language code rather than shell commands.
+Prompt/banner noise in responses is the REPL's own — quiet it with the REPL's
+flags (`python -q`, etc.). `req.Cwd`/`req.Env` are ignored (the process is
+already running).
 
 ## update — keep the binary fresh
 

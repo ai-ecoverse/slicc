@@ -15,3 +15,9 @@ func killProcess(cmd *exec.Cmd, _ string) {
 		_ = cmd.Process.Kill()
 	}
 }
+
+// interruptProcess is a no-op on Windows: there is no way to deliver a
+// Ctrl+C-equivalent to a piped child without killing it, and killing a
+// persistent REPL to "interrupt" it would destroy its state. Returns false so
+// callers know nothing was sent.
+func interruptProcess(_ *exec.Cmd) bool { return false }
