@@ -120,9 +120,13 @@ gates; run them when you touched a native package:
 npm run lint:swift                     # SwiftLint across all four Swift/iOS packages
 npm run lint:swift:format              # swift format lint --strict (config: root .swift-format)
 npm run format:swift                   # swift format --in-place (fixes the above)
-npm run deadcode:swift                 # Periphery (informational in CI, non-blocking)
+npm run deadcode:swift                 # Periphery on the 3 SPM packages (informational)
 cd packages/slicc-cli && make check    # gofmt + tidy-check + vet + golangci-lint + race + coverage
 ```
+
+`ios-app` has no `package.json`, so its Periphery scan lives only in its CI job —
+`knip.json` (off-limits to hand-edits here) does not allow `periphery` as a root-script
+binary, unlike the per-package scripts, which sit inside knip's ignore list.
 
 `swift format` ships with the Swift 6+ toolchain — no install step. It is a formatter;
 SwiftLint remains the linter, and the two configs are deliberately consistent (4-space
