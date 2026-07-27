@@ -13,6 +13,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
 import type { BshDiscoveryFS, BshEntry } from './bsh-discovery.js';
 import type { ScriptCatalog } from './script-catalog.js';
+import { ESBUILD_VERSION } from './supplemental-commands/esbuild-wasm.js';
 
 const log = createLogger('bsh-watchdog');
 
@@ -21,10 +22,10 @@ const log = createLogger('bsh-watchdog');
  * an unbundled `require(...)` for a bare specifier. The .bsh runs in
  * the target browser page via CDP `Runtime.evaluate` and has no way
  * to resolve bare specifiers at runtime — the user must pre-bundle
- * via `esbuild --bundle` so every bare specifier is inlined.
+ * after installing the pinned `esbuild-wasm` bootstrap, then run direct
+ * `esbuild --bundle` so every bare specifier is inlined.
  */
-const BSH_BUNDLE_HINT =
-  '.bsh scripts must be pre-bundled. Install deps via `ipk add <pkg>`, then bundle with `esbuild --bundle <script>.bsh --outfile=<script>.bundled.bsh` and drop the bundled file in place. There is no runtime resolver in the target page.';
+const BSH_BUNDLE_HINT = `.bsh scripts must be pre-bundled. Install deps via \`ipk add <pkg>\`, then bootstrap esbuild via \`ipk add esbuild-wasm@${ESBUILD_VERSION}\` and bundle with \`esbuild --bundle <script>.bsh --outfile=<script>.bundled.bsh\`. Drop the bundled file in place. There is no runtime resolver in the target page.`;
 
 export interface BshWatchdogOptions {
   /** Optional CDP transport to subscribe to navigation events on.
@@ -209,9 +210,10 @@ export class BshWatchdog {
     // module graph, no ipk node_modules walk, and no CDN fallback. The
     // wrapper pre-scans the script for `require(...)` specifiers and emits a
     // clear bundle-first error before evaluating the body when any survive.
-    // Bundle the script via `esbuild --bundle <script>.bsh --outfile=...`
-    // so esbuild inlines every bare specifier from the ipk-installed
-    // `node_modules` tree (see `esbuild-command.ts`).
+    // Bootstrap the pinned esbuild-wasm package via `ipk add`, then bundle
+    // the script via direct `esbuild --bundle <script>.bsh --outfile=...` so
+    // every bare specifier is inlined from the ipk-installed `node_modules`
+    // tree (see `esbuild-command.ts`).
     const wrappedScript = `(async () => {
   const __requireSpecifiers = (function() {
     const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
