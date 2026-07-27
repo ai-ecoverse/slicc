@@ -22,7 +22,6 @@ import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import { FORWARDABLE_TO_LEADER, type LickEvent } from './lick-manager.js';
-import { handleFsRequest } from './tray-fs-handler.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
 import type { LeaderSyncContext } from './tray-leader/context.js';
@@ -32,6 +31,8 @@ import {
   FollowerRegistry,
   labelForFollower,
 } from './tray-leader/follower-registry.js';
+import { FsRouter } from './tray-leader/fs-router.js';
+import { TabRouter } from './tray-leader/tab-router.js';
 import { TranscriptExportManager } from './tray-leader/transcript-export.js';
 import {
   CHERRY_RUNTIME_TAG,
@@ -250,31 +251,13 @@ interface PendingRemoteExec {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-/** Tracks a tab.open request being routed through the leader. */
-interface PendingTabOpenRoute {
-  /** bootstrapId of the follower that originated the request (or '__leader__') */
-  requesterBootstrapId: string;
-  /** The original requestId from the requester */
-  requestId: string;
-}
-
-/** Tracks an fs request being routed through the leader. */
-interface PendingFsRoute {
-  /** bootstrapId of the follower that originated the request (or '__leader__') */
-  requesterBootstrapId: string;
-  /** The original requestId from the requester */
-  requestId: string;
-  /** Accumulated chunked responses (for multi-chunk file reads). */
-  chunks: TrayFsResponse[];
-  /** Expected total chunks (set from first response). */
-  totalChunks: number;
-}
-
 export class LeaderSyncManager {
   private readonly followerRegistry: FollowerRegistry;
   private readonly context: LeaderSyncContext;
   private readonly broadcast: BroadcastManager;
   private readonly cdpRouter: CDPRouter;
+  private readonly fsRouter: FsRouter;
+  private readonly tabRouter: TabRouter;
   private readonly transcriptExport: TranscriptExportManager;
   private readonly registry = new TrayTargetRegistry();
   private get followers(): Map<string, ConnectedFollower> {
@@ -283,24 +266,6 @@ export class LeaderSyncManager {
   private get runtimeToBootstrap(): Map<string, string> {
     return this.context.followers.runtimeToBootstrap;
   }
-  /** Maps requestId → routing info for tab.open requests in flight through the leader. */
-  private readonly pendingTabOpenRoutes = new Map<string, PendingTabOpenRoute>();
-  /** Resolvers for leader-originated tab.open requests. */
-  private readonly tabOpenResolvers = new Map<
-    string,
-    { resolve: (targetId: string) => void; reject: (err: Error) => void }
-  >();
-  /** Maps requestId → routing info for fs requests in flight through the leader. */
-  private readonly pendingFsRoutes = new Map<string, PendingFsRoute>();
-  /** Resolvers for leader-originated fs requests. */
-  private readonly fsResolvers = new Map<
-    string,
-    {
-      resolve: (responses: TrayFsResponse[]) => void;
-      reject: (err: Error) => void;
-      responses: TrayFsResponse[];
-    }
-  >();
   /** Leader-initiated remote execs (the `ssh` command) awaiting a follower reply, keyed by (unguessable) requestId. */
   private readonly pendingRemoteExecs = new Map<string, PendingRemoteExec>();
   /**
@@ -371,6 +336,11 @@ export class LeaderSyncManager {
       afterRegistryCleanup: (bootstrapId) => {
         if (this.registry.hasChanged()) this.broadcastTargetRegistry();
       },
+    });
+    this.fsRouter = new FsRouter(this.context);
+    this.tabRouter = new TabRouter(this.context, {
+      getTargetEntries: () => this.registry.getEntries(),
+      isCherryTarget,
     });
     this.transcriptExport = new TranscriptExportManager(this.context);
     Object.defineProperty(this, 'activeExports', {
@@ -940,29 +910,29 @@ export class LeaderSyncManager {
       case 'tab.open': {
         const { requestId, targetRuntimeId, url } = message;
         if (targetRuntimeId === 'leader') {
-          this.executeLocalTabOpen(requestId, url, bootstrapId);
+          void this.tabRouter.executeLocalTabOpen(requestId, url, bootstrapId);
         } else {
-          this.forwardTabOpen(requestId, targetRuntimeId, url, bootstrapId);
+          this.tabRouter.forwardTabOpen(requestId, targetRuntimeId, url, bootstrapId);
         }
         break;
       }
       case 'tab.opened':
-        this.handleTabOpenResponse(message.requestId, message.targetId);
+        this.tabRouter.handleTabOpenResponse(message.requestId, message.targetId);
         break;
       case 'tab.open.error':
-        this.handleTabOpenError(message.requestId, message.error);
+        this.tabRouter.handleTabOpenError(message.requestId, message.error);
         break;
       case 'fs.request': {
         const { requestId, targetRuntimeId, request } = message;
         if (targetRuntimeId === 'leader') {
-          this.executeLocalFs(requestId, request, bootstrapId);
+          void this.fsRouter.executeLocalFs(requestId, request, bootstrapId);
         } else {
-          this.forwardFsRequest(requestId, targetRuntimeId, request, bootstrapId);
+          this.fsRouter.forwardFsRequest(requestId, targetRuntimeId, request, bootstrapId);
         }
         break;
       }
       case 'fs.response':
-        this.handleFsResponse(message.requestId, message.response);
+        this.fsRouter.handleFsResponse(message.requestId, message.response);
         break;
       case 'exec.request':
       case 'exec.chunk':
@@ -1284,289 +1254,12 @@ export class LeaderSyncManager {
     return targetFollower.sync.send({ type: 'cherry.slicc_event', targetId, name, detail });
   }
 
-  // ---------------------------------------------------------------------------
-  // Tab open routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Whether a runtime can honor a generic `tab.open`. A runtime whose only
-   * advertised targets are cherry host pages cannot — a cooperative host page
-   * is not a tab spawner and the tray `capabilities` shape (navigate/network/
-   * screenshot) carries no `openUrl` capability, so we refuse rather than emit
-   * a `tab.open` the cherry host can't honor. Runtimes with at least one real
-   * browser target (or no registry entry yet) are allowed through unchanged.
-   */
-  private canRuntimeOpenTab(targetRuntimeId: string): boolean {
-    // `getEntries()` is a read that ALSO clears the registry's dirty flag.
-    // That is benign here: the registry mutation paths (`setTargets` via
-    // `targets.advertise` / `setLocalTargets`) broadcast in the same
-    // synchronous turn, before any `tab.open` can interleave — so a `tab.open`
-    // gating read can never swallow a not-yet-broadcast change.
-    const entries = this.registry.getEntries().filter((e) => e.runtimeId === targetRuntimeId);
-    if (entries.length === 0) return true;
-    return entries.some((e) => !isCherryTarget(e));
-  }
-
   /**
    * Open a tab on a remote runtime from the leader's own code.
    * Returns a promise that resolves with the composite targetId ("{runtimeId}:{localTargetId}").
    */
   openRemoteTab(targetRuntimeId: string, url: string): Promise<string> {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-
-    if (!targetFollower) {
-      return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
-    }
-
-    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
-      return Promise.reject(
-        new Error(`Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`)
-      );
-    }
-
-    const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<string>((resolve, reject) => {
-      this.tabOpenResolvers.set(requestId, { resolve, reject });
-      this.pendingTabOpenRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
-      targetFollower.sync.send({ type: 'tab.open', requestId, url });
-    });
-  }
-
-  /**
-   * Execute a tab.open on the leader's own browser transport.
-   */
-  private async executeLocalTabOpen(
-    requestId: string,
-    url: string,
-    requesterBootstrapId: string
-  ): Promise<void> {
-    const follower = this.followers.get(requesterBootstrapId);
-    if (!follower) return;
-
-    const transport = this.options.browserTransport;
-    if (!transport) {
-      follower.sync.send({
-        type: 'tab.open.error',
-        requestId,
-        error: 'Leader has no browser transport',
-      });
-      return;
-    }
-
-    try {
-      const result = await transport.send('Target.createTarget', { url, background: true });
-      const targetId = result['targetId'] as string;
-      follower.sync.send({ type: 'tab.opened', requestId, targetId: `leader:${targetId}` });
-    } catch (err) {
-      follower.sync.send({
-        type: 'tab.open.error',
-        requestId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  /**
-   * Forward a tab.open request from one follower to another.
-   */
-  private forwardTabOpen(
-    requestId: string,
-    targetRuntimeId: string,
-    url: string,
-    requesterBootstrapId: string
-  ): void {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-    const requester = this.followers.get(requesterBootstrapId);
-
-    if (!targetFollower) {
-      if (requester) {
-        requester.sync.send({
-          type: 'tab.open.error',
-          requestId,
-          error: `Target runtime "${targetRuntimeId}" not connected`,
-        });
-      }
-      return;
-    }
-
-    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
-      if (requester) {
-        requester.sync.send({
-          type: 'tab.open.error',
-          requestId,
-          error: `Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`,
-        });
-      }
-      return;
-    }
-
-    this.pendingTabOpenRoutes.set(requestId, { requesterBootstrapId, requestId });
-    targetFollower.sync.send({ type: 'tab.open', requestId, url });
-  }
-
-  /**
-   * Handle a tab.opened response from a follower.
-   */
-  private handleTabOpenResponse(requestId: string, targetId: string): void {
-    const route = this.pendingTabOpenRoutes.get(requestId);
-    if (!route) return;
-    this.pendingTabOpenRoutes.delete(requestId);
-
-    if (route.requesterBootstrapId === '__leader__') {
-      const resolver = this.tabOpenResolvers.get(requestId);
-      if (resolver) {
-        this.tabOpenResolvers.delete(requestId);
-        resolver.resolve(targetId);
-      }
-      return;
-    }
-
-    const requester = this.followers.get(route.requesterBootstrapId);
-    if (requester) {
-      requester.sync.send({ type: 'tab.opened', requestId, targetId });
-    }
-  }
-
-  /**
-   * Handle a tab.open.error response from a follower.
-   */
-  private handleTabOpenError(requestId: string, error: string): void {
-    const route = this.pendingTabOpenRoutes.get(requestId);
-    if (!route) return;
-    this.pendingTabOpenRoutes.delete(requestId);
-
-    if (route.requesterBootstrapId === '__leader__') {
-      const resolver = this.tabOpenResolvers.get(requestId);
-      if (resolver) {
-        this.tabOpenResolvers.delete(requestId);
-        resolver.reject(new Error(error));
-      }
-      return;
-    }
-
-    const requester = this.followers.get(route.requesterBootstrapId);
-    if (requester) {
-      requester.sync.send({ type: 'tab.open.error', requestId, error });
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // FS routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute an fs request on the leader's own VFS.
-   * Sends the response(s) back to the requesting follower.
-   */
-  private async executeLocalFs(
-    requestId: string,
-    request: TrayFsRequest,
-    requesterBootstrapId: string
-  ): Promise<void> {
-    const follower = this.followers.get(requesterBootstrapId);
-    if (!follower) return;
-
-    const vfs = this.options.vfs;
-    if (!vfs) {
-      follower.sync.send({
-        type: 'fs.response',
-        requestId,
-        response: { ok: false, error: 'Leader has no VFS' },
-      });
-      return;
-    }
-
-    const responses = await handleFsRequest(vfs, request);
-    for (const response of responses) {
-      follower.sync.send({ type: 'fs.response', requestId, response });
-    }
-  }
-
-  /**
-   * Forward an fs request from one follower to another follower that owns the target runtime.
-   */
-  private forwardFsRequest(
-    requestId: string,
-    targetRuntimeId: string,
-    request: TrayFsRequest,
-    requesterBootstrapId: string
-  ): void {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-    const requester = this.followers.get(requesterBootstrapId);
-
-    if (!targetFollower) {
-      if (requester) {
-        requester.sync.send({
-          type: 'fs.response',
-          requestId,
-          response: { ok: false, error: `Target runtime "${targetRuntimeId}" not connected` },
-        });
-      }
-      return;
-    }
-
-    // Track the pending route so we can return the response to the requester
-    this.pendingFsRoutes.set(requestId, {
-      requesterBootstrapId,
-      requestId,
-      chunks: [],
-      totalChunks: 1,
-    });
-
-    // Forward to the target follower
-    targetFollower.sync.send({ type: 'fs.request', requestId, request });
-  }
-
-  /**
-   * Handle an fs response from a follower (forwarding back to the original requester).
-   * Supports chunked responses — accumulates chunks and forwards each one.
-   */
-  private handleFsResponse(requestId: string, response: TrayFsResponse): void {
-    const route = this.pendingFsRoutes.get(requestId);
-    if (!route) {
-      // Check if this is for a leader-originated request
-      const resolver = this.fsResolvers.get(requestId);
-      if (resolver) {
-        resolver.responses.push(response);
-        const totalChunks = (response.ok && response.totalChunks) || 1;
-        if (resolver.responses.length >= totalChunks) {
-          this.fsResolvers.delete(requestId);
-          resolver.resolve(resolver.responses);
-        }
-      }
-      return;
-    }
-
-    // Route to the leader's own fsResolvers if the requester is the leader itself
-    if (route.requesterBootstrapId === '__leader__') {
-      const resolver = this.fsResolvers.get(requestId);
-      if (resolver) {
-        resolver.responses.push(response);
-        const totalChunks = (response.ok && response.totalChunks) || 1;
-        if (resolver.responses.length >= totalChunks) {
-          this.fsResolvers.delete(requestId);
-          this.pendingFsRoutes.delete(requestId);
-          resolver.resolve(resolver.responses);
-        }
-      }
-      return;
-    }
-
-    const requester = this.followers.get(route.requesterBootstrapId);
-    if (requester) {
-      requester.sync.send({ type: 'fs.response', requestId, response });
-    }
-
-    // Track chunks and clean up route when all chunks received
-    route.chunks.push(response);
-    const totalChunks = (response.ok && response.totalChunks) || 1;
-    route.totalChunks = totalChunks;
-    if (route.chunks.length >= route.totalChunks) {
-      this.pendingFsRoutes.delete(requestId);
-    }
+    return this.tabRouter.openRemoteTab(targetRuntimeId, url);
   }
 
   /**
@@ -1574,32 +1267,7 @@ export class LeaderSyncManager {
    * Returns a promise that resolves with the response(s).
    */
   sendFsRequest(targetRuntimeId: string, request: TrayFsRequest): Promise<TrayFsResponse[]> {
-    if (targetRuntimeId === 'leader') {
-      const vfs = this.options.vfs;
-      if (!vfs) return Promise.resolve([{ ok: false, error: 'Leader has no VFS' }]);
-      return handleFsRequest(vfs, request);
-    }
-
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-
-    if (!targetFollower) {
-      return Promise.resolve([
-        { ok: false, error: `Target runtime "${targetRuntimeId}" not connected` },
-      ]);
-    }
-
-    const requestId = `fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<TrayFsResponse[]>((resolve, reject) => {
-      this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
-      this.pendingFsRoutes.set(requestId, {
-        requesterBootstrapId: '__leader__',
-        requestId,
-        chunks: [],
-        totalChunks: 1,
-      });
-      targetFollower.sync.send({ type: 'fs.request', requestId, request });
-    });
+    return this.fsRouter.sendFsRequest(targetRuntimeId, request);
   }
 
   // ---------------------------------------------------------------------------
