@@ -30,7 +30,10 @@ import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import {
+  FollowerSyncManager,
+  type FollowerSyncManagerOptions,
+} from '../scoops/tray-follower-sync.js';
 import type { ScoopSummary, SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
 import {
@@ -119,6 +122,13 @@ export interface StartPageFollowerTrayOptions {
    * no scoop switcher UI to update.
    */
   onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
+  /**
+   * Render the transcript-export approval dialog for a **headless** leader (the
+   * hosted-leader / cloud float) that delegated the prompt to this follower.
+   * Forwarded verbatim to `FollowerSyncManager`; when unset the follower replies
+   * with a denial, so the gate stays fail-closed.
+   */
+  onTranscriptExportApprovalRequest?: FollowerSyncManagerOptions['onTranscriptExportApprovalRequest'];
 
   // --- Page-side wiring callbacks ---
   /**
@@ -278,6 +288,7 @@ export function startPageFollowerTray(
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
       onScoopsList: options.onScoopsList,
+      onTranscriptExportApprovalRequest: options.onTranscriptExportApprovalRequest,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

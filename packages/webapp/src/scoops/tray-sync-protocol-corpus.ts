@@ -22,7 +22,7 @@
  */
 
 import type { FollowerToLeaderMessage, LeaderToFollowerMessage } from '@slicc/shared-ts';
-import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { SLICC_HOSTED_ORIGIN, TRAY_SYNC_PROTOCOL_VERSION } from '@slicc/shared-ts';
 
 /**
  * What the iOS mirror must do with a leader→follower variant:
@@ -89,6 +89,17 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
   'transcript.export.error': {
     ios: 'unknown',
     message: { type: 'transcript.export.error', requestId: 'te-1', code: 'session-not-found' },
+  },
+  // Delegated approval prompt — only sent by a headless (hosted/cloud) leader.
+  // iOS never originates exports, so it never receives this.
+  'transcript.export.approve.request': {
+    ios: 'unknown',
+    message: {
+      type: 'transcript.export.approve.request',
+      requestId: 'te-1',
+      selector: { kind: 'active' },
+      estimatedBytes: 1024,
+    },
   },
   snapshot: {
     ios: 'decoded',
@@ -332,6 +343,11 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     ios: 'undecodable',
     message: { type: 'transcript.export.ack', requestId: 'te-2', index: 0 },
   },
+  // TS-only: iOS never originates exports so it is never asked to approve one.
+  'transcript.export.approve.response': {
+    ios: 'undecodable',
+    message: { type: 'transcript.export.approve.response', requestId: 'te-2', approved: true },
+  },
   user_message: {
     ios: 'decoded',
     message: { type: 'user_message', text: 'hello from follower', messageId: 'f-1' },
@@ -495,7 +511,10 @@ export function buildCorpusDocument(): {
       .map(({ ios, message }) => ({ type: message.type, ios, message: message as unknown }))
       .sort((a, b) => a.type.localeCompare(b.type));
   return {
-    traySyncProtocolVersion: 3,
+    // Read from the constant, never a literal: the Swift suite asserts this
+    // equals its own `traySyncProtocolVersion`, so a hand-pinned copy here
+    // would silently pass a stale version through a protocol bump.
+    traySyncProtocolVersion: TRAY_SYNC_PROTOCOL_VERSION,
     // Mapped-type-enforced variant counts; the Swift suite asserts the entry
     // arrays match so a truncated/stale JSON copy fails loudly.
     leaderVariantCount: Object.keys(LEADER_TO_FOLLOWER_CORPUS).length,

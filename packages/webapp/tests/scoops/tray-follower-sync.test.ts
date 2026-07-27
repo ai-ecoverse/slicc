@@ -2351,7 +2351,7 @@ describe('FollowerSyncManager', () => {
         runtime?: string;
       };
       expect(first.type).toBe('hello');
-      expect(first.protocolVersion).toBe(3);
+      expect(first.protocolVersion).toBe(4);
       expect(first.runtime).toBe('follower-1');
     });
 

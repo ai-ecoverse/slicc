@@ -89,13 +89,18 @@ export async function downloadTranscriptBlob(blob: Blob, filename: string): Prom
  * The dialog shows only the safe metadata the leader already knows from its
  * own connected state: follower label, selector, and estimated size.
  * No transcript title or content is revealed before approval.
+ *
+ * `delegated` flips the copy for the hosted-leader (cloud) float, where a
+ * headless leader hands the prompt to the requesting follower: the approver is
+ * then the person who asked, on this device, rather than a leader-side operator
+ * vetting someone else's request.
  */
 export function openTranscriptExportApproval(request: {
-  requestId: string;
-  followerLabel: string;
+  followerLabel?: string;
   hostOrigin?: string;
   selector: TranscriptExportSelector;
   estimatedBytes?: number;
+  delegated?: boolean;
 }): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const dialog = document.createElement('slicc-dialog');
@@ -117,7 +122,7 @@ export function openTranscriptExportApproval(request: {
       return el;
     };
 
-    body.append(row('Follower', request.followerLabel));
+    if (request.followerLabel) body.append(row('Follower', request.followerLabel));
     if (request.hostOrigin) body.append(row('Host origin', request.hostOrigin));
     body.append(
       row(
@@ -135,9 +140,18 @@ export function openTranscriptExportApproval(request: {
     const warning = document.createElement('p');
     warning.style.cssText =
       'font-size:0.8125rem;color:var(--s2-content-secondary,#717171);margin:0;';
+    // Name the actual recipient of the bytes. On a delegated (cloud) prompt the
+    // approver is the requester, so "the follower" would be meaningless — and
+    // for an embedded Cherry follower the bytes leave SLICC for the host page,
+    // which the human must be told explicitly.
+    const recipient = !request.delegated
+      ? 'The follower will receive'
+      : request.hostOrigin
+        ? 'The embedding page will receive'
+        : 'This device will download';
     warning.textContent =
-      '\u26a0\ufe0f The follower will receive a complete binary copy of the transcript. ' +
-      'This is a one-time approval — export starts immediately after you click Allow.';
+      `\u26a0\ufe0f ${recipient} a complete binary copy of the transcript. ` +
+      'This is a one-time approval — it starts immediately after you click Allow.';
     body.append(warning);
     dialog.append(body);
 

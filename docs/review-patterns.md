@@ -256,6 +256,11 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
 - Approval gate: every follower/Cherry export path must call `openTranscriptExportApproval()`
   before streaming. A bypass is Critical.
 - Approval semantics: **one-time per request** — no "Always allow" option.
+- Approval **reachability**: a gate is only real if a human can answer it. A leader with
+  `kind: 'hosted'` (cloud) is headless — it delegates the prompt to the requesting follower via
+  `transcript.export.approve.request`. When touching approval code, check it still resolves in
+  _both_ realms, and that every failure path (timeout, disconnect, unwired handler, throw)
+  denies rather than hangs.
 - Cherry protocol: `session.export.request` → approval → `session.export.progress*` →
   `session.export.response` OR `session.export.error`. Confirm cancel (`session.export.cancel`)
   is handled on both sides.
@@ -271,6 +276,10 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
   on valid IDs.
 - **Task-8 review (M-1)**: unknown error codes from followers were passed through unvalidated;
   the fix maps unknown codes to `transfer-corrupt`.
+- **Cloud approval hang**: the approval dialog rendered into the _leader's_ DOM, which in the
+  hosted-leader float is headless Chromium in an e2b sandbox. Nobody could click it, so follower
+  exports hung at `pending` forever — no timeout on either side, and the per-follower in-flight
+  cap then auto-denied every retry. Fixed by delegating the prompt to the requesting follower.
 
 **Remediation** — verify the fail-closed path with a unit test that makes the redactor throw;
 confirm the approval dialog is rendered before `streamExport()` is called; check both

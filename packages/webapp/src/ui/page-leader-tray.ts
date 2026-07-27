@@ -199,6 +199,10 @@ function buildSyncManager(
     onPreviewLick: options.onPreviewLick,
     requestTranscriptExportApproval: options.requestTranscriptExportApproval,
     createTranscriptExport: options.createTranscriptExport,
+    // `kind: 'hosted'` is the cloud float: the leader tab is headless Chromium
+    // in an e2b sandbox, so there is no human here to answer an export approval
+    // dialog. The sync manager delegates the prompt to the requesting follower.
+    headlessLeader: options.kind === 'hosted',
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,
     vfs: options.vfs,

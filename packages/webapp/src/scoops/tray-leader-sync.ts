@@ -163,6 +163,18 @@ export interface LeaderSyncManagerOptions {
     estimatedBytes?: number;
   }) => Promise<boolean>;
   /**
+   * True when this leader tab has no interactive human of its own — the
+   * hosted-leader (cloud) float, where the leader is headless Chromium inside
+   * an e2b sandbox. Such a leader cannot render `requestTranscriptExportApproval`
+   * to anyone, so it delegates the prompt to the requesting follower (whose
+   * user is the only human in the session) over the tray data channel.
+   *
+   * The gate is delegated, never skipped: the same dialog is shown, just in the
+   * realm where a human can actually answer it. Every failure mode — no reply,
+   * disconnect, unwired handler, dialog error — resolves to deny.
+   */
+  headlessLeader?: boolean;
+  /**
    * Create a TranscriptZipResult for a follower-requested export.
    * The AbortSignal is cancelled on deny/cancel/disconnect/error.
    */
@@ -490,6 +502,14 @@ export class LeaderSyncManager {
     { resolve: () => void; reject: (err: Error) => void }
   >();
 
+  /**
+   * Pending delegated approvals, keyed by the same composite
+   * `${bootstrapId}:${requestId}` as {@link activeExports}. Settled by the
+   * follower's `transcript.export.approve.response`, by the timeout, or by
+   * disconnect cleanup in {@link removeFollower}.
+   */
+  private readonly approvalWaiters = new Map<string, (approved: boolean) => void>();
+
   /** Build the composite map key from follower identity and wire request ID. */
   private static exportKey(bootstrapId: string, requestId: string): string {
     return `${bootstrapId}:${requestId}`;
@@ -526,6 +546,14 @@ export class LeaderSyncManager {
    * alive, the export is aborted so the leader never waits indefinitely.
    */
   private static readonly ACK_TIMEOUT_MS = 30_000;
+
+  /**
+   * Deadline for a delegated approval reply. Generous because a human has to
+   * read the dialog and click, but bounded so a follower that never answers
+   * (closed tab, dead UI) cannot pin the export slot forever — the leader
+   * always sends a terminal `denied`.
+   */
+  private static readonly APPROVAL_TIMEOUT_MS = 120_000;
 
   /**
    * Minimum peer protocol version that supports transcript.export.ack (Wave 4).
@@ -651,6 +679,12 @@ export class LeaderSyncManager {
         this.clearAckWaiters(bootstrapId, requestId);
         this.activeExports.delete(key);
       }
+    }
+
+    // Deny any delegated approval this follower was still being asked about,
+    // so `handleTranscriptExportRequest` resumes and releases its slot.
+    for (const key of [...this.approvalWaiters.keys()]) {
+      if (key.startsWith(`${bootstrapId}:`)) this.settleApproval(key, false);
     }
 
     log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
@@ -1526,6 +1560,13 @@ export class LeaderSyncManager {
       case 'transcript.export.ack':
         this.handleTranscriptExportAck(bootstrapId, message.requestId, message.index);
         break;
+      case 'transcript.export.approve.response':
+        this.handleTranscriptExportApprovalResponse(
+          bootstrapId,
+          message.requestId,
+          message.approved
+        );
+        break;
       case 'cherry.host_event':
         this.routeCherryHostEvent(bootstrapId, message);
         break;
@@ -1615,8 +1656,11 @@ export class LeaderSyncManager {
     const follower = this.followers.get(bootstrapId);
     if (!follower) return;
 
-    const { requestTranscriptExportApproval, createTranscriptExport } = this.options;
-    if (!requestTranscriptExportApproval || !createTranscriptExport) {
+    const { requestTranscriptExportApproval, createTranscriptExport, headlessLeader } =
+      this.options;
+    // A headless leader has no dialog to show, so it only needs the ZIP factory
+    // — the prompt is delegated to the follower.
+    if ((!requestTranscriptExportApproval && !headlessLeader) || !createTranscriptExport) {
       follower.sync.send({ type: 'transcript.export.denied', requestId });
       return;
     }
@@ -1645,16 +1689,21 @@ export class LeaderSyncManager {
 
     let approved = false;
     try {
-      approved = await requestTranscriptExportApproval({
-        requestId,
-        followerLabel,
-        // Derived from connected state via targets.advertise — never from request payload.
-        // Only populated for Cherry followers; omitted for non-Cherry runtimes.
-        hostOrigin: follower.hostOrigin,
-        selector,
-      });
+      if (headlessLeader) {
+        // No human in this tab — ask the follower's user instead.
+        approved = await this.requestDelegatedApproval(bootstrapId, requestId, selector);
+      } else if (requestTranscriptExportApproval) {
+        approved = await requestTranscriptExportApproval({
+          requestId,
+          followerLabel,
+          // Derived from connected state via targets.advertise — never from request
+          // payload. Only populated for Cherry followers; omitted otherwise.
+          hostOrigin: follower.hostOrigin,
+          selector,
+        });
+      }
     } catch (err) {
-      log.warn('requestTranscriptExportApproval threw', {
+      log.warn('transcript export approval threw', {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1691,6 +1740,76 @@ export class LeaderSyncManager {
     this.activeExports.delete(key);
     // Reject any ack waiter for this request so the sendExportChunks loop exits.
     this.clearAckWaiters(bootstrapId, requestId);
+    // Settle a pending delegated approval so it does not idle until its
+    // timeout after the request it belongs to is already gone.
+    this.settleApproval(key, false);
+  }
+
+  /**
+   * Ask the requesting follower to render the approval dialog and resolve with
+   * the human's verdict. Used only by a headless (hosted / cloud) leader.
+   *
+   * Fail-closed: resolves `false` if the follower is gone, never replies within
+   * {@link APPROVAL_TIMEOUT_MS}, or the request is cancelled meanwhile.
+   */
+  private requestDelegatedApproval(
+    bootstrapId: string,
+    requestId: string,
+    selector: TranscriptExportSelector
+  ): Promise<boolean> {
+    const follower = this.followers.get(bootstrapId);
+    if (!follower) return Promise.resolve(false);
+
+    const key = LeaderSyncManager.exportKey(bootstrapId, requestId);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        log.warn('Delegated transcript export approval timed out', { bootstrapId, requestId });
+        this.settleApproval(key, false);
+      }, LeaderSyncManager.APPROVAL_TIMEOUT_MS);
+
+      this.approvalWaiters.set(key, (approved) => {
+        clearTimeout(timer);
+        resolve(approved);
+      });
+
+      // `send` reports failure by returning false (it never throws). A prompt
+      // that never left the leader can never be answered — deny now rather than
+      // holding the export slot until the deadline.
+      const sent = follower.sync.send({
+        type: 'transcript.export.approve.request',
+        requestId,
+        selector,
+      });
+      if (!sent) {
+        log.warn('Failed to send delegated approval prompt — denying', {
+          bootstrapId,
+          requestId,
+        });
+        this.settleApproval(key, false);
+      }
+    });
+  }
+
+  /**
+   * Resolve a pending delegated approval, if one is still registered for `key`.
+   * Idempotent — a late or duplicate reply after the waiter is gone is a no-op.
+   */
+  private settleApproval(key: string, approved: boolean): void {
+    const waiter = this.approvalWaiters.get(key);
+    if (!waiter) return;
+    this.approvalWaiters.delete(key);
+    waiter(approved);
+  }
+
+  /** Handle `transcript.export.approve.response` from a follower. */
+  private handleTranscriptExportApprovalResponse(
+    bootstrapId: string,
+    requestId: string,
+    approved: boolean
+  ): void {
+    // Composite key scopes the verdict to the follower that was asked, so one
+    // follower can never answer another's prompt.
+    this.settleApproval(LeaderSyncManager.exportKey(bootstrapId, requestId), approved === true);
   }
 
   /**

@@ -119,6 +119,19 @@ export interface FollowerSyncManagerOptions {
    * Inject `() => new MemorySpool()` in tests for a deterministic, fast spool.
    */
   makeExportSpool?: (requestId: string) => ExportSpool;
+  /**
+   * Render the transcript-export approval dialog on behalf of a **headless**
+   * leader (the hosted-leader / cloud float, where the leader tab is headless
+   * Chromium in an e2b sandbox and has no human to ask).
+   *
+   * Resolve `true` for "Allow once", `false` for deny. When this is unset, or
+   * it rejects, the follower replies with a denial — the gate is fail-closed,
+   * so a follower that cannot prompt can never silently authorize an export.
+   */
+  onTranscriptExportApprovalRequest?: (request: {
+    selector: TranscriptExportSelector;
+    estimatedBytes?: number;
+  }) => Promise<boolean> | boolean;
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
@@ -769,6 +782,7 @@ export class FollowerSyncManager implements AgentHandle {
       case 'transcript.export.chunk':
       case 'transcript.export.complete':
       case 'transcript.export.error':
+      case 'transcript.export.approve.request':
         this.handleExportLeaderMessage(message);
         break;
       case 'ping':
@@ -1319,7 +1333,8 @@ export class FollowerSyncManager implements AgentHandle {
           | 'transcript.export.start'
           | 'transcript.export.chunk'
           | 'transcript.export.complete'
-          | 'transcript.export.error';
+          | 'transcript.export.error'
+          | 'transcript.export.approve.request';
       }
     >
   ): void {
@@ -1353,6 +1368,12 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       case 'transcript.export.error':
         this.handleExportError(message.requestId, message.code);
+        break;
+      case 'transcript.export.approve.request':
+        void this.handleExportApprovalRequest(message.requestId, {
+          selector: message.selector,
+          ...(message.estimatedBytes != null ? { estimatedBytes: message.estimatedBytes } : {}),
+        });
         break;
       default: {
         // Exhaustiveness guard: a new export message variant fails compile here
@@ -1424,6 +1445,30 @@ export class FollowerSyncManager implements AgentHandle {
         selector,
       });
     });
+  }
+
+  /**
+   * Render the approval dialog for a headless leader that delegated the prompt,
+   * then reply with the human's verdict.
+   *
+   * Fail-closed: no handler wired, or a handler that throws, replies with a
+   * denial rather than leaving the leader to time out.
+   */
+  private async handleExportApprovalRequest(
+    requestId: string,
+    request: { selector: TranscriptExportSelector; estimatedBytes?: number }
+  ): Promise<void> {
+    let approved = false;
+    try {
+      approved = (await this.options.onTranscriptExportApprovalRequest?.(request)) === true;
+    } catch (err) {
+      log.warn('Transcript export approval dialog failed — denying', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      approved = false;
+    }
+    this.sync.send({ type: 'transcript.export.approve.response', requestId, approved });
   }
 
   private handleExportDenied(requestId: string): void {
