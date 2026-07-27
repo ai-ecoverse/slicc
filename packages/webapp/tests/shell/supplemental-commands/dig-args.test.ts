@@ -99,6 +99,10 @@ describe('dig argument parser', () => {
     expect(query(['notatype'])).toMatchObject({ name: 'notatype', type: 'A' });
   });
 
+  it.each(['a', 'mx'])('treats a lone supported type-like token as the query name: %s', (name) => {
+    expect(query([name])).toMatchObject({ name, type: 'A' });
+  });
+
   it('errors clearly when name and type slots are already filled', () => {
     expect(parseDigArgs(['example.com', 'A', 'extra'])).toMatchObject({
       kind: 'error',

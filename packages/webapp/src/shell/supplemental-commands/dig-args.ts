@@ -135,9 +135,14 @@ function parseServer(arg: string, index: number, state: ParserState): ParseStep 
 function parseBare(arg: string, index: number, state: ParserState): ParseStep {
   const token = arg.trim();
   const candidateType = token.toUpperCase();
-  if (SUPPORTED_TYPES.includes(candidateType) && !state.type) state.type = candidateType;
+  const nameType = state.name?.toUpperCase();
+  if (SUPPORTED_TYPES.includes(candidateType) && !state.type && state.name)
+    state.type = candidateType;
   else if (!state.name) state.name = token;
-  else return { error: invalidType(token) };
+  else if (nameType && SUPPORTED_TYPES.includes(nameType) && !state.type) {
+    state.name = token;
+    state.type = nameType;
+  } else return { error: invalidType(token) };
   return { nextIndex: index };
 }
 
