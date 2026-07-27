@@ -1296,7 +1296,24 @@ describe('LeaderSyncManager', () => {
       vi.useRealTimers();
     });
 
-    it('removes follower when keepalive declares dead', () => {
+    it('keeps a stalled follower whose channel is still open', () => {
+      const onFollowerDead = vi.fn();
+      const { manager } = createManager({ onFollowerDead });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      // Ten ticks with no pong, well past the 3-missed stall threshold.
+      // Eviction closes the follower's data channel, so evicting a follower
+      // that is merely slow (throttled tab, busy main thread) would break a
+      // working connection. Its channel is still open — keep it.
+      vi.advanceTimersByTime(10 * 10_000);
+
+      expect(manager.hasFollowers).toBe(true);
+      expect(channel.readyState).toBe('open');
+      expect(onFollowerDead).not.toHaveBeenCalled();
+    });
+
+    it('removes follower once the keepalive hard deadline passes', () => {
       const onFollowerDead = vi.fn();
       const { manager } = createManager({ onFollowerDead });
       const channel = new FakeChannel();
@@ -1304,14 +1321,26 @@ describe('LeaderSyncManager', () => {
 
       expect(manager.hasFollowers).toBe(true);
 
-      // Default keepalive: 10s interval, 3 missed
-      vi.advanceTimersByTime(10_000); // tick 1: ping sent
-      vi.advanceTimersByTime(10_000); // tick 2: missed=1
-      vi.advanceTimersByTime(10_000); // tick 3: missed=2
-      vi.advanceTimersByTime(10_000); // tick 4: missed=3 → dead
+      // Default keepalive: 10s interval, hard deadline at 30 missed pongs.
+      vi.advanceTimersByTime(31 * 10_000);
 
       expect(manager.hasFollowers).toBe(false);
       expect(channel.readyState).toBe('closed');
+      expect(onFollowerDead).toHaveBeenCalledWith('b1');
+    });
+
+    it('removes follower promptly when its channel is already closed', () => {
+      const onFollowerDead = vi.fn();
+      const { manager } = createManager({ onFollowerDead });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      // A follower that really went away takes its channel with it; the
+      // stall grace only applies while the transport is still usable.
+      channel.readyState = 'closed';
+      vi.advanceTimersByTime(4 * 10_000);
+
+      expect(manager.hasFollowers).toBe(false);
       expect(onFollowerDead).toHaveBeenCalledWith('b1');
     });
 

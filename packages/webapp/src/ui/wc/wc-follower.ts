@@ -1,6 +1,11 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
 import { createLogger } from '../../core/logger.js';
+import {
+  FOLLOWER_STATUS_STORAGE_KEY,
+  getFollowerTrayRuntimeStatus,
+  subscribeToFollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -419,12 +424,39 @@ export async function mountWcUiFollower(
   // Terminal: the auto-reconnect loop exhausted its attempts (initial failures
   // now route through that loop too - see tray-webrtc startFollowerWithAutoReconnect).
   const GAVE_UP = "Couldn't reach the leader. Reload to retry.";
+  // Transient: the leader stopped answering pings but the channel is still
+  // open, so it is working, not gone (see `data-channel-keepalive.ts`). This is
+  // the whole reason a stall must not read as a disconnect — the connection is
+  // fine and recovers by itself, so the placeholder says "busy", not "lost".
+  const LEADER_BUSY = 'The leader is busy — hang on…';
   const setComposerState = (enabled: boolean, placeholder: string): void => {
     boot.refs.inputCard.setAttribute('placeholder', placeholder);
     if (enabled) boot.refs.inputCard.removeAttribute('disabled');
     else boot.refs.inputCard.setAttribute('disabled', '');
   };
   setComposerState(false, CONNECTING);
+
+  // Mirror the follower tray status into `localStorage`, matching what
+  // `wc-tray.ts` does for the kernel-backed floats. Without this the
+  // `/join/<token>` mount — the float most people actually run — keeps its
+  // connection history (attach attempts, last attach code, reconnects, last
+  // error) in module scope only, so a disconnect leaves nothing behind to
+  // diagnose from. Seed on boot, then track every transition.
+  subscribeToFollowerTrayRuntimeStatus((status) => {
+    try {
+      window.localStorage.setItem(FOLLOWER_STATUS_STORAGE_KEY, JSON.stringify(status));
+    } catch {
+      // A full/blocked localStorage must never break the connection UX.
+    }
+  });
+  try {
+    window.localStorage.setItem(
+      FOLLOWER_STATUS_STORAGE_KEY,
+      JSON.stringify(getFollowerTrayRuntimeStatus())
+    );
+  } catch {
+    // Same — telemetry is best-effort.
+  }
 
   // Push-to-talk: arm the composer's hold-to-dictate gesture. The follower
   // reuses the WC shell WITHOUT attachWcClient (which is where the live/leader
@@ -514,6 +546,13 @@ export async function mountWcUiFollower(
         prelude.cherryTransport?.emitSliccEventToHost(
           connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
         );
+    },
+    // A stall keeps the composer usable-looking but disabled, so a message
+    // typed while the leader is catching up can't be silently dropped. No
+    // cherry host event: the host contract is connected/disconnected, and a
+    // stall is neither.
+    onLeaderStalled: (stalled) => {
+      setComposerState(!stalled, stalled ? LEADER_BUSY : CONNECTED);
     },
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });

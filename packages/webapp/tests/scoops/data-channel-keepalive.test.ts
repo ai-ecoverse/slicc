@@ -223,4 +223,198 @@ describe('DataChannelKeepalive', () => {
     vi.advanceTimersByTime(5000);
     expect(sendPing).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // Stall vs death
+  //
+  // A peer that stops answering while its transport is still open is busy,
+  // not gone. Killing the connection there is self-inflicted: it closes a
+  // healthy channel and forces a full ICE/DTLS renegotiation.
+  // -------------------------------------------------------------------------
+
+  describe('stall handling (transport still open)', () => {
+    /** Build a keepalive whose transport openness the test controls. */
+    const makeStalling = (open: { value: boolean }, overrides = {}) => {
+      const sendPing = vi.fn();
+      const onDead = vi.fn();
+      const onStalled = vi.fn();
+      const onRecovered = vi.fn();
+      const keepalive = new DataChannelKeepalive({
+        sendPing,
+        onDead,
+        onStalled,
+        onRecovered,
+        isTransportOpen: () => open.value,
+        intervalMs: 1000,
+        maxMissed: 3,
+        hardMaxMissed: 6,
+        ...overrides,
+      });
+      return { keepalive, sendPing, onDead, onStalled, onRecovered };
+    };
+
+    it('reports a stall instead of death when the transport is still open', () => {
+      const open = { value: true };
+      const { keepalive, onDead, onStalled } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // tick 4 → missed=3 === maxMissed
+
+      expect(onStalled).toHaveBeenCalledTimes(1);
+      expect(onDead).not.toHaveBeenCalled();
+      expect(keepalive.isStalled).toBe(true);
+
+      keepalive.stop();
+    });
+
+    it('keeps probing while stalled instead of tearing down', () => {
+      const open = { value: true };
+      const { keepalive, sendPing, onDead } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // stalled
+      const pingsAtStall = sendPing.mock.calls.length;
+      vi.advanceTimersByTime(1000);
+
+      expect(sendPing.mock.calls.length).toBeGreaterThan(pingsAtStall);
+      expect(onDead).not.toHaveBeenCalled();
+
+      keepalive.stop();
+    });
+
+    it('reports the stall once, not on every tick', () => {
+      const open = { value: true };
+      const { keepalive, onStalled } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(5000); // past maxMissed, before hardMaxMissed
+
+      expect(onStalled).toHaveBeenCalledTimes(1);
+
+      keepalive.stop();
+    });
+
+    it('recovers when the peer answers again, without ever dying', () => {
+      const open = { value: true };
+      const { keepalive, onDead, onStalled, onRecovered } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // stalled
+      expect(onStalled).toHaveBeenCalledTimes(1);
+
+      keepalive.receivePong();
+
+      expect(onRecovered).toHaveBeenCalledTimes(1);
+      expect(keepalive.isStalled).toBe(false);
+      expect(keepalive.missed).toBe(0);
+
+      // A recovered peer can stall again later.
+      vi.advanceTimersByTime(4000);
+      expect(onStalled).toHaveBeenCalledTimes(2);
+      expect(onDead).not.toHaveBeenCalled();
+
+      keepalive.stop();
+    });
+
+    it('an inbound ping also clears the stall', () => {
+      const open = { value: true };
+      const { keepalive, onRecovered } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000);
+      keepalive.receivePing();
+
+      expect(onRecovered).toHaveBeenCalledTimes(1);
+      expect(keepalive.isStalled).toBe(false);
+
+      keepalive.stop();
+    });
+
+    it('still dies once the hard deadline passes', () => {
+      const open = { value: true };
+      const { keepalive, onDead } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // stalled (missed=3)
+      expect(onDead).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(3000); // missed=6 === hardMaxMissed → dead
+
+      expect(onDead).toHaveBeenCalledTimes(1);
+
+      keepalive.stop();
+    });
+
+    it('dies at maxMissed when the transport is NOT open', () => {
+      const open = { value: false };
+      const { keepalive, onDead, onStalled } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // missed=3 with a dead transport
+
+      expect(onDead).toHaveBeenCalledTimes(1);
+      expect(onStalled).not.toHaveBeenCalled();
+
+      keepalive.stop();
+    });
+
+    it('rejects a hard deadline that would never apply', () => {
+      // `tick` only consults the hard deadline after maxMissed is crossed, so a
+      // smaller hardMaxMissed would silently never fire.
+      expect(
+        () =>
+          new DataChannelKeepalive({
+            sendPing: vi.fn(),
+            onDead: vi.fn(),
+            maxMissed: 60,
+            hardMaxMissed: 30,
+          })
+      ).toThrow(RangeError);
+    });
+
+    it.each([
+      ['intervalMs', { intervalMs: 0 }],
+      ['maxMissed', { maxMissed: -1 }],
+      ['hardMaxMissed', { hardMaxMissed: 2.5 }],
+    ])('rejects a non-positive-integer %s', (_name, overrides) => {
+      expect(
+        () => new DataChannelKeepalive({ sendPing: vi.fn(), onDead: vi.fn(), ...overrides })
+      ).toThrow(RangeError);
+    });
+
+    it('does not report a recovery after it has already declared death', () => {
+      const open = { value: true };
+      const { keepalive, onDead, onRecovered } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(7000); // stalled, then past the hard deadline
+      expect(onDead).toHaveBeenCalledTimes(1);
+      expect(keepalive.isStalled).toBe(false);
+
+      // A pong that arrives after the state machine gave up must not resurrect
+      // it or claim a recovery.
+      keepalive.receivePong();
+      keepalive.receivePing();
+
+      expect(onRecovered).not.toHaveBeenCalled();
+      expect(keepalive.isStalled).toBe(false);
+    });
+
+    it('dies at maxMissed once an open transport closes mid-stall', () => {
+      const open = { value: true };
+      const { keepalive, onDead, onStalled } = makeStalling(open);
+      keepalive.start();
+
+      vi.advanceTimersByTime(4000); // stalled while open
+      expect(onStalled).toHaveBeenCalledTimes(1);
+      expect(onDead).not.toHaveBeenCalled();
+
+      open.value = false; // transport really went away
+      vi.advanceTimersByTime(1000);
+
+      expect(onDead).toHaveBeenCalledTimes(1);
+
+      keepalive.stop();
+    });
+  });
 });

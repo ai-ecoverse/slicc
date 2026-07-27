@@ -15,6 +15,26 @@ after `npm run build` has produced `dist/node-server`:
 The script tags the published template with the SLICC version from the root
 `package.json`.
 
+## Sandbox size
+
+The template pins **4 vCPUs** and **8192 MB** of RAM. e2b's own defaults are 2
+vCPUs / 1024 MB, and 2 is not enough: the hosted leader shares one sandbox
+between Chromium (browser + renderer + network/storage utilities), the SLICC
+kernel worker (WASM shell, realms, OPFS), and node-server. Under that
+contention the leader page's main thread stalls for tens of seconds during
+ordinary cone work, which is long enough for the tray keepalive on both ends to
+stop hearing pongs (see `docs/architecture.md` → Multi-Browser Sync → Liveness).
+
+CPU is fixed at **build** time (`BasicBuildOptions.cpuCount`) — `Sandbox.create`
+has no per-sandbox override — so changing it requires republishing the template:
+
+    SLICC_E2B_CPU_COUNT=8 \
+      packages/dev-tools/e2b-template/scripts/build-template.sh
+
+`SLICC_E2B_CPU_COUNT` defaults to `4` and must be a positive integer (the build
+fails fast otherwise). Raising it raises the per-second cost of every cone
+booted from the template, so pair any bump with a look at e2b billing.
+
 ## Isolated / test builds (don't override production)
 
 e2b has no build-without-deploy mode — `Template.build` builds on e2b's infra

@@ -27,10 +27,26 @@ async function main(): Promise<void> {
   // live 'slicc' template and could change what Sandbox.create('slicc') sees.
   const templateName = process.env['SLICC_E2B_TEMPLATE_NAME'] ?? 'slicc';
 
+  // vCPUs for the sandbox. e2b's default is 2, which the hosted leader has to
+  // share between Chromium (browser + renderer + network/storage utilities),
+  // the SLICC kernel worker (WASM shell, realms, OPFS), and node-server. Under
+  // that contention the leader page's main thread stalls for tens of seconds
+  // during ordinary cone work, which is long enough for the tray keepalive on
+  // BOTH ends to stop hearing pongs. CPU allocation is fixed at template-build
+  // time (`BasicBuildOptions`) — `Sandbox.create` has no per-sandbox override —
+  // so it has to be set here.
+  const cpuCount = Number(process.env['SLICC_E2B_CPU_COUNT'] ?? 4);
+  if (!Number.isInteger(cpuCount) || cpuCount < 1) {
+    throw new Error(
+      `SLICC_E2B_CPU_COUNT must be a positive integer; got ${process.env['SLICC_E2B_CPU_COUNT']}`
+    );
+  }
+
   console.log('cwd:', process.cwd());
   console.log('repoRoot (fileContextPath):', repoRoot);
   console.log('E2B_API_KEY set:', Boolean(process.env['E2B_API_KEY']));
   console.log('Template alias:', templateName);
+  console.log('vCPUs:', cpuCount);
 
   // fileContextPath roots all .copy() source paths at the repo root, so
   // dist/* and packages/* are reachable. Without it the SDK roots at this
@@ -70,6 +86,7 @@ async function main(): Promise<void> {
 
   console.log('Template definition built, starting Template.build…');
   const buildInfo = await Template.build(template, templateName, {
+    cpuCount,
     memoryMB: 8192,
     onBuildLogs: defaultBuildLogger({ minLevel: 'debug' }),
   });

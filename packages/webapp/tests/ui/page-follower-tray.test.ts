@@ -85,6 +85,15 @@ describe('startPageFollowerTray', () => {
     expect(() => handle.stop()).not.toThrow();
   });
 
+  it('accepts an onLeaderStalled option without throwing', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      onLeaderStalled: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
   it('accepts an onCherrySliccEvent option (cherry outbound bridge) without throwing', () => {
     const opts: StartPageFollowerTrayOptions = {
       ...makeBaseOptions(),

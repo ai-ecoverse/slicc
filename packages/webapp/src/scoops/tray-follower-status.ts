@@ -23,6 +23,17 @@ export interface FollowerTrayRuntimeStatus {
   connectingSince: number | null;
   /** Last error message encountered during attach/bootstrap (more specific than `error`). */
   lastError: string | null;
+  /**
+   * The leader has stopped answering keepalive pings but its data channel is
+   * still open — it is busy, not gone (see `data-channel-keepalive.ts`). The
+   * connection is intact and recovers on its own, so this is deliberately NOT
+   * a `state` variant: a stalled follower is still `connected`.
+   *
+   * Optional because it is a transient overlay maintained by
+   * {@link setFollowerStalled}, like `lastPingTime` — not part of the status
+   * every producer constructs.
+   */
+  stalled?: boolean;
 }
 
 let followerTrayRuntimeStatus: FollowerTrayRuntimeStatus = {
@@ -129,5 +140,12 @@ export function resetReconnectAttempts(): void {
 /** Update the lastPingTime timestamp, preserving other fields. */
 export function setFollowerLastPingTime(timestamp: number): void {
   followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, lastPingTime: timestamp };
+  notifyFollowerListeners();
+}
+
+/** Flag/clear the transient "leader is busy" state, preserving other fields. */
+export function setFollowerStalled(stalled: boolean): void {
+  if (followerTrayRuntimeStatus.stalled === stalled) return;
+  followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, stalled };
   notifyFollowerListeners();
 }
