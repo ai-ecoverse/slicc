@@ -119,6 +119,21 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   }
 
   /**
+   * The embedding page's origin, as resolved once at boot by
+   * `resolveParentOrigin()` (ancestorOrigins → referrer → same-origin) and used
+   * as this transport's `postMessage` target.
+   *
+   * Exposed so consent UI can name the party that actually receives exported
+   * bytes. Callers must not re-derive it from `location.ancestorOrigins`:
+   * that API is non-standard and absent in Firefox, where Cherry still boots
+   * via the referrer fallback — re-deriving would silently mislabel the
+   * recipient at the consent boundary.
+   */
+  get hostOrigin(): string {
+    return this.opts.targetOrigin;
+  }
+
+  /**
    * The host iframe's realm can soft-navigate (SPA route change / history
    * pushState) WITHOUT a CDP navigate, so report the live `location.href` rather
    * than the URL captured at construction — otherwise Target.getTargets /

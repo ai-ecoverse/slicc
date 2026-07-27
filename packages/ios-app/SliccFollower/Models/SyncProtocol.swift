@@ -3,7 +3,7 @@ import Foundation
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-let traySyncProtocolVersion = 3
+let traySyncProtocolVersion = 4
 
 // MARK: - AgentEvent
 
@@ -310,7 +310,10 @@ enum LeaderToFollowerMessage: Codable {
              "transcript.export.start",
              "transcript.export.chunk",
              "transcript.export.complete",
-             "transcript.export.error":
+             "transcript.export.error",
+             // Delegated approval prompt from a headless (cloud) leader. iOS
+             // never originates an export, so it is never asked to approve one.
+             "transcript.export.approve.request":
             self = .unknown(type: type)
         case "hello":
             self = .hello(

@@ -126,4 +126,6 @@ ls -la /workspace/*.zip
 - The local UI export ("Export transcript" in the avatar menu) produces the
   same ZIP and triggers a browser download instead of writing to VFS.
 - Followers (tray, Cherry) must request an export from the leader; the leader
-  shows a one-time approval dialog before streaming the ZIP.
+  shows a one-time approval dialog before streaming the ZIP. On a cloud
+  (hosted-leader) session the leader is headless, so it delegates that prompt to
+  the requesting follower — the approval appears on the user's own device.

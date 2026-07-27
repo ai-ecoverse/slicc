@@ -119,6 +119,25 @@ export interface FollowerSyncManagerOptions {
    * Inject `() => new MemorySpool()` in tests for a deterministic, fast spool.
    */
   makeExportSpool?: (requestId: string) => ExportSpool;
+  /**
+   * Render the transcript-export approval dialog on behalf of a **headless**
+   * leader (the hosted-leader / cloud float, where the leader tab is headless
+   * Chromium in an e2b sandbox and has no human to ask).
+   *
+   * Resolve `true` for "Allow once", `false` for deny. When this is unset, or
+   * it rejects, the follower replies with a denial — the gate is fail-closed,
+   * so a follower that cannot prompt can never silently authorize an export.
+   *
+   * `signal` aborts when the underlying export is settled by something other
+   * than this dialog (leader approval timeout, local cancel, disconnect,
+   * error). Implementations MUST close the prompt and resolve `false` on abort
+   * so a stale dialog cannot linger past the request it belongs to.
+   */
+  onTranscriptExportApprovalRequest?: (request: {
+    selector: TranscriptExportSelector;
+    estimatedBytes?: number;
+    signal: AbortSignal;
+  }) => Promise<boolean> | boolean;
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
@@ -232,6 +251,12 @@ export class FollowerSyncManager implements AgentHandle {
       signal: AbortSignal;
       onAbort: () => void;
       onProgress?: (progress: TranscriptExportProgress) => void;
+      /**
+       * Aborts a delegated approval dialog that is still on screen. Set while a
+       * headless leader's prompt is open; fired by every terminal outcome so a
+       * stale dialog cannot outlive the request it belongs to.
+       */
+      approvalAbort?: AbortController;
     }
   >();
 
@@ -395,6 +420,7 @@ export class FollowerSyncManager implements AgentHandle {
     // Remove each AbortSignal listener, cancel the spool (releasing OPFS
     // temp files and memory), and clear the map.
     for (const [, entry] of this.activeExportRequests) {
+      entry.approvalAbort?.abort();
       entry.signal.removeEventListener('abort', entry.onAbort);
       void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-aborted'));
@@ -769,6 +795,7 @@ export class FollowerSyncManager implements AgentHandle {
       case 'transcript.export.chunk':
       case 'transcript.export.complete':
       case 'transcript.export.error':
+      case 'transcript.export.approve.request':
         this.handleExportLeaderMessage(message);
         break;
       case 'ping':
@@ -1319,7 +1346,8 @@ export class FollowerSyncManager implements AgentHandle {
           | 'transcript.export.start'
           | 'transcript.export.chunk'
           | 'transcript.export.complete'
-          | 'transcript.export.error';
+          | 'transcript.export.error'
+          | 'transcript.export.approve.request';
       }
     >
   ): void {
@@ -1353,6 +1381,12 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       case 'transcript.export.error':
         this.handleExportError(message.requestId, message.code);
+        break;
+      case 'transcript.export.approve.request':
+        void this.handleExportApprovalRequest(message.requestId, {
+          selector: message.selector,
+          ...(message.estimatedBytes != null ? { estimatedBytes: message.estimatedBytes } : {}),
+        });
         break;
       default: {
         // Exhaustiveness guard: a new export message variant fails compile here
@@ -1393,6 +1427,9 @@ export class FollowerSyncManager implements AgentHandle {
       const onAbort = (): void => {
         const entry = this.activeExportRequests.get(requestId);
         if (!entry) return;
+        // Close a delegated approval dialog opened for this request — a Cherry
+        // host abort must not leave a live prompt behind.
+        entry.approvalAbort?.abort();
         this.sync.send({ type: 'transcript.export.cancel', requestId });
         this.activeExportRequests.delete(requestId);
         void entry.spool.cancel();
@@ -1426,9 +1463,63 @@ export class FollowerSyncManager implements AgentHandle {
     });
   }
 
+  /**
+   * Render the approval dialog for a headless leader that delegated the prompt,
+   * then reply with the human's verdict.
+   *
+   * Fail-closed: no handler wired, or a handler that throws, replies with a
+   * denial rather than leaving the leader to time out.
+   */
+  private async handleExportApprovalRequest(
+    requestId: string,
+    request: { selector: TranscriptExportSelector; estimatedBytes?: number }
+  ): Promise<void> {
+    // Only ever prompt for an export this follower actually asked for and is
+    // still waiting on. Drops unsolicited prompts from a misbehaving or
+    // version-skewed leader, and prompts that arrive after a local cancel.
+    const entry = this.activeExportRequests.get(requestId);
+    if (!entry) {
+      log.warn('Ignoring approval prompt for an unknown export request', { requestId });
+      this.sync.send({ type: 'transcript.export.approve.response', requestId, approved: false });
+      return;
+    }
+
+    // Tie the dialog to the request: a leader timeout, a local abort, a
+    // disconnect, or an error closes it instead of leaving a stale prompt whose
+    // "Allow" would land on a leader that has already given up.
+    const approvalAbort = new AbortController();
+    entry.approvalAbort = approvalAbort;
+
+    let approved = false;
+    try {
+      approved =
+        (await this.options.onTranscriptExportApprovalRequest?.({
+          ...request,
+          signal: approvalAbort.signal,
+        })) === true;
+    } catch (err) {
+      log.warn('Transcript export approval dialog failed — denying', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      approved = false;
+    }
+
+    // Re-check: the request may have been settled while the dialog was open. A
+    // late verdict must not be reported as an approval the leader would ignore.
+    if (approvalAbort.signal.aborted || !this.activeExportRequests.has(requestId)) {
+      this.sync.send({ type: 'transcript.export.approve.response', requestId, approved: false });
+      return;
+    }
+    this.sync.send({ type: 'transcript.export.approve.response', requestId, approved });
+  }
+
   private handleExportDenied(requestId: string): void {
     const entry = this.activeExportRequests.get(requestId);
     if (!entry) return;
+    // Covers the leader's approval timeout: close our own prompt if it is
+    // somehow still open, so "Allow" cannot be clicked into a dead request.
+    entry.approvalAbort?.abort();
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
     void entry.spool.cancel();
@@ -1550,6 +1641,7 @@ export class FollowerSyncManager implements AgentHandle {
   private handleExportError(requestId: string, code: TranscriptExportErrorCode): void {
     const entry = this.activeExportRequests.get(requestId);
     if (!entry) return;
+    entry.approvalAbort?.abort();
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
     void entry.spool.cancel();

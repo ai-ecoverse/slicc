@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 3,
-  "leaderVariantCount": 36,
-  "followerVariantCount": 29,
+  "traySyncProtocolVersion": 4,
+  "leaderVariantCount": 37,
+  "followerVariantCount": 30,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -329,6 +329,18 @@
       "message": {
         "type": "theme.apply",
         "themeJson": "{\"accent\":\"#ff0066\"}"
+      }
+    },
+    {
+      "type": "transcript.export.approve.request",
+      "ios": "unknown",
+      "message": {
+        "type": "transcript.export.approve.request",
+        "requestId": "te-1",
+        "selector": {
+          "kind": "active"
+        },
+        "estimatedBytes": 1024
       }
     },
     {
@@ -665,6 +677,15 @@
         "type": "transcript.export.ack",
         "requestId": "te-2",
         "index": 0
+      }
+    },
+    {
+      "type": "transcript.export.approve.response",
+      "ios": "undecodable",
+      "message": {
+        "type": "transcript.export.approve.response",
+        "requestId": "te-2",
+        "approved": true
       }
     },
     {

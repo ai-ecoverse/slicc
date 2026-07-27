@@ -52,7 +52,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 3;
+export const TRAY_SYNC_PROTOCOL_VERSION = 4;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -108,6 +108,22 @@ export type LeaderToFollowerMessage =
   // Transcript export (leader → follower)
   | { type: 'transcript.export.pending'; requestId: string }
   | { type: 'transcript.export.denied'; requestId: string }
+  /**
+   * Delegated approval prompt (v4). Sent **only** when the leader has no
+   * interactive human of its own — the hosted-leader (cloud) float, where the
+   * leader tab is headless Chromium in an e2b sandbox. The requesting follower
+   * renders the same approval dialog the leader would have shown and replies
+   * with `transcript.export.approve.response`.
+   *
+   * Carries no transcript metadata beyond what the follower already supplied in
+   * its own request (`selector`), plus an optional size estimate.
+   */
+  | {
+      type: 'transcript.export.approve.request';
+      requestId: string;
+      selector: TranscriptExportSelector;
+      estimatedBytes?: number;
+    }
   | {
       type: 'transcript.export.start';
       requestId: string;
@@ -199,6 +215,13 @@ export type FollowerToLeaderMessage =
    * sending the next chunk. Owner-scoped via requestId + follower identity.
    */
   | { type: 'transcript.export.ack'; requestId: string; index: number }
+  /**
+   * Reply to a delegated `transcript.export.approve.request` (v4). `approved`
+   * is the human's verdict from the follower-rendered dialog. Any other
+   * outcome (no handler, dialog error, timeout, disconnect) is resolved as a
+   * denial by the leader — the gate is fail-closed.
+   */
+  | { type: 'transcript.export.approve.response'; requestId: string; approved: boolean }
   | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }

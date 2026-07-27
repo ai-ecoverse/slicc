@@ -36,6 +36,10 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 - Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates). The same applies to the unified preview's `preview.open` leader→follower message: iOS decodes it in `LeaderToFollowerMessage` and routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview URL minted by the leader's `serve`), then acks with `tab.opened`.
 - The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
+- Transcript export in both directions, including the v4 delegated-approval pair
+  (`transcript.export.approve.request` / `transcript.export.approve.response`). iOS never
+  originates an export, so it is never asked to approve one; the leader→follower prompt decodes
+  to `.unknown` and the follower→leader reply is `undecodable` in the corpus.
 
 ### Cherry (embedded follower) mirror
 

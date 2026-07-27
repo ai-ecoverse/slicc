@@ -488,6 +488,26 @@ export async function mountWcUiFollower(
       controller.addUserMessage(text, attachments),
     onStatus: (status) => controller.setProcessing(status === 'processing'),
     setChatAgent: (agent) => controller.setAgent(agent),
+    // A headless (hosted / cloud) leader has no human to show the export
+    // approval dialog to, so it delegates the prompt here — this follower's
+    // user is the only person in the session. Same dialog, same one-time
+    // semantics; only the realm it renders in differs.
+    onTranscriptExportApprovalRequest: async (request) => {
+      const { openTranscriptExportApproval } = await import('./wc-transcript-export.js');
+      // Cherry: the bytes leave SLICC for the embedding page, so name it. Use
+      // the origin the transport already resolved at boot rather than reading
+      // `location.ancestorOrigins` again — that API is absent in Firefox, where
+      // Cherry still boots via the referrer fallback, and re-deriving it would
+      // mislabel the recipient as this device.
+      const cherryHostOrigin = isCherry ? prelude.cherryTransport?.hostOrigin : undefined;
+      return openTranscriptExportApproval({
+        delegated: true,
+        selector: request.selector,
+        signal: request.signal,
+        ...(cherryHostOrigin ? { hostOrigin: cherryHostOrigin } : {}),
+        ...(request.estimatedBytes != null ? { estimatedBytes: request.estimatedBytes } : {}),
+      });
+    },
     onConnectionChange: (connected) => {
       setComposerState(connected, connected ? CONNECTED : CONNECTING);
       if (isCherry)
