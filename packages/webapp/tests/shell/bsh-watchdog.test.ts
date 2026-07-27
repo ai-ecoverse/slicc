@@ -614,6 +614,7 @@ describe('BshWatchdog', () => {
       const expression = String(evaluateCalls[0].params['expression']);
       // Wrapper carries the bundle hint and the unbundled-specifier guard.
       expect(expression).toContain('esbuild --bundle');
+      expect(expression).not.toContain('ipx esbuild --bundle');
       expect(expression).toContain('unbundled require() specifiers');
       // No CDN URL or dynamic-import pre-fetch in the wrapper.
       expect(expression).not.toContain('esm.sh');
@@ -683,6 +684,7 @@ describe('BshWatchdog mirror of require-guards', () => {
     // No CDN pre-fetch anymore — the .bsh runtime has no resolver, so the
     // wrapper must point the user at the bundle-first workflow.
     expect(watchdogSource).toContain('esbuild --bundle');
+    expect(watchdogSource).not.toContain('ipx esbuild --bundle');
     expect(watchdogSource).toContain('unbundled require() specifiers');
     expect(watchdogSource).toContain('[bsh]');
   });
