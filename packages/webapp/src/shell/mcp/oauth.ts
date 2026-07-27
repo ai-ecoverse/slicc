@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../../core/logger.js';
+import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../../providers/pkce.js';
 
 const log = createLogger('mcp-oauth');
 
@@ -72,6 +73,41 @@ export type FetchLike = (
   json(): Promise<unknown>;
   headers?: { get(name: string): string | null };
 }>;
+
+interface DiscoveryValidationContext {
+  discoveryPath: 'prm' | 'asm-origin-fallback';
+  prmUrl: string;
+  prmReason: string | null;
+  asmUrl: string;
+  asmReason: string | null;
+}
+
+function assertValidAuthorizationServerMetadata(
+  asm: AuthorizationServerMetadata | null,
+  context: DiscoveryValidationContext
+): asserts asm is AuthorizationServerMetadata {
+  const { discoveryPath, prmUrl, prmReason, asmUrl, asmReason } = context;
+  if (!asm) {
+    if (discoveryPath === 'asm-origin-fallback') {
+      throw new Error(
+        `MCP OAuth discovery failed. ` +
+          `PRM (${prmUrl}): ${prmReason}. ` +
+          `ASM fallback (${asmUrl}): ${asmReason}.`
+      );
+    }
+    throw new Error(`ASM fetch failed: ${asmReason} (${asmUrl})`);
+  }
+  if (asm.authorization_endpoint && asm.token_endpoint) return;
+  if (discoveryPath === 'asm-origin-fallback') {
+    throw new Error(
+      `MCP OAuth discovery failed. ` +
+        `PRM (${prmUrl}): ${prmReason}. ` +
+        `ASM fallback (${asmUrl}) is missing required endpoints ` +
+        `(authorization_endpoint, token_endpoint).`
+    );
+  }
+  throw new Error(`ASM at ${asmUrl} is missing required endpoints`);
+}
 
 // ── Discovery (RFC 9728 + RFC 8414) ─────────────────────────────────
 
@@ -161,27 +197,13 @@ export async function discoverAuth(
     asmReason = err instanceof Error ? err.message : String(err);
   }
 
-  if (!asm) {
-    if (discoveryPath === 'asm-origin-fallback') {
-      throw new Error(
-        `MCP OAuth discovery failed. ` +
-          `PRM (${prmUrl}): ${prmReason}. ` +
-          `ASM fallback (${asmUrl}): ${asmReason}.`
-      );
-    }
-    throw new Error(`ASM fetch failed: ${asmReason} (${asmUrl})`);
-  }
-  if (!asm.authorization_endpoint || !asm.token_endpoint) {
-    if (discoveryPath === 'asm-origin-fallback') {
-      throw new Error(
-        `MCP OAuth discovery failed. ` +
-          `PRM (${prmUrl}): ${prmReason}. ` +
-          `ASM fallback (${asmUrl}) is missing required endpoints ` +
-          `(authorization_endpoint, token_endpoint).`
-      );
-    }
-    throw new Error(`ASM at ${asmUrl} is missing required endpoints`);
-  }
+  assertValidAuthorizationServerMetadata(asm, {
+    discoveryPath,
+    prmUrl,
+    prmReason,
+    asmUrl,
+    asmReason,
+  });
   return {
     issuer: asm.issuer || asBase,
     authorizationEndpoint: asm.authorization_endpoint,
@@ -254,22 +276,13 @@ export function pickPkceMethod(supported: string[] | undefined): 'S256' | 'plain
   return 'S256';
 }
 
-function base64UrlEncode(bytes: Uint8Array): string {
-  let bin = '';
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
 /** Generate a PKCE verifier + challenge pair using the chosen method. */
 export async function generatePkce(method: 'S256' | 'plain'): Promise<PkcePair> {
-  const rand = new Uint8Array(32);
-  crypto.getRandomValues(rand);
-  const codeVerifier = base64UrlEncode(rand);
+  const codeVerifier = generateCodeVerifier();
   if (method === 'plain') {
     return { codeVerifier, codeChallenge: codeVerifier, method };
   }
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
-  return { codeVerifier, codeChallenge: base64UrlEncode(new Uint8Array(digest)), method };
+  return { codeVerifier, codeChallenge: await deriveCodeChallenge(codeVerifier), method };
 }
 
 // ── Authorization-code flow ─────────────────────────────────────────
@@ -305,7 +318,7 @@ export function extractCodeFromUrl(url: string): { code: string | null; state: s
 export async function runAuthFlow(opts: RunAuthFlowOptions): Promise<TokenResponse> {
   const method = pickPkceMethod(opts.asMetadata.codeChallengeMethods);
   const pkce = await generatePkce(method);
-  const state = base64UrlEncode(crypto.getRandomValues(new Uint8Array(16)));
+  const state = randomState();
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: opts.clientId,

@@ -5,8 +5,11 @@
  * https://github.com/espennilsen/pi/blob/main/extensions/pi-openrouter/src/oauth.ts
  */
 
+import { deriveCodeChallenge, generateCodeVerifier } from '../src/providers/pkce.js';
 import type { InterceptingOAuthLauncher, OAuthLoginOptions } from '../src/providers/types.js';
 import { saveOAuthAccount } from '../src/ui/provider-settings.js';
+
+export { deriveCodeChallenge, generateCodeVerifier };
 
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_KEYS_URL = 'https://openrouter.ai/api/v1/auth/keys';
@@ -14,23 +17,6 @@ const OPENROUTER_API_BASE_URL = 'https://openrouter.ai/api/v1';
 
 export const OPENROUTER_CALLBACK_URL = 'http://127.0.0.1:3000/callback';
 export const OPENROUTER_REDIRECT_URI_PATTERN = 'http://127.0.0.1:3000/*';
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  let value = '';
-  for (const byte of bytes) value += String.fromCharCode(byte);
-  return btoa(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export function generateCodeVerifier(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return base64UrlEncode(bytes);
-}
-
-export async function deriveCodeChallenge(verifier: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  return base64UrlEncode(new Uint8Array(digest));
-}
 
 export function buildAuthorizeUrl(callbackUrl: string, codeChallenge: string): string {
   const authorize = new URL(OPENROUTER_AUTH_URL);
