@@ -128,6 +128,25 @@ type Envelope struct {
 	Type string `json:"type"`
 }
 
+// ChunkFrame is one frame of a message too large for a single SCTP send.
+//
+// It mirrors TrayChunkFrame in packages/shared-ts/src/tray-sync-protocol.ts and
+// deliberately sits BELOW the message discriminants above: a sender splits an
+// oversize serialized message into frames, and a receiver reassembles them
+// before looking at `type` at all. That is why it needs no entry in the golden
+// corpus (which enumerates the message unions) and why Conn.dispatch intercepts
+// it ahead of the type switch.
+//
+// ChunkData slices are concatenated in ChunkIndex order to recover the original
+// message bytes.
+type ChunkFrame struct {
+	Type        string `json:"type"`
+	ChunkID     string `json:"chunkId"`
+	ChunkIndex  int    `json:"chunkIndex"`
+	TotalChunks int    `json:"totalChunks"`
+	ChunkData   string `json:"chunkData"`
+}
+
 // Message type discriminants used across the CLI.
 const (
 	TypeHello           = "hello"
@@ -141,6 +160,11 @@ const (
 	TypeUserMessageEcho = "user_message_echo"
 	TypeStatus          = "status"
 	TypeError           = "error"
+
+	// TypeChunk is the transport-level chunk frame (see ChunkFrame). The `__`
+	// prefix marks reserved transport vocabulary that can never collide with a
+	// semantic message type.
+	TypeChunk = "__chunk"
 
 	StreamStdout = "stdout"
 	StreamStderr = "stderr"

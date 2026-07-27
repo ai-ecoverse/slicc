@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
@@ -29,6 +31,28 @@ const (
 	bootstrapMaxWait    = 30 * time.Second
 	maxBufferedAmount   = 1 << 20 // 1 MiB — apply backpressure above this
 	maxSupersedeRetries = 5
+)
+
+// Transport chunking bounds. These mirror the TS constants in
+// packages/shared-ts/src/tray-sync-protocol.ts; see ChunkFrame for why framing
+// lives below the message discriminants.
+const (
+	// maxMessageBytes is the per-send SCTP ceiling. 65536 is the floor every
+	// SCTP implementation must accept (RFC 8831 §6.6), so framing to it is
+	// always safe regardless of what the peer negotiated.
+	maxMessageBytes = 65536
+	// chunkEnvelopeBytes is the allowance for a frame's type/id/index fields.
+	chunkEnvelopeBytes = 512
+	// worstCaseBytesPerRune bounds the growth of a slice of already-serialized
+	// JSON when it is re-escaped into a frame: a non-ASCII BMP rune costs 3
+	// UTF-8 bytes, re-escaped ASCII (`\` → `\\`) costs 2. 4 leaves margin.
+	worstCaseBytesPerRune = 4
+	// maxChunkBytes caps frame payload, matching the TS chunkers.
+	maxChunkBytes = 32 * 1024
+	// maxTotalMessageBytes is the hard ceiling on one reassembled message.
+	maxTotalMessageBytes = 8 << 20 // 8 MiB
+	// maxPendingReassemblies bounds concurrent in-flight reassemblies.
+	maxPendingReassemblies = 8
 )
 
 // Options configures a Dial.
@@ -64,6 +88,11 @@ type Conn struct {
 	dc *webrtc.DataChannel
 
 	sendMu sync.Mutex
+
+	// reassemblyMu guards reassembly; dispatch runs on the data-channel read
+	// goroutine, so inbound frames arrive serially, but Close may race it.
+	reassemblyMu sync.Mutex
+	reassembly   map[string]*chunkReassembly
 
 	connected chan struct{}
 	done      chan struct{}
@@ -371,11 +400,25 @@ func (c *Conn) setBootstrapID(ref *string, id string) {
 	c.mu.Unlock()
 }
 
+// chunkReassembly accumulates the frames of one chunked message.
+type chunkReassembly struct {
+	chunks   []string
+	received int
+	bytes    int
+	started  time.Time
+}
+
 // dispatch decodes the discriminant and routes inbound messages.
 func (c *Conn) dispatch(data []byte) {
 	var env protocol.Envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		c.opts.logf("tray: dropping unparseable message: %v", err)
+		return
+	}
+	// Transport frames are intercepted before the type switch: reassembly
+	// completes into an ordinary message, so OnMessage never sees framing.
+	if env.Type == protocol.TypeChunk {
+		c.acceptChunkFrame(data)
 		return
 	}
 	switch env.Type {
@@ -387,6 +430,78 @@ func (c *Conn) dispatch(data []byte) {
 		if c.opts.OnMessage != nil {
 			c.opts.OnMessage(env.Type, data)
 		}
+	}
+}
+
+// acceptChunkFrame buffers one inbound frame and, once the last one lands,
+// re-dispatches the reconstructed message.
+//
+// Bounded by maxPendingReassemblies and maxTotalMessageBytes, evicting
+// oldest-first: a peer that starts many large messages and finishes none must
+// not grow this process without limit. Frames are index-addressed, so
+// out-of-order delivery is handled even though SCTP is ordered by default.
+func (c *Conn) acceptChunkFrame(data []byte) {
+	var frame protocol.ChunkFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		c.opts.logf("tray: dropping unparseable chunk frame: %v", err)
+		return
+	}
+	if frame.TotalChunks <= 0 || frame.ChunkIndex < 0 || frame.ChunkIndex >= frame.TotalChunks {
+		c.opts.logf("tray: dropping chunk frame with bad indices %d/%d",
+			frame.ChunkIndex, frame.TotalChunks)
+		return
+	}
+
+	c.reassemblyMu.Lock()
+	if c.reassembly == nil {
+		c.reassembly = make(map[string]*chunkReassembly)
+	}
+	entry, ok := c.reassembly[frame.ChunkID]
+	if !ok {
+		entry = &chunkReassembly{chunks: make([]string, frame.TotalChunks), started: time.Now()}
+		c.reassembly[frame.ChunkID] = entry
+		c.evictOldestReassemblyLocked()
+	}
+	if entry.chunks[frame.ChunkIndex] != "" {
+		c.reassemblyMu.Unlock() // duplicate frame
+		return
+	}
+	entry.chunks[frame.ChunkIndex] = frame.ChunkData
+	entry.received++
+	entry.bytes += len(frame.ChunkData)
+	if entry.bytes > maxTotalMessageBytes {
+		delete(c.reassembly, frame.ChunkID)
+		c.reassemblyMu.Unlock()
+		c.opts.logf("tray: dropping oversize chunked message %s (>%d bytes)",
+			frame.ChunkID, maxTotalMessageBytes)
+		return
+	}
+	if entry.received < frame.TotalChunks {
+		c.reassemblyMu.Unlock()
+		return
+	}
+	delete(c.reassembly, frame.ChunkID)
+	c.reassemblyMu.Unlock()
+
+	c.dispatch([]byte(strings.Join(entry.chunks, "")))
+}
+
+// evictOldestReassemblyLocked drops the oldest in-flight reassembly while the
+// pending count is over budget. Caller must hold reassemblyMu.
+func (c *Conn) evictOldestReassemblyLocked() {
+	for len(c.reassembly) > maxPendingReassemblies {
+		var oldestID string
+		var oldest time.Time
+		for id, entry := range c.reassembly {
+			if oldestID == "" || entry.started.Before(oldest) {
+				oldestID, oldest = id, entry.started
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(c.reassembly, oldestID)
+		c.opts.logf("tray: evicted incomplete reassembly %s", oldestID)
 	}
 }
 
@@ -402,11 +517,38 @@ func (c *Conn) sendHello() error {
 
 // SendJSON marshals v and sends it over the data channel, applying simple
 // backpressure when the SCTP send buffer is backed up.
+//
+// A message larger than maxMessageBytes is split into chunk frames rather than
+// handed to SendText, which would fail for exceeding the SCTP max message size
+// and drop the message.
 func (c *Conn) SendJSON(v any) error {
 	payload, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	if len(payload) > maxTotalMessageBytes {
+		return fmt.Errorf("tray: refusing to send %d-byte message (limit %d)",
+			len(payload), maxTotalMessageBytes)
+	}
+	if len(payload) <= maxMessageBytes {
+		return c.sendRaw(string(payload))
+	}
+	for _, frame := range frameChunks(string(payload), newChunkID()) {
+		encoded, err := json.Marshal(frame)
+		if err != nil {
+			return err
+		}
+		if err := c.sendRaw(string(encoded)); err != nil {
+			return fmt.Errorf("tray: chunked send failed at frame %d/%d: %w",
+				frame.ChunkIndex, frame.TotalChunks, err)
+		}
+	}
+	return nil
+}
+
+// sendRaw writes one already-serialized frame, waiting for the SCTP buffer to
+// drain first.
+func (c *Conn) sendRaw(payload string) error {
 	c.mu.Lock()
 	dc := c.dc
 	c.mu.Unlock()
@@ -423,7 +565,65 @@ func (c *Conn) SendJSON(v any) error {
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return dc.SendText(string(payload))
+	return dc.SendText(payload)
+}
+
+// newChunkID returns an identifier unique among this process's in-flight
+// chunked messages.
+func newChunkID() string {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("c%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("c%x", buf)
+}
+
+// frameChunks splits an already-serialized message into frames that each fit
+// within maxMessageBytes once re-escaped as JSON.
+//
+// Slicing is done on bytes, but only at rune boundaries: cutting a multi-byte
+// rune in half would corrupt both frames, and Go strings carry raw UTF-8 (no
+// surrogate-escape safety net).
+func frameChunks(payload, chunkID string) []protocol.ChunkFrame {
+	budget := (maxMessageBytes - chunkEnvelopeBytes) / worstCaseBytesPerRune
+	if budget > maxChunkBytes {
+		budget = maxChunkBytes
+	}
+	if budget < 1 {
+		budget = 1
+	}
+
+	var slices []string
+	for start := 0; start < len(payload); {
+		end := start + budget
+		if end >= len(payload) {
+			end = len(payload)
+		} else {
+			for end > start && !utf8.RuneStart(payload[end]) {
+				end--
+			}
+			if end == start {
+				end = start + budget // pathological; accept the split
+			}
+		}
+		slices = append(slices, payload[start:end])
+		start = end
+	}
+	if len(slices) == 0 {
+		slices = []string{""}
+	}
+
+	frames := make([]protocol.ChunkFrame, len(slices))
+	for i, slice := range slices {
+		frames[i] = protocol.ChunkFrame{
+			Type:        protocol.TypeChunk,
+			ChunkID:     chunkID,
+			ChunkIndex:  i,
+			TotalChunks: len(slices),
+			ChunkData:   slice,
+		}
+	}
+	return frames
 }
 
 // Done is closed when the connection drops.
