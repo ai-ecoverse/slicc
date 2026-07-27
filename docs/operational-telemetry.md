@@ -13,6 +13,10 @@ SLICC runs across three deployment modes (CLI, extension, Electron) and emits RU
 - Are voice input and skill installation gaining adoption?
 - What are the Core Web Vitals for the UI? (CLI/Electron only — the extension doesn't get CWV.)
 
+RUM covers only the applications that load the webapp. For the tray hub worker,
+swift-server, the iOS follower, and the Go CLI — none of which emit beacons — see
+"Deploy-Impact Signals by Application" at the end of this document.
+
 ### Why this approach
 
 - **Lightweight**: sampling-based, zero performance impact on unsampled pageviews.
@@ -237,3 +241,187 @@ Once checkpoints are flowing in production, verify in the RUM dashboard (`rum.hl
 - Custom checkpoint names appear in the breakdown.
 - Source/target fields contain only expected sanitized values.
 - No unexpected PII appears in any field.
+
+## Deploy-Impact Signals by Application
+
+Everything above covers the three floats that load `packages/webapp/src/ui/telemetry.ts`.
+The repo ships eight applications; five of them never load it, so "check the RUM
+dashboard" is the wrong answer for those. This section is the post-ship lookup table for
+the question that actually gets asked: **I just shipped — where do I look to see if it
+broke?**
+
+| Application         | Primary deploy-impact signal                                                             | Ours or Apple/Cloudflare-hosted | Latency to signal   |
+| ------------------- | ---------------------------------------------------------------------------------------- | ------------------------------- | ------------------- |
+| `webapp`            | RUM (`RUM_GENERATION=slicc-cli` / `slicc-electron`), see "Dashboard verification"        | ours (Helix RUM)                | minutes (sampled)   |
+| `node-server`       | RUM (CLI generation) + `GET /api/status` on the local port                               | ours                            | immediate / minutes |
+| `chrome-extension`  | RUM (`RUM_GENERATION=slicc-extension`), no enhancer checkpoints                          | ours (Helix RUM)                | minutes (sampled)   |
+| `swift-launcher`    | RUM via `@slicc/swift-optel` (`packages/swift-optel/`)                                   | ours (Helix RUM)                | minutes (sampled)   |
+| `cloudflare-worker` | `GET /status`, Cloudflare Workers metrics, `cloudflare-spend` issue tripwire             | Cloudflare + ours               | immediate / 1 day   |
+| `swift-server`      | `GET /api/status` + `~/.slicc/logs/slicc-<day>.log`                                      | local only, never leaves host   | immediate           |
+| `ios-app`           | App Store Connect TestFlight processing state, then TestFlight Crashes & Feedback        | Apple-hosted                    | minutes / days      |
+| `slicc-cli`         | **No telemetry.** Nearest: GitHub Release download counts + worker install-route traffic | GitHub + Cloudflare             | days                |
+
+The four rows below the fold are the ones with no dashboard pointer anywhere else in the
+docs. Each gets its own subsection. Where an application genuinely has no signal, that is
+stated rather than papered over.
+
+### `cloudflare-worker` (tray hub)
+
+**Liveness, first thing to curl.** `GET https://www.sliccy.ai/status` is a public,
+unauthenticated health document — `{ status, service, timestamp, version }`, served by
+`handleStaticRoutes` in `packages/cloudflare-worker/src/index.ts` with
+`Cache-Control: no-store`. It is advertised by the RFC 8631 `status` rel that
+`packages/cloudflare-worker/src/links.ts` puts on every response, and anchored in
+`/.well-known/api-catalog` (`packages/cloudflare-worker/src/api-catalog.ts`), so a
+consumer walking the rel set can probe liveness without hard-coding the path. Semantics
+deliberately mirror node-server's `GET /api/status`
+(`packages/node-server/src/index.ts`, advertised via
+`packages/node-server/src/links-middleware.ts`) and swift-server's
+`GET /api/status` (`packages/swift-server/Sources/Server/APIRoutes.swift`) — same
+`{ status, service, timestamp }` core, different `service` identifier per runtime.
+
+`version` is the Cloudflare Worker **version ID** from the `version_metadata` binding
+declared in `packages/cloudflare-worker/wrangler.jsonc`. It is the only field that answers
+"is the thing I just deployed the thing serving traffic?" — a green deploy log plus a
+stale `version` means the deploy did not actually roll. Two non-production caveats:
+`wrangler dev` does bind `version_metadata`, but hands out a **locally generated** UUID
+that changes every dev session, so a local `version` value carries no information; and in
+unit tests the binding is unbound, in which case the field reads `unknown`. Never treat
+`unknown` as a failure signal. Nothing else is exposed: no env vars, no binding names, no
+account identifiers. Keep it that way — this endpoint is reachable by anyone.
+
+**Request/error/CPU metrics.** Cloudflare dashboard → Workers & Pages → `slicc-tray-hub`
+→ Metrics. Requests, error rate, CPU time, and Durable Object duration all live there, and
+the same numbers are queryable from the Cloudflare GraphQL Analytics API. This is the only
+place a worker 500 becomes visible — the worker emits no RUM.
+
+**The regression alarm is the spend tripwire.**
+`.github/workflows/cloudflare-spend-monitor.yml` runs daily at 06:30 UTC (after the UTC
+day closes), queries the GraphQL Analytics API for Durable Object duration/requests and
+Workers requests, converts them to an estimated USD/day, and opens or comments on a
+`cloudflare-spend`-labelled GitHub issue once the estimate passes the `$3/day` default
+(override via `vars.CLOUDFLARE_SPEND_THRESHOLD_USD`); it auto-closes the issue when spend
+falls back under. The estimator is unit-tested in
+`packages/dev-tools/cloudflare-spend-monitor/lib.test.mjs`.
+
+This is worth understanding as an availability signal and not just a cost one: the
+worker's expensive failure modes are runaway loops — a leader that reconnects forever, a
+follower that polls without backoff, a preview bridge that never closes. Those show up as
+a DO-duration spike long before anyone notices a functional regression. The tripwire is,
+in practice, the worker's only automated post-deploy alarm.
+
+**Staging goes first.** The `cloudflare-worker` job in `.github/workflows/ci.yml` deploys
+`slicc-tray-hub-staging` on every non-fork PR and on pushes to main, so a bad change is
+observable on the staging origin before production.
+`packages/cloudflare-worker/tests/deployed.test.ts` is the live-endpoint suite to point at
+it (`WORKER_BASE_URL=https://… npm test -- tests/deployed.test.ts` from
+`packages/cloudflare-worker/`). Production deploys run through
+`.github/workflows/worker.yml`; `.github/workflows/worker-staging.yml` is the manual
+staging path. Full runbook — retry logic, routes-only failure classification, R2 archive
+mechanics, ghost-leader analysis — is in
+[`.agents/skills/deploying-tray-worker/SKILL.md`](../.agents/skills/deploying-tray-worker/SKILL.md)
+(`docs/tray-worker-operations.md` is a stub that redirects there).
+
+**Known gap: no retained logs.** `packages/cloudflare-worker/wrangler.jsonc` declares no
+`observability` block and no tail worker or Logpush job, so there is no committed log
+retention for either environment. Live debugging means `npx wrangler tail` — real time
+only, nothing kept, and useless for a failure that already happened. Closing this is a
+one-line config change (`"observability": { "enabled": true }` per environment, plus the
+retention/sampling settings) and it is the highest-value observability improvement
+available to the worker today.
+
+### `swift-server`
+
+**Liveness.** `GET /api/status` on the server's local port returns
+`{ status: "ok", service: "slicc-server", timestamp }` with `Cache-Control: no-store`
+(`packages/swift-server/Sources/Server/APIRoutes.swift`). The `service` string doubles as
+the float fingerprint: the UI floatbar renders "sliccstart" when `slicc-server` answers
+and "npx" when node-server's `slicc-node-server` answers. So a wrong floatbar label after
+a launcher change is a routing bug, and this endpoint is how you tell which binary is
+actually on the port.
+
+**Logs, local only.** `FileLogger`
+(`packages/swift-server/Sources/Utilities/FileLogger.swift`, wired up in
+`packages/swift-server/Sources/CLI/ServerCommand.swift`) writes one file per day to
+`~/.slicc/logs/slicc-<day>.log`, created mode `0600`, with files older than seven days
+pruned by `cleanupOldLogs` on rotation. HTTP request lines come from
+`packages/swift-server/Sources/Server/RequestLogger.swift`; repeated identical lines are
+collapsed by `packages/swift-server/Sources/Utilities/LogDedup.swift`.
+
+**Known gap: nothing is aggregated.** The log never leaves the user's machine, there is no
+crash reporter, and swift-server emits no RUM of its own (the RUM signal for the native
+stack comes from the launcher via `@slicc/swift-optel`, not from the server process). After
+shipping a swift-server change, the realistic loop is: reproduce locally and read
+`~/.slicc/logs/`, or wait for a user to paste a log. Treat "did my swift-server change
+break someone" as unanswerable from telemetry.
+
+### `ios-app`
+
+`SliccFollower` is distributed through TestFlight, not the App Store, and the post-ship
+signals are all Apple-hosted.
+
+**First gate — did Apple accept the build.**
+`packages/ios-app/scripts/package-and-upload-testflight.sh` builds and uploads (secrets
+provisioned by `packages/ios-app/scripts/setup-testflight-secrets.sh`), and
+`packages/ios-app/scripts/check-testflight-status.sh` polls App Store Connect with the
+local API key and prints the build's `processingState`: `PROCESSING` (Apple still scanning
+and extracting symbols), `VALID` (ready for testers), `INVALID` (bundle rejected — details
+arrive by email only), `FAILED`. Run it after every upload; an `INVALID` build never
+reaches a tester, and nothing else in the repo will tell you.
+
+**After distribution.** App Store Connect → TestFlight → Crashes and Feedback carries
+tester-submitted screenshots and crash logs; Xcode → Window → Organizer → Crashes carries
+symbolicated reports for the same builds. Both are read manually in Apple's UIs — no
+script in this repo queries either.
+
+**Known gap: no in-app telemetry.** The iOS follower emits no RUM, no analytics, and
+integrates no crash-reporting SDK. Apple's crash aggregation only sees crashes, and only
+from testers who opted into sharing. A follower that connects but silently fails to render
+produces no signal at all; the only channel back to this repo is a human filing an issue.
+Adding a crash SDK or wiring the follower into the RUM beacon would be the fix — neither
+is committed to.
+
+### `slicc-cli`
+
+**There is no telemetry, by construction.** The Go follower CLI emits no beacons, no
+analytics, and no crash reports. That is the honest answer, and it should stay the answer
+unless someone deliberately decides otherwise — a headless CLI that phones home is a
+different product.
+
+What that leaves, in descending order of usefulness:
+
+1. **GitHub Release asset download counts** for `slicc-<os>-<arch>[.exe]`. The only
+   adoption number available. Note that CLI releases are **sparse** — binaries attach only
+   to releases where `packages/slicc-cli` actually changed — so compare against the release
+   that carries assets, not `releases/latest`.
+2. **Worker traffic on the install and download routes.** `GET /install-cli`,
+   `GET /install-cli.ps1`, and `GET /download/slicc-cli/:target`
+   (`packages/cloudflare-worker/src/install-cli.ts`) all run through the tray hub, so their
+   request and status-code breakdown is visible in the worker's Cloudflare analytics. A
+   release that shipped a broken or missing asset shows up as 4xx/5xx on
+   `/download/slicc-cli/*` — this is the closest thing to a release-health check the CLI
+   has, and it costs nothing because the traffic already lands on infrastructure we
+   observe.
+3. **Nothing from self-update failures.** `packages/slicc-cli/internal/update/` runs the
+   staged binary's `--version` as a sanity gate before the atomic rename, so a corrupt
+   download fails closed and prints on the user's machine. Correct behaviour, zero
+   visibility to us. Same for the once-a-day update notice cached at
+   `<user-cache-dir>/slicc/update-check.json` and suppressed by `SLICC_NO_UPDATE_CHECK=1`.
+4. **Issue reports.** The actual feedback channel.
+
+If CLI release health ever needs to be monitored for real, the cheapest closer is an alert
+on the worker's `/download/slicc-cli/*` error rate — it needs no change to the binary and
+no new telemetry surface. Everything else requires deciding that the CLI may talk to us.
+
+### Summary of honest gaps
+
+| Application         | Gap                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `cloudflare-worker` | No retained logs (`observability` unset in `wrangler.jsonc`); no per-route error alarm  |
+| `swift-server`      | Logs are local-only; no crash reporter; no remote signal of any kind                    |
+| `ios-app`           | No in-app telemetry or crash SDK; only Apple-hosted crash reports from opted-in testers |
+| `slicc-cli`         | No telemetry at all; release health is inferred from worker download-route traffic      |
+
+Do not add a dashboard link to this table that does not exist. An accurate "no signal
+today, nearest proxy is X" is more useful than a plausible-looking URL that nobody can
+open.
