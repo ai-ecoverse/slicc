@@ -5,6 +5,7 @@ import type { IFileSystem } from 'just-bash';
 import { createRequire } from 'module';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  biomeDiagnosticToJson,
   biomeVirtualPath,
   checkBiomeInstalled,
   createBiomeCommand,
@@ -101,6 +102,22 @@ function createMockCtx(
     cwd: string;
     env: Map<string, string>;
     stdin: string;
+  };
+}
+
+function parseJsonResult(result: { stdout: string; stderr: string; exitCode: number }) {
+  expect(result.stderr).toBe('');
+  return JSON.parse(result.stdout) as {
+    summary: { errors: number; warnings: number; filesChecked: number; unformattedFiles: number };
+    diagnostics: {
+      severity: string;
+      category: string;
+      message: string;
+      filePath: string;
+      line: number | null;
+      column: number | null;
+    }[];
+    files: { path: string; unchanged: boolean }[];
   };
 }
 
@@ -316,6 +333,34 @@ describe('shiftBiomeSpans', () => {
     const diag = { tags: [], message: 'x', location: { span: [30, 31] } };
     expect(() => shiftBiomeSpans(diag, 28)).not.toThrow();
     expect(diag.location.span).toEqual([2, 3]);
+  });
+});
+
+describe('biomeDiagnosticToJson', () => {
+  it('uses the real wrapped-file path and span-shifted line and column', () => {
+    const source = 'const y = 1;\nconst unusedX = 2;\nreturn y;\n';
+    const start =
+      JSH_WRAP_PREFIX_BYTE_LENGTH + new TextEncoder().encode('const y = 1;\nconst ').length;
+    const diagnostic = {
+      severity: 'warning',
+      category: 'lint/correctness/noUnusedVariables',
+      description: 'unused variable',
+      message: [
+        { elements: [], content: 'The variable ' },
+        { elements: ['Emphasis'], content: 'unusedX' },
+        { elements: [], content: ' is unused.' },
+      ],
+      location: { span: [start, start + 7] },
+    };
+    shiftBiomeSpans(diagnostic, JSH_WRAP_PREFIX_BYTE_LENGTH);
+    expect(biomeDiagnosticToJson(diagnostic, '/workspace/tool.jsh', source)).toEqual({
+      severity: 'warning',
+      category: 'lint/correctness/noUnusedVariables',
+      message: 'The variable unusedX is unused.',
+      filePath: '/workspace/tool.jsh',
+      line: 2,
+      column: 7,
+    });
   });
 });
 
@@ -545,6 +590,23 @@ describe('install-required guidance', () => {
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toMatch(/ipk add @biomejs\/wasm-web/);
     expect(res.stderr).not.toMatch(/unpkg|jsdelivr|esm\.sh/);
+
+    const json = await cmd.execute(['check', '--json', 'a.ts'], ctx);
+    expect(json.exitCode).toBe(res.exitCode);
+    expect(parseJsonResult(json)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 0, unformattedFiles: 0 },
+      diagnostics: [
+        expect.objectContaining({
+          severity: 'error',
+          category: 'runtime',
+          message: expect.stringMatching(/ipk add @biomejs\/wasm-web/),
+          filePath: '/workspace/a.ts',
+          line: null,
+          column: null,
+        }),
+      ],
+      files: [],
+    });
   });
 });
 
@@ -564,13 +626,9 @@ describe('biome --help / argument errors', () => {
     expect(res.stdout).toContain('Config "extends" is');
     expect(res.stdout).toContain('unsupported and is not resolved');
     expect(res.stdout).toContain('Diagnostics use plain text without HTML tags, entities');
-    expect(res.stdout).toContain(
-      '--reporter <plain|json>    Reporter selection (parsed only; default: plain)'
-    );
-    expect(res.stdout).toContain(
-      '--json                     Alias for --reporter json (parsed only)'
-    );
-    expect(res.stdout).not.toContain('Select output reporter');
+    expect(res.stdout).toContain('--reporter <plain|json>    Reporter selection (default: plain)');
+    expect(res.stdout).toContain('--json                     Alias for --reporter json');
+    expect(res.stdout).toContain('The json reporter writes one document to stdout');
     expect(res.stdout).toMatch(
       /Exit codes:[\s\S]*0\s+No findings[\s\S]*1\s+Error\/fatal\/warning diagnostics[\s\S]*2\s+Usage error/
     );
@@ -582,6 +640,25 @@ describe('biome --help / argument errors', () => {
     const res = await cmd.execute(['--frobnicate'], ctx);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toMatch(/unknown option/);
+  });
+
+  it('emits a JSON document for a parse-time usage error when --json was selected', async () => {
+    const res = await createBiomeCommand().execute(['--json', '--frobnicate'], createMockCtx());
+    expect(res.exitCode).toBe(2);
+    expect(parseJsonResult(res)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 0, unformattedFiles: 0 },
+      diagnostics: [
+        {
+          severity: 'error',
+          category: 'usage',
+          message: 'biome: unknown option: --frobnicate',
+          filePath: '',
+          line: null,
+          column: null,
+        },
+      ],
+      files: [],
+    });
   });
 
   it('exits 2 when --write and --check are combined', async () => {
@@ -612,6 +689,77 @@ describe('biome --help / argument errors', () => {
     );
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toContain('configuration file not found: /workspace/missing.json');
+
+    const json = await createBiomeCommand().execute(
+      ['check', '--json', '--config-path', 'missing.json', 'a.ts'],
+      ctx
+    );
+    expect(json.exitCode).toBe(res.exitCode);
+    expect(parseJsonResult(json)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 0, unformattedFiles: 0 },
+      diagnostics: [
+        {
+          severity: 'error',
+          category: 'configuration',
+          message: 'biome: configuration file not found: /workspace/missing.json',
+          filePath: '/workspace/a.ts',
+          line: null,
+          column: null,
+        },
+      ],
+      files: [],
+    });
+  });
+
+  it('emits input failures as JSON with the plain reporter exit code', async () => {
+    const ctx = createMockCtx();
+    const plain = await createBiomeCommand().execute(['check', 'missing.ts'], ctx);
+    const json = await createBiomeCommand().execute(['check', '--json', 'missing.ts'], ctx);
+    expect(json.exitCode).toBe(plain.exitCode);
+    expect(plain.stderr).toBe(
+      'biome: missing.ts: no such file or directory\nbiome: no lintable files found\n'
+    );
+    expect(parseJsonResult(json)).toMatchObject({
+      summary: { errors: 1, warnings: 0, filesChecked: 0, unformattedFiles: 0 },
+      diagnostics: [
+        {
+          severity: 'error',
+          category: 'io',
+          message: 'biome: missing.ts: no such file or directory\nbiome: no lintable files found',
+          filePath: '',
+          line: null,
+          column: null,
+        },
+      ],
+      files: [],
+    });
+  });
+
+  it('wraps unexpected post-parse filesystem exceptions only for JSON', async () => {
+    const ctx = createMockCtx({
+      fs: { readFile: vi.fn().mockRejectedValue(new Error('read exploded')) },
+    });
+    await ctx.fs.writeFile('/workspace/a.ts', 'const value = 1;');
+    await expect(createBiomeCommand().execute(['check', 'a.ts'], ctx)).rejects.toThrow(
+      'read exploded'
+    );
+
+    const json = await createBiomeCommand().execute(['check', '--json', 'a.ts'], ctx);
+    expect(json.exitCode).toBe(1);
+    expect(parseJsonResult(json)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 0, unformattedFiles: 0 },
+      diagnostics: [
+        {
+          severity: 'error',
+          category: 'runtime',
+          message: 'biome: read exploded',
+          filePath: '/workspace/a.ts',
+          line: null,
+          column: null,
+        },
+      ],
+      files: [],
+    });
   });
 
   it('exits 1 for an unparseable discovered configuration before loading Biome', async () => {
@@ -650,6 +798,7 @@ describe('finalizeOutcome', () => {
             formatted: null,
             diagnosticsText:
               '<strong>error</strong>: left &lt; right &amp;&amp; value &gt; 0<br><span>lint/rule</span>\n',
+            diagnostics: [],
             errorCount: 1,
             warningCount: 0,
             unchanged: true,
@@ -679,6 +828,7 @@ describe('finalizeOutcome', () => {
             path: '/workspace/a.ts',
             formatted: null,
             diagnosticsText: 'warning\n',
+            diagnostics: [],
             errorCount: 0,
             warningCount: 1,
             unchanged: true,
@@ -704,6 +854,7 @@ describe('finalizeOutcome', () => {
             path: '/workspace/a.ts',
             formatted: 'const value = 1;\n',
             diagnosticsText: '/workspace/a.ts: file is not formatted\n',
+            diagnostics: [],
             errorCount: 1,
             warningCount: 0,
             unchanged: false,
@@ -716,6 +867,190 @@ describe('finalizeOutcome', () => {
     );
     expect(result.stdout).toBe('');
     expect(result.exitCode).toBe(1);
+  });
+
+  it('emits the stable JSON shape for a clean run', async () => {
+    const result = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['check', '--json', 'a.ts']),
+      [{ path: '/workspace/a.ts', source: 'const value = 1;\n' }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted: null,
+            diagnosticsText: '',
+            diagnostics: [],
+            errorCount: 0,
+            warningCount: 0,
+            unchanged: true,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({
+      summary: { errors: 0, warnings: 0, filesChecked: 1, unformattedFiles: 0 },
+      diagnostics: [],
+      files: [{ path: '/workspace/a.ts', unchanged: true }],
+    });
+  });
+
+  it('includes a partial missing-input failure in the JSON document', async () => {
+    const result = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['check', '--json', 'a.ts', 'missing.ts']),
+      [{ path: '/workspace/a.ts', source: 'const value = 1;\n' }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted: null,
+            diagnosticsText: '',
+            diagnostics: [],
+            errorCount: 0,
+            warningCount: 0,
+            unchanged: true,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      'biome: missing.ts: no such file or directory\n'
+    );
+    expect(result.exitCode).toBe(1);
+    expect(parseJsonResult(result)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 1, unformattedFiles: 0 },
+      diagnostics: [
+        {
+          severity: 'error',
+          category: 'io',
+          message: 'biome: missing.ts: no such file or directory',
+          filePath: '',
+          line: null,
+          column: null,
+        },
+      ],
+      files: [{ path: '/workspace/a.ts', unchanged: true }],
+    });
+  });
+
+  it('puts structured findings in JSON stdout and leaves stderr empty', async () => {
+    const diagnostic = {
+      severity: 'error',
+      category: 'lint/suspicious/noDebugger',
+      message: 'This is an unexpected use of the debugger statement.',
+      filePath: '/workspace/a.js',
+      line: 2,
+      column: 1,
+    };
+    const result = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['lint', '--reporter', 'json', 'a.js']),
+      [{ path: '/workspace/a.js', source: 'const value = 1;\ndebugger;\n' }],
+      {
+        results: [
+          {
+            path: '/workspace/a.js',
+            formatted: null,
+            diagnosticsText: '<strong>diagnostic text must not reach stderr</strong>',
+            diagnostics: [diagnostic],
+            errorCount: 1,
+            warningCount: 0,
+            unchanged: true,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      summary: { errors: 1, warnings: 0, filesChecked: 1, unformattedFiles: 0 },
+      diagnostics: [diagnostic],
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('reports an unformatted file without mixing formatted source into JSON stdout', async () => {
+    const formatted = 'const value = 1;\n';
+    const result = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['format', '--check', '--json', 'a.ts']),
+      [{ path: '/workspace/a.ts', source: 'const value=1;\n' }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted,
+            diagnosticsText: '/workspace/a.ts: file is not formatted\n',
+            diagnostics: [],
+            errorCount: 1,
+            warningCount: 0,
+            unchanged: false,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.stderr).toBe('');
+    expect(result.stdout).not.toContain(formatted);
+    expect(JSON.parse(result.stdout)).toEqual({
+      summary: { errors: 1, warnings: 0, filesChecked: 1, unformattedFiles: 1 },
+      diagnostics: [],
+      files: [{ path: '/workspace/a.ts', unchanged: false }],
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('keeps exit codes identical between plain and JSON reporters', async () => {
+    const makeOutcome = () => ({
+      results: [
+        {
+          path: '/workspace/a.ts',
+          formatted: null,
+          diagnosticsText: 'warning\n',
+          diagnostics: [
+            {
+              severity: 'warning',
+              category: 'lint/style/example',
+              message: 'warning',
+              filePath: '/workspace/a.ts',
+              line: 1,
+              column: 1,
+            },
+          ],
+          errorCount: 0,
+          warningCount: 1,
+          unchanged: true,
+        },
+      ],
+      stderr: '',
+      exitCode: 0,
+    });
+    const inputs = [{ path: '/workspace/a.ts', source: 'const value = 1;\n' }];
+    const plain = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['lint', '--reporter', 'plain', 'a.ts']),
+      inputs,
+      makeOutcome(),
+      ''
+    );
+    const json = await finalizeOutcome(
+      createMockCtx(),
+      parseBiomeArgs(['lint', '--reporter', 'json', 'a.ts']),
+      inputs,
+      makeOutcome(),
+      ''
+    );
+    expect(json.exitCode).toBe(plain.exitCode);
+    expect(json.exitCode).toBe(1);
   });
 });
 
@@ -875,5 +1210,18 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
     const written = await ctx.fs.readFile(sourcePath);
     expect(written).toContain("const greeting = 'hello';");
     expect(written).not.toContain('const greeting = "hello";');
+
+    const wrappedPath = '/workspace/project/src/tool.jsh';
+    await ctx.fs.writeFile(wrappedPath, 'const y = 1;\nconst unusedX = 2;\nreturn y;\n');
+    const jsonResult = await createBiomeCommand().execute(['check', '--json', wrappedPath], ctx);
+    expect(jsonResult.exitCode).toBe(1);
+    expect(jsonResult.stderr).toBe('');
+    const report = JSON.parse(jsonResult.stdout) as {
+      diagnostics: { category: string; filePath: string; line: number; column: number }[];
+    };
+    const unused = report.diagnostics.find((diagnostic) =>
+      diagnostic.category.endsWith('/noUnusedVariables')
+    );
+    expect(unused).toMatchObject({ filePath: wrappedPath, line: 2, column: 7 });
   }, 120_000);
 });

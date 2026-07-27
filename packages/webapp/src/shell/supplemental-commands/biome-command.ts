@@ -101,6 +101,74 @@ const SUBCOMMANDS = new Set(['check', 'lint', 'format']);
 export type BiomeSubcommand = 'check' | 'lint' | 'format';
 export type BiomeReporter = 'plain' | 'json';
 
+export interface BiomeJsonDiagnostic {
+  severity: string;
+  category: string;
+  message: string;
+  filePath: string;
+  line: number | null;
+  column: number | null;
+}
+
+/** Convert a span-shifted Biome diagnostic into the stable JSON reporter shape. */
+export function biomeDiagnosticToJson(
+  diagnostic: unknown,
+  filePath: string,
+  source: string
+): BiomeJsonDiagnostic {
+  const value = diagnostic as {
+    severity?: unknown;
+    category?: unknown;
+    description?: unknown;
+    message?: unknown;
+    location?: { span?: unknown };
+  };
+  const markupMessage = Array.isArray(value.message)
+    ? value.message
+        .map((node) =>
+          node &&
+          typeof node === 'object' &&
+          typeof (node as { content?: unknown }).content === 'string'
+            ? (node as { content: string }).content
+            : ''
+        )
+        .join('')
+    : '';
+  const message =
+    markupMessage ||
+    (typeof value.description === 'string' ? value.description : String(value.description ?? ''));
+  const span = value.location?.span;
+  const rawStart = Array.isArray(span) && typeof span[0] === 'number' ? span[0] : null;
+  if (rawStart === null) {
+    return {
+      severity: typeof value.severity === 'string' ? value.severity : 'unknown',
+      category: typeof value.category === 'string' ? value.category : 'unknown',
+      message,
+      filePath,
+      line: null,
+      column: null,
+    };
+  }
+  const bytes = new TextEncoder().encode(source);
+  const prefix = new TextDecoder().decode(
+    bytes.slice(0, Math.max(0, Math.min(rawStart, bytes.length)))
+  );
+  let line = 1;
+  for (const character of prefix) {
+    if (character === '\n') line++;
+  }
+  const lastNewline = prefix.lastIndexOf('\n');
+  const column = Array.from(prefix.slice(lastNewline + 1)).length + 1;
+  return {
+    severity: typeof value.severity === 'string' ? value.severity : 'unknown',
+    category: typeof value.category === 'string' ? value.category : 'unknown',
+    message,
+    filePath,
+    line,
+    column,
+  };
+}
+
 /**
  * Pinned, verified-working dependency set. `@biomejs/wasm-web` +
  * `@biomejs/js-api` back the biome API; `esbuild-wasm` is also
@@ -145,8 +213,8 @@ Flags:
   --check                    Check formatting without printing changes (format only)
   --stdin-file-path <path>   Virtual file path for stdin mode
   --config-path <file>       Use this config instead of automatic discovery
-  --reporter <plain|json>    Reporter selection (parsed only; default: plain)
-  --json                     Alias for --reporter json (parsed only)
+  --reporter <plain|json>    Reporter selection (default: plain)
+  --json                     Alias for --reporter json
   -h, --help                 Show this help
   -v, --version              Show installed @biomejs/wasm-web version
 
@@ -158,6 +226,9 @@ Configuration:
 
 Output:
   Diagnostics use plain text without HTML tags, entities, or ANSI escapes.
+  The json reporter writes one document to stdout and no diagnostics to stderr:
+    { summary: { errors, warnings, filesChecked, unformattedFiles },
+      diagnostics: [...], files: [{ path, unchanged }] }
 
 Exit codes:
   0  No findings; checked files are formatted
@@ -200,6 +271,15 @@ function parseReporter(value: string): BiomeReporter {
     throw new Error(`biome: unknown reporter: ${value}`);
   }
   return value;
+}
+
+function argsRequestJsonReporter(args: string[]): boolean {
+  return args.some(
+    (arg, index) =>
+      arg === '--json' ||
+      arg === '--reporter=json' ||
+      (arg === '--reporter' && args[index + 1] === 'json')
+  );
 }
 
 function parseBiomeOption(out: ParsedBiomeArgs, args: string[], index: number): number | null {
@@ -425,6 +505,7 @@ interface BiomeFileResult {
   path: string;
   formatted: string | null;
   diagnosticsText: string;
+  diagnostics: BiomeJsonDiagnostic[];
   errorCount: number;
   warningCount: number;
   unchanged: boolean;
@@ -460,6 +541,7 @@ const JSH_WRAP_SUFFIX = ${JSON.stringify(JSH_WRAP_SUFFIX)};
 const JSH_WRAP_PREFIX_BYTES = ${JSH_WRAP_PREFIX_BYTE_LENGTH};
 const shiftBiomeSpans = ${shiftBiomeSpans.toString()};
 const unwrapFormattedJsh = ${unwrapFormattedJsh.toString()};
+const biomeDiagnosticToJson = ${biomeDiagnosticToJson.toString()};
 async function compileBiomeWasm(wasmPath) {
   // Prefer the host-side WASM compiler: biome's ~37 MB wasm hard-OOMs
   // WebAssembly.compile inside this per-task realm worker, so the kernel
@@ -498,6 +580,7 @@ async function main() {
     let formatted = null;
     let unchanged = true;
     let diagText = '';
+    const diagnostics = [];
     let errors = 0;
     let warnings = 0;
     // .jsh/.bsh run as an AsyncFunction body, so wrap before Biome parses.
@@ -511,6 +594,7 @@ async function main() {
       const fmtDiags = fmt.diagnostics || [];
       if (wrap) { for (const d of fmtDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }
       for (const d of fmtDiags) {
+        diagnostics.push(biomeDiagnosticToJson(d, file.path, file.source));
         if (d.severity === 'error' || d.severity === 'fatal') errors++;
         else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
       }
@@ -546,6 +630,7 @@ async function main() {
       const lintDiags = lint.diagnostics || [];
       if (wrap) { for (const d of lintDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }
       for (const d of lintDiags) {
+        diagnostics.push(biomeDiagnosticToJson(d, file.path, file.source));
         if (d.severity === 'error' || d.severity === 'fatal') errors++;
         else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
       }
@@ -564,7 +649,7 @@ async function main() {
     if (file.biomePath !== file.path && diagText) {
       diagText = diagText.split(file.biomePath).join(file.path);
     }
-    results.push({ path: file.path, formatted, diagnosticsText: diagText, errorCount: errors, warningCount: warnings, unchanged });
+    results.push({ path: file.path, formatted, diagnosticsText: diagText, diagnostics, errorCount: errors, warningCount: warnings, unchanged });
   }
   process.stdout.write(JSON.stringify(results));
 }
@@ -628,6 +713,39 @@ async function runBiomeOps(
 }
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
+
+function reporterResult(
+  reporter: BiomeReporter,
+  result: ExecResult,
+  category: string,
+  filePath = ''
+): ExecResult {
+  if (reporter === 'plain') return result;
+  const message = (result.stderr || result.stdout).trimEnd();
+  const diagnostics: BiomeJsonDiagnostic[] = message
+    ? [
+        {
+          severity: result.exitCode === 0 ? 'information' : 'error',
+          category,
+          message,
+          filePath,
+          line: null,
+          column: null,
+        },
+      ]
+    : [];
+  const report = {
+    summary: {
+      errors: result.exitCode === 0 ? 0 : 1,
+      warnings: 0,
+      filesChecked: 0,
+      unformattedFiles: 0,
+    },
+    diagnostics,
+    files: [],
+  };
+  return { stdout: `${JSON.stringify(report)}\n`, stderr: '', exitCode: result.exitCode };
+}
 
 async function preflight(
   ctx: CommandContext,
@@ -699,7 +817,9 @@ export async function finalizeOutcome(
   let warningCount = 0;
   let changed = 0;
   for (const r of outcome.results) {
-    if (r.diagnosticsText) stderrParts.push(htmlDiagnosticsToText(r.diagnosticsText));
+    if (parsed.reporter === 'plain' && r.diagnosticsText) {
+      stderrParts.push(htmlDiagnosticsToText(r.diagnosticsText));
+    }
     errorCount += r.errorCount;
     warningCount += r.warningCount;
     if (parsed.write && r.formatted !== null && !r.unchanged) {
@@ -719,6 +839,34 @@ export async function finalizeOutcome(
     stderrParts.push(`biome: wrote ${changed} file(s)\n`);
   }
   const finalExit = errorCount > 0 || warningCount > 0 || missingErrText.length > 0 ? 1 : 0;
+  if (parsed.reporter === 'json') {
+    const missingDiagnostics: BiomeJsonDiagnostic[] = missingErrText
+      ? [
+          {
+            severity: 'error',
+            category: 'io',
+            message: missingErrText.trimEnd(),
+            filePath: '',
+            line: null,
+            column: null,
+          },
+        ]
+      : [];
+    const report = {
+      summary: {
+        errors: errorCount + missingDiagnostics.length,
+        warnings: warningCount,
+        filesChecked: outcome.results.length,
+        unformattedFiles: outcome.results.filter((result) => !result.unchanged).length,
+      },
+      diagnostics: [
+        ...outcome.results.flatMap((result) => result.diagnostics),
+        ...missingDiagnostics,
+      ],
+      files: outcome.results.map((result) => ({ path: result.path, unchanged: result.unchanged })),
+    };
+    return { stdout: `${JSON.stringify(report)}\n`, stderr: '', exitCode: finalExit };
+  }
   return { stdout: stdoutParts.join(''), stderr: stderrParts.join(''), exitCode: finalExit };
 }
 
@@ -734,62 +882,125 @@ async function handleVersion(ipk: IpkResolutionContext): Promise<ExecResult> {
   return { stdout: `${version}\n`, stderr: '', exitCode: 0 };
 }
 
+async function handleMetadataRequest(
+  parsed: ParsedBiomeArgs,
+  ipk: IpkResolutionContext
+): Promise<ExecResult | null> {
+  if (parsed.showHelp) {
+    return reporterResult(parsed.reporter, { stdout: HELP_TEXT, stderr: '', exitCode: 0 }, 'usage');
+  }
+  if (parsed.showVersion) {
+    return reporterResult(parsed.reporter, await handleVersion(ipk), 'runtime');
+  }
+  return null;
+}
+
+function requestedFilePath(parsed: ParsedBiomeArgs, ctx: CommandContext): string {
+  const path = parsed.paths[0];
+  if (!path) return '';
+  try {
+    return ctx.fs.resolvePath(ctx.cwd, path);
+  } catch {
+    return '';
+  }
+}
+
+async function executeParsedBiomeCommand(
+  parsed: ParsedBiomeArgs,
+  ctx: CommandContext
+): Promise<ExecResult> {
+  const ipk = createIpkContextFromCtx(ctx);
+  const metadataResult = await handleMetadataRequest(parsed, ipk);
+  if (metadataResult) return metadataResult;
+
+  if (parsed.subcommand === null) {
+    return reporterResult(
+      parsed.reporter,
+      {
+        stdout: '',
+        stderr: 'biome: missing subcommand (expected check, lint, or format)\n',
+        exitCode: 2,
+      },
+      'usage'
+    );
+  }
+
+  const gathered = await gatherInputs(ctx, parsed);
+  if ('exitCode' in gathered) return reporterResult(parsed.reporter, gathered, 'io');
+
+  const searchFrom =
+    parsed.paths.length === 0 && ctx.stdin ? ctx.cwd : splitPath(gathered.inputs[0].path).dir;
+  const config = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, searchFrom, parsed.configPath);
+  if (!config.ok) {
+    return reporterResult(
+      parsed.reporter,
+      { stdout: '', stderr: `${config.error}\n`, exitCode: config.exitCode },
+      'configuration',
+      gathered.inputs[0].path
+    );
+  }
+
+  const pre = await preflight(ctx, ipk);
+  if ('exitCode' in pre) {
+    return reporterResult(parsed.reporter, pre, 'runtime', gathered.inputs[0].path);
+  }
+
+  const outcome = await runBiomeOps(
+    ctx,
+    parsed.subcommand,
+    parsed.write,
+    parsed.check,
+    config.resolved?.configuration ?? null,
+    parsed.reporter,
+    gathered.inputs,
+    pre.wasmPath
+  );
+  if (outcome.exitCode !== 0) {
+    return reporterResult(
+      parsed.reporter,
+      {
+        stdout: '',
+        stderr: gathered.missingErrText + outcome.stderr,
+        exitCode: outcome.exitCode,
+      },
+      'runtime',
+      gathered.inputs[0].path
+    );
+  }
+  return finalizeOutcome(ctx, parsed, gathered.inputs, outcome, gathered.missingErrText);
+}
+
 export function createBiomeCommand(): Command {
   return defineCommand('biome', async (args, ctx): Promise<ExecResult> => {
     let parsed: ParsedBiomeArgs;
     try {
       parsed = parseBiomeArgs(args);
     } catch (err) {
-      return {
-        stdout: '',
-        stderr: `${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 2,
-      };
+      return reporterResult(
+        argsRequestJsonReporter(args) ? 'json' : 'plain',
+        {
+          stdout: '',
+          stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 2,
+        },
+        'usage'
+      );
     }
 
-    if (parsed.showHelp) return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
-
-    const ipk = createIpkContextFromCtx(ctx);
-    if (parsed.showVersion) return handleVersion(ipk);
-
-    if (parsed.subcommand === null) {
-      return {
-        stdout: '',
-        stderr: 'biome: missing subcommand (expected check, lint, or format)\n',
-        exitCode: 2,
-      };
+    try {
+      return await executeParsedBiomeCommand(parsed, ctx);
+    } catch (err) {
+      if (parsed.reporter === 'plain') throw err;
+      return reporterResult(
+        'json',
+        {
+          stdout: '',
+          stderr: `biome: ${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 1,
+        },
+        'runtime',
+        requestedFilePath(parsed, ctx)
+      );
     }
-
-    const gathered = await gatherInputs(ctx, parsed);
-    if ('exitCode' in gathered) return gathered;
-
-    const searchFrom =
-      parsed.paths.length === 0 && ctx.stdin ? ctx.cwd : splitPath(gathered.inputs[0].path).dir;
-    const config = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, searchFrom, parsed.configPath);
-    if (!config.ok) {
-      return { stdout: '', stderr: `${config.error}\n`, exitCode: config.exitCode };
-    }
-
-    const pre = await preflight(ctx, ipk);
-    if ('exitCode' in pre) return pre;
-
-    const outcome = await runBiomeOps(
-      ctx,
-      parsed.subcommand,
-      parsed.write,
-      parsed.check,
-      config.resolved?.configuration ?? null,
-      parsed.reporter,
-      gathered.inputs,
-      pre.wasmPath
-    );
-    if (outcome.exitCode !== 0) {
-      return {
-        stdout: '',
-        stderr: gathered.missingErrText + outcome.stderr,
-        exitCode: outcome.exitCode,
-      };
-    }
-    return finalizeOutcome(ctx, parsed, gathered.inputs, outcome, gathered.missingErrText);
   });
 }
