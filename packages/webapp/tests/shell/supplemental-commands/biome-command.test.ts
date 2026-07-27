@@ -10,6 +10,7 @@ import {
   createBiomeCommand,
   createIpkContextFromCtx,
   expandPaths,
+  finalizeOutcome,
   isLintableFile,
   JSH_WRAP_PREFIX_BYTE_LENGTH,
   parseBiomeArgs,
@@ -99,9 +100,22 @@ describe('parseBiomeArgs', () => {
     expect(parseBiomeArgs([]).showHelp).toBe(true);
   });
 
-  it('captures check/format as subcommand', () => {
+  it('captures check, lint, and format as subcommands', () => {
     expect(parseBiomeArgs(['check', 'a.ts']).subcommand).toBe('check');
+    expect(parseBiomeArgs(['lint', 'a.ts']).subcommand).toBe('lint');
     expect(parseBiomeArgs(['format', 'a.ts']).subcommand).toBe('format');
+  });
+
+  it('captures format --check', () => {
+    const parsed = parseBiomeArgs(['format', '--check', 'a.ts']);
+    expect(parsed.subcommand).toBe('format');
+    expect(parsed.check).toBe(true);
+  });
+
+  it('rejects --write together with --check', () => {
+    expect(() => parseBiomeArgs(['format', '--write', '--check', 'a.ts'])).toThrow(
+      /cannot be used together/
+    );
   });
 
   it('captures --write and --stdin-file-path', () => {
@@ -116,6 +130,38 @@ describe('parseBiomeArgs', () => {
   it('captures --version and --help', () => {
     expect(parseBiomeArgs(['--version']).showVersion).toBe(true);
     expect(parseBiomeArgs(['--help']).showHelp).toBe(true);
+  });
+
+  it('captures both --config-path forms', () => {
+    expect(parseBiomeArgs(['check', '--config-path', 'biome.json', 'a.ts']).configPath).toBe(
+      'biome.json'
+    );
+    expect(parseBiomeArgs(['check', '--config-path=/repo/biome.json', 'a.ts']).configPath).toBe(
+      '/repo/biome.json'
+    );
+  });
+
+  it('rejects a missing --config-path value', () => {
+    expect(() => parseBiomeArgs(['check', '--config-path'])).toThrow(/requires a value/);
+    expect(() => parseBiomeArgs(['check', '--config-path='])).toThrow(/requires a value/);
+  });
+
+  it('captures reporter forms and defaults to plain', () => {
+    expect(parseBiomeArgs(['lint', 'a.ts']).reporter).toBe('plain');
+    expect(parseBiomeArgs(['lint', '--reporter', 'json', 'a.ts']).reporter).toBe('json');
+    expect(parseBiomeArgs(['lint', '--reporter=plain', 'a.ts']).reporter).toBe('plain');
+  });
+
+  it('captures --json as an alias for --reporter json', () => {
+    expect(parseBiomeArgs(['lint', '--json', 'a.ts']).reporter).toBe('json');
+  });
+
+  it('rejects invalid or missing reporter values', () => {
+    expect(() => parseBiomeArgs(['lint', '--reporter', 'github', 'a.ts'])).toThrow(
+      /unknown reporter/
+    );
+    expect(() => parseBiomeArgs(['lint', '--reporter'])).toThrow(/requires a value/);
+    expect(() => parseBiomeArgs(['lint', '--reporter='])).toThrow(/requires a value/);
   });
 
   it('rejects unknown flags', () => {
@@ -349,6 +395,22 @@ describe('biome --help / argument errors', () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toMatch(/biome - thin wrapper/);
     expect(res.stdout).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stdout).toMatch(/lint\s+Lint only/);
+    expect(res.stdout).toContain('--check');
+    expect(res.stdout).toContain(
+      '--config-path <file>       Configuration path override (parsed only)'
+    );
+    expect(res.stdout).toContain(
+      '--reporter <plain|json>    Reporter selection (parsed only; default: plain)'
+    );
+    expect(res.stdout).toContain(
+      '--json                     Alias for --reporter json (parsed only)'
+    );
+    expect(res.stdout).not.toContain('Use the specified Biome configuration file');
+    expect(res.stdout).not.toContain('Select output reporter');
+    expect(res.stdout).toMatch(
+      /Exit codes:[\s\S]*0\s+No findings[\s\S]*1\s+Errors \(including fatal\), warnings/
+    );
   });
 
   it('exits 2 on an unknown flag', async () => {
@@ -357,6 +419,79 @@ describe('biome --help / argument errors', () => {
     const res = await cmd.execute(['--frobnicate'], ctx);
     expect(res.exitCode).toBe(2);
     expect(res.stderr).toMatch(/unknown option/);
+  });
+
+  it('exits 2 when --write and --check are combined', async () => {
+    const res = await createBiomeCommand().execute(
+      ['format', '--write', '--check', 'a.ts'],
+      createMockCtx()
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toMatch(/cannot be used together/);
+  });
+
+  it.each([
+    [['check', '--config-path'], /--config-path requires a value/],
+    [['lint', '--reporter'], /--reporter requires a value/],
+    [['lint', '--reporter', 'github'], /unknown reporter/],
+  ] as const)('exits 2 for invalid option values: %j', async (args, message) => {
+    const res = await createBiomeCommand().execute([...args], createMockCtx());
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr).toMatch(message);
+  });
+});
+
+describe('finalizeOutcome', () => {
+  it('exits 1 when warnings are the only findings', async () => {
+    const ctx = createMockCtx();
+    const source = 'const value = 1;\n';
+    const result = await finalizeOutcome(
+      ctx,
+      parseBiomeArgs(['lint', 'a.ts']),
+      [{ path: '/workspace/a.ts', source }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted: null,
+            diagnosticsText: 'warning\n',
+            errorCount: 0,
+            warningCount: 1,
+            unchanged: true,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('does not print formatted source for format --check', async () => {
+    const ctx = createMockCtx();
+    const result = await finalizeOutcome(
+      ctx,
+      parseBiomeArgs(['format', '--check', 'a.ts']),
+      [{ path: '/workspace/a.ts', source: 'const value=1;\n' }],
+      {
+        results: [
+          {
+            path: '/workspace/a.ts',
+            formatted: 'const value = 1;\n',
+            diagnosticsText: '/workspace/a.ts: file is not formatted\n',
+            errorCount: 1,
+            warningCount: 0,
+            unchanged: false,
+          },
+        ],
+        stderr: '',
+        exitCode: 0,
+      },
+      ''
+    );
+    expect(result.stdout).toBe('');
+    expect(result.exitCode).toBe(1);
   });
 });
 

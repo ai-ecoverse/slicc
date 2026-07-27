@@ -9,12 +9,13 @@
  * missing package surfaces as a clean guidance error that names
  * the exact `ipk add` line.
  *
- * Subcommands (the minimum surface the prior built-in exposed):
+ * Subcommands:
  *
  *   biome --version           Print the installed wasm-web version
  *   biome check  [files...]   Lint + format check together
+ *   biome lint   [files...]   Lint only
  *   biome format [files...]   Print formatted output to stdout
- *                             (or write back with --write)
+ *                             (check with --check or write with --write)
  *
  * Stdin mode (no file arguments + piped input):
  *   --stdin-file-path <path>  Virtual path so Biome picks the parser
@@ -94,8 +95,9 @@ export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionConte
   };
 }
 
-const SUBCOMMANDS = new Set(['check', 'format']);
-export type BiomeSubcommand = 'check' | 'format';
+const SUBCOMMANDS = new Set(['check', 'lint', 'format']);
+export type BiomeSubcommand = 'check' | 'lint' | 'format';
+export type BiomeReporter = 'plain' | 'json';
 
 /**
  * Pinned, verified-working dependency set. `@biomejs/wasm-web` +
@@ -133,13 +135,24 @@ Usage:
 
 Subcommands:
   check         Lint + format check together
-  format        Print formatted output to stdout (or write with --write)
+  lint          Lint only (never writes files)
+  format        Print formatted output (check with --check or write with --write)
 
 Flags:
   --write                    Write formatted output back to disk (format / check)
+  --check                    Report unformatted files instead of printing (format only)
   --stdin-file-path <path>   Virtual file path for stdin mode
+  --config-path <file>       Configuration path override (parsed only)
+  --reporter <plain|json>    Reporter selection (parsed only; default: plain)
+  --json                     Alias for --reporter json (parsed only)
   -h, --help                 Show this help
   -v, --version              Show installed @biomejs/wasm-web version
+
+Exit codes:
+  0  No findings
+  1  Errors (including fatal), warnings, unformatted files under check / format --check,
+     or missing packages / files
+  2  Usage error
 
 Install:
   Inert until the backing packages are installed in node_modules:
@@ -154,9 +167,79 @@ export interface ParsedBiomeArgs {
   subcommand: BiomeSubcommand | null;
   paths: string[];
   write: boolean;
+  check: boolean;
   stdinFilePath: string | null;
+  configPath: string | null;
+  reporter: BiomeReporter;
   showHelp: boolean;
   showVersion: boolean;
+}
+
+function requiredOptionValue(args: string[], index: number, option: string): string {
+  const value = args[index + 1];
+  if (typeof value !== 'string' || value.startsWith('-')) {
+    throw new Error(`biome: ${option} requires a value`);
+  }
+  return value;
+}
+
+function parseReporter(value: string): BiomeReporter {
+  if (!value) throw new Error('biome: --reporter requires a value');
+  if (value !== 'plain' && value !== 'json') {
+    throw new Error(`biome: unknown reporter: ${value}`);
+  }
+  return value;
+}
+
+function parseBiomeOption(out: ParsedBiomeArgs, args: string[], index: number): number | null {
+  const arg = args[index];
+  switch (arg) {
+    case '-h':
+    case '--help':
+      out.showHelp = true;
+      return index;
+    case '-v':
+    case '--version':
+      out.showVersion = true;
+      return index;
+    case '--write':
+      out.write = true;
+      return index;
+    case '--check':
+      out.check = true;
+      return index;
+    case '--json':
+      out.reporter = 'json';
+      return index;
+    case '--stdin-file-path':
+      out.stdinFilePath = requiredOptionValue(args, index, arg);
+      return index + 1;
+    case '--config-path':
+      out.configPath = requiredOptionValue(args, index, arg);
+      return index + 1;
+    case '--reporter':
+      out.reporter = parseReporter(requiredOptionValue(args, index, arg));
+      return index + 1;
+  }
+  if (arg.startsWith('--stdin-file-path=')) {
+    out.stdinFilePath = arg.slice('--stdin-file-path='.length);
+    return index;
+  }
+  if (arg.startsWith('--config-path=')) {
+    out.configPath = requiredEqualsValue(arg, '--config-path');
+    return index;
+  }
+  if (arg.startsWith('--reporter=')) {
+    out.reporter = parseReporter(arg.slice('--reporter='.length));
+    return index;
+  }
+  return null;
+}
+
+function requiredEqualsValue(arg: string, option: string): string {
+  const value = arg.slice(option.length + 1);
+  if (!value) throw new Error(`biome: ${option} requires a value`);
+  return value;
 }
 
 export function parseBiomeArgs(args: string[]): ParsedBiomeArgs {
@@ -164,7 +247,10 @@ export function parseBiomeArgs(args: string[]): ParsedBiomeArgs {
     subcommand: null,
     paths: [],
     write: false,
+    check: false,
     stdinFilePath: null,
+    configPath: null,
+    reporter: 'plain',
     showHelp: false,
     showVersion: false,
   };
@@ -176,39 +262,26 @@ export function parseBiomeArgs(args: string[]): ParsedBiomeArgs {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '-h' || arg === '--help') {
-      out.showHelp = true;
-      continue;
-    }
-    if (arg === '-v' || arg === '--version') {
-      out.showVersion = true;
+    const consumedIndex = parseBiomeOption(out, args, i);
+    if (consumedIndex !== null) {
+      i = consumedIndex;
       continue;
     }
     if (out.subcommand === null && SUBCOMMANDS.has(arg)) {
       out.subcommand = arg as BiomeSubcommand;
       continue;
     }
-    if (arg === '--write') {
-      out.write = true;
-      continue;
-    }
-    if (arg === '--stdin-file-path') {
-      const value = args[i + 1];
-      if (typeof value !== 'string' || value.startsWith('-')) {
-        throw new Error('biome: --stdin-file-path requires a value');
-      }
-      out.stdinFilePath = value;
-      i += 1;
-      continue;
-    }
-    if (arg.startsWith('--stdin-file-path=')) {
-      out.stdinFilePath = arg.slice('--stdin-file-path='.length);
-      continue;
-    }
     if (arg.startsWith('-')) {
       throw new Error(`biome: unknown option: ${arg}`);
     }
     out.paths.push(arg);
+  }
+
+  if (out.write && out.check) {
+    throw new Error('biome: --write and --check cannot be used together');
+  }
+  if (out.check && out.subcommand !== 'format') {
+    throw new Error('biome: --check is only valid with the format subcommand');
   }
 
   return out;
@@ -331,6 +404,9 @@ export async function checkBiomeInstalled(
 interface BiomeRequest {
   op: BiomeSubcommand;
   write: boolean;
+  check: boolean;
+  configPath: string | null;
+  reporter: BiomeReporter;
   files: { path: string; biomePath: string; source: string; wrap: boolean }[];
 }
 
@@ -417,40 +493,42 @@ async function main() {
     // shifted back by the prefix length and are printed against the ORIGINAL
     // (unwrapped) source so line/column point at the real file.
     const wrap = file.wrap === true;
-    const fmtInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
-    const fmt = biome.formatContent(projectKey, fmtInput, { filePath: file.biomePath });
-    const fmtDiags = fmt.diagnostics || [];
-    if (wrap) { for (const d of fmtDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }
-    for (const d of fmtDiags) {
-      if (d.severity === 'error' || d.severity === 'fatal') errors++;
-      else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
-    }
-    if (fmtDiags.length > 0) {
-      try {
-        diagText += biome.printDiagnostics(fmtDiags, { filePath: file.biomePath, fileSource: file.source });
-      } catch (e) { /* ignore */ }
-    }
-    // Determine the formatted content in REAL-file terms. For wrapped files
-    // that means unwrapping Biome's output, then a re-format round-trip guard:
-    // if re-wrapping + re-formatting the unwrapped body does not reproduce
-    // Biome's wrapped output, the de-indent was lossy (e.g. a multi-line
-    // template literal with tab-prefixed content) — keep the file UNCHANGED
-    // rather than write corrupted output.
-    let formattedContent = fmt.content;
-    if (wrap) {
-      if (fmt.content === fmtInput) {
-        formattedContent = file.source;
-      } else {
-        const candidate = unwrapFormattedJsh(fmt.content);
-        const reFmt = biome.formatContent(projectKey, JSH_WRAP_PREFIX + candidate + JSH_WRAP_SUFFIX, { filePath: file.biomePath });
-        formattedContent = reFmt.content === fmt.content ? candidate : file.source;
+    if (req.op !== 'lint') {
+      const fmtInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
+      const fmt = biome.formatContent(projectKey, fmtInput, { filePath: file.biomePath });
+      const fmtDiags = fmt.diagnostics || [];
+      if (wrap) { for (const d of fmtDiags) shiftBiomeSpans(d, JSH_WRAP_PREFIX_BYTES); }
+      for (const d of fmtDiags) {
+        if (d.severity === 'error' || d.severity === 'fatal') errors++;
+        else if (d.severity === 'warn' || d.severity === 'warning') warnings++;
+      }
+      if (fmtDiags.length > 0) {
+        try {
+          diagText += biome.printDiagnostics(fmtDiags, { filePath: file.biomePath, fileSource: file.source });
+        } catch (e) { /* ignore */ }
+      }
+      // Determine the formatted content in REAL-file terms. For wrapped files
+      // that means unwrapping Biome's output, then a re-format round-trip guard:
+      // if re-wrapping + re-formatting the unwrapped body does not reproduce
+      // Biome's wrapped output, the de-indent was lossy (e.g. a multi-line
+      // template literal with tab-prefixed content) — keep the file UNCHANGED
+      // rather than write corrupted output.
+      let formattedContent = fmt.content;
+      if (wrap) {
+        if (fmt.content === fmtInput) {
+          formattedContent = file.source;
+        } else {
+          const candidate = unwrapFormattedJsh(fmt.content);
+          const reFmt = biome.formatContent(projectKey, JSH_WRAP_PREFIX + candidate + JSH_WRAP_SUFFIX, { filePath: file.biomePath });
+          formattedContent = reFmt.content === fmt.content ? candidate : file.source;
+        }
+      }
+      if (formattedContent !== file.source) {
+        formatted = formattedContent;
+        unchanged = false;
       }
     }
-    if (formattedContent !== file.source) {
-      formatted = formattedContent;
-      unchanged = false;
-    }
-    if (req.op === 'check') {
+    if (req.op !== 'format') {
       const lintInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
       const lint = biome.lintContent(projectKey, lintInput, { filePath: file.biomePath });
       const lintDiags = lint.diagnostics || [];
@@ -464,10 +542,12 @@ async function main() {
           diagText += biome.printDiagnostics(lintDiags, { filePath: file.biomePath, fileSource: file.source });
         } catch (e) { /* ignore */ }
       }
-      if (!unchanged && !req.write) {
-        diagText += file.path + ': file is not formatted (run with --write to fix)\\n';
-        errors++;
-      }
+    }
+    const shouldReportUnformatted =
+      !unchanged && ((req.op === 'check' && !req.write) || (req.op === 'format' && req.check));
+    if (shouldReportUnformatted) {
+      diagText += file.path + ': file is not formatted (run with --write to fix)\\n';
+      errors++;
     }
     if (file.biomePath !== file.path && diagText) {
       diagText = diagText.split(file.biomePath).join(file.path);
@@ -496,12 +576,18 @@ async function runBiomeOps(
   ctx: CommandContext,
   op: BiomeSubcommand,
   write: boolean,
+  check: boolean,
+  configPath: string | null,
+  reporter: BiomeReporter,
   files: { path: string; source: string }[],
   wasmPath: string
 ): Promise<RunOpsOutcome> {
   const req: BiomeRequest = {
     op,
     write,
+    check,
+    configPath,
+    reporter,
     files: files.map((f) => ({
       path: f.path,
       biomePath: biomeVirtualPath(f.path),
@@ -588,7 +674,7 @@ async function gatherInputs(
   return { inputs, missingErrText };
 }
 
-async function finalizeOutcome(
+export async function finalizeOutcome(
   ctx: CommandContext,
   parsed: ParsedBiomeArgs,
   inputs: { path: string; source: string }[],
@@ -598,16 +684,19 @@ async function finalizeOutcome(
   const stdoutParts: string[] = [];
   const stderrParts: string[] = [missingErrText];
   let errorCount = 0;
+  let warningCount = 0;
   let changed = 0;
   for (const r of outcome.results) {
     if (r.diagnosticsText) stderrParts.push(r.diagnosticsText);
     errorCount += r.errorCount;
+    warningCount += r.warningCount;
     if (parsed.write && r.formatted !== null && !r.unchanged) {
       await ctx.fs.writeFile(r.path, r.formatted);
       changed++;
     } else if (
       !parsed.write &&
       parsed.subcommand === 'format' &&
+      !parsed.check &&
       inputs.length === 1 &&
       inputs[0].path === r.path
     ) {
@@ -617,7 +706,7 @@ async function finalizeOutcome(
   if (parsed.write && changed > 0) {
     stderrParts.push(`biome: wrote ${changed} file(s)\n`);
   }
-  const finalExit = errorCount > 0 || missingErrText.length > 0 ? 1 : 0;
+  const finalExit = errorCount > 0 || warningCount > 0 || missingErrText.length > 0 ? 1 : 0;
   return { stdout: stdoutParts.join(''), stderr: stderrParts.join(''), exitCode: finalExit };
 }
 
@@ -654,7 +743,7 @@ export function createBiomeCommand(): Command {
     if (parsed.subcommand === null) {
       return {
         stdout: '',
-        stderr: 'biome: missing subcommand (expected check or format)\n',
+        stderr: 'biome: missing subcommand (expected check, lint, or format)\n',
         exitCode: 2,
       };
     }
@@ -669,6 +758,9 @@ export function createBiomeCommand(): Command {
       ctx,
       parsed.subcommand,
       parsed.write,
+      parsed.check,
+      parsed.configPath,
+      parsed.reporter,
       gathered.inputs,
       pre.wasmPath
     );
