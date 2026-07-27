@@ -15,7 +15,7 @@
   "indentSwitchCaseLabels": false,
   "indentBlankLines": false,
   "multiElementCollectionTrailingCommas": true,
-  "reflowMultilineStringLiterals": "never",
+  "reflowMultilineStringLiterals": { "never": {} },
   "spacesAroundRangeFormationOperators": false,
   "spacesBeforeEndOfLineComments": 2,
   "fileScopedDeclarationPrivacy": { "accessLevel": "private" },
