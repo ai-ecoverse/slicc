@@ -1,7 +1,14 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createProxiedFetch } from '../proxied-fetch.js';
-import { DIG_VERSION, type DigQueryArgs, parseDigArgs, SUPPORTED_TYPES } from './dig-args.js';
+import {
+  DIG_VERSION,
+  type DigQueryArgs,
+  parseDigArgs,
+  QUAD9_RESOLVER_URL,
+  SUPPORTED_TYPES,
+} from './dig-args.js';
+import { buildDnsMessageUrl, type DnsResponse, parseDnsMessage } from './dns-message.js';
 
 // DoH numeric type → symbolic name (used to render answers).
 const TYPE_NUM_TO_NAME: Record<number, string> = {
@@ -25,18 +32,6 @@ const RCODE_NAMES: Record<number, string> = {
   4: 'NOTIMP',
   5: 'REFUSED',
 };
-
-interface DohAnswer {
-  name: string;
-  type: number;
-  TTL?: number;
-  data: string;
-}
-
-interface DohResponse {
-  Status: number;
-  Answer?: DohAnswer[];
-}
 
 interface DigOutput {
   stdout: string;
@@ -65,7 +60,7 @@ function digHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  -v, --version show version information\n' +
       '  +short        one answer value per line, no headers\n' +
       '  +opts         other dig +options are accepted as no-ops\n' +
-      '  --json        raw resolver JSON (pretty-printed)\n' +
+      '  --json        resolver response as pretty-printed JSON\n' +
       '  -h, --help    show this help\n',
     stderr: '',
     exitCode: 0,
@@ -76,7 +71,7 @@ function renderType(type: number): string {
   return TYPE_NUM_TO_NAME[type] ?? `TYPE${type}`;
 }
 
-function renderAnswers(payload: DohResponse, query: DigQueryArgs): DigOutput {
+function renderAnswers(payload: DnsResponse, query: DigQueryArgs): DigOutput {
   const { fallbackNote, json, name, short } = query;
   if (typeof payload.Status === 'number' && payload.Status !== 0) {
     const rcode = RCODE_NAMES[payload.Status] ?? String(payload.Status);
@@ -121,12 +116,16 @@ async function runDig(args: string[], proxiedFetch: ProxiedFetch): Promise<DigOu
   }
 
   const { fallbackNote, name, resolverUrl, type } = parsedArgs;
-  const url = `${resolverUrl}?name=${encodeURIComponent(name)}&type=${type}`;
+  const usesDnsMessage = resolverUrl === QUAD9_RESOLVER_URL;
+  let url: string;
   let response: Awaited<ReturnType<ProxiedFetch>>;
   try {
+    url = usesDnsMessage
+      ? buildDnsMessageUrl(resolverUrl, name, type)
+      : `${resolverUrl}?name=${encodeURIComponent(name)}&type=${type}`;
     response = await proxiedFetch(url, {
       method: 'GET',
-      headers: { Accept: 'application/dns-json' },
+      headers: { Accept: usesDnsMessage ? 'application/dns-message' : 'application/dns-json' },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -141,8 +140,10 @@ async function runDig(args: string[], proxiedFetch: ProxiedFetch): Promise<DigOu
   }
 
   try {
-    const text = new TextDecoder('utf-8').decode(response.body);
-    return renderAnswers(JSON.parse(text) as DohResponse, parsedArgs);
+    const payload = usesDnsMessage
+      ? parseDnsMessage(response.body, name, type)
+      : (JSON.parse(new TextDecoder('utf-8').decode(response.body)) as DnsResponse);
+    return renderAnswers(payload, parsedArgs);
   } catch {
     return {
       stdout: '',

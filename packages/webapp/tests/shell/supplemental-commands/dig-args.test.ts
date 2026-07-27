@@ -24,9 +24,9 @@ describe('dig argument parser', () => {
     ['8.8.8.8', 'https://dns.google/resolve'],
     ['8.8.4.4', 'https://dns.google/resolve'],
     ['dns.google', 'https://dns.google/resolve'],
-    ['9.9.9.9', 'https://dns.quad9.net:5053/dns-query'],
-    ['149.112.112.112', 'https://dns.quad9.net:5053/dns-query'],
-    ['dns.quad9.net', 'https://dns.quad9.net:5053/dns-query'],
+    ['9.9.9.9', 'https://dns.quad9.net/dns-query'],
+    ['149.112.112.112', 'https://dns.quad9.net/dns-query'],
+    ['dns.quad9.net', 'https://dns.quad9.net/dns-query'],
   ])('maps @%s to its DoH endpoint', (server, resolverUrl) => {
     expect(query([`@${server}`, 'example.com'])).toMatchObject({ resolverUrl, fallbackNote: '' });
   });

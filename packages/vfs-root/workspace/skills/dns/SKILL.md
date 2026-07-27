@@ -39,6 +39,6 @@ the built-in DoH transport.
 
 - `-x <address>` performs an IPv4 or IPv6 reverse lookup as a `PTR` query.
 - `-v` and `--version` print `DiG 9.20.0-slicc (DNS-over-HTTPS)` and exit.
-- `+short` prints one answer value per line; `--json` prints raw resolver JSON.
+- `+short` prints one answer value per line; `--json` prints the resolver response as JSON.
   They are mutually exclusive.
 - Other `+opts`, such as `+noall` and `+answer`, are accepted as no-ops.
