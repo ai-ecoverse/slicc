@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Sliccstart
 
 /// Backfill coverage for pure, side-effect-free helpers that lost their
@@ -12,14 +13,14 @@ final class LauncherCoverageBackfillTests: XCTestCase {
 
     func testParseSecretsHonoursQuotingCommentsAndDomains() {
         let blob = """
-        # comment line
-        GITHUB_TOKEN="ghp_with space"
-        GITHUB_TOKEN_DOMAINS=api.github.com, *.github.com
-        EMPTY_DOMAINS_SECRET=value
-        EMPTY_DOMAINS_SECRET_DOMAINS=
-        SINGLE='quoted'
-        SINGLE_DOMAINS=example.com
-        """
+            # comment line
+            GITHUB_TOKEN="ghp_with space"
+            GITHUB_TOKEN_DOMAINS=api.github.com, *.github.com
+            EMPTY_DOMAINS_SECRET=value
+            EMPTY_DOMAINS_SECRET_DOMAINS=
+            SINGLE='quoted'
+            SINGLE_DOMAINS=example.com
+            """
         let secrets = EnvFileFormat.parseSecrets(blob)
         let byName = Dictionary(uniqueKeysWithValues: secrets.map { ($0.name, $0) })
         XCTAssertEqual(byName["GITHUB_TOKEN"]?.value, "ghp_with space")
@@ -90,12 +91,16 @@ final class LauncherCoverageBackfillTests: XCTestCase {
         // call returns a well-formed, sorted array.
         let withPermNames = AppScanner.scan(hasAppManagementPermission: true).map(\.name)
         let withoutPermNames = AppScanner.scan(hasAppManagementPermission: false).map(\.name)
-        XCTAssertEqual(withPermNames, withPermNames.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        })
-        XCTAssertEqual(withoutPermNames, withoutPermNames.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        })
+        XCTAssertEqual(
+            withPermNames,
+            withPermNames.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            })
+        XCTAssertEqual(
+            withoutPermNames,
+            withoutPermNames.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            })
     }
 
     func testIsChromiumBrowserMatchesKnownBundleId() {

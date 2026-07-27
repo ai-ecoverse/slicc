@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Coverage tests for small pure helpers in `AppScanner`,

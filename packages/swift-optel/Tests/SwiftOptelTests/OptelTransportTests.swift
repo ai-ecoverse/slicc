@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 final class OptelTransportTests: XCTestCase {
@@ -16,30 +17,33 @@ final class OptelTransportTests: XCTestCase {
     }
 
     func testMakeRequestBuildsCollectorURLWithWeight() throws {
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: sampleEvent(weight: 100),
-            collectBaseURL: baseURL,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: sampleEvent(weight: 100),
+                collectBaseURL: baseURL,
+                timeout: 10
+            ))
         XCTAssertEqual(request.url?.absoluteString, "https://rum.hlx.page/.rum/100")
     }
 
     func testMakeRequestHonorsCustomWeightInPath() throws {
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: sampleEvent(weight: 1000),
-            collectBaseURL: baseURL,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: sampleEvent(weight: 1000),
+                collectBaseURL: baseURL,
+                timeout: 10
+            ))
         XCTAssertEqual(request.url?.absoluteString, "https://rum.hlx.page/.rum/1000")
     }
 
     func testMakeRequestHonorsCustomBaseURL() throws {
         let base = URL(string: "https://custom.example.com/path/")!
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: sampleEvent(),
-            collectBaseURL: base,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: sampleEvent(),
+                collectBaseURL: base,
+                timeout: 10
+            ))
         XCTAssertEqual(
             request.url?.absoluteString,
             "https://custom.example.com/path/.rum/100"
@@ -47,31 +51,34 @@ final class OptelTransportTests: XCTestCase {
     }
 
     func testMakeRequestSetsPostMethodAndJSONHeader() throws {
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: sampleEvent(),
-            collectBaseURL: baseURL,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: sampleEvent(),
+                collectBaseURL: baseURL,
+                timeout: 10
+            ))
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
     }
 
     func testMakeRequestPropagatesTimeout() throws {
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: sampleEvent(),
-            collectBaseURL: baseURL,
-            timeout: 3.5
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: sampleEvent(),
+                collectBaseURL: baseURL,
+                timeout: 3.5
+            ))
         XCTAssertEqual(request.timeoutInterval, 3.5, accuracy: 0.0001)
     }
 
     func testMakeRequestEncodesEventAsBody() throws {
         let event = sampleEvent()
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: event,
-            collectBaseURL: baseURL,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: event,
+                collectBaseURL: baseURL,
+                timeout: 10
+            ))
         let body = try XCTUnwrap(request.httpBody)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: body) as? [String: Any]
@@ -95,11 +102,12 @@ final class OptelTransportTests: XCTestCase {
             checkpoint: .top,
             t: 0
         )
-        let request = try XCTUnwrap(URLSessionOptelTransport.makeRequest(
-            event: event,
-            collectBaseURL: baseURL,
-            timeout: 10
-        ))
+        let request = try XCTUnwrap(
+            URLSessionOptelTransport.makeRequest(
+                event: event,
+                collectBaseURL: baseURL,
+                timeout: 10
+            ))
         let body = try XCTUnwrap(request.httpBody)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: body) as? [String: Any]

@@ -84,7 +84,8 @@ public enum OptelUncaughtExceptionHook {
 
     /// `true` once the hook has been installed for this process.
     public static var isInstalled: Bool {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return installed
     }
 

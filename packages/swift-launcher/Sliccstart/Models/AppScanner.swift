@@ -10,7 +10,7 @@ final class AppScanner {
 
     static func scan(hasAppManagementPermission: Bool = true) -> [AppTarget] {
         var targets: [AppTarget] = []
-        var debugBuilds: [String: AppTarget] = [:] // originalPath -> debugTarget
+        var debugBuilds: [String: AppTarget] = [:]  // originalPath -> debugTarget
 
         // First scan ~/Applications for debug builds (user-owned, no TCC prompt)
         let fm = FileManager.default
@@ -36,40 +36,47 @@ final class AppScanner {
 
         // Known Chromium browsers by bundle ID
         for (bundleId, displayName) in AppTarget.knownChromiumBrowsers {
-            guard let url = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: bundleId
-            ) else { continue }
+            guard
+                let url = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: bundleId
+                )
+            else { continue }
             let path = url.path
             let name = appName(fromPath: path)
             let icon = NSWorkspace.shared.icon(forFile: path)
-            targets.append(AppTarget(
-                id: path, name: displayName, path: path,
-                executablePath: executablePath(forApp: path, name: name),
-                type: .chromiumBrowser, icon: icon,
-                debugSupport: .supported,
-                isDebugBuild: false,
-                originalAppPath: nil
-            ))
+            targets.append(
+                AppTarget(
+                    id: path, name: displayName, path: path,
+                    executablePath: executablePath(forApp: path, name: name),
+                    type: .chromiumBrowser, icon: icon,
+                    debugSupport: .supported,
+                    isDebugBuild: false,
+                    originalAppPath: nil
+                ))
         }
 
         // Known terminal emulators by bundle ID
         for (bundleId, displayName) in AppTarget.knownTerminals {
-            guard let url = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: bundleId
-            ) else { continue }
+            guard
+                let url = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: bundleId
+                )
+            else { continue }
             let path = url.path
             let name = appName(fromPath: path)
             let icon = NSWorkspace.shared.icon(forFile: path)
-            let executable = Bundle(url: url)?.executableURL?.path
+            let executable =
+                Bundle(url: url)?.executableURL?.path
                 ?? executablePath(forApp: path, name: name)
-            targets.append(AppTarget(
-                id: path, name: displayName, path: path,
-                executablePath: executable,
-                type: .terminal, icon: icon,
-                debugSupport: .unknown,
-                isDebugBuild: false,
-                originalAppPath: nil
-            ))
+            targets.append(
+                AppTarget(
+                    id: path, name: displayName, path: path,
+                    executablePath: executable,
+                    type: .terminal, icon: icon,
+                    debugSupport: .unknown,
+                    isDebugBuild: false,
+                    originalAppPath: nil
+                ))
         }
 
         // Without App Management permission we can't peek inside app bundles
@@ -77,22 +84,25 @@ final class AppScanner {
         // Instead, discover known Electron apps by bundle ID — no TCC needed.
         guard hasAppManagementPermission else {
             for (bundleId, displayName) in AppTarget.knownElectronApps {
-                guard let url = NSWorkspace.shared.urlForApplication(
-                    withBundleIdentifier: bundleId
-                ) else { continue }
+                guard
+                    let url = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: bundleId
+                    )
+                else { continue }
                 let appPath = url.path
                 // Skip if a debug build already covers this app
                 if debugBuilds[appPath] != nil { continue }
                 let name = appName(fromPath: appPath)
                 let icon = NSWorkspace.shared.icon(forFile: appPath)
-                targets.append(AppTarget(
-                    id: appPath, name: displayName, path: appPath,
-                    executablePath: executablePath(forApp: appPath, name: name),
-                    type: .electronApp, icon: icon,
-                    debugSupport: .unknown,
-                    isDebugBuild: false,
-                    originalAppPath: nil
-                ))
+                targets.append(
+                    AppTarget(
+                        id: appPath, name: displayName, path: appPath,
+                        executablePath: executablePath(forApp: appPath, name: name),
+                        type: .electronApp, icon: icon,
+                        debugSupport: .unknown,
+                        isDebugBuild: false,
+                        originalAppPath: nil
+                    ))
             }
             targets.append(contentsOf: debugBuilds.values)
             return targets.sorted {
@@ -118,14 +128,15 @@ final class AppScanner {
             let name = appName(fromPath: appPath)
             let icon = NSWorkspace.shared.icon(forFile: appPath)
             let debugSupport = checkDebugSupport(atPath: appPath)
-            targets.append(AppTarget(
-                id: appPath, name: name, path: appPath,
-                executablePath: executablePath(forApp: appPath, name: name),
-                type: .electronApp, icon: icon,
-                debugSupport: debugSupport,
-                isDebugBuild: false,
-                originalAppPath: nil
-            ))
+            targets.append(
+                AppTarget(
+                    id: appPath, name: name, path: appPath,
+                    executablePath: executablePath(forApp: appPath, name: name),
+                    type: .electronApp, icon: icon,
+                    debugSupport: debugSupport,
+                    isDebugBuild: false,
+                    originalAppPath: nil
+                ))
         }
 
         return targets.sorted {
@@ -159,15 +170,15 @@ final class AppScanner {
         let fm = FileManager.default
         let electronFramework = "\(appPath)/Contents/Frameworks/Electron Framework.framework"
         guard fm.fileExists(atPath: electronFramework) else {
-            return .supported // Not Electron - assume it works
+            return .supported  // Not Electron - assume it works
         }
 
         // Known apps that block remote debugging at the application level
         // These apps have explicit checks in their JavaScript code that exit
         // when --remote-debugging-port is detected, even if the Electron fuse allows it.
         let knownBlockedApps = [
-            "Claude",       // Checks CLAUDE_CDP_AUTH JWT, exits without it
-            "1Password",    // Security-focused, blocks remote debugging
+            "Claude",  // Checks CLAUDE_CDP_AUTH JWT, exits without it
+            "1Password",  // Security-focused, blocks remote debugging
         ]
 
         let appName = self.appName(fromPath: appPath)

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 final class OptelWindowObserverTests: XCTestCase {
@@ -153,19 +154,19 @@ final class OptelWindowObserverTests: XCTestCase {
     // MARK: - macOS observer install/uninstall
 
     #if os(macOS)
-    func testObserverInstallIsIdempotent() {
-        OptelWindowObserver._testing_reset()
-        XCTAssertFalse(OptelWindowObserver.isInstalled)
-        OptelWindowObserver.installIfNeeded()
-        XCTAssertTrue(OptelWindowObserver.isInstalled)
-        // Second call is a no-op; flag remains set and no crash.
-        OptelWindowObserver.installIfNeeded()
-        XCTAssertTrue(OptelWindowObserver.isInstalled)
-        OptelWindowObserver.uninstall()
-        XCTAssertFalse(OptelWindowObserver.isInstalled)
-        // Uninstall when nothing is installed is also a no-op.
-        OptelWindowObserver.uninstall()
-        XCTAssertFalse(OptelWindowObserver.isInstalled)
-    }
+        func testObserverInstallIsIdempotent() {
+            OptelWindowObserver._testing_reset()
+            XCTAssertFalse(OptelWindowObserver.isInstalled)
+            OptelWindowObserver.installIfNeeded()
+            XCTAssertTrue(OptelWindowObserver.isInstalled)
+            // Second call is a no-op; flag remains set and no crash.
+            OptelWindowObserver.installIfNeeded()
+            XCTAssertTrue(OptelWindowObserver.isInstalled)
+            OptelWindowObserver.uninstall()
+            XCTAssertFalse(OptelWindowObserver.isInstalled)
+            // Uninstall when nothing is installed is also a no-op.
+            OptelWindowObserver.uninstall()
+            XCTAssertFalse(OptelWindowObserver.isInstalled)
+        }
     #endif
 }

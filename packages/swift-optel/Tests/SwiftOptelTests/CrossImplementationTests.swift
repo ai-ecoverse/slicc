@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 /// Pinned cross-implementation wire-format vectors.
@@ -53,9 +54,9 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/100",
             expectedBody: """
-            {"weight":100,"id":"abc123def","referer":"https://com.example.app/",\
-            "checkpoint":"top","t":0}
-            """
+                {"weight":100,"id":"abc123def","referer":"https://com.example.app/",\
+                "checkpoint":"top","t":0}
+                """
         ),
         // `click` checkpoint with full pingData (source + target + value).
         Vector(
@@ -75,10 +76,10 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/100",
             expectedBody: """
-            {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
-            "checkpoint":"click","t":1234,"source":".button#submit",\
-            "target":"/api/checkout","value":42}
-            """
+                {"weight":100,"id":"abc123def","referer":"https://com.example.app/home",\
+                "checkpoint":"click","t":1234,"source":".button#submit",\
+                "target":"/api/checkout","value":42}
+                """
         ),
         // `rate=on` → weight 1; URL path carries the weight verbatim.
         Vector(
@@ -94,9 +95,9 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/1",
             expectedBody: """
-            {"weight":1,"id":"000000001","referer":"https://com.example.app/settings",\
-            "checkpoint":"navigate","t":500,"source":"SettingsView"}
-            """
+                {"weight":1,"id":"000000001","referer":"https://com.example.app/settings",\
+                "checkpoint":"navigate","t":500,"source":"SettingsView"}
+                """
         ),
         // `rate=high` → weight 10.
         Vector(
@@ -111,9 +112,9 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/10",
             expectedBody: """
-            {"weight":10,"id":"deadbeef0","referer":"https://com.example.app/",\
-            "checkpoint":"enter","t":0}
-            """
+                {"weight":10,"id":"deadbeef0","referer":"https://com.example.app/",\
+                "checkpoint":"enter","t":0}
+                """
         ),
         // `rate=low` → weight 1000.
         Vector(
@@ -132,10 +133,10 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: defaultBase,
             expectedURL: "https://rum.hlx.page/.rum/1000",
             expectedBody: """
-            {"weight":1000,"id":"feedface1","referer":"https://com.example.app/error",\
-            "checkpoint":"error","t":9999,"source":"NSCocoaErrorDomain",\
-            "target":"File not found"}
-            """
+                {"weight":1000,"id":"feedface1","referer":"https://com.example.app/error",\
+                "checkpoint":"error","t":9999,"source":"NSCocoaErrorDomain",\
+                "target":"File not found"}
+                """
         ),
         // Custom `collectBaseURL` with a non-root path. Mirrors the JS
         // `new URL('.rum/' + weight, collectBaseURL)` relative-resolution
@@ -152,9 +153,9 @@ final class CrossImplementationTests: XCTestCase {
             collectBaseURL: URL(string: "https://custom.example.com/path/")!,
             expectedURL: "https://custom.example.com/path/.rum/100",
             expectedBody: """
-            {"weight":100,"id":"cafebabe0","referer":"https://com.example.app/",\
-            "checkpoint":"top","t":0}
-            """
+                {"weight":100,"id":"cafebabe0","referer":"https://com.example.app/",\
+                "checkpoint":"top","t":0}
+                """
         ),
     ]
 

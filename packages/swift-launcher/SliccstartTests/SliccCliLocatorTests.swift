@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 final class SliccCliLocatorTests: XCTestCase {

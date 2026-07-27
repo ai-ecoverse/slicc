@@ -1,10 +1,11 @@
 import AsyncHTTPClient
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
-import HTTPTypes
 import NIOCore
 import XCTest
+
 @testable import slicc_server
 
 /// Tests for `POST /api/handoff` and the pure Handoff helpers. Mirrors the
@@ -21,20 +22,22 @@ final class HandoffTests: XCTestCase {
     // MARK: - validatePayload
 
     func testValidateAcceptsHandoffPayload() {
-        XCTAssertNil(Handoff.validatePayload([
-            "verb": .string("handoff"),
-            "target": .string("https://example.com/page"),
-            "instruction": .string("Continue the signup flow"),
-        ]))
+        XCTAssertNil(
+            Handoff.validatePayload([
+                "verb": .string("handoff"),
+                "target": .string("https://example.com/page"),
+                "instruction": .string("Continue the signup flow"),
+            ]))
     }
 
     func testValidateAcceptsUpskillWithBranchAndPath() {
-        XCTAssertNil(Handoff.validatePayload([
-            "verb": .string("upskill"),
-            "target": .string("https://github.com/o/r"),
-            "branch": .string("main"),
-            "path": .string("skills/foo"),
-        ]))
+        XCTAssertNil(
+            Handoff.validatePayload([
+                "verb": .string("upskill"),
+                "target": .string("https://github.com/o/r"),
+                "branch": .string("main"),
+                "path": .string("skills/foo"),
+            ]))
     }
 
     func testValidateRejectsLegacySliccHeader() {
@@ -139,13 +142,14 @@ final class HandoffTests: XCTestCase {
     func testValidateAllowsExplicitNullOptionals() {
         // JSON `null` mirrors the TS `!= null` guards: a null instruction /
         // branch / path is treated as absent, not as a wrong type.
-        XCTAssertNil(Handoff.validatePayload([
-            "verb": .string("handoff"),
-            "target": .string("https://example.com/"),
-            "instruction": .null,
-            "branch": .null,
-            "path": .null,
-        ]))
+        XCTAssertNil(
+            Handoff.validatePayload([
+                "verb": .string("handoff"),
+                "target": .string("https://example.com/"),
+                "instruction": .null,
+                "branch": .null,
+                "path": .null,
+            ]))
     }
 
     // MARK: - buildNavigateEvent
@@ -215,7 +219,8 @@ final class HandoffTests: XCTestCase {
         try await self.withApp(recorder: recorder) { client in
             try await self.postHandoff(
                 client,
-                body: #"{"verb":"handoff","target":"https://example.com/page","instruction":"Continue the signup flow","url":"https://example.com/page","title":"Signup"}"#
+                body:
+                    #"{"verb":"handoff","target":"https://example.com/page","instruction":"Continue the signup flow","url":"https://example.com/page","title":"Signup"}"#
             ) { response in
                 XCTAssertEqual(response.status, .ok)
                 XCTAssertEqual(try self.decodeJSONObject(from: response.body), ["ok": .bool(true)])
@@ -347,9 +352,10 @@ final class HandoffTests: XCTestCase {
         do {
             let lickSystem = LickSystem()
             if let recorder {
-                await lickSystem.addClient(WebSocketClient { text in
-                    await recorder.append(text)
-                })
+                await lickSystem.addClient(
+                    WebSocketClient { text in
+                        await recorder.append(text)
+                    })
             }
             let router = Router()
             registerAPIRoutes(

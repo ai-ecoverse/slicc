@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import XCTest
+
 @testable import slicc_server
 
 /// Thread-safe call counter for `@Sendable` probe closures in the
@@ -80,14 +81,14 @@ final class ElectronLauncherTests: XCTestCase {
                 title: "Standalone",
                 url: "file:///tmp/index.html",
                 webSocketDebuggerURL: "ws://127.0.0.1:9223/devtools/page/3"
-            )
+            ),
         ]
 
         XCTAssertEqual(
             selectBestOverlayTargets(targets).map(\.webSocketDebuggerURL),
             [
                 "ws://127.0.0.1:9223/devtools/page/2",
-                "ws://127.0.0.1:9223/devtools/page/3"
+                "ws://127.0.0.1:9223/devtools/page/3",
             ]
         )
     }
@@ -643,7 +644,8 @@ final class ElectronLauncherTests: XCTestCase {
             "classification must not hinge on about:blank — any readable href is not-loaded"
         )
         if let catchRange = expression.range(of: "catch"),
-           let okRange = expression.range(of: "return 'ok'") {
+            let okRange = expression.range(of: "return 'ok'")
+        {
             XCTAssertTrue(
                 okRange.lowerBound > catchRange.lowerBound,
                 "`return 'ok'` must live inside the catch branch"
@@ -785,8 +787,8 @@ final class ElectronLauncherTests: XCTestCase {
     func testElectronInspectableTargetDecodesWebSocketDebuggerUrlCodingKey() throws {
         // The CodingKey maps webSocketDebuggerURL ↔ webSocketDebuggerUrl in JSON.
         let json = """
-        {"type":"page","title":"Hi","url":"https://example.com","webSocketDebuggerUrl":"ws://x/y"}
-        """.data(using: .utf8)!
+            {"type":"page","title":"Hi","url":"https://example.com","webSocketDebuggerUrl":"ws://x/y"}
+            """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
         XCTAssertEqual(decoded.webSocketDebuggerURL, "ws://x/y")
         XCTAssertEqual(decoded.title, "Hi")
@@ -794,8 +796,8 @@ final class ElectronLauncherTests: XCTestCase {
 
     func testElectronInspectableTargetDecodesMissingOptionalFields() throws {
         let json = """
-        {"type":"page","url":"https://example.com"}
-        """.data(using: .utf8)!
+            {"type":"page","url":"https://example.com"}
+            """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ElectronInspectableTarget.self, from: json)
         XCTAssertNil(decoded.title)
         XCTAssertNil(decoded.webSocketDebuggerURL)
@@ -1085,16 +1087,16 @@ final class ElectronLauncherTests: XCTestCase {
         let chatURL = buildThinOverlayAppURL(
             options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "chat")
         )
-        let chatItems = Dictionary(uniqueKeysWithValues:
-            (URLComponents(string: chatURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        let chatItems = Dictionary(
+            uniqueKeysWithValues: (URLComponents(string: chatURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
         )
         XCTAssertNil(chatItems["tab"])
 
         let memoryURL = buildThinOverlayAppURL(
             options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "memory")
         )
-        let memoryItems = Dictionary(uniqueKeysWithValues:
-            (URLComponents(string: memoryURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        let memoryItems = Dictionary(
+            uniqueKeysWithValues: (URLComponents(string: memoryURL)?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
         )
         XCTAssertEqual(memoryItems["tab"], "memory")
     }
@@ -1134,7 +1136,7 @@ final class ElectronLauncherTests: XCTestCase {
     func testResolveHostedLeaderOriginPrefersExplicitOverWorkerBase() {
         let result = resolveHostedLeaderOrigin(environment: [
             "SLICC_HOSTED_LEADER_ORIGIN": "https://primary.example",
-            "WORKER_BASE_URL": "https://fallback.example"
+            "WORKER_BASE_URL": "https://fallback.example",
         ])
         XCTAssertEqual(result, "https://primary.example")
     }

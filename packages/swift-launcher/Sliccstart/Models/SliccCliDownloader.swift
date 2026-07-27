@@ -84,19 +84,22 @@ enum SliccCliCodeSignatureValidator {
     private static func inspect(_ url: URL) -> SliccCliCodeSignatureInspection {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
-              let staticCode else {
+            let staticCode
+        else {
             return .init(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
         }
 
         var requirement: SecRequirement?
         let developerIDRequirement =
             "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-        guard SecRequirementCreateWithString(
-            developerIDRequirement as CFString,
-            [],
-            &requirement
-        ) == errSecSuccess,
-              let requirement else {
+        guard
+            SecRequirementCreateWithString(
+                developerIDRequirement as CFString,
+                [],
+                &requirement
+            ) == errSecSuccess,
+            let requirement
+        else {
             return .init(hasValidDeveloperIDSignature: false, teamIdentifier: nil)
         }
 
@@ -108,7 +111,8 @@ enum SliccCliCodeSignatureValidator {
         var signingInformation: CFDictionary?
         let informationFlags = SecCSFlags(rawValue: kSecCSSigningInformation)
         guard SecCodeCopySigningInformation(staticCode, informationFlags, &signingInformation) == errSecSuccess,
-              let information = signingInformation as? [CFString: Any] else {
+            let information = signingInformation as? [CFString: Any]
+        else {
             return .init(hasValidDeveloperIDSignature: true, teamIdentifier: nil)
         }
         return .init(

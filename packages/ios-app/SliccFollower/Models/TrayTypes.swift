@@ -103,25 +103,26 @@ enum TrayBootstrapEvent: Codable, Sendable {
             self = .failed(sequence: sequence, sentAt: sentAt, failure: fail)
         default:
             throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "Unknown TrayBootstrapEvent type: \(type)"))
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unknown TrayBootstrapEvent type: \(type)"))
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .offer(seq, sent, offer):
+        case .offer(let seq, let sent, let offer):
             try container.encode("bootstrap.offer", forKey: .type)
             try container.encode(seq, forKey: .sequence)
             try container.encode(sent, forKey: .sentAt)
             try container.encode(offer, forKey: .offer)
-        case let .iceCandidate(seq, sent, cand):
+        case .iceCandidate(let seq, let sent, let cand):
             try container.encode("bootstrap.ice_candidate", forKey: .type)
             try container.encode(seq, forKey: .sequence)
             try container.encode(sent, forKey: .sentAt)
             try container.encode(cand, forKey: .candidate)
-        case let .failed(seq, sent, fail):
+        case .failed(let seq, let sent, let fail):
             try container.encode("bootstrap.failed", forKey: .type)
             try container.encode(seq, forKey: .sequence)
             try container.encode(sent, forKey: .sentAt)
@@ -159,23 +160,24 @@ enum FollowerAttachResult: Codable, Sendable {
                 error: try container.decode(String.self, forKey: .error))
         default:
             throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "Unknown action: \(action)"))
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Unknown action: \(action)"))
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .wait(code, retryAfterMs):
+        case .wait(let code, let retryAfterMs):
             try container.encode("wait", forKey: .action)
             try container.encode(code, forKey: .code)
             try container.encode(retryAfterMs, forKey: .retryAfterMs)
-        case let .signal(code, bootstrap):
+        case .signal(let code, let bootstrap):
             try container.encode("signal", forKey: .action)
             try container.encode(code, forKey: .code)
             try container.encode(bootstrap, forKey: .bootstrap)
-        case let .fail(code, error):
+        case .fail(let code, let error):
             try container.encode("fail", forKey: .action)
             try container.encode(code, forKey: .code)
             try container.encode(error, forKey: .error)

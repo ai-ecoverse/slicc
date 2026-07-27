@@ -92,102 +92,103 @@ public enum OptelWindowNavigateDecider {
 }
 
 #if os(macOS)
-import AppKit
+    import AppKit
 
-/// macOS-only observer that watches for key/main window changes and emits
-/// `navigate` beacons whenever focus moves to a *different* window.
-///
-/// Install/uninstall is idempotent; the dedupe state is reset on uninstall so
-/// the next install starts fresh. The actual emit/skip decision is delegated
-/// to ``OptelWindowNavigateDecider`` so the behavior is unit-tested in pure
-/// Swift without requiring a running app.
-public enum OptelWindowObserver {
-    private static let lock = NSLock()
-    private static var installed = false
-    private static var observers: [NSObjectProtocol] = []
-    private static var lastIdentity: OptelWindowIdentity?
+    /// macOS-only observer that watches for key/main window changes and emits
+    /// `navigate` beacons whenever focus moves to a *different* window.
+    ///
+    /// Install/uninstall is idempotent; the dedupe state is reset on uninstall so
+    /// the next install starts fresh. The actual emit/skip decision is delegated
+    /// to ``OptelWindowNavigateDecider`` so the behavior is unit-tested in pure
+    /// Swift without requiring a running app.
+    public enum OptelWindowObserver {
+        private static let lock = NSLock()
+        private static var installed = false
+        private static var observers: [NSObjectProtocol] = []
+        private static var lastIdentity: OptelWindowIdentity?
 
-    /// `true` once the observer has been installed for this process.
-    public static var isInstalled: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return installed
-    }
-
-    /// Install observers for `NSWindow.didBecomeKeyNotification` and
-    /// `didBecomeMainNotification`. Safe to call repeatedly; the second and
-    /// subsequent calls are no-ops.
-    public static func installIfNeeded() {
-        lock.lock()
-        guard !installed else {
-            lock.unlock()
-            return
+        /// `true` once the observer has been installed for this process.
+        public static var isInstalled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return installed
         }
-        installed = true
-        let center = NotificationCenter.default
-        let names: [Notification.Name] = [
-            NSWindow.didBecomeKeyNotification,
-            NSWindow.didBecomeMainNotification,
-        ]
-        for name in names {
-            let token = center.addObserver(
-                forName: name,
-                object: nil,
-                queue: .main
-            ) { notification in
-                guard let window = notification.object as? NSWindow else { return }
-                OptelWindowObserver.handle(window: window)
+
+        /// Install observers for `NSWindow.didBecomeKeyNotification` and
+        /// `didBecomeMainNotification`. Safe to call repeatedly; the second and
+        /// subsequent calls are no-ops.
+        public static func installIfNeeded() {
+            lock.lock()
+            guard !installed else {
+                lock.unlock()
+                return
             }
-            observers.append(token)
+            installed = true
+            let center = NotificationCenter.default
+            let names: [Notification.Name] = [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.didBecomeMainNotification,
+            ]
+            for name in names {
+                let token = center.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { notification in
+                    guard let window = notification.object as? NSWindow else { return }
+                    OptelWindowObserver.handle(window: window)
+                }
+                observers.append(token)
+            }
+            lock.unlock()
         }
-        lock.unlock()
-    }
 
-    /// Remove the installed observers and reset dedupe state. Safe to call
-    /// when nothing is installed.
-    public static func uninstall() {
-        lock.lock()
-        let toRemove = observers
-        observers.removeAll()
-        lastIdentity = nil
-        installed = false
-        lock.unlock()
-        let center = NotificationCenter.default
-        for token in toRemove {
-            center.removeObserver(token)
+        /// Remove the installed observers and reset dedupe state. Safe to call
+        /// when nothing is installed.
+        public static func uninstall() {
+            lock.lock()
+            let toRemove = observers
+            observers.removeAll()
+            lastIdentity = nil
+            installed = false
+            lock.unlock()
+            let center = NotificationCenter.default
+            for token in toRemove {
+                center.removeObserver(token)
+            }
+        }
+
+        /// Internal hook used by the notification handlers. Runs the identity +
+        /// decider seam against the supplied window and emits when appropriate.
+        static func handle(window: NSWindow) {
+            let identity = identity(for: window)
+            let decision: OptelWindowNavigateDecider.Decision
+            lock.lock()
+            decision = OptelWindowNavigateDecider.decide(
+                previous: lastIdentity,
+                current: identity
+            )
+            lastIdentity = identity
+            lock.unlock()
+            if decision.shouldEmit, let source = decision.source {
+                Optel.sample(.navigate, source: source)
+            }
+        }
+
+        /// Build an ``OptelWindowIdentity`` for an `NSWindow`. Extracted so tests
+        /// can construct equivalent identities without instantiating AppKit.
+        static func identity(for window: NSWindow) -> OptelWindowIdentity {
+            OptelWindowIdentity.make(
+                identifier: window.identifier?.rawValue,
+                title: window.title,
+                fallbackKey: String(ObjectIdentifier(window).hashValue)
+            )
+        }
+
+        /// Test-only reset of the install latch and dedupe state. Removes any
+        /// currently-registered notification observers.
+        internal static func _testing_reset() {
+            uninstall()
         }
     }
-
-    /// Internal hook used by the notification handlers. Runs the identity +
-    /// decider seam against the supplied window and emits when appropriate.
-    static func handle(window: NSWindow) {
-        let identity = identity(for: window)
-        let decision: OptelWindowNavigateDecider.Decision
-        lock.lock()
-        decision = OptelWindowNavigateDecider.decide(
-            previous: lastIdentity,
-            current: identity
-        )
-        lastIdentity = identity
-        lock.unlock()
-        if decision.shouldEmit, let source = decision.source {
-            Optel.sample(.navigate, source: source)
-        }
-    }
-
-    /// Build an ``OptelWindowIdentity`` for an `NSWindow`. Extracted so tests
-    /// can construct equivalent identities without instantiating AppKit.
-    static func identity(for window: NSWindow) -> OptelWindowIdentity {
-        OptelWindowIdentity.make(
-            identifier: window.identifier?.rawValue,
-            title: window.title,
-            fallbackKey: String(ObjectIdentifier(window).hashValue)
-        )
-    }
-
-    /// Test-only reset of the install latch and dedupe state. Removes any
-    /// currently-registered notification observers.
-    internal static func _testing_reset() {
-        uninstall()
-    }
-}
 #endif

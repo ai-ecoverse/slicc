@@ -1,9 +1,9 @@
-import SwiftUI
 import AppKit
-import Combine
-import os
 import AppUpdater
+import Combine
 import SwiftOptel
+import SwiftUI
+import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
@@ -167,7 +167,9 @@ struct SliccstartApp: App {
                 }
             } message: {
                 if let target = debugBuildTarget {
-                    Text("\(target.name) has remote debugging disabled.\n\nCreate a debug build in ~/Applications that enables SLICC to connect?\n\nThis will:\n• Copy the app to ~/Applications/\(target.name) Debug.app\n• Patch Electron fuses\n• Bypass CDP auth checks\n• Ad-hoc sign the result")
+                    Text(
+                        "\(target.name) has remote debugging disabled.\n\nCreate a debug build in ~/Applications that enables SLICC to connect?\n\nThis will:\n• Copy the app to ~/Applications/\(target.name) Debug.app\n• Patch Electron fuses\n• Bypass CDP auth checks\n• Ad-hoc sign the result"
+                    )
                 }
             }
             .alert("Restart App for SLICC?", isPresented: $showElectronRestartDialog) {
@@ -182,7 +184,9 @@ struct SliccstartApp: App {
                 }
             } message: {
                 if let target = electronRestartTarget {
-                    Text("\(target.name) is already running without a known SLICC debug port.\n\nSliccstart can quit and reopen it with remote debugging enabled.")
+                    Text(
+                        "\(target.name) is already running without a known SLICC debug port.\n\nSliccstart can quit and reopen it with remote debugging enabled."
+                    )
                 }
             }
         }

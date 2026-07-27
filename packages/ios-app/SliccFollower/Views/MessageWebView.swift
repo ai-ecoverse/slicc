@@ -19,7 +19,7 @@ struct MessageWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(red: 0.102, green: 0.102, blue: 0.102, alpha: 1) // #1a1a1a
+        webView.backgroundColor = UIColor(red: 0.102, green: 0.102, blue: 0.102, alpha: 1)  // #1a1a1a
         webView.scrollView.backgroundColor = webView.backgroundColor
         webView.scrollView.bounces = false
 
@@ -90,7 +90,8 @@ struct MessageWebView: UIViewRepresentable {
             didReceive message: WKScriptMessage
         ) {
             if message.name == "linkHandler", let urlString = message.body as? String,
-               let url = URL(string: urlString) {
+                let url = URL(string: urlString)
+            {
                 parent.onLinkTapped?(url)
             }
         }
@@ -158,4 +159,3 @@ struct MessageWebView: UIViewRepresentable {
         }
     }
 }
-

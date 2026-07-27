@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import XCTest
+
 @testable import slicc_server
 
 final class FileLoggerTests: XCTestCase {
@@ -16,11 +17,13 @@ final class FileLoggerTests: XCTestCase {
     }
 
     func testCreatesDateBasedLogFileWithJSONLines() throws {
-        let logger = FileLogger(label: "test", configuration: .init(
-            logDirectory: temporaryDirectory,
-            logLevel: .debug,
-            cleanup: false
-        ))
+        let logger = FileLogger(
+            label: "test",
+            configuration: .init(
+                logDirectory: temporaryDirectory,
+                logLevel: .debug,
+                cleanup: false
+            ))
 
         logger.log(
             level: .info,
@@ -50,11 +53,13 @@ final class FileLoggerTests: XCTestCase {
     }
 
     func testFiltersByLogLevelAndStripsANSI() throws {
-        let logger = FileLogger(label: "test", configuration: .init(
-            logDirectory: temporaryDirectory,
-            logLevel: .warning,
-            cleanup: false
-        ))
+        let logger = FileLogger(
+            label: "test",
+            configuration: .init(
+                logDirectory: temporaryDirectory,
+                logLevel: .warning,
+                cleanup: false
+            ))
 
         logger.log(level: .info, message: "skip me", metadata: nil, source: "test", file: #fileID, function: #function, line: #line)
         logger.log(level: .warning, message: "\u{001B}[32mkeep me\u{001B}[0m", metadata: nil, source: "test", file: #fileID, function: #function, line: #line)

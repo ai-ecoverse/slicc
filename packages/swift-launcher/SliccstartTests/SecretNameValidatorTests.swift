@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Pins the character set the Settings → Secrets editor accepts. Must
@@ -66,12 +67,12 @@ final class SecretNameValidatorTests: XCTestCase {
         // digits, etc. — the kind of input the server-side ASCII check
         // rejects with `400 invalid_profile` after the UI has saved.
         // These cases pin the implementation to ASCII-only.
-        XCTAssertFalse(SecretNameValidator.isValid("café"))                 // accented Latin
+        XCTAssertFalse(SecretNameValidator.isValid("café"))  // accented Latin
         XCTAssertFalse(SecretNameValidator.isValid("s3.р2.access_key_id"))  // Cyrillic 'р' (U+0440)
-        XCTAssertFalse(SecretNameValidator.isValid("数字"))                   // CJK ideographs
-        XCTAssertFalse(SecretNameValidator.isValid("token\u{0661}"))        // Arabic-Indic digit 1
-        XCTAssertFalse(SecretNameValidator.isValid("token\u{FF11}"))        // full-width digit 1
-        XCTAssertFalse(SecretNameValidator.isValid("Ω"))                    // Greek capital omega
+        XCTAssertFalse(SecretNameValidator.isValid("数字"))  // CJK ideographs
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{0661}"))  // Arabic-Indic digit 1
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{FF11}"))  // full-width digit 1
+        XCTAssertFalse(SecretNameValidator.isValid("Ω"))  // Greek capital omega
     }
 
     /// Pinned corpus shared with the server-side validator's tests. Each

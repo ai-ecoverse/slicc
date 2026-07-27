@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 /// Deterministic ``RandomSource`` for pinning the per-session selection

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Drives the retry loop in `TrayStatusProbe.discoverJoinUrl` through its
@@ -27,7 +28,10 @@ final class TrayStatusProbeTests: XCTestCase {
 
         actor Counter {
             var count = 0
-            func tick() -> Int { count += 1; return count }
+            func tick() -> Int {
+                count += 1
+                return count
+            }
         }
         let counter = Counter()
         let probe = TrayStatusProbe(fetch: { _ in
@@ -99,7 +103,10 @@ final class TrayStatusProbeTests: XCTestCase {
     }
 
     func testStopsAtMaxAttemptsAndDoesNotSpinUnboundedly() async {
-        actor Hits { var n = 0; func bump() { n += 1 } }
+        actor Hits {
+            var n = 0
+            func bump() { n += 1 }
+        }
         let hits = Hits()
         let probe = TrayStatusProbe(fetch: { _ in
             await hits.bump()

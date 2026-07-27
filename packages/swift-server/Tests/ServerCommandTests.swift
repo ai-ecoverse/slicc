@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import slicc_server
 
 final class ServerCommandTests: XCTestCase {
@@ -57,7 +58,7 @@ final class ServerCommandTests: XCTestCase {
     func testLeadAndJoinOptionsImplyModes() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--lead-worker-base-url", "https://worker.example",
-            "--join-url", "https://join.example/session"
+            "--join-url", "https://join.example/session",
         ])
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(
@@ -65,7 +66,7 @@ final class ServerCommandTests: XCTestCase {
             arguments: [
                 "slicc-server",
                 "--lead-worker-base-url", "https://worker.example",
-                "--join-url", "https://join.example/session"
+                "--join-url", "https://join.example/session",
             ]
         )
 
@@ -82,7 +83,7 @@ final class ServerCommandTests: XCTestCase {
     func testJoinFlagParsesUrlAsValue() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--electron", "--electron-app", "/Applications/Slack.app",
-            "--join", "https://tray.example.com/base/join/tray-123.secret"
+            "--join", "https://tray.example.com/base/join/tray-123.secret",
         ])
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(
@@ -90,7 +91,7 @@ final class ServerCommandTests: XCTestCase {
             arguments: [
                 "slicc-server",
                 "--electron", "--electron-app", "/Applications/Slack.app",
-                "--join", "https://tray.example.com/base/join/tray-123.secret"
+                "--join", "https://tray.example.com/base/join/tray-123.secret",
             ]
         )
 
@@ -112,7 +113,7 @@ final class ServerCommandTests: XCTestCase {
             from: command,
             arguments: [
                 "slicc-server",
-                "--join=https://tray.example.com/base/join/tray-123.secret"
+                "--join=https://tray.example.com/base/join/tray-123.secret",
             ]
         )
 
@@ -128,14 +129,14 @@ final class ServerCommandTests: XCTestCase {
     // assembly in `resolveCliBrowserLaunchUrl` (see `launch-url.test.ts`).
     func testResolveBrowserLaunchURLBuildsCanonicalTrayUrlForJoinFlow() throws {
         let parsed = try ServerCommand.parseAsRoot([
-            "--join", "https://tray.example.com/base/join/tray-123.secret"
+            "--join", "https://tray.example.com/base/join/tray-123.secret",
         ])
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(
             from: command,
             arguments: [
                 "slicc-server",
-                "--join", "https://tray.example.com/base/join/tray-123.secret"
+                "--join", "https://tray.example.com/base/join/tray-123.secret",
             ]
         )
 
@@ -157,7 +158,7 @@ final class ServerCommandTests: XCTestCase {
     func testResolveBrowserLaunchURLRejectsLeadAndJoinTogether() throws {
         let parsed = try ServerCommand.parseAsRoot([
             "--lead-worker-base-url", "https://worker.example",
-            "--join", "https://tray.example.com/base/join/tray-123.secret"
+            "--join", "https://tray.example.com/base/join/tray-123.secret",
         ])
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(
@@ -165,7 +166,7 @@ final class ServerCommandTests: XCTestCase {
             arguments: [
                 "slicc-server",
                 "--lead-worker-base-url", "https://worker.example",
-                "--join", "https://tray.example.com/base/join/tray-123.secret"
+                "--join", "https://tray.example.com/base/join/tray-123.secret",
             ]
         )
 
@@ -205,14 +206,14 @@ final class ServerCommandTests: XCTestCase {
 
     func testResolveBrowserLaunchURLPrefersExplicitLeaderOriginInThinMode() throws {
         let parsed = try ServerCommand.parseAsRoot([
-            "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/"
+            "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/",
         ])
         let command = try XCTUnwrap(parsed as? ServerCommand)
         let config = ServerConfig.resolve(
             from: command,
             arguments: [
                 "slicc-server",
-                "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/"
+                "--lead-worker-base-url", "https://slicc-tray-hub-staging.minivelos.workers.dev/",
             ]
         )
 
@@ -353,19 +354,22 @@ final class ServerCommandTests: XCTestCase {
             arguments: ["slicc-server", "--electron"]
         )
         // Opt-in active: --electron + non-empty SLICC_HOSTED_LEADER_ORIGIN.
-        XCTAssertTrue(ServerCommand.isThinElectronMode(
-            config: electronConfig,
-            environment: ["SLICC_HOSTED_LEADER_ORIGIN": "https://www.sliccy.ai"]
-        ))
+        XCTAssertTrue(
+            ServerCommand.isThinElectronMode(
+                config: electronConfig,
+                environment: ["SLICC_HOSTED_LEADER_ORIGIN": "https://www.sliccy.ai"]
+            ))
         // Empty env value is treated as absent (matches resolveHostedLeaderOrigin).
-        XCTAssertFalse(ServerCommand.isThinElectronMode(
-            config: electronConfig,
-            environment: ["SLICC_HOSTED_LEADER_ORIGIN": ""]
-        ))
-        XCTAssertFalse(ServerCommand.isThinElectronMode(
-            config: electronConfig,
-            environment: [:]
-        ))
+        XCTAssertFalse(
+            ServerCommand.isThinElectronMode(
+                config: electronConfig,
+                environment: ["SLICC_HOSTED_LEADER_ORIGIN": ""]
+            ))
+        XCTAssertFalse(
+            ServerCommand.isThinElectronMode(
+                config: electronConfig,
+                environment: [:]
+            ))
     }
 
     func testIsThinElectronModeRejectsServeOnlyAndNonElectron() throws {
@@ -384,11 +388,12 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testResolveBridgeTokenReturnsNilOutsideThinModesWithoutForwardedToken() {
-        XCTAssertNil(ServerCommand.resolveBridgeToken(
-            thinBridgeMode: false,
-            thinElectronMode: false,
-            environment: [:]
-        ))
+        XCTAssertNil(
+            ServerCommand.resolveBridgeToken(
+                thinBridgeMode: false,
+                thinElectronMode: false,
+                environment: [:]
+            ))
     }
 
     // Regression: a `--serve-only` reattach (neither thin mode active) that
@@ -442,25 +447,28 @@ final class ServerCommandTests: XCTestCase {
     // `access-control-*` headers). Mirrors node-server's
     // `shouldMountThinBridgeCors(thinBridgeMode, bridgeToken)`.
     func testShouldMountThinBridgeCorsSelectedWhenTokenPresentOutsideThinBridge() {
-        XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
-            thinBridgeMode: false,
-            bridgeToken: "tok"
-        ))
+        XCTAssertTrue(
+            ServerCommand.shouldMountThinBridgeCors(
+                thinBridgeMode: false,
+                bridgeToken: "tok"
+            ))
     }
 
     func testShouldMountThinBridgeCorsSelectedUnderThinBridgeMode() {
-        XCTAssertTrue(ServerCommand.shouldMountThinBridgeCors(
-            thinBridgeMode: true,
-            bridgeToken: nil
-        ))
+        XCTAssertTrue(
+            ServerCommand.shouldMountThinBridgeCors(
+                thinBridgeMode: true,
+                bridgeToken: nil
+            ))
     }
 
     func testShouldMountThinBridgeCorsOffInLegacyModesWithoutToken() {
         // Dev / serve-only without a forwarded token: no token ⇒ no root
         // middleware mounted (swift-server never serves UI; API/CDP bridge only).
-        XCTAssertFalse(ServerCommand.shouldMountThinBridgeCors(
-            thinBridgeMode: false,
-            bridgeToken: nil
-        ))
+        XCTAssertFalse(
+            ServerCommand.shouldMountThinBridgeCors(
+                thinBridgeMode: false,
+                bridgeToken: nil
+            ))
     }
 }

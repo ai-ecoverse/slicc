@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+
 @testable import slicc_server
 
 final class ChromeLauncherTests: XCTestCase {
@@ -15,7 +16,8 @@ final class ChromeLauncherTests: XCTestCase {
 
     func testFindChromeExecutablePrefersInstalledChromeBeforeChromeForTesting() {
         let installed = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        let cached = "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+        let cached =
+            "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
         let launcher = makeLauncher(
             existingPaths: [installed, cached],
             directoryListings: ["/project/node_modules/.cache/puppeteer/chrome": ["mac-123"]],
@@ -26,7 +28,8 @@ final class ChromeLauncherTests: XCTestCase {
     }
 
     func testFindChromeExecutableFindsChromeForTestingInProjectNodeModulesCache() {
-        let cached = "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+        let cached =
+            "/project/node_modules/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
         let launcher = makeLauncher(
             existingPaths: [cached],
             directoryListings: ["/project/node_modules/.cache/puppeteer/chrome": ["mac-123"]],
@@ -466,12 +469,13 @@ final class ChromeLauncherTests: XCTestCase {
         )
 
         do {
-            _ = try await launcher.launch(config: ChromeLaunchConfig(
-                cdpPort: 9222,
-                launchUrl: "http://localhost:5710",
-                userDataDir: "/tmp/user-data",
-                executablePath: chromePath
-            ))
+            _ = try await launcher.launch(
+                config: ChromeLaunchConfig(
+                    cdpPort: 9222,
+                    launchUrl: "http://localhost:5710",
+                    userDataDir: "/tmp/user-data",
+                    executablePath: chromePath
+                ))
             XCTFail("expected chromeAlreadyRunning but launch succeeded")
         } catch ChromeLauncherError.chromeAlreadyRunning(let port, let browser) {
             XCTAssertEqual(port, 9222)

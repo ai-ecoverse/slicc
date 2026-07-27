@@ -106,18 +106,18 @@ class FollowerSyncManager {
 
     private func handleLeaderMessage(_ message: LeaderToFollowerMessage) {
         switch message {
-        case let .snapshot(messages, _):
+        case .snapshot(let messages, _):
             snapshotChunkBuffer = nil
             logger.info("Snapshot received, \(messages.count) messages")
             delegate?.followerSync(self, didReceiveSnapshot: messages)
 
-        case let .snapshotChunk(chunkData, chunkIndex, totalChunks, _):
+        case .snapshotChunk(let chunkData, let chunkIndex, let totalChunks, _):
             handleSnapshotChunk(chunkData: chunkData, chunkIndex: chunkIndex, totalChunks: totalChunks)
 
-        case let .agentEvent(event, _):
+        case .agentEvent(let event, _):
             routeAgentEvent(event)
 
-        case let .userMessageEcho(text, messageId, _):
+        case .userMessageEcho(let text, let messageId, _):
             if sentMessageIds.contains(messageId) {
                 sentMessageIds.remove(messageId)
                 logger.debug("Skipping own message echo: \(messageId)")
@@ -126,11 +126,11 @@ class FollowerSyncManager {
             logger.info("User message echo received: \(messageId)")
             delegate?.followerSync(self, didReceiveUserMessageEcho: text, messageId: messageId)
 
-        case let .status(scoopStatus):
+        case .status(let scoopStatus):
             let isProcessing = scoopStatus == "processing"
             delegate?.followerSync(self, didUpdateStatus: isProcessing)
 
-        case let .error(error):
+        case .error(let error):
             logger.warning("Error from leader: \(error)")
             delegate?.followerSync(self, didReceiveError: error)
 
@@ -146,13 +146,13 @@ class FollowerSyncManager {
             }
 
         case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate,
-             .sprinkleReloaded, .cdpRequest, .targetsRegistry, .tabOpen,
-             .cherrySliccEvent, .previewOpen, .themeApply, .hello:
+            .sprinkleReloaded, .cdpRequest, .targetsRegistry, .tabOpen,
+            .cherrySliccEvent, .previewOpen, .themeApply, .hello:
             // Newer protocol messages — handled by AppState directly, not by this
             // legacy delegate-based sync manager. Ignored here.
             break
 
-        case let .unknown(type):
+        case .unknown(let type):
             // Protocol drift safety net — mirror of the TS dispatchers' warn.
             logger.warning("Unknown leader message type — skewed leader? type=\(type)")
         }
@@ -160,26 +160,27 @@ class FollowerSyncManager {
 
     private func routeAgentEvent(_ event: AgentEvent) {
         switch event {
-        case let .messageStart(messageId):
+        case .messageStart(let messageId):
             delegate?.followerSync(self, didStartMessage: messageId)
-        case let .contentDelta(messageId, text):
+        case .contentDelta(let messageId, let text):
             delegate?.followerSync(self, didReceiveDelta: messageId, text: text)
-        case let .contentDone(messageId):
+        case .contentDone(let messageId):
             delegate?.followerSync(self, didFinishMessage: messageId)
-        case let .toolUseStart(messageId, toolName, toolInput):
+        case .toolUseStart(let messageId, let toolName, let toolInput):
             let inputStr: String
             if let input = toolInput, let data = try? JSONEncoder().encode(input),
-               let str = String(data: data, encoding: .utf8) {
+                let str = String(data: data, encoding: .utf8)
+            {
                 inputStr = str
             } else {
                 inputStr = ""
             }
             delegate?.followerSync(self, didReceiveToolUse: messageId, toolName: toolName, input: inputStr)
-        case let .toolResult(messageId, toolName, result, isError):
+        case .toolResult(let messageId, let toolName, let result, let isError):
             delegate?.followerSync(self, didReceiveToolResult: messageId, toolName: toolName, result: result, isError: isError ?? false)
-        case let .turnEnd(messageId):
+        case .turnEnd(let messageId):
             delegate?.followerSync(self, didFinishMessage: messageId)
-        case let .error(error):
+        case .error(let error):
             delegate?.followerSync(self, didReceiveError: error)
 
         case .unknown:
@@ -207,7 +208,8 @@ class FollowerSyncManager {
         }
 
         guard var buffer = snapshotChunkBuffer,
-              chunkIndex >= 0, chunkIndex < buffer.totalChunks else { return }
+            chunkIndex >= 0, chunkIndex < buffer.totalChunks
+        else { return }
 
         // Only count if this slot hasn't been filled yet (handles duplicates)
         if buffer.chunks[chunkIndex] == nil {
@@ -217,7 +219,8 @@ class FollowerSyncManager {
         }
 
         guard let currentBuffer = snapshotChunkBuffer,
-              currentBuffer.received >= currentBuffer.totalChunks else { return }
+            currentBuffer.received >= currentBuffer.totalChunks
+        else { return }
 
         // All chunks received — reassemble
         let assembled = currentBuffer.chunks.compactMap { $0 }.joined()

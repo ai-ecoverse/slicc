@@ -196,7 +196,6 @@ struct SettingsView: View {
         }
     }
 
-
     // MARK: - Advanced Section
 
     private var advancedSection: some View {

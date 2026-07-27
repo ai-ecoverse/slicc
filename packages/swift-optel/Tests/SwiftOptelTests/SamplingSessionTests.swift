@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 /// RNG stub that always returns the same value.
@@ -80,7 +81,7 @@ final class SamplingSessionTests: XCTestCase {
     func testWeight10BoundarySelection() {
         // r * 10 < 1  →  r < 0.1
         XCTAssertTrue(makeSession(weight: 10, random: 0.099).isSelected)
-        XCTAssertFalse(makeSession(weight: 10, random: 0.1).isSelected) // 0.1*10 = 1.0, not < 1
+        XCTAssertFalse(makeSession(weight: 10, random: 0.1).isSelected)  // 0.1*10 = 1.0, not < 1
         XCTAssertFalse(makeSession(weight: 10, random: 0.2).isSelected)
     }
 

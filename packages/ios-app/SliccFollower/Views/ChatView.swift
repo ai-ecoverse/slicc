@@ -1,5 +1,5 @@
-import os
 import SwiftUI
+import os
 
 /// Top-level container view with a NavigationSplitView whose sidebar lists
 /// chat / browser tabs / sprinkles and whose detail column shows the selected
@@ -22,7 +22,7 @@ struct ChatView: View {
                 FixtureConversationView()
             case .tabs:
                 TabsCarouselView()
-            case let .sprinkle(name):
+            case .sprinkle(let name):
                 if let sprinkle = appState.sprinkles.first(where: { $0.name == name }) {
                     SprinkleDetailView(sprinkle: sprinkle)
                 } else {
@@ -224,15 +224,18 @@ struct ScoopHeaderView: View {
             Spacer()
 
             HStack(spacing: 6) {
-                Image(systemName: appState.selectedScoop?.isCone == true
-                      ? "cup.and.saucer.fill"
-                      : "circle.grid.2x2")
-                    .foregroundStyle(.purple)
+                Image(
+                    systemName: appState.selectedScoop?.isCone == true
+                        ? "cup.and.saucer.fill"
+                        : "circle.grid.2x2"
+                )
+                .foregroundStyle(.purple)
                 Text(appState.selectedScoop?.assistantLabel ?? "—")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                 if let active = appState.leaderActiveScoopJid,
-                   active == appState.selectedScoopJid {
+                    active == appState.selectedScoopJid
+                {
                     Circle()
                         .fill(Color.green)
                         .frame(width: 6, height: 6)
@@ -262,4 +265,3 @@ struct ScoopHeaderView: View {
         .preferredColorScheme(.dark)
         .environmentObject(AppState())
 }
-

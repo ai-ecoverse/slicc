@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import SwiftOptel
 
 /// Deterministic ``RandomSource`` for sampling-session construction.

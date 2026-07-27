@@ -107,11 +107,13 @@ func cleanupOldLogs(in directory: URL, maxAge: TimeInterval = sevenDaysInSeconds
     let fileManager = FileManager.default
     let resourceKeys: Set<URLResourceKey> = [.contentModificationDateKey]
 
-    guard let entries = try? fileManager.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: Array(resourceKeys),
-        options: [.skipsHiddenFiles]
-    ) else {
+    guard
+        let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(resourceKeys),
+            options: [.skipsHiddenFiles]
+        )
+    else {
         return
     }
 

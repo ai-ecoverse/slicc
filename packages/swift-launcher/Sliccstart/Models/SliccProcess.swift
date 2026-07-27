@@ -1,6 +1,6 @@
-import Foundation
 import AppKit
 import Darwin
+import Foundation
 import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProcess")
@@ -174,8 +174,9 @@ final class SliccProcess {
         let parentDir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
         var dir = parentDir
         for _ in 0..<5 {
-            if FileManager.default.fileExists(atPath: dir + "/package.json") &&
-               FileManager.default.fileExists(atPath: dir + "/packages/node-server/src/index.ts") {
+            if FileManager.default.fileExists(atPath: dir + "/package.json")
+                && FileManager.default.fileExists(atPath: dir + "/packages/node-server/src/index.ts")
+            {
                 log.info("sliccDir: found source tree at \(dir, privacy: .public)")
                 return dir
             }
@@ -388,7 +389,8 @@ final class SliccProcess {
         inheritedEnv: [String: String],
         bridgeToken: String = standaloneBridgeToken
     ) -> [String: String] {
-        let workerBaseUrl = inheritedEnv["WORKER_BASE_URL"]
+        let workerBaseUrl =
+            inheritedEnv["WORKER_BASE_URL"]
             .flatMap { $0.isEmpty ? nil : $0 }
             ?? defaultWorkerBaseUrl
         return [
@@ -558,7 +560,7 @@ final class SliccProcess {
 
     /// Find the next available port pair for an Electron app.
     private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
-        let electronCount = UInt16(launchRecords.count) // offset from base
+        let electronCount = UInt16(launchRecords.count)  // offset from base
         for i: UInt16 in 0...20 {
             let port = Self.electronBasePort + electronCount + i
             let cdpPort = Self.electronBaseCdpPort + electronCount + i
@@ -770,7 +772,8 @@ final class SliccProcess {
         // carries it in its launch URL. Fall back to the freshly-minted
         // static token only for legacy records written before the token
         // was persisted.
-        let fallbackToken = target.type == .chromiumBrowser
+        let fallbackToken =
+            target.type == .chromiumBrowser
             ? Self.standaloneBridgeToken
             : Self.thinElectronBridgeToken
         let resolvedBridgeToken = record.bridgeToken ?? fallbackToken
@@ -926,7 +929,8 @@ final class SliccProcess {
 
             let parts = argument.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             let option = parts[0].lowercased()
-            let isSensitive = option.hasPrefix("--")
+            let isSensitive =
+                option.hasPrefix("--")
                 && (option.contains("join") || option.contains("token"))
             guard isSensitive else { return argument }
             guard parts.count == 2 else {
@@ -959,7 +963,8 @@ final class SliccProcess {
                 return
             }
             if record.observedCdpListening,
-               Date().timeIntervalSince(record.startedAt) > Self.browserLaunchStaleTimeout {
+                Date().timeIntervalSince(record.startedAt) > Self.browserLaunchStaleTimeout
+            {
                 log.info("refreshRuntimeState: \(target.name, privacy: .public) browser CDP port went away after booting; stopping stale helper")
                 stopLaunchRecord(id: target.id, terminateApps: false)
             }
@@ -979,7 +984,8 @@ final class SliccProcess {
 
         guard let observedAppPID = record.observedAppPID else {
             if Date().timeIntervalSince(record.startedAt) > Self.electronLaunchStaleTimeout,
-               !Self.isPortInUse(record.cdpPort) {
+                !Self.isPortInUse(record.cdpPort)
+            {
                 log.info("refreshRuntimeState: \(target.name, privacy: .public) has no app pid or CDP listener; stopping stale helper")
                 stopLaunchRecord(id: target.id, terminateApps: false)
                 return
@@ -998,13 +1004,15 @@ final class SliccProcess {
             return nil
         }
         if record.targetType == .electronApp,
-           !Self.isPortInUse(record.cdpPort) {
+            !Self.isPortInUse(record.cdpPort)
+        {
             return nil
         }
         if record.targetType == .electronApp,
-           let observedAppPID = record.observedAppPID,
-           !Self.isPIDRunning(observedAppPID),
-           !isElectronAppRunning(target) {
+            let observedAppPID = record.observedAppPID,
+            !Self.isPIDRunning(observedAppPID),
+            !isElectronAppRunning(target)
+        {
             return nil
         }
         return record.cdpPort
@@ -1099,7 +1107,8 @@ final class SliccProcess {
         return NSWorkspace.shared.runningApplications.filter { app in
             guard !app.isTerminated else { return false }
             if let bundleURL = app.bundleURL.map({ standardizedFileURL(path: $0.path) }),
-               appURLs.contains(bundleURL) {
+                appURLs.contains(bundleURL)
+            {
                 return true
             }
             if let executableURL = app.executableURL?.standardizedFileURL.resolvingSymlinksInPath() {

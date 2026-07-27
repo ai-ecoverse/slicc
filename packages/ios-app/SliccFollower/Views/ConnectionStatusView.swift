@@ -124,4 +124,3 @@ struct ConnectionStatusView: View {
     }
     .preferredColorScheme(.dark)
 }
-

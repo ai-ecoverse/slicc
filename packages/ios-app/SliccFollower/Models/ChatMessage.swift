@@ -59,7 +59,8 @@ struct AnyCodable: Codable, Equatable {
         // Simple equality: both nil, or both encode to the same JSON
         if lhs.value == nil && rhs.value == nil { return true }
         guard let lData = try? JSONEncoder().encode(lhs),
-              let rData = try? JSONEncoder().encode(rhs) else { return false }
+            let rData = try? JSONEncoder().encode(rhs)
+        else { return false }
         return lData == rData
     }
 }
@@ -90,8 +91,7 @@ struct ChatMessage: Codable, Identifiable {
     let timestamp: Double  // Unix ms
     var toolCalls: [ToolCall]?
     var isStreaming: Bool?
-    var source: String?    // "cone", "lick", scoop name
-    var channel: String?   // "webhook", "cron"
+    var source: String?  // "cone", "lick", scoop name
+    var channel: String?  // "webhook", "cron"
     var queued: Bool?
 }
-

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Sliccstart
 
 /// Pins the leader/follower CLI flags Sliccstart hands to slicc-server.
@@ -74,11 +75,13 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
             cdpPort: 9223,
             joinUrl: nil
         )
-        XCTAssertEqual(args, [
-            "--electron-app=/Applications/Slack.app",
-            "--kill",
-            "--cdp-port=9223",
-        ])
+        XCTAssertEqual(
+            args,
+            [
+                "--electron-app=/Applications/Slack.app",
+                "--kill",
+                "--cdp-port=9223",
+            ])
     }
 
     func testElectronAppArgsThreadJoinUrlWhenLeaderAvailable() {
@@ -87,12 +90,14 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
             cdpPort: 9223,
             joinUrl: "https://example.test/join/abc.def"
         )
-        XCTAssertEqual(args, [
-            "--electron-app=/Applications/Slack.app",
-            "--kill",
-            "--cdp-port=9223",
-            "--join=https://example.test/join/abc.def",
-        ])
+        XCTAssertEqual(
+            args,
+            [
+                "--electron-app=/Applications/Slack.app",
+                "--kill",
+                "--cdp-port=9223",
+                "--join=https://example.test/join/abc.def",
+            ])
     }
 
     func testElectronAppArgsTreatEmptyJoinUrlAsAbsent() {
@@ -116,14 +121,16 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
 
         let redacted = SliccProcess.redactedSpawnArguments(arguments)
 
-        XCTAssertEqual(redacted, [
-            "--electron-app=/Applications/Slack.app",
-            "--join=<redacted>",
-            "--bridge-token=<redacted>",
-            "--token",
-            "<redacted>",
-            "--cdp-port=9223",
-        ])
+        XCTAssertEqual(
+            redacted,
+            [
+                "--electron-app=/Applications/Slack.app",
+                "--join=<redacted>",
+                "--bridge-token=<redacted>",
+                "--token",
+                "<redacted>",
+                "--cdp-port=9223",
+            ])
         XCTAssertFalse(redacted.joined(separator: " ").contains("secret"))
     }
 
@@ -149,13 +156,15 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
             cdpPort: 9223,
             joinUrl: "https://example.test/join/abc.def"
         )
-        XCTAssertEqual(args, [
-            "--serve-only",
-            "--cdp-port=9223",
-            "--electron-app=/Applications/Slack.app",
-            "--electron",
-            "--join=https://example.test/join/abc.def",
-        ])
+        XCTAssertEqual(
+            args,
+            [
+                "--serve-only",
+                "--cdp-port=9223",
+                "--electron-app=/Applications/Slack.app",
+                "--electron",
+                "--join=https://example.test/join/abc.def",
+            ])
     }
 
     func testReattachArgsElectronWithoutJoinUrlOmitsJoinFlag() {
@@ -165,12 +174,14 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
             cdpPort: 9223,
             joinUrl: nil
         )
-        XCTAssertEqual(args, [
-            "--serve-only",
-            "--cdp-port=9223",
-            "--electron-app=/Applications/Slack.app",
-            "--electron",
-        ])
+        XCTAssertEqual(
+            args,
+            [
+                "--serve-only",
+                "--cdp-port=9223",
+                "--electron-app=/Applications/Slack.app",
+                "--electron",
+            ])
         XCTAssertFalse(args.contains { $0.hasPrefix("--join=") })
     }
 

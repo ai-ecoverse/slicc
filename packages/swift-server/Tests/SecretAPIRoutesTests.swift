@@ -3,6 +3,7 @@ import Foundation
 import Hummingbird
 import HummingbirdTesting
 import XCTest
+
 @testable import slicc_server
 
 final class SecretAPIRoutesTests: XCTestCase {
@@ -291,7 +292,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                 realValue: "ghp_realSecret123",
                 maskedValue: "ghp_maskedAAA0001",
                 domains: ["github.com"]
-            ),
+            )
         ])
         try await withHTTPClient { httpClient in
             let router = Router()
@@ -330,7 +331,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                 realValue: "ghp_realSecret123",
                 maskedValue: "ghp_maskedAAA0001",
                 domains: ["github.com"]
-            ),
+            )
         ])
         let filler = String(repeating: "a", count: 3 * 1024 * 1024)
         let text = "\(filler) token: ghp_realSecret123 done"
@@ -476,7 +477,7 @@ final class SecretAPIRoutesTests: XCTestCase {
                 realValue: "ghp_realSecret123",
                 maskedValue: "ghp_maskedAAA0001",
                 domains: ["github.com"]
-            ),
+            )
         ])
         try await withHTTPClient { httpClient in
             let router = Router()
@@ -524,15 +525,15 @@ final class SecretAPIRoutesTests: XCTestCase {
     func testRedactExportRedactsShortSecretByRealValueOnly() async throws {
         // A short secret (isMaskable: false) has no distinct masked form.
         // Its real value must still be replaced during export with a k<n> marker.
-        let shortVal = String(repeating: "z", count: 3) // well below minMaskableSecretLength=9
+        let shortVal = String(repeating: "z", count: 3)  // well below minMaskableSecretLength=9
         let injector = SecretInjector(secrets: [
             .init(
                 name: "SHORT_KEY",
                 realValue: shortVal,
-                maskedValue: shortVal, // identity masking for short secrets
+                maskedValue: shortVal,  // identity masking for short secrets
                 domains: [],
                 isMaskable: false
-            ),
+            )
         ])
         try await withHTTPClient { httpClient in
             let router = Router()
@@ -571,7 +572,7 @@ final class SecretAPIRoutesTests: XCTestCase {
 
     func testRedactExportShortSecretMarkerContinuesAfterMaskableMarker() async throws {
         // Maskable secret → k1, short secret → k2 (index continues)
-        let shortVal = String(repeating: "q", count: 4) // below minMaskableSecretLength=9
+        let shortVal = String(repeating: "q", count: 4)  // below minMaskableSecretLength=9
         let injector = SecretInjector(secrets: [
             .init(
                 name: "LONG_TOKEN",
@@ -706,4 +707,3 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 }
-

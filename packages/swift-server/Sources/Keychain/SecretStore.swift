@@ -120,7 +120,8 @@ enum SecretStore {
             throw SecretStoreError.keychainError(status: status)
         }
         guard let data = result as? Data,
-              let text = String(data: data, encoding: .utf8) else {
+            let text = String(data: data, encoding: .utf8)
+        else {
             throw SecretStoreError.keychainError(status: errSecDecode)
         }
         return text
@@ -173,16 +174,17 @@ enum SecretStore {
             // because this is a non-interactive launch. Surface an actionable
             // line (name/service only — never a value) and continue without
             // Keychain secrets rather than hanging.
-            FileHandle.standardError.write(Data(
-                ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "
-                    + "\(keychainService)/\(keychainAccount); continuing without stored secrets. "
-                    + "Durable fix: sign the binary with a stable identity and click "
-                    + "\"Always Allow\" once — see packages/dev-tools/tools/setup-dev-cert.sh. "
-                    + "(One-off non-interactive grant for the stable identity: "
-                    + "security set-generic-password-partition-list "
-                    + "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) "
-                    + "-k <login-password>.)\n").utf8
-            ))
+            FileHandle.standardError.write(
+                Data(
+                    ("[slicc:secrets] Keychain access blocked (errSecInteractionNotAllowed) for "
+                        + "\(keychainService)/\(keychainAccount); continuing without stored secrets. "
+                        + "Durable fix: sign the binary with a stable identity and click "
+                        + "\"Always Allow\" once — see packages/dev-tools/tools/setup-dev-cert.sh. "
+                        + "(One-off non-interactive grant for the stable identity: "
+                        + "security set-generic-password-partition-list "
+                        + "-S apple-tool:,apple: -s \(keychainService) -a \(keychainAccount) "
+                        + "-k <login-password>.)\n").utf8
+                ))
             return []
         } catch {
             return []

@@ -322,11 +322,12 @@ class AppState: ObservableObject {
 
     /// Forward a sprinkle lick (from a panel or inline sprinkle) to the leader.
     func sendSprinkleLick(_ sprinkleName: String, body: AnyCodable?, targetScoop: String? = nil) {
-        sendToLeader(.sprinkleLick(
-            sprinkleName: sprinkleName,
-            body: body,
-            targetScoop: targetScoop
-        ))
+        sendToLeader(
+            .sprinkleLick(
+                sprinkleName: sprinkleName,
+                body: body,
+                targetScoop: targetScoop
+            ))
     }
 
     /// Reassemble chunked sprinkle.content responses and resolve waiters.
@@ -351,7 +352,8 @@ class AppState: ObservableObject {
 
         let assembled: String?
         if let chunkIndex = chunkIndex, let totalChunks = totalChunks {
-            var buffer = pendingSprinkleFetches[requestId]
+            var buffer =
+                pendingSprinkleFetches[requestId]
                 ?? SprinkleFetchBuffer(sprinkleName: sprinkleName)
             buffer.totalChunks = totalChunks
             buffer.chunks[chunkIndex] = content
@@ -383,7 +385,7 @@ class AppState: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case let .fetchFailed(reason):
+            case .fetchFailed(let reason):
                 return "Failed to load sprinkle: \(reason)"
             }
         }
@@ -402,7 +404,8 @@ class AppState: ObservableObject {
             self.leaderConnected = plan.leader?.connected ?? false
 
             guard let bootstrap = plan.bootstrap,
-                  let iceServers = plan.iceServers else {
+                let iceServers = plan.iceServers
+            else {
                 self.connectionState = .failed
                 self.lastError = "Attach succeeded but no bootstrap or ICE servers"
                 return
@@ -420,7 +423,7 @@ class AppState: ObservableObject {
             // (The attach response doesn't include events; they come from poll.)
 
             var gotOffer = false
-            let maxPolls = 60 // Safety limit
+            let maxPolls = 60  // Safety limit
             for _ in 0..<maxPolls {
                 if Task.isCancelled { return }
 
@@ -578,11 +581,11 @@ class AppState: ObservableObject {
         }
 
         switch msg {
-        case let .snapshot(chatMessages, scoopJid):
+        case .snapshot(let chatMessages, let scoopJid):
             logger.info("Snapshot received: \(chatMessages.count) messages, scoopJid=\(scoopJid)")
             ingestSnapshot(messages: chatMessages, scoopJid: scoopJid)
 
-        case let .snapshotChunk(chunkData, chunkIndex, totalChunks, _):
+        case .snapshotChunk(let chunkData, let chunkIndex, let totalChunks, _):
             logger.info("Snapshot chunk \(chunkIndex + 1)/\(totalChunks) received (\(chunkData.count) chars)")
             snapshotTotalChunks = totalChunks
             snapshotChunks[chunkIndex] = chunkData
@@ -603,11 +606,11 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .agentEvent(event, scoopJid):
+        case .agentEvent(let event, let scoopJid):
             logger.debug("Agent event received: scoopJid=\(scoopJid)")
             handleAgentEvent(event, scoopJid: scoopJid)
 
-        case let .userMessageEcho(text, messageId, scoopJid):
+        case .userMessageEcho(let text, let messageId, let scoopJid):
             logger.debug("User message echo: id=\(messageId)")
             var buffer = messagesByScoop[scoopJid] ?? []
             if !buffer.contains(where: { $0.id == messageId }) {
@@ -624,7 +627,7 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .status(scoopStatus):
+        case .status(let scoopStatus):
             logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
             isStreaming = (scoopStatus == "streaming" || scoopStatus == "running")
@@ -632,11 +635,11 @@ class AppState: ObservableObject {
                 streamingMessageId = nil
             }
 
-        case let .error(error):
+        case .error(let error):
             logger.error("Leader error: \(error)")
             lastError = error
 
-        case let .scoopsList(scoops, activeScoopJid):
+        case .scoopsList(let scoops, let activeScoopJid):
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
@@ -655,11 +658,11 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .sprinklesList(sprinkles):
+        case .sprinklesList(let sprinkles):
             logger.info("Sprinkles list received: \(sprinkles.count) sprinkles")
             self.sprinkles = sprinkles
 
-        case let .sprinkleContent(requestId, sprinkleName, content, chunkIndex, totalChunks, error):
+        case .sprinkleContent(let requestId, let sprinkleName, let content, let chunkIndex, let totalChunks, let error):
             handleSprinkleContent(
                 requestId: requestId,
                 sprinkleName: sprinkleName,
@@ -669,18 +672,18 @@ class AppState: ObservableObject {
                 error: error
             )
 
-        case let .sprinkleUpdate(sprinkleName, data):
+        case .sprinkleUpdate(let sprinkleName, let data):
             logger.debug("Sprinkle update for \(sprinkleName)")
             if let data = data {
                 sprinkleUpdates[sprinkleName] = data
             }
 
-        case let .sprinkleReloaded(sprinkleName):
+        case .sprinkleReloaded(let sprinkleName):
             logger.info("Sprinkle reloaded on leader: \(sprinkleName)")
             sprinkleContents.removeValue(forKey: sprinkleName)
             sprinkleReloadGeneration[sprinkleName, default: 0] += 1
 
-        case let .cdpRequest(requestId, localTargetId, method, params, sessionId):
+        case .cdpRequest(let requestId, let localTargetId, let method, let params, let sessionId):
             logger.debug("CDP request \(method) target=\(localTargetId)")
             cdpBridge?.handleRequest(
                 requestId: requestId,
@@ -690,11 +693,11 @@ class AppState: ObservableObject {
                 sessionId: sessionId
             )
 
-        case let .tabOpen(requestId, url):
+        case .tabOpen(let requestId, let url):
             logger.info("Leader requested new tab: \(url)")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
-        case let .previewOpen(requestId, url):
+        case .previewOpen(let requestId, let url):
             // Worker-hosted preview URL pushed by the leader after `serve`.
             // Same delivery path as tab.open: hand to CDPBridge which opens
             // the URL in a WKWebView CDP target. The preview-vs-tab
@@ -715,7 +718,7 @@ class AppState: ObservableObject {
         case .pong:
             Task { await keepalive?.receivedPong() }
 
-        case let .cherrySliccEvent(targetId, name, _):
+        case .cherrySliccEvent(let targetId, let name, _):
             // Cherry host-page events are not hosted on iOS (the follower has no
             // cherry page surface). Documented no-op: log and ignore. Present so the
             // switch stays exhaustive and a future cherry-on-iOS path has a seam.
@@ -727,10 +730,10 @@ class AppState: ObservableObject {
             // parity is explicit — this was the drift that shipped silently.
             logger.debug("Ignoring theme.apply (iOS uses native theming)")
 
-        case let .hello(protocolVersion, runtime):
+        case .hello(let protocolVersion, let runtime):
             handleLeaderHello(protocolVersion: protocolVersion, runtime: runtime)
 
-        case let .unknown(type):
+        case .unknown(let type):
             // Protocol drift safety net — mirror of the TS dispatchers' warn.
             logger.warning("Unknown leader message type — skewed leader? type=\(type)")
         }
@@ -820,7 +823,7 @@ class AppState: ObservableObject {
         let isVisible = (scoopJid == selectedScoopJid)
 
         switch event {
-        case let .messageStart(messageId):
+        case .messageStart(let messageId):
             logger.info("Agent event: message_start id=\(messageId) scoop=\(scoopJid)")
             let newMsg = ChatMessage(
                 id: messageId,
@@ -839,7 +842,7 @@ class AppState: ObservableObject {
                 onStreamingEvent?(.messageStart(messageId: messageId))
             }
 
-        case let .contentDelta(messageId, text):
+        case .contentDelta(let messageId, let text):
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].content += text
                 messagesByScoop[scoopJid] = buffer
@@ -849,7 +852,7 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .contentDone(messageId):
+        case .contentDone(let messageId):
             logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
@@ -861,12 +864,13 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .toolUseStart(messageId, toolName, toolInput):
+        case .toolUseStart(let messageId, let toolName, let toolInput):
             logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 let inputStr: String
                 if let toolInput, let data = try? JSONEncoder().encode(toolInput),
-                   let str = String(data: data, encoding: .utf8) {
+                    let str = String(data: data, encoding: .utf8)
+                {
                     inputStr = str
                 } else {
                     inputStr = "{}"
@@ -881,12 +885,13 @@ class AppState: ObservableObject {
                 if isVisible {
                     cancelPendingMessagesFlush()
                     messages = buffer
-                    onStreamingEvent?(.toolUseStart(
-                        messageId: messageId, toolName: toolName, toolInput: inputStr))
+                    onStreamingEvent?(
+                        .toolUseStart(
+                            messageId: messageId, toolName: toolName, toolInput: inputStr))
                 }
             }
 
-        case let .toolResult(messageId, toolName, result, isError):
+        case .toolResult(let messageId, let toolName, let result, let isError):
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 if let tcIdx = buffer[idx].toolCalls?.lastIndex(where: { $0.name == toolName }) {
                     buffer[idx].toolCalls?[tcIdx].result = result
@@ -899,7 +904,7 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .turnEnd(messageId):
+        case .turnEnd(let messageId):
             logger.info("Agent event: turn_end id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
@@ -912,7 +917,7 @@ class AppState: ObservableObject {
                 }
             }
 
-        case let .error(error):
+        case .error(let error):
             logger.error("Agent event: error — \(error)")
             if isVisible { lastError = error }
 
@@ -947,7 +952,8 @@ class AppState: ObservableObject {
             // Only publish if the user is still viewing the same scoop and the
             // buffer still exists — drop stale flushes after a scoop switch.
             if self.selectedScoopJid == scoopJid,
-               let buffer = self.messagesByScoop[scoopJid] {
+                let buffer = self.messagesByScoop[scoopJid]
+            {
                 self.messages = buffer
             }
         }
@@ -1082,9 +1088,8 @@ enum AppStateError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case let .attachFailed(reason):
+        case .attachFailed(let reason):
             return "Failed to attach to tray: \(reason)"
         }
     }
 }
-
