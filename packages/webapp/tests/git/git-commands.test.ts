@@ -2683,6 +2683,126 @@ describe('GitCommands', () => {
     });
   });
 
+  describe('ls-tree', () => {
+    async function seedTree(): Promise<void> {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/README.md', 'root readme');
+      await vfs.mkdir('/project/src', { recursive: true });
+      await vfs.writeFile('/project/src/main.ts', 'main');
+      await vfs.writeFile('/project/src/util.ts', 'util');
+      await vfs.mkdir('/project/skills/garmin', { recursive: true });
+      await vfs.writeFile('/project/skills/garmin/SKILL.md', 'skill');
+      await vfs.writeFile('/project/skills/garmin/run.sh', 'run');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'seed'], '/project');
+    }
+
+    it('lists top-level tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(3);
+      const byName = new Map(lines.map((line) => [line.split('\t')[1], line]));
+      expect(byName.get('README.md')).toMatch(/^100644 blob [0-9a-f]{40}\tREADME\.md$/);
+      expect(byName.get('skills')).toMatch(/^040000 tree [0-9a-f]{40}\tskills$/);
+      expect(byName.get('src')).toMatch(/^040000 tree [0-9a-f]{40}\tsrc$/);
+    });
+
+    it('-r recurses and omits tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '-r', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const paths = result.stdout
+        .trim()
+        .split('\n')
+        .map((line) => line.split('\t')[1])
+        .sort();
+      expect(paths).toEqual([
+        'README.md',
+        'skills/garmin/SKILL.md',
+        'skills/garmin/run.sh',
+        'src/main.ts',
+        'src/util.ts',
+      ]);
+      expect(result.stdout).not.toContain(' tree ');
+    });
+
+    it('-d lists only top-level tree entries', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '-d', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      const names = lines.map((line) => line.split('\t')[1]).sort();
+      expect(names).toEqual(['skills', 'src']);
+      expect(result.stdout).not.toContain(' blob ');
+    });
+
+    it('--name-only emits paths without mode/type/oid', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', '--name-only', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['README.md', 'skills', 'src']);
+    });
+
+    it('path arg pointing at a subtree shows the tree entry itself (non-recursive)', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'HEAD', 'skills/garmin'], '/project');
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^040000 tree [0-9a-f]{40}\tskills\/garmin$/);
+    });
+
+    it('-r with a path recursively lists blobs under that path', async () => {
+      await seedTree();
+      const result = await git.execute(
+        ['ls-tree', '-r', '--name-only', 'HEAD', 'skills'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      const lines = result.stdout.trim().split('\n').sort();
+      expect(lines).toEqual(['skills/garmin/SKILL.md', 'skills/garmin/run.sh']);
+    });
+
+    it('path arg matching a blob shows only that blob', async () => {
+      await seedTree();
+      const result = await git.execute(
+        ['ls-tree', '--name-only', 'HEAD', 'src/main.ts'],
+        '/project'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('src/main.ts');
+    });
+
+    it('accepts branch and tag as tree-ish', async () => {
+      await seedTree();
+      await git.execute(['branch', 'feature'], '/project');
+      await git.execute(['tag', 'v1.0'], '/project');
+      const branchResult = await git.execute(['ls-tree', '--name-only', 'feature'], '/project');
+      const tagResult = await git.execute(['ls-tree', '--name-only', 'v1.0'], '/project');
+      expect(branchResult.exitCode).toBe(0);
+      expect(tagResult.exitCode).toBe(0);
+      expect(branchResult.stdout).toBe(tagResult.stdout);
+    });
+
+    it('missing tree-ish returns a usage error', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree'], '/project');
+      expect(result.exitCode).toBe(129);
+      expect(result.stderr).toContain('usage: git ls-tree');
+    });
+
+    it('unknown ref returns a bad-object error', async () => {
+      await seedTree();
+      const result = await git.execute(['ls-tree', 'nope'], '/project');
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain('Not a valid object name');
+    });
+  });
+
   describe('show-ref', () => {
     it('lists all refs (branches and tags)', async () => {
       await git.execute(['init'], '/project');
