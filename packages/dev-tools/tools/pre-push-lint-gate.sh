@@ -14,7 +14,7 @@ cd "$REPO_ROOT"
 
 # ── dependency check ──────────────────────────────────────────────────────────
 BIN="$REPO_ROOT/node_modules/.bin"
-for bin in biome prettier knip; do
+for bin in biome prettier knip jscpd; do
 	if [ ! -x "$BIN/$bin" ]; then
 		echo "pre-push-lint-gate: $bin not found in node_modules/.bin." >&2
 		echo "Run 'npm ci' before pushing." >&2
@@ -70,7 +70,8 @@ run_check "custom-lints" bash -c '
   npm run lint:no-ui-in-providers --silent &&
   npm run lint:patches --silent &&
   npm run lint:no-raw-chrome-runtime-id --silent &&
-  npm run lint:hosted-origin --silent
+  npm run lint:hosted-origin --silent &&
+  npm run lint:duplication --silent
 '
 
 # CI-only steps (not in lint:ci)
