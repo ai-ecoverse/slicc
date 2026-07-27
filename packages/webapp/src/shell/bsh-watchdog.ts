@@ -21,10 +21,10 @@ const log = createLogger('bsh-watchdog');
  * an unbundled `require(...)` for a bare specifier. The .bsh runs in
  * the target browser page via CDP `Runtime.evaluate` and has no way
  * to resolve bare specifiers at runtime — the user must pre-bundle
- * via `ipx esbuild --bundle` so every bare specifier is inlined.
+ * via `esbuild --bundle` so every bare specifier is inlined.
  */
 const BSH_BUNDLE_HINT =
-  '.bsh scripts must be pre-bundled. Install deps via `ipk add <pkg>`, then bundle with `ipx esbuild --bundle <script>.bsh --outfile=<script>.bundled.bsh` and drop the bundled file in place. There is no runtime resolver in the target page.';
+  '.bsh scripts must be pre-bundled. Install deps via `ipk add <pkg>`, then bundle with `esbuild --bundle <script>.bsh --outfile=<script>.bundled.bsh` and drop the bundled file in place. There is no runtime resolver in the target page.';
 
 export interface BshWatchdogOptions {
   /** Optional CDP transport to subscribe to navigation events on.
@@ -209,7 +209,7 @@ export class BshWatchdog {
     // module graph, no ipk node_modules walk, and no CDN fallback. The
     // wrapper pre-scans the script for `require(...)` specifiers and emits a
     // clear bundle-first error before evaluating the body when any survive.
-    // Bundle the script via `ipx esbuild --bundle <script>.bsh --outfile=...`
+    // Bundle the script via `esbuild --bundle <script>.bsh --outfile=...`
     // so esbuild inlines every bare specifier from the ipk-installed
     // `node_modules` tree (see `esbuild-command.ts`).
     const wrappedScript = `(async () => {
