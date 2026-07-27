@@ -20,11 +20,13 @@ npm run test
 npm run test:coverage
 npm run build
 npm run build -w @slicc/chrome-extension
+npm run bundle-size
 node packages/dev-tools/tools/check-touched-exemptions.mjs
 ```
 
 Run `npm run verify` first because formatting is the most common CI failure. Do not omit the
 separate `check-touched-exemptions.mjs` command: `npm run verify` does not include it.
+`npm run bundle-size` needs both builds to have run first — it measures files in `dist/`.
 
 ## Pre-push lint gate (automatic)
 
@@ -53,6 +55,7 @@ npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
 npm run build
 npm run build -w @slicc/chrome-extension
+npm run bundle-size                    # Bundle budgets; needs the builds above
 ```
 
 The `check-touched-exemptions.mjs` gate runs right after lint because it catches
@@ -63,11 +66,56 @@ complexity debt that lint alone misses. See the section below for details.
 Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
 then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
-`lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`, and
-`lint:patches`.
+`lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
+`lint:patches`, and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
+
+## Duplicate-code gate (`lint:duplication`)
+
+`npm run lint:duplication` runs jscpd against `jscpd.json` and fails when total duplicated
+lines exceed the `threshold` there. It is chained into both `lint` and `lint:ci`, so the CI
+`lint` job and the pre-push gate both enforce it — there is no separate CI job.
+
+Coverage spans all eight shipped applications: TypeScript/JS for `packages/webapp`,
+`packages/node-server`, `packages/chrome-extension` and `packages/cloudflare-worker`, Swift
+for `packages/swift-launcher`, `packages/swift-server` and `packages/ios-app`, and Go for
+`packages/slicc-cli`.
+
+```bash
+npm run lint:duplication               # The gate (silent unless over threshold)
+npm run lint:duplication:report        # Browsable HTML + JSON clone report in dist/jscpd/
+```
+
+When the gate trips, run the report script and read `dist/jscpd/` to find the clone pairs.
+
+The threshold is a **one-way ratchet**, held just above the measured baseline in the same
+spirit as `coverage-thresholds.json`. Lower it as duplication is paid down; never raise it
+to turn a red run green. The nightly `debt:duplication` rotation in
+[`.github/workflows/agentic-debt-triage.yml`](../../../.github/workflows/agentic-debt-triage.yml)
+is the intended driver for paying it down.
+
+`packages/dev-tools/tools/duplication-config.test.mjs` guards the config itself: it asserts
+every application path is still scanned with a non-zero file count, so an over-broad `ignore`
+entry cannot silently drop an app from the signal.
+
+jscpd's config parser prints a harmless `unknown field '$comment'` warning for the rationale
+key in `jscpd.json`. That is expected — do not silence it by deleting the key.
+
+## Bundle-size budgets (`bundle-size`)
+
+`npm run bundle-size` runs size-limit for the two Vite-bundled browser apps. Budgets live in
+the `size-limit` block of [`packages/webapp/package.json`](../../../packages/webapp/package.json)
+and [`packages/chrome-extension/package.json`](../../../packages/chrome-extension/package.json),
+next to the code they guard, and are measured on raw (non-brotli) bytes.
+
+It reads built output, so run `npm run build` and
+`npm run build -w @slicc/chrome-extension` first. CI enforces it in the `bundle-size` job,
+which builds both apps itself.
+
+Budgets are ratchets like the duplication threshold: tighten them as payloads shrink. Raising
+one needs a justification in the PR body.
 
 ## Boy-scout complexity gate (`check-touched-exemptions.mjs`)
 
@@ -115,7 +163,8 @@ commands.
 If local checks pass but CI still fails, inspect
 [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml). The `cloudflare-worker`
 job runs `wrangler deploy --dry-run`. This rarely trips for typical changes but lives in
-`.github/workflows/ci.yml` if you need it. All other lint-job gates (manifest
+`.github/workflows/ci.yml` if you need it. The `bundle-size` job is the other CI-only gate;
+reproduce it locally with `npm run bundle-size` after both builds. All other lint-job gates (manifest
 justifications, knip dead-code) are now covered by the pre-push lint gate (`npm run
 verify`).
 
