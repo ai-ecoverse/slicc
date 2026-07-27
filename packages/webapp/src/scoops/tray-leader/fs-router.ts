@@ -154,10 +154,8 @@ export class FsRouter {
     route: PendingFsRoute,
     response: TrayFsResponse
   ): TrayFsResponse[] | null {
-    if (route.chunks.length === 0) {
-      route.totalChunks = (response.ok && response.totalChunks) || 1;
-    }
     route.chunks.push(response);
+    route.totalChunks = (response.ok && response.totalChunks) || 1;
     if (route.chunks.length < route.totalChunks) return null;
     return route.chunks;
   }

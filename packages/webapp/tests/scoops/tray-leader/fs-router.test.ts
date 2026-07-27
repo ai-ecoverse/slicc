@@ -95,6 +95,64 @@ describe('FsRouter', () => {
     await expect(pending).resolves.toEqual([duplicate, duplicate]);
   });
 
+  it('completes when the current response decreases totalChunks to the received count', async () => {
+    const { followers, router } = createHarness();
+    const sent = addFollower(followers, 'target');
+    followers.setRuntimeId('runtime-target', 'target');
+    const pending = router.sendFsRequest('runtime-target', { op: 'readFile', path: '/large' });
+    const request = sent.find((message) => message.type === 'fs.request');
+    if (request?.type !== 'fs.request') throw new Error('missing fs request');
+    const first: TrayFsResponse = {
+      ok: true,
+      data: { type: 'file', content: 'first', encoding: 'utf-8' },
+      chunkIndex: 0,
+      totalChunks: 3,
+    };
+    const second: TrayFsResponse = {
+      ok: true,
+      data: { type: 'file', content: 'second', encoding: 'utf-8' },
+      chunkIndex: 1,
+      totalChunks: 2,
+    };
+    const onResolve = vi.fn();
+    void pending.then(onResolve);
+
+    router.handleFsResponse(request.requestId, first);
+    router.handleFsResponse(request.requestId, second);
+    await Promise.resolve();
+
+    expect(onResolve).toHaveBeenCalledWith([first, second]);
+  });
+
+  it('remains pending when the current response increases totalChunks above the received count', async () => {
+    const { followers, router } = createHarness();
+    const sent = addFollower(followers, 'target');
+    followers.setRuntimeId('runtime-target', 'target');
+    const pending = router.sendFsRequest('runtime-target', { op: 'readFile', path: '/large' });
+    const request = sent.find((message) => message.type === 'fs.request');
+    if (request?.type !== 'fs.request') throw new Error('missing fs request');
+    const first: TrayFsResponse = {
+      ok: true,
+      data: { type: 'file', content: 'first', encoding: 'utf-8' },
+      chunkIndex: 0,
+      totalChunks: 2,
+    };
+    const second: TrayFsResponse = {
+      ok: true,
+      data: { type: 'file', content: 'second', encoding: 'utf-8' },
+      chunkIndex: 1,
+      totalChunks: 3,
+    };
+    const onResolve = vi.fn();
+    void pending.then(onResolve);
+
+    router.handleFsResponse(request.requestId, first);
+    router.handleFsResponse(request.requestId, second);
+    await Promise.resolve();
+
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
   it('rejects a leader request when its target follower disconnects', async () => {
     const { followers, router } = createHarness();
     addFollower(followers, 'target');
