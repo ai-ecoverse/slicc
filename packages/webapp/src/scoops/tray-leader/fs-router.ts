@@ -156,13 +156,9 @@ export class FsRouter {
   ): TrayFsResponse[] | null {
     if (route.chunks.length === 0) {
       route.totalChunks = (response.ok && response.totalChunks) || 1;
-      route.chunks = new Array<TrayFsResponse>(route.totalChunks);
     }
-    const chunkIndex = (response.ok && response.chunkIndex) || 0;
-    route.chunks[chunkIndex] = response;
-    for (let index = 0; index < route.totalChunks; index++) {
-      if (!route.chunks[index]) return null;
-    }
+    route.chunks.push(response);
+    if (route.chunks.length < route.totalChunks) return null;
     return route.chunks;
   }
 

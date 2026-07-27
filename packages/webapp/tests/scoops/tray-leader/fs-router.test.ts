@@ -49,7 +49,7 @@ function addFollower(registry: FollowerRegistry, bootstrapId: string) {
 }
 
 describe('FsRouter', () => {
-  it('reassembles multi-chunk responses in chunk-index order', async () => {
+  it('reassembles multi-chunk responses in arrival order', async () => {
     const { followers, router } = createHarness();
     const sent = addFollower(followers, 'target');
     followers.setRuntimeId('runtime-target', 'target');
@@ -72,7 +72,27 @@ describe('FsRouter', () => {
     router.handleFsResponse(request.requestId, second);
     router.handleFsResponse(request.requestId, first);
 
-    await expect(pending).resolves.toEqual([first, second]);
+    await expect(pending).resolves.toEqual([second, first]);
+  });
+
+  it('counts duplicate chunk indexes toward completion', async () => {
+    const { followers, router } = createHarness();
+    const sent = addFollower(followers, 'target');
+    followers.setRuntimeId('runtime-target', 'target');
+    const pending = router.sendFsRequest('runtime-target', { op: 'readFile', path: '/large' });
+    const request = sent.find((message) => message.type === 'fs.request');
+    if (request?.type !== 'fs.request') throw new Error('missing fs request');
+    const duplicate: TrayFsResponse = {
+      ok: true,
+      data: { type: 'file', content: 'same', encoding: 'utf-8' },
+      chunkIndex: 0,
+      totalChunks: 2,
+    };
+
+    router.handleFsResponse(request.requestId, duplicate);
+    router.handleFsResponse(request.requestId, duplicate);
+
+    await expect(pending).resolves.toEqual([duplicate, duplicate]);
   });
 
   it('rejects a leader request when its target follower disconnects', async () => {
