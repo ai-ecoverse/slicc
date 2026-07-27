@@ -547,6 +547,24 @@ jobs:
           name: coverage-cloudflare-worker
           path: coverage/
           if-no-files-found: ignore
+      # Per-test timing data. Emitted by a second vitest invocation rather than
+      # by the gate step above because coverage-gate.mjs builds its own argv
+      # (floors from coverage-thresholds.json) and forwards nothing, and vitest
+      # reporters are a global option with no per-project override. The worker
+      # suite runs in ~3s, so the duplicate run is cheaper than plumbing a
+      # reporter through the shared gate. Runs on failure too — a timing report
+      # of the run that just broke is the useful one.
+      - name: Emit test timing report
+        if: always()
+        continue-on-error: true
+        run: npx vitest run --project cloudflare-worker --reporter=junit --outputFile.junit=test-results/cloudflare-worker-junit.xml
+      - name: Upload test timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timing-cloudflare-worker
+          path: test-results/
+          if-no-files-found: ignore
 
       # #1330 retention: archive this build's content-hashed assets to the
       # STAGING R2 bucket BEFORE any deploy attempt so long-lived tabs can
