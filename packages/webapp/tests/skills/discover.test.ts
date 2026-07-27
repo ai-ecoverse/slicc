@@ -126,6 +126,16 @@ describe('discoverSkills', () => {
     const skills = await discoverSkills(fs);
     expect(skills.some((s) => s.name === 'workflows')).toBe(true);
   });
+
+  it('discovers the bundled biome skill', async () => {
+    await fs.mkdir('/workspace/skills/biome', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/biome/SKILL.md',
+      '---\nname: biome\ndescription: Use when checking code with Biome.\n---\n# Biome\n'
+    );
+    const skills = await discoverSkills(fs);
+    expect(skills.some((s) => s.name === 'biome')).toBe(true);
+  });
 });
 
 describe('getSkillInfo', () => {

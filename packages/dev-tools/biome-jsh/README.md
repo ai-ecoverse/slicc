@@ -49,6 +49,22 @@ CI surfaces them inline.
 biome-jsh check skills/
 ```
 
+## Relationship to the in-app `biome` command
+
+`biome-jsh` and the in-app wrapper share byte-aligned `.jsh`/`.bsh`
+wrap/unwrap/span-shift helpers, but they are intentionally different frontends:
+
+- `biome-jsh` runs the native `@biomejs/biome` binary and uses its normal upward
+  config discovery. The in-app command loads the WASM API and implements VFS
+  discovery plus an explicit `--config-path`.
+- `biome-jsh check` and `lint` always request GitHub Actions annotations. The
+  in-app command converts the WASM API's HTML diagnostics to plain text.
+- `biome-jsh` supports `check`, `lint`, `format`, and `format --write`; it does
+  not implement the in-app `format --check`, `--config-path`, or
+  `--stdin-file-path` flags. Use `biome-jsh check` for a format gate.
+- `biome-jsh` exits `1` for errors, missing files, or unformatted files; warning
+  annotations alone do not fail it. The in-app command exits `1` for warnings too.
+
 ## Biome binary
 
 `@biomejs/biome` is a declared dependency but the binary is **resolved at
