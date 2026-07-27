@@ -29,6 +29,7 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
 
     func testMissingCliDownloadsThenExpandsAndLaunches() async throws {
         var downloaded = false
+        var exposedURL: URL?
         var launchedCommand: String?
         let service = TerminalFollowerLaunchService(
             findCliBinary: { nil },
@@ -37,6 +38,7 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
                 downloaded = true
                 return URL(fileURLWithPath: "/managed/slicc")
             },
+            exposeCli: { exposedURL = $0 },
             resolveLoginShell: { "/bin/fish" },
             loadTemplate: { "{slicc} {joinUrl} follow {shell} -c" },
             launchTerminal: { _, command in launchedCommand = command }
@@ -49,6 +51,7 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
         )
 
         XCTAssertTrue(downloaded)
+        XCTAssertEqual(exposedURL?.path, "/managed/slicc")
         XCTAssertEqual(
             launchedCommand,
             "/managed/slicc https://example.test/join/token.secret follow /bin/fish -c"
@@ -78,6 +81,35 @@ final class TerminalFollowerLaunchFlowTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? TerminalLauncher.LaunchError, expected)
         }
+    }
+
+    func testPathExposureFailureDoesNotBlockManagedLaunch() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let managed = SliccCliLocator.managedBinDirectory(homeDirectory: home)
+            .appendingPathComponent("slicc")
+        let exposure = SliccCliPathExposure(
+            homeDirectory: home,
+            isDirectoryWritable: { _ in false }
+        )
+        var launchedCommand: String?
+        let service = TerminalFollowerLaunchService(
+            findCliBinary: { managed.path },
+            downloadCli: { _ in XCTFail("download should be skipped"); return managed },
+            exposeCli: { XCTAssertEqual(exposure.expose($0), .failed) },
+            resolveLoginShell: { "/bin/zsh" },
+            loadTemplate: { FollowCommandTemplate.defaultTemplate },
+            launchTerminal: { _, command in launchedCommand = command }
+        )
+
+        try await service.launch(
+            target: target(type: .terminal),
+            joinURL: "https://example.test/join/token.secret",
+            progressHandler: { _ in }
+        )
+
+        XCTAssertNotNil(launchedCommand)
+        XCTAssertTrue(launchedCommand?.contains("https://example.test/join/token.secret follow /bin/zsh -c") == true)
     }
 
     func testSliccProcessWiresLeaderURLIntoTerminalLaunchService() async throws {

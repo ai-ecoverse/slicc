@@ -44,10 +44,12 @@ enum TerminalLaunchDecision {
 
 struct TerminalFollowerLaunchService {
     typealias DownloadCLI = (@escaping SliccCliDownloader.ProgressHandler) async throws -> URL
+    typealias ExposeCLI = (URL) -> Void
     typealias LaunchTerminal = (AppTarget, String) throws -> Void
 
     private let findCliBinary: () -> String?
     private let downloadCli: DownloadCLI
+    private let exposeCli: ExposeCLI
     private let resolveLoginShell: () -> String
     private let loadTemplate: () -> String
     private let launchTerminal: LaunchTerminal
@@ -55,12 +57,14 @@ struct TerminalFollowerLaunchService {
     init(
         findCliBinary: @escaping () -> String?,
         downloadCli: @escaping DownloadCLI,
+        exposeCli: @escaping ExposeCLI = { _ in },
         resolveLoginShell: @escaping () -> String,
         loadTemplate: @escaping () -> String,
         launchTerminal: @escaping LaunchTerminal
     ) {
         self.findCliBinary = findCliBinary
         self.downloadCli = downloadCli
+        self.exposeCli = exposeCli
         self.resolveLoginShell = resolveLoginShell
         self.loadTemplate = loadTemplate
         self.launchTerminal = launchTerminal
@@ -75,16 +79,17 @@ struct TerminalFollowerLaunchService {
         joinURL: String,
         progressHandler: @escaping SliccCliDownloader.ProgressHandler
     ) async throws {
-        let sliccPath: String
+        let sliccURL: URL
         if let existing = findCliBinary() {
-            sliccPath = existing
+            sliccURL = URL(fileURLWithPath: existing)
         } else {
-            sliccPath = try await downloadCli(progressHandler).path
+            sliccURL = try await downloadCli(progressHandler)
         }
+        exposeCli(sliccURL)
 
         let command = FollowCommandTemplate.expand(
             template: loadTemplate(),
-            sliccPath: sliccPath,
+            sliccPath: sliccURL.path,
             joinURL: joinURL,
             shellPath: resolveLoginShell()
         )
@@ -96,6 +101,7 @@ struct TerminalFollowerLaunchService {
         downloadCli: { progressHandler in
             try await SliccCliDownloader(progressHandler: progressHandler).download()
         },
+        exposeCli: { _ = SliccCliPathExposure().expose($0) },
         resolveLoginShell: { LoginShellResolver.resolve() },
         loadTemplate: {
             UserDefaults.standard.string(forKey: terminalFollowCommandKey)

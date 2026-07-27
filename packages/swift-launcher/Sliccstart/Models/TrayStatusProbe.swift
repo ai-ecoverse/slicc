@@ -3,6 +3,20 @@ import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "TrayStatusProbe")
 
+enum TrayStatusProbeExhaustion {
+    case retryable
+    case terminal
+
+    func message(maxAttempts: Int) -> String {
+        switch self {
+        case .retryable:
+            "discoverJoinUrl: attempt window exhausted after \(maxAttempts) attempts; outer probe will retry"
+        case .terminal:
+            "discoverJoinUrl: gave up after \(maxAttempts) attempts; no further retries scheduled"
+        }
+    }
+}
+
 /// Polls the leader browser's `/api/tray-status` endpoint to recover the
 /// freshly-minted tray join URL. Sliccstart launches the browser with
 /// `--lead` so swift-server hands `tray=<workerBaseUrl>` to the webapp;
@@ -32,7 +46,8 @@ struct TrayStatusProbe {
     func discoverJoinUrl(
         serveOrigin: String,
         maxAttempts: Int = 8,
-        retryDelay: TimeInterval = 1.5
+        retryDelay: TimeInterval = 1.5,
+        exhaustion: TrayStatusProbeExhaustion = .terminal
     ) async -> String? {
         guard let url = URL(string: "\(serveOrigin)/api/tray-status") else {
             log.error("discoverJoinUrl: invalid serveOrigin \(serveOrigin, privacy: .public)")
@@ -59,7 +74,13 @@ struct TrayStatusProbe {
                 try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
             }
         }
-        log.info("discoverJoinUrl: gave up after \(maxAttempts) attempts")
+        let exhaustionMessage = exhaustion.message(maxAttempts: maxAttempts)
+        switch exhaustion {
+        case .retryable:
+            log.info("\(exhaustionMessage, privacy: .public)")
+        case .terminal:
+            log.warning("\(exhaustionMessage, privacy: .public)")
+        }
         return nil
     }
 }

@@ -531,7 +531,8 @@ final class SliccProcess {
                 let joinUrl = await probe.discoverJoinUrl(
                     serveOrigin: serveOrigin,
                     maxAttempts: innerMaxAttempts,
-                    retryDelay: innerRetryDelay
+                    retryDelay: innerRetryDelay,
+                    exhaustion: .retryable
                 )
                 if let joinUrl {
                     await MainActor.run { [weak self] in
@@ -548,7 +549,7 @@ final class SliccProcess {
                     return
                 }
 
-                // discoverJoinUrl gave up — wait a short outer backoff
+                // The inner attempt window exhausted — wait a short outer backoff
                 // then re-check the stop conditions and probe again.
                 try? await Task.sleep(nanoseconds: UInt64(outerBackoff * 1_000_000_000))
             }
