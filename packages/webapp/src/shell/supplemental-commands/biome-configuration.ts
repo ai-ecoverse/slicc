@@ -2,6 +2,8 @@ import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
 
 export type BiomeConfiguration = Record<string, unknown>;
 
+const BIOME_JS_API_VERSION = __BIOME_JS_API_VERSION__;
+
 interface BiomeConfigFileSystem {
   exists(path: string): Promise<boolean>;
   readFile(path: string): Promise<string>;
@@ -122,6 +124,21 @@ export function parseBiomeJsonc(source: string): BiomeConfiguration {
   return parsed as BiomeConfiguration;
 }
 
+function firstPathPlugin(configuration: BiomeConfiguration): string | null {
+  if (!Array.isArray(configuration.plugins)) return null;
+  for (const plugin of configuration.plugins) {
+    if (typeof plugin === 'string') return plugin;
+    if (
+      plugin !== null &&
+      typeof plugin === 'object' &&
+      typeof (plugin as { path?: unknown }).path === 'string'
+    ) {
+      return (plugin as { path: string }).path;
+    }
+  }
+  return null;
+}
+
 async function findDiscoveredConfig(
   fs: BiomeConfigFileSystem,
   searchFrom: string
@@ -152,7 +169,16 @@ async function readConfiguration(
     return { ok: false, error: `biome: failed to read configuration ${path}: ${detail}`, exitCode };
   }
   try {
-    return { ok: true, resolved: { path, configuration: parseBiomeJsonc(source) } };
+    const configuration = parseBiomeJsonc(source);
+    const plugin = firstPathPlugin(configuration);
+    if (plugin !== null) {
+      return {
+        ok: false,
+        error: `biome: unsupported configuration ${path}: path-based plugin ${JSON.stringify(plugin)} cannot be loaded by @biomejs/js-api@${BIOME_JS_API_VERSION}`,
+        exitCode,
+      };
+    }
+    return { ok: true, resolved: { path, configuration } };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {

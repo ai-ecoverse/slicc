@@ -126,7 +126,12 @@ are installed in the VFS with `ipk add`. It has three subcommands:
 `--config-path <file>` option overrides discovery. Otherwise, discovery starts in
 the first target file's directory (or the current directory for stdin), walks
 toward `/`, and prefers `biome.json` over `biome.jsonc` at each directory.
-Comments and trailing commas are accepted. Config `extends` is not resolved.
+Comments and trailing commas are accepted. Formatter/linter enabled gates and
+file include/exclude patterns are evaluated before processing, so skipped files
+produce no findings or writes and are omitted from `filesChecked`. Config
+`extends` is not resolved. Path-based plugins cannot be loaded through the pinned
+WASM JavaScript API and produce a precise configuration error instead of a runtime
+failure.
 
 Diagnostics are plain text: the wrapper removes the HTML tags and entities emitted
 by the WASM API, and it does not add ANSI escapes.

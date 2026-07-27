@@ -34,7 +34,7 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { splitPath } from '../../fs/path-utils.js';
+import { normalizePath, pathSegments, splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stdinAsText } from '../just-bash-compat.js';
@@ -222,7 +222,8 @@ Configuration:
   Without --config-path, starts at the first target's directory (or cwd for
   stdin), then walks toward /. At each directory biome.json is preferred over
   biome.jsonc. Comments and trailing commas are accepted. Config "extends" is
-  unsupported and is not resolved.
+  unsupported and is not resolved. Path-based plugins are unsupported by the
+  pinned WASM JavaScript API and fail with a configuration error.
 
 Output:
   Diagnostics use plain text without HTML tags, entities, or ANSI escapes.
@@ -313,7 +314,7 @@ function parseBiomeOption(out: ParsedBiomeArgs, args: string[], index: number): 
       return index + 1;
   }
   if (arg.startsWith('--stdin-file-path=')) {
-    out.stdinFilePath = arg.slice('--stdin-file-path='.length);
+    out.stdinFilePath = requiredEqualsValue(arg, '--stdin-file-path');
     return index;
   }
   if (arg.startsWith('--config-path=')) {
@@ -497,6 +498,7 @@ interface BiomeRequest {
   write: boolean;
   check: boolean;
   configuration: BiomeConfiguration | null;
+  configurationRoot: string | null;
   reporter: BiomeReporter;
   files: { path: string; biomePath: string; source: string; wrap: boolean }[];
 }
@@ -509,6 +511,28 @@ interface BiomeFileResult {
   errorCount: number;
   warningCount: number;
   unchanged: boolean;
+}
+
+export function biomePathFromConfigRoot(
+  realPath: string,
+  configurationRoot: string | null
+): string {
+  const virtualPath = biomeVirtualPath(normalizePath(realPath));
+  if (configurationRoot === null) return virtualPath;
+  const rootSegments = pathSegments(configurationRoot);
+  const fileSegments = pathSegments(virtualPath);
+  let shared = 0;
+  while (
+    shared < rootSegments.length &&
+    shared < fileSegments.length &&
+    rootSegments[shared] === fileSegments[shared]
+  ) {
+    shared++;
+  }
+  return [
+    ...Array.from({ length: rootSegments.length - shared }, () => '..'),
+    ...fileSegments.slice(shared),
+  ].join('/');
 }
 
 /**
@@ -542,6 +566,14 @@ const JSH_WRAP_PREFIX_BYTES = ${JSH_WRAP_PREFIX_BYTE_LENGTH};
 const shiftBiomeSpans = ${shiftBiomeSpans.toString()};
 const unwrapFormattedJsh = ${unwrapFormattedJsh.toString()};
 const biomeDiagnosticToJson = ${biomeDiagnosticToJson.toString()};
+function supportsFeature(biome, projectKey, path, feature) {
+  const workspace = biome.workspace;
+  if (!workspace || typeof workspace.fileFeatures !== 'function') {
+    throw new Error('pinned @biomejs/js-api workspace does not expose file feature gates');
+  }
+  const supported = workspace.fileFeatures({ projectKey, path, features: [feature] });
+  return supported.featuresSupported && supported.featuresSupported[feature] === 'supported';
+}
 async function compileBiomeWasm(wasmPath) {
   // Prefer the host-side WASM compiler: biome's ~37 MB wasm hard-OOMs
   // WebAssembly.compile inside this per-task realm worker, so the kernel
@@ -573,10 +605,13 @@ async function main() {
   const Biome = jsApi.Biome || (jsApi.default && jsApi.default.Biome);
   if (!Biome) throw new Error('@biomejs/js-api/web does not export Biome');
   const biome = new Biome();
-  const { projectKey } = biome.openProject();
+  const { projectKey } = biome.openProject(req.configurationRoot || undefined);
   if (req.configuration !== null) biome.applyConfiguration(projectKey, req.configuration);
   const results = [];
   for (const file of req.files) {
+    const formatEnabled = req.op !== 'lint' && supportsFeature(biome, projectKey, file.biomePath, 'format');
+    const lintEnabled = req.op !== 'format' && supportsFeature(biome, projectKey, file.biomePath, 'lint');
+    if (!formatEnabled && !lintEnabled) continue;
     let formatted = null;
     let unchanged = true;
     let diagText = '';
@@ -588,7 +623,7 @@ async function main() {
     // shifted back by the prefix length and are printed against the ORIGINAL
     // (unwrapped) source so line/column point at the real file.
     const wrap = file.wrap === true;
-    if (req.op !== 'lint') {
+    if (formatEnabled) {
       const fmtInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
       const fmt = biome.formatContent(projectKey, fmtInput, { filePath: file.biomePath });
       const fmtDiags = fmt.diagnostics || [];
@@ -624,7 +659,7 @@ async function main() {
         unchanged = false;
       }
     }
-    if (req.op !== 'format') {
+    if (lintEnabled) {
       const lintInput = wrap ? (JSH_WRAP_PREFIX + file.source + JSH_WRAP_SUFFIX) : file.source;
       const lint = biome.lintContent(projectKey, lintInput, { filePath: file.biomePath });
       const lintDiags = lint.diagnostics || [];
@@ -675,6 +710,7 @@ async function runBiomeOps(
   write: boolean,
   check: boolean,
   configuration: BiomeConfiguration | null,
+  configurationRoot: string | null,
   reporter: BiomeReporter,
   files: { path: string; source: string }[],
   wasmPath: string
@@ -684,10 +720,11 @@ async function runBiomeOps(
     write,
     check,
     configuration,
+    configurationRoot,
     reporter,
     files: files.map((f) => ({
       path: f.path,
-      biomePath: biomeVirtualPath(f.path),
+      biomePath: biomePathFromConfigRoot(f.path, configurationRoot),
       source: f.source,
       wrap: shouldWrapForBiome(f.path),
     })),
@@ -951,6 +988,7 @@ async function executeParsedBiomeCommand(
     parsed.write,
     parsed.check,
     config.resolved?.configuration ?? null,
+    config.resolved === null ? null : splitPath(config.resolved.path).dir,
     parsed.reporter,
     gathered.inputs,
     pre.wasmPath

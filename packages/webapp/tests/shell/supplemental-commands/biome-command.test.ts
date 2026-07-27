@@ -6,6 +6,7 @@ import { createRequire } from 'module';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   biomeDiagnosticToJson,
+  biomePathFromConfigRoot,
   biomeVirtualPath,
   checkBiomeInstalled,
   createBiomeCommand,
@@ -188,6 +189,11 @@ describe('parseBiomeArgs', () => {
     expect(stdinEq.stdinFilePath).toBe('/bar.ts');
   });
 
+  it('rejects a missing --stdin-file-path value in both forms', () => {
+    expect(() => parseBiomeArgs(['check', '--stdin-file-path'])).toThrow(/requires a value/);
+    expect(() => parseBiomeArgs(['check', '--stdin-file-path='])).toThrow(/requires a value/);
+  });
+
   it('captures --version and --help', () => {
     expect(parseBiomeArgs(['--version']).showVersion).toBe(true);
     expect(parseBiomeArgs(['--help']).showHelp).toBe(true);
@@ -260,6 +266,20 @@ describe('biomeVirtualPath', () => {
 
   it('leaves other extensions unchanged', () => {
     expect(biomeVirtualPath('/x/baz.ts')).toBe('/x/baz.ts');
+  });
+});
+
+describe('biomePathFromConfigRoot', () => {
+  it('uses config-root-relative parser paths while preserving no-config behavior', () => {
+    expect(biomePathFromConfigRoot('/workspace/project/src/tool.jsh', '/workspace/project')).toBe(
+      'src/tool.js'
+    );
+    expect(biomePathFromConfigRoot('/workspace/other.ts', '/workspace/project')).toBe(
+      '../other.ts'
+    );
+    expect(biomePathFromConfigRoot('/workspace/project/src/file.ts', null)).toBe(
+      '/workspace/project/src/file.ts'
+    );
   });
 });
 
@@ -434,6 +454,39 @@ describe('Biome configuration resolution', () => {
       ok: true,
       resolved: { path: '/workspace/packages/biome.json', configuration: { root: true } },
     });
+  });
+
+  it('rejects path-based plugins with a precise unsupported-configuration error', async () => {
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/biome.json',
+      JSON.stringify({ plugins: ['./.biome-plugins/custom.grit'] })
+    );
+    const result = await resolveBiomeConfiguration(ctx.fs, ctx.cwd, '/workspace/src', null);
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/custom.grit" cannot be loaded by @biomejs/js-api@6.0.0',
+      exitCode: 1,
+    });
+  });
+
+  it('fails check and format precisely against this repository biome.json plugin', async () => {
+    const ctx = createMockCtx();
+    const repositoryConfig = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../biome.json'),
+      'utf8'
+    );
+    await ctx.fs.writeFile('/workspace/biome.json', repositoryConfig);
+    const sourcePath = '/workspace/packages/webapp/src/shell/file.ts';
+    await ctx.fs.writeFile(sourcePath, 'const value = 1;\n');
+    const expectedError =
+      'biome: unsupported configuration /workspace/biome.json: path-based plugin "./.biome-plugins/no-innerhtml-electron-overlay.grit" cannot be loaded by @biomejs/js-api@6.0.0\n';
+
+    for (const subcommand of ['check', 'format']) {
+      const result = await createBiomeCommand().execute([subcommand, sourcePath], ctx);
+      expect(result).toEqual({ exitCode: 1, stdout: '', stderr: expectedError });
+    }
   });
 
   it('parses JSONC comments and trailing commas without altering string content', () => {
@@ -625,6 +678,7 @@ describe('biome --help / argument errors', () => {
     expect(res.stdout).toContain('biome.json is preferred over');
     expect(res.stdout).toContain('Config "extends" is');
     expect(res.stdout).toContain('unsupported and is not resolved');
+    expect(res.stdout).toContain('Path-based plugins are unsupported');
     expect(res.stdout).toContain('Diagnostics use plain text without HTML tags, entities');
     expect(res.stdout).toContain('--reporter <plain|json>    Reporter selection (default: plain)');
     expect(res.stdout).toContain('--json                     Alias for --reporter json');
@@ -1168,7 +1222,7 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
     expect(formatted.content).toContain("const greeting = 'hello';");
   });
 
-  it('applies explicit and discovered configuration through the real command helper', async () => {
+  it('applies config roots, feature gates, and file filters through the real command helper', async () => {
     const ctx = createMockCtx();
     await stageRealBiomePackages(ctx);
     await ctx.fs.writeFile(
@@ -1184,44 +1238,62 @@ describeHeavy('biome .jsh/.bsh wrapping against real Biome', () => {
       '/workspace/project/biome.jsonc',
       `{
         // The discovered config must reach BIOME_HELPER_SCRIPT.
+        "files": { "includes": ["**/*.js", "**/*.ts", "!**/generated/**"] },
+        "formatter": { "enabled": true },
         "linter": {
           "enabled": true,
-          "rules": { "preset": "recommended", "suspicious": { "noDebugger": "off" } },
+          "rules": { "preset": "recommended", "suspicious": { "noDebugger": "error" } },
         },
         "javascript": { "formatter": { "quoteStyle": "single" } },
+        "overrides": [
+          {
+            "includes": ["src/configured.js"],
+            "linter": { "rules": { "suspicious": { "noDebugger": "off" } } }
+          },
+          {
+            "includes": ["src/disabled.js", "src/types/**/*.ts"],
+            "formatter": { "enabled": false },
+            "linter": { "enabled": false }
+          }
+        ],
       }`
     );
     const sourcePath = '/workspace/project/src/configured.js';
     await ctx.fs.writeFile(sourcePath, 'debugger;\nconst greeting = "hello";\nvoid greeting;\n');
+    const disabledPath = '/workspace/project/src/disabled.js';
+    const disabledSource = 'debugger;\nconst disabled = "unchanged";\n';
+    await ctx.fs.writeFile(disabledPath, disabledSource);
+    const overridePath = '/workspace/project/src/types/configured.ts';
+    const overrideSource = 'debugger;\n';
+    await ctx.fs.writeFile(overridePath, overrideSource);
+    const excludedPath = '/workspace/project/generated/excluded.js';
+    const excludedSource = 'debugger;\nconst excluded = "unchanged";\n';
+    await ctx.fs.writeFile(excludedPath, excludedSource);
 
     const enabled = await createBiomeCommand().execute(
-      ['lint', '--config-path', '/workspace/project/enabled.json', sourcePath],
+      ['lint', '--json', '--config-path', '/workspace/project/enabled.json', sourcePath],
       ctx
     );
     expect(enabled.exitCode).toBe(1);
-    expect(enabled.stderr).toContain('lint/suspicious/noDebugger');
-    expect(enabled.stderr).not.toMatch(
-      /<\/?[A-Za-z][^>]*>|&(?:amp|lt|gt|quot|apos|nbsp|#[xX]?[0-9A-Fa-f]+);/
+    expect(enabled.stderr).toBe('');
+    expect(parseJsonResult(enabled).diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'lint/suspicious/noDebugger',
+        filePath: sourcePath,
+      })
     );
 
-    const configured = await createBiomeCommand().execute(['check', '--write', sourcePath], ctx);
+    const configured = await createBiomeCommand().execute(
+      ['check', '--write', sourcePath, disabledPath, overridePath, excludedPath],
+      ctx
+    );
     expect(configured).toMatchObject({ exitCode: 0, stdout: '' });
     expect(configured.stderr).toContain('biome: wrote 1 file(s)');
     const written = await ctx.fs.readFile(sourcePath);
     expect(written).toContain("const greeting = 'hello';");
     expect(written).not.toContain('const greeting = "hello";');
-
-    const wrappedPath = '/workspace/project/src/tool.jsh';
-    await ctx.fs.writeFile(wrappedPath, 'const y = 1;\nconst unusedX = 2;\nreturn y;\n');
-    const jsonResult = await createBiomeCommand().execute(['check', '--json', wrappedPath], ctx);
-    expect(jsonResult.exitCode).toBe(1);
-    expect(jsonResult.stderr).toBe('');
-    const report = JSON.parse(jsonResult.stdout) as {
-      diagnostics: { category: string; filePath: string; line: number; column: number }[];
-    };
-    const unused = report.diagnostics.find((diagnostic) =>
-      diagnostic.category.endsWith('/noUnusedVariables')
-    );
-    expect(unused).toMatchObject({ filePath: wrappedPath, line: 2, column: 7 });
+    expect(await ctx.fs.readFile(disabledPath)).toBe(disabledSource);
+    expect(await ctx.fs.readFile(overridePath)).toBe(overrideSource);
+    expect(await ctx.fs.readFile(excludedPath)).toBe(excludedSource);
   }, 120_000);
 });
