@@ -29,11 +29,22 @@ jobs:
           node-version: 24
           cache: npm
 
+      # The Go floor (coverage-thresholds.json `go`) is measured with the same
+      # `make cover` path the slicc-cli job gates with.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/slicc-cli/go.mod
+          cache-dependency-path: packages/slicc-cli/go.sum
+
       - run: npm ci
 
-      # Dependencies the Swift coverage builds need (mirrors ci.yml).
-      - name: Build webapp (Swift launcher dependency)
+      # Dependencies the Swift coverage builds need (mirrors ci.yml). The
+      # webapp + extension builds double as the artifacts the size-limit
+      # ceilings are measured against; without them that measurement skips.
+      - name: Build webapp (Swift launcher dependency, size-limit input)
         run: npm run build -w @slicc/webapp
+      - name: Build extension (size-limit input)
+        run: npm run build -w @slicc/chrome-extension
       - name: Build swift-server (Swift launcher dependency)
         run: cd packages/swift-server && swift build -c release
       # ios-app is measured via `xcodebuild test` on a simulator, which needs the
@@ -49,13 +60,17 @@ jobs:
       - name: Install Chromium (browser-mode coverage)
         run: npx playwright install chromium
 
-      - name: Run coverage ratchet
+      # One pass measures everything: coverage floors (TypeScript, Swift, Go),
+      # the jscpd duplication ceiling, the size-limit byte ceilings and the
+      # per-test duration ceilings (the last come out of the same vitest runs
+      # the coverage measurement already pays for).
+      - name: Run coverage and ceiling ratchet
         id: ratchet
         env:
           GH_TOKEN: ${{ github.token }}
         run: node packages/dev-tools/tools/coverage-ratchet.mjs --github-output
 
-      - name: Commit raised floors
+      - name: Commit ratcheted budgets
         if: steps.ratchet.outputs.changed == 'true'
         env:
           RATCHET_BRANCH: automation/coverage-ratchet
@@ -64,8 +79,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$RATCHET_BRANCH"
-          git add coverage-thresholds.json
-          git commit -m "chore(coverage): ratchet floors toward measured coverage"
+          git add coverage-thresholds.json jscpd.json \
+            packages/webapp/package.json packages/chrome-extension/package.json
+          git commit -m "chore(coverage): ratchet floors and ceilings toward measured reality"
           git push --force-with-lease origin "$RATCHET_BRANCH"
 
       - name: Create or update ratchet PR
@@ -88,6 +104,6 @@ jobs:
             gh pr create \
               --base main \
               --head "$RATCHET_BRANCH" \
-              --title "chore(coverage): ratchet coverage floors" \
-              --body "Automated nightly bump of \`coverage-thresholds.json\` toward measured coverage. Floors only ever rise (>=1pp steps, <1% headroom); no PR is opened when nothing changed."
+              --title "chore(coverage): ratchet coverage floors and budget ceilings" \
+              --body "Automated nightly move of every gated budget toward measured reality: coverage floors in \`coverage-thresholds.json\` rise (>=1pp steps, <1% headroom), while the duplication ceiling in \`jscpd.json\`, the \`size-limit\` budgets in \`packages/webapp/package.json\` / \`packages/chrome-extension/package.json\` and the per-test duration ceilings in \`coverage-thresholds.json\` (\`testTiming\`) fall. Floors never drop, ceilings never rise, and no PR is opened when nothing changed."
           fi
