@@ -74,6 +74,24 @@ export interface WorkerEnv {
    * third-party pages and emits `frame-ancestors *` (the CSP wildcard).
    */
   ALLOWED_CHERRY_HOST_ORIGINS?: string;
+  /**
+   * Cloudflare `version_metadata` binding. Unbound in `wrangler dev` and in
+   * unit tests, so every read must tolerate `undefined`.
+   */
+  CF_VERSION_METADATA?: { id?: string };
+}
+
+const UNKNOWN_WORKER_VERSION = 'unknown';
+
+/**
+ * Deployed Worker version ID for the public health document — the field that
+ * distinguishes "deploy reported success" from "the new build is serving
+ * traffic". Nothing else from the binding is exposed: `/status` is
+ * unauthenticated, so it carries an opaque version ID and no config.
+ */
+export function resolveWorkerVersion(env: Pick<WorkerEnv, 'CF_VERSION_METADATA'>): string {
+  const id = env.CF_VERSION_METADATA?.id;
+  return typeof id === 'string' && id.length > 0 ? id : UNKNOWN_WORKER_VERSION;
 }
 
 /**
@@ -789,6 +807,7 @@ async function tryHandleInfoRoutes(
         status: 'ok',
         service: 'slicc-tray-hub',
         timestamp: new Date().toISOString(),
+        version: resolveWorkerVersion(env),
       },
       200,
       { 'Cache-Control': 'no-store' }
