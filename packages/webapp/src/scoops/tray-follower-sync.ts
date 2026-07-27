@@ -867,20 +867,6 @@ export class FollowerSyncManager implements AgentHandle {
   }
 
   /**
-   * Handle a `sprinkles.list` broadcast from the leader.
-   * Every list arrival is a content-invalidation barrier: clears the cache and
-   * bumps `cacheEpoch` so late pre-barrier fetch replies don’t poison the
-   * post-barrier world (see `handleSprinkleContent`).
-   */
-  private handleSprinklesList(sprinkles: SprinkleSummary[]): void {
-    log.info('Sprinkles list received from leader', { sprinkleCount: sprinkles.length });
-    this.sprinkleContentCache.clear();
-    this.cacheEpoch++;
-    this.latestSprinkles = sprinkles;
-    this.options.onSprinklesList?.(sprinkles);
-  }
-
-  /**
    * Reassemble chunked `sprinkle.content` responses and resolve the waiting
    * fetchers. Mirrors `handleSprinkleContent` in iOS `AppState.swift` — same
    * chunk-buffer + ordered-join + waiter-resolve flow, plus error rejection.

@@ -11,8 +11,7 @@ import type {
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
 } from '@slicc/shared-ts';
-import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
-import { TranscriptExportError } from '@slicc/shared-ts';
+import { base64ToUint8, TranscriptExportError, uint8ToBase64 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
@@ -1547,29 +1546,9 @@ export class LeaderSyncManager {
         }
         break;
       }
-      case 'hello': {
-        const follower = this.followers.get(bootstrapId);
-        if (follower) {
-          follower.peerProtocolVersion = message.protocolVersion;
-          follower.peerCapabilities = message.capabilities;
-          follower.peerMotd = message.motd;
-          // `exec` capability arrives on `hello` (after the follower is already
-          // counted on connect), so re-notify with the unchanged count to let
-          // the page re-mirror the followers shim with fresh exec flags — the
-          // `host` / `ssh` listing reads that shim from the kernel worker.
-          this.options.onFollowerCountChanged?.(this.followers.size);
-        }
-        if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
-          log.warn('Follower speaks a newer tray sync protocol — update this build', {
-            bootstrapId,
-            followerVersion: message.protocolVersion,
-            ourVersion: TRAY_SYNC_PROTOCOL_VERSION,
-          });
-        } else {
-          log.info('Follower hello', { bootstrapId, protocolVersion: message.protocolVersion });
-        }
+      case 'hello':
+        this.handleFollowerHello(bootstrapId, message);
         break;
-      }
       default: {
         // Exhaustiveness guard: a new FollowerToLeaderMessage variant fails
         // compile here until this dispatcher decides. At runtime this branch
@@ -1581,6 +1560,33 @@ export class LeaderSyncManager {
         });
         break;
       }
+    }
+  }
+
+  /** Handle a follower `hello` handshake message. */
+  private handleFollowerHello(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'hello' }
+  ): void {
+    const follower = this.followers.get(bootstrapId);
+    if (follower) {
+      follower.peerProtocolVersion = message.protocolVersion;
+      follower.peerCapabilities = message.capabilities;
+      follower.peerMotd = message.motd;
+      // `exec` capability arrives on `hello` (after the follower is already
+      // counted on connect), so re-notify with the unchanged count to let
+      // the page re-mirror the followers shim with fresh exec flags — the
+      // `host` / `ssh` listing reads that shim from the kernel worker.
+      this.options.onFollowerCountChanged?.(this.followers.size);
+    }
+    if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
+      log.warn('Follower speaks a newer tray sync protocol — update this build', {
+        bootstrapId,
+        followerVersion: message.protocolVersion,
+        ourVersion: TRAY_SYNC_PROTOCOL_VERSION,
+      });
+    } else {
+      log.info('Follower hello', { bootstrapId, protocolVersion: message.protocolVersion });
     }
   }
 
