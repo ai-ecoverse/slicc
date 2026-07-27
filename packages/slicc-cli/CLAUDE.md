@@ -154,8 +154,16 @@ make check          # CI gate: gofmt + tidy-check + go vet + golangci-lint + rac
 make lint           # golangci-lint run (config in .golangci.yml)
 make tidy-check     # fail when go.mod/go.sum drift from the tree's imports
 make cover          # race tests + total-coverage floor (COVER_MIN, default 58%)
+make test-json      # per-test timings → test-report.json (CI artifact)
 make dist           # cross-compiled static binaries → dist/
 ```
+
+`make test-json` exists only to produce the `test-timings-slicc-cli-<os>` CI
+artifact; it is a separate pass so `test`/`cover` console output stays
+human-readable. There is **no** retry wrapper around the Go suite, deliberately:
+every test in this module is hermetic (no network, no real signaling server — the
+WebRTC integration test drives an in-process leader harness), so a failure is a
+real failure and a retry would only mask it.
 
 Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
 complexity, matching the TS side's biome complexity gate), `make tidy-check`
