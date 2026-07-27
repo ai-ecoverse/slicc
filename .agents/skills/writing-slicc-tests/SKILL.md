@@ -494,6 +494,30 @@ node -e "const r=require('./test-timing/vitest.json').testResults.flatMap(f=>f.a
 
 Reproduce it locally with `CI=1 npm run test`.
 
+### The Slow-Test Gate
+
+That report is gated, not just archived. `npm run test:timing -- <project>`
+(`packages/dev-tools/tools/test-timing-gate.mjs`) compares the project's **p95
+per-test duration** against `testTiming.<project>.p95Ms` in
+`coverage-thresholds.json`, and the `webapp`, `node-server` and
+`chrome-extension` CI jobs run it right after their coverage step.
+
+- **p95, not the slowest test.** p95 is an order statistic over hundreds of
+  tests, so one slow sample on a loaded runner cannot move it, while a genuine
+  distribution shift does. The slowest test is still printed for triage.
+- **Retried samples are excluded.** A retried test reports `status: "passed"`
+  with the failed attempt's message still in `failureMessages`, and its
+  `duration` is the _sum_ of all attempts (a 120 ms test that fails once
+  reports ~245 ms). Counting that would inflate the measurement, so
+  `summarizeTiming` drops it and reports the count instead.
+- **It skips, never fails, on missing plumbing.** No report, no project entry
+  or no durations → `[skip]` and exit 0.
+- **The ceiling only ever tightens.** The nightly ratchet
+  (`packages/dev-tools/tools/coverage-ratchet.mjs`) lowers it to 4x the
+  measured p95, rounded to 50 ms — loose on purpose, since it measures on macOS
+  while the gate runs on Linux. Never hand-raise it to make a slow suite pass;
+  make the suite faster (fake the timer, drop the sleep, share the fixture).
+
 ## Run Tests
 
 | Command                                                      | Purpose                                   |

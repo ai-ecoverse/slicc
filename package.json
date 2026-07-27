@@ -64,6 +64,8 @@
     "test:coverage:webcomponents": "npm run test:coverage -w @slicc/webcomponents",
     "test:coverage:spoon": "npm run test:coverage -w @ai-ecoverse/spoon",
     "coverage:ratchet": "node packages/dev-tools/tools/coverage-ratchet.mjs",
+    "test:timing": "node packages/dev-tools/tools/test-timing-gate.mjs",
+    "flake:ledger": "node packages/dev-tools/flake-ledger/sweep-flakes.mjs",
     "bundle-size": "npm run size -w @slicc/webapp && npm run size -w @slicc/chrome-extension",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
@@ -94,6 +96,7 @@
     "prepare": "husky",
     "lint:no-raw-chrome-runtime-id": "node packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs",
     "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs",
+    "lint:ci-quarantine": "node packages/dev-tools/tools/check-ci-quarantine.mjs",
     "verify": "bash packages/dev-tools/tools/pre-push-lint-gate.sh"
   },
   "dependencies": {

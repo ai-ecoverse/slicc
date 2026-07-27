@@ -242,6 +242,56 @@ Once checkpoints are flowing in production, verify in the RUM dashboard (`rum.hl
 - Source/target fields contain only expected sanitized values.
 - No unexpected PII appears in any field.
 
+## CI Flake Ledger
+
+Everything above is production telemetry. CI has its own hidden-signal problem, and the flake ledger is the answer to it.
+
+`vitest.config.ts` gives the `node-server` and `chrome-extension` projects `retry: 1` in CI (deliberately not `webapp`, whose ~10k in-process tests would hide real nondeterminism behind retries). That retry absorbs a genuine infrastructure hiccup — and it also means a test can fail attempt 1, pass attempt 2, and leave the build **green and completely silent**. Without a ledger, flake tolerance goes up while flake visibility goes down.
+
+### Standing policy: a retry is a debt marker, not a fix
+
+1. **Every retried pass is recorded.** The build stays green; a `debt:flake` issue carries the paper trail.
+2. **The ledger never fails a build.** It runs in `.github/workflows/flake-ledger.yml`, not in `.github/workflows/ci.yml`. A gate that reddens the build on every flake is just the retry removed.
+3. **Adding a retry does not close a flake issue.** The issue closes when the nondeterminism is fixed — a real wait condition instead of a sleep, an isolated port, a deterministic clock. Raising `retry` above 1, or extending it to another project, is a decision to stop looking.
+4. **Frequency decides priority.** Issues report "retried in N of M runs"; fix the one that fires most.
+
+### How a retried test appears in vitest 4.1.10
+
+vitest's built-in `json` reporter has **no** retry field — `assertionResults` entries carry only `ancestorTitles`, `fullName`, `status`, `title`, `duration`, `failureMessages`, `location`, `meta`, `tags`. The retry evidence survives indirectly: vitest accumulates every attempt's errors on `task.result.errors` and reports only the final state, so a test that passed on retry is a `passed` assertion **with a non-empty `failureMessages`**:
+
+```json
+{
+  "fullName": "flake probe passes only on the second attempt",
+  "status": "passed",
+  "failureMessages": ["AssertionError: probe attempt 1 is deliberately failing"]
+}
+```
+
+A test that failed _every_ attempt is `"status": "failed"` with one message per attempt — a genuine failure, and the ledger ignores it. A clean pass and an `it.fails` expected failure both carry an empty `failureMessages`, so neither is a false positive.
+
+For exact counts, `packages/dev-tools/flake-ledger/flake-reporter.mjs` reads `TestCase.diagnostic().retryCount` from vitest's reporter API and writes `test-timing/flakes.json` (already covered by the `test-timing-*` artifact upload). It is optional and not currently wired into `reporters`; see the package README for the one-line change.
+
+### Where flake issues appear and how to read them
+
+Nightly at 04:17 UTC, `.github/workflows/flake-ledger.yml` sweeps the last day of completed `ci.yml` runs, downloads their `test-timing-*` artifacts, and files GitHub issues labelled **`debt:flake`** — the same `debt:*` family the nightly agentic-debt triage uses. Nightly rather than per-run because frequency needs a window: one pass can say "retried in 3 of 40 runs", a per-run trigger cannot.
+
+An issue titled `flake: [chrome-extension] <full test name>` gives you:
+
+- **File** and **Test** — where it lives, and the reproduction command (run the whole project, not the single test; these flakes usually need full-suite parallelism).
+- **Attempts before passing** — 2 means one retry saved it.
+- **Retried runs observed** — the frequency figure. This is the prioritisation number.
+- **Signal source** — `vitest-json` (inferred, attempt count is a lower bound) or `flake-reporter` (exact).
+- **Failure from the losing attempt** — the actual error the green build swallowed.
+- A hidden `flake-fp:<fingerprint>` marker. Recurrences comment on the same issue (reopening it if closed) rather than opening a new one, so the issue count tracks distinct flaky tests, not nights elapsed.
+
+Run it by hand against a wider window (reports only, files nothing):
+
+```bash
+FLAKE_DRY_RUN=1 SINCE_DAYS=7 npm run flake:ledger
+```
+
+Details, env vars, and the artifact shapes: `packages/dev-tools/flake-ledger/README.md`.
+
 ## Deploy-Impact Signals by Application
 
 Everything above covers the three floats that load `packages/webapp/src/ui/telemetry.ts`.

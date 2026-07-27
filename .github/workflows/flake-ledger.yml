@@ -1,0 +1,82 @@
+name: Flake Ledger
+
+# Nightly flake ledger. `vitest.config.ts` retries the `node-server` and
+# `chrome-extension` projects once in CI, which means a test can fail attempt 1,
+# pass attempt 2, and leave the build green and silent. This workflow reads that
+# back out of the `test-timing-*` artifacts CI already uploads and files ONE
+# GitHub issue per flaky test, labelled `debt:flake` — the same `debt:*` family
+# the nightly agentic-debt triage uses.
+#
+# Why nightly rather than per-run (`workflow_run`): a flake is only worth
+# prioritising by frequency, and frequency needs a window. One nightly pass over
+# the last day of runs reports "retried in N of M runs" and updates a single
+# issue; a per-run trigger would comment on every occurrence, could not count
+# anything, and would fire on runs whose artifacts are not yet complete.
+#
+# This never fails a build: the sweep runs here, not in ci.yml, and only writes
+# issues. A retry is a debt marker, not a fix — see docs/operational-telemetry.md.
+#
+# No secrets beyond the automatic GITHUB_TOKEN. `actions: read` is what lets
+# `gh run download` reach the artifacts.
+
+on:
+  schedule:
+    - cron: '17 4 * * *' # nightly at 04:17 UTC (between RUM triage 03:00 and agentic-debt 05:33)
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: 'Look-back window in days'
+        required: false
+        default: '1'
+      dry_run:
+        description: 'Report only; do not file or update issues'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: flake-ledger
+  cancel-in-progress: false
+
+permissions:
+  contents: read # checkout only
+  issues: write # file / update the flake issue
+  actions: read # gh run download of the test-timing-* artifacts
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs (matching
+      # .github/workflows/agentic-debt-triage.yml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Ensure the flake label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "debt:flake" --color 5319e7 \
+            --description "Agentic-debt: test passed only on retry (flake ledger)" --force
+
+      # The sweep needs no dependencies — plain Node ESM plus the `gh` CLI that
+      # is preinstalled on the runner.
+      - name: Sweep CI artifacts for retried tests
+        id: sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '1' }}
+          FLAKE_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
+        run: node packages/dev-tools/flake-ledger/sweep-flakes.mjs
+
+      - name: Upload the ledger
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flake-ledger
+          path: flake-ledger.json
+          if-no-files-found: ignore

@@ -1,10 +1,10 @@
 {
-  "$comment": "Copy/paste-detection floor for every application package, consumed by `npm run lint:duplication` (chained into `lint` and `lint:ci`). `threshold` is the maximum total duplicated-line percentage across all scanned formats; the measured baseline is 7.08%, so the floor keeps ~0.4pp of headroom in the same spirit as coverage-thresholds.json. Treat it as a one-way ratchet: lower it as duplication is paid down (the nightly `debt:duplication` triage rotation in .github/workflows/agentic-debt-triage.yml is the intended driver), never raise it to turn a red run green. jscpd's config parser rejects JSONC comments and prints a harmless `unknown field '$comment'` warning for this key — that warning is the price of documenting the floor here, do not silence it by deleting the key.",
+  "$comment": "Copy/paste-detection ceiling for every application package, consumed by `npm run lint:duplication` (chained into `lint` and `lint:ci`). `threshold` is the maximum total duplicated-line percentage across all scanned formats; it keeps 0.3-0.4pp of headroom above the measured baseline, in the same spirit as coverage-thresholds.json. It is a one-way ratchet — only ever tightened, never raised to turn a red run green — and the nightly coverage ratchet (`packages/dev-tools/tools/coverage-ratchet.mjs`, nextDuplicationThreshold) now lowers it automatically as duplication is paid down by the `debt:duplication` triage rotation in .github/workflows/agentic-debt-triage.yml. jscpd's config parser rejects JSONC comments and prints a harmless `unknown field '$comment'` warning for this key — that warning is the price of documenting the budget here, do not silence it by deleting the key.",
   "path": ["packages"],
   "format": ["typescript", "tsx", "javascript", "jsx", "swift", "go"],
   "minTokens": 50,
   "minLines": 5,
-  "threshold": 7.5,
+  "threshold": 7.4,
   "reporters": ["silent", "threshold"],
   "absolute": false,
   "ignore": [

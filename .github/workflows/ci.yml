@@ -164,12 +164,20 @@ jobs:
       - uses: ./.github/actions/npm-ci
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
-      - name: Function-size + cognitive-complexity debt boy-scout gate
+      - name: Debt-list boy-scout gate (complexity, coverage-exclude, duplication)
         # Fail when this PR touches a file that is still on either of the
         # biome.json complexity debt lists (function-size or cognitive-
-        # complexity) without removing its override entry. Skips
-        # automatically on merge_group / push.
+        # complexity) without removing its override entry, or when it GROWS
+        # any frozen debt list: the biome non-complexity overrides,
+        # coverageExclude in coverage-thresholds.json, or jscpd.json ignore.
+        # knip ignores are reported only. Skips automatically on
+        # merge_group / push.
         run: node packages/dev-tools/tools/check-touched-exemptions.mjs
+      - name: CI quarantine registry gate
+        # Fail on a `continue-on-error: true` step that is not declared in
+        # ci-quarantine.json with a reason, an owner, and a review date.
+        # Past-review-date entries warn only.
+        run: npm run lint:ci-quarantine
       - name: Check Chrome Web Store manifest justifications
         # Fail if the extension manifest gains/drops a permission without a
         # matching reviewer justification in docs/chrome-web-store-submission.md
@@ -294,6 +302,9 @@ jobs:
           name: test-timing-webapp
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- webapp
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -433,6 +444,9 @@ jobs:
           name: test-timing-node-server
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- node-server
       - name: Build @slicc/shared-ts (runtime dependency)
         run: npm run build -w @slicc/shared-ts
       - name: Build
@@ -474,6 +488,9 @@ jobs:
           name: test-timing-chrome-extension
           path: test-timing/
           if-no-files-found: ignore
+      - name: Slow-test gate
+        if: always()
+        run: npm run test:timing -- chrome-extension
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build extension

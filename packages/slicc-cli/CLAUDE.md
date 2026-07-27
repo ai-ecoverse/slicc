@@ -153,7 +153,7 @@ make build          # → bin/slicc
 make check          # CI gate: gofmt + tidy-check + go vet + golangci-lint + race tests + coverage floor
 make lint           # golangci-lint run (config in .golangci.yml)
 make tidy-check     # fail when go.mod/go.sum drift from the tree's imports
-make cover          # race tests + total-coverage floor (COVER_MIN, default 58%)
+make cover          # race tests + total-coverage floor (COVER_MIN, read from coverage-thresholds.json)
 make test-json      # per-test timings → test-report.json (CI artifact)
 make dist           # cross-compiled static binaries → dist/
 ```
@@ -168,8 +168,13 @@ real failure and a retry would only mask it.
 Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
 complexity, matching the TS side's biome complexity gate), `make tidy-check`
 (unused/missing module dependencies — the Go analogue of the TS side's knip run)
-and the `COVER_MIN` coverage floor in the Makefile. All run in the `slicc-cli` CI
-job via `make check`. Release binaries are cut **atomically with the semantic-release flow** and only
+and the `COVER_MIN` coverage floor. All run in the `slicc-cli` CI
+job via `make check`. `COVER_MIN` is not hardcoded: the Makefile reads
+`go.slicc-cli.statements` from the repo-root `coverage-thresholds.json`, so the
+nightly ratchet (`packages/dev-tools/tools/coverage-ratchet.mjs`) raises it like
+every other language's floor. The read uses `node` when available and falls back
+to `awk`, so `make cover` still gates without a Node toolchain; `make cover
+COVER_MIN=60` overrides it for a one-off run. Release binaries are cut **atomically with the semantic-release flow** and only
 when `packages/slicc-cli/` changed since the last tag. `release-native.mjs`
 (the prepareCmd gate) calls `sign-and-package.sh` when `decideSliccCliGating`
 opens: it cross-compiles every target on the macOS release runner, Developer

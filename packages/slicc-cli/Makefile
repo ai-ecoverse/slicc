@@ -12,8 +12,16 @@ BIN_DIR   := bin
 DIST_DIR  := dist
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS   := -s -w -X main.version=$(VERSION)
-# Total-statement coverage floor (raise as coverage improves; keep in sync with CLAUDE.md).
-COVER_MIN ?= 58
+# Total-statement coverage floor. The value lives in the repo-root
+# coverage-thresholds.json (go.slicc-cli.statements) alongside every other
+# language's floors, so the nightly coverage ratchet raises it automatically.
+# Read with node when it is on PATH and with awk otherwise, so `make cover`
+# gates identically for a Go developer with no Node toolchain. Override for a
+# one-off run with `make cover COVER_MIN=60`.
+THRESHOLDS := ../../coverage-thresholds.json
+COVER_MIN_FILE := $(shell node -e 'process.stdout.write(String(require("$(THRESHOLDS)").go["slicc-cli"].statements))' 2>/dev/null \
+	|| awk '/"go"/ { in_go = 1 } in_go && /"statements"/ { gsub(/[^0-9.]/, "", $$2); print $$2; exit }' $(THRESHOLDS) 2>/dev/null)
+COVER_MIN ?= $(COVER_MIN_FILE)
 
 # GOOS/GOARCH pairs to cross-compile for `dist`.
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
@@ -61,6 +69,9 @@ tidy-check:
 # of code exercised across package boundaries (e.g. internal/tray via the
 # main-package WebRTC integration test).
 cover:
+	@if [ -z "$(COVER_MIN)" ]; then \
+		echo "FAIL: no Go coverage floor in $(THRESHOLDS) (go.slicc-cli.statements)"; exit 1; \
+	fi
 	go test -race -coverpkg=./... -coverprofile=cover.out ./...
 	@total=$$(go tool cover -func=cover.out | awk '/^total:/ {print $$3}' | tr -d '%'); \
 	echo "total coverage: $$total% (floor $(COVER_MIN)%)"; \
