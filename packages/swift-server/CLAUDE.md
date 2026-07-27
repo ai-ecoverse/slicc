@@ -46,6 +46,11 @@ npm run lint:format -w @slicc/swift-server   # swift format lint --strict (CI ga
 npm run format -w @slicc/swift-server        # swift format --in-place
 ```
 
+The shared config parses on swift-format 6.1 and newer — `reflowMultilineStringLiterals`
+must stay in the object enum form (`{ "never": {} }`), since 6.1 rejects the plain-string
+spelling while 6.2+ accepts both. CI runs whatever `macos-latest` ships (6.3 today), and
+`orderedImports` is only honoured from 6.3 on; older toolchains ignore it silently.
+
 Avoid multi-line string interpolations inside a multi-line string literal:
 swift-format re-indents the two independently and can emit non-compiling Swift.
 Hoist the interpolated expression into a local instead.
