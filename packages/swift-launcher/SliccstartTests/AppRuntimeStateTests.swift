@@ -137,6 +137,17 @@ final class AppRuntimeStateTests: XCTestCase {
         )
     }
 
+    func testTerminalRowsRequireLeaderAvailability() {
+        XCTAssertEqual(
+            AppRuntimeState.resolve(targetType: .terminal, leaderAvailable: false),
+            .cannotStart(.needsLeader)
+        )
+        XCTAssertEqual(
+            AppRuntimeState.resolve(targetType: .terminal, leaderAvailable: true),
+            .notRunning
+        )
+    }
+
     func testDebugBuildLaunchRecordOnlyTerminatesDebugCopy() {
         let target = makeElectronTarget(
             path: "/Users/test/Applications/Slack Debug.app",
