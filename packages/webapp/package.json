@@ -4,9 +4,30 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
+    "size": "size-limit",
     "test": "vitest run --root ../.. --config vitest.config.ts --project webapp",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
+  "size-limit": [
+    {
+      "name": "webapp: main entry chunk",
+      "path": "../../dist/ui/assets/main-*.js",
+      "brotli": false,
+      "limit": "24 kB"
+    },
+    {
+      "name": "webapp: kernel worker",
+      "path": "../../dist/ui/assets/kernel-worker-*.js",
+      "brotli": false,
+      "limit": "1850 kB"
+    },
+    {
+      "name": "webapp: total JS payload",
+      "path": "../../dist/ui/**/*.js",
+      "brotli": false,
+      "limit": "31 MB"
+    }
+  ],
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",
     "@ai-ecoverse/spoon": "*",
