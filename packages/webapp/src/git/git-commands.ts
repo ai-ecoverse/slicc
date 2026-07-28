@@ -311,8 +311,10 @@ export class GitCommands {
     // a preceding value-flag (`commit -m --help`) is shadowed onto that flag,
     // and a `--help` after a `--` separator (`checkout -- --help`) lands in
     // `doubleDashRest` — neither sets the `help` flag (#1047 review).
-    const subHelp = parseArgs(rest, GIT_FLAG_SPECS[command] ?? {});
-    if (subHelp.flags.help || subHelp.flags.h) {
+    const subcommandSpec = GIT_FLAG_SPECS[command] ?? {};
+    const subHelp = parseArgs(rest, subcommandSpec);
+    const shortHelpHasCommandMeaning = Object.hasOwn(subcommandSpec.alias ?? {}, 'h');
+    if (subHelp.flags.help || (subHelp.flags.h && !shortHelpHasCommandMeaning)) {
       return this.help();
     }
 

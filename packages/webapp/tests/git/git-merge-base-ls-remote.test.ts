@@ -52,7 +52,7 @@ describe('git command safety and remote inspection', () => {
     expect(notAncestor).toEqual({ stdout: '', stderr: '', exitCode: 1 });
   });
 
-  it('lists and filters remote heads without fetching objects', async () => {
+  it.each(['--heads', '-h'])('lists and filters remote heads with %s', async (headsFlag) => {
     await commands.execute(['init'], '/project');
     await commands.execute(
       ['remote', 'add', 'origin', 'https://example.test/acme/repo.git'],
@@ -64,7 +64,7 @@ describe('git command safety and remote inspection', () => {
     ]);
 
     try {
-      const result = await commands.execute(['ls-remote', '--heads', 'origin', 'main'], '/project');
+      const result = await commands.execute(['ls-remote', headsFlag, 'origin', 'main'], '/project');
 
       expect(result).toEqual({
         stdout: `${'1'.repeat(40)}\trefs/heads/main\n`,

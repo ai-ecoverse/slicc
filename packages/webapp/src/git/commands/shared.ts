@@ -127,6 +127,10 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   'ls-tree': {
     boolean: ['r', 'd', 'name-only'],
   },
+  'ls-remote': {
+    boolean: ['heads', 'tags', 'symref', 'exit-code'],
+    alias: { h: 'heads', t: 'tags' },
+  },
 };
 
 /** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */
