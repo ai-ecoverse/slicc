@@ -2069,6 +2069,55 @@ describe('model metadata overrides', () => {
     expect(mystery.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
+  it('does not inherit Claude family cost for OpenAI-routed models (local-llm/azure)', () => {
+    // Regression for the Codex P2 finding: a local-llm or azure-openai account
+    // can expose a Claude-style id (e.g. claude-sonnet-6) that pi-ai's registry
+    // doesn't know. Those models route through the OpenAI API (api: 'openai')
+    // and run on the user's own/free server, so they must NOT inherit real
+    // Anthropic pricing from the global model map — they keep the $0 default.
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        // OpenAI-routed unknown Claude-family id → must stay at the $0 default.
+        { id: 'claude-opus-5', name: 'Claude Opus 5', api: 'openai' as const },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+    // Must NOT have inherited the known Anthropic opus pricing.
+    expect(model.cost).not.toEqual(knownOpusCost);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
   it('compat from modelOverrides and getModelIds merges across the three layers', () => {
     // Verifies applyModelMetadata's merge behavior: each successive layer
     // (pi-ai base → modelOverrides → getModelIds) can override individual

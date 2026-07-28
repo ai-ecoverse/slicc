@@ -393,12 +393,20 @@ export function getProviderModels(providerId: string): Model<Api>[] {
           // pi-ai's registry doesn't know yet (e.g. claude-opus-5) still prices
           // instead of degrading to $0. Mirror buildAdobeModel(): set both the
           // cost object pi-ai's calculateCost() reads and the flat mirrors.
-          const familyCost = findFamilyCost(pm.id, modelMap);
-          model.cost = familyCost;
-          model.inputCost = familyCost.input;
-          model.outputCost = familyCost.output;
-          model.cacheReadCost = familyCost.cacheRead;
-          model.cacheWriteCost = familyCost.cacheWrite;
+          // Gate on the Anthropic API route: family-cost inheritance is
+          // Claude-specific and only meaningful for models billed through
+          // Anthropic's API (e.g. the Adobe proxy). OpenAI-routed providers
+          // (local-llm, azure-openai) may expose Claude-style IDs for local or
+          // free models, so they keep the synthesized $0 default instead of
+          // inheriting real Anthropic pricing.
+          if (apiType === 'anthropic') {
+            const familyCost = findFamilyCost(pm.id, modelMap);
+            model.cost = familyCost;
+            model.inputCost = familyCost.input;
+            model.outputCost = familyCost.output;
+            model.cacheReadCost = familyCost.cacheRead;
+            model.cacheWriteCost = familyCost.cacheWrite;
+          }
         }
 
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).
