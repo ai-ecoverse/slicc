@@ -1082,7 +1082,15 @@ When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
    testable) and is wired as a fallback strictly below any reported cost in
    both `buildAdobeModel` and `getProviderModels`'s unknown-model branch.
    Verify the inherited costs are reasonable. Once pi-ai is bumped, the real
-   costs take over.
+   costs take over. **Cross-provider guard:** the `getProviderModels` branch is
+   shared by _every_ provider that defines `getModelIds` (github, openrouter,
+   xai-grok, cerebras, local-llm, azure-openai, …), so inheritance is gated to
+   Anthropic-API-routed models (`pm.api !== 'openai'`). Adobe's Claude models
+   are anthropic-routed and still inherit; OpenAI-routed providers keep
+   `buildProviderRoutedModel`'s $0 default even for a Claude-style id — this
+   stops a local or free model literally named like a Claude family id (e.g. a
+   `local-llm` model called `claude-sonnet-6`) from inheriting real Anthropic
+   pricing. Reported cost (layer 2/3) still wins over the fallback either way.
 
 ## Thinking effort pipeline
 
