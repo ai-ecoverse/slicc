@@ -6,6 +6,8 @@ struct AppListView: View {
     @Bindable var sliccProcess: SliccProcess
     @Bindable var appManagementPermission: AppManagementPermission
     @ObservedObject var appUpdater: AppUpdater
+    let updateCheckStatus: UpdateCheckStatus
+    let onCheckForUpdates: () -> Void
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onCreateDebugBuild: (AppTarget) -> Void
@@ -206,6 +208,7 @@ struct AppListView: View {
                 try await sliccProcess.launchTerminalFollower(target)
                 clearPendingTerminalLaunch()
             } catch {
+                LauncherErrorReport.report(.terminalFollower, error)
                 terminalLaunchError = "\(error.localizedDescription) Try again, or install the slicc CLI manually."
                 clearPendingTerminalLaunch(keepError: true)
             }
@@ -250,11 +253,30 @@ struct AppListView: View {
                 .accessibilityIdentifier("restart-to-update")
             }
         } else {
-            Button("Check for Updates") {
-                appUpdater.check()
-            }
+            checkForUpdatesButton
+        }
+    }
+
+    @ViewBuilder
+    private var checkForUpdatesButton: some View {
+        Button(updateCheckStatus.buttonTitle) { onCheckForUpdates() }
             .buttonStyle(.borderless).font(.caption)
+            .disabled(!updateCheckStatus.allowsRetry)
+            .foregroundStyle(updateCheckStatusTint)
+            .help(updateCheckStatus.detail ?? "")
             .accessibilityIdentifier("check-for-updates")
+    }
+
+    private var updateCheckStatusTint: AnyShapeStyle {
+        switch updateCheckStatus {
+        case .idle:
+            return AnyShapeStyle(.primary)
+        case .checking, .upToDate:
+            return AnyShapeStyle(.secondary)
+        case .noInstallableRelease:
+            return AnyShapeStyle(Color.orange)
+        case .failed:
+            return AnyShapeStyle(Color.red)
         }
     }
 }

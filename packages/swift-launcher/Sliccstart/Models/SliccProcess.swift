@@ -683,6 +683,9 @@ final class SliccProcess {
             try recordStore.save(snapshot)
         } catch {
             log.error("detachAll: failed to persist records: \(error.localizedDescription, privacy: .public)")
+            // A lost snapshot means the surviving browsers cannot be reattached
+            // after the update relaunch, so this must be visible fleet-wide.
+            LauncherErrorReport.report(.updateDetach, error)
         }
 
         log.info("detachAll: detaching \(self.launchRecords.count) processes")
@@ -719,6 +722,7 @@ final class SliccProcess {
                 reattached.append(record.targetId)
             } catch {
                 log.error("reattach: failed for \(record.targetName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                LauncherErrorReport.report(.reattach, error)
             }
         }
         recordStore.clear()
