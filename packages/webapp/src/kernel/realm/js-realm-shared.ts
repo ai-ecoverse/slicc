@@ -146,7 +146,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
 
   const nodeConsole = createNodeConsole(writeStdout, writeStderr);
 
-  const { processShim, getDidCallProcessExit } = createProcessShim(init, writeStdout, writeStderr);
+  const proc = createProcessShim(init, writeStdout, writeStderr);
   const noColor = !!init.env?.NO_COLOR;
 
   // `c` / `cli` are constructed together so cli.die/warn can call into c
@@ -239,7 +239,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const moduleSystem = createModuleSystem({
     graph,
     fsBridge,
-    processShim,
+    processShim: proc.processShim,
     childProcess: createNodeChildProcess(execBridge), // per-realm `child_process` shim over `exec`
     nodeConsole,
     sliccyModules,
@@ -269,10 +269,10 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
     rpc.call('wasm', 'compile', [path]);
 
-  const exitCode = await runUserCode(
+  let exitCode = await runUserCode(
     entryCode,
     {
-      process: processShim,
+      process: proc.processShim,
       console: nodeConsole,
       require: requireShim,
       module: moduleShim,
@@ -284,10 +284,11 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     writeStderr,
     isEsmEntry
   );
-
   await flushSyncFsCache(rpc, syncFs, writeStderr);
-
-  if (!getDidCallProcessExit()) {
+  // process.exit() (main body or a stdin handler the shim caught) wins and skips the RPC drain.
+  if (proc.getDidCallProcessExit()) {
+    exitCode = proc.getExitCode();
+  } else {
     await drainPendingRpcs(rpc);
   }
   delete g.__slicc_compileWasm;
