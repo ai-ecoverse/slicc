@@ -215,6 +215,11 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     expect(connect).toHaveBeenCalledWith('test-ext-id', { name: EXTENSION_BRIDGE_PORT_NAME });
     expect(result.realCdpTransport).toBeInstanceOf(ExtensionBridgeTransport);
     expect(result.browser).toBeDefined();
+    // This branch reaches real Chrome with NO bridge launch params. A follower
+    // capability check that sniffs the URL for `?bridge=` misses it and
+    // silently stops advertising tabs on the pinned-leader reload path (#1706
+    // review) — which is why the capability is decided here, not by callers.
+    expect(result.hasLocalCdpSurface).toBe(true);
   });
 
   it('forwards an extension.lick into the late-bound client inject seam as a navigate LickEvent', async () => {
@@ -514,5 +519,68 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
 
     expect(seenUrl).toBe('/api/runtime-config');
     expect(seenBridgeHeader).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasLocalCdpSurface — "can browser.listPages() succeed here?" (#1706)
+//
+// The extension-bridge branch is asserted in its own suite above, where the
+// chrome.runtime.connect stub lives.
+// ---------------------------------------------------------------------------
+
+describe('setupStandalonePrelude — hasLocalCdpSurface', () => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__slicc_browser;
+  });
+
+  it('is false with no bridge params and no extension bridge (hosted-tab follower)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 }))
+    );
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'follower',
+      envBaseUrl: null,
+      window: createFakeWindow('?ws=files'),
+      log: createLog(),
+    });
+
+    expect(result.hasLocalCdpSurface).toBe(false);
+  });
+
+  it('is true for a node-server-launched tab carrying bridge params', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 }))
+    );
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'follower',
+      envBaseUrl: null,
+      window: createFakeWindow(
+        '?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp&bridgeToken=tok&bridgeRole=follower'
+      ),
+      log: createLog(),
+    });
+
+    expect(result.hasLocalCdpSurface).toBe(true);
+  });
+
+  it('is false when a bridge param arrives without its token (unusable pair)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 }))
+    );
+
+    const result = await setupStandalonePrelude({
+      runtimeMode: 'follower',
+      envBaseUrl: null,
+      window: createFakeWindow('?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp'),
+      log: createLog(),
+    });
+
+    expect(result.hasLocalCdpSurface).toBe(false);
   });
 });

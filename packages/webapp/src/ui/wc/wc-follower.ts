@@ -7,7 +7,6 @@ import {
   subscribeToFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
-import { parseBridgeLaunchParams } from '../boot/bridge-launch-params.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -218,28 +217,30 @@ function applyFeatureVisibility(features: CherryFeatureSet): void {
 }
 
 /**
- * Whether a follower has a CDP surface worth advertising to the leader.
+ * Whether a follower should advertise its local tabs to the leader.
  *
- * - **cherry embed**: yes — the host handshake gives it a synthetic target for
- *   the embedding page. Except under `?ui-only=1`, where the extension drives
- *   the real tab via `chrome.debugger` and the synthetic target would only
- *   compete with it.
- * - **every other follower**: only when node-server launched it with bridge
- *   params (`?bridge=ws://…&bridgeToken=…`), which is the only way a page
- *   realm reaches a local Chrome.
+ * Two independent questions, deliberately kept apart:
  *
- * A follower opened from a hosted `/join/…` link matches neither, and this is
- * the case the old `isCherry && ui-only=1` gate missed: it has no local bridge,
- * so `getDefaultCdpUrl()` resolves to `wss://<hosted-origin>/cdp` — a path the
- * hosted origin answers with the SPA fallback (HTML, 200), so the WebSocket
- * upgrade can never succeed and the 5s refresh loop retries indefinitely.
+ * 1. **Capability** — `hasLocalCdpSurface` from `setupStandalonePrelude`, which
+ *    is the only thing that knows which transport branch actually ran. A
+ *    follower opened from a hosted `/join/…` link has none: `getDefaultCdpUrl()`
+ *    resolves to `wss://<hosted-origin>/cdp`, the SPA fallback answers with HTML,
+ *    and the 5s refresh loop retries that doomed upgrade forever (#1706).
+ * 2. **Policy** — `uiOnly`. The extension side panel *has* a surface (a synthetic
+ *    cherry target) but deliberately withholds it, because the extension drives
+ *    the real tab through `chrome.debugger` and the two would compete.
  *
- * Keyed on the local CDP surface EXISTING, not on which float is running — a
- * float-name check is what drifted out of date when hosted followers shipped.
+ * Never re-derive the capability from URL params here. The prelude's branches
+ * disagree about which params matter — the extension-leader branch reaches real
+ * Chrome with no bridge params at all — so a URL check silently drops that
+ * float. Keying on a float name is the same mistake one level up: it is what
+ * went stale when hosted followers shipped nine days after the original gate.
  */
-export function followerAdvertisesCdpTargets(isCherry: boolean, search: string): boolean {
-  if (isCherry) return new URLSearchParams(search).get('ui-only') !== '1';
-  return parseBridgeLaunchParams(search) !== null;
+export function followerAdvertisesCdpTargets(
+  hasLocalCdpSurface: boolean,
+  uiOnly: boolean
+): boolean {
+  return hasLocalCdpSurface && !uiOnly;
 }
 
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
@@ -251,7 +252,6 @@ export async function mountWcUiFollower(
 ): Promise<void> {
   const isCherry = runtimeMode === 'cherry';
   const uiOnly = isCherry && new URLSearchParams(window.location.search).get('ui-only') === '1';
-  const advertisesCdpTargets = followerAdvertisesCdpTargets(isCherry, window.location.search);
   // The login hand-off (welcome-dip replacement, sign-in card, open-leader-tab)
   // is EXTENSION-SIDE-PANEL-ONLY. Only that follower host can complete it: its
   // cherry host (`sidepanel-entry.ts`) relays `slicc.open-leader-tab` to the SW,
@@ -538,7 +538,7 @@ export async function mountWcUiFollower(
   const follower = startPageFollowerTray({
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
-    advertisesCdpTargets,
+    advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
     browserAPI: prelude.browser,
     onSnapshot: (messages) => controller.loadMessages(messages),
     // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)

@@ -279,12 +279,16 @@ function buildWorkbench(): {
 
   // The dock's system tools include a Browser entry. Floats that wire the
   // full-screen tab switcher claim the surface (see `WcShellRefs.overlaySurfaces`)
-  // and never reach this pane; the rest — followers above all — land here, so
-  // the placeholder is the live fallback, not dead chrome.
+  // and never reach this pane; the rest — followers above all — land here.
+  //
+  // So this copy must describe the FALLBACK, not the switcher. It used to
+  // advertise the switcher and tell the reader to click cards that are not
+  // there — harmless while the pane was unreachable, actively wrong now that
+  // followers land on it.
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
   const browserNote = el('div', { class: 'wcui-placeholder' });
   browserNote.textContent =
-    'The Browser dock item opens the full-screen tab switcher: every open tab — local and tray followers — with live screenshot thumbnails. Click a card to focus it, ✕ to close it.';
+    'The tab switcher runs on the leader. This float has no browser of its own to show — ask the leader to open, focus, or close tabs through chat.';
   browserSurface.append(browserNote);
 
   body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);

@@ -62,6 +62,22 @@ export interface LickForwardingClient {
 export interface StandalonePreludeResult {
   browser: BrowserAPI;
   realCdpTransport: CDPTransport;
+  /**
+   * Whether this page realm reached a real Chrome — the single answer to
+   * "can `browser.listPages()` succeed here?", decided by whichever transport
+   * branch below actually ran.
+   *
+   * `false` means the page has a `BrowserAPI` with no route to Chrome: calling
+   * into it dials `getDefaultCdpUrl()` (= `wss://<page-origin>/cdp`), which on
+   * a hosted origin the SPA fallback answers with HTML, so the upgrade never
+   * succeeds. A follower that polls on that route retries forever (#1706).
+   *
+   * Callers must read this rather than re-deriving it from URL params: the
+   * three branches disagree about which params matter (the extension-leader
+   * branch deliberately ignores bridge params), and duplicating that logic is
+   * exactly the drift #1706 was.
+   */
+  hasLocalCdpSurface: boolean;
   cherryJoinUrl?: string;
   cherryTransport?: CherryHostTransport;
   instanceId: string;
@@ -324,6 +340,10 @@ export async function setupStandalonePrelude(
     localLickWsUrl = bridge.lickWsUrl;
   }
 
+  // Mirrors the three transport branches below, in order: cherry's synthetic
+  // target, the extension bridge's `chrome.debugger`, or the node-server bridge.
+  const hasLocalCdpSurface = runtimeMode === 'cherry' || useExtensionBridge || bridge !== null;
+
   const runtimeConfig = await fetchRuntimeConfig();
   const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
     runtimeMode,
@@ -412,6 +432,7 @@ export async function setupStandalonePrelude(
   return {
     browser,
     realCdpTransport,
+    hasLocalCdpSurface,
     cherryJoinUrl,
     cherryTransport,
     instanceId: mintInstanceId(),

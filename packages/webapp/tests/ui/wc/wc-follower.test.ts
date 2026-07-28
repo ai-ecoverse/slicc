@@ -32,6 +32,7 @@ vi.mock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
     cherryJoinUrl: undefined,
     cherryTransport: undefined,
     instanceId: 'i',
+    hasLocalCdpSurface: true,
   })),
 }));
 
@@ -73,6 +74,7 @@ function mockCherryPrelude(emit: () => void): void {
         features: ALL_CHERRY_FEATURES,
       },
       instanceId: 'i',
+      hasLocalCdpSurface: true,
     })),
   }));
 }
@@ -674,6 +676,9 @@ describe('mountWcUiFollower', () => {
         cherryJoinUrl: undefined,
         cherryTransport: undefined,
         instanceId: 'i',
+        // A hosted `/join/…` tab reaches no Chrome — what the prelude reports
+        // for this URL (asserted directly in setup-standalone-prelude.test.ts).
+        hasLocalCdpSurface: false,
       })),
     }));
     vi.resetModules();
@@ -700,39 +705,28 @@ describe('mountWcUiFollower', () => {
 // ---------------------------------------------------------------------------
 
 describe('followerAdvertisesCdpTargets', () => {
-  const BRIDGE = '?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp&bridgeToken=tok';
-
-  it('non-cherry WITH bridge params advertises (node-server-launched follower)', async () => {
+  // Capability AND policy. The capability half is decided by the prelude (see
+  // setup-standalone-prelude.test.ts) precisely so this predicate never has to
+  // guess a transport from URL shape — the extension-bridge branch reaches real
+  // Chrome with no bridge params, and a URL check drops it (#1706 review).
+  it('advertises when a local CDP surface exists and policy allows it', async () => {
     const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(false, BRIDGE)).toBe(true);
+    expect(followerAdvertisesCdpTargets(true, false)).toBe(true);
   });
 
-  it('non-cherry WITHOUT bridge params does not advertise (hosted-tab follower)', async () => {
+  it('does not advertise without a local CDP surface (hosted-tab follower)', async () => {
     const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(false, '')).toBe(false);
-    expect(followerAdvertisesCdpTargets(false, '?ws=files')).toBe(false);
+    expect(followerAdvertisesCdpTargets(false, false)).toBe(false);
   });
 
-  it('a bridge param missing its token does not count as a local bridge', async () => {
+  it('ui-only withholds an EXISTING surface (extension drives chrome.debugger)', async () => {
     const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(false, '?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp')).toBe(
-      false
-    );
+    expect(followerAdvertisesCdpTargets(true, true)).toBe(false);
   });
 
-  it('cherry advertises its synthetic target by default', async () => {
+  it('ui-only cannot conjure a surface that does not exist', async () => {
     const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(true, '?cherry=1')).toBe(true);
-  });
-
-  it('cherry with ?ui-only=1 does not advertise (extension drives chrome.debugger)', async () => {
-    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(true, '?cherry=1&ui-only=1')).toBe(false);
-  });
-
-  it('ui-only is cherry-only — it does not flip a bridged non-cherry follower', async () => {
-    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
-    expect(followerAdvertisesCdpTargets(false, `${BRIDGE}&ui-only=1`)).toBe(true);
+    expect(followerAdvertisesCdpTargets(false, true)).toBe(false);
   });
 });
 

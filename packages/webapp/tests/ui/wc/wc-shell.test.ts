@@ -234,11 +234,14 @@ describe('mountWcUiPreview', () => {
     expect(refs.shell.hasAttribute('open')).toBe(false);
   });
 
-  it('describes the tab switcher on the browser surface', () => {
+  // This pane is what a float WITHOUT the overlay shows, so its copy has to
+  // describe that fallback. It previously advertised the switcher and told the
+  // reader to click cards — unreachable copy before #1706, wrong copy after.
+  it('the browser surface describes the fallback, not the switcher it lacks', () => {
     const root = mount();
-    const surface = root.querySelector('[surface-id="browser"]');
-    expect(surface?.textContent).toContain('tab switcher');
-    expect(surface?.textContent).toContain('followers');
+    const text = root.querySelector('[surface-id="browser"]')?.textContent ?? '';
+    expect(text).toContain('runs on the leader');
+    expect(text).not.toMatch(/click a card/i);
   });
 
   it('hides the workbench header until sprinkle tabs exist (tool tabs never render)', () => {
@@ -291,7 +294,6 @@ describe('mountWcUiPreview', () => {
 
   it('switches the active surface on tab select (canonical detail field is id)', () => {
     const root = mount();
-    const header = root.querySelector('slicc-workbench-header') as HTMLElement;
     const body = root.querySelector('slicc-workbench-body') as HTMLElement;
     // Drive the REAL tab bar so the event carries the library's canonical
     // `{ id }` detail — a synthetic `{ tabId }` event would mask the
