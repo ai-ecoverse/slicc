@@ -14,8 +14,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                                                                                                              | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                                                    |
 | `SliccFollower/Models/SyncProtocol.swift`                                                                                                                                                     | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                                                              |
-| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`                                                                                                                            | Chat + signaling data types                                                                                                                                                                                       |
-| `SliccFollower/Models/TrayChunkFraming.swift`                                                                                                                                                 | Transport chunk framing + `TrayChunkReassembler` — splits/reassembles messages over the SCTP per-message limit. Sits BELOW the message union (see "Transport chunk framing" below); unit-tested without an app.   |
+| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`                                                                                           | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture / `ios` expectation. See `docs/architecture.md`             |
 | `SliccFollower/Sync/FollowerSyncManager.swift`                                                                                                                                                | **DEAD CODE — slated for deletion.** Predecessor of the inline `AppState.handleDataChannelMessage` switch; zero instantiation sites in the iOS app today. All data-channel routing lives in `AppState`.           |
 | `SliccFollower/Sync/Keepalive.swift`                                                                                                                                                          | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                                                       |
 | `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift`                                                                                          | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                 |
@@ -41,20 +40,6 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
   (`transcript.export.approve.request` / `transcript.export.approve.response`). iOS never
   originates an export, so it is never asked to approve one; the leader→follower prompt decodes
   to `.unknown` and the follower→leader reply is `undecodable` in the corpus.
-
-### Transport chunk framing
-
-`TrayChunkFrame` (`Models/SyncProtocol.swift`) is **not** a case of either message enum — it is
-the transport frame one layer below them, mirroring `TrayChunkFrame` in
-`packages/shared-ts/src/tray-sync-protocol.ts`. A sender splits a message that exceeds the SCTP
-per-message limit into frames; `AppState.handleDataChannelMessage` intercepts them ahead of the
-union decode and re-routes the reassembled message.
-
-Consequences for this package: **no corpus fixture and no `ios` decode expectation** (the corpus
-enumerates the unions, and a frame is not in them), and every leader→follower message type gains
-oversize support at once rather than one at a time. The framing/eviction rules live in
-`TrayChunkReassembler` so they can be tested (`Tests/SliccFollowerTests/ChunkFramingTests.swift`)
-without standing up an app, a peer connection, or a data channel.
 
 ### Cherry (embedded follower) mirror
 

@@ -165,8 +165,9 @@ struct TrayTargetEntry: Codable, Hashable {
 ///
 /// A chunk frame is deliberately NOT a case of `LeaderToFollowerMessage`: it
 /// belongs to the layer *below* the message union. A sender splits an oversize
-/// serialized message into frames, and `FollowerSyncManager.handleMessage`
-/// reassembles them before decoding the union at all.
+/// serialized message into frames, and `AppState.handleDataChannelMessage`
+/// reassembles them (via `TrayChunkReassembler`) before decoding the union at
+/// all.
 ///
 /// This is why it has no golden-corpus fixture and no `ios` decode
 /// expectation: the corpus enumerates the message unions, and this is not in
@@ -181,7 +182,9 @@ struct TrayChunkFrame: Codable {
     let totalChunks: Int
     let chunkData: String
 
-    /// True when the frame's indices are self-consistent.
+    /// True when the frame's indices are self-consistent. Callers additionally
+    /// bound `totalChunks` (see `TrayChunkLimits.maxChunkCount`) before
+    /// allocating anything sized by it.
     var hasValidIndices: Bool {
         totalChunks > 0 && chunkIndex >= 0 && chunkIndex < totalChunks
     }
