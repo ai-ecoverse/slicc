@@ -15,6 +15,7 @@ import {
   BridgeConfigCache,
   createNonceWaiter,
   ExtensionDelegateCache,
+  filterAuthorizedProxyClients,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
   isBridgeLocalApiUrl,
@@ -547,6 +548,18 @@ describe('maySetProxyConfig (bridge-config security gate)', () => {
     expect(maySetProxyConfig({ type: 'window', frameType: 'nested', id: 'sprinkle' })).toBe(false);
     expect(maySetProxyConfig({ type: 'window', frameType: 'auxiliary', id: 'popup' })).toBe(false);
     expect(maySetProxyConfig(null)).toBe(false);
+  });
+
+  it('filters URL fallbacks and delegate candidates to top-level windows', () => {
+    const leader = { type: 'window', frameType: 'top-level', url: 'https://leader.test/' };
+    const clients = [
+      leader,
+      { type: 'window', frameType: 'nested', url: 'https://nested.test/?bridge=evil' },
+      { type: 'window', frameType: 'auxiliary', url: 'https://popup.test/?ext=evil' },
+      { type: 'worker', frameType: 'none', url: 'https://worker.test/' },
+    ];
+
+    expect(filterAuthorizedProxyClients(clients)).toEqual([leader]);
   });
 });
 
