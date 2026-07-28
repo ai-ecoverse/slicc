@@ -32,8 +32,10 @@ import { fetch } from './commands/fetch.js';
 import { init } from './commands/init.js';
 import { log } from './commands/log.js';
 import { lsFiles } from './commands/ls-files.js';
+import { lsRemote } from './commands/ls-remote.js';
 import { lsTree } from './commands/ls-tree.js';
 import { merge } from './commands/merge.js';
+import { mergeBase } from './commands/merge-base.js';
 import { mergeFile } from './commands/merge-file.js';
 import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
@@ -341,6 +343,8 @@ export class GitCommands {
           return await commit(this.ctx, effectiveCwd, rest);
         case 'log':
           return await log(this.ctx, effectiveCwd, rest);
+        case 'ls-remote':
+          return await lsRemote(this.ctx, effectiveCwd, rest);
         case 'branch':
           return await branch(this.ctx, effectiveCwd, rest);
         case 'checkout':
@@ -361,6 +365,8 @@ export class GitCommands {
           return await push(this.ctx, effectiveCwd, rest);
         case 'merge':
           return await merge(this.ctx, effectiveCwd, rest);
+        case 'merge-base':
+          return await mergeBase(this.ctx, effectiveCwd, rest);
         case 'cherry-pick':
           return await cherryPick(this.ctx, effectiveCwd, rest);
         case 'rebase':
@@ -399,7 +405,7 @@ export class GitCommands {
           return {
             stdout: '',
             stderr: `git: '${command}' is not a git command. See 'git help'.\n`,
-            exitCode: 1,
+            exitCode: 127,
           };
       }
     } catch (err) {

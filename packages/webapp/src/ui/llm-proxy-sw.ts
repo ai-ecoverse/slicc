@@ -56,6 +56,7 @@ import {
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isPassthroughDestination,
+  maySetProxyConfig,
   maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
@@ -141,14 +142,14 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   // clients, so a non-Client sender is either an unrelated message or
   // a future channel we haven't wired up yet.
   if (!source || !('id' in source) || typeof source.id !== 'string') return;
-  if (isBridgeConfigMessage(event.data)) {
+  if (isBridgeConfigMessage(event.data) && maySetProxyConfig(source)) {
     bridgeConfigCache.set(source.id, {
       apiBaseUrl: event.data.apiBaseUrl,
       token: event.data.token,
     });
     return;
   }
-  if (isExtensionDelegateMessage(event.data)) {
+  if (isExtensionDelegateMessage(event.data) && maySetProxyConfig(source)) {
     extensionDelegateCache.set(source.id, { extensionId: event.data.extensionId });
     return;
   }

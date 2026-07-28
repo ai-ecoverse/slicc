@@ -11,6 +11,11 @@ export async function branch(
   const deleteFlag = args.includes('-d') || args.includes('-D') || args.includes('--delete');
   const listAll = args.includes('-a') || args.includes('--all');
 
+  if (args.includes('--show-current')) {
+    const current = await git.currentBranch({ fs: ctx.lfs, dir: cwd });
+    return { stdout: current ? `${current}\n` : '', stderr: '', exitCode: 0 };
+  }
+
   // Filter out flags to get branch name
   const branchName = args.find((a) => !a.startsWith('-'));
 

@@ -1,6 +1,7 @@
 /** `git status` (long and short/porcelain forms). */
 
 import * as git from 'isomorphic-git';
+import { matchesPathspec } from './revision.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function status(
@@ -10,9 +11,11 @@ export async function status(
 ): Promise<GitCommandResult> {
   const short = args.includes('--short') || args.includes('-s');
   const porcelain = args.includes('--porcelain');
+  const separator = args.indexOf('--');
+  const pathspecs = separator === -1 ? [] : args.slice(separator + 1);
 
   if (short || porcelain) {
-    return statusShort(ctx, cwd);
+    return statusShort(ctx, cwd, pathspecs);
   }
 
   let output = '';
@@ -25,7 +28,7 @@ export async function status(
   }
 
   const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
-  const { staged, unstaged, untracked } = classifyStatusMatrix(matrix);
+  const { staged, unstaged, untracked } = classifyStatusMatrix(matrix, pathspecs);
 
   output += formatStatusLong(staged, unstaged, untracked);
 
@@ -33,7 +36,10 @@ export async function status(
 }
 
 /** Classify status matrix entries into staged, unstaged, and untracked buckets. */
-function classifyStatusMatrix(matrix: [string, number, number, number][]): {
+function classifyStatusMatrix(
+  matrix: [string, number, number, number][],
+  pathspecs: string[]
+): {
   staged: string[];
   unstaged: string[];
   untracked: string[];
@@ -43,6 +49,7 @@ function classifyStatusMatrix(matrix: [string, number, number, number][]): {
   const untracked: string[] = [];
 
   for (const [file, head, workdir, stage] of matrix) {
+    if (!matchesPathspec(file, pathspecs)) continue;
     if (head === 0 && workdir === 2 && stage === 0) {
       untracked.push(file);
     } else if (stage === 2 || (head === 1 && stage === 0 && workdir === 0)) {
@@ -99,11 +106,16 @@ function formatStatusLong(staged: string[], unstaged: string[], untracked: strin
  * Output status in short/porcelain format: `XY filename`
  * X = index status, Y = workdir status
  */
-async function statusShort(ctx: GitCommandContext, cwd: string): Promise<GitCommandResult> {
+async function statusShort(
+  ctx: GitCommandContext,
+  cwd: string,
+  pathspecs: string[]
+): Promise<GitCommandResult> {
   const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
   let output = '';
 
   for (const [file, head, workdir, stage] of matrix) {
+    if (!matchesPathspec(file, pathspecs)) continue;
     const codes = shortStatusCodes(head, workdir, stage);
     if (!codes) continue;
     output += `${codes[0]}${codes[1]} ${file}\n`;
