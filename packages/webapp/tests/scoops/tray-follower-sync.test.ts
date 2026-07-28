@@ -1252,7 +1252,13 @@ describe('FollowerSyncManager', () => {
       });
     });
 
-    it('emits error event and updates status when channel closes', () => {
+    it('updates status WITHOUT emitting a transcript error event when channel closes (#1707)', () => {
+      // A transient drop is connection state, not conversation content: the
+      // mount presents it via onConnectionChange/onGaveUp and auto-reconnect
+      // usually heals it. Emitting an agent 'error' event here rendered a
+      // permanent <slicc-error-card> in the thread (and fired trackError into
+      // RUM) for every self-healing blip. Leader-SENT error events still
+      // forward — see 'dispatches error events from leader error messages'.
       const channel = new FakeChannel();
       const onDisconnect = vi.fn();
       const follower = new FollowerSyncManager(channel, { onDisconnect });
@@ -1261,15 +1267,14 @@ describe('FollowerSyncManager', () => {
 
       channel.simulateClose();
 
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe('error');
+      expect(events).toHaveLength(0);
       const status = getFollowerTrayRuntimeStatus();
       expect(status.state).toBe('error');
       expect(status.error).toBe('Data channel closed');
       expect(onDisconnect).toHaveBeenCalledWith('Data channel closed');
     });
 
-    it('emits error event and updates status when channel errors', () => {
+    it('updates status WITHOUT emitting a transcript error event when channel errors (#1707)', () => {
       const channel = new FakeChannel();
       const onDisconnect = vi.fn();
       const follower = new FollowerSyncManager(channel, { onDisconnect });
@@ -1278,8 +1283,7 @@ describe('FollowerSyncManager', () => {
 
       channel.simulateError();
 
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe('error');
+      expect(events).toHaveLength(0);
       const status = getFollowerTrayRuntimeStatus();
       expect(status.state).toBe('error');
       expect(status.error).toBe('Data channel error');
@@ -1297,7 +1301,7 @@ describe('FollowerSyncManager', () => {
       channel.simulateClose();
       channel.simulateError();
 
-      expect(events).toHaveLength(1);
+      expect(events).toHaveLength(0);
       expect(onDisconnect).toHaveBeenCalledTimes(1);
     });
 

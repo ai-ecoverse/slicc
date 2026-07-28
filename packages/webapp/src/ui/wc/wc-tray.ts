@@ -59,6 +59,7 @@ import {
   type LeaderRunNewSessionDetail,
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
+import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { WcShellRefs } from './wc-shell.js';
 
@@ -576,6 +577,11 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   });
 
   startInitialRole(deps, state, leaderOptions, wireLeaderHooks, lockManager);
+
+  // Drive the floatbar's `online` dot from the tray statuses (#1707). This is
+  // the kernel float's install point (covers both roles); the no-kernel
+  // follower mount installs the same helper in `wc-follower.ts`.
+  installFloatbarOnline(deps.refs.floatbar);
 
   subscribeToLeaderTrayRuntimeStatus((status) => {
     win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));

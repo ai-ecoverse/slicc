@@ -632,11 +632,26 @@ export class FollowerSyncManager implements AgentHandle {
 
   /**
    * Handle a detected disconnect (keepalive dead, channel close/error).
-   * Updates follower status, emits an error event, cleans up, and notifies via onDisconnect.
+   * Updates follower status, cleans up, and notifies via onDisconnect.
+   *
+   * Deliberately does NOT emit an agent 'error' event (#1707): this manager
+   * is installed as the chat panel's AgentHandle, so such an event renders a
+   * permanent `<slicc-error-card>` in the transcript and fires `trackError`
+   * into RUM — for a state that `startFollowerWithAutoReconnect` usually
+   * heals in seconds. Connection state is presented by the mount instead
+   * (`onConnectionChange`/`onGaveUp` → composer placeholders) and recorded in
+   * the follower runtime status for `host`/telemetry. Leader-SENT error
+   * events (genuine agent errors) still forward via `handleLeaderMessage`.
    */
   private handleDisconnect(reason: string): void {
     if (this.disconnected) return; // prevent duplicate cleanup
     this.disconnected = true;
+
+    // `error` (not `warn`): the prod log level is ERROR, and a real transport
+    // drop previously produced no console signal at all — only the UI knew
+    // (#1707). An EXPECTED stall stays `warn` per #1698; an unexpected drop
+    // is precisely the thing an operator console should show.
+    log.error('Follower sync disconnected', { reason });
 
     // Update follower runtime status to error
     const current = getFollowerTrayRuntimeStatus();
@@ -648,9 +663,6 @@ export class FollowerSyncManager implements AgentHandle {
       // thing it described.
       stalled: false,
     });
-
-    // Emit error to UI listeners
-    this.emitEvent({ type: 'error', error: `Connection to leader lost: ${reason}` });
 
     // Clean up keepalive, CDP event forwarding, and sync channel
     this.keepalive.stop();
