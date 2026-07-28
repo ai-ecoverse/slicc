@@ -572,6 +572,20 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
+    // SECURITY NOTE (#1717): `allow-scripts allow-same-origin` together make
+    // this sandbox ESCAPABLE — Chrome logs "can escape its sandboxing" once
+    // per iframe, and it is right. That is a known, accepted property, not an
+    // oversight: `allow-same-origin` is required because sprinkles load
+    // app-served assets (`/lucide-icons.js`, theme CSS) through the VFS
+    // service worker, and an opaque-origin (fully sandboxed) srcdoc document
+    // cannot use the parent's SW at all. The attribute is therefore only a
+    // speed bump against ACCIDENTAL misbehavior (forms, top-navigation) — the
+    // real containment for attacker-authored sprinkle content is the service
+    // worker's security gates, which treat this nested same-origin context as
+    // untrusted (see the sync-fs channel-nonce gate in
+    // `llm-proxy-sw-config.ts`). Do not "fix" the warning by dropping
+    // `allow-same-origin`, and do not assume this sandbox isolates anything.
+    //
     // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
     // level deeper there (host page → cherry iframe → sprinkle iframe), and
     // content that opens a link via `target="_blank"`/`window.open()` instead
