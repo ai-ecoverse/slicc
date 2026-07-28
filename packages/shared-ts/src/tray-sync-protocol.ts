@@ -101,6 +101,118 @@ export interface TraySyncCapabilities {
 }
 
 // ---------------------------------------------------------------------------
+// Transport-level chunk framing
+// ---------------------------------------------------------------------------
+
+/**
+ * Discriminant of the transport-level chunk frame.
+ *
+ * A chunk frame is deliberately NOT a member of `LeaderToFollowerMessage` or
+ * `FollowerToLeaderMessage`: it belongs to the layer *below* the message union,
+ * the same way TCP segments sit below an HTTP request. Senders split an
+ * oversize serialized message into frames; receivers reassemble them and only
+ * then decode the union. Consequences, all deliberate:
+ *
+ * - No golden-fixture corpus entry and no per-variant iOS decode expectation —
+ *   the corpus enumerates the message unions, and this is not in them.
+ * - Every message type is covered, including ones not written yet. The bug this
+ *   closes (#1700) was a *class* of bug: any unbounded payload on any type.
+ * - Handler switches never see it. All three runtimes intercept before decode:
+ *   TS `TraySyncChannel`, Go `Conn.dispatch`, Swift `handleMessage`.
+ *
+ * The `__` prefix marks it as reserved transport vocabulary and guarantees it
+ * can never collide with a semantic message type.
+ */
+export const TRAY_CHUNK_FRAME_TYPE = '__chunk';
+
+/**
+ * One frame of a chunked message. `chunkData` slices are concatenated in
+ * `chunkIndex` order to recover the original serialized message.
+ *
+ * Field names mirror the pre-existing per-type chunkers (`snapshot_chunk`,
+ * `cdp.response`, `sprinkle.content`, `fs.response`) so the wire vocabulary
+ * stays uniform. Those four still chunk at their own thresholds; they now sit
+ * safely *under* this transport limit rather than being the only things that
+ * respected any limit at all.
+ */
+export interface TrayChunkFrame {
+  type: typeof TRAY_CHUNK_FRAME_TYPE;
+  /** Groups frames of one message. Unique per sender, per message. */
+  chunkId: string;
+  /** 0-based position of this frame. */
+  chunkIndex: number;
+  /** Total frame count for this message; identical on every frame. */
+  totalChunks: number;
+  /** A slice of the serialized message. */
+  chunkData: string;
+}
+
+/**
+ * Fallback max message size (bytes) when the SCTP transport hasn't reported
+ * one. 65536 is the floor every SCTP implementation must accept (RFC 8831 §6.6
+ * — a peer advertising less is non-conformant), so chunking to it is always
+ * safe. Chrome 152 reports 262144; consulting the real value only buys larger
+ * frames, never correctness.
+ */
+export const TRAY_DEFAULT_MAX_MESSAGE_BYTES = 65536;
+
+/**
+ * Hard ceiling (bytes) on a single serialized message, chunking included.
+ * Beyond this the sender refuses loudly instead of flooding the SCTP buffer —
+ * ~16 MB of queued data earns `OperationError: RTCDataChannel send queue is
+ * full`, which drops the message anyway and can wedge the channel for
+ * everything behind it, keepalive included.
+ *
+ * 8 MiB clears the payload this bound exists for by a wide margin: a 1536 px
+ * `open --view --size high` screenshot is ~1-3 MB base64.
+ */
+export const TRAY_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Refuse to start a chunked send while this many bytes (or more) are already
+ * queued in the SCTP transport. Applies to chunked sends ONLY — small messages
+ * still go out under congestion so keepalive ping/pong can't be starved by a
+ * backed-up channel, which would make a merely congested peer look dead.
+ */
+export const TRAY_SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Max frames one message may be split into.
+ *
+ * Bounds the allocation a receiver performs on the FIRST frame of a message:
+ * `totalChunks` is peer-controlled, and allocating per-frame bookkeeping for a
+ * claimed billion frames exhausts the receiver before any payload arrives.
+ * 8192 is far above what any sender here produces — the 8 MiB cap over ~16 KiB
+ * frames is ~512 — while keeping the eager allocation trivial.
+ */
+export const TRAY_MAX_CHUNK_COUNT = 8192;
+
+/** Max messages being reassembled concurrently before the oldest is evicted. */
+export const TRAY_MAX_PENDING_REASSEMBLIES = 8;
+
+/** Max bytes held across all in-flight reassemblies before the oldest is evicted. */
+export const TRAY_MAX_REASSEMBLY_BYTES = 32 * 1024 * 1024;
+
+/** Narrowing guard for an inbound transport frame, ahead of union decode. */
+export function isTrayChunkFrame(value: unknown): value is TrayChunkFrame {
+  if (typeof value !== 'object' || value === null) return false;
+  const frame = value as Partial<TrayChunkFrame>;
+  return (
+    frame.type === TRAY_CHUNK_FRAME_TYPE &&
+    typeof frame.chunkId === 'string' &&
+    typeof frame.chunkIndex === 'number' &&
+    typeof frame.totalChunks === 'number' &&
+    typeof frame.chunkData === 'string' &&
+    Number.isInteger(frame.chunkIndex) &&
+    Number.isInteger(frame.totalChunks) &&
+    frame.totalChunks > 0 &&
+    frame.totalChunks <= TRAY_MAX_CHUNK_COUNT &&
+    frame.chunkIndex >= 0 &&
+    frame.chunkIndex < frame.totalChunks
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Protocol messages
 // ---------------------------------------------------------------------------
 

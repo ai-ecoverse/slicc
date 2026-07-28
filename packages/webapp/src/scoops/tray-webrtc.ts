@@ -35,6 +35,16 @@ export interface TrayDataChannelLike {
    * sender uses this for backpressure — when absent, backpressure is skipped.
    */
   bufferedAmount?: number;
+  /**
+   * The negotiated SCTP `maxMessageSize` in bytes, or undefined when it isn't
+   * known yet. Attached by `bindSctpLimit` at the two places a real channel
+   * enters this module; `TraySyncChannel` consults it to size chunk frames and
+   * falls back to the RFC 8831 floor when absent (test doubles).
+   *
+   * A getter rather than a value because `RTCPeerConnection.sctp` is null until
+   * the transport is negotiated, which happens after the channel object exists.
+   */
+  getMaxMessageSize?: () => number | undefined;
   addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void;
   addEventListener(type: 'message', listener: (event: { data: string }) => void): void;
   send(data: string): void;
@@ -44,6 +54,12 @@ export interface TrayDataChannelLike {
 export interface TrayPeerConnectionLike {
   localDescription?: TraySessionDescription | null;
   connectionState?: string;
+  /**
+   * The SCTP transport, once negotiated. Structurally satisfied by the real
+   * `RTCPeerConnection` at zero runtime cost (`createBrowserPeerConnection`
+   * casts one straight to this interface), and omitted by test doubles.
+   */
+  sctp?: { maxMessageSize?: number } | null;
   createDataChannel(label: string): TrayDataChannelLike;
   createOffer(): Promise<TraySessionDescription>;
   createAnswer(): Promise<TraySessionDescription>;
@@ -184,7 +200,7 @@ export class LeaderTrayPeerManager {
       connectedAt: null,
       runtime: message.runtime,
     };
-    const channel = peer.createDataChannel(this.dataChannelLabel);
+    const channel = bindSctpLimit(peer.createDataChannel(this.dataChannelLabel), peer);
     this.peers.set(message.bootstrapId, { state, peer, channel });
 
     peer.addEventListener('icecandidate', ({ candidate }) => {
@@ -617,7 +633,7 @@ export class FollowerTrayManager {
       }
     });
     peer.addEventListener('datachannel', ({ channel }) => {
-      active.channel = channel;
+      active.channel = bindSctpLimit(channel, peer);
       channel.addEventListener('open', () => {
         active.open = true;
       });
@@ -855,6 +871,23 @@ export function startFollowerWithAutoReconnect(
     });
 
   return handle;
+}
+
+/**
+ * Teach a data channel how to report its transport's `maxMessageSize`.
+ *
+ * Assigned onto the channel rather than wrapped in an adapter so object
+ * identity is preserved for the callers that store and compare channels. The
+ * peer connection is only in scope here, at the two points a channel is
+ * created (leader) or received (follower) — by the time it reaches
+ * `TraySyncChannel` only `TrayDataChannelLike` remains.
+ */
+function bindSctpLimit(
+  channel: TrayDataChannelLike,
+  peer: TrayPeerConnectionLike
+): TrayDataChannelLike {
+  channel.getMaxMessageSize = () => peer.sctp?.maxMessageSize;
+  return channel;
 }
 
 function createBrowserPeerConnection(iceServers?: TrayIceServerConfig[]): TrayPeerConnectionLike {
