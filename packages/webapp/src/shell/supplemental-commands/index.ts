@@ -14,6 +14,7 @@ import {
   createPbcopyCommand,
   createPbpasteCommand,
 } from './clipboard-commands.js';
+import { createCmpCommand } from './cmp-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
@@ -158,6 +159,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createZipCommand(),
     createUnzipCommand(),
     createTarCommand(),
+    createCmpCommand(),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
