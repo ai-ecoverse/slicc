@@ -61,6 +61,38 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         )
     }
 
+    /// Proves the pagination walk works against GitHub's real `Link` headers:
+    /// with one release per page, page 1 (`v5.81.1`-style tags carry no macOS
+    /// artifact) cannot satisfy the check, so the provider must follow
+    /// `rel="next"` until it reaches a release shipping `Sliccstart-*.zip`.
+    /// A frozen fixture could not catch header-format drift here.
+    func testPaginationWalkFindsAnInstallableReleaseOnRealAPI() async throws {
+        // `currentVersion` is pinned: the walk stops at the running build's own
+        // release, and the XCTest host bundle's version is unrelated to the
+        // repo's release history.
+        let provider = TolerantGithubReleaseProvider(
+            currentVersion: Version(0, 0, 0),
+            fetchPage: { request in
+                var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+                var items = (components.queryItems ?? []).filter { $0.name != "per_page" }
+                items.append(URLQueryItem(name: "per_page", value: "1"))
+                components.queryItems = items
+                var paged = request
+                paged.url = components.url
+                let (data, response) = try await URLSession.shared.data(for: paged)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                return (data, http)
+            })
+
+        let releases = try await provider.fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
+
+        XCTAssertFalse(
+            releases.isEmpty,
+            "Expected the paginated walk to reach a release with an installable Sliccstart asset "
+                + "within \(TolerantGithubReleaseProvider.maxReleasePages) pages"
+        )
+    }
+
     // MARK: - Strict decoder (the bug — contrast test)
 
     /// Confirms that the *strict* decoder path silently drops every v-prefixed
@@ -96,7 +128,10 @@ final class UpdateCheckIntegrationTests: XCTestCase {
     private func fetchReleasesJSON(owner: String, repo: String) async throws -> Data {
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
         var request = URLRequest(url: url)
-        if let token = ProcessInfo.processInfo.environment["GH_TOKEN"] {
+        // An empty GH_TOKEN must be treated as no token — `Bearer ` makes
+        // GitHub answer 401 and the whole suite fails with a misleading
+        // `URLError(.badServerResponse)`, same trap the provider guards.
+        if let token = ProcessInfo.processInfo.environment["GH_TOKEN"], !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: request)

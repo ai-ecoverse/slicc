@@ -337,6 +337,7 @@ struct SecretsSettingsView: View {
             unlocked = true
         } catch {
             log.error("unlock failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.secretsUnlock, error)
             errorMessage = error.localizedDescription
             unlocked = false
         }
@@ -369,6 +370,7 @@ struct SecretsSettingsView: View {
             secrets = sorted
         } catch {
             log.error("persist failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.secretsPersist, error)
             errorMessage = error.localizedDescription
         }
     }

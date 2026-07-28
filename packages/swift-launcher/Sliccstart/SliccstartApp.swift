@@ -43,6 +43,7 @@ struct SliccstartApp: App {
     @State private var electronRestartTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
+    @State private var updateCheckStatus: UpdateCheckStatus = .idle
     @StateObject private var appUpdater = AppUpdater(
         owner: "ai-ecoverse",
         repo: "slicc",
@@ -86,12 +87,15 @@ struct SliccstartApp: App {
                         sliccProcess: sliccProcess,
                         appManagementPermission: appManagementPermission,
                         appUpdater: appUpdater,
+                        updateCheckStatus: updateCheckStatus,
+                        onCheckForUpdates: { checkForUpdates() },
                         onLaunchStandalone: { target in
                             log.info("onLaunchStandalone: \(target.name, privacy: .public)")
                             do {
                                 try sliccProcess.launchStandalone(target)
                             } catch {
                                 log.error("onLaunchStandalone failed: \(error.localizedDescription, privacy: .public)")
+                                LauncherErrorReport.report(.launchStandalone, error)
                                 showError(error.localizedDescription)
                             }
                         },
@@ -109,6 +113,8 @@ struct SliccstartApp: App {
                                 do {
                                     try await bootstrapper.update()
                                 } catch {
+                                    log.error("onUpdate failed: \(error.localizedDescription, privacy: .public)")
+                                    LauncherErrorReport.report(.bootstrapUpdate, error)
                                     bootstrapper.lastError = error.localizedDescription
                                     bootstrapper.progressMessage = error.localizedDescription
                                 }
@@ -196,7 +202,7 @@ struct SliccstartApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
-                    appUpdater.check()
+                    checkForUpdates()
                 }
             }
         }
@@ -213,6 +219,8 @@ struct SliccstartApp: App {
             do {
                 try await bootstrapper.bootstrap()
             } catch {
+                log.error("initialize: bootstrap failed: \(error.localizedDescription, privacy: .public)")
+                LauncherErrorReport.report(.bootstrap, error)
                 bootstrapper.lastError = error.localizedDescription
                 bootstrapper.progressMessage = error.localizedDescription
                 return
@@ -235,7 +243,7 @@ struct SliccstartApp: App {
 
         // Check for app updates in bundled mode
         if SliccBootstrapper.isBundled {
-            appUpdater.check()
+            checkForUpdates()
         }
 
         // Skip the configured-browser auto-launch when we just reattached —
@@ -243,6 +251,37 @@ struct SliccstartApp: App {
         if reattached.isEmpty {
             autoLaunchConfiguredBrowser()
         }
+    }
+
+    /// Runs an update check and records the outcome so the footer can report
+    /// it. Every `AppUpdater` failure — rate limits, a release window without
+    /// an installable macOS asset, a code-signing mismatch — arrives here and
+    /// would otherwise be dropped, leaving the UI claiming nothing to update.
+    private func checkForUpdates() {
+        guard updateCheckStatus.allowsRetry else { return }
+        log.info("checkForUpdates: starting")
+        updateCheckStatus = .checking
+        appUpdater.check(
+            success: {
+                Task { @MainActor in
+                    let ready = appUpdater.state.release != nil
+                    log.info("checkForUpdates: finished, update ready = \(ready, privacy: .public)")
+                    updateCheckStatus = ready ? .idle : .upToDate
+                }
+            },
+            fail: { error in
+                Task { @MainActor in
+                    let status = UpdateCheckStatus.from(error: error)
+                    log.error("checkForUpdates: failed: \(String(describing: error), privacy: .public)")
+                    // `upToDate` is AppUpdater's way of saying "nothing newer",
+                    // not a fault — reporting it would drown the real failures.
+                    if status != .upToDate {
+                        LauncherErrorReport.report(.updateCheck, error)
+                    }
+                    updateCheckStatus = status
+                }
+            }
+        )
     }
 
     /// Launch the browser the user picked in Settings > Startup, if any.
@@ -260,6 +299,7 @@ struct SliccstartApp: App {
             try sliccProcess.launchStandalone(target)
         } catch {
             log.error("autoLaunch failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.autoLaunch, error)
         }
     }
 
@@ -277,6 +317,8 @@ struct SliccstartApp: App {
             targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
             showError("Debug build created!\n\nThe patched version of \(target.name) is now available and will be used automatically.")
         } catch {
+            log.error("createDebugBuild failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.debugBuild, error)
             showError("Failed to create debug build:\n\n\(error.localizedDescription)")
         }
 
@@ -321,6 +363,7 @@ struct SliccstartApp: App {
             )
         } catch {
             log.error("onLaunchElectron failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.launchElectron, error)
             showError(error.localizedDescription)
         }
     }
