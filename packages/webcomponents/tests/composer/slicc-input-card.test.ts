@@ -467,6 +467,27 @@ describe('slicc-input-card', () => {
       await userEvent.keyboard('{Control>}{Enter}{/Control}');
       expect(submit).toHaveBeenCalledWith({ value: 'one\ntwo', steer: true });
     });
+
+    it('preserves the line breaks of pasted multi-line text', async () => {
+      const source = document.createElement('textarea');
+      source.value = 'alpha\nbeta\ngamma';
+      document.body.appendChild(source);
+      await userEvent.click(source);
+      await userEvent.keyboard('{Control>}a{/Control}');
+      await userEvent.copy();
+
+      const el = mount();
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      await userEvent.click(textarea(el));
+      await userEvent.paste();
+
+      expect(el.value).toBe('alpha\nbeta\ngamma');
+      // A paste must not be mistaken for a send, and it has to reflect out
+      // through the same value pipeline typing uses.
+      expect(submit).not.toHaveBeenCalled();
+      expect(el.getAttribute('value')).toBe('alpha\nbeta\ngamma');
+    });
   });
 
   describe('history walking (ArrowUp / ArrowDown)', () => {
