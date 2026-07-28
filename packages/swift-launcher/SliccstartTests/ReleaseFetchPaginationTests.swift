@@ -149,6 +149,53 @@ final class ReleaseFetchPaginationTests: XCTestCase {
         XCTAssertEqual(stub.requestedURLs.count, 2)
     }
 
+    func testABackportOnAnEarlierPageDoesNotEndTheWalk() async throws {
+        // `/releases` is creation-ordered, so a patch cut for an older line can
+        // be published after a newer release and appear on page one. Treating
+        // that as "we passed the running build" would hide the installable
+        // release further back.
+        let stub = PageStub(pages: [
+            "[\(releaseJSON(tag: "v5.81.1", assetName: nil)),\(releaseJSON(tag: "v5.32.9", assetName: nil))]",
+            "[\(releaseJSON(tag: "v5.80.0", assetName: nil))]",
+            "[\(releaseJSON(tag: "v5.74.0", assetName: "Sliccstart-5.74.0.zip"))]",
+        ])
+        let releases = try await provider(stub, currentVersion: Version(5, 32, 10))
+            .fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
+
+        XCTAssertEqual(releases.map(\.tagName), [Version(5, 74, 0)])
+        XCTAssertEqual(stub.requestedURLs.count, 3)
+    }
+
+    func testAnUnparsableTagDoesNotEndTheWalk() async throws {
+        // A non-semver tag decodes to `Version.null` (0.0.0); counting it as an
+        // older release would stop the walk on page one forever.
+        let stub = PageStub(pages: [
+            "[\(releaseJSON(tag: "nightly", assetName: nil)),\(releaseJSON(tag: "v5.81.1", assetName: nil))]",
+            "[\(releaseJSON(tag: "v5.74.0", assetName: "Sliccstart-5.74.0.zip"))]",
+        ])
+        let releases = try await provider(stub, currentVersion: Version(5, 32, 10))
+            .fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
+
+        XCTAssertEqual(releases.map(\.tagName), [Version(5, 74, 0)])
+        XCTAssertEqual(stub.requestedURLs.count, 2)
+    }
+
+    func testStopsOncePastTheRunningVersionEvenIfItsReleaseIsGone() async throws {
+        // The running build's release can be missing (deleted, or installed from
+        // a build never published), so the walk must also end when a whole page
+        // is older than it.
+        let stub = PageStub(pages: [
+            "[\(releaseJSON(tag: "v5.81.1", assetName: nil))]",
+            "[\(releaseJSON(tag: "v5.32.9", assetName: nil)),\(releaseJSON(tag: "v5.32.8", assetName: nil))]",
+            "[\(releaseJSON(tag: "v5.32.7", assetName: "Sliccstart-5.32.7.zip"))]",
+        ])
+        let releases = try await provider(stub, currentVersion: Version(5, 32, 10))
+            .fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
+
+        XCTAssertTrue(releases.isEmpty)
+        XCTAssertEqual(stub.requestedURLs.count, 2)
+    }
+
     func testKeepsWalkingWhileEveryReleaseIsNewerThanTheRunningBuild() async throws {
         let stub = PageStub(pages: [
             "[\(releaseJSON(tag: "v5.81.1", assetName: nil))]",

@@ -65,10 +65,11 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
     /// see an empty list and report "no update" while a newer installable
     /// release existed.
     ///
-    /// The walk stops as soon as a page reaches `currentVersion` — the release
-    /// the running build came from. Anything past it is older than what is
+    /// The walk stops once a page reaches `currentVersion` — the release the
+    /// running build came from. Anything past it is older than what is
     /// installed and can never be an update, so that is the natural end of the
-    /// search rather than an arbitrary page count.
+    /// search rather than an arbitrary page count. See `hasReached(_:)` for why
+    /// "reached" is not simply "saw an older tag".
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
         var nextURL: URL? = Self.firstPageURL(host.releasesURL(owner: owner, repo: repo))
         var viable: [Release] = []
@@ -96,7 +97,7 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
             // internal to the module and cannot be called from here, so we
             // replicate its predicate exactly below.
             viable = filterViableReleases(releases)
-            reachedCurrentVersion = releases.contains { $0.tagName <= currentVersion }
+            reachedCurrentVersion = hasReached(currentVersion, on: releases)
             nextURL = Self.nextPageURL(
                 linkHeader: httpResponse.value(forHTTPHeaderField: "Link"),
                 expectedHost: url.host
@@ -104,6 +105,25 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
         }
 
         return viable
+    }
+
+    /// Whether this page ends the search for `currentVersion`.
+    ///
+    /// `/releases` is ordered by creation, not by version, so a single older
+    /// tag on a page does not mean the walk has passed the running build: a
+    /// backport published after a newer release, or a tag that fails tolerant
+    /// parsing (which decodes to `Version.null`, i.e. `0.0.0`), would otherwise
+    /// stop page one and hide the installable release sitting further back.
+    ///
+    /// So stop only when either the running build's own release is on this page
+    /// or every parsed release on it is older — one page past a stray backport
+    /// at worst. Unparsed tags are ignored rather than treated as ancient, and
+    /// a page with nothing parsable never stops the walk.
+    func hasReached(_ currentVersion: Version, on releases: [Release]) -> Bool {
+        let parsed = releases.map(\.tagName).filter { $0 != Version(0, 0, 0) }
+        guard !parsed.isEmpty else { return false }
+        if parsed.contains(currentVersion) { return true }
+        return parsed.allSatisfy { $0 < currentVersion }
     }
 
     /// Adds the largest page size GitHub allows so a single round-trip covers
