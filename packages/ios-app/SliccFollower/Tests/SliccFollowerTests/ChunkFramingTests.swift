@@ -54,6 +54,24 @@ final class TrayChunkFramingTests: XCTestCase {
         XCTAssertEqual(rebuilt.count, 20_000)
     }
 
+    func testOversizedGraphemeClusterDoesNotBlowTheFrameBudget() throws {
+        // An extended grapheme cluster has no size bound: a base character with
+        // tens of thousands of combining scalars is ONE Character. Appending it
+        // whole would emit a frame over the transport limit.
+        let monster = "a" + String(repeating: "\u{0301}", count: 60_000)
+        XCTAssertEqual(monster.count, 1, "precondition: a single Character")
+
+        let frames = TrayChunkFraming.frameChunks(monster)
+
+        XCTAssertGreaterThan(frames.count, 1)
+        for frame in frames {
+            let encoded = try encode(frame)
+            XCTAssertLessThanOrEqual(encoded.count, TrayChunkLimits.maxMessageBytes,
+                                     "frame \(frame.chunkIndex) is \(encoded.count) bytes")
+        }
+        XCTAssertEqual(frames.map(\.chunkData).joined(), monster)
+    }
+
     func testFramesAreNumberedConsistently() {
         let frames = TrayChunkFraming.frameChunks(String(repeating: "y", count: 200_000),
                                                   chunkId: "shared-id")
@@ -152,6 +170,36 @@ final class TrayChunkFramingTests: XCTestCase {
                                                         chunkIndex: 5,
                                                         totalChunks: 2,
                                                         chunkData: "x"))
+
+        XCTAssertNil(outcome.message)
+        XCTAssertEqual(outcome.rejection, .malformed)
+        XCTAssertTrue(reassembler.isEmpty)
+    }
+
+    func testRejectsInconsistentTotalChunks() {
+        var reassembler = TrayChunkReassembler()
+
+        // Peer-controlled metadata must not resize a buffer already in flight.
+        // The Go receiver panicked on exactly this shape before it was guarded.
+        _ = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag, chunkId: "x",
+                                              chunkIndex: 0, totalChunks: 2, chunkData: "a"))
+        let outcome = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag, chunkId: "x",
+                                                        chunkIndex: 99, totalChunks: 100,
+                                                        chunkData: "b"))
+
+        XCTAssertNil(outcome.message)
+        XCTAssertEqual(outcome.rejection, .malformed)
+    }
+
+    func testRejectsExcessiveChunkCount() {
+        var reassembler = TrayChunkReassembler()
+
+        // Allocating a buffer for a claimed billion frames would exhaust memory
+        // before any payload arrived.
+        let outcome = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag,
+                                                        chunkId: "huge", chunkIndex: 0,
+                                                        totalChunks: 1_000_000_000,
+                                                        chunkData: "a"))
 
         XCTAssertNil(outcome.message)
         XCTAssertEqual(outcome.rejection, .malformed)

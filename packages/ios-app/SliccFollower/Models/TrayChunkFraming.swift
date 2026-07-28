@@ -30,6 +30,10 @@ enum TrayChunkLimits {
     static let maxTotalBytes = 8 * 1024 * 1024
     /// Concurrent in-flight reassemblies before the oldest is evicted.
     static let maxPending = 8
+    /// Max frames one message may claim. Bounds the buffer allocated from a
+    /// peer-controlled `totalChunks` before any payload arrives; far above the
+    /// ~512 frames the 8 MiB cap produces at ~16 KiB each.
+    static let maxChunkCount = 8192
 }
 
 // MARK: - Framing
@@ -38,27 +42,31 @@ enum TrayChunkFraming {
     /// Split an already-serialized message into frames that each fit within the
     /// SCTP per-message limit once re-escaped as JSON.
     ///
-    /// Slicing is measured in UTF-8 bytes but cut at character boundaries —
-    /// splitting a multi-byte character would corrupt both frames.
+    /// Slicing is measured in UTF-8 bytes and cut at Unicode *scalar*
+    /// boundaries. Scalars rather than `Character`s because an extended grapheme
+    /// cluster has no size bound — an emoji with many combining scalars can
+    /// exceed the whole frame budget by itself, and appending it whole would
+    /// produce an over-limit frame. Every scalar is at most 4 UTF-8 bytes, and
+    /// cutting between scalars still yields valid UTF-8 on both sides.
     static func frameChunks(_ text: String, chunkId: String = UUID().uuidString) -> [TrayChunkFrame] {
         let budget = max(1, min(TrayChunkLimits.maxChunkBytes,
                                 (TrayChunkLimits.maxMessageBytes - TrayChunkLimits.envelopeBytes)
                                     / TrayChunkLimits.worstCaseBytesPerCharacter))
 
         var slices: [String] = []
-        var current = ""
+        var current = String.UnicodeScalarView()
         var currentBytes = 0
-        for character in text {
-            let size = String(character).utf8.count
+        for scalar in text.unicodeScalars {
+            let size = String(scalar).utf8.count
             if currentBytes + size > budget, !current.isEmpty {
-                slices.append(current)
-                current = ""
+                slices.append(String(current))
+                current = String.UnicodeScalarView()
                 currentBytes = 0
             }
-            current.append(character)
+            current.append(scalar)
             currentBytes += size
         }
-        if !current.isEmpty || slices.isEmpty { slices.append(current) }
+        if !current.isEmpty || slices.isEmpty { slices.append(String(current)) }
 
         return slices.enumerated().map { index, slice in
             TrayChunkFrame(type: TrayChunkFrame.typeTag,
@@ -120,7 +128,15 @@ struct TrayChunkReassembler {
     var isEmpty: Bool { buffers.isEmpty }
 
     mutating func accept(_ frame: TrayChunkFrame) -> Outcome {
-        guard frame.hasValidIndices else { return .rejected(.malformed) }
+        guard frame.hasValidIndices,
+              frame.totalChunks <= TrayChunkLimits.maxChunkCount else {
+            return .rejected(.malformed)
+        }
+        // totalChunks must not change mid-message: a peer that re-declares it is
+        // either buggy or probing the buffer sized by the first frame.
+        if let existing = buffers[frame.chunkId], existing.chunks.count != frame.totalChunks {
+            return .rejected(.malformed)
+        }
 
         if buffers[frame.chunkId] == nil {
             buffers[frame.chunkId] = Buffer(totalChunks: frame.totalChunks)

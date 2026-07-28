@@ -176,6 +176,17 @@ export const TRAY_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
  */
 export const TRAY_SEND_HIGH_WATER_BYTES = 8 * 1024 * 1024;
 
+/**
+ * Max frames one message may be split into.
+ *
+ * Bounds the allocation a receiver performs on the FIRST frame of a message:
+ * `totalChunks` is peer-controlled, and allocating per-frame bookkeeping for a
+ * claimed billion frames exhausts the receiver before any payload arrives.
+ * 8192 is far above what any sender here produces — the 8 MiB cap over ~16 KiB
+ * frames is ~512 — while keeping the eager allocation trivial.
+ */
+export const TRAY_MAX_CHUNK_COUNT = 8192;
+
 /** Max messages being reassembled concurrently before the oldest is evicted. */
 export const TRAY_MAX_PENDING_REASSEMBLIES = 8;
 
@@ -195,6 +206,7 @@ export function isTrayChunkFrame(value: unknown): value is TrayChunkFrame {
     Number.isInteger(frame.chunkIndex) &&
     Number.isInteger(frame.totalChunks) &&
     frame.totalChunks > 0 &&
+    frame.totalChunks <= TRAY_MAX_CHUNK_COUNT &&
     frame.chunkIndex >= 0 &&
     frame.chunkIndex < frame.totalChunks
   );

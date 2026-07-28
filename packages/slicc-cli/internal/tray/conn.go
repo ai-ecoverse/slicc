@@ -53,6 +53,9 @@ const (
 	maxTotalMessageBytes = 8 << 20 // 8 MiB
 	// maxPendingReassemblies bounds concurrent in-flight reassemblies.
 	maxPendingReassemblies = 8
+	// maxChunkCount bounds the per-frame bookkeeping allocated from a peer's
+	// claimed TotalChunks, before any payload has arrived.
+	maxChunkCount = 8192
 )
 
 // Options configures a Dial.
@@ -455,12 +458,26 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 			frame.ChunkIndex, frame.TotalChunks)
 		return
 	}
+	if frame.TotalChunks > maxChunkCount {
+		c.opts.logf("tray: dropping chunk frame claiming %d frames (max %d)",
+			frame.TotalChunks, maxChunkCount)
+		return
+	}
 
 	c.reassemblyMu.Lock()
 	if c.reassembly == nil {
 		c.reassembly = make(map[string]*chunkReassembly)
 	}
 	entry, ok := c.reassembly[frame.ChunkID]
+	if ok && len(entry.chunks) != frame.TotalChunks {
+		// TotalChunks must not change mid-message. Without this, a later frame
+		// re-declaring a larger count indexes past the buffer sized by the first
+		// one and panics the data-channel read goroutine — a remote crash.
+		c.reassemblyMu.Unlock()
+		c.opts.logf("tray: dropping chunk frame with inconsistent totalChunks (%d, want %d)",
+			frame.TotalChunks, len(entry.chunks))
+		return
+	}
 	if !ok {
 		entry = &chunkReassembly{
 			chunks:  make([]string, frame.TotalChunks),

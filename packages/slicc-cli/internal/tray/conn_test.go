@@ -231,6 +231,50 @@ func TestDispatchKeepsConcurrentReassembliesSeparate(t *testing.T) {
 	}
 }
 
+func TestDispatchSurvivesInconsistentTotalChunks(t *testing.T) {
+	calls := 0
+	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
+
+	// A later frame re-declaring a larger TotalChunks used to index past the
+	// buffer sized by the first frame, panicking the data-channel read goroutine
+	// — a remote crash from two frames.
+	first, _ := json.Marshal(protocol.ChunkFrame{
+		Type: protocol.TypeChunk, ChunkID: "x", ChunkIndex: 0, TotalChunks: 2, ChunkData: "a",
+	})
+	second, _ := json.Marshal(protocol.ChunkFrame{
+		Type: protocol.TypeChunk, ChunkID: "x", ChunkIndex: 99, TotalChunks: 100, ChunkData: "b",
+	})
+	c.dispatch(first)
+	c.dispatch(second)
+
+	if calls != 0 {
+		t.Errorf("handler ran %d times for an inconsistent frame", calls)
+	}
+}
+
+func TestDispatchRejectsExcessiveChunkCount(t *testing.T) {
+	calls := 0
+	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
+
+	// Allocating per-frame bookkeeping for a claimed billion frames would
+	// exhaust the process before any payload arrived.
+	encoded, _ := json.Marshal(protocol.ChunkFrame{
+		Type: protocol.TypeChunk, ChunkID: "huge", ChunkIndex: 0,
+		TotalChunks: 1_000_000_000, ChunkData: "a",
+	})
+	c.dispatch(encoded)
+
+	if calls != 0 {
+		t.Errorf("handler ran %d times for an excessive frame count", calls)
+	}
+	c.reassemblyMu.Lock()
+	pending := len(c.reassembly)
+	c.reassemblyMu.Unlock()
+	if pending != 0 {
+		t.Errorf("buffered %d reassemblies for an excessive frame count", pending)
+	}
+}
+
 func TestDispatchDropsMalformedFrame(t *testing.T) {
 	calls := 0
 	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
