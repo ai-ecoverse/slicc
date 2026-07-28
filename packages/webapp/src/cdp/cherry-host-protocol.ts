@@ -9,15 +9,28 @@
 
 export const CHERRY_PROTOCOL_VERSION = 2;
 
+/**
+ * Every wire version this build can negotiate, newest first (the first entry
+ * MUST be CHERRY_PROTOCOL_VERSION). The follower iframe posts one
+ * `handshake.hello` per entry (same channelId) and pins the negotiated version
+ * from whichever `handshake.welcome` the host answers with; the host SDK keeps
+ * accepting only its own CHERRY_PROTOCOL_VERSION. Embedders VENDOR the host
+ * SDK, so a protocol bump must keep the previous version listed here until no
+ * known embedder still ships it — dropping an entry hard-breaks those hosts
+ * with an opaque handshake timeout (the 2026-07-27 labs incident).
+ */
+export const SUPPORTED_CHERRY_PROTOCOL_VERSIONS: readonly number[] = [2, 1];
+
 export interface CherryHandshakeHello {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  /** Wire version stamp. Runtime-validated against an accepted-versions set. */
+  cherry: number;
   channelId: string;
   kind: 'handshake.hello';
   capabilities: { navigate: boolean; screenshot: boolean; openUrl: boolean };
 }
 
 export interface CherryHandshakeWelcome {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'handshake.welcome';
   /** Tray join URL the host supplied; the follower embeds against it. */
@@ -41,8 +54,24 @@ export interface CherryHandshakeWelcome {
   effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 }
 
+/**
+ * Host → iframe: reply to a `handshake.hello` whose protocol version this host
+ * cannot speak. Lets a version-skewed follower fail its connect() fast with an
+ * actionable error instead of eating the full handshake timeout. Stamped with
+ * the HOST's version (the follower diagnoses the skew from it); `channelId`
+ * echoes the rejected hello's so the follower's three-factor gate attributes
+ * the reply to its own handshake attempt.
+ */
+export interface CherryHandshakeVersionMismatch {
+  cherry: number;
+  channelId: string;
+  kind: 'handshake.version-mismatch';
+  /** The rejected hello's version, echoed for diagnostics. */
+  peerVersion: number;
+}
+
 export interface CherryCdpRequest {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'cdp.request';
   id: number;
@@ -52,7 +81,7 @@ export interface CherryCdpRequest {
 }
 
 export interface CherryCdpResponse {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'cdp.response';
   id: number;
@@ -61,7 +90,7 @@ export interface CherryCdpResponse {
 }
 
 export interface CherryCdpEvent {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'cdp.event';
   method: string;
@@ -70,7 +99,7 @@ export interface CherryCdpEvent {
 }
 
 export interface CherryPermissionRequest {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'permission.request';
   id: number;
@@ -78,7 +107,7 @@ export interface CherryPermissionRequest {
 }
 
 export interface CherryPermissionResponse {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'permission.response';
   id: number;
@@ -86,7 +115,7 @@ export interface CherryPermissionResponse {
 }
 
 export interface CherryHostEvent {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'host.event';
   name: string;
@@ -94,7 +123,7 @@ export interface CherryHostEvent {
 }
 
 export interface CherrySliccEvent {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'slicc.event';
   name: string;
@@ -102,12 +131,12 @@ export interface CherrySliccEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Session export envelopes (host → iframe and iframe → host)
+// Session export envelopes (host → iframe and iframe → host) — v2+ only.
 // ---------------------------------------------------------------------------
 
 /** Host → iframe: initiate a transcript export for the given session. */
 export interface CherrySessionExportRequest {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'session.export.request';
   requestId: string;
@@ -117,7 +146,7 @@ export interface CherrySessionExportRequest {
 
 /** Host → iframe: cancel an in-flight export (AbortSignal fired). */
 export interface CherrySessionExportCancel {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'session.export.cancel';
   requestId: string;
@@ -128,7 +157,7 @@ export interface CherrySessionExportCancel {
  * All fields are JSON-cloneable; no Blob or binary here.
  */
 export interface CherrySessionExportProgress {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'session.export.progress';
   requestId: string;
@@ -149,7 +178,7 @@ export interface CherrySessionExportProgress {
  * JSON-cloneable and may be structured-cloned through any postMessage bridge.
  */
 export interface CherrySessionExportResponse {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'session.export.response';
   requestId: string;
@@ -159,7 +188,7 @@ export interface CherrySessionExportResponse {
 
 /** Iframe → host: the export failed with a terminal error code. */
 export interface CherrySessionExportError {
-  cherry: typeof CHERRY_PROTOCOL_VERSION;
+  cherry: number;
   channelId: string;
   kind: 'session.export.error';
   requestId: string;
@@ -169,6 +198,7 @@ export interface CherrySessionExportError {
 export type CherryEnvelope =
   | CherryHandshakeHello
   | CherryHandshakeWelcome
+  | CherryHandshakeVersionMismatch
   | CherryCdpRequest
   | CherryCdpResponse
   | CherryCdpEvent
@@ -185,6 +215,7 @@ export type CherryEnvelope =
 const KINDS = new Set<CherryEnvelope['kind']>([
   'handshake.hello',
   'handshake.welcome',
+  'handshake.version-mismatch',
   'cdp.request',
   'cdp.response',
   'cdp.event',
@@ -199,18 +230,29 @@ const KINDS = new Set<CherryEnvelope['kind']>([
   'session.export.error',
 ]);
 
-export function isCherryEnvelope(value: unknown): value is CherryEnvelope {
+/**
+ * Structural envelope validator. `versions` is the set of wire versions the
+ * caller currently accepts — strict own-version by default; the follower
+ * passes SUPPORTED_CHERRY_PROTOCOL_VERSIONS while negotiating and narrows to
+ * the single negotiated version once connected.
+ */
+export function isCherryEnvelope(
+  value: unknown,
+  versions: readonly number[] = [CHERRY_PROTOCOL_VERSION]
+): value is CherryEnvelope {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   if (
-    v.cherry !== CHERRY_PROTOCOL_VERSION ||
+    typeof v.cherry !== 'number' ||
+    !versions.includes(v.cherry) ||
     typeof v.channelId !== 'string' ||
     typeof v.kind !== 'string' ||
     !KINDS.has(v.kind as CherryEnvelope['kind'])
   )
     return false;
-  // Export envelopes require a non-empty requestId and kind-specific fields.
   const k = v.kind as CherryEnvelope['kind'];
+  if (k === 'handshake.version-mismatch' && typeof v.peerVersion !== 'number') return false;
+  // Export envelopes require a non-empty requestId and kind-specific fields.
   if (
     k === 'session.export.request' ||
     k === 'session.export.cancel' ||
@@ -238,6 +280,11 @@ export interface AcceptContext {
   expectedSource: MessageEventSource | null;
   /** Pinned channel nonce. null only during pre-handshake (accept any). */
   channelId: string | null;
+  /**
+   * Wire versions to accept. Defaults to strict [CHERRY_PROTOCOL_VERSION];
+   * see isCherryEnvelope.
+   */
+  versions?: readonly number[];
 }
 
 /**
@@ -249,26 +296,28 @@ export interface AcceptContext {
 export function acceptEnvelope(event: MessageEvent, ctx: AcceptContext): boolean {
   if (!ctx.allowOrigins.includes(event.origin)) return false;
   if (ctx.expectedSource !== null && event.source !== ctx.expectedSource) return false;
-  if (!isCherryEnvelope(event.data)) return false;
+  if (!isCherryEnvelope(event.data, ctx.versions)) return false;
   if (ctx.channelId !== null && event.data.channelId !== ctx.channelId) return false;
   return true;
 }
 
 /**
- * True when a message is shaped like a cherry envelope but carries a DIFFERENT
- * protocol version — i.e. the peer is a version-skewed build, not postMessage
- * noise. `isCherryEnvelope` (and therefore `acceptEnvelope`) rejects these, so
- * without this check a skewed peer is indistinguishable from the generic
- * handshake timeout. Callers log it distinctly ("update the older side").
+ * True when a message is shaped like a cherry envelope but carries a protocol
+ * version outside the caller's accepted set — i.e. the peer is a version-skewed
+ * build, not postMessage noise. `isCherryEnvelope` (and therefore
+ * `acceptEnvelope`) rejects these, so without this check a skewed peer is
+ * indistinguishable from the generic handshake timeout. Callers log it
+ * distinctly ("update the older side").
  */
 export function isCherryVersionMismatch(
-  value: unknown
+  value: unknown,
+  supported: readonly number[] = [CHERRY_PROTOCOL_VERSION]
 ): value is { cherry: number; channelId: string; kind: string } {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.cherry === 'number' &&
-    v.cherry !== CHERRY_PROTOCOL_VERSION &&
+    !supported.includes(v.cherry) &&
     typeof v.channelId === 'string' &&
     typeof v.kind === 'string'
   );

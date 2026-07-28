@@ -1,6 +1,9 @@
 import type { TranscriptExportProgress } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHERRY_PROTOCOL_VERSION } from '../../src/cdp/cherry-host-protocol.js';
+import {
+  CHERRY_PROTOCOL_VERSION,
+  SUPPORTED_CHERRY_PROTOCOL_VERSIONS,
+} from '../../src/cdp/cherry-host-protocol.js';
 import { CherryHostTransport } from '../../src/cdp/cherry-host-transport.js';
 
 function makeTransport() {
@@ -138,6 +141,143 @@ describe('CherryHostTransport', () => {
     });
     await p;
     expect(events).toEqual(['frameNavigated', 'loadEventFired']);
+  });
+
+  // -------------------------------------------------------------------------
+  // Protocol version negotiation (regression: 2026-07-27 labs handshake timeout
+  // — a host page with a vendored v1 SDK silently dropped the v2 hello and the
+  // iframe ate the full 30s timeout).
+  // -------------------------------------------------------------------------
+
+  it('posts one hello per supported protocol version, newest first, same channelId', async () => {
+    const p = h.transport.connect();
+    const hellos = h.posted.filter((m) => m.kind === 'handshake.hello');
+    expect(hellos.map((m) => m.cherry)).toEqual([...SUPPORTED_CHERRY_PROTOCOL_VERSIONS]);
+    expect(SUPPORTED_CHERRY_PROTOCOL_VERSIONS[0]).toBe(CHERRY_PROTOCOL_VERSION);
+    // Same channelId on every hello: a legacy host must not read the extra
+    // hello as a reloaded-iframe re-handshake (isReHello keys on channelId).
+    expect(new Set(hellos.map((m) => m.channelId)).size).toBe(1);
+    // Settle the connect so the test doesn't leak a pending timer.
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hellos[0].channelId,
+      kind: 'handshake.welcome',
+    });
+    await p;
+  });
+
+  it('completes the handshake against a legacy v1 host SDK', async () => {
+    const p = h.transport.connect();
+    // A vendored v1 host rejects the v2 hello (console.warn only, no reply) and
+    // answers ONLY a v1 hello with a v1 welcome.
+    const v1Hello = h.posted.find((m) => m.kind === 'handshake.hello' && m.cherry === 1);
+    expect(v1Hello).toBeTruthy();
+    h.inbound({
+      cherry: 1,
+      channelId: v1Hello.channelId,
+      kind: 'handshake.welcome',
+      joinUrl: 'https://app.example/join?t=L',
+    });
+    await expect(p).resolves.toBeUndefined();
+    expect(h.transport.state).toBe('connected');
+    expect(h.transport.joinUrl).toBe('https://app.example/join?t=L');
+    expect(h.transport.negotiatedProtocolVersion).toBe(1);
+  });
+
+  it('stamps outbound envelopes with the negotiated version after a v1 welcome', async () => {
+    const p = h.transport.connect();
+    const v1Hello = h.posted.find((m) => m.kind === 'handshake.hello' && m.cherry === 1);
+    h.inbound({ cherry: 1, channelId: v1Hello.channelId, kind: 'handshake.welcome' });
+    await p;
+    // slicc.event — the v1 host's acceptEnvelope would drop a v2-stamped one.
+    h.transport.emitSliccEventToHost('build.done');
+    const ev = h.posted.find((m) => m.kind === 'slicc.event');
+    expect(ev.cherry).toBe(1);
+    // cdp.request — same wire-version requirement.
+    void h.transport.send('Runtime.evaluate', { expression: '1' }).catch(() => {});
+    const req = h.posted.find((m) => m.kind === 'cdp.request');
+    expect(req.cherry).toBe(1);
+    h.transport.disconnect();
+  });
+
+  it('accepts inbound v1 envelopes after negotiating v1', async () => {
+    const p = h.transport.connect();
+    const v1Hello = h.posted.find((m) => m.kind === 'handshake.hello' && m.cherry === 1);
+    h.inbound({ cherry: 1, channelId: v1Hello.channelId, kind: 'handshake.welcome' });
+    await p;
+    const seen: string[] = [];
+    h.transport.onHostEvent = (name) => seen.push(name);
+    h.inbound({
+      cherry: 1,
+      channelId: v1Hello.channelId,
+      kind: 'host.event',
+      name: 'checkout-done',
+    });
+    expect(seen).toEqual(['checkout-done']);
+  });
+
+  it('ignores session.export.request after negotiating v1 (v2-only envelope kind)', async () => {
+    const p = h.transport.connect();
+    const v1Hello = h.posted.find((m) => m.kind === 'handshake.hello' && m.cherry === 1);
+    h.inbound({ cherry: 1, channelId: v1Hello.channelId, kind: 'handshake.welcome' });
+    await p;
+    h.transport.onExportRequest = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      h.inbound({
+        cherry: 1,
+        channelId: v1Hello.channelId,
+        kind: 'session.export.request',
+        requestId: 'req-v1-export',
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(h.transport.onExportRequest).not.toHaveBeenCalled();
+    expect(h.posted.find((m) => m.kind === 'session.export.error')).toBeUndefined();
+  });
+
+  it('fails fast on a trusted welcome with a version outside the supported set', async () => {
+    const p = h.transport.connect();
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+    const unsupported = Math.max(...SUPPORTED_CHERRY_PROTOCOL_VERSIONS) + 1;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      h.inbound({ cherry: unsupported, channelId: hello.channelId, kind: 'handshake.welcome' });
+      // String argument = substring match (avoids a dynamically-built RegExp).
+      await expect(p).rejects.toThrow(`version mismatch (peer v${unsupported}`);
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(h.transport.state).toBe('disconnected');
+  });
+
+  it('does not fail a pending connect on a version-skewed envelope with a stale channelId', async () => {
+    // A delayed handshake.version-mismatch reply from a PREVIOUS connect
+    // attempt (or another transport on the same parent) carries a different
+    // channelId — it must not kill the current pending handshake.
+    const p = h.transport.connect();
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+    const unsupported = Math.max(...SUPPORTED_CHERRY_PROTOCOL_VERSIONS) + 1;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      h.inbound({
+        cherry: unsupported,
+        channelId: 'cherry-stale-previous-attempt',
+        kind: 'handshake.version-mismatch',
+        peerVersion: 2,
+      });
+      // Still pending — a valid welcome for THIS attempt completes it.
+      h.inbound({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: hello.channelId,
+        kind: 'handshake.welcome',
+      });
+      await expect(p).resolves.toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(h.transport.state).toBe('connected');
   });
 
   it('rejects connect and resets state when the handshake times out', async () => {

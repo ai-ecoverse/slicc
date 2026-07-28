@@ -19,6 +19,7 @@ import {
   type CherrySessionExportProgress,
   isCherryEnvelope,
   isCherryVersionMismatch,
+  SUPPORTED_CHERRY_PROTOCOL_VERSIONS,
 } from './cherry-host-protocol.js';
 import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
 import type { CDPConnectOptions } from './types.js';
@@ -72,6 +73,13 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   };
   private _theme: string | null = null;
   private _effortLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null = null;
+  /**
+   * Wire version negotiated with the host SDK. connect() posts one hello per
+   * SUPPORTED_CHERRY_PROTOCOL_VERSIONS entry; the version of the welcome the
+   * host answers with is pinned here and stamped on all subsequent outbound
+   * envelopes (a vendored older SDK drops envelopes at any other version).
+   */
+  private negotiatedVersion: number = CHERRY_PROTOCOL_VERSION;
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
   /**
@@ -186,11 +194,17 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     return this._effortLevel;
   }
 
+  /** The wire version negotiated at handshake (own version until connected). */
+  get negotiatedProtocolVersion(): number {
+    return this.negotiatedVersion;
+  }
+
   async connect(options?: CDPConnectOptions): Promise<void> {
     if (this._state !== 'disconnected') {
       throw new Error(`Cannot connect: state is ${this._state}`);
     }
     this._state = 'connecting';
+    this.negotiatedVersion = CHERRY_PROTOCOL_VERSION;
     this.channelId = `cherry-${crypto.randomUUID()}`;
     if (typeof window !== 'undefined') {
       window.addEventListener('message', this.boundHandler);
@@ -208,18 +222,30 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         this.channelId = null;
         this.connectResolve = null;
         this.connectReject = null;
-        reject(new Error(`Cherry handshake timed out after ${timeoutMs}ms`));
+        reject(
+          new Error(
+            `Cherry handshake timed out after ${timeoutMs}ms — no handshake.welcome ` +
+              `from the embedding page (host SDK missing, not listening, or ` +
+              `version-skewed; check the host page's console)`
+          )
+        );
       }, timeoutMs);
-      this.post({
-        cherry: CHERRY_PROTOCOL_VERSION,
-        channelId: this.channelId!,
-        kind: 'handshake.hello',
-        capabilities: this.opts.capabilities ?? {
-          navigate: true,
-          screenshot: true,
-          openUrl: true,
-        },
-      });
+      // One hello per supported wire version, newest first, SAME channelId (a
+      // host must not read the extra hellos as a reloaded-iframe re-handshake).
+      // A host only answers the hello at its own version and warn-drops the
+      // others, so a vendored older SDK still completes the handshake.
+      for (const version of SUPPORTED_CHERRY_PROTOCOL_VERSIONS) {
+        this.post({
+          cherry: version,
+          channelId: this.channelId!,
+          kind: 'handshake.hello',
+          capabilities: this.opts.capabilities ?? {
+            navigate: true,
+            screenshot: true,
+            openUrl: true,
+          },
+        });
+      }
     });
   }
 
@@ -284,7 +310,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         },
       });
       this.post({
-        cherry: CHERRY_PROTOCOL_VERSION,
+        cherry: this.negotiatedVersion,
         channelId: this.channelId!,
         kind: 'cdp.request',
         id,
@@ -314,7 +340,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       return;
     }
     this.post({
-      cherry: CHERRY_PROTOCOL_VERSION,
+      cherry: this.negotiatedVersion,
       channelId: this.channelId,
       kind: 'slicc.event',
       name,
@@ -329,74 +355,33 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   }
 
   private handleMessage(event: MessageEvent): void {
+    // While negotiating, accept any supported wire version; once connected,
+    // narrow to the single version the welcome pinned.
+    const versions =
+      this._state === 'connected' ? [this.negotiatedVersion] : SUPPORTED_CHERRY_PROTOCOL_VERSIONS;
     if (
       !acceptEnvelope(event, {
         allowOrigins: this.opts.allowOrigins,
         expectedSource: this.opts.counterpart as unknown as MessageEventSource,
         channelId: this.channelId,
+        versions,
       })
     ) {
-      // A version-skewed peer fails `isCherryEnvelope` itself — without this
-      // distinct log the skew is indistinguishable from the 30s timeout.
-      if (isCherryVersionMismatch(event.data)) {
-        log.warn('Cherry protocol version mismatch — update the older side', {
-          peerVersion: event.data.cherry,
-          ourVersion: CHERRY_PROTOCOL_VERSION,
-          origin: event.origin,
-        });
-        // Fail the pending connect() immediately instead of eating the 30s
-        // timeout — but ONLY when origin + source match the pinned host page.
-        // Without that gate any hostile frame could post a mismatch-shaped
-        // message and kill the handshake.
-        const trustedPeer =
-          this.opts.allowOrigins.includes(event.origin) &&
-          event.source === (this.opts.counterpart as unknown as MessageEventSource);
-        if (trustedPeer) {
-          this.failPendingConnect(
-            new Error(
-              `Cherry protocol version mismatch (peer v${event.data.cherry}, ` +
-                `ours v${CHERRY_PROTOCOL_VERSION}) — update the older side`
-            )
-          );
-        }
-      } else if (isCherryEnvelope(event.data)) {
-        // A well-formed cherry envelope rejected by the gate signals a
-        // misconfiguration (wrong host origin, source/channel mismatch) rather
-        // than unrelated postMessage noise — log it so it doesn't surface only
-        // as an opaque 30s connect timeout. Plain noise is filtered silently.
-        log.warn('Rejected a cherry envelope (origin/source/channel mismatch)', {
-          origin: event.origin,
-          allowOrigins: this.opts.allowOrigins,
-        });
-      }
+      this.diagnoseRejectedMessage(event, versions);
       return;
     }
     const env = event.data as CherryEnvelope;
+    // v2-only envelope kinds must not be acted on over a v1-negotiated channel
+    // (the host would silently drop our v2-shaped replies anyway).
+    if (this.negotiatedVersion < 2 && env.kind.startsWith('session.export.')) {
+      log.warn('Ignoring a v2-only envelope on a v1-negotiated cherry channel', {
+        kind: env.kind,
+      });
+      return;
+    }
     switch (env.kind) {
       case 'handshake.welcome':
-        if (this.connectTimer !== null) {
-          clearTimeout(this.connectTimer);
-          this.connectTimer = null;
-        }
-        this._state = 'connected';
-        this._joinUrl = env.joinUrl ?? null;
-        this._theme = env.theme ?? null;
-        this._effortLevel = env.effortLevel ?? null;
-        this._features = env.features ?? {
-          terminal: true,
-          files: true,
-          memory: true,
-          browser: true,
-          modelPicker: true,
-          history: true,
-          nav: true,
-          newSprinkle: true,
-          monitor: true,
-        };
-        log.info('Cherry handshake complete', { channelId: this.channelId });
-        this.connectResolve?.();
-        this.connectResolve = null;
-        this.connectReject = null;
+        this.handleWelcome(env);
         return;
       case 'cdp.response': {
         const p = this.pending.get(env.id);
@@ -432,6 +417,82 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     }
   }
 
+  /**
+   * Diagnose a message that failed the three-factor gate. A version-skewed
+   * peer fails `isCherryEnvelope` itself — without a distinct log (and the
+   * fast connect() rejection) the skew is indistinguishable from the 30s
+   * handshake timeout.
+   */
+  private diagnoseRejectedMessage(event: MessageEvent, versions: readonly number[]): void {
+    if (isCherryVersionMismatch(event.data, versions)) {
+      log.warn('Cherry protocol version mismatch — update the older side', {
+        peerVersion: event.data.cherry,
+        supportedVersions: [...SUPPORTED_CHERRY_PROTOCOL_VERSIONS],
+        origin: event.origin,
+      });
+      // Fail the pending connect() immediately instead of eating the 30s
+      // timeout — but ONLY when ALL THREE factors match: origin, source, AND
+      // the channelId nonce. acceptEnvelope rejected on version before its
+      // nonce check could run, so restore it here — without it any hostile
+      // frame could kill the handshake, and a DELAYED mismatch reply from a
+      // previous connect attempt (different channelId) would fail an
+      // unrelated pending connect. The host's genuine reply echoes this
+      // attempt's hello channelId, so the nonce always matches when it should.
+      const trustedPeer =
+        event.data.channelId === this.channelId &&
+        this.opts.allowOrigins.includes(event.origin) &&
+        event.source === (this.opts.counterpart as unknown as MessageEventSource);
+      if (trustedPeer) {
+        this.failPendingConnect(
+          new Error(
+            `Cherry protocol version mismatch (peer v${event.data.cherry}, ` +
+              `ours v${CHERRY_PROTOCOL_VERSION}) — update the older side`
+          )
+        );
+      }
+    } else if (isCherryEnvelope(event.data, SUPPORTED_CHERRY_PROTOCOL_VERSIONS)) {
+      // A well-formed cherry envelope rejected by the gate signals a
+      // misconfiguration (wrong host origin, source/channel mismatch) rather
+      // than unrelated postMessage noise — log it so it doesn't surface only
+      // as an opaque 30s connect timeout. Plain noise is filtered silently.
+      log.warn('Rejected a cherry envelope (origin/source/channel mismatch)', {
+        origin: event.origin,
+        allowOrigins: this.opts.allowOrigins,
+      });
+    }
+  }
+
+  /** Complete the handshake: pin the negotiated wire version and host-supplied config. */
+  private handleWelcome(env: Extract<CherryEnvelope, { kind: 'handshake.welcome' }>): void {
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    this._state = 'connected';
+    this.negotiatedVersion = env.cherry;
+    this._joinUrl = env.joinUrl ?? null;
+    this._theme = env.theme ?? null;
+    this._effortLevel = env.effortLevel ?? null;
+    this._features = env.features ?? {
+      terminal: true,
+      files: true,
+      memory: true,
+      browser: true,
+      modelPicker: true,
+      history: true,
+      nav: true,
+      newSprinkle: true,
+      monitor: true,
+    };
+    log.info('Cherry handshake complete', {
+      channelId: this.channelId,
+      negotiatedVersion: this.negotiatedVersion,
+    });
+    this.connectResolve?.();
+    this.connectResolve = null;
+    this.connectReject = null;
+  }
+
   private handleExportRequest(
     env: Extract<CherryEnvelope, { kind: 'session.export.request' }>
   ): void {
@@ -447,7 +508,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       // Only post progress if the request is still live.
       if (!this.pendingHostExports.has(requestId)) return;
       this.post({
-        cherry: CHERRY_PROTOCOL_VERSION,
+        cherry: this.negotiatedVersion,
         channelId,
         kind: 'session.export.progress',
         requestId,
@@ -464,7 +525,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       .then((blob) => {
         this.pendingHostExports.delete(requestId);
         this.post({
-          cherry: CHERRY_PROTOCOL_VERSION,
+          cherry: this.negotiatedVersion,
           channelId,
           kind: 'session.export.response',
           requestId,
@@ -488,7 +549,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   private postExportError(requestId: string, code: string): void {
     if (!this.channelId) return;
     this.post({
-      cherry: CHERRY_PROTOCOL_VERSION,
+      cherry: this.negotiatedVersion,
       channelId: this.channelId,
       kind: 'session.export.error',
       requestId,

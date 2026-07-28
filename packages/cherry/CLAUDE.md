@@ -194,6 +194,31 @@ same `CherryEnvelope` union, `CHERRY_PROTOCOL_VERSION`, `isCherryEnvelope`,
 difference is the package location (the SDK copy carries no webapp import). When
 you change one, change the other.
 
+## Protocol version negotiation and bump rules
+
+Embedders **vendor** this SDK, so the two sides of the handshake routinely run
+different builds. The contract that keeps that safe:
+
+- The follower iframe posts one `handshake.hello` per entry in
+  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` (newest first, same `channelId`) and pins
+  the negotiated version from whichever `handshake.welcome` the host answers
+  with. All subsequent envelopes — both directions — are stamped with the
+  negotiated version. Version-gated envelope kinds (e.g. `session.export.*`,
+  v2+) must not be used on a lower-negotiated channel.
+- The host SDK accepts only its own `CHERRY_PROTOCOL_VERSION`. When a
+  handshake attempt arrives at a version it cannot speak (and origin + source
+  prove it is our iframe), it replies `handshake.version-mismatch` so the
+  follower fails `connect()` fast with an actionable error instead of eating
+  the handshake timeout, and fires `hooks.onProtocolMismatch`.
+- **When bumping `CHERRY_PROTOCOL_VERSION`:** keep the previous version in
+  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` and gate any new envelope kinds on the
+  negotiated version. Removing a version from the supported set hard-breaks
+  every embedder still shipping a vendored SDK at that version — do it only
+  for a genuinely breaking wire change, and say so in the changelog. The
+  2026-07-27 labs incident (P1: every embed failed with an opaque 30s
+  "Cherry handshake timed out") was caused by bumping 1 → 2 for an _additive_
+  feature while both sides still validated with strict equality.
+
 ## Build and test
 
 ```bash
