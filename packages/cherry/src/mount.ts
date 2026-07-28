@@ -13,6 +13,14 @@ import {
   type TranscriptExportProgress,
 } from './transcript-types.js';
 
+/**
+ * How long a version-skewed hello may wait for a supported companion hello
+ * (same channelId) before onProtocolMismatch fires. The follower posts all its
+ * hellos synchronously in one burst, so a real fallback arrives within the
+ * same task queue turn — this window is generous headroom, not a race.
+ */
+const MISMATCH_HOOK_GRACE_MS = 250;
+
 interface CdpResponseShape {
   result?: Record<string, unknown>;
   error?: { code: number; message: string };
@@ -206,6 +214,42 @@ function buildExportSession(
   };
 }
 
+/**
+ * Handle a trusted `handshake.hello` at a protocol version this SDK cannot
+ * speak: reply `handshake.version-mismatch` immediately (so the follower
+ * fails its connect() fast — a follower that still has a version this SDK
+ * speaks ignores the reply and proceeds with its lower-version companion
+ * hello), and DEFER `onProtocolMismatch` by MISMATCH_HOOK_GRACE_MS. The
+ * hook's contract is "fallbacks exhausted / the mount will not come up", but
+ * a [newer, current] follower completes the handshake with its companion
+ * hello milliseconds after the skewed one — an accepted hello for the same
+ * attempt cancels the deferred report. Deduped per handshake-attempt
+ * channelId: a no-overlap follower posts several skewed hellos (one per
+ * version it speaks, same channelId) and gets one reply + one report.
+ */
+function buildSkewedHelloHandler(
+  pendingMismatchHooks: Map<string, ReturnType<typeof setTimeout>>,
+  post: (env: CherryEnvelope) => void,
+  hooks: MountSliccOptions['hooks']
+): (data: { cherry: number; channelId: string }) => void {
+  return (data) => {
+    if (pendingMismatchHooks.has(data.channelId)) return;
+    post({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: data.channelId,
+      kind: 'handshake.version-mismatch',
+      peerVersion: data.cherry,
+    });
+    pendingMismatchHooks.set(
+      data.channelId,
+      setTimeout(() => {
+        pendingMismatchHooks.delete(data.channelId);
+        hooks?.onProtocolMismatch?.(data.cherry, CHERRY_PROTOCOL_VERSION);
+      }, MISMATCH_HOOK_GRACE_MS)
+    );
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Mount
 // ---------------------------------------------------------------------------
@@ -241,9 +285,24 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
   };
   const exportSession = buildExportSession(pending, post, () => channelId);
 
+  /** Pending deferred onProtocolMismatch reports, keyed by handshake-attempt channelId. */
+  const pendingMismatchHooks = new Map<string, ReturnType<typeof setTimeout>>();
+  const handleVersionSkewedHello = buildSkewedHelloHandler(
+    pendingMismatchHooks,
+    post,
+    options.hooks
+  );
+
   const handleEnvelope = async (env: CherryEnvelope): Promise<CdpResponseShape | undefined> => {
     switch (env.kind) {
       case 'handshake.hello': {
+        // A supported hello completes negotiation for this attempt — cancel any
+        // deferred mismatch report from its higher-version companion hellos.
+        const mismatchTimer = pendingMismatchHooks.get(env.channelId);
+        if (mismatchTimer !== undefined) {
+          clearTimeout(mismatchTimer);
+          pendingMismatchHooks.delete(env.channelId);
+        }
         rejectAllPending(pending, 'transfer-aborted');
         channelId = env.channelId;
         post(buildWelcomeEnvelope(channelId, options));
@@ -326,13 +385,7 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
           event.data.kind === 'handshake.hello' &&
           event.data.channelId !== channelId
         ) {
-          post({
-            cherry: CHERRY_PROTOCOL_VERSION,
-            channelId: event.data.channelId,
-            kind: 'handshake.version-mismatch',
-            peerVersion: event.data.cherry,
-          });
-          options.hooks?.onProtocolMismatch?.(event.data.cherry, CHERRY_PROTOCOL_VERSION);
+          handleVersionSkewedHello(event.data);
         }
       } else if (isCherryEnvelope(event.data)) {
         console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
@@ -359,6 +412,8 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     destroy() {
       window.removeEventListener('message', onMessage);
       rejectAllPending(pending, 'transfer-aborted');
+      for (const [, timer] of pendingMismatchHooks) clearTimeout(timer);
+      pendingMismatchHooks.clear();
       if (sdkCreatedIframe) iframe.remove();
     },
     testReceive: (env) => handleEnvelope(env),

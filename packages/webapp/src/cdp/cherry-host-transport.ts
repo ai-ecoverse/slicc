@@ -431,10 +431,15 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         origin: event.origin,
       });
       // Fail the pending connect() immediately instead of eating the 30s
-      // timeout — but ONLY when origin + source match the pinned host page.
-      // Without that gate any hostile frame could post a mismatch-shaped
-      // message and kill the handshake.
+      // timeout — but ONLY when ALL THREE factors match: origin, source, AND
+      // the channelId nonce. acceptEnvelope rejected on version before its
+      // nonce check could run, so restore it here — without it any hostile
+      // frame could kill the handshake, and a DELAYED mismatch reply from a
+      // previous connect attempt (different channelId) would fail an
+      // unrelated pending connect. The host's genuine reply echoes this
+      // attempt's hello channelId, so the nonce always matches when it should.
       const trustedPeer =
+        event.data.channelId === this.channelId &&
         this.opts.allowOrigins.includes(event.origin) &&
         event.source === (this.opts.counterpart as unknown as MessageEventSource);
       if (trustedPeer) {

@@ -366,18 +366,77 @@ describe('protocol version skew', () => {
   }
 
   it('replies handshake.version-mismatch to a version-skewed hello from its own iframe', () => {
+    vi.useFakeTimers();
     const onProtocolMismatch = vi.fn();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { handle, posted, dispatch } = mountWithCapture({ onProtocolMismatch });
     dispatch({ cherry: 99, channelId: 'ch-skew', kind: 'handshake.hello' });
+    // The wire reply is immediate (fast connect() failure in the follower)…
     const reply = posted.find((e) => e.kind === 'handshake.version-mismatch');
     expect(reply).toBeTruthy();
     expect(reply?.cherry).toBe(CHERRY_PROTOCOL_VERSION);
     expect(reply?.channelId).toBe('ch-skew'); // echoed so the follower's gate accepts it
     expect(reply?.peerVersion).toBe(99);
-    expect(onProtocolMismatch).toHaveBeenCalledWith(99, CHERRY_PROTOCOL_VERSION);
+    // …but the hook waits out the negotiation grace window (a supported
+    // companion hello may still complete the handshake).
+    expect(onProtocolMismatch).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
+    expect(onProtocolMismatch).toHaveBeenCalledExactlyOnceWith(99, CHERRY_PROTOCOL_VERSION);
     warn.mockRestore();
     handle.destroy();
+    vi.useRealTimers();
+  });
+
+  it('does not fire onProtocolMismatch when a supported companion hello completes the handshake', () => {
+    // A FUTURE [3, 2]-style follower: its v3 hello is skewed for this v2 SDK,
+    // but its v2 companion (same channelId) succeeds — the mount comes up and
+    // the "fallbacks exhausted" hook must stay silent.
+    vi.useFakeTimers();
+    const onProtocolMismatch = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture({ onProtocolMismatch });
+    dispatch({ cherry: 3, channelId: 'ch-fallback', kind: 'handshake.hello' });
+    dispatch({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: 'ch-fallback',
+      kind: 'handshake.hello',
+    });
+    expect(posted.some((e) => e.kind === 'handshake.welcome')).toBe(true);
+    vi.advanceTimersByTime(1000);
+    expect(onProtocolMismatch).not.toHaveBeenCalled();
+    warn.mockRestore();
+    handle.destroy();
+    vi.useRealTimers();
+  });
+
+  it('replies and reports once for multiple skewed hellos of one no-overlap attempt', () => {
+    // A no-overlap follower (e.g. [99, 98]) posts one hello per version, all
+    // with the same channelId — one reply on the wire, one hook report.
+    vi.useFakeTimers();
+    const onProtocolMismatch = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, posted, dispatch } = mountWithCapture({ onProtocolMismatch });
+    dispatch({ cherry: 99, channelId: 'ch-noover', kind: 'handshake.hello' });
+    dispatch({ cherry: 98, channelId: 'ch-noover', kind: 'handshake.hello' });
+    expect(posted.filter((e) => e.kind === 'handshake.version-mismatch').length).toBe(1);
+    vi.advanceTimersByTime(300);
+    expect(onProtocolMismatch).toHaveBeenCalledExactlyOnceWith(99, CHERRY_PROTOCOL_VERSION);
+    warn.mockRestore();
+    handle.destroy();
+    vi.useRealTimers();
+  });
+
+  it('destroy() cancels a pending onProtocolMismatch report', () => {
+    vi.useFakeTimers();
+    const onProtocolMismatch = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { handle, dispatch } = mountWithCapture({ onProtocolMismatch });
+    dispatch({ cherry: 99, channelId: 'ch-destroyed', kind: 'handshake.hello' });
+    handle.destroy();
+    vi.advanceTimersByTime(1000);
+    expect(onProtocolMismatch).not.toHaveBeenCalled();
+    warn.mockRestore();
+    vi.useRealTimers();
   });
 
   it('does not reply to the companion lower-version hello of a completed handshake', () => {

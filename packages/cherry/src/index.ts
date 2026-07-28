@@ -61,11 +61,13 @@ export interface HostHooks {
   /** Called once the Cherry postMessage handshake completes (welcome sent to follower). */
   onHandshakeComplete?: () => void;
   /**
-   * Called when the follower iframe attempts a handshake with a cherry
-   * protocol version this SDK build cannot speak (after the follower's own
-   * version fallbacks are exhausted). The mount will not come up until the
-   * older side (this vendored SDK or the SLICC origin) is updated — surface
-   * this to telemetry instead of waiting out the handshake timeout.
+   * Called at most once per handshake attempt, after a short grace window,
+   * when the follower iframe offered ONLY cherry protocol versions this SDK
+   * build cannot speak. Never fires when a fallback succeeds: a follower that
+   * also offers a version this SDK speaks completes the handshake and cancels
+   * the report. When it does fire, the mount will not come up until the older
+   * side (this vendored SDK or the SLICC origin) is updated — surface this to
+   * telemetry instead of waiting out the handshake timeout.
    */
   onProtocolMismatch?: (peerVersion: number, sdkVersion: number) => void;
 }

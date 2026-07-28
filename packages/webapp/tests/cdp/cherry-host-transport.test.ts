@@ -252,6 +252,34 @@ describe('CherryHostTransport', () => {
     expect(h.transport.state).toBe('disconnected');
   });
 
+  it('does not fail a pending connect on a version-skewed envelope with a stale channelId', async () => {
+    // A delayed handshake.version-mismatch reply from a PREVIOUS connect
+    // attempt (or another transport on the same parent) carries a different
+    // channelId — it must not kill the current pending handshake.
+    const p = h.transport.connect();
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+    const unsupported = Math.max(...SUPPORTED_CHERRY_PROTOCOL_VERSIONS) + 1;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      h.inbound({
+        cherry: unsupported,
+        channelId: 'cherry-stale-previous-attempt',
+        kind: 'handshake.version-mismatch',
+        peerVersion: 2,
+      });
+      // Still pending — a valid welcome for THIS attempt completes it.
+      h.inbound({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId: hello.channelId,
+        kind: 'handshake.welcome',
+      });
+      await expect(p).resolves.toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(h.transport.state).toBe('connected');
+  });
+
   it('rejects connect and resets state when the handshake times out', async () => {
     vi.useFakeTimers();
     const p = h.transport.connect();
