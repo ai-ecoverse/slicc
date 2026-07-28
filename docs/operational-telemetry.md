@@ -13,9 +13,11 @@ SLICC runs across three deployment modes (CLI, extension, Electron) and emits RU
 - Are voice input and skill installation gaining adoption?
 - What are the Core Web Vitals for the UI? (CLI/Electron only — the extension doesn't get CWV.)
 
-RUM covers only the applications that load the webapp. For the tray hub worker,
-swift-server, the iOS follower, and the Go CLI — none of which emit beacons — see
-"Deploy-Impact Signals by Application" at the end of this document.
+RUM covers the applications that load the webapp, plus `slicc-cli`, which emits a
+much narrower launch/error-only beacon via its own Go client (`packages/go-optel`)
+rather than `telemetry.ts` — see "CLI Telemetry" below. The tray hub worker,
+swift-server, and the iOS follower emit no beacons at all; see "Deploy-Impact
+Signals by Application" at the end of this document.
 
 ### Why this approach
 
@@ -112,6 +114,11 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 | `viewmedia`    | Image rendered     | context (`'chat'`)                        | (omitted)                           | `chat-panel.ts` — `MutationObserver` on `messagesEl`                                                                                                           |
 | `error`        | JS error / failure | error type (`'js'` for the auto listener) | sanitized error message (extension) | `telemetry.ts:initTelemetry()` (extension) / helix listeners (CLI/Electron)                                                                                    |
 | `signup`       | Settings opened    | trigger (`'button'`)                      | (omitted)                           | `provider-settings.ts:showProviderSettings()`                                                                                                                  |
+| `enter`        | Scoop spawned      | scoop folder name                         | `'scoop-spawn'`                     | `scoop-telemetry-hook.ts:emitScoopLifecycle('spawn', ...)` → `telemetry.ts:trackScoopLifecycle()`, called from `scoop-lifecycle-manager.ts`                    |
+| `convert`      | Cone fed a scoop   | scoop folder name                         | `'scoop-feed'`                      | `emitScoopLifecycle('feed', ...)`, called from `scoop-message-router.ts`                                                                                       |
+| `leave`        | Scoop completed    | scoop folder name                         | `'scoop-complete'`                  | `emitScoopLifecycle('complete', ...)`, called from `scoop-completion-service.ts`                                                                               |
+
+A scoop failure reuses the `error` checkpoint row above rather than getting its own row: `trackScoopLifecycle()` sets `source: 'scoop:<name>'` (not the bare scoop name used by `enter`/`convert`/`leave`) and runs the message through the same `sanitizeError` used for `trackError`, dropping known user-fixable error families (no-api-key, invalid-model, auth-expired) before emitting.
 
 ### Auto-instrumented (from enhancer, CLI/Electron only)
 
@@ -124,6 +131,7 @@ These work out of the box in CLI/Electron with no custom code. They do NOT fire 
 
 - `navigate`, `formsubmit`, `fill`, `viewblock` — wired in both CLI/Electron and extension.
 - `signup`, `viewmedia` — newly wired; fire in both modes.
+- `enter` (scoop spawn) / `convert` (scoop feed) / `leave` (scoop complete) — wired since 2026-06-14 (issue #795 Gap 3 follow-up) via `scoop-telemetry-hook.ts`. Fires in both modes: the hook lives in the worker-safe scoops layer and only needs a sink registered, which `initTelemetry()` does identically for CLI/Electron and extension. Turn-end and per-tool-call-duration checkpoints remain unwired — see "Not instrumented in this iteration" below.
 - `error` — fires in both modes, but the **automatic capture path** differs:
   - CLI/Electron: helix-rum-js installs its own `window.error` and `unhandledrejection` listeners and emits its native payload shape.
   - Extension: `telemetry.ts` registers SLICC's listeners after assigning `sampleRUM` from `rum.js`, emitting `{source: 'js', target: sanitizedMessage}`. Sanitization collapses VFS paths to `/<root>/.../` and truncates to 200 characters.
@@ -146,7 +154,7 @@ Historical note: prior to the thin-bridge release the extension had two independ
 ### Not instrumented in this iteration
 
 - The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
-- Custom agent-loop events from the kernel worker — turn end, tool-call durations, explicit scoop create/delegate/drop. The worker's `AlmostBashShellHeadless` now emits `fill` beacons for every bash call (so the cone-side `agent ...` invocations and `feed_scoop` tool calls show up indirectly), but there are no dedicated `agent-spawn` or `scoop-delegate` checkpoints yet.
+- Turn-end and per-tool-call-duration events from the kernel worker. Scoop lifecycle itself (spawn/feed/complete/error) **is** wired — see `enter`/`convert`/`leave` in the checkpoint mapping above, shipped 2026-06-14 via `scoop-telemetry-hook.ts` — but there is no checkpoint yet for a turn finishing or for how long an individual tool call took. The worker's `AlmostBashShellHeadless` emits `fill` beacons for every bash call, so `feed_scoop` tool calls also show up indirectly through that channel.
 - Core Web Vitals and other enhancer-derived checkpoints in the extension. See "Extension Enhancer Parity Decision" above for the full rationale; the short version is that CSP makes the auto-loaded enhancer impossible, manual `web-vitals` integration is low-signal for a chat-app shell, and the highest-value piece (`error`) is already wired separately.
 
 ## Sampling Strategy
@@ -175,6 +183,32 @@ The implementations are privacy-safe by design (no cookies, no PII, ephemeral pa
 4. **No PII in scoop names**: scoop names are system-generated (e.g. `researcher`, `coder`) or short user-typed labels. They flow through unredacted; if user-typed scoop names ever grow into freeform input, add an explicit sanitizer.
 5. **Model IDs only**: model id strings like `claude-sonnet-4` flow through; base URLs and OAuth account details do not.
 6. **Opt-out**: `localStorage.setItem('telemetry-disabled', 'true')` disables init entirely. `isTelemetryEnabled()` and `setTelemetryEnabled(boolean)` are exported helpers from `telemetry.ts` for wiring this into a settings UI (the UI control itself is future work).
+
+## CLI Telemetry (`slicc-cli`)
+
+`slicc-cli` is a headless Go binary — no `window`, no `localStorage`, no `@adobe/helix-rum-js` — so it does not use `telemetry.ts` at all. It has its own dependency-free Go client, `packages/go-optel` (`github.com/ai-ecoverse/go-optel`), pulled in by `packages/slicc-cli/go.mod` via a local `replace` directive (this monorepo has no `go.work`, so cross-module deps within `packages/` are wired that way). `packages/go-optel` implements the same helix-rum-js wire format as `telemetry.ts` and `packages/swift-optel`, so beacons land in the same collector and JSON shape, just from a third independent client.
+
+### Why this is much narrower than the webapp or swift-optel
+
+A CLI has no UI to click on or navigate, so there is no `click`/`navigate`/CWV equivalent. The intended surface is deliberately two checkpoints only:
+
+- `enter` — process launch. Fires once per invocation from `packages/slicc-cli/telemetry.go:initTelemetry()`, wired into every real subcommand dispatch in `main.go` (`prompt`, `exec`, `watch`, `follow`, `update`). `source` is the subcommand name, allowlisted by `classifySubcommand()` — anything outside the fixed vocabulary (e.g. a typo) is folded into `"unknown"` rather than echoed verbatim.
+- `error` — an operational failure (leader dial failure, self-update failure), always via `reportRuntimeError(source, err)` → `optel.Client.ReportError`, never a raw `Sample(Error, ...)` call. `source` is one of a small fixed set (`dial`, `watch`, `follow`, `update`) — never user-typed input.
+
+`referer` is `https://slicc-cli/` (go-optel's `BuildReferer`, mirroring swift-optel's use of a fixed app id in place of a real hostname) — filter dashboards on that host the way webapp dashboards filter on `RUM_GENERATION`.
+
+### Privacy / security: why sanitization is mandatory here
+
+A browser's `error.message` is mostly harmless; a CLI's is not. Go's `net/http`/`net/url` errors embed the full request URL in `Error()` — and `slicc-cli` dials a leader's `https://…/join/<token>` URL, so a raw dial-error string is a bearer-token leak, not just a privacy nit. OS file errors likewise embed the user's home directory (usually containing their login name). `packages/go-optel/sanitize.go`'s `Sanitize()` is the only path from an `error.Error()` string to a beacon field, and `ReportError` is the only sanctioned caller: it collapses any absolute URL to `scheme://host/...` and any absolute path to its first segment/drive letter, **before** truncating to 200 characters, so a leaked fragment can't survive truncation ordering. Application code in `slicc-cli` must always call `reportRuntimeError(...)`, never wire `err.Error()` into a beacon field directly.
+
+### Opt-out, gating, sampling
+
+- **Opt-out**: `SLICC_NO_TELEMETRY=1` disables telemetry outright — no client is configured, no beacon fires.
+- **Release-build gating**: telemetry only configures on stamped release builds (`update.IsReleaseVersion(version)`, the same gate the update notifier uses). A `dev` / git-describe local build never phones home, so local development is silent without needing the opt-out env var at all.
+- **Sampling**: one coin flip per process (weight 100, i.e. selected by default), decided once inside `optel.Configure()` and reused for every checkpoint in that launch — matching how the webapp/swift-optel decide once per pageview/session rather than per event. `OPTEL_RATE`/`OPTEL_DEBUG` env vars are honored with the same names and semantics as swift-optel.
+- **Flush**: `initTelemetry()` returns a bounded flush closure (`defer initTelemetry(sub)()` in `main.go`) that waits up to 2 seconds for in-flight beacon goroutines before the process exits — Go has no `navigator.sendBeacon` guarantee that a fire-and-forget goroutine survives past `main()` returning.
+
+See `packages/go-optel/README.md` and `packages/go-optel/CLAUDE.md` for the library itself, and `packages/slicc-cli/telemetry.go` for the wiring.
 
 ## Self-Hosting Option (future work)
 
@@ -231,6 +265,8 @@ Telemetry tests live in `packages/webapp/tests/ui/`:
 | `chat-panel-telemetry.test.ts`        | `ChatPanel.sendMessage()` fires `trackChatSend` with the right scoop name and model id; the MutationObserver fires `trackImageView('chat')` per `<img>` attached to the chat tree.                                                            |
 | `provider-settings-telemetry.test.ts` | `showProviderSettings()` fires `trackSettingsOpen('button')` on dialog open.                                                                                                                                                                  |
 
+`slicc-cli`'s beacons are not covered by the table above — they go through `packages/go-optel` (its own Go module, tested by `go test ./...` there: sanitization, sampling, session/env/transport behavior) and `packages/slicc-cli/telemetry_test.go` (subcommand classification, opt-out/release-gating logic, nil-safety, hermetic client configuration — no real network call in any case).
+
 The dispatcher's two branches are tested via separate `describe` blocks — the CLI-branch tests run in default Vitest setup (no `chrome` global, helix mocked at file level), and the extension-branch tests stub `globalThis.chrome` and use `vi.doMock('./rum.js', ...)` after `vi.resetModules()` to override per test.
 
 ### Dashboard verification
@@ -250,16 +286,16 @@ dashboard" is the wrong answer for those. This section is the post-ship lookup t
 the question that actually gets asked: **I just shipped — where do I look to see if it
 broke?**
 
-| Application         | Primary deploy-impact signal                                                             | Ours or Apple/Cloudflare-hosted | Latency to signal   |
-| ------------------- | ---------------------------------------------------------------------------------------- | ------------------------------- | ------------------- |
-| `webapp`            | RUM (`RUM_GENERATION=slicc-cli` / `slicc-electron`), see "Dashboard verification"        | ours (Helix RUM)                | minutes (sampled)   |
-| `node-server`       | RUM (CLI generation) + `GET /api/status` on the local port                               | ours                            | immediate / minutes |
-| `chrome-extension`  | RUM (`RUM_GENERATION=slicc-extension`), no enhancer checkpoints                          | ours (Helix RUM)                | minutes (sampled)   |
-| `swift-launcher`    | RUM via `@slicc/swift-optel` (`packages/swift-optel/`)                                   | ours (Helix RUM)                | minutes (sampled)   |
-| `cloudflare-worker` | `GET /status`, Cloudflare Workers metrics, `cloudflare-spend` issue tripwire             | Cloudflare + ours               | immediate / 1 day   |
-| `swift-server`      | `GET /api/status` + `~/.slicc/logs/slicc-<day>.log`                                      | local only, never leaves host   | immediate           |
-| `ios-app`           | App Store Connect TestFlight processing state, then TestFlight Crashes & Feedback        | Apple-hosted                    | minutes / days      |
-| `slicc-cli`         | **No telemetry.** Nearest: GitHub Release download counts + worker install-route traffic | GitHub + Cloudflare             | days                |
+| Application         | Primary deploy-impact signal                                                                            | Ours or Apple/Cloudflare-hosted | Latency to signal                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------- |
+| `webapp`            | RUM (`RUM_GENERATION=slicc-cli` / `slicc-electron`), see "Dashboard verification"                       | ours (Helix RUM)                | minutes (sampled)                      |
+| `node-server`       | RUM (CLI generation) + `GET /api/status` on the local port                                              | ours                            | immediate / minutes                    |
+| `chrome-extension`  | RUM (`RUM_GENERATION=slicc-extension`), no enhancer checkpoints                                         | ours (Helix RUM)                | minutes (sampled)                      |
+| `swift-launcher`    | RUM via `@slicc/swift-optel` (`packages/swift-optel/`)                                                  | ours (Helix RUM)                | minutes (sampled)                      |
+| `cloudflare-worker` | `GET /status`, Cloudflare Workers metrics, `cloudflare-spend` issue tripwire                            | Cloudflare + ours               | immediate / 1 day                      |
+| `swift-server`      | `GET /api/status` + `~/.slicc/logs/slicc-<day>.log`                                                     | local only, never leaves host   | immediate                              |
+| `ios-app`           | App Store Connect TestFlight processing state, then TestFlight Crashes & Feedback                       | Apple-hosted                    | minutes / days                         |
+| `slicc-cli`         | RUM via `@ai-ecoverse/go-optel` (`packages/go-optel/`) — launch + error only, see "CLI Telemetry" above | ours (Helix RUM)                | minutes (sampled), release builds only |
 
 The four rows below the fold are the ones with no dashboard pointer anywhere else in the
 docs. Each gets its own subsection. Where an application genuinely has no signal, that is
@@ -391,44 +427,43 @@ is committed to.
 
 ### `slicc-cli`
 
-**There is no telemetry, by construction.** The Go follower CLI emits no beacons, no
-analytics, and no crash reports. That is the honest answer, and it should stay the answer
-unless someone deliberately decides otherwise — a headless CLI that phones home is a
-different product.
+**Launch + error telemetry only, opt-out, release builds only.** Since the `go-optel`
+client landed (see "CLI Telemetry" above), `slicc-cli` emits an `enter` beacon per launch
+and an `error` beacon on a dial/watch/follow/update failure. That is deliberately much
+narrower than the webapp: no chat content, no command text, no scoop names — a CLI
+touching a leader's bearer-token join URL and the local filesystem has a much sharper
+privacy/security overlap than a browser tab, so the checkpoint set stays minimal by
+design (see `packages/go-optel/CLAUDE.md`). Dev/git-describe builds never phone home, and
+`SLICC_NO_TELEMETRY=1` opts out of a release build too.
 
-What that leaves, in descending order of usefulness:
+What that still leaves uncovered, in descending order of usefulness:
 
-1. **GitHub Release asset download counts** for `slicc-<os>-<arch>[.exe]`. The only
-   adoption number available. Note that CLI releases are **sparse** — binaries attach only
-   to releases where `packages/slicc-cli` actually changed — so compare against the release
-   that carries assets, not `releases/latest`.
-2. **Worker traffic on the install and download routes.** `GET /install-cli`,
+1. **The once-a-day background update notice** (`startUpdateNotice()`, cached at
+   `<user-cache-dir>/slicc/update-check.json`, suppressed by `SLICC_NO_UPDATE_CHECK=1`) is
+   a best-effort banner check and swallows its own errors silently — it is not wired to
+   `reportRuntimeError`. Only the explicit `slicc update` subcommand's fetch/apply
+   failures are reported.
+2. **GitHub Release asset download counts** for `slicc-<os>-<arch>[.exe]` remain the only
+   adoption number independent of telemetry sampling. CLI releases are **sparse** —
+   binaries attach only to releases where `packages/slicc-cli` actually changed — so
+   compare against the release that carries assets, not `releases/latest`.
+3. **Worker traffic on the install and download routes.** `GET /install-cli`,
    `GET /install-cli.ps1`, and `GET /download/slicc-cli/:target`
    (`packages/cloudflare-worker/src/install-cli.ts`) all run through the tray hub, so their
-   request and status-code breakdown is visible in the worker's Cloudflare analytics. A
-   release that shipped a broken or missing asset shows up as 4xx/5xx on
-   `/download/slicc-cli/*` — this is the closest thing to a release-health check the CLI
-   has, and it costs nothing because the traffic already lands on infrastructure we
-   observe.
-3. **Nothing from self-update failures.** `packages/slicc-cli/internal/update/` runs the
-   staged binary's `--version` as a sanity gate before the atomic rename, so a corrupt
-   download fails closed and prints on the user's machine. Correct behaviour, zero
-   visibility to us. Same for the once-a-day update notice cached at
-   `<user-cache-dir>/slicc/update-check.json` and suppressed by `SLICC_NO_UPDATE_CHECK=1`.
-4. **Issue reports.** The actual feedback channel.
-
-If CLI release health ever needs to be monitored for real, the cheapest closer is an alert
-on the worker's `/download/slicc-cli/*` error rate — it needs no change to the binary and
-no new telemetry surface. Everything else requires deciding that the CLI may talk to us.
+   request and status-code breakdown is visible in the worker's Cloudflare analytics —
+   still the fastest signal for a broken release asset, independent of whether any given
+   launch happened to sample.
+4. **Issue reports.** The actual feedback channel for anything telemetry doesn't capture
+   (UX complaints, feature requests, silent hangs with no error).
 
 ### Summary of honest gaps
 
-| Application         | Gap                                                                                     |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `cloudflare-worker` | No retained logs (`observability` unset in `wrangler.jsonc`); no per-route error alarm  |
-| `swift-server`      | Logs are local-only; no crash reporter; no remote signal of any kind                    |
-| `ios-app`           | No in-app telemetry or crash SDK; only Apple-hosted crash reports from opted-in testers |
-| `slicc-cli`         | No telemetry at all; release health is inferred from worker download-route traffic      |
+| Application         | Gap                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflare-worker` | No retained logs (`observability` unset in `wrangler.jsonc`); no per-route error alarm                                           |
+| `swift-server`      | Logs are local-only; no crash reporter; no remote signal of any kind                                                             |
+| `ios-app`           | No in-app telemetry or crash SDK; only Apple-hosted crash reports from opted-in testers                                          |
+| `slicc-cli`         | Only `enter`/`error` beacons (sampled, release builds only); the background update-notice check swallows its own errors silently |
 
 Do not add a dashboard link to this table that does not exist. An accurate "no signal
 today, nearest proxy is X" is more useful than a plausible-looking URL that nobody can

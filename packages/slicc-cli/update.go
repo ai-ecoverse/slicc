@@ -32,6 +32,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	release, err := checker.LatestCLIRelease(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slicc update: %s\n", err)
+		reportRuntimeError("update", err)
 		return 1
 	}
 	// A git-describe / dev build is not comparable to release tags (its
@@ -62,6 +63,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	fmt.Printf("updating slicc %s → %s ...\n", version, release.Version)
 	if err := checker.Apply(ctx, release, exePath); err != nil {
 		fmt.Fprintf(os.Stderr, "slicc update: %s\n", err)
+		reportRuntimeError("update", err)
 		return 1
 	}
 	fmt.Printf("updated %s to slicc %s\n", exePath, release.Version)

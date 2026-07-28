@@ -1,0 +1,36 @@
+# golangci-lint config for packages/go-optel (v2 schema), mirroring
+# packages/slicc-cli/.golangci.yml so the two Go modules share one lint bar.
+version: '2'
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - funlen
+    - gocyclo
+    - gocognit
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+  settings:
+    funlen:
+      lines: 120
+      statements: 70
+    gocyclo:
+      min-complexity: 25
+    gocognit:
+      min-complexity: 30
+  exclusions:
+    rules:
+      # Test functions are allowed to be longer / more branchy than production.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocyclo
+          - gocognit
+
+formatters:
+  enable:
+    - gofmt

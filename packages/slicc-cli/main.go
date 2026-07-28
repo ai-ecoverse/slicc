@@ -45,6 +45,7 @@ func run(args []string) int {
 	case "update":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		defer initTelemetry("update")()
 		return cmdUpdate(ctx, args[1:])
 	}
 
@@ -63,6 +64,11 @@ func run(args []string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Launch telemetry (Enter checkpoint only; see telemetry.go) — one
+	// sampling decision per process, opt-out via SLICC_NO_TELEMETRY=1,
+	// silent by construction on non-release builds.
+	defer initTelemetry(sub)()
 
 	// Once-a-day cached upgrade notice (stderr), refreshed in the background;
 	// the deferred flush lets a short-lived verb persist the refresh result.

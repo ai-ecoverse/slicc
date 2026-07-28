@@ -78,6 +78,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slicc prompt: %s\n", err)
+		reportRuntimeError("dial", err)
 		return 1
 	}
 	defer conn.Close()
@@ -144,6 +145,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "slicc exec: %s\n", err)
+		reportRuntimeError("dial", err)
 		return 1
 	}
 	defer conn.Close()
@@ -203,6 +205,7 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
 			failures++
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "slicc watch: %s\n", err)
+				reportRuntimeError("watch", err)
 			}
 			if failures >= 20 {
 				fmt.Fprintln(os.Stderr, "slicc watch: giving up after 20 failed attempts")
@@ -350,6 +353,7 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 			failures++
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "slicc follow: %s\n", err)
+				reportRuntimeError("follow", err)
 			}
 			if failures >= 20 {
 				fmt.Fprintln(os.Stderr, "slicc follow: giving up after 20 failed attempts")
