@@ -54,6 +54,8 @@ Every leader broadcast (`LeaderToFollowerMessage` / `broadcast*` in `tray-leader
 needs a matching follower handler in `tray-follower-sync.ts` AND a UI action wired in
 `wc-follower.ts`. New interactive elements on leader surfaces need follower counterparts.
 Check all three boot paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`).
+Also flag: a fallback removed from a shared helper for a leader-only replacement, or a
+gate keyed on a float name (`isCherry`) where a capability check belongs (#1706).
 The largest empirical failure class (~30–40 commits since 2026-03).
 
 ## 8. Origin / bridge routing contract (often Major)

@@ -1,5 +1,9 @@
 /**
- * Behavioral tests for the `uiOnly` follower mode of `startPageFollowerTray`.
+ * Behavioral tests for `advertisesCdpTargets` on `startPageFollowerTray`.
+ *
+ * The flag gates whether the follower enumerates local CDP targets and
+ * advertises them to the leader. A follower with no local CDP surface that
+ * still polls dials `wss://<page-origin>/cdp` on a 5s loop forever (#1706).
  *
  * `advertiseTargets` lives on the `FollowerSyncManager` that
  * `startPageFollowerTray` constructs inside its private `wireFollowerSync`,
@@ -79,17 +83,17 @@ function fakeConnection() {
   return { channel: {} as never, bootstrapId: 'boot-1', trayId: 'tray-1', controllerId: 'ctrl-1' };
 }
 
-describe('startPageFollowerTray uiOnly advertise suppression', () => {
+describe('startPageFollowerTray CDP advertise suppression', () => {
   beforeEach(() => {
     capturedOnConnected = null;
     capturedSyncCallbacks = null;
     mockAdvertiseTargets = vi.fn();
   });
 
-  it('uiOnly=true: interval path does NOT call advertiseTargets', async () => {
+  it('advertisesCdpTargets=false: interval path does NOT call advertiseTargets', async () => {
     vi.useFakeTimers();
     try {
-      const opts = { ...makeBaseOptions(), uiOnly: true, _refreshIntervalMs: 50 };
+      const opts = { ...makeBaseOptions(), advertisesCdpTargets: false, _refreshIntervalMs: 50 };
       const handle = startPageFollowerTray(opts);
       expect(capturedOnConnected).not.toBeNull();
       capturedOnConnected!(fakeConnection());
@@ -103,8 +107,8 @@ describe('startPageFollowerTray uiOnly advertise suppression', () => {
     }
   });
 
-  it('uiOnly=true: onTargetsChanged callback does NOT call advertiseTargets', async () => {
-    const opts = { ...makeBaseOptions(), uiOnly: true };
+  it('advertisesCdpTargets=false: onTargetsChanged callback does NOT call advertiseTargets', async () => {
+    const opts = { ...makeBaseOptions(), advertisesCdpTargets: false };
     const handle = startPageFollowerTray(opts);
     capturedOnConnected!(fakeConnection());
 
@@ -116,8 +120,8 @@ describe('startPageFollowerTray uiOnly advertise suppression', () => {
     handle.stop();
   });
 
-  it('uiOnly=true: chat sync (setChatAgent, requestSnapshot) still wired', () => {
-    const opts = { ...makeBaseOptions(), uiOnly: true };
+  it('advertisesCdpTargets=false: chat sync (setChatAgent, requestSnapshot) still wired', () => {
+    const opts = { ...makeBaseOptions(), advertisesCdpTargets: false };
     const handle = startPageFollowerTray(opts);
     capturedOnConnected!(fakeConnection());
 
@@ -127,10 +131,49 @@ describe('startPageFollowerTray uiOnly advertise suppression', () => {
     handle.stop();
   });
 
-  it('uiOnly=false (positive control): interval path DOES call advertiseTargets', async () => {
+  it('advertisesCdpTargets=true (positive control): interval path DOES call advertiseTargets', async () => {
     vi.useFakeTimers();
     try {
-      const opts = { ...makeBaseOptions(), uiOnly: false, _refreshIntervalMs: 50 };
+      const opts = { ...makeBaseOptions(), advertisesCdpTargets: true, _refreshIntervalMs: 50 };
+      const handle = startPageFollowerTray(opts);
+      capturedOnConnected!(fakeConnection());
+
+      await vi.advanceTimersByTimeAsync(120);
+
+      expect(mockAdvertiseTargets).toHaveBeenCalled();
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression (#1706): suppression must stop the POLLING, not just the
+  // advertisement. The bug users hit was the dialing itself — every tick
+  // called `listPages()`, which opened a doomed `wss://<hosted-origin>/cdp`
+  // socket. Asserting only on `advertiseTargets` would still pass while that
+  // loop ran, so assert the transport is never touched at all.
+  it('advertisesCdpTargets=false: never calls listPages (no CDP dialing at all)', async () => {
+    vi.useFakeTimers();
+    try {
+      const opts = { ...makeBaseOptions(), advertisesCdpTargets: false, _refreshIntervalMs: 50 };
+      const handle = startPageFollowerTray(opts);
+      capturedOnConnected!(fakeConnection());
+
+      await vi.advanceTimersByTimeAsync(500); // 10 refresh windows
+
+      expect(opts.browserAPI.listPages).not.toHaveBeenCalled();
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The option is optional; an omitted flag keeps the historical
+  // advertise-by-default behavior for local-bridge followers.
+  it('omitted flag defaults to advertising', async () => {
+    vi.useFakeTimers();
+    try {
+      const opts = { ...makeBaseOptions(), _refreshIntervalMs: 50 };
       const handle = startPageFollowerTray(opts);
       capturedOnConnected!(fakeConnection());
 

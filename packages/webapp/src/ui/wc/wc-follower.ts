@@ -216,6 +216,33 @@ function applyFeatureVisibility(features: CherryFeatureSet): void {
   }
 }
 
+/**
+ * Whether a follower should advertise its local tabs to the leader.
+ *
+ * Two independent questions, deliberately kept apart:
+ *
+ * 1. **Capability** — `hasLocalCdpSurface` from `setupStandalonePrelude`, which
+ *    is the only thing that knows which transport branch actually ran. A
+ *    follower opened from a hosted `/join/…` link has none: `getDefaultCdpUrl()`
+ *    resolves to `wss://<hosted-origin>/cdp`, the SPA fallback answers with HTML,
+ *    and the 5s refresh loop retries that doomed upgrade forever (#1706).
+ * 2. **Policy** — `uiOnly`. The extension side panel *has* a surface (a synthetic
+ *    cherry target) but deliberately withholds it, because the extension drives
+ *    the real tab through `chrome.debugger` and the two would compete.
+ *
+ * Never re-derive the capability from URL params here. The prelude's branches
+ * disagree about which params matter — the extension-leader branch reaches real
+ * Chrome with no bridge params at all — so a URL check silently drops that
+ * float. Keying on a float name is the same mistake one level up: it is what
+ * went stale when hosted followers shipped nine days after the original gate.
+ */
+export function followerAdvertisesCdpTargets(
+  hasLocalCdpSurface: boolean,
+  uiOnly: boolean
+): boolean {
+  return hasLocalCdpSurface && !uiOnly;
+}
+
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: follower boot has sequential setup steps
 export async function mountWcUiFollower(
@@ -511,7 +538,7 @@ export async function mountWcUiFollower(
   const follower = startPageFollowerTray({
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
-    uiOnly,
+    advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
     browserAPI: prelude.browser,
     onSnapshot: (messages) => controller.loadMessages(messages),
     // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)

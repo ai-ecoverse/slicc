@@ -32,6 +32,7 @@ vi.mock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
     cherryJoinUrl: undefined,
     cherryTransport: undefined,
     instanceId: 'i',
+    hasLocalCdpSurface: true,
   })),
 }));
 
@@ -73,6 +74,7 @@ function mockCherryPrelude(emit: () => void): void {
         features: ALL_CHERRY_FEATURES,
       },
       instanceId: 'i',
+      hasLocalCdpSurface: true,
     })),
   }));
 }
@@ -582,7 +584,7 @@ describe('mountWcUiFollower', () => {
     expect(app.querySelector('.wc-signin-redirect')).toBeNull();
   });
 
-  it('reads ?ui-only=1 and passes uiOnly:true to startPageFollowerTray when cherry', async () => {
+  it('reads ?ui-only=1 and suppresses CDP advertisement via startPageFollowerTray when cherry', async () => {
     // Change the URL to include ui-only=1
     Object.defineProperty(window, 'location', {
       value: {
@@ -598,7 +600,7 @@ describe('mountWcUiFollower', () => {
 
     expect(startFollowerSpy).toHaveBeenCalledTimes(1);
     const opts = startFollowerSpy.mock.calls[0]![0];
-    expect(opts.uiOnly).toBe(true);
+    expect(opts.advertisesCdpTargets).toBe(false);
 
     // The ui-only follower is the extension side-panel cockpit — a cross-origin
     // iframe where getUserMedia can't be granted. So mic/camera capture is
@@ -656,7 +658,11 @@ describe('mountWcUiFollower', () => {
     expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
-  it('does not set uiOnly when ?ui-only=1 is present but NOT cherry mode', async () => {
+  // Regression (#1706): a hosted-tab follower has no local CDP bridge, so it
+  // must not advertise — regardless of `ui-only`, which is a cherry-only
+  // parameter. The pre-fix gate (`isCherry && ui-only=1`) evaluated false here
+  // and left the follower dialing `wss://www.sliccy.ai/cdp` on a 5s loop.
+  it('suppresses CDP advertisement for a hosted-tab follower (no bridge params, NOT cherry)', async () => {
     // Regular follower with ui-only param should ignore it. This is a NON-cherry
     // follower, so it starts the follower-navigate-watcher, which calls
     // `realCdpTransport.on(...)`. Establish our own prelude mock with a complete
@@ -670,6 +676,9 @@ describe('mountWcUiFollower', () => {
         cherryJoinUrl: undefined,
         cherryTransport: undefined,
         instanceId: 'i',
+        // A hosted `/join/…` tab reaches no Chrome — what the prelude reports
+        // for this URL (asserted directly in setup-standalone-prelude.test.ts).
+        hasLocalCdpSurface: false,
       })),
     }));
     vi.resetModules();
@@ -686,8 +695,38 @@ describe('mountWcUiFollower', () => {
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
 
     const opts = startFollowerSpy.mock.calls[0]![0];
-    // uiOnly should be undefined or false for non-cherry
-    expect(opts.uiOnly).toBeFalsy();
+    // No `?bridge=`/`?bridgeToken=` on this URL — no local Chrome to enumerate.
+    expect(opts.advertisesCdpTargets).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// followerAdvertisesCdpTargets — the predicate in isolation (#1706)
+// ---------------------------------------------------------------------------
+
+describe('followerAdvertisesCdpTargets', () => {
+  // Capability AND policy. The capability half is decided by the prelude (see
+  // setup-standalone-prelude.test.ts) precisely so this predicate never has to
+  // guess a transport from URL shape — the extension-bridge branch reaches real
+  // Chrome with no bridge params, and a URL check drops it (#1706 review).
+  it('advertises when a local CDP surface exists and policy allows it', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(true, false)).toBe(true);
+  });
+
+  it('does not advertise without a local CDP surface (hosted-tab follower)', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, false)).toBe(false);
+  });
+
+  it('ui-only withholds an EXISTING surface (extension drives chrome.debugger)', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(true, true)).toBe(false);
+  });
+
+  it('ui-only cannot conjure a surface that does not exist', async () => {
+    const { followerAdvertisesCdpTargets } = await import('../../../src/ui/wc/wc-follower.js');
+    expect(followerAdvertisesCdpTargets(false, true)).toBe(false);
   });
 });
 

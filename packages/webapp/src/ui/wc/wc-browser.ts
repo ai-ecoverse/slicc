@@ -94,6 +94,13 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     }
   };
 
+  // Claim the surface so the shell's dock handler stops opening a workbench
+  // pane behind this overlay. Claiming HERE (rather than hardcoding 'browser'
+  // in the shell) keeps the pane fallback for every float that never reaches
+  // this wiring — followers, cherry, extension — and for a leader whose
+  // dynamic import of this module fails.
+  refs.overlaySurfaces.add('browser');
+
   refs.dock.addEventListener('slicc-dock-select', (event) => {
     if ((event as CustomEvent<{ id?: string }>).detail?.id !== 'browser') return;
     void refresh();

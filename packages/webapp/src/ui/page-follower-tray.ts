@@ -91,11 +91,19 @@ export interface StartPageFollowerTrayOptions {
   runtime?: string;
 
   /**
-   * When true, the follower keeps handshake + transport + chat sync but suppresses CDP target
-   * advertisement. Used by the extension's per-page cherry sidebar (`?cherry=1&ui-only=1`), where
-   * the extension controls the tab via real `chrome.debugger` CDP instead of a weak synthetic cherry target.
+   * Whether this follower has a CDP surface worth advertising to the leader.
+   * When false the follower keeps handshake + transport + chat sync but never
+   * enumerates or advertises targets.
+   *
+   * Must reflect whether a local CDP surface actually EXISTS — not which float
+   * is running. A follower without one that still polls will dial
+   * `getDefaultCdpUrl()` (= `wss://<page-origin>/cdp`) on a 5s loop forever;
+   * on a hosted origin that path returns the SPA fallback, so the socket can
+   * never open and the loop never ends.
+   *
+   * Callers: `wc-follower.ts` derives this via `followerAdvertisesCdpTargets`.
    */
-  uiOnly?: boolean;
+  advertisesCdpTargets?: boolean;
 
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
@@ -331,7 +339,7 @@ export function startPageFollowerTray(
       recoveryMessage: 'Follower CDP target listing recovered (stable for debounce window)',
     });
     const refreshTargets = async (): Promise<void> => {
-      if (options.uiOnly) return; // UI-only follower advertises no CDP target
+      if (options.advertisesCdpTargets === false) return; // no local CDP surface to advertise
       let pages: Awaited<ReturnType<typeof options.browserAPI.listPages>>;
       try {
         pages = await options.browserAPI.listPages();
@@ -363,7 +371,7 @@ export function startPageFollowerTray(
     options.onConnectionChange?.(true);
     sync.requestSnapshot();
 
-    if (!options.uiOnly) {
+    if (options.advertisesCdpTargets !== false) {
       targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
       void refreshTargets();
     }

@@ -100,6 +100,18 @@ export interface WcShellRefs {
   monitor: SliccMonitor;
   tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
+  /**
+   * Dock surface ids claimed by a full-screen overlay launcher instead of a
+   * workbench pane. `wireDockToWorkbench` consults this at click time, so a
+   * float that never wires an overlay (follower, cherry, extension) keeps the
+   * pane fallback — and a leader whose overlay module fails to load degrades
+   * to the same fallback rather than a dead dock item.
+   *
+   * Claimed by the overlay's own wiring (see `wc-browser.ts`), never here:
+   * hardcoding an id in the dock handler is what made the follower's Browser
+   * globe inert once the leader-only overlay became its replacement.
+   */
+  overlaySurfaces: Set<string>;
 }
 
 const STYLE_ID = 'slicc-wcui-style';
@@ -265,12 +277,18 @@ function buildWorkbench(): {
   const monitor = el('slicc-monitor', { class: 'wcui-monitor' }) as SliccMonitor;
   monitorSurfaceHost.append(monitor);
 
-  // The dock's system tools include a Browser entry; its CDP pane is not
-  // built for the WC shell yet — a placeholder beats an empty void.
+  // The dock's system tools include a Browser entry. Floats that wire the
+  // full-screen tab switcher claim the surface (see `WcShellRefs.overlaySurfaces`)
+  // and never reach this pane; the rest — followers above all — land here.
+  //
+  // So this copy must describe the FALLBACK, not the switcher. It used to
+  // advertise the switcher and tell the reader to click cards that are not
+  // there — harmless while the pane was unreachable, actively wrong now that
+  // followers land on it.
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
   const browserNote = el('div', { class: 'wcui-placeholder' });
   browserNote.textContent =
-    'The Browser dock item opens the full-screen tab switcher: every open tab — local and tray followers — with live screenshot thumbnails. Click a card to focus it, ✕ to close it.';
+    'The tab switcher runs on the leader. This float has no browser of its own to show — ask the leader to open, focus, or close tabs through chat.';
   browserSurface.append(browserNote);
 
   body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);
@@ -287,14 +305,16 @@ function wireDockToWorkbench(
   dock: HTMLElement,
   shell: HTMLElement,
   body: HTMLElement,
+  overlaySurfaces: ReadonlySet<string>,
   onSurfaceActivate?: (surfaceId: string) => void
 ): void {
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     if (!id) return;
-    // The Browser globe opens the FULL-SCREEN tab overlay (wc-browser.ts) —
-    // a workspace pane underneath it would just be dead chrome.
-    if (id === 'browser') return;
+    // Overlay-launched surfaces open a full-screen view instead; a workspace
+    // pane underneath it would just be dead chrome. Read at click time, not
+    // mount time — the overlay wiring runs after `mountWcShell`.
+    if (overlaySurfaces.has(id)) return;
     shell.setAttribute('open', '');
     body.setAttribute('active', id);
     onSurfaceActivate?.(id);
@@ -367,7 +387,8 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     buildWorkbench();
   const dock = el('slicc-dock', { 'system-tools': '' });
   shell.append(pane, workbench, dock);
-  wireDockToWorkbench(dock, shell, body, options.onSurfaceActivate);
+  const overlaySurfaces = new Set<string>();
+  wireDockToWorkbench(dock, shell, body, overlaySurfaces, options.onSurfaceActivate);
   wireTabsToBody(header, body, options.onSurfaceActivate);
 
   // The freezer rail reserves its width via `--rail-w` on the app column so
@@ -419,6 +440,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     monitor,
     tabBar,
     avatarMenu,
+    overlaySurfaces,
   };
 }
 

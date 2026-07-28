@@ -166,21 +166,82 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('html,body{margin:0');
   });
 
-  it('the browser dock item never opens a workspace pane (the overlay is the surface)', () => {
-    const root = mount();
-    const dock = root.querySelector('slicc-dock') as HTMLElement;
-    const shell = root.querySelector('slicc-shell') as HTMLElement;
-    dock.dispatchEvent(
+  // Regression (#1706): the dock handler used to hardcode `id === 'browser'`
+  // and skip the pane for EVERY float, while only standalone leaders wired the
+  // replacement overlay. Followers were left with an inert globe. The skip is
+  // now driven by `refs.overlaySurfaces`, which the overlay claims for itself.
+  it('an UNCLAIMED browser dock item opens the workspace pane (follower fallback)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'follower',
+      placeholder: 'p',
+    });
+
+    refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
     );
-    expect(shell.hasAttribute('open')).toBe(false);
+
+    expect(refs.shell.hasAttribute('open')).toBe(true);
+    expect(refs.workbenchBody.getAttribute('active')).toBe('browser');
   });
 
-  it('describes the tab switcher on the browser surface', () => {
+  it('a CLAIMED browser dock item opens no pane (the overlay is the surface)', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'leader',
+      placeholder: 'p',
+    });
+    refs.overlaySurfaces.add('browser'); // what wireWcBrowser does
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+
+    expect(refs.shell.hasAttribute('open')).toBe(false);
+  });
+
+  // The claim lands after mountWcShell (the overlay module is imported lazily),
+  // so the handler must read the set at click time, not capture it at wiring.
+  it('a claim registered AFTER mount still suppresses the pane', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'leader',
+      placeholder: 'p',
+    });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
+    );
+    expect(refs.shell.hasAttribute('open')).toBe(true);
+
+    refs.overlaySurfaces.add('browser');
+    refs.shell.removeAttribute('open');
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+    expect(refs.shell.hasAttribute('open')).toBe(false);
+  });
+
+  // This pane is what a float WITHOUT the overlay shows, so its copy has to
+  // describe that fallback. It previously advertised the switcher and told the
+  // reader to click cards — unreachable copy before #1706, wrong copy after.
+  it('the browser surface describes the fallback, not the switcher it lacks', () => {
     const root = mount();
-    const surface = root.querySelector('[surface-id="browser"]');
-    expect(surface?.textContent).toContain('tab switcher');
-    expect(surface?.textContent).toContain('followers');
+    const text = root.querySelector('[surface-id="browser"]')?.textContent ?? '';
+    expect(text).toContain('runs on the leader');
+    expect(text).not.toMatch(/click a card/i);
   });
 
   it('hides the workbench header until sprinkle tabs exist (tool tabs never render)', () => {
@@ -233,7 +294,6 @@ describe('mountWcUiPreview', () => {
 
   it('switches the active surface on tab select (canonical detail field is id)', () => {
     const root = mount();
-    const header = root.querySelector('slicc-workbench-header') as HTMLElement;
     const body = root.querySelector('slicc-workbench-body') as HTMLElement;
     // Drive the REAL tab bar so the event carries the library's canonical
     // `{ id }` detail — a synthetic `{ tabId }` event would mask the
