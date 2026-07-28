@@ -517,6 +517,46 @@ describe('GitCommands', () => {
     expect(result.stdout).toContain('/project');
   });
 
+  it('resolves relative revisions (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    const commits: string[] = [];
+
+    for (const version of ['one', 'two', 'three']) {
+      await vfs.writeFile('/project/file.txt', version);
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', version], '/project');
+      commits.push((await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim());
+    }
+
+    for (const [revision, expected] of [
+      ['HEAD~1', commits[1]],
+      ['HEAD~2', commits[0]],
+      ['HEAD^', commits[1]],
+      ['HEAD@{1}', commits[1]],
+    ] as const) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: `${expected}\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+    }
+  });
+
+  it('rejects invalid relative revisions as ambiguous arguments (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'only commit');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'only'], '/project');
+
+    for (const revision of ['HEAD~1', 'HEAD^', 'HEAD@{1}', 'HEAD~nope']) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: '',
+        stderr: `fatal: ambiguous argument '${revision}'\n`,
+        exitCode: 128,
+      });
+    }
+  });
+
   describe('status --short/-s/--porcelain', () => {
     it('shows untracked files with ?? prefix', async () => {
       await git.execute(['init'], '/project');
