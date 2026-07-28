@@ -971,6 +971,8 @@ Stdin from upstream pipelines is buffered **fully and read-ahead** before the sc
    process.stdin.on('data', (d) => (s += d)).on('end', () => console.log(s));
    ```
 
+   `pause()` suppresses that emission — the buffer stays intact until `resume()` re-arms it (or another surface drains it), and `process.exit(N)` called from a `'data'`/`'end'`/`'close'` handler exits the script with code `N`.
+
 3. **Async iteration** — yields the buffered string once:
 
    ```typescript

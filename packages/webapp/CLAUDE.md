@@ -322,6 +322,8 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
   buffered read-ahead (no streaming; latin1 strings, not `Buffer`s; `'error'` never fires) and
   one-shot: `read()`, events (`on('data')`→`'end'`→`'close'`, single chunk), and the async
   iterator share one `consumed` flag, so whichever drains first wins and the others see EOF.
+  On the events surface, `pause()` suppresses the deferred emission until `resume()` (the buffer
+  stays drainable) and `process.exit(N)` from a handler exits with code `N`.
   `process.stdin.isTTY` is always `false`. Do not expose `stdin` as a top-level identifier
   (collides with user declarations).
 
