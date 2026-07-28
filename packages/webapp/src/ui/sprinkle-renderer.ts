@@ -574,17 +574,26 @@ export class SprinkleRenderer {
     const iframe = document.createElement('iframe');
     // SECURITY NOTE (#1717): `allow-scripts allow-same-origin` together make
     // this sandbox ESCAPABLE — Chrome logs "can escape its sandboxing" once
-    // per iframe, and it is right. That is a known, accepted property, not an
-    // oversight: `allow-same-origin` is required because sprinkles load
-    // app-served assets (`/lucide-icons.js`, theme CSS) through the VFS
-    // service worker, and an opaque-origin (fully sandboxed) srcdoc document
-    // cannot use the parent's SW at all. The attribute is therefore only a
-    // speed bump against ACCIDENTAL misbehavior (forms, top-navigation) — the
-    // real containment for attacker-authored sprinkle content is the service
-    // worker's security gates, which treat this nested same-origin context as
-    // untrusted (see the sync-fs channel-nonce gate in
-    // `llm-proxy-sw-config.ts`). Do not "fix" the warning by dropping
-    // `allow-same-origin`, and do not assume this sandbox isolates anything.
+    // per iframe, and it is right. Do not assume this sandbox isolates
+    // anything: it is only a speed bump against ACCIDENTAL misbehavior
+    // (forms, top-navigation). Sprinkle content is agent-authored code that
+    // runs same-origin with the app — the trust model, not this attribute,
+    // is the boundary. The one hard gate that treats this nested context as
+    // untrusted is scoped to the sync-fs channel nonce (realm capability
+    // tokens) in `llm-proxy-sw-config.ts`; it is NOT general containment.
+    //
+    // What `allow-same-origin` is (and is not) known to affect — verified
+    // during #1718 review: the bridge does NOT need it (pure postMessage
+    // both ways; the parent validates by `event.source` identity), and
+    // neither do the injected tags (`/lucide-icons.js` is a network-served
+    // static, theme CSS is inlined). What WOULD change with an opaque
+    // origin: sprinkle content loses same-origin storage (`localStorage` /
+    // IndexedDB throw), and the document no longer inherits the parent's
+    // service-worker controller, so SW-served VFS subresources
+    // (`/preview/*`, project-serve root-relative paths) inside a sprinkle
+    // would fall through to the network. Dropping the token is option A in
+    // #1717 — do it only with a browser-level regression test over those
+    // behaviors, not as a drive-by "fix" for the console warning.
     //
     // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
     // level deeper there (host page → cherry iframe → sprinkle iframe), and
@@ -627,7 +636,7 @@ export class SprinkleRenderer {
       );
       iframe.addEventListener(
         'error',
-        (e) => {
+        () => {
           clearTimeout(timer);
           reject(new Error('full-doc iframe failed to load'));
         },
