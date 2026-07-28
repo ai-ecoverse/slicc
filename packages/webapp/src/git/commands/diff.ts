@@ -7,36 +7,51 @@
  */
 
 import * as git from 'isomorphic-git';
+import { parseArgs } from '../../shell/arg-parser.js';
 import { diffStat, unifiedDiff } from '../diff.js';
+import { matchesPathspec, resolveRevision } from './revision.js';
+import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
+
+type FileChange = { filepath: string; oldContent: string; newContent: string };
 
 export async function diff(
   ctx: GitCommandContext,
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const staged = args.includes('--staged') || args.includes('--cached');
-  const nameOnly = args.includes('--name-only');
-  const showStat = args.includes('--stat');
+  const { flags, positionals, doubleDashRest } = parseArgs(args, GIT_FLAG_SPECS.diff);
+  const staged = flags.staged === true || flags.cached === true;
+  const opts = {
+    nameOnly: flags['name-only'] === true,
+    stat: flags.stat === true,
+    pathspecs: doubleDashRest,
+  };
 
-  // Check for commit-to-commit diff: git diff <commit1> <commit2>
-  const nonFlags = args.filter((a) => !a.startsWith('-'));
-  if (nonFlags.length >= 2) {
-    return diffCommits(ctx, cwd, nonFlags[0], nonFlags[1], { nameOnly, stat: showStat });
+  if (positionals.length >= 2) {
+    return diffCommits(ctx, cwd, positionals[0], positionals[1], opts);
+  }
+  if (positionals.length === 1) {
+    const range = splitTwoDotRange(positionals[0]);
+    if (range) return diffCommits(ctx, cwd, range[0], range[1], opts);
+    if (staged) return diffCommitIndex(ctx, cwd, positionals[0], opts);
+    return diffCommitWorkdir(ctx, cwd, positionals[0], opts);
   }
 
-  const changes = staged ? await diffStagedChanges(ctx, cwd) : await diffWorkdirChanges(ctx, cwd);
+  const changes = staged
+    ? await diffStagedChanges(ctx, cwd, opts.pathspecs)
+    : await diffWorkdirChanges(ctx, cwd, opts.pathspecs);
 
   if (changes.length === 0) {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  if (nameOnly) {
+  if (opts.nameOnly) {
     const output = changes.map((c) => c.filepath).join('\n') + '\n';
     return { stdout: output, stderr: '', exitCode: 0 };
   }
 
-  if (showStat) {
+  if (opts.stat) {
     return formatDiffStat(changes);
   }
 
@@ -54,19 +69,22 @@ export async function diff(
   return { stdout: output, stderr: '', exitCode: 0 };
 }
 
-/** Collect staged changes by comparing HEAD tree vs index. */
+/** Collect staged changes by comparing a commit tree vs index. */
 async function diffStagedChanges(
   ctx: GitCommandContext,
-  cwd: string
-): Promise<{ filepath: string; oldContent: string; newContent: string }[]> {
-  const changes: { filepath: string; oldContent: string; newContent: string }[] = [];
+  cwd: string,
+  pathspecs: string[] = [],
+  ref = 'HEAD'
+): Promise<FileChange[]> {
+  const changes: FileChange[] = [];
 
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
-    trees: [git.TREE({ ref: 'HEAD' }), git.STAGE()],
+    trees: [git.TREE({ ref }), git.STAGE()],
     map: async (filepath, [headEntry, stageEntry]) => {
       if (filepath === '.' || filepath.startsWith('.git')) return undefined;
+      if (!matchesPathspec(filepath, pathspecs)) return undefined;
       const headType = headEntry ? await headEntry.type() : undefined;
       const stageType = stageEntry ? await stageEntry.type() : undefined;
       if (headType === 'tree' || stageType === 'tree') return undefined;
@@ -86,12 +104,29 @@ async function diffStagedChanges(
   return changes;
 }
 
+async function diffCommitIndex(
+  ctx: GitCommandContext,
+  cwd: string,
+  ref: string,
+  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+): Promise<GitCommandResult> {
+  let resolved: string;
+  try {
+    resolved = await resolveRevision(ctx, cwd, ref);
+  } catch {
+    return ambiguousRevision(ref);
+  }
+  const changes = await diffStagedChanges(ctx, cwd, opts.pathspecs, resolved);
+  return formatChanges(changes, opts);
+}
+
 /** Collect unstaged changes by comparing index vs workdir. */
 async function diffWorkdirChanges(
   ctx: GitCommandContext,
-  cwd: string
-): Promise<{ filepath: string; oldContent: string; newContent: string }[]> {
-  const changes: { filepath: string; oldContent: string; newContent: string }[] = [];
+  cwd: string,
+  pathspecs: string[] = []
+): Promise<FileChange[]> {
+  const changes: FileChange[] = [];
 
   // Collect all index entries with their OIDs
   const indexEntries = new Map<string, string>();
@@ -111,6 +146,7 @@ async function diffWorkdirChanges(
 
   // Compare each index entry with workdir content directly
   for (const [file, stageOid] of indexEntries) {
+    if (!matchesPathspec(file, pathspecs)) continue;
     const oldText = await readBlobText(ctx, cwd, stageOid);
 
     let newText = '';
@@ -148,37 +184,25 @@ export async function diffCommits(
   cwd: string,
   ref1: string,
   ref2: string,
-  opts: { nameOnly: boolean; stat: boolean }
+  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
 ): Promise<GitCommandResult> {
-  // Resolve short SHAs to full OIDs
-  let resolvedRef1 = ref1;
-  let resolvedRef2 = ref2;
   try {
-    resolvedRef1 = await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref1 });
+    const resolvedRef1 = await resolveRevision(ctx, cwd, ref1);
+    const resolvedRef2 = await resolveRevision(ctx, cwd, ref2);
+    return await diffResolvedTrees(ctx, cwd, resolvedRef1, resolvedRef2, opts);
   } catch {
-    // Not a short OID, try as branch/tag ref
-    try {
-      resolvedRef1 = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: ref1 });
-    } catch {
-      /* use as-is */
-    }
+    const invalid = await firstInvalidRef(ctx, cwd, [ref1, ref2]);
+    return ambiguousRevision(invalid ?? ref1);
   }
-  try {
-    resolvedRef2 = await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref2 });
-  } catch {
-    try {
-      resolvedRef2 = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: ref2 });
-    } catch {
-      /* use as-is */
-    }
-  }
+}
 
-  type FileChange = {
-    filepath: string;
-    oldContent: string;
-    newContent: string;
-  };
-
+async function diffResolvedTrees(
+  ctx: GitCommandContext,
+  cwd: string,
+  resolvedRef1: string,
+  resolvedRef2: string,
+  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+): Promise<GitCommandResult> {
   const changes: FileChange[] = [];
 
   await git.walk({
@@ -186,53 +210,114 @@ export async function diffCommits(
     dir: cwd,
     trees: [git.TREE({ ref: resolvedRef1 }), git.TREE({ ref: resolvedRef2 })],
     map: async (filepath, [entry1, entry2]) => {
-      if (filepath === '.') return undefined;
-
-      const type1 = entry1 ? await entry1.type() : undefined;
-      const type2 = entry2 ? await entry2.type() : undefined;
-
-      if (type1 === 'tree' || type2 === 'tree') return undefined;
-
-      const oid1 = entry1 ? await entry1.oid() : undefined;
-      const oid2 = entry2 ? await entry2.oid() : undefined;
-
-      if (oid1 === oid2) return undefined;
-
-      const content1 = entry1 ? await entry1.content() : undefined;
-      const content2 = entry2 ? await entry2.content() : undefined;
-
-      const oldText = content1 ? new TextDecoder().decode(content1) : '';
-      const newText = content2 ? new TextDecoder().decode(content2) : '';
-
-      changes.push({ filepath, oldContent: oldText, newContent: newText });
+      const change = await compareWalkerEntries(filepath, entry1, entry2, opts.pathspecs ?? []);
+      if (change) changes.push(change);
       return undefined;
     },
   });
 
-  if (changes.length === 0) {
-    return { stdout: '', stderr: '', exitCode: 0 };
-  }
+  return formatChanges(changes, opts);
+}
 
+async function diffCommitWorkdir(
+  ctx: GitCommandContext,
+  cwd: string,
+  ref: string,
+  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+): Promise<GitCommandResult> {
+  let resolved: string;
+  try {
+    resolved = await resolveRevision(ctx, cwd, ref);
+  } catch {
+    return ambiguousRevision(ref);
+  }
+  const tracked = new Set(await git.listFiles({ fs: ctx.lfs, dir: cwd }));
+  const changes: FileChange[] = [];
+  await git.walk({
+    fs: ctx.lfs,
+    dir: cwd,
+    trees: [git.TREE({ ref: resolved }), git.WORKDIR()],
+    map: async (filepath, [oldEntry, workEntry]) => {
+      if (!oldEntry && !tracked.has(filepath)) return undefined;
+      const change = await compareWalkerEntries(
+        filepath,
+        oldEntry,
+        workEntry,
+        opts.pathspecs ?? []
+      );
+      if (change) changes.push(change);
+      return undefined;
+    },
+  });
+  return formatChanges(changes, opts);
+}
+
+async function compareWalkerEntries(
+  filepath: string,
+  oldEntry: git.WalkerEntry | null,
+  newEntry: git.WalkerEntry | null,
+  pathspecs: string[]
+): Promise<FileChange | null> {
+  if (filepath === '.' || !matchesPathspec(filepath, pathspecs)) return null;
+  const oldType = oldEntry ? await oldEntry.type() : undefined;
+  const newType = newEntry ? await newEntry.type() : undefined;
+  if (oldType === 'tree' || newType === 'tree') return null;
+  const oldOid = oldEntry ? await oldEntry.oid() : undefined;
+  const newOid = newEntry ? await newEntry.oid() : undefined;
+  if (oldOid === newOid) return null;
+  const oldContent = oldEntry ? await oldEntry.content() : undefined;
+  const newContent = newEntry ? await newEntry.content() : undefined;
+  return {
+    filepath,
+    oldContent: oldContent ? new TextDecoder().decode(oldContent) : '',
+    newContent: newContent ? new TextDecoder().decode(newContent) : '',
+  };
+}
+
+function formatChanges(
+  changes: FileChange[],
+  opts: { nameOnly: boolean; stat: boolean }
+): GitCommandResult {
+  if (changes.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
   if (opts.nameOnly) {
-    const output = changes.map((c) => c.filepath).join('\n') + '\n';
-    return { stdout: output, stderr: '', exitCode: 0 };
+    return { stdout: `${changes.map((c) => c.filepath).join('\n')}\n`, stderr: '', exitCode: 0 };
   }
+  if (opts.stat) return formatDiffStat(changes);
+  const stdout = changes
+    .map((change) =>
+      unifiedDiff({
+        oldContent: change.oldContent,
+        newContent: change.newContent,
+        oldName: change.filepath,
+        newName: change.filepath,
+      })
+    )
+    .join('');
+  return { stdout, stderr: '', exitCode: 0 };
+}
 
-  if (opts.stat) {
-    return formatDiffStat(changes);
+function splitTwoDotRange(value: string): [string, string] | null {
+  const match = /^(.+)\.\.([^.]*)$/.exec(value);
+  return match?.[2] ? [match[1], match[2]] : null;
+}
+
+async function firstInvalidRef(
+  ctx: GitCommandContext,
+  cwd: string,
+  refs: string[]
+): Promise<string | null> {
+  for (const ref of refs) {
+    try {
+      await resolveRevision(ctx, cwd, ref);
+    } catch {
+      return ref;
+    }
   }
+  return null;
+}
 
-  let output = '';
-  for (const change of changes) {
-    output += unifiedDiff({
-      oldContent: change.oldContent,
-      newContent: change.newContent,
-      oldName: change.filepath,
-      newName: change.filepath,
-    });
-  }
-
-  return { stdout: output, stderr: '', exitCode: 0 };
+function ambiguousRevision(ref: string): GitCommandResult {
+  return { stdout: '', stderr: `fatal: ambiguous argument '${ref}'\n`, exitCode: 128 };
 }
 
 function formatDiffStat(

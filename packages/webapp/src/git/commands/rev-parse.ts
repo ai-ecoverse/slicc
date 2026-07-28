@@ -1,6 +1,7 @@
 /** `git rev-parse`. */
 
 import * as git from 'isomorphic-git';
+import { resolveRevision } from './revision.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function revParse(
@@ -32,8 +33,25 @@ export async function revParse(
 
   const ref = args.find((a) => !a.startsWith('-')) ?? 'HEAD';
   try {
-    const oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
-    return { stdout: `${oid}\n`, stderr: '', exitCode: 0 };
+    if (args.includes('--abbrev-ref')) {
+      if (ref === 'HEAD') {
+        const current = await git.currentBranch({ fs: ctx.lfs, dir: cwd });
+        return { stdout: `${current ?? 'HEAD'}\n`, stderr: '', exitCode: 0 };
+      }
+      return {
+        stdout: `${ref.replace(/^refs\/(?:heads|tags|remotes)\//, '')}\n`,
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+    const oid = await resolveRevision(ctx, cwd, ref);
+    const shortArg = args.find((a) => a === '--short' || a.startsWith('--short='));
+    const length = shortArg?.includes('=') ? Number(shortArg.split('=')[1]) : 7;
+    return {
+      stdout: `${shortArg ? oid.slice(0, Number.isFinite(length) ? length : 7) : oid}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
   } catch {
     return {
       stdout: '',

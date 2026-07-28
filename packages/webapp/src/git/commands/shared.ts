@@ -54,6 +54,7 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
     ],
     boolean: ['oneline', 'stat', 'reverse', 'all'],
     alias: { n: 'max-count', pretty: 'format' },
+    '--': true,
   },
   branch: {
     string: [
@@ -70,7 +71,12 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
   checkout: { string: ['b', 'B', 'orphan', 'track', 'start-point', 'conflict'], '--': true },
   clean: CLEAN_SPEC,
-  diff: { string: ['format', 'diff-filter'], alias: { pretty: 'format' } },
+  diff: {
+    string: ['format', 'diff-filter'],
+    boolean: ['staged', 'cached', 'name-only', 'stat'],
+    alias: { pretty: 'format' },
+    '--': true,
+  },
   show: { string: ['format'], boolean: ['stat'], alias: { pretty: 'format' } },
   merge: {
     string: ['message', 'strategy', 'strategy-option'],
@@ -120,6 +126,10 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
   'ls-tree': {
     boolean: ['r', 'd', 'name-only'],
+  },
+  'ls-remote': {
+    boolean: ['heads', 'tags', 'symref', 'exit-code'],
+    alias: { h: 'heads', t: 'tags' },
   },
 };
 

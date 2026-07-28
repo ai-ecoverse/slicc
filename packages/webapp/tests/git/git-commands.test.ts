@@ -41,7 +41,7 @@ describe('GitCommands', () => {
 
   it('returns error for unknown command', async () => {
     const result = await git.execute(['unknown'], '/');
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(127);
     expect(result.stderr).toContain('is not a git command');
   });
 
@@ -517,6 +517,70 @@ describe('GitCommands', () => {
     expect(result.stdout).toContain('/project');
   });
 
+  it('resolves parent revisions and rejects unsupported reflog selectors (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    const commits: string[] = [];
+
+    for (const version of ['one', 'two', 'three']) {
+      await vfs.writeFile('/project/file.txt', version);
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', version], '/project');
+      commits.push((await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim());
+    }
+
+    for (const [revision, expected] of [
+      ['HEAD~1', commits[1]],
+      ['HEAD~2', commits[0]],
+      ['HEAD^', commits[1]],
+    ] as const) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: `${expected}\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+    }
+
+    expect(await git.execute(['rev-parse', 'HEAD@{1}'], '/project')).toEqual({
+      stdout: '',
+      stderr: "fatal: ambiguous argument 'HEAD@{1}'\n",
+      exitCode: 128,
+    });
+  });
+
+  it('rejects invalid relative revisions as ambiguous arguments (#1726)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'only commit');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'only'], '/project');
+
+    for (const revision of ['HEAD~1', 'HEAD^', 'HEAD@{1}', 'HEAD~nope']) {
+      expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
+        stdout: '',
+        stderr: `fatal: ambiguous argument '${revision}'\n`,
+        exitCode: 128,
+      });
+    }
+  });
+
+  it('honors branch-name and revision-abbreviation flags (#1727)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+    await git.execute(['checkout', '-b', 'feature'], '/project');
+
+    const fullOid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+    const short = await git.execute(['rev-parse', '--short', 'HEAD'], '/project');
+    const shortEight = await git.execute(['rev-parse', '--short=8', 'HEAD'], '/project');
+    const abbrevRef = await git.execute(['rev-parse', '--abbrev-ref', 'HEAD'], '/project');
+    const currentBranch = await git.execute(['branch', '--show-current'], '/project');
+
+    expect(short).toEqual({ stdout: `${fullOid.slice(0, 7)}\n`, stderr: '', exitCode: 0 });
+    expect(shortEight).toEqual({ stdout: `${fullOid.slice(0, 8)}\n`, stderr: '', exitCode: 0 });
+    expect(abbrevRef).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+    expect(currentBranch).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+  });
+
   describe('status --short/-s/--porcelain', () => {
     it('shows untracked files with ?? prefix', async () => {
       await git.execute(['init'], '/project');
@@ -691,6 +755,22 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('-old');
       expect(result.stdout).toContain('+new');
+    });
+
+    it('compares a supplied revision with the index for --cached', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'committed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'staged\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await vfs.writeFile('/project/file.txt', 'unstaged\n');
+
+      const result = await git.execute(['diff', '--cached', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('+staged');
+      expect(result.stdout).not.toContain('unstaged');
     });
 
     it('shows only filenames with --name-only', async () => {

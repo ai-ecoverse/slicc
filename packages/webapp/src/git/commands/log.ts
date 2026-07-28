@@ -3,6 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
+import { matchesPathspec } from './revision.js';
 import { flagString, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -11,7 +12,7 @@ export async function log(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags } = parseArgs(args, GIT_FLAG_SPECS.log);
+  const { flags, positionals, doubleDashRest } = parseArgs(args, GIT_FLAG_SPECS.log);
   const depth = flagString(flags, 'max-count');
   const oneline = flags.oneline === true;
   const showStat = flags.stat === true;
@@ -22,18 +23,13 @@ export async function log(
   const grepFilter = flagString(flags, 'grep');
   const followFile = flagString(flags, 'follow');
 
-  let commits: Awaited<ReturnType<typeof git.log>>;
-
-  if (all) {
-    commits = await logAllBranches(ctx, cwd, depth ? parseInt(depth, 10) : undefined);
-  } else {
-    commits = await git.log({
-      fs: ctx.lfs,
-      dir: cwd,
-      depth: depth ? parseInt(depth, 10) : 10,
-      ...(followFile ? { filepath: followFile, follow: true } : {}),
-    });
-  }
+  let commits = await selectCommits(ctx, cwd, {
+    all,
+    maxCount: depth ? parseInt(depth, 10) : undefined,
+    revision: positionals[0],
+    pathspecs: doubleDashRest,
+    followFile,
+  });
 
   // Apply --author filter
   if (authorFilter) {
@@ -49,12 +45,65 @@ export async function log(
     commits = commits.slice().reverse();
   }
 
+  const stdout = await renderLog(ctx, cwd, commits, { format, oneline, showStat });
+  return { stdout, stderr: '', exitCode: 0 };
+}
+
+interface LogSelection {
+  all: boolean;
+  maxCount?: number;
+  revision?: string;
+  pathspecs: string[];
+  followFile?: string;
+}
+
+async function selectCommits(
+  ctx: GitCommandContext,
+  cwd: string,
+  selection: LogSelection
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const range = selection.revision ? splitLogRange(selection.revision) : null;
+  const ref = range?.[1] ?? selection.revision;
+  let commits = selection.all
+    ? await logAllBranches(
+        ctx,
+        cwd,
+        selection.pathspecs.length > 0 ? undefined : selection.maxCount
+      )
+    : await git.log({
+        fs: ctx.lfs,
+        dir: cwd,
+        ...(ref ? { ref } : {}),
+        ...(!range && selection.pathspecs.length === 0 ? { depth: selection.maxCount ?? 10 } : {}),
+        ...(selection.followFile ? { filepath: selection.followFile, follow: true } : {}),
+      });
+  if (range) {
+    const excluded = await git.log({ fs: ctx.lfs, dir: cwd, ref: range[0] });
+    const excludedOids = new Set(excluded.map((entry) => entry.oid));
+    commits = commits.filter((entry) => !excludedOids.has(entry.oid));
+  }
+  if (selection.pathspecs.length > 0) {
+    const matches = await Promise.all(
+      commits.map((entry) => commitTouchesPathspec(ctx, cwd, entry, selection.pathspecs))
+    );
+    commits = commits.filter((_, index) => matches[index]);
+  }
+  return range || selection.pathspecs.length > 0
+    ? commits.slice(0, selection.maxCount ?? 10)
+    : commits;
+}
+
+async function renderLog(
+  ctx: GitCommandContext,
+  cwd: string,
+  commits: Awaited<ReturnType<typeof git.log>>,
+  opts: { format?: string; oneline: boolean; showStat: boolean }
+): Promise<string> {
   let output = '';
   for (const entry of commits) {
     const { commit, oid } = entry;
-    if (format) {
-      output += formatLogEntry(oid, commit, format) + '\n';
-    } else if (oneline) {
+    if (opts.format) output += `${formatLogEntry(oid, commit, opts.format)}\n`;
+    else if (opts.oneline) {
       output += `\x1b[33m${oid.slice(0, 7)}\x1b[0m ${commit.message.split('\n')[0]}\n`;
     } else {
       output += `\x1b[33mcommit ${oid}\x1b[0m\n`;
@@ -62,13 +111,9 @@ export async function log(
       output += `Date:   ${new Date(commit.author.timestamp * 1000).toLocaleString()}\n\n`;
       output += `    ${commit.message.replace(/\n/g, '\n    ')}\n\n`;
     }
-
-    if (showStat) {
-      output += await logStatForCommit(ctx, cwd, entry);
-    }
+    if (opts.showStat) output += await logStatForCommit(ctx, cwd, entry);
   }
-
-  return { stdout: output, stderr: '', exitCode: 0 };
+  return output;
 }
 
 /**
@@ -167,4 +212,38 @@ async function logStatForCommit(
 
   // Initial commit: diff against empty tree
   return await diffInitialCommit(ctx, cwd, oid, true);
+}
+
+function splitLogRange(value: string): [string, string] | null {
+  const match = /^(.+)\.\.([^.]*)$/.exec(value);
+  return match?.[2] ? [match[1], match[2]] : null;
+}
+
+async function commitTouchesPathspec(
+  ctx: GitCommandContext,
+  cwd: string,
+  entry: Awaited<ReturnType<typeof git.log>>[0],
+  pathspecs: string[]
+): Promise<boolean> {
+  const parent = entry.commit.parent[0];
+  let touched = false;
+  await git.walk({
+    fs: ctx.lfs,
+    dir: cwd,
+    trees: parent
+      ? [git.TREE({ ref: parent }), git.TREE({ ref: entry.oid })]
+      : [git.TREE({ ref: entry.oid })],
+    map: async (filepath, entries) => {
+      if (touched || filepath === '.' || !matchesPathspec(filepath, pathspecs)) return undefined;
+      const types = await Promise.all(entries.map((item) => item?.type()));
+      if (types.some((type) => type === 'tree')) return undefined;
+      if (entries.length === 1) {
+        touched = !!entries[0];
+      } else {
+        touched = (await entries[0]?.oid()) !== (await entries[1]?.oid());
+      }
+      return undefined;
+    },
+  });
+  return touched;
 }

@@ -32,8 +32,10 @@ import { fetch } from './commands/fetch.js';
 import { init } from './commands/init.js';
 import { log } from './commands/log.js';
 import { lsFiles } from './commands/ls-files.js';
+import { lsRemote } from './commands/ls-remote.js';
 import { lsTree } from './commands/ls-tree.js';
 import { merge } from './commands/merge.js';
+import { mergeBase } from './commands/merge-base.js';
 import { mergeFile } from './commands/merge-file.js';
 import { mv } from './commands/mv.js';
 import { pull } from './commands/pull.js';
@@ -309,8 +311,10 @@ export class GitCommands {
     // a preceding value-flag (`commit -m --help`) is shadowed onto that flag,
     // and a `--help` after a `--` separator (`checkout -- --help`) lands in
     // `doubleDashRest` — neither sets the `help` flag (#1047 review).
-    const subHelp = parseArgs(rest, GIT_FLAG_SPECS[command] ?? {});
-    if (subHelp.flags.help || subHelp.flags.h) {
+    const subcommandSpec = GIT_FLAG_SPECS[command] ?? {};
+    const subHelp = parseArgs(rest, subcommandSpec);
+    const shortHelpHasCommandMeaning = Object.hasOwn(subcommandSpec.alias ?? {}, 'h');
+    if (subHelp.flags.help || (subHelp.flags.h && !shortHelpHasCommandMeaning)) {
       return this.help();
     }
 
@@ -341,6 +345,8 @@ export class GitCommands {
           return await commit(this.ctx, effectiveCwd, rest);
         case 'log':
           return await log(this.ctx, effectiveCwd, rest);
+        case 'ls-remote':
+          return await lsRemote(this.ctx, effectiveCwd, rest);
         case 'branch':
           return await branch(this.ctx, effectiveCwd, rest);
         case 'checkout':
@@ -361,6 +367,8 @@ export class GitCommands {
           return await push(this.ctx, effectiveCwd, rest);
         case 'merge':
           return await merge(this.ctx, effectiveCwd, rest);
+        case 'merge-base':
+          return await mergeBase(this.ctx, effectiveCwd, rest);
         case 'cherry-pick':
           return await cherryPick(this.ctx, effectiveCwd, rest);
         case 'rebase':
@@ -399,7 +407,7 @@ export class GitCommands {
           return {
             stdout: '',
             stderr: `git: '${command}' is not a git command. See 'git help'.\n`,
-            exitCode: 1,
+            exitCode: 127,
           };
       }
     } catch (err) {
