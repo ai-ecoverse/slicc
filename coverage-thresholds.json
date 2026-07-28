@@ -3,7 +3,7 @@
   "typescript": {
     "cloudflare-worker": {
       "lines": 86,
-      "statements": 85,
+      "statements": 86,
       "functions": 92,
       "branches": 75,
       "coverageExclude": [
@@ -21,7 +21,7 @@
     },
     "node-server": {
       "lines": 82,
-      "statements": 79,
+      "statements": 80,
       "functions": 84,
       "branches": 70,
       "coverageExclude": [
@@ -41,8 +41,8 @@
     },
     "chrome-extension": {
       "lines": 81,
-      "statements": 80,
-      "functions": 72,
+      "statements": 81,
+      "functions": 73,
       "branches": 69,
       "coverageExclude": [
         "**/node_modules/**",
@@ -68,8 +68,8 @@
       ]
     },
     "webapp": {
-      "lines": 79,
-      "statements": 77,
+      "lines": 80,
+      "statements": 78,
       "functions": 78,
       "branches": 68,
       "coverageExclude": [
@@ -86,10 +86,10 @@
       ]
     },
     "cherry": {
-      "lines": 83,
-      "statements": 81,
-      "functions": 96,
-      "branches": 66
+      "lines": 88,
+      "statements": 86,
+      "functions": 97,
+      "branches": 74
     },
     "cloud-core": {
       "lines": 85,
@@ -110,9 +110,9 @@
       ]
     },
     "shared": {
-      "lines": 95,
+      "lines": 96,
       "statements": 94,
-      "functions": 93,
+      "functions": 94,
       "branches": 87
     },
     "webcomponents": {
@@ -135,9 +135,9 @@
       "regions": 57
     },
     "swift-launcher": {
-      "lines": 32,
-      "functions": 37,
-      "regions": 42
+      "lines": 39,
+      "functions": 42,
+      "regions": 48
     },
     "swift-optel": {
       "lines": 75,
