@@ -27,9 +27,13 @@ export const MACOS_PATH_PREFIXES = [
 export const IOS_PATH_PREFIXES = ['packages/ios-app/'];
 
 // APPROVED relevant path set for the `slicc` Go CLI binaries. The CLI vendors
-// its own copy of the wire protocol (internal/protocol), so only its own package
-// changes the built binary — no cross-package inputs.
-export const SLICC_CLI_PATH_PREFIXES = ['packages/slicc-cli/'];
+// its own copy of the wire protocol (internal/protocol), so that part of the
+// built binary has no cross-package inputs — but packages/go-optel/ is a real
+// build dependency (pulled in via a local `replace` in slicc-cli's go.mod;
+// this monorepo has no go.work), so a go-optel-only change must still gate a
+// release, or a go-optel fix would ship silently until an unrelated
+// slicc-cli file next changed.
+export const SLICC_CLI_PATH_PREFIXES = ['packages/slicc-cli/', 'packages/go-optel/'];
 
 // APPROVED extension-relevant path set for the Chrome Web Store publish. Covers
 // the extension entry points plus every web package bundled into the extension

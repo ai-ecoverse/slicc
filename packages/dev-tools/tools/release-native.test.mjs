@@ -312,12 +312,24 @@ describe('decideSliccCliGating', () => {
     ).toEqual({ sliccCli: true, firstRelease: false });
   });
 
+  it('builds when only its go-optel dependency changed', () => {
+    expect(
+      decideSliccCliGating({
+        lastTag: 'v1.0.0',
+        // go-optel is a real build dependency (local `replace` in
+        // slicc-cli/go.mod), unlike the vendored internal/protocol copy below.
+        changedFiles: ['packages/go-optel/sanitize.go'],
+      })
+    ).toEqual({ sliccCli: true, firstRelease: false });
+  });
+
   it('skips when only unrelated packages changed', () => {
     expect(
       decideSliccCliGating({
         lastTag: 'v1.0.0',
         // A shared-ts protocol change does NOT rebuild the CLI (it vendors its
-        // own internal/protocol copy) — only packages/slicc-cli/ counts.
+        // own internal/protocol copy) — only packages/slicc-cli/ and
+        // packages/go-optel/ count.
         changedFiles: ['packages/shared-ts/src/tray-sync-protocol.ts', 'packages/webapp/x.ts'],
       })
     ).toEqual({ sliccCli: false, firstRelease: false });
