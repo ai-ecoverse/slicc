@@ -21,6 +21,7 @@ import {
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
   isPassthroughDestination,
+  maySetProxyConfig,
   maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
@@ -536,6 +537,16 @@ describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
     expect(maySetSyncFsNonce(undefined)).toBe(false);
     expect(maySetSyncFsNonce({ id: 'x' })).toBe(false); // no type
     expect(maySetSyncFsNonce({ type: 'window' })).toBe(false); // no frameType
+  });
+});
+
+describe('maySetProxyConfig (bridge-config security gate)', () => {
+  it('accepts only the top-level leader window', () => {
+    expect(maySetProxyConfig({ type: 'window', frameType: 'top-level', id: 'leader' })).toBe(true);
+    expect(maySetProxyConfig({ type: 'worker', id: 'realm' })).toBe(false);
+    expect(maySetProxyConfig({ type: 'window', frameType: 'nested', id: 'sprinkle' })).toBe(false);
+    expect(maySetProxyConfig({ type: 'window', frameType: 'auxiliary', id: 'popup' })).toBe(false);
+    expect(maySetProxyConfig(null)).toBe(false);
   });
 });
 

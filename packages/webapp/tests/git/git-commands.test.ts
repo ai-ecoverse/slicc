@@ -41,7 +41,7 @@ describe('GitCommands', () => {
 
   it('returns error for unknown command', async () => {
     const result = await git.execute(['unknown'], '/');
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(127);
     expect(result.stderr).toContain('is not a git command');
   });
 
