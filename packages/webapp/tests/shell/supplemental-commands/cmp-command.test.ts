@@ -46,4 +46,15 @@ describe('cmp command', () => {
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain('cmp: missing: No such file or directory');
   });
+
+  it.each(['-s', '--quiet', '--silent'])(
+    '%s suppresses unreadable-input diagnostics',
+    async (flag) => {
+      const result = await createCmpCommand().execute(
+        [flag, 'missing', 'b'],
+        context({ '/work/b': [] })
+      );
+      expect(result).toEqual({ stdout: '', stderr: '', exitCode: 2 });
+    }
+  );
 });

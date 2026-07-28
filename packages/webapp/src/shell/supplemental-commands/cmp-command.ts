@@ -18,9 +18,9 @@ export function createCmpCommand(): Command {
       };
     }
     const first = await readInput(ctx, files[0]);
-    if ('error' in first) return first.error;
+    if ('error' in first) return quiet ? { ...first.error, stderr: '' } : first.error;
     const second = await readInput(ctx, files[1]);
-    if ('error' in second) return second.error;
+    if ('error' in second) return quiet ? { ...second.error, stderr: '' } : second.error;
     const difference = firstDifference(first.bytes, second.bytes);
     if (!difference) return { stdout: '', stderr: '', exitCode: 0 };
     if (quiet) return { stdout: '', stderr: '', exitCode: 1 };
