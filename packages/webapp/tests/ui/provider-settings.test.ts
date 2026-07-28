@@ -1920,6 +1920,204 @@ describe('model metadata overrides', () => {
     expect(models[0].contextWindow).toBe(1000000);
   });
 
+  it('propagates cost from getModelIds for a model id unknown to pi-ai (fixes $0 pricing)', () => {
+    // Regression: an Adobe-style proxy reports pricing for a model pi-ai's
+    // registry doesn't know (e.g. claude-opus-5). Without a cost branch in
+    // applyModelMetadata the synthesized model kept buildProviderRoutedModel's
+    // $0 default and the session cost counter read $0. pi-ai's calculateCost()
+    // prices usage from model.cost, so the object must survive resolution.
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+    // Flat mirrors match the shape buildAdobeModel() emits.
+    expect(model.inputCost).toBe(5);
+    expect(model.outputCost).toBe(25);
+    expect(model.cacheReadCost).toBe(0.5);
+    expect(model.cacheWriteCost).toBe(6.25);
+  });
+
+  it('leaves cost at the synthesized zero default when getModelIds reports none', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('getModelIds cost takes priority over modelOverrides cost (layer 3 > layer 2)', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-5': { cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+      },
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
+  it('cost precedence: reported cost > family-inherited cost > zeros', () => {
+    // Wave 2: a proxy reports two Claude models pi-ai's registry doesn't know.
+    // A known opus in the same family carries pricing, so the unknown-model
+    // branch inherits it as a fallback — unless getModelIds reports a cost,
+    // which must win. The chain proves reported > family-inherited > zeros.
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    const reportedCost = { input: 9, output: 45, cacheRead: 0.9, cacheWrite: 11.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        // Unknown opus WITHOUT a cost → inherits the known opus family cost.
+        { id: 'claude-opus-5', name: 'Claude Opus 5' },
+        // Unknown opus WITH a reported cost → reported wins over the family.
+        { id: 'claude-opus-5-1', name: 'Claude Opus 5.1', cost: reportedCost },
+        // Non-Claude unknown model → no family to inherit → stays at zeros.
+        { id: 'mystery-1', name: 'Mystery 1' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const inherited = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+    const reported = models.find((m) => m.id === 'claude-opus-5-1') as unknown as Record<
+      string,
+      unknown
+    >;
+    const mystery = models.find((m) => m.id === 'mystery-1') as unknown as Record<string, unknown>;
+
+    // Family-inherited cost (no reported cost) — object + flat mirrors.
+    expect(inherited.cost).toEqual(knownOpusCost);
+    expect(inherited.inputCost).toBe(5);
+    expect(inherited.outputCost).toBe(25);
+    // Reported cost wins over the family-inherited fallback.
+    expect(reported.cost).toEqual(reportedCost);
+    expect(reported.inputCost).toBe(9);
+    expect(reported.outputCost).toBe(45);
+    // No family match and no reported cost → zeros.
+    expect(mystery.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('does not inherit Claude family cost for OpenAI-routed models (local-llm/azure)', () => {
+    // Regression for the Codex P2 finding: a local-llm or azure-openai account
+    // can expose a Claude-style id (e.g. claude-sonnet-6) that pi-ai's registry
+    // doesn't know. Those models route through the OpenAI API (api: 'openai')
+    // and run on the user's own/free server, so they must NOT inherit real
+    // Anthropic pricing from the global model map — they keep the $0 default.
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        // OpenAI-routed unknown Claude-family id → must stay at the $0 default.
+        { id: 'claude-opus-5', name: 'Claude Opus 5', api: 'openai' as const },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+    // Must NOT have inherited the known Anthropic opus pricing.
+    expect(model.cost).not.toEqual(knownOpusCost);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
   it('compat from modelOverrides and getModelIds merges across the three layers', () => {
     // Verifies applyModelMetadata's merge behavior: each successive layer
     // (pi-ai base → modelOverrides → getModelIds) can override individual

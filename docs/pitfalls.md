@@ -1054,7 +1054,12 @@ When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
    metadata and features silently break (thinking off, cost counter $0.00).
    Fields to check: `reasoning`, `input`, `cost`. See
    `providers/adobe.ts:getModelIds` and
-   `src/providers/adobe-model-metadata.ts:enrichAdobeModel`.
+   `src/providers/adobe-model-metadata.ts:enrichAdobeModel`. The forwarded
+   `cost` only sticks if `applyModelMetadata` (`src/providers/account-store.ts`)
+   has a branch that layers it onto both `model.cost` (the object pi-ai's
+   `calculateCost()` reads) and the flat `inputCost`/`outputCost`/`cacheReadCost`/
+   `cacheWriteCost` mirrors — without it a proxy-reported price is silently
+   discarded and the counter still reads $0.00.
 
 3. **Verify `parseClaudeVersion` handles the new ID format.** pi-ai may use
    IDs without a minor version (e.g. `claude-sonnet-5` instead of
@@ -1072,9 +1077,20 @@ When Anthropic ships a new Claude model that isn't in the pinned pi-ai:
    pattern as the Sonnet 5 and Haiku compat workarounds).
 
 5. **Verify `findFamilyCost`.** For models pi-ai doesn't know, this inherits
-   costs from the closest known model in the same family. Verify the
-   inherited costs are reasonable. Once pi-ai is bumped, the real costs
-   take over.
+   costs from the closest known model in the same family. It now lives in
+   `src/providers/family-cost.ts` (extracted from `adobe.ts` so it is unit-
+   testable) and is wired as a fallback strictly below any reported cost in
+   both `buildAdobeModel` and `getProviderModels`'s unknown-model branch.
+   Verify the inherited costs are reasonable. Once pi-ai is bumped, the real
+   costs take over. **Cross-provider guard:** the `getProviderModels` branch is
+   shared by _every_ provider that defines `getModelIds` (github, openrouter,
+   xai-grok, cerebras, local-llm, azure-openai, …), so inheritance is gated to
+   Anthropic-API-routed models (`pm.api !== 'openai'`). Adobe's Claude models
+   are anthropic-routed and still inherit; OpenAI-routed providers keep
+   `buildProviderRoutedModel`'s $0 default even for a Claude-style id — this
+   stops a local or free model literally named like a Claude family id (e.g. a
+   `local-llm` model called `claude-sonnet-6`) from inheriting real Anthropic
+   pricing. Reported cost (layer 2/3) still wins over the fallback either way.
 
 ## Thinking effort pipeline
 

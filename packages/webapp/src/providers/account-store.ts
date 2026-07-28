@@ -22,6 +22,7 @@ import { callSecretsBridge } from '../core/secrets-bridge-client.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { bedrockCampRegionFromBaseUrl, isBedrockCampCompatible } from './built-in/bedrock-camp.js';
+import { findFamilyCost } from './family-cost.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
@@ -282,6 +283,7 @@ function applyModelMetadata(
     max_tokens?: number;
     reasoning?: boolean;
     input?: string[];
+    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
     compat?: CompatOverrides;
     thinkingLevelMap?: Record<string, string | null>;
   }
@@ -290,6 +292,18 @@ function applyModelMetadata(
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
   if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
   if (metadata.input !== undefined) model.input = metadata.input;
+  // pi-ai's calculateCost() prices usage from model.cost (the object), so a
+  // provider's getModelIds() (layer 3) can report pricing for a model pi-ai's
+  // registry doesn't know — otherwise it inherits buildProviderRoutedModel()'s
+  // $0 default. Set both the cost object pi-ai reads and the flat mirrors
+  // buildAdobeModel() emits so the two model-construction paths stay aligned.
+  if (metadata.cost !== undefined) {
+    model.cost = metadata.cost;
+    model.inputCost = metadata.cost.input;
+    model.outputCost = metadata.cost.output;
+    model.cacheReadCost = metadata.cost.cacheRead;
+    model.cacheWriteCost = metadata.cost.cacheWrite;
+  }
   // Merge compat onto whatever pi-ai's base model already declared (or any
   // compat from a prior modelOverrides layer). Each successive layer can
   // override individual flags without clobbering siblings. Cast to a generic
@@ -372,6 +386,27 @@ export function getProviderModels(providerId: string): Model<Api>[] {
             unknown
           >;
           if (pm.name) model.name = pm.name; // proxy display name; else keep the id
+          // Fallback strictly BELOW an explicitly reported cost (applied via
+          // applyModelMetadata from modelOverrides/getModelIds just below) but
+          // above buildProviderRoutedModel's $0 default: inherit pricing from
+          // the closest known model in the same Claude family so a proxy model
+          // pi-ai's registry doesn't know yet (e.g. claude-opus-5) still prices
+          // instead of degrading to $0. Mirror buildAdobeModel(): set both the
+          // cost object pi-ai's calculateCost() reads and the flat mirrors.
+          // Gate on the Anthropic API route: family-cost inheritance is
+          // Claude-specific and only meaningful for models billed through
+          // Anthropic's API (e.g. the Adobe proxy). OpenAI-routed providers
+          // (local-llm, azure-openai) may expose Claude-style IDs for local or
+          // free models, so they keep the synthesized $0 default instead of
+          // inheriting real Anthropic pricing.
+          if (apiType === 'anthropic') {
+            const familyCost = findFamilyCost(pm.id, modelMap);
+            model.cost = familyCost;
+            model.inputCost = familyCost.input;
+            model.outputCost = familyCost.output;
+            model.cacheReadCost = familyCost.cacheRead;
+            model.cacheWriteCost = familyCost.cacheWrite;
+          }
         }
 
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).

@@ -150,6 +150,12 @@ is denied.
   predicates (`claude-model-version.ts`).
 - Changes to `buildAdobeModel`, `enrichAdobeModel`, or `getModelIds` that add or rename
   model fields without checking all three are in sync.
+- Changes to the shared cost-fallback path (`findFamilyCost` in
+  `src/providers/family-cost.ts`, the `getProviderModels` unknown-model branch, or the
+  `applyModelMetadata` cost branch in `account-store.ts`) — these run for every provider with
+  `getModelIds`, not just Adobe. `findFamilyCost` inheritance is gated to Anthropic-API-routed
+  models (`pm.api !== 'openai'`) so OpenAI-routed providers (local-llm, azure-openai) don't
+  inherit Anthropic pricing for a Claude-style id; check that guard survives refactors.
 - A pi-ai bump that adds new models — check if the new model's `thinkingLevelMap`, `cost`,
   and `reasoning` are correct. Also check for breaking API changes (e.g. function signature
   changes like `buildBaseOptions`).
