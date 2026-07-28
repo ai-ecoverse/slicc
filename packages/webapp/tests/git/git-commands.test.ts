@@ -517,7 +517,7 @@ describe('GitCommands', () => {
     expect(result.stdout).toContain('/project');
   });
 
-  it('resolves relative revisions (#1726)', async () => {
+  it('resolves parent revisions and rejects unsupported reflog selectors (#1726)', async () => {
     await git.execute(['init'], '/project');
     const commits: string[] = [];
 
@@ -532,7 +532,6 @@ describe('GitCommands', () => {
       ['HEAD~1', commits[1]],
       ['HEAD~2', commits[0]],
       ['HEAD^', commits[1]],
-      ['HEAD@{1}', commits[1]],
     ] as const) {
       expect(await git.execute(['rev-parse', revision], '/project')).toEqual({
         stdout: `${expected}\n`,
@@ -540,6 +539,12 @@ describe('GitCommands', () => {
         exitCode: 0,
       });
     }
+
+    expect(await git.execute(['rev-parse', 'HEAD@{1}'], '/project')).toEqual({
+      stdout: '',
+      stderr: "fatal: ambiguous argument 'HEAD@{1}'\n",
+      exitCode: 128,
+    });
   });
 
   it('rejects invalid relative revisions as ambiguous arguments (#1726)', async () => {

@@ -23,16 +23,14 @@ export async function resolveRevision(
 }
 
 function parseRevision(revision: string): { base: string; steps: RevisionStep[] } {
-  const match = /^(.+?)(?:(~[0-9]*|\^[0-9]*|@\{[0-9]+\}))*$/.exec(revision);
+  if (revision.includes('@{')) throw new Error('reflog selectors are unsupported');
+  const match = /^(.+?)(?:(~[0-9]*|\^[0-9]*))*$/.exec(revision);
   if (!match) throw new Error('invalid revision');
   const base = match[1];
   const suffix = revision.slice(base.length);
-  const tokens = suffix.match(/~[0-9]*|\^[0-9]*|@\{[0-9]+\}/g) ?? [];
+  const tokens = suffix.match(/~[0-9]*|\^[0-9]*/g) ?? [];
   if (tokens.join('') !== suffix) throw new Error('invalid revision');
   const steps = tokens.map((token): RevisionStep => {
-    if (token.startsWith('@{')) {
-      return { kind: 'first-parent', count: Number(token.slice(2, -1)) };
-    }
     const count = token.length === 1 ? 1 : Number(token.slice(1));
     return { kind: token[0] === '~' ? 'first-parent' : 'parent', count };
   });
