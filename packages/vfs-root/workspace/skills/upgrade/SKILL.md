@@ -45,8 +45,9 @@ Before the user decides, you can fetch the GitHub compare API for the two tags a
 
 ```bash
 # The repo is public — no auth required for the compare endpoint.
+# stdin here is fully buffered, so read() drains the whole response in one shot.
 curl -sSL "https://api.github.com/repos/ai-ecoverse/slicc/compare/v${FROM_VERSION}...v${TO_VERSION}" \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.commits.map(c=>"- "+c.commit.message.split("\n")[0]).join("\n"))})'
+  | node -e 'const j=JSON.parse(process.stdin.read()||"{}");console.log((j.commits||[]).map(c=>"- "+c.commit.message.split("\n")[0]).join("\n"))'
 ```
 
 Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, ...). If the compare returns 404 (tags missing), fall back to the GitHub releases page URL: `https://github.com/ai-ecoverse/slicc/releases/tag/v${TO_VERSION}`.
