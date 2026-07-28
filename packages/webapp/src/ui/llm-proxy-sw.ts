@@ -52,10 +52,12 @@ import {
   createNonceWaiter,
   ExtensionDelegateCache,
   type ExtensionFetchDelegateRequest,
+  filterAuthorizedProxyClients,
   isBridgeConfigMessage,
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isPassthroughDestination,
+  maySetProxyConfig,
   maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   type ResolvedExtensionDelegate,
@@ -141,14 +143,14 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
   // clients, so a non-Client sender is either an unrelated message or
   // a future channel we haven't wired up yet.
   if (!source || !('id' in source) || typeof source.id !== 'string') return;
-  if (isBridgeConfigMessage(event.data)) {
+  if (isBridgeConfigMessage(event.data) && maySetProxyConfig(source)) {
     bridgeConfigCache.set(source.id, {
       apiBaseUrl: event.data.apiBaseUrl,
       token: event.data.token,
     });
     return;
   }
-  if (isExtensionDelegateMessage(event.data)) {
+  if (isExtensionDelegateMessage(event.data) && maySetProxyConfig(source)) {
     extensionDelegateCache.set(source.id, { extensionId: event.data.extensionId });
     return;
   }
@@ -408,7 +410,7 @@ async function readClientUrl(clientId: string | null): Promise<string | null> {
   if (!clientId) return null;
   try {
     const client = await self.clients.get(clientId);
-    return client?.url ?? null;
+    return filterAuthorizedProxyClients(client ? [client] : [])[0]?.url ?? null;
   } catch {
     return null;
   }
@@ -427,7 +429,9 @@ async function readWindowClientUrls(): Promise<string[]> {
       type: 'window',
       includeUncontrolled: true,
     });
-    return clients.map((c) => c.url).filter((u): u is string => !!u);
+    return filterAuthorizedProxyClients(clients)
+      .map((c) => c.url)
+      .filter((u): u is string => !!u);
   } catch {
     return [];
   }
@@ -441,7 +445,9 @@ async function readWindowClientUrls(): Promise<string[]> {
  */
 async function pickDelegateWindowClient(): Promise<Client | null> {
   try {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const clients = filterAuthorizedProxyClients(
+      await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    );
     if (clients.length === 0) return null;
     const leader = clients.find((c) => parseExtensionDelegateFromClientUrl(c.url) !== null);
     return leader ?? clients[0];

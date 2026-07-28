@@ -15,12 +15,14 @@ import {
   BridgeConfigCache,
   createNonceWaiter,
   ExtensionDelegateCache,
+  filterAuthorizedProxyClients,
   isBridgeConfigMessage,
   isBridgeFetchProxyUrl,
   isBridgeLocalApiUrl,
   isExtensionDelegateMessage,
   isExtensionFetchDelegateRequest,
   isPassthroughDestination,
+  maySetProxyConfig,
   maySetSyncFsNonce,
   parseExtensionDelegateFromClientUrl,
   resolveBridgeConfig,
@@ -536,6 +538,28 @@ describe('maySetSyncFsNonce (sync-fs channel-nonce security gate)', () => {
     expect(maySetSyncFsNonce(undefined)).toBe(false);
     expect(maySetSyncFsNonce({ id: 'x' })).toBe(false); // no type
     expect(maySetSyncFsNonce({ type: 'window' })).toBe(false); // no frameType
+  });
+});
+
+describe('maySetProxyConfig (bridge-config security gate)', () => {
+  it('accepts only the top-level leader window', () => {
+    expect(maySetProxyConfig({ type: 'window', frameType: 'top-level', id: 'leader' })).toBe(true);
+    expect(maySetProxyConfig({ type: 'worker', id: 'realm' })).toBe(false);
+    expect(maySetProxyConfig({ type: 'window', frameType: 'nested', id: 'sprinkle' })).toBe(false);
+    expect(maySetProxyConfig({ type: 'window', frameType: 'auxiliary', id: 'popup' })).toBe(false);
+    expect(maySetProxyConfig(null)).toBe(false);
+  });
+
+  it('filters URL fallbacks and delegate candidates to top-level windows', () => {
+    const leader = { type: 'window', frameType: 'top-level', url: 'https://leader.test/' };
+    const clients = [
+      leader,
+      { type: 'window', frameType: 'nested', url: 'https://nested.test/?bridge=evil' },
+      { type: 'window', frameType: 'auxiliary', url: 'https://popup.test/?ext=evil' },
+      { type: 'worker', frameType: 'none', url: 'https://worker.test/' },
+    ];
+
+    expect(filterAuthorizedProxyClients(clients)).toEqual([leader]);
   });
 });
 

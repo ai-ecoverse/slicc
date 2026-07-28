@@ -457,6 +457,16 @@ export function maySetSyncFsNonce(source: unknown): boolean {
   return c?.type === 'window' && c.frameType === 'top-level';
 }
 
+/** Only the top-level leader page may publish bridge or extension-delegate config. */
+export function maySetProxyConfig(source: unknown): boolean {
+  return maySetSyncFsNonce(source);
+}
+
+/** Remove clients that must not supply proxy URL fallbacks or receive delegated fetches. */
+export function filterAuthorizedProxyClients<T>(clients: readonly T[]): T[] {
+  return clients.filter(maySetProxyConfig);
+}
+
 /** A one-shot notifier the SW's cold-op path awaits until a nonce (re)arrives. */
 export interface NonceWaiter {
   /** Resolve every pending `wait()` — called when a nonce is registered. */

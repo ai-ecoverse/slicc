@@ -593,6 +593,10 @@ chrome.runtime.onConnect.addListener((port) => {
 
 See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnectionAsync` for the production pattern. Regression test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — "handleFetchProxyConnectionAsync — synchronous listener attach".
 
+### Service-worker proxy configuration requires a top-level window source
+
+Treat service-worker payload validation and client authorization as separate checks. A worker or nested/auxiliary window can publish `bridge-config` / `extension-delegate` messages or encode equivalent parameters in its URL, so both message handling and URL fallback/delegate selection must require `type === 'window'` and `frameType === 'top-level'`. Keep this gate aligned with the sync-fs channel-nonce gate in `llm-proxy-sw-config.ts`.
+
 ## Hosted Leader Tab Cannot Reach `chrome.storage`
 
 **The Problem**
