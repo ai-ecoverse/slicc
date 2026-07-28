@@ -3,9 +3,14 @@ module github.com/ai-ecoverse/slicc-cli
 go 1.26.5
 
 require (
+	github.com/ai-ecoverse/go-optel v0.0.0
 	github.com/pion/ice/v4 v4.3.0
 	github.com/pion/webrtc/v4 v4.2.17
 )
+
+// go-optel is a sibling package in this monorepo (no go.work file), so the
+// module is resolved from the local tree rather than a published version.
+replace github.com/ai-ecoverse/go-optel => ../go-optel
 
 require (
 	github.com/google/uuid v1.6.0 // indirect

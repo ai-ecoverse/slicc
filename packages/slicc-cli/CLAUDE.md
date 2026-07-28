@@ -52,6 +52,7 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 | `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                                               |
 | `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals) + `EvalSession` (persistent-REPL `--eval` mode) |
 | `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                                                   |
+| `telemetry.go`        | `initTelemetry`/`reportRuntimeError` — launch + error RUM beacons via `@ai-ecoverse/go-optel`                                               |
 | `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                                                        |
 | `internal/logging/`   | `log/slog` structured diagnostic logger (text/JSON handler, env-driven level) + the `Logf` adapter the `tray` seam consumes                 |
 
@@ -145,6 +146,30 @@ and for any non-release-stamped version (`dev`, `git describe` output) —
 `IsReleaseVersion` gates both the notice and the self-replace, so `slicc
 update` refuses to clobber a local build that is ahead of the latest tag.
 `SLICC_UPDATE_API_BASE` overrides the API base (tests/mirrors).
+
+## Telemetry
+
+`telemetry.go` wires `packages/go-optel` (`github.com/ai-ecoverse/go-optel`, a
+sibling Go module pulled in via a local `replace` directive — this monorepo has
+no `go.work`) into two checkpoints only: `enter` on launch
+(`initTelemetry(sub)`, deferred right after `initTelemetry(sub)()` executes
+immediately in `main.go`'s `run()`) and `error` on an operational failure
+(`reportRuntimeError(source, err)`, called from the dial-error branches in
+`commands.go` and the update-check/apply error branches in `update.go`).
+`source` for `error` beacons is always one of a small fixed set (`dial`,
+`watch`, `follow`, `update`) — never user-typed input (join URL, exec/prompt
+text) — and `classifySubcommand` applies the same allowlist-not-passthrough
+treatment to the `enter` beacon's subcommand name.
+
+Gated the same way as the update notifier: `SLICC_NO_TELEMETRY=1` opts out
+outright, and `update.IsReleaseVersion(version)` means a `dev`/git-describe
+local build never configures a client at all (no env var needed for that
+case). Sampling is one coin flip per process (weight 100 by default,
+`OPTEL_RATE`/`OPTEL_DEBUG` env override), not per checkpoint. See
+`packages/go-optel/CLAUDE.md` for why `Sanitize()` (URL/path redaction before
+truncation) is mandatory here rather than a nice-to-have — this CLI's error
+strings can embed a leader's bearer-token join URL — and
+`docs/operational-telemetry.md` ("CLI Telemetry") for the cross-float design.
 
 ## Build / test
 

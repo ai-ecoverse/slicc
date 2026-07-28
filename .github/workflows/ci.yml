@@ -40,6 +40,7 @@ jobs:
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
+      go-optel: ${{ steps.filter.outputs.go-optel }}
       slicc-cli: ${{ steps.filter.outputs.slicc-cli }}
       swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
@@ -83,11 +84,17 @@ jobs:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+            go-optel:
+              - 'packages/go-optel/**'
             slicc-cli:
               - 'packages/slicc-cli/**'
               # The Go corpus test decodes the shared golden fixture; a protocol
               # change regenerates it, so run the Go job when it moves too.
               - 'packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
+              # slicc-cli depends on go-optel via a local `replace` directive
+              # (no go.work in this monorepo), so a go-optel-only change must
+              # still run slicc-cli's suite.
+              - 'packages/go-optel/**'
             swift-config:
               - '.swiftlint.yml'
               - '.swift-format'
@@ -806,6 +813,30 @@ jobs:
       - name: Build
         run: npm run build -w @slicc/cloud-core
 
+  go-optel:
+    needs: changes
+    if: >-
+      needs.changes.outputs.go-optel == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    # Pure stdlib string/JSON logic with no OS-specific paths, unlike
+    # slicc-cli's process-group signalling — one Linux job covers it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/go-optel/go.mod
+          # No go.sum: the module has zero third-party dependencies.
+          cache: false
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Format, lint, vet, race tests, coverage floor
+        working-directory: packages/go-optel
+        run: make check
+
   slicc-cli:
     needs: changes
     if: >-
@@ -1375,6 +1406,7 @@ jobs:
         swift-server,
         swift-optel,
         ios-app,
+        go-optel,
         slicc-cli,
         release-gate,
       ]
