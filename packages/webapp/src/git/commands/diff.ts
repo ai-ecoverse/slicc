@@ -34,6 +34,7 @@ export async function diff(
   if (positionals.length === 1) {
     const range = splitTwoDotRange(positionals[0]);
     if (range) return diffCommits(ctx, cwd, range[0], range[1], opts);
+    if (staged) return diffCommitIndex(ctx, cwd, positionals[0], opts);
     return diffCommitWorkdir(ctx, cwd, positionals[0], opts);
   }
 
@@ -68,18 +69,19 @@ export async function diff(
   return { stdout: output, stderr: '', exitCode: 0 };
 }
 
-/** Collect staged changes by comparing HEAD tree vs index. */
+/** Collect staged changes by comparing a commit tree vs index. */
 async function diffStagedChanges(
   ctx: GitCommandContext,
   cwd: string,
-  pathspecs: string[] = []
+  pathspecs: string[] = [],
+  ref = 'HEAD'
 ): Promise<FileChange[]> {
   const changes: FileChange[] = [];
 
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
-    trees: [git.TREE({ ref: 'HEAD' }), git.STAGE()],
+    trees: [git.TREE({ ref }), git.STAGE()],
     map: async (filepath, [headEntry, stageEntry]) => {
       if (filepath === '.' || filepath.startsWith('.git')) return undefined;
       if (!matchesPathspec(filepath, pathspecs)) return undefined;
@@ -100,6 +102,22 @@ async function diffStagedChanges(
   });
 
   return changes;
+}
+
+async function diffCommitIndex(
+  ctx: GitCommandContext,
+  cwd: string,
+  ref: string,
+  opts: { nameOnly: boolean; stat: boolean; pathspecs?: string[] }
+): Promise<GitCommandResult> {
+  let resolved: string;
+  try {
+    resolved = await resolveRevision(ctx, cwd, ref);
+  } catch {
+    return ambiguousRevision(ref);
+  }
+  const changes = await diffStagedChanges(ctx, cwd, opts.pathspecs, resolved);
+  return formatChanges(changes, opts);
 }
 
 /** Collect unstaged changes by comparing index vs workdir. */

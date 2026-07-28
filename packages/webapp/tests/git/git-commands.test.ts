@@ -752,6 +752,22 @@ describe('GitCommands', () => {
       expect(result.stdout).toContain('+new');
     });
 
+    it('compares a supplied revision with the index for --cached', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'committed\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'staged\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await vfs.writeFile('/project/file.txt', 'unstaged\n');
+
+      const result = await git.execute(['diff', '--cached', 'HEAD'], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('+staged');
+      expect(result.stdout).not.toContain('unstaged');
+    });
+
     it('shows only filenames with --name-only', async () => {
       await git.execute(['init'], '/project');
       await vfs.writeFile('/project/a.txt', 'a\n');
