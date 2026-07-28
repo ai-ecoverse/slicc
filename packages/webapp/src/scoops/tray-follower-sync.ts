@@ -321,7 +321,8 @@ export class FollowerSyncManager implements AgentHandle {
       },
     });
     this.keepalive.start();
-    // Emit an error event when the underlying channel drops
+    // Treat an unexpected underlying channel drop as a disconnect (status +
+    // cleanup + onDisconnect; no transcript error event — see handleDisconnect)
     channel.addEventListener('close', () => {
       log.warn('Data channel closed');
       this.handleDisconnect('Data channel closed');
@@ -397,8 +398,8 @@ export class FollowerSyncManager implements AgentHandle {
    * Close the sync channel and clean up. Idempotent — once called, the
    * channel-close event that follows will short-circuit in
    * `handleDisconnect`, so a caller-initiated teardown can't trigger
-   * the error-state side effects (red-error follower status, `error`
-   * event emission, `onDisconnect` callback that drives reconnect
+   * the error-state side effects (red-error follower status, error-level
+   * disconnect log, `onDisconnect` callback that drives reconnect
    * logic) that `handleDisconnect` is designed to fire only on an
    * unexpected channel drop.
    */
@@ -1202,7 +1203,9 @@ export class FollowerSyncManager implements AgentHandle {
    */
   private async executeLocalCDP(
     requestId: string,
-    localTargetId: string,
+    // Unused: the wire message carries the follower-local target id for
+    // symmetry, but the transport routes by sessionId/method alone.
+    _localTargetId: string,
     method: string,
     params: Record<string, unknown> | undefined,
     sessionId: string | undefined
