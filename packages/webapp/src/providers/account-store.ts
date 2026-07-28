@@ -22,6 +22,7 @@ import { callSecretsBridge } from '../core/secrets-bridge-client.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { bedrockCampRegionFromBaseUrl, isBedrockCampCompatible } from './built-in/bedrock-camp.js';
+import { findFamilyCost } from './family-cost.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
@@ -385,6 +386,19 @@ export function getProviderModels(providerId: string): Model<Api>[] {
             unknown
           >;
           if (pm.name) model.name = pm.name; // proxy display name; else keep the id
+          // Fallback strictly BELOW an explicitly reported cost (applied via
+          // applyModelMetadata from modelOverrides/getModelIds just below) but
+          // above buildProviderRoutedModel's $0 default: inherit pricing from
+          // the closest known model in the same Claude family so a proxy model
+          // pi-ai's registry doesn't know yet (e.g. claude-opus-5) still prices
+          // instead of degrading to $0. Mirror buildAdobeModel(): set both the
+          // cost object pi-ai's calculateCost() reads and the flat mirrors.
+          const familyCost = findFamilyCost(pm.id, modelMap);
+          model.cost = familyCost;
+          model.inputCost = familyCost.input;
+          model.outputCost = familyCost.output;
+          model.cacheReadCost = familyCost.cacheRead;
+          model.cacheWriteCost = familyCost.cacheWrite;
         }
 
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).

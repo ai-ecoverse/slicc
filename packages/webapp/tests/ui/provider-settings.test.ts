@@ -2003,6 +2003,72 @@ describe('model metadata overrides', () => {
     expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
   });
 
+  it('cost precedence: reported cost > family-inherited cost > zeros', () => {
+    // Wave 2: a proxy reports two Claude models pi-ai's registry doesn't know.
+    // A known opus in the same family carries pricing, so the unknown-model
+    // branch inherits it as a fallback — unless getModelIds reports a cost,
+    // which must win. The chain proves reported > family-inherited > zeros.
+    const knownOpusCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    const reportedCost = { input: 9, output: 45, cacheRead: 0.9, cacheWrite: 11.25 };
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-opus-4-8',
+            name: 'Claude Opus 4.8',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+            cost: knownOpusCost,
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        // Unknown opus WITHOUT a cost → inherits the known opus family cost.
+        { id: 'claude-opus-5', name: 'Claude Opus 5' },
+        // Unknown opus WITH a reported cost → reported wins over the family.
+        { id: 'claude-opus-5-1', name: 'Claude Opus 5.1', cost: reportedCost },
+        // Non-Claude unknown model → no family to inherit → stays at zeros.
+        { id: 'mystery-1', name: 'Mystery 1' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const inherited = models.find((m) => m.id === 'claude-opus-5') as unknown as Record<
+      string,
+      unknown
+    >;
+    const reported = models.find((m) => m.id === 'claude-opus-5-1') as unknown as Record<
+      string,
+      unknown
+    >;
+    const mystery = models.find((m) => m.id === 'mystery-1') as unknown as Record<string, unknown>;
+
+    // Family-inherited cost (no reported cost) — object + flat mirrors.
+    expect(inherited.cost).toEqual(knownOpusCost);
+    expect(inherited.inputCost).toBe(5);
+    expect(inherited.outputCost).toBe(25);
+    // Reported cost wins over the family-inherited fallback.
+    expect(reported.cost).toEqual(reportedCost);
+    expect(reported.inputCost).toBe(9);
+    expect(reported.outputCost).toBe(45);
+    // No family match and no reported cost → zeros.
+    expect(mystery.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
   it('compat from modelOverrides and getModelIds merges across the three layers', () => {
     // Verifies applyModelMetadata's merge behavior: each successive layer
     // (pi-ai base → modelOverrides → getModelIds) can override individual
