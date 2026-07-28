@@ -115,6 +115,41 @@ describe('mountWcUiFollower', () => {
     expect(opts.browserAPI).toBeTruthy();
   });
 
+  it('drives the floatbar online dot from the follower tray status (#1707)', async () => {
+    // Integration guard: the slicc-floatbar `online` API existed with NO
+    // producer — the dot never lit while connected. Assert the mount installs
+    // one, end to end through the runtime-status subscription.
+    const { setFollowerTrayRuntimeStatus } = await import(
+      '../../../src/scoops/tray-follower-status.js'
+    );
+    const inactive = {
+      state: 'inactive' as const,
+      joinUrl: null,
+      trayId: null,
+      error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
+      attachAttempts: 0,
+      lastAttachCode: null,
+      connectingSince: null,
+      lastError: null,
+    };
+    setFollowerTrayRuntimeStatus(inactive);
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    const floatbar = app.querySelector('slicc-floatbar') as HTMLElement;
+    expect(floatbar).toBeTruthy();
+    expect(floatbar.hasAttribute('online')).toBe(false);
+
+    setFollowerTrayRuntimeStatus({ ...inactive, state: 'connected' });
+    expect(floatbar.hasAttribute('online')).toBe(true);
+
+    setFollowerTrayRuntimeStatus({ ...inactive, state: 'error', error: 'Data channel closed' });
+    expect(floatbar.hasAttribute('online')).toBe(false);
+  });
+
   // Must run BEFORE the "Disconnect from leader" test below: that test's
   // switch-out mutates window location/localStorage so a later non-cherry
   // mount can't resolve its join URL (it falls back to mountWcUiLive).

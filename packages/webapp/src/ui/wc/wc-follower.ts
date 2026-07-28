@@ -17,6 +17,7 @@ import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
+import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { prepareWcShell } from './wc-live.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { submittedText } from './wc-shell.js';
@@ -462,6 +463,12 @@ export async function mountWcUiFollower(
     else boot.refs.inputCard.setAttribute('disabled', '');
   };
   setComposerState(false, CONNECTING);
+
+  // Drive the floatbar's `online` dot from the tray statuses (#1707) — the
+  // no-kernel follower's install point; the kernel float installs the same
+  // helper in `wc-tray.ts`. Before this, the API existed but had no producer:
+  // the dot never lit and the pill tooltip read "offline" mid-stream.
+  installFloatbarOnline(boot.refs.floatbar);
 
   // Mirror the follower tray status into `localStorage`, matching what
   // `wc-tray.ts` does for the kernel-backed floats. Without this the
