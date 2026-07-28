@@ -81,4 +81,29 @@ describe('git command safety and remote inspection', () => {
       listRefs.mockRestore();
     }
   });
+
+  it('emits symbolic targets with ls-remote --symref', async () => {
+    await commands.execute(['init'], '/project');
+    const oid = '1'.repeat(40);
+    const listRefs = vi.spyOn(isoGit, 'listServerRefs').mockResolvedValue([
+      { oid, ref: 'HEAD', target: 'refs/heads/main' },
+      { oid, ref: 'refs/heads/main' },
+    ]);
+
+    try {
+      const result = await commands.execute(
+        ['ls-remote', '--symref', 'https://example.test/acme/repo.git'],
+        '/project'
+      );
+
+      expect(result).toEqual({
+        stdout: `ref: refs/heads/main\tHEAD\n${oid}\tHEAD\n${oid}\trefs/heads/main\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+      expect(listRefs).toHaveBeenCalledWith(expect.objectContaining({ symrefs: true }));
+    } finally {
+      listRefs.mockRestore();
+    }
+  });
 });

@@ -11,6 +11,7 @@ export async function lsRemote(
 ): Promise<GitCommandResult> {
   const heads = args.includes('--heads') || args.includes('-h');
   const tags = args.includes('--tags') || args.includes('-t');
+  const showSymrefs = args.includes('--symref');
   const positionals = args.filter((arg) => !arg.startsWith('-'));
   const remoteArg = positionals[0] ?? 'origin';
   const patterns = positionals.slice(1);
@@ -24,11 +25,16 @@ export async function lsRemote(
       corsProxy: ctx.corsProxy,
       onAuth: ctx.getOnAuth(),
       prefix,
-      symrefs: args.includes('--symref'),
+      symrefs: showSymrefs,
       peelTags: tags,
     });
     const selected = refs.filter((item) => matchesPatterns(item.ref, patterns));
-    const stdout = selected.map((item) => `${item.oid}\t${item.ref}\n`).join('');
+    const stdout = selected
+      .map(
+        (item) =>
+          `${showSymrefs && item.target ? `ref: ${item.target}\t${item.ref}\n` : ''}${item.oid}\t${item.ref}\n`
+      )
+      .join('');
     return { stdout, stderr: '', exitCode: args.includes('--exit-code') && !stdout ? 2 : 0 };
   } catch (err) {
     return {
