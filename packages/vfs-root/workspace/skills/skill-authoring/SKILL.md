@@ -97,13 +97,13 @@ Rules of thumb:
 
 Node-standard bare globals:
 
-| Global                     | Use for                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()`                                                 |
-| `console`                  | `log`/`info` → stdout, `warn`/`error` → stderr                                                                                       |
-| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                  |
-| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below). |
-| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                       |
+| Global                     | Use for                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`                  | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`; `stdin` is one-shot buffered (no streaming) — `read()`, events, or async iterator, drain once |
+| `console`                  | `log`/`info` → stdout, `warn`/`error` → stderr                                                                                                                      |
+| `fetch`                    | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                                 |
+| `require(p)`               | Synchronous CJS `require`. Use `require('sliccy:<name>')` for capability bridges and `require('fs')` for the VFS bridge (see below).                                |
+| `__dirname` / `__filename` | CJS scope vars — the script's own directory and absolute path.                                                                                                      |
 
 Capability bridges via `require('sliccy:<name>')` (full reference: `./jsh-runtime-extensions.md`):
 

@@ -319,9 +319,11 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 - `script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup
   paths.
 - Scripts run in an async wrapper: prefer top-level `await`. Stdin (`process.stdin`) is fully
-  buffered (no streaming); `read()` drains it with Node-like EOF semantics. `process.stdin.isTTY`
-  is always `false`. Do not expose `stdin` as a top-level identifier (collides with user
-  declarations).
+  buffered read-ahead (no streaming; latin1 strings, not `Buffer`s; `'error'` never fires) and
+  one-shot: `read()`, events (`on('data')`→`'end'`→`'close'`, single chunk), and the async
+  iterator share one `consumed` flag, so whichever drains first wins and the others see EOF.
+  `process.stdin.isTTY` is always `false`. Do not expose `stdin` as a top-level identifier
+  (collides with user declarations).
 
 ### `.bsh` browser scripts
 

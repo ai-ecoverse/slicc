@@ -944,28 +944,43 @@ process.stdout.write(s)                      // Write to stdout
 process.stderr.write(s)                      // Write to stderr
 process.stdin.read(): string | null          // Buffered piped stdin; null after EOF
 process.stdin.isTTY: false                   // Always false in this environment
+process.stdin.on(event, cb)                  // EventEmitter surface: 'data' → 'end' → 'close'
 process.stdin[Symbol.asyncIterator]()        // Yields the buffered string once
 String(process.stdin)                        // Non-consuming view of the buffer
 ```
 
 #### stdin (via `process.stdin`)
 
-Stdin from upstream pipelines is buffered fully before the script runs — there is **no streaming**. `read()` drains the buffer with Node-like EOF semantics:
+Stdin from upstream pipelines is buffered **fully and read-ahead** before the script runs — there is **no streaming**. The kernel hands the realm one complete buffer; there is no incremental source, chunks are latin1-preserved **strings** (not `Buffer`s), and an `'error'` event never fires.
 
-```typescript
-// echo "a,b,c" | parse-csv
-const data = process.stdin.read(); // 'a,b,c\n'
-const again = process.stdin.read(); // null — buffer was drained
-```
+`process.stdin` exposes three consumption surfaces that all share a **single one-shot `consumed` flag**. Whichever surface consumes first wins; the others then see EOF. Do not mix them expecting to read the buffer twice.
 
-The async iterator shares that consumed state with `read()`, so re-iterating yields nothing after the first pass (and yields nothing at all if you called `read()` first):
+1. **`read()`** — drains the buffer with Node-like EOF semantics:
 
-```typescript
-let total = '';
-for await (const chunk of process.stdin) total += chunk;
-```
+   ```typescript
+   // echo "a,b,c" | parse-csv
+   const data = process.stdin.read(); // 'a,b,c\n'
+   const again = process.stdin.read(); // null — buffer was drained
+   ```
 
-For a non-consuming view, use `String(process.stdin)` or `process.stdin.toString()`. If no input is piped, the first `read()` returns `''` and subsequent calls return `null`.
+2. **Events** (`on` / `once` / `addListener` / `off` / `pause` / `resume` / `setEncoding`) — the entire buffer arrives as a **single** `'data'` chunk, then `'end'`, then `'close'`. This is a compatibility shim for copy/pasted Node snippets, **not** real streaming — do not reach for it expecting incremental delivery.
+
+   ```typescript
+   // echo "a,b,c" | parse-csv
+   let s = '';
+   process.stdin.on('data', (d) => (s += d)).on('end', () => console.log(s));
+   ```
+
+3. **Async iteration** — yields the buffered string once:
+
+   ```typescript
+   let total = '';
+   for await (const chunk of process.stdin) total += chunk;
+   ```
+
+Because the `consumed` flag is shared, once any surface has drained the buffer the others see EOF: `read()` returns `null` and the events surface emits `'end'` only (no `'data'`). If no input is piped, the first `read()` returns `''` and subsequent calls return `null`, and the events surface emits `'end'` with no `'data'`.
+
+For a non-consuming view, use `String(process.stdin)` or `process.stdin.toString()`.
 
 Stdin is intentionally NOT exposed as a top-level identifier — user scripts are free to declare their own `const stdin = …` without colliding with the runtime.
 
