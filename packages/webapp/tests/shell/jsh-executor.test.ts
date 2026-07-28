@@ -1130,4 +1130,98 @@ describe('stdin in .jsh scripts', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('end:resumed');
   });
+
+  // -------------------------------------------------------------------------
+  // Review round 1 (PR #1730) — Codex inline comments. Each pins a reported
+  // bug in the EventEmitter surface's deferred flush.
+  // -------------------------------------------------------------------------
+
+  it('P1: process.exit(N) from an `end` handler becomes the realm exit code', async () => {
+    // r3665033022: flush() runs inside queueMicrotask, outside runUserCode's
+    // try/catch, so a NodeExitError thrown by an `end` handler was lost — the
+    // realm reported exit 0 (and surfaced an uncaught error) instead of N.
+    const ctx = createMockCtx(
+      {
+        '/workspace/exit-in-end.jsh': [
+          "process.stdin.on('data', (d) => process.stdout.write('got:' + d + '\\n'));",
+          "process.stdin.on('end', () => process.exit(3));",
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'payload'
+    );
+    const result = await executeJshFile('/workspace/exit-in-end.jsh', [], ctx);
+    expect(result.exitCode).toBe(3);
+    expect(result.stdout).toBe('got:payload\n');
+  });
+
+  it('P1: process.exit(N) from a `data` handler exits before `end` fires', async () => {
+    // Node's process.exit() terminates immediately, so a `data`-handler exit
+    // must skip the subsequent `end`/`close` emission and carry code N.
+    const ctx = createMockCtx(
+      {
+        '/workspace/exit-in-data.jsh': [
+          "process.stdin.on('data', () => { process.stdout.write('data\\n'); process.exit(4); });",
+          "process.stdin.on('end', () => process.stdout.write('end\\n'));",
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'x'
+    );
+    const result = await executeJshFile('/workspace/exit-in-data.jsh', [], ctx);
+    expect(result.exitCode).toBe(4);
+    expect(result.stdout).toBe('data\n');
+    expect(result.stdout).not.toContain('end');
+  });
+
+  it('P2: pause() before the scheduled flush suppresses emission until resume()', async () => {
+    // r3665033027: `.on('data', h).pause()` still flushed on the scheduled
+    // microtask — the buffer was consumed and emitted despite the pause, and a
+    // later read() could not recover it. pause() must suppress the pending
+    // flush; the buffer stays intact until resume() (or another surface) drains
+    // it.
+    const ctx = createMockCtx(
+      {
+        '/workspace/pause-suppress.jsh': [
+          'const order = [];',
+          "process.stdin.on('data', (d) => order.push('data:' + d));",
+          "process.stdin.on('end', () => order.push('end'));",
+          'process.stdin.pause();',
+          'await new Promise((r) => setTimeout(r, 0));',
+          'const recovered = process.stdin.read();',
+          'console.log(JSON.stringify({ order, recovered }));',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'buffered'
+    );
+    const result = await executeJshFile('/workspace/pause-suppress.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ order: [], recovered: 'buffered' });
+  });
+
+  it('P2 guard: a synchronous pause().resume() still flushes within one hop', async () => {
+    // The un-paused (and resync'd) path must keep emitting on the single
+    // originally-scheduled microtask — no extra tick, no dropped `end` output.
+    const ctx = createMockCtx(
+      {
+        '/workspace/pause-resume-sync.jsh': [
+          'let got = "";',
+          "process.stdin.on('data', (d) => { got += d; });",
+          "process.stdin.on('end', () => console.log('end:' + got));",
+          'process.stdin.pause();',
+          'process.stdin.resume();',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'sync-body'
+    );
+    const result = await executeJshFile('/workspace/pause-resume-sync.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('end:sync-body');
+  });
 });
