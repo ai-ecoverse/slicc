@@ -582,18 +582,19 @@ export class SprinkleRenderer {
     // untrusted is scoped to the sync-fs channel nonce (realm capability
     // tokens) in `llm-proxy-sw-config.ts`; it is NOT general containment.
     //
-    // What `allow-same-origin` is (and is not) known to affect — verified
-    // during #1718 review: the bridge does NOT need it (pure postMessage
-    // both ways; the parent validates by `event.source` identity), and
-    // neither do the injected tags (`/lucide-icons.js` is a network-served
-    // static, theme CSS is inlined). What WOULD change with an opaque
-    // origin: sprinkle content loses same-origin storage (`localStorage` /
-    // IndexedDB throw), and the document no longer inherits the parent's
-    // service-worker controller, so SW-served VFS subresources
-    // (`/preview/*`, project-serve root-relative paths) inside a sprinkle
-    // would fall through to the network. Dropping the token is option A in
-    // #1717 — do it only with a browser-level regression test over those
-    // behaviors, not as a drive-by "fix" for the console warning.
+    // What `allow-same-origin` actually affects — measured empirically for
+    // #1717 (2026-07-28, CDP harness, a test sprinkle run with and without
+    // the token): the postMessage bridge does NOT need it (init/setState/
+    // exec/readFile all pass from an opaque origin; the parent validates by
+    // `event.source` identity). Everything else about a working sprinkle
+    // DOES: with the token removed, `localStorage`/IndexedDB/
+    // `navigator.serviceWorker` throw SecurityError, the document stops
+    // inheriting the parent's SW controller so `/preview/*` VFS subresources
+    // fall through and 404, and even plain same-site `fetch()` fails (an
+    // opaque origin makes it a CORS request with `Origin: null`). Option A
+    // in #1717 (dropping the token) was evaluated and REJECTED on those
+    // results — do not re-attempt it as a drive-by "fix" for the console
+    // warning; genuine isolation needs a dedicated sandbox origin (option C).
     //
     // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
     // level deeper there (host page → cherry iframe → sprinkle iframe), and
