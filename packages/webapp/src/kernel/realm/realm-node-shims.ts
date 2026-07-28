@@ -3,7 +3,7 @@
  * small path/exit helpers used to bootstrap a JS realm. Extracted from
  * `js-realm-shared.ts`; no behavior change.
  */
-import { attachArgvParseFlags } from './js-realm-helpers.js';
+import { attachArgvParseFlags, nodeStream } from './js-realm-helpers.js';
 import type { RealmInitMsg } from './realm-types.js';
 
 export function dirnameOf(filePath: string): string {
@@ -83,30 +83,99 @@ export function createProcessShim(
  *
  * EOF semantics match Node's `Readable.read()`: the first `read()` returns
  * the full buffer, subsequent calls return `null`. A single `consumed` flag
- * is shared with the async iterator so `for await (const c of process.stdin)`
- * after a `read()` (or a second iteration) yields nothing. `toString()`
- * always returns the original buffer; `isTTY` is always `false`.
+ * is shared across `read()`, the async iterator, and the EventEmitter surface
+ * so no path double-delivers: `for await (const c of process.stdin)` after a
+ * `read()` (or a second iteration) yields nothing. `toString()` always returns
+ * the original buffer; `isTTY` is always `false`.
+ *
+ * The EventEmitter surface (`.on('data'|'end'|'close')`, `for await`) reuses
+ * the shared `StreamBase` emitter (`nodeStream.Stream`) rather than a bespoke
+ * one. Registering a `'data'` listener (or calling `resume()`) puts the stream
+ * in flowing mode: on a single `queueMicrotask` hop it emits the whole buffer
+ * as one `'data'` chunk (skipped when empty or already consumed), then `'end'`,
+ * then `'close'`. The one-hop deferral is deliberate — Wave 1 measured that a
+ * multi-tick chain loses `'end'`-handler output past `realm-done` (see
+ * `js-realm-shared.ts` `drainPendingRpcs`). `'error'` never fires.
  */
-function createStdinShim(stdinBuffer: string) {
-  let consumed = false;
-  return {
-    isTTY: false,
-    read(): string | null {
-      if (consumed) return null;
-      consumed = true;
-      return stdinBuffer;
-    },
-    toString(): string {
-      return stdinBuffer;
-    },
-    [Symbol.asyncIterator](): AsyncIterator<string> {
-      return {
-        async next(): Promise<IteratorResult<string>> {
-          if (consumed) return { value: undefined, done: true };
-          consumed = true;
-          return { value: stdinBuffer, done: false };
-        },
-      };
-    },
-  };
+class StdinShim extends nodeStream.Stream {
+  isTTY = false;
+  private consumed = false;
+  private flowScheduled = false;
+  private readonly buffer: string;
+
+  constructor(stdinBuffer: string) {
+    super();
+    this.buffer = stdinBuffer;
+  }
+
+  read(): string | null {
+    if (this.consumed) return null;
+    this.consumed = true;
+    return this.buffer;
+  }
+
+  toString(): string {
+    return this.buffer;
+  }
+
+  // The realm buffer is already latin1-preserved text (one JS char per byte),
+  // so there is nothing to re-decode: any/no encoding yields the same chunk.
+  setEncoding(_encoding?: string): this {
+    return this;
+  }
+
+  pause(): this {
+    return this;
+  }
+
+  resume(): this {
+    this.scheduleFlow();
+    return this;
+  }
+
+  on(event: string, fn: (...args: unknown[]) => void): this {
+    super.on(event, fn);
+    if (event === 'data') this.scheduleFlow();
+    return this;
+  }
+
+  addListener(event: string, fn: (...args: unknown[]) => void): this {
+    return this.on(event, fn);
+  }
+
+  once(event: string, fn: (...args: unknown[]) => void): this {
+    super.once(event, fn);
+    if (event === 'data') this.scheduleFlow();
+    return this;
+  }
+
+  private scheduleFlow(): void {
+    if (this.flowScheduled) return;
+    this.flowScheduled = true;
+    queueMicrotask(() => this.flush());
+  }
+
+  private flush(): void {
+    if (!this.consumed) {
+      this.consumed = true;
+      if (this.buffer.length > 0) this.emit('data', this.buffer);
+    }
+    this.readable = false;
+    this.emit('end');
+    this.emit('close');
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<string> {
+    return {
+      next: async (): Promise<IteratorResult<string>> => {
+        if (this.consumed) return { value: undefined, done: true };
+        this.consumed = true;
+        return { value: this.buffer, done: false };
+      },
+    };
+  }
+}
+
+function createStdinShim(stdinBuffer: string): StdinShim {
+  return new StdinShim(stdinBuffer);
 }
