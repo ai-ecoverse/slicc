@@ -557,6 +557,25 @@ describe('GitCommands', () => {
     }
   });
 
+  it('honors branch-name and revision-abbreviation flags (#1727)', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+    await git.execute(['checkout', '-b', 'feature'], '/project');
+
+    const fullOid = (await git.execute(['rev-parse', 'HEAD'], '/project')).stdout.trim();
+    const short = await git.execute(['rev-parse', '--short', 'HEAD'], '/project');
+    const shortEight = await git.execute(['rev-parse', '--short=8', 'HEAD'], '/project');
+    const abbrevRef = await git.execute(['rev-parse', '--abbrev-ref', 'HEAD'], '/project');
+    const currentBranch = await git.execute(['branch', '--show-current'], '/project');
+
+    expect(short).toEqual({ stdout: `${fullOid.slice(0, 7)}\n`, stderr: '', exitCode: 0 });
+    expect(shortEight).toEqual({ stdout: `${fullOid.slice(0, 8)}\n`, stderr: '', exitCode: 0 });
+    expect(abbrevRef).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+    expect(currentBranch).toEqual({ stdout: 'feature\n', stderr: '', exitCode: 0 });
+  });
+
   describe('status --short/-s/--porcelain', () => {
     it('shows untracked files with ?? prefix', async () => {
       await git.execute(['init'], '/project');
