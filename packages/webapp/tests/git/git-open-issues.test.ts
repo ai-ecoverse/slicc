@@ -84,4 +84,25 @@ describe('git open-issue compatibility', () => {
       expect((await git.execute(['log', '--oneline'], '/copy')).stdout).toContain('local source');
     }
   );
+
+  it.each([
+    ['/source', '--branch'],
+    ['file:///source', '-b'],
+  ])('checks out a requested branch when cloning %s with %s', async (url, branchFlag) => {
+    await git.execute(['init'], '/source');
+    await fs.writeFile('/source/readme.txt', 'main\n');
+    await git.execute(['add', 'readme.txt'], '/source');
+    await git.execute(['commit', '-m', 'main'], '/source');
+    await git.execute(['checkout', '-b', 'topic'], '/source');
+    await fs.writeFile('/source/readme.txt', 'topic\n');
+    await git.execute(['add', 'readme.txt'], '/source');
+    await git.execute(['commit', '-m', 'topic'], '/source');
+    await git.execute(['checkout', 'main'], '/source');
+
+    const result = await git.execute(['clone', branchFlag, 'topic', url, '/copy'], '/');
+
+    expect(result.exitCode).toBe(0);
+    expect(await fs.readTextFile('/copy/readme.txt')).toBe('topic\n');
+    expect((await git.execute(['branch', '--show-current'], '/copy')).stdout.trim()).toBe('topic');
+  });
 });

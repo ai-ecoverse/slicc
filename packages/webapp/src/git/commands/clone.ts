@@ -42,7 +42,7 @@ export async function clone(
   let output = `Cloning into '${dir}'...\n`;
 
   const local = localCloneSource(url, cwd);
-  if (local) return cloneLocal(ctx, local, targetDir, url, dir, output);
+  if (local) return cloneLocal(ctx, local, targetDir, url, dir, output, branch);
 
   // Use a shared cache for the clone operation
   const cache = {};
@@ -115,7 +115,8 @@ async function cloneLocal(
   targetDir: string,
   sourceUrl: string,
   displayDir: string,
-  output: string
+  output: string,
+  requestedBranch?: string
 ): Promise<GitCommandResult> {
   if (targetDir === sourceDir || targetDir.startsWith(`${sourceDir}/`)) {
     return formatCloneError(new Error('destination is inside the source repository'), targetDir);
@@ -135,7 +136,7 @@ async function cloneLocal(
     } catch {
       await ctx.lfs.mkdir(targetDir, { recursive: true });
     }
-    const branch = await git.currentBranch({ fs: ctx.lfs, dir: sourceDir });
+    const branch = requestedBranch ?? (await git.currentBranch({ fs: ctx.lfs, dir: sourceDir }));
     await copyLocalTree(ctx, `${sourceDir}/.git`, `${targetDir}/.git`);
     if (branch) await git.checkout({ fs: ctx.lfs, dir: targetDir, ref: branch, force: true });
     await git.addRemote({
