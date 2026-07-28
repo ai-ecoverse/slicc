@@ -49,9 +49,12 @@ enum TrayChunkFraming {
     /// produce an over-limit frame. Every scalar is at most 4 UTF-8 bytes, and
     /// cutting between scalars still yields valid UTF-8 on both sides.
     static func frameChunks(_ text: String, chunkId: String = UUID().uuidString) -> [TrayChunkFrame] {
-        let budget = max(1, min(TrayChunkLimits.maxChunkBytes,
-                                (TrayChunkLimits.maxMessageBytes - TrayChunkLimits.envelopeBytes)
-                                    / TrayChunkLimits.worstCaseBytesPerCharacter))
+        let budget = max(
+            1,
+            min(
+                TrayChunkLimits.maxChunkBytes,
+                (TrayChunkLimits.maxMessageBytes - TrayChunkLimits.envelopeBytes)
+                    / TrayChunkLimits.worstCaseBytesPerCharacter))
 
         var slices: [String] = []
         var current = String.UnicodeScalarView()
@@ -69,11 +72,12 @@ enum TrayChunkFraming {
         if !current.isEmpty || slices.isEmpty { slices.append(String(current)) }
 
         return slices.enumerated().map { index, slice in
-            TrayChunkFrame(type: TrayChunkFrame.typeTag,
-                           chunkId: chunkId,
-                           chunkIndex: index,
-                           totalChunks: slices.count,
-                           chunkData: slice)
+            TrayChunkFrame(
+                type: TrayChunkFrame.typeTag,
+                chunkId: chunkId,
+                chunkIndex: index,
+                totalChunks: slices.count,
+                chunkData: slice)
         }
     }
 }
@@ -129,7 +133,8 @@ struct TrayChunkReassembler {
 
     mutating func accept(_ frame: TrayChunkFrame) -> Outcome {
         guard frame.hasValidIndices,
-              frame.totalChunks <= TrayChunkLimits.maxChunkCount else {
+            frame.totalChunks <= TrayChunkLimits.maxChunkCount
+        else {
             return .rejected(.malformed)
         }
         // totalChunks must not change mid-message: a peer that re-declares it is
@@ -143,8 +148,9 @@ struct TrayChunkReassembler {
             evictOldestIfNeeded()
         }
         guard var buffer = buffers[frame.chunkId],
-              frame.chunkIndex < buffer.chunks.count,
-              buffer.chunks[frame.chunkIndex] == nil else { return .pending }
+            frame.chunkIndex < buffer.chunks.count,
+            buffer.chunks[frame.chunkIndex] == nil
+        else { return .pending }
 
         buffer.chunks[frame.chunkIndex] = frame.chunkData
         buffer.received += 1

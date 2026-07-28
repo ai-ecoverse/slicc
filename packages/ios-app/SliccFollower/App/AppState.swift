@@ -576,7 +576,8 @@ class AppState: ObservableObject {
     /// `routeLeaderMessage` and its switch never see framing (#1700).
     func handleDataChannelMessage(_ data: Data) {
         if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
-           frame.type == TrayChunkFrame.typeTag {
+            frame.type == TrayChunkFrame.typeTag
+        {
             acceptChunkFrame(frame)
             return
         }
@@ -975,14 +976,16 @@ class AppState: ObservableObject {
         }
 
         guard data.count <= TrayChunkLimits.maxTotalBytes,
-              let text = String(bytes: data, encoding: .utf8) else {
+            let text = String(bytes: data, encoding: .utf8)
+        else {
             logger.error("Refusing to send oversize message (\(data.count) bytes)")
             return false
         }
         let frames = TrayChunkFraming.frameChunks(text)
         for frame in frames {
             guard let encoded = try? JSONEncoder().encode(frame),
-                  webRTCManager?.sendData(encoded) == true else {
+                webRTCManager?.sendData(encoded) == true
+            else {
                 logger.error("Chunked send failed at frame \(frame.chunkIndex + 1)/\(frames.count)")
                 return false
             }

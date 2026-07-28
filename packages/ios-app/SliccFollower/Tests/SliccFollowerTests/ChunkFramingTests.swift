@@ -1,5 +1,6 @@
-import XCTest
 import Foundation
+import XCTest
+
 @testable import SliccFollower
 
 /// Transport-level chunk framing (#1700).
@@ -66,15 +67,17 @@ final class TrayChunkFramingTests: XCTestCase {
         XCTAssertGreaterThan(frames.count, 1)
         for frame in frames {
             let encoded = try encode(frame)
-            XCTAssertLessThanOrEqual(encoded.count, TrayChunkLimits.maxMessageBytes,
-                                     "frame \(frame.chunkIndex) is \(encoded.count) bytes")
+            XCTAssertLessThanOrEqual(
+                encoded.count, TrayChunkLimits.maxMessageBytes,
+                "frame \(frame.chunkIndex) is \(encoded.count) bytes")
         }
         XCTAssertEqual(frames.map(\.chunkData).joined(), monster)
     }
 
     func testFramesAreNumberedConsistently() {
-        let frames = TrayChunkFraming.frameChunks(String(repeating: "y", count: 200_000),
-                                                  chunkId: "shared-id")
+        let frames = TrayChunkFraming.frameChunks(
+            String(repeating: "y", count: 200_000),
+            chunkId: "shared-id")
 
         for (index, frame) in frames.enumerated() {
             XCTAssertEqual(frame.type, TrayChunkFrame.typeTag)
@@ -165,11 +168,13 @@ final class TrayChunkFramingTests: XCTestCase {
 
         // `__chunk` is reserved transport vocabulary: a frame with impossible
         // indices is rejected, never treated as a message.
-        let outcome = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag,
-                                                        chunkId: "bad",
-                                                        chunkIndex: 5,
-                                                        totalChunks: 2,
-                                                        chunkData: "x"))
+        let outcome = reassembler.accept(
+            TrayChunkFrame(
+                type: TrayChunkFrame.typeTag,
+                chunkId: "bad",
+                chunkIndex: 5,
+                totalChunks: 2,
+                chunkData: "x"))
 
         XCTAssertNil(outcome.message)
         XCTAssertEqual(outcome.rejection, .malformed)
@@ -181,11 +186,15 @@ final class TrayChunkFramingTests: XCTestCase {
 
         // Peer-controlled metadata must not resize a buffer already in flight.
         // The Go receiver panicked on exactly this shape before it was guarded.
-        _ = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag, chunkId: "x",
-                                              chunkIndex: 0, totalChunks: 2, chunkData: "a"))
-        let outcome = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag, chunkId: "x",
-                                                        chunkIndex: 99, totalChunks: 100,
-                                                        chunkData: "b"))
+        _ = reassembler.accept(
+            TrayChunkFrame(
+                type: TrayChunkFrame.typeTag, chunkId: "x",
+                chunkIndex: 0, totalChunks: 2, chunkData: "a"))
+        let outcome = reassembler.accept(
+            TrayChunkFrame(
+                type: TrayChunkFrame.typeTag, chunkId: "x",
+                chunkIndex: 99, totalChunks: 100,
+                chunkData: "b"))
 
         XCTAssertNil(outcome.message)
         XCTAssertEqual(outcome.rejection, .malformed)
@@ -196,10 +205,12 @@ final class TrayChunkFramingTests: XCTestCase {
 
         // Allocating a buffer for a claimed billion frames would exhaust memory
         // before any payload arrived.
-        let outcome = reassembler.accept(TrayChunkFrame(type: TrayChunkFrame.typeTag,
-                                                        chunkId: "huge", chunkIndex: 0,
-                                                        totalChunks: 1_000_000_000,
-                                                        chunkData: "a"))
+        let outcome = reassembler.accept(
+            TrayChunkFrame(
+                type: TrayChunkFrame.typeTag,
+                chunkId: "huge", chunkIndex: 0,
+                totalChunks: 1_000_000_000,
+                chunkData: "a"))
 
         XCTAssertNil(outcome.message)
         XCTAssertEqual(outcome.rejection, .malformed)
