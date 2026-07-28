@@ -282,6 +282,7 @@ function applyModelMetadata(
     max_tokens?: number;
     reasoning?: boolean;
     input?: string[];
+    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
     compat?: CompatOverrides;
     thinkingLevelMap?: Record<string, string | null>;
   }
@@ -290,6 +291,18 @@ function applyModelMetadata(
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
   if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
   if (metadata.input !== undefined) model.input = metadata.input;
+  // pi-ai's calculateCost() prices usage from model.cost (the object), so a
+  // provider's getModelIds() (layer 3) can report pricing for a model pi-ai's
+  // registry doesn't know — otherwise it inherits buildProviderRoutedModel()'s
+  // $0 default. Set both the cost object pi-ai reads and the flat mirrors
+  // buildAdobeModel() emits so the two model-construction paths stay aligned.
+  if (metadata.cost !== undefined) {
+    model.cost = metadata.cost;
+    model.inputCost = metadata.cost.input;
+    model.outputCost = metadata.cost.output;
+    model.cacheReadCost = metadata.cost.cacheRead;
+    model.cacheWriteCost = metadata.cost.cacheWrite;
+  }
   // Merge compat onto whatever pi-ai's base model already declared (or any
   // compat from a prior modelOverrides layer). Each successive layer can
   // override individual flags without clobbering siblings. Cast to a generic

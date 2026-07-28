@@ -1920,6 +1920,89 @@ describe('model metadata overrides', () => {
     expect(models[0].contextWindow).toBe(1000000);
   });
 
+  it('propagates cost from getModelIds for a model id unknown to pi-ai (fixes $0 pricing)', () => {
+    // Regression: an Adobe-style proxy reports pricing for a model pi-ai's
+    // registry doesn't know (e.g. claude-opus-5). Without a cost branch in
+    // applyModelMetadata the synthesized model kept buildProviderRoutedModel's
+    // $0 default and the session cost counter read $0. pi-ai's calculateCost()
+    // prices usage from model.cost, so the object must survive resolution.
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+    // Flat mirrors match the shape buildAdobeModel() emits.
+    expect(model.inputCost).toBe(5);
+    expect(model.outputCost).toBe(25);
+    expect(model.cacheReadCost).toBe(0.5);
+    expect(model.cacheWriteCost).toBe(6.25);
+  });
+
+  it('leaves cost at the synthesized zero default when getModelIds reports none', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('getModelIds cost takes priority over modelOverrides cost (layer 3 > layer 2)', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-5': { cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+      },
+      getModelIds: () => [
+        {
+          id: 'claude-opus-5',
+          name: 'Claude Opus 5',
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const model = models[0] as unknown as Record<string, unknown>;
+    expect(model.cost).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
   it('compat from modelOverrides and getModelIds merges across the three layers', () => {
     // Verifies applyModelMetadata's merge behavior: each successive layer
     // (pi-ai base → modelOverrides → getModelIds) can override individual

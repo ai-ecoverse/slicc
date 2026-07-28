@@ -184,6 +184,15 @@ export interface ModelMetadata {
   /** Supported input modalities (e.g., ['text', 'image']). */
   input?: string[];
   /**
+   * Per-token pricing in US dollars per million tokens; matches pi-ai's
+   * `Model.cost`. Providers whose `getModelIds()` reports pricing for models
+   * pi-ai's registry doesn't know yet (e.g. Adobe's `claude-opus-5`) set this
+   * so the resolved model prices correctly instead of inheriting the $0
+   * default synthesized by `buildProviderRoutedModel()`. Merged as a whole
+   * object over the base model's cost by applyModelMetadata().
+   */
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /**
    * Per-model API compatibility overrides; matches pi-ai's `Model.compat`
    * field. Used to opt models out of provider features the upstream backend
    * rejects — e.g. Adobe sets `{ supportsEagerToolInputStreaming: false }`
