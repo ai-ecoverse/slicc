@@ -951,21 +951,43 @@ class AppState: ObservableObject {
     /// iOS originates only small messages today, but an unbounded one (a large
     /// pasted user message) would otherwise be dropped by the transport with no
     /// signal at all.
-    private func sendToLeader(_ msg: FollowerToLeaderMessage) {
-        guard let data = try? JSONEncoder().encode(msg) else { return }
-        if data.count <= TrayChunkLimits.maxMessageBytes {
-            webRTCManager?.sendData(data)
-            return
+    ///
+    /// Every write is checked. Continuing past a failed frame would leave the
+    /// leader holding an incomplete reassembly until eviction and the user with
+    /// no indication their message was lost — the silent-drop behaviour this
+    /// whole change exists to remove (#1700).
+    @discardableResult
+    private func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(msg)
+        } catch {
+            logger.error("Failed to encode message: \(error.localizedDescription)")
+            return false
         }
+
+        if data.count <= TrayChunkLimits.maxMessageBytes {
+            guard webRTCManager?.sendData(data) == true else {
+                logger.error("Send failed (\(data.count) bytes)")
+                return false
+            }
+            return true
+        }
+
         guard data.count <= TrayChunkLimits.maxTotalBytes,
               let text = String(bytes: data, encoding: .utf8) else {
             logger.error("Refusing to send oversize message (\(data.count) bytes)")
-            return
+            return false
         }
-        for frame in TrayChunkFraming.frameChunks(text) {
-            guard let encoded = try? JSONEncoder().encode(frame) else { return }
-            webRTCManager?.sendData(encoded)
+        let frames = TrayChunkFraming.frameChunks(text)
+        for frame in frames {
+            guard let encoded = try? JSONEncoder().encode(frame),
+                  webRTCManager?.sendData(encoded) == true else {
+                logger.error("Chunked send failed at frame \(frame.chunkIndex + 1)/\(frames.count)")
+                return false
+            }
         }
+        return true
     }
 
     // MARK: - Messages flush throttling
