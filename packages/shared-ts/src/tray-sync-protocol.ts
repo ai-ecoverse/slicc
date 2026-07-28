@@ -334,7 +334,14 @@ export type FollowerToLeaderMessage =
    * denial by the leader — the gate is fail-closed.
    */
   | { type: 'transcript.export.approve.response'; requestId: string; approved: boolean }
-  | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
+  | {
+      type: 'user_message';
+      text: string;
+      messageId: string;
+      attachments?: MessageAttachment[];
+      /** Steering send: interrupt the leader's running turn instead of queueing behind it. */
+      steer?: boolean;
+    }
   | { type: 'abort' }
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
   | { type: 'request_snapshot'; scoopJid?: string }

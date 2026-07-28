@@ -86,6 +86,21 @@ describe('FollowerSyncManager', () => {
       expect(sent[0]).toEqual({ type: 'user_message', text: 'hello', messageId: 'msg-1' });
     });
 
+    it('marks a steering send so the leader interrupts its running turn', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendMessage('interrupt', 'msg-1', undefined, { steer: true });
+
+      const sent = channel.parseSent();
+      expect(sent[0]).toEqual({
+        type: 'user_message',
+        text: 'interrupt',
+        messageId: 'msg-1',
+        steer: true,
+      });
+    });
+
     it('sends attachments with user_message payloads', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);

@@ -20,7 +20,7 @@ import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { prepareWcShell } from './wc-live.js';
 import { scoopColor } from './wc-scoop-color.js';
-import { submittedText } from './wc-shell.js';
+import { submittedSteer, submittedText } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
   isLoginDipAction,
@@ -532,7 +532,7 @@ export async function mountWcUiFollower(
     const text = submittedText(event) ?? '';
     const attachments = attachStage.take();
     if (text.trim() || attachments.length) {
-      controller.sendUserMessage(text, attachments);
+      controller.sendUserMessage(text, attachments, { steer: submittedSteer(event) });
       (boot.refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     }
   });

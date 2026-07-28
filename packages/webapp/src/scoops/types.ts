@@ -194,6 +194,12 @@ export interface ChannelMessage {
   lickId?: string;
   /** Result state for an actionable lick: pending / confirmed / dismissed. */
   lickState?: 'pending' | 'confirmed' | 'dismissed';
+  /**
+   * Steering send (Ctrl/Cmd+Enter in the composer): when this message lands
+   * mid-turn, interrupt the running turn with it instead of queueing it behind
+   * the turn. Carried through the router batch down to `ScoopContext.prompt`.
+   */
+  steer?: boolean;
 }
 
 /** Scheduled task */

@@ -61,6 +61,7 @@ function createMockCallbacks(): ScoopContextCallbacks {
  */
 function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promise<void>): void {
   const followUpQueue: any[] = [];
+  const steeringQueue: any[] = [];
   const agent = {
     prompt: mockPrompt,
     abort: vi.fn(),
@@ -68,12 +69,17 @@ function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promis
     followUp: vi.fn((msg: any) => {
       followUpQueue.push(msg);
     }),
+    steer: vi.fn((msg: any) => {
+      steeringQueue.push(msg);
+    }),
     clearAllQueues: vi.fn(() => {
       followUpQueue.length = 0;
+      steeringQueue.length = 0;
     }),
     state: { isStreaming: false },
-    // Expose queue for test inspection
+    // Expose queues for test inspection
     _followUpQueue: followUpQueue,
+    _steeringQueue: steeringQueue,
   };
   // Inject via private field
   (ctx as any).agent = agent;
@@ -350,6 +356,48 @@ describe('ScoopContext prompt queueing', () => {
 
     resolveFirst!();
     await promptPromise;
+  });
+
+  it('queues a steering prompt via steer() instead of followUp when processing', async () => {
+    const prompts: string[] = [];
+    let resolveFirst: () => void;
+    const firstPromptDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    injectMockAgent(ctx, async (text) => {
+      prompts.push(text);
+      if (text === 'first') await firstPromptDone;
+    });
+
+    const promptPromise = ctx.prompt('first');
+    await ctx.prompt('steer me', [], { steer: true });
+
+    // The steering message rides pi's steering queue (injected as soon as the
+    // running turn finishes its step), not the follow-up queue.
+    expect(prompts).toEqual(['first']);
+    expect((ctx as any).agent.steer).toHaveBeenCalledTimes(1);
+    expect((ctx as any).agent.followUp).not.toHaveBeenCalled();
+    expect((ctx as any).agent._steeringQueue).toHaveLength(1);
+    expect((ctx as any).agent._steeringQueue[0].content).toEqual([
+      { type: 'text', text: 'steer me' },
+    ]);
+
+    resolveFirst!();
+    await promptPromise;
+  });
+
+  it('runs a steering prompt immediately when the agent is idle (nothing to interrupt)', async () => {
+    const prompts: string[] = [];
+    injectMockAgent(ctx, async (text) => {
+      prompts.push(text);
+    });
+
+    await ctx.prompt('steer me', [], { steer: true });
+
+    expect(prompts).toEqual(['steer me']);
+    expect((ctx as any).agent.steer).not.toHaveBeenCalled();
+    expect((ctx as any).agent.followUp).not.toHaveBeenCalled();
   });
 
   it('preserves image attachments when queueing follow-up prompts', async () => {

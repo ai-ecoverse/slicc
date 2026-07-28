@@ -174,9 +174,9 @@ function createLeaderOptionsFactory(
     },
     onSprinkleLick: (name, body, targetScoop, originLabel) =>
       client.sendSprinkleLick(name, body, targetScoop, originLabel),
-    onFollowerMessage: (text, messageId, attachments) => {
+    onFollowerMessage: (text, messageId, attachments, options) => {
       deps.getController()?.addUserMessage(text, attachments);
-      deps.agentHandle.sendMessage(text, messageId, attachments);
+      deps.agentHandle.sendMessage(text, messageId, attachments, options);
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
     },
     onFollowerAbort: () => deps.agentHandle.stop(),

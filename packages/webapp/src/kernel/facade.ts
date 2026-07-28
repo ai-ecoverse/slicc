@@ -1629,7 +1629,13 @@ export class Bridge implements KernelFacade {
     });
     this.persistScoop(msg.scoopJid);
     if (this.followerSync) {
-      this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      // Only a steering send carries the options argument, so the ordinary
+      // forward stays a three-argument call.
+      if (msg.steer) {
+        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments, { steer: true });
+      } else {
+        this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+      }
       return;
     }
     const channelMsg: ChannelMessage = {
@@ -1642,6 +1648,7 @@ export class Bridge implements KernelFacade {
       timestamp: new Date().toISOString(),
       fromAssistant: false,
       channel: 'web',
+      ...(msg.steer ? { steer: true as const } : {}),
     };
     await this.orchestrator?.handleMessage(channelMsg);
     this.orchestrator?.createScoopTab(msg.scoopJid);

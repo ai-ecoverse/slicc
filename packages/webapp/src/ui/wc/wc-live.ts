@@ -70,6 +70,7 @@ import {
   applyShellContext,
   mountWcShell,
   type SwitcherScoop,
+  submittedSteer,
   submittedText,
   type WcShellRefs,
 } from './wc-shell.js';
@@ -1094,7 +1095,10 @@ function wireWcComposer(deps: {
         })
         .catch(() => undefined);
     }
-    boot.getController()?.sendUserMessage(text, attachStage?.take(), { dictation });
+    boot.getController()?.sendUserMessage(text, attachStage?.take(), {
+      dictation,
+      steer: submittedSteer(event),
+    });
     (refs.inputCard as HTMLElement & { clear?: () => void }).clear?.();
     // User input is most-recent activity: the addressed scoop gets the eyes
     // and the text feeds its hover-tooltip summary.

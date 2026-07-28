@@ -239,7 +239,12 @@ export class OffscreenClient implements KernelClientFacade {
 
   createAgentHandle(): AgentHandle {
     return {
-      sendMessage: (text: string, messageId?: string, attachments?: MessageAttachment[]) => {
+      sendMessage: (
+        text: string,
+        messageId?: string,
+        attachments?: MessageAttachment[],
+        options?: { steer?: boolean }
+      ) => {
         if (!this.selectedScoopJid) {
           this.emitToUI({ type: 'error', error: 'No scoop selected' });
           return;
@@ -250,6 +255,7 @@ export class OffscreenClient implements KernelClientFacade {
           text,
           attachments,
           messageId: messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          ...(options?.steer ? { steer: true as const } : {}),
         });
       },
 

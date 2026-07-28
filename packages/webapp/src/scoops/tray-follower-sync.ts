@@ -337,7 +337,12 @@ export class FollowerSyncManager implements AgentHandle {
   // AgentHandle implementation
   // ---------------------------------------------------------------------------
 
-  sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void {
+  sendMessage(
+    text: string,
+    messageId?: string,
+    attachments?: MessageAttachment[],
+    options?: { steer?: boolean }
+  ): void {
     const id = messageId ?? `follower-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.sentMessageIds.add(id);
     // Off-loaded `path` values point at this follower's VFS — they are
@@ -351,6 +356,7 @@ export class FollowerSyncManager implements AgentHandle {
       text,
       messageId: id,
       attachments: safeAttachments,
+      ...(options?.steer ? { steer: true as const } : {}),
     });
     log.info('Sent user message to leader', { messageId: id });
   }

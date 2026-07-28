@@ -35,7 +35,8 @@ export interface ScoopMessageRouterDeps {
     text: string,
     senderId: string,
     senderName: string,
-    images?: ReturnType<typeof imageContentFromAttachments>
+    images?: ReturnType<typeof imageContentFromAttachments>,
+    options?: { steer?: boolean }
   ): Promise<void>;
   /** Notify the UI about a new incoming message (delegation / external lick chip). */
   notifyIncomingMessage(scoopJid: string, message: ChannelMessage): void;
@@ -267,7 +268,14 @@ export class ScoopMessageRouter {
     this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
     await this.deps.db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
 
-    await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images);
+    // One steering send anywhere in the batch steers the whole batch — the
+    // batch is delivered as a single prompt, so it cannot be split into a
+    // steered and a queued half.
+    const steer = messages.some((m) => m.steer);
+
+    await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
+      steer,
+    });
   }
 
   /** Start the message polling loop. */

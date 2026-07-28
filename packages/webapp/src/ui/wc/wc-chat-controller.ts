@@ -517,11 +517,14 @@ export class WcChatController {
    * priming note) are appended to the text before storing and sending —
    * the marked text is what the agent (and replay/compaction) sees; the
    * render seam strips the markers so the visible bubble stays clean.
+   *
+   * `options.steer` marks a steering send (Ctrl/Cmd+Enter): the agent
+   * interrupts its running turn with it instead of queueing it behind the turn.
    */
   sendUserMessage(
     text: string,
     attachments?: ChatMessage['attachments'],
-    options?: { dictation?: boolean }
+    options?: { dictation?: boolean; steer?: boolean }
   ): void {
     const trimmed = text.trim();
     if (!trimmed && !attachments?.length) return;
@@ -533,16 +536,26 @@ export class WcChatController {
       timestamp: Date.now(),
       attachments: attachments?.length ? attachments : undefined,
     };
-    if (this.#processing) {
+    if (this.#processing && !options?.steer) {
       // Busy-submit: park the bubble in the stack instead of the thread. The
       // agent still receives it now (orchestrator owns turn batching); the
       // bubble flushes into the thread when the consuming turn starts.
       this.#queued.push(message);
       this.#fireQueuedChange();
     } else {
+      // A steering send belongs to the RUNNING turn, which never crosses a
+      // processing rising edge — the queued stack's only flush boundary. So it
+      // goes straight into the thread; parking it would leave the card stuck in
+      // the stack until some later turn started.
       this.#appendMessage(message);
     }
-    this.#agent.sendMessage(content, message.id, message.attachments);
+    // Only steering sends carry the options argument, so the ordinary send
+    // stays a three-argument call for every AgentHandle implementation.
+    if (options?.steer) {
+      this.#agent.sendMessage(content, message.id, message.attachments, { steer: true });
+    } else {
+      this.#agent.sendMessage(content, message.id, message.attachments);
+    }
     // Fire ONLY on the single user-initiated send site. The retry path
     // (`#handleErrorRetry`) replays an existing user turn through
     // `#agent.sendMessage` directly and intentionally does NOT re-beacon,
