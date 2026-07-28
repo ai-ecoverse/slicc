@@ -68,6 +68,13 @@ class LimitedDataChannel implements TrayDataChannelLike {
   }
 }
 
+/**
+ * A high surrogate not followed by a low one, or a low surrogate not preceded
+ * by a high one — i.e. half of an astral character. `JSON.stringify` emits
+ * these as lone `\udXXX` escapes, which Go decodes to U+FFFD.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 function bigEvent(bytes: number, scoopJid = 'cone'): LeaderToFollowerMessage {
   return {
     type: 'agent_event',
@@ -96,6 +103,36 @@ describe('tray sync transport chunking', () => {
       const payload = JSON.stringify({ mixed: `a"\\b${'\u6f22'.repeat(50_000)}\u{1f366}` });
       const frames = frameChunks(payload, TRAY_DEFAULT_MAX_MESSAGE_BYTES, 'fixed');
       expect(frames.map((f) => f.chunkData).join('')).toBe(payload);
+    });
+
+    it('never splits a surrogate pair across frames', () => {
+      // JS slicing is by UTF-16 code unit, so an astral character can be cut in
+      // half. JSON.stringify emits each half as a lone \udXXX escape; JS rejoins
+      // those losslessly (so a same-runtime round-trip is blind to this), but
+      // Go's encoding/json decodes an unpaired escape to U+FFFD and the
+      // character arrives destroyed. Assert well-formedness per frame, which is
+      // what a non-JS decoder actually requires.
+      const unitsPerChunk = Math.floor((TRAY_DEFAULT_MAX_MESSAGE_BYTES - 512) / 4);
+      // Place an emoji so its two halves straddle the first cut exactly.
+      const payload = `${'a'.repeat(unitsPerChunk - 1)}\u{1f366}${'b'.repeat(unitsPerChunk)}`;
+
+      const frames = frameChunks(payload, TRAY_DEFAULT_MAX_MESSAGE_BYTES, 'surrogate');
+
+      expect(frames.length).toBeGreaterThan(1);
+      for (const frame of frames) {
+        expect(LONE_SURROGATE.test(frame.chunkData), `frame ${frame.chunkIndex}`).toBe(false);
+      }
+      expect(frames.map((f) => f.chunkData).join('')).toBe(payload);
+    });
+
+    it('keeps frames well-formed with astral characters at many offsets', () => {
+      // Emoji every 7 units guarantees some land on a boundary regardless of
+      // how the chunk size is tuned.
+      const payload = `${'\u{1f366}xxxxx'.repeat(30_000)}`;
+
+      for (const frame of frameChunks(payload, TRAY_DEFAULT_MAX_MESSAGE_BYTES, 'astral')) {
+        expect(LONE_SURROGATE.test(frame.chunkData), `frame ${frame.chunkIndex}`).toBe(false);
+      }
     });
 
     it('numbers frames consistently and shares one chunkId', () => {
@@ -324,6 +361,49 @@ describe('tray sync transport chunking', () => {
       // The two oldest were evicted: completing the first emits nothing.
       for (const frame of started[0]!.slice(1)) dc.simulateMessage(JSON.stringify(frame));
       expect(received).toEqual([]);
+    });
+
+    it('drops a frame that re-declares totalChunks mid-message', () => {
+      // Peer-controlled metadata must not resize a buffer already in flight.
+      // The Go receiver panicked on exactly this shape before it was guarded.
+      const dc = new LimitedDataChannel(262_144);
+      const sync = new TraySyncChannel<LeaderToFollowerMessage, LeaderToFollowerMessage>(dc);
+      const received: LeaderToFollowerMessage[] = [];
+      sync.onMessage((m) => received.push(m));
+
+      const frame = (chunkIndex: number, totalChunks: number, chunkData: string) =>
+        JSON.stringify({
+          type: TRAY_CHUNK_FRAME_TYPE,
+          chunkId: 'x',
+          chunkIndex,
+          totalChunks,
+          chunkData,
+        });
+      dc.simulateMessage(frame(0, 2, 'a'));
+      dc.simulateMessage(frame(99, 100, 'b'));
+
+      expect(received).toEqual([]);
+    });
+
+    it('rejects a frame claiming an excessive chunk count', () => {
+      const dc = new LimitedDataChannel(262_144);
+      const sync = new TraySyncChannel<LeaderToFollowerMessage, LeaderToFollowerMessage>(dc);
+      const received: LeaderToFollowerMessage[] = [];
+      sync.onMessage((m) => received.push(m));
+
+      dc.simulateMessage(
+        JSON.stringify({
+          type: TRAY_CHUNK_FRAME_TYPE,
+          chunkId: 'huge',
+          chunkIndex: 0,
+          totalChunks: 1_000_000_000,
+          chunkData: 'a',
+        })
+      );
+      dc.simulateMessage(JSON.stringify({ type: 'ping' }));
+
+      // Rejected as malformed, and the channel keeps working.
+      expect(received).toEqual([{ type: 'ping' }]);
     });
 
     it('ignores a malformed frame without disturbing the channel', () => {

@@ -23,6 +23,7 @@ import {
   isTrayChunkFrame,
   TRAY_CHUNK_FRAME_TYPE,
   TRAY_DEFAULT_MAX_MESSAGE_BYTES,
+  TRAY_MAX_CHUNK_COUNT,
   TRAY_MAX_MESSAGE_BYTES,
   TRAY_MAX_PENDING_REASSEMBLIES,
   TRAY_MAX_REASSEMBLY_BYTES,
@@ -321,6 +322,15 @@ function nextChunkId(): string {
 /**
  * Slice a serialized message into frames that each fit `maxMessageBytes`.
  *
+ * Cuts never fall between the two halves of a surrogate pair. JS strings are
+ * UTF-16, so slicing by code unit can split an astral character (emoji, CJK
+ * extensions, math alphanumerics) down the middle. `JSON.stringify` then emits
+ * each half as a lone `\udXXX` escape — which JS itself rejoins losslessly, so a
+ * same-runtime round-trip looks fine, but Go's `encoding/json` decodes an
+ * unpaired escape to U+FFFD. The character reaches a CLI follower destroyed and
+ * unrecoverable. Slices are therefore built first and counted after, since a
+ * boundary adjustment can change how many there are.
+ *
  * Exported for tests: the size guarantee is the whole point of this module, and
  * asserting it directly beats inferring it from channel behaviour.
  */
@@ -334,18 +344,32 @@ export function frameChunks(
     1,
     Math.min(MAX_CHUNK_UNITS, Math.floor(budget / WORST_CASE_BYTES_PER_UNIT))
   );
-  const totalChunks = Math.max(1, Math.ceil(payload.length / unitsPerChunk));
-  const frames: TrayChunkFrame[] = [];
-  for (let i = 0; i < totalChunks; i++) {
-    frames.push({
-      type: TRAY_CHUNK_FRAME_TYPE,
-      chunkId,
-      chunkIndex: i,
-      totalChunks,
-      chunkData: payload.slice(i * unitsPerChunk, (i + 1) * unitsPerChunk),
-    });
+
+  const slices: string[] = [];
+  for (let start = 0; start < payload.length; ) {
+    let end = Math.min(start + unitsPerChunk, payload.length);
+    // Never cut between a high surrogate and its low surrogate.
+    if (end < payload.length && isHighSurrogate(payload.charCodeAt(end - 1))) {
+      end -= 1;
+    }
+    if (end <= start) end = start + unitsPerChunk; // pathological; accept the split
+    slices.push(payload.slice(start, end));
+    start = end;
   }
-  return frames;
+  if (slices.length === 0) slices.push('');
+
+  return slices.map((chunkData, chunkIndex) => ({
+    type: TRAY_CHUNK_FRAME_TYPE,
+    chunkId,
+    chunkIndex,
+    totalChunks: slices.length,
+    chunkData,
+  }));
+}
+
+/** True for the leading half of a UTF-16 surrogate pair. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
 interface ReassemblyBuffer {
@@ -413,6 +437,17 @@ export class TraySyncChannel<
    */
   private acceptChunkFrame(frame: TrayChunkFrame): void {
     let buffer = this.reassembly.get(frame.chunkId);
+    // `totalChunks` must not change mid-message: a peer that re-declares it is
+    // either buggy or probing for an out-of-bounds write against the buffer
+    // sized by the first frame.
+    if (buffer && buffer.totalChunks !== frame.totalChunks) {
+      log.error('Dropping a tray sync chunk frame with inconsistent totalChunks', {
+        chunkId: frame.chunkId,
+        expected: buffer.totalChunks,
+        received: frame.totalChunks,
+      });
+      return;
+    }
     if (!buffer) {
       buffer = {
         chunks: new Array(frame.totalChunks),
@@ -574,6 +609,19 @@ export class TraySyncChannel<
     }
 
     const frames = frameChunks(serialized, this.maxMessageBytes);
+    // Sender/receiver symmetry: never emit more frames than a peer will accept.
+    // Unreachable with a conforming transport (8 MiB over >=16 KiB frames is
+    // ~512), but a transport reporting an absurdly small limit would otherwise
+    // produce a message no receiver can reassemble.
+    if (frames.length > TRAY_MAX_CHUNK_COUNT) {
+      log.error('Refusing to send a message needing too many frames', {
+        type,
+        bytes,
+        frames: frames.length,
+        limit: TRAY_MAX_CHUNK_COUNT,
+      });
+      return false;
+    }
     for (const frame of frames) {
       if (!this.writeRaw(JSON.stringify(frame), TRAY_CHUNK_FRAME_TYPE)) {
         log.error('Chunked tray sync send failed part-way', {
