@@ -572,6 +572,30 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
+    // SECURITY NOTE (#1717): `allow-scripts allow-same-origin` together make
+    // this sandbox ESCAPABLE — Chrome logs "can escape its sandboxing" once
+    // per iframe, and it is right. Do not assume this sandbox isolates
+    // anything: it is only a speed bump against ACCIDENTAL misbehavior
+    // (forms, top-navigation). Sprinkle content is agent-authored code that
+    // runs same-origin with the app — the trust model, not this attribute,
+    // is the boundary. The one hard gate that treats this nested context as
+    // untrusted is scoped to the sync-fs channel nonce (realm capability
+    // tokens) in `llm-proxy-sw-config.ts`; it is NOT general containment.
+    //
+    // What `allow-same-origin` actually affects — measured empirically for
+    // #1717 (2026-07-28, CDP harness, a test sprinkle run with and without
+    // the token): the postMessage bridge does NOT need it (init/setState/
+    // exec/readFile all pass from an opaque origin; the parent validates by
+    // `event.source` identity). Everything else about a working sprinkle
+    // DOES: with the token removed, `localStorage`/IndexedDB/
+    // `navigator.serviceWorker` throw SecurityError, the document stops
+    // inheriting the parent's SW controller so `/preview/*` VFS subresources
+    // fall through and 404, and even plain same-site `fetch()` fails (an
+    // opaque origin makes it a CORS request with `Origin: null`). Option A
+    // in #1717 (dropping the token) was evaluated and REJECTED on those
+    // results — do not re-attempt it as a drive-by "fix" for the console
+    // warning; genuine isolation needs a dedicated sandbox origin (option C).
+    //
     // `allow-popups` only for cherry: a sprinkle's own srcdoc iframe sits one
     // level deeper there (host page → cherry iframe → sprinkle iframe), and
     // content that opens a link via `target="_blank"`/`window.open()` instead
@@ -613,7 +637,7 @@ export class SprinkleRenderer {
       );
       iframe.addEventListener(
         'error',
-        (e) => {
+        () => {
           clearTimeout(timer);
           reject(new Error('full-doc iframe failed to load'));
         },
