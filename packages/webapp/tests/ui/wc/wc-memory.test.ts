@@ -4,6 +4,7 @@
  */
 
 import 'fake-indexeddb/auto';
+import { SYNTHETIC_MEMORY_MARKDOWN } from '@slicc/webcomponents/memory/synthetic-fixture';
 import { describe, expect, it } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
@@ -98,6 +99,19 @@ describe('parseMemoryRows', () => {
     expect(parseMemoryRows('just prose, no bullets')).toHaveLength(1);
     expect(parseMemoryRows('')).toHaveLength(0);
     expect(parseMemoryRows('# heading only')).toHaveLength(0);
+  });
+
+  it('parses the synthetic fixture with sections and clean rendered text', () => {
+    const rows = parseMemoryRows(SYNTHETIC_MEMORY_MARKDOWN);
+    expect(rows).toHaveLength(101);
+    expect(rows.every((row) => row.section.length > 0)).toBe(true);
+    expect(rows.every((row) => !/[`]|\*\*/.test(`${row.title}${row.summary}`))).toBe(true);
+    expect(
+      rows.find((row) => row.bodyHtml.includes('<strong>Start with evidence</strong>'))
+    ).toMatchObject({
+      section: 'Working rhythm',
+      summary: 'and only then choose whether a code change is warranted.',
+    });
   });
 });
 
