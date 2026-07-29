@@ -18,7 +18,12 @@ import { FsWatcher, VirtualFS } from '../fs/index.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
-import { registerSessionCostsProvider } from '../shell/supplemental-commands/cost-command.js';
+import {
+  frozenSessionToCostData,
+  registerSessionCostsProvider,
+  type ScoopCostData,
+  type SessionCostScope,
+} from '../shell/supplemental-commands/cost-command.js';
 import type {
   ConeApprovalRouter,
   PendingSudoRequest,
@@ -435,7 +440,7 @@ export class Orchestrator implements ConeApprovalRouter {
     }
 
     // Register session costs provider for the `cost` shell command
-    registerSessionCostsProvider(() => this.getSessionCosts());
+    registerSessionCostsProvider((scope) => this.getSessionCostsForCommand(scope));
 
     // Register the worker-side transcript export service so
     // getTranscriptExportService() works from any worker-side caller.
@@ -990,14 +995,32 @@ export class Orchestrator implements ConeApprovalRouter {
     this.lifecycle.getContext(jid)?.stop();
   }
 
-  /** Collect cost data from all active and dropped scoops for the `cost` shell command. */
-  getSessionCosts(): ReturnType<ScoopCostTracker['getSessionCosts']> {
-    return this.costTracker.getSessionCosts();
+  /** Collect live cost data, optionally including dropped scoop history. */
+  getSessionCosts(
+    options?: Parameters<ScoopCostTracker['getSessionCosts']>[0]
+  ): ReturnType<ScoopCostTracker['getSessionCosts']> {
+    return this.costTracker.getSessionCosts(options);
+  }
+
+  /** Collect the cost command's live or complete history, including frozen sessions. */
+  async getSessionCostsForCommand(scope: SessionCostScope): Promise<ScoopCostData[]> {
+    const costs = this.getSessionCosts({ includeDropped: scope === 'all' });
+    if (scope === 'live' || !this.sharedFs) return costs;
+    const { readSessionsIndex } = await import('../ui/session-freezer.js');
+    const frozenSessions = await readSessionsIndex(this.sharedFs);
+    return [...costs, ...frozenSessions.map(frozenSessionToCostData)];
   }
 
   /** Per-model cost breakdown (sorted by cost descending) for the session-stats wire. */
-  getModelCosts(): ReturnType<ScoopCostTracker['getModelCosts']> {
-    return this.costTracker.getModelCosts();
+  getModelCosts(
+    options?: Parameters<ScoopCostTracker['getModelCosts']>[0]
+  ): ReturnType<ScoopCostTracker['getModelCosts']> {
+    return this.costTracker.getModelCosts(options);
+  }
+
+  /** Active-session spend over the trailing window, extrapolated to dollars per hour. */
+  getBurnRate(nowMs?: number): ReturnType<ScoopCostTracker['getBurnRate']> {
+    return this.costTracker.getBurnRate(nowMs);
   }
 
   /**

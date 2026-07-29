@@ -16,6 +16,9 @@ import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.
 import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
+const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const BURN_RATE_WINDOW_HOURS = 0.25;
+
 export interface ModelCostData {
   model: string;
   input: number;
@@ -33,6 +36,10 @@ export interface ScoopCostTrackerDeps {
   getContexts(): ReadonlyMap<string, ScoopContext>;
 }
 
+export interface CostScopeOptions {
+  includeDropped?: boolean;
+}
+
 /**
  * Build cost data for a single scoop from its context's assistant messages.
  * Returns `null` when the scoop has no usage yet (no assistant turns).
@@ -42,7 +49,8 @@ export interface ScoopCostTrackerDeps {
  */
 export function buildScoopCost(
   scoop: RegisteredScoop,
-  context: ScoopContext
+  context: ScoopContext,
+  source: ScoopCostData['source'] = 'live'
 ): ScoopCostData | null {
   const messages = context.getAgentMessages();
   const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
@@ -57,6 +65,7 @@ export function buildScoopCost(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   const modelCounts = new Map<string, number>();
+  const modelCosts = new Map<string, number>();
   for (const msg of assistantMsgs) {
     aggregated.input += msg.usage.input;
     aggregated.output += msg.usage.output;
@@ -69,6 +78,7 @@ export function buildScoopCost(
     aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
     aggregated.cost.total += msg.usage.cost.total;
     modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
+    modelCosts.set(msg.model, (modelCosts.get(msg.model) ?? 0) + msg.usage.cost.total);
   }
 
   let topModel = '';
@@ -84,7 +94,6 @@ export function buildScoopCost(
   const firstActivity = timestamps[0];
   const lastActivity = timestamps[timestamps.length - 1];
 
-  const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
   const timespanMs = lastActivity - firstActivity;
   const intervals = Math.max(1, Math.ceil(timespanMs / FIFTEEN_MINUTES_MS));
   const activeTimeMs = intervals * FIFTEEN_MINUTES_MS;
@@ -93,6 +102,10 @@ export function buildScoopCost(
     name: scoop.assistantLabel,
     type: scoop.isCone ? 'cone' : 'scoop',
     model: topModel,
+    models: [...modelCosts.entries()]
+      .sort(([, costA], [, costB]) => costB - costA)
+      .map(([model]) => model),
+    source,
     usage: aggregated,
     turns: assistantMsgs.length,
     firstActivity,
@@ -117,7 +130,7 @@ export class ScoopCostTracker {
     const scoop = this.deps.getScoops().get(jid);
     const context = this.deps.getContexts().get(jid);
     if (!scoop || !context) return;
-    const costData = buildScoopCost(scoop, context);
+    const costData = buildScoopCost(scoop, context, 'dropped');
     if (costData) {
       this.dropped.push(costData);
     }
@@ -128,8 +141,8 @@ export class ScoopCostTracker {
     }
   }
 
-  /** Collect cost data from all active + dropped scoops for the `cost` command. */
-  getSessionCosts(): ScoopCostData[] {
+  /** Collect cost data from live scoops, optionally including dropped history. */
+  getSessionCosts(options: CostScopeOptions = {}): ScoopCostData[] {
     const results: ScoopCostData[] = [];
     const contexts = this.deps.getContexts();
     for (const scoop of this.deps.getScoops().values()) {
@@ -138,8 +151,22 @@ export class ScoopCostTracker {
       const costData = buildScoopCost(scoop, context);
       if (costData) results.push(costData);
     }
-    results.push(...this.dropped);
+    if (options.includeDropped) results.push(...this.dropped);
     return results;
+  }
+
+  /** Active-session cost in the trailing 15-minute window, extrapolated to dollars per hour. */
+  getBurnRate(nowMs = Date.now()): number {
+    const cutoff = nowMs - FIFTEEN_MINUTES_MS;
+    let windowCost = 0;
+    for (const context of this.deps.getContexts().values()) {
+      for (const message of context.getAgentMessages()) {
+        if (message.role === 'assistant' && message.timestamp >= cutoff) {
+          windowCost += message.usage.cost.total;
+        }
+      }
+    }
+    return windowCost / BURN_RATE_WINDOW_HOURS;
   }
 
   /**
@@ -154,10 +181,10 @@ export class ScoopCostTracker {
   }
 
   /**
-   * Aggregate token usage and cost across all live + dropped scoops, grouped by model name.
+   * Aggregate live token usage and cost by model, optionally including dropped history.
    * Returns results sorted by cost descending.
    */
-  getModelCosts(): ModelCostData[] {
+  getModelCosts(options: CostScopeOptions = {}): ModelCostData[] {
     const modelMap = new Map<string, ModelCostData>();
 
     // Aggregate live scoops
@@ -168,9 +195,10 @@ export class ScoopCostTracker {
       this.aggregateMessages(assistantMsgs, modelMap);
     }
 
-    // Aggregate dropped scoops
-    for (const messages of this.droppedMessages) {
-      this.aggregateMessages(messages, modelMap);
+    if (options.includeDropped) {
+      for (const messages of this.droppedMessages) {
+        this.aggregateMessages(messages, modelMap);
+      }
     }
 
     // Convert to array and sort by cost descending

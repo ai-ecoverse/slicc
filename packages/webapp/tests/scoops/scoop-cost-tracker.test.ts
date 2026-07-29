@@ -4,7 +4,7 @@ import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import { ScoopCostTracker } from '../../src/scoops/scoop-cost-tracker.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
-describe('ScoopCostTracker.getModelCosts', () => {
+describe('ScoopCostTracker', () => {
   function createMockScoop(jid: string, label: string, isCone = false): RegisteredScoop {
     return {
       jid,
@@ -67,6 +67,90 @@ describe('ScoopCostTracker.getModelCosts', () => {
     });
   });
 
+  it('returns live session costs by default and includes dropped costs on request', () => {
+    const liveScoop = createMockScoop('live', 'Live Scoop');
+    const droppedScoop = createMockScoop('dropped', 'Dropped Scoop');
+    scoopsMap.set('live', liveScoop);
+    scoopsMap.set('dropped', droppedScoop);
+    contextsMap.set(
+      'live',
+      createMockContext([createAssistantMessage('model-live', 100, 50, 0, 0, 0.01, 0.005)])
+    );
+    contextsMap.set(
+      'dropped',
+      createMockContext([createAssistantMessage('model-old', 200, 100, 0, 0, 0.02, 0.01)])
+    );
+
+    tracker.snapshot('dropped');
+    scoopsMap.delete('dropped');
+    contextsMap.delete('dropped');
+
+    expect(tracker.getSessionCosts()).toMatchObject([
+      { name: 'Live Scoop', source: 'live', models: ['model-live'] },
+    ]);
+    expect(tracker.getSessionCosts({ includeDropped: true })).toMatchObject([
+      { name: 'Live Scoop', source: 'live' },
+      { name: 'Dropped Scoop', source: 'dropped' },
+    ]);
+  });
+
+  it('sorts all models in a scoop by cost while preserving the compatibility model', () => {
+    const scoop = createMockScoop('multi', 'Multi-model Scoop');
+    scoopsMap.set('multi', scoop);
+    contextsMap.set(
+      'multi',
+      createMockContext([
+        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01),
+        createAssistantMessage('model-frequent', 100, 50, 0, 0, 0.01),
+        createAssistantMessage('model-expensive', 100, 50, 0, 0, 0.1),
+      ])
+    );
+
+    const [cost] = tracker.getSessionCosts();
+
+    expect(cost.model).toBe('model-frequent');
+    expect(cost.models).toEqual(['model-expensive', 'model-frequent']);
+  });
+
+  it('returns zero burn rate when the trailing window is empty', () => {
+    const nowMs = 2_000_000_000_000;
+    const scoop = createMockScoop('idle', 'Idle Scoop');
+    scoopsMap.set('idle', scoop);
+    contextsMap.set(
+      'idle',
+      createMockContext([
+        createAssistantMessage('model', 100, 50, 0, 0, 0.1, 0, 0, 0, nowMs - 15 * 60 * 1000 - 1),
+      ])
+    );
+
+    expect(tracker.getBurnRate(nowMs)).toBe(0);
+  });
+
+  it('computes burn rate from live messages inside the deterministic trailing window', () => {
+    const nowMs = 2_000_000_000_000;
+    const liveScoop = createMockScoop('live', 'Live Scoop');
+    const droppedScoop = createMockScoop('dropped', 'Dropped Scoop');
+    scoopsMap.set('live', liveScoop);
+    scoopsMap.set('dropped', droppedScoop);
+    contextsMap.set(
+      'live',
+      createMockContext([
+        createAssistantMessage('model', 100, 50, 0, 0, 0.1, 0, 0, 0, nowMs - 5 * 60 * 1000),
+        createAssistantMessage('model', 100, 50, 0, 0, 0.2, 0, 0, 0, nowMs - 15 * 60 * 1000),
+        createAssistantMessage('model', 100, 50, 0, 0, 0.3, 0, 0, 0, nowMs - 15 * 60 * 1000 - 1),
+      ])
+    );
+    contextsMap.set(
+      'dropped',
+      createMockContext([createAssistantMessage('model', 100, 50, 0, 0, 0.5, 0, 0, 0, nowMs - 1)])
+    );
+    tracker.snapshot('dropped');
+    scoopsMap.delete('dropped');
+    contextsMap.delete('dropped');
+
+    expect(tracker.getBurnRate(nowMs)).toBeCloseTo(1.2, 10);
+  });
+
   it('aggregates costs by model across all live scoops', () => {
     const scoop1 = createMockScoop('scoop1', 'Scoop 1');
     const scoop2 = createMockScoop('scoop2', 'Scoop 2');
@@ -106,7 +190,7 @@ describe('ScoopCostTracker.getModelCosts', () => {
     expect(sonnet!.turns).toBe(2);
   });
 
-  it('includes dropped scoops in the model aggregation', () => {
+  it('includes dropped scoops in the model aggregation only on request', () => {
     const scoop1 = createMockScoop('scoop1', 'Live Scoop');
     const scoop2 = createMockScoop('scoop2', 'Dropped Scoop');
 
@@ -127,7 +211,11 @@ describe('ScoopCostTracker.getModelCosts', () => {
     scoopsMap.delete('scoop2');
     contextsMap.delete('scoop2');
 
-    const result = tracker.getModelCosts();
+    expect(tracker.getModelCosts()).toMatchObject([
+      { model: 'claude-opus-4-6', input: 1000, output: 500 },
+    ]);
+
+    const result = tracker.getModelCosts({ includeDropped: true });
 
     expect(result).toHaveLength(2);
 
@@ -207,11 +295,11 @@ describe('ScoopCostTracker.getModelCosts', () => {
     contextsMap.delete('scoop1');
 
     // Should have one model from dropped scoop
-    expect(tracker.getModelCosts()).toHaveLength(1);
+    expect(tracker.getModelCosts({ includeDropped: true })).toHaveLength(1);
 
     tracker.reset();
 
     // After reset, should be empty
-    expect(tracker.getModelCosts()).toEqual([]);
+    expect(tracker.getModelCosts({ includeDropped: true })).toEqual([]);
   });
 });
