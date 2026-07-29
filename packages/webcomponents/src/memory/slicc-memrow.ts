@@ -32,14 +32,23 @@ slicc-memrow {
   font-family: var(--ui);
   color: var(--ink);
 }
-slicc-memrow:focus-visible {
+slicc-memrow .mt:focus-visible {
   outline: 2px solid var(--violet);
   outline-offset: 2px;
 }
 slicc-memrow .mt {
+  appearance: none;
   display: flex;
   align-items: center;
+  width: 100%;
   gap: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  font: inherit;
 }
 slicc-memrow .mt b {
   min-width: 0;
@@ -170,11 +179,12 @@ function normalizeTag(value: string | null): MemTag {
  * Internal DOM (light DOM):
  *
  *     <slicc-memrow class="fresh">
- *       <div class="mt">
+ *       <button class="mt" type="button">
  *         <b>…title…</b>
  *         <slicc-memtag kind="user">user</slicc-memtag>
- *       </div>
+ *       </button>
  *       <div class="ms">…summary…<!-- relocated slotted children --></div>
+ *       <button class="mexpand" type="button">Show more</button>
  *     </slicc-memrow>
  *
  * @attr heading - the bold memory heading (escaped)
@@ -182,9 +192,12 @@ function normalizeTag(value: string | null): MemTag {
  * @attr tag - `user` | `feedback` | `project`; selects the right-pinned memtag
  * @attr fresh - boolean; rose-tints the card as the newest memory (mirrored to
  *   the `fresh` host class so the scoped stylesheet can target it)
+ * @attr expanded - boolean; shows the full summary and reflects through the
+ *   `expanded` property
  * @slot - extra summary content relocated into the `.ms` line (light DOM has no
  *   native slot)
- * @fires select - the row was activated (click / Enter / Space); `detail` carries
+ * @fires select - the row was activated (click / native button keyboard);
+ *   `detail` carries
  *   `{ heading, summary, tag }`
  */
 export class SliccMemrow extends HTMLElement {
@@ -193,20 +206,21 @@ export class SliccMemrow extends HTMLElement {
   }
 
   #initialized = false;
-  #mt: HTMLDivElement | null = null;
+  #mt: HTMLButtonElement | null = null;
   #titleEl: HTMLElement | null = null;
   #tagEl: HTMLElement | null = null;
   #ms: HTMLDivElement | null = null;
   #expandEl: HTMLButtonElement | null = null;
   #resizeObserver: ResizeObserver | null = null;
   #measureFrame = 0;
+  #richHeading = false;
+  #richBody = false;
+  #pendingHeadingContent: DocumentFragment | null = null;
+  #pendingBodyContent: DocumentFragment | null = null;
   #onActivate: ((e: Event) => void) | null = null;
-  #onKey: ((e: KeyboardEvent) => void) | null = null;
 
   connectedCallback(): void {
     ensureMemrowStyle(this.ownerDocument);
-    if (!this.hasAttribute('role')) this.setAttribute('role', 'button');
-    if (!this.hasAttribute('tabindex')) this.tabIndex = 0;
     if (!this.#initialized) this.#initialize();
     this.#sync();
     this.#bind();
@@ -264,11 +278,36 @@ export class SliccMemrow extends HTMLElement {
     this.toggleAttribute('fresh', value);
   }
 
+  /** Whether the full summary is disclosed. */
+  get expanded(): boolean {
+    return this.hasAttribute('expanded');
+  }
+
+  set expanded(value: boolean) {
+    this.toggleAttribute('expanded', value);
+  }
+
+  /** Set trusted rich heading content in place of the plain heading rendering. */
+  setHeadingContent(content: DocumentFragment): void {
+    this.#richHeading = true;
+    if (this.#titleEl) this.#titleEl.replaceChildren(content);
+    else this.#pendingHeadingContent = content;
+  }
+
+  /** Set trusted rich summary content in place of the plain summary rendering. */
+  setBodyContent(content: DocumentFragment): void {
+    this.#richBody = true;
+    if (this.#ms) this.#ms.replaceChildren(content);
+    else this.#pendingBodyContent = content;
+    this.#scheduleDisclosureMeasurement();
+  }
+
   #initialize(): void {
     this.#initialized = true;
 
-    const mt = this.ownerDocument.createElement('div');
+    const mt = this.ownerDocument.createElement('button');
     mt.className = 'mt';
+    mt.type = 'button';
     const titleEl = this.ownerDocument.createElement('b');
     const tagEl = this.ownerDocument.createElement('slicc-memtag');
     mt.append(titleEl, tagEl);
@@ -278,6 +317,11 @@ export class SliccMemrow extends HTMLElement {
     // Relocate any pre-existing host children (extra summary content) into the
     // `.ms` line so the caller can slot content; light DOM has no native slot.
     while (this.firstChild) ms.appendChild(this.firstChild);
+
+    if (this.#pendingHeadingContent) titleEl.replaceChildren(this.#pendingHeadingContent);
+    if (this.#pendingBodyContent) ms.replaceChildren(this.#pendingBodyContent);
+    this.#pendingHeadingContent = null;
+    this.#pendingBodyContent = null;
 
     this.append(mt, ms);
     this.#mt = mt;
@@ -294,7 +338,7 @@ export class SliccMemrow extends HTMLElement {
     if (!titleEl || !tagEl || !ms) return;
 
     const displayed = displayText(this.heading, this.summary);
-    titleEl.textContent = displayed.heading;
+    if (!this.#richHeading) titleEl.textContent = displayed.heading;
 
     const tag = this.tag;
     // Drive the composed <slicc-memtag> through its real API (`type` picks the
@@ -309,12 +353,14 @@ export class SliccMemrow extends HTMLElement {
 
     // Replace only the leading summary text node, preserving any relocated
     // slotted children that follow it.
-    const first = ms.firstChild;
-    const summary = displayed.summary;
-    if (first && first.nodeType === Node.TEXT_NODE) {
-      first.textContent = summary;
-    } else if (summary) {
-      ms.insertBefore(this.ownerDocument.createTextNode(summary), first);
+    if (!this.#richBody) {
+      const first = ms.firstChild;
+      const summary = displayed.summary;
+      if (first && first.nodeType === Node.TEXT_NODE) {
+        first.textContent = summary;
+      } else if (summary) {
+        ms.insertBefore(this.ownerDocument.createTextNode(summary), first);
+      }
     }
 
     // Mirror the boolean attribute to the host class the stylesheet targets.
@@ -333,12 +379,12 @@ export class SliccMemrow extends HTMLElement {
   }
 
   #scheduleDisclosureMeasurement(): void {
-    if (!this.isConnected || this.hasAttribute('expanded')) return;
+    if (!this.isConnected || this.expanded) return;
     if (this.#measureFrame) cancelAnimationFrame(this.#measureFrame);
     this.#measureFrame = requestAnimationFrame(() => {
       this.#measureFrame = 0;
       const ms = this.#ms;
-      if (!ms || this.hasAttribute('expanded')) return;
+      if (!ms || this.expanded) return;
       const expandable = ms.scrollHeight > ms.clientHeight + 1;
       if (expandable) this.#ensureDisclosureButton();
       else this.#expandEl?.remove();
@@ -353,7 +399,7 @@ export class SliccMemrow extends HTMLElement {
       button.type = 'button';
       button.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.toggleAttribute('expanded');
+        this.expanded = !this.expanded;
       });
       this.#expandEl = button;
     }
@@ -363,7 +409,7 @@ export class SliccMemrow extends HTMLElement {
   #syncDisclosureLabel(): void {
     const button = this.#expandEl;
     if (!button?.isConnected) return;
-    const expanded = this.hasAttribute('expanded');
+    const expanded = this.expanded;
     button.textContent = expanded ? 'Show less' : 'Show more';
     button.setAttribute('aria-expanded', String(expanded));
   }
@@ -373,25 +419,12 @@ export class SliccMemrow extends HTMLElement {
       this.#onActivate = (e: Event) => this.#emitSelect(e);
       this.addEventListener('click', this.#onActivate);
     }
-    if (!this.#onKey) {
-      this.#onKey = (e: KeyboardEvent) => {
-        if (e.target === this && (e.key === 'Enter' || e.key === ' ')) {
-          e.preventDefault();
-          this.#emitSelect(e);
-        }
-      };
-      this.addEventListener('keydown', this.#onKey);
-    }
   }
 
   #unbind(): void {
     if (this.#onActivate) {
       this.removeEventListener('click', this.#onActivate);
       this.#onActivate = null;
-    }
-    if (this.#onKey) {
-      this.removeEventListener('keydown', this.#onKey);
-      this.#onKey = null;
     }
   }
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { SliccMemrow } from '../../src/memory/slicc-memrow.js';
 // Sibling composed by tag — importing here registers it so the row's
 // <slicc-memtag> upgrades during the test run.
@@ -24,10 +25,11 @@ describe('slicc-memrow', () => {
     expect(customElements.get('slicc-memrow')).toBe(SliccMemrow);
   });
 
-  it('is keyboard reachable with button semantics by default', () => {
+  it('uses a native row activation button without making the host interactive', () => {
     const el = mount({ heading: 'keyboard first' });
-    expect(el.getAttribute('role')).toBe('button');
-    expect(el.tabIndex).toBe(0);
+    expect(el.hasAttribute('role')).toBe(false);
+    expect(el.tabIndex).toBe(-1);
+    expect(el.querySelector('.mt')).toBeInstanceOf(HTMLButtonElement);
   });
 
   it('renders the .mt header and .ms summary into its own light DOM', () => {
@@ -77,6 +79,15 @@ describe('slicc-memrow', () => {
     expect(el.classList.contains('fresh')).toBe(true);
     el.fresh = false;
     expect(el.classList.contains('fresh')).toBe(false);
+  });
+
+  it('reflects expanded attribute ↔ property', () => {
+    const el = mount();
+    expect(el.expanded).toBe(false);
+    el.expanded = true;
+    expect(el.hasAttribute('expanded')).toBe(true);
+    el.removeAttribute('expanded');
+    expect(el.expanded).toBe(false);
   });
 
   it('defaults the tag to user', () => {
@@ -141,6 +152,19 @@ describe('slicc-memrow', () => {
     expect(ms?.textContent).toContain('see ');
   });
 
+  it('renders trusted rich summary content instead of duplicating the plain summary', () => {
+    const el = document.createElement('slicc-memrow') as SliccMemrow;
+    el.summary = 'run the focused gate';
+    const fragment = document.createDocumentFragment();
+    const strong = document.createElement('strong');
+    strong.textContent = 'run';
+    fragment.append(strong, ' the focused gate');
+    el.setBodyContent(fragment);
+    document.body.append(el);
+    expect(el.querySelector('.ms')?.textContent).toBe('run the focused gate');
+    expect(el.querySelector('.ms strong')?.textContent).toBe('run');
+  });
+
   it('emits a composed select event on click with title/summary/tag detail', () => {
     const el = mount({ heading: 'e2e via puppeteer-core', summary: 'use CDP', tag: 'feedback' });
     let detail: { heading: string; summary: string; tag: string } | null = null;
@@ -154,14 +178,15 @@ describe('slicc-memrow', () => {
     expect(detail!.tag).toBe('feedback');
   });
 
-  it('emits select on Enter and Space keydown', () => {
+  it('emits select on native Enter and Space activation', async () => {
     const el = mount({ heading: 't' });
     let count = 0;
     el.addEventListener('select', () => {
       count += 1;
     });
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    await userEvent.click(el.querySelector('.mt') as HTMLButtonElement);
+    count = 0;
+    await userEvent.keyboard('{Enter} ');
     expect(count).toBe(2);
   });
 
@@ -175,6 +200,8 @@ describe('slicc-memrow', () => {
     expect(short.querySelector('.mexpand')).toBeNull();
     const button = el.querySelector('.mexpand') as HTMLButtonElement;
     expect(button).not.toBeNull();
+    expect(button.parentElement).toBe(el);
+    expect(button.closest('[role="button"]')).toBeNull();
     expect(button.textContent).toBe('Show more');
     button.click();
     expect(el.hasAttribute('expanded')).toBe(true);

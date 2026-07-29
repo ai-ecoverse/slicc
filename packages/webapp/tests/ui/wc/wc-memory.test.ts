@@ -125,10 +125,12 @@ describe('buildMemoryRows', () => {
         '## Feedback and review',
         '- **Remember** the `milk` and <img src="x" onerror="alert(1)">',
         '- and the cones `<preview mode="safe"> & A > B` <script>alert(1)</script>',
+        '- **Keep changes reviewable:** inspect the baseline before editing and run the `focused gate` after the smallest implementation.',
       ].join('\n')
     );
     const rows = await buildMemoryRows(fs);
-    expect(rows).toHaveLength(2);
+    document.body.append(...rows);
+    expect(rows).toHaveLength(3);
     expect(rows[0].tagName.toLowerCase()).toBe('slicc-memrow');
     expect(rows[0].getAttribute('heading')).toBe('Remember the milk and');
     expect(rows[0].hasAttribute('title')).toBe(false);
@@ -136,10 +138,16 @@ describe('buildMemoryRows', () => {
     expect(rows[0].getAttribute('tag')).toBe('feedback');
     expect(rows[0].querySelector('strong')?.textContent).toBe('Remember');
     expect(rows[0].querySelector('code')?.textContent).toBe('milk');
+    expect(rows[0].querySelector('.ms')?.textContent).toBe('');
+    expect(rows[0].textContent?.match(/Remember/g)).toHaveLength(1);
+    expect(rows[0].textContent?.match(/milk/g)).toHaveLength(1);
     expect(rows[0].querySelector('img')?.hasAttribute('onerror')).toBe(false);
     expect(rows[1].querySelector('script')).toBeNull();
     expect(rows[1].querySelector('code')?.textContent).toBe('<preview mode="safe"> & A > B');
     expect(rows[1].querySelector('preview')).toBeNull();
+    expect(rows[2].querySelector('.ms code')?.textContent).toBe('focused gate');
+    expect(rows[2].textContent?.match(/Keep changes reviewable/g)).toHaveLength(1);
+    expect(rows[2].textContent?.match(/inspect the baseline/g)).toHaveLength(1);
     expect(rows.map((row) => row.textContent).join(' ')).not.toMatch(/\*\*|`|alert\(1\)/);
   });
 

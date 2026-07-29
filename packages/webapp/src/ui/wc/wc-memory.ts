@@ -6,6 +6,7 @@
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import { renderMessageContent } from '../message-renderer.js';
+import '@slicc/webcomponents/src/memory/slicc-memrow.js';
 
 const MEMORY_PATH = '/workspace/CLAUDE.md';
 const TITLE_TARGET = 64;
@@ -25,11 +26,15 @@ export interface MemoryRow {
   section: string;
   tag: MemoryTag | null;
   bodyHtml: string;
+  titleEnd: number;
+  summaryStart: number;
 }
 
 interface MemorySplit {
   title: string;
   summary: string;
+  titleEnd: number;
+  summaryStart: number;
 }
 
 interface PendingMemory {
@@ -53,7 +58,9 @@ function markdownText(markdown: string): string {
 /** Prefer a nearby clause boundary, then enforce a lossless hard cap. */
 function splitBullet(markdown: string): MemorySplit {
   const plain = markdownText(markdown);
-  if (plain.length <= TITLE_TARGET) return { title: plain, summary: '' };
+  if (plain.length <= TITLE_TARGET) {
+    return { title: plain, summary: '', titleEnd: plain.length, summaryStart: plain.length };
+  }
 
   const candidates: Array<{ titleEnd: number; summaryStart: number }> = [];
   const boundary =
@@ -77,13 +84,21 @@ function splitBullet(markdown: string): MemorySplit {
     return {
       title: plain.slice(0, best.titleEnd).trim(),
       summary: plain.slice(best.summaryStart).trim(),
+      titleEnd: best.titleEnd,
+      summaryStart: best.summaryStart,
     };
   }
 
   const prefix = plain.slice(0, MEMORY_TITLE_MAX + 1);
   const lastSpace = prefix.lastIndexOf(' ');
   const splitAt = lastSpace >= MIN_TITLE_LENGTH ? lastSpace : MEMORY_TITLE_MAX;
-  return { title: plain.slice(0, splitAt).trim(), summary: plain.slice(splitAt).trim() };
+  const summary = plain.slice(splitAt).trim();
+  return {
+    title: plain.slice(0, splitAt).trim(),
+    summary,
+    titleEnd: splitAt,
+    summaryStart: plain.indexOf(summary, splitAt),
+  };
 }
 
 function tagForMemory(markdown: string, section: string): MemoryTag | null {
@@ -103,6 +118,8 @@ function memoryRow(markdown: string, section: string): MemoryRow {
     section,
     tag: tagForMemory(markdown, section),
     bodyHtml: renderMessageContent(markdown),
+    titleEnd: split.titleEnd,
+    summaryStart: split.summaryStart,
   };
 }
 
@@ -157,9 +174,85 @@ export function parseMemoryRows(markdown: string): MemoryRow[] {
   return rows;
 }
 
-/** Commit sanitized renderer output via DOM construction, matching message rows. */
-function setBodyHtml(row: HTMLElement, html: string): void {
-  row.replaceChildren(trustedFragment(html));
+interface FragmentPosition {
+  node: Node;
+  offset: number;
+}
+
+function normalizedPosition(fragment: DocumentFragment, target: number): FragmentPosition | null {
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  let normalizedOffset = 0;
+  let hasText = false;
+  let pendingSpace = false;
+  let pendingSpacePosition: FragmentPosition | null = null;
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    for (let offset = 0; offset < node.data.length; offset += 1) {
+      if (/\s/.test(node.data[offset])) {
+        if (hasText && !pendingSpace) {
+          pendingSpace = true;
+          pendingSpacePosition = { node, offset };
+        }
+        continue;
+      }
+      if (pendingSpace) {
+        if (normalizedOffset === target) return pendingSpacePosition;
+        normalizedOffset += 1;
+      }
+      pendingSpace = false;
+      pendingSpacePosition = null;
+      if (normalizedOffset === target) return { node, offset };
+      normalizedOffset += 1;
+      hasText = true;
+    }
+    node = walker.nextNode() as Text | null;
+  }
+  return normalizedOffset === target
+    ? { node: fragment, offset: fragment.childNodes.length }
+    : null;
+}
+
+function renderedFragment(html: string, start: number, end: number | null): DocumentFragment {
+  const fragment = trustedFragment(html);
+  const startPosition = normalizedPosition(fragment, start);
+  const endPosition =
+    end == null
+      ? { node: fragment, offset: fragment.childNodes.length }
+      : normalizedPosition(fragment, end);
+  if (!startPosition || !endPosition) return document.createDocumentFragment();
+  const range = document.createRange();
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+  const content = range.cloneContents();
+  for (const child of [...content.childNodes]) {
+    if (child.nodeType === Node.TEXT_NODE && !child.textContent?.trim()) child.remove();
+  }
+  const paragraph = content.childNodes.length === 1 ? content.firstChild : null;
+  if (!(paragraph instanceof HTMLParagraphElement)) return content;
+  const unwrapped = document.createDocumentFragment();
+  unwrapped.append(...paragraph.childNodes);
+  return unwrapped;
+}
+
+interface RichMemoryRow extends HTMLElement {
+  setHeadingContent(content: DocumentFragment): void;
+  setBodyContent(content: DocumentFragment): void;
+}
+
+/** Build production memrow elements from already-loaded memory Markdown. */
+export function createMemoryRows(markdown: string): HTMLElement[] {
+  return parseMemoryRows(markdown).map((row) => {
+    const el = document.createElement('slicc-memrow') as RichMemoryRow;
+    el.setAttribute('heading', row.title);
+    if (row.summary) el.setAttribute('summary', row.summary);
+    el.setAttribute('section', row.section);
+    if (row.tag) el.setAttribute('tag', row.tag);
+    el.setHeadingContent(renderedFragment(row.bodyHtml, 0, row.titleEnd));
+    if (row.summary) {
+      el.setBodyContent(renderedFragment(row.bodyHtml, row.summaryStart, null));
+    }
+    return el;
+  });
 }
 
 /** Read the cone memory file and render it as memrow cards. */
@@ -171,13 +264,5 @@ export async function buildMemoryRows(fs: LocalVfsClient): Promise<HTMLElement[]
   } catch {
     markdown = '';
   }
-  return parseMemoryRows(markdown).map((row) => {
-    const el = document.createElement('slicc-memrow');
-    el.setAttribute('heading', row.title);
-    if (row.summary) el.setAttribute('summary', row.summary);
-    el.setAttribute('section', row.section);
-    if (row.tag) el.setAttribute('tag', row.tag);
-    setBodyHtml(el, row.bodyHtml);
-    return el;
-  });
+  return createMemoryRows(markdown);
 }
