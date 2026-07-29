@@ -85,6 +85,7 @@ export {
   REDACTED_REAL_WORLD_MEMORY_PATH,
   type RedactedRealWorldMemoryFixtureTarget,
 } from './memory/redacted-real-world-memory-fixture.js';
+export { SliccMemoryPanel } from './memory/slicc-memory-panel.js';
 export { SliccMemrow } from './memory/slicc-memrow.js';
 export { SliccMemtag } from './memory/slicc-memtag.js';
 export { SliccPaletteCell } from './memory/slicc-palette-cell.js';

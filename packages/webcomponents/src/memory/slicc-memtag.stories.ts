@@ -94,7 +94,7 @@ export const InMemoryRows: StoryObj = {
     ];
     for (const [title, summary, type, fresh] of rows) {
       const row = document.createElement('slicc-memrow');
-      row.setAttribute('title', title);
+      row.setAttribute('heading', title);
       row.setAttribute('summary', summary);
       row.setAttribute('tag', type);
       if (fresh) row.setAttribute('fresh', '');

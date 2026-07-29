@@ -16,6 +16,7 @@ import {
   followSystemTheme,
   type SliccAvatarMenu,
   type SliccFileTree,
+  type SliccMemoryPanel,
   type SliccMonitor,
   type SliccQueuedStack,
 } from '@slicc/webcomponents';
@@ -96,7 +97,7 @@ export interface WcShellRefs {
   freezer: HTMLElement;
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
-  memoryHost: HTMLElement;
+  memoryHost: SliccMemoryPanel;
   monitor: SliccMonitor;
   tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
@@ -151,8 +152,7 @@ const CSS = [
   'box-sizing:border-box;font-family:var(--ui);border-radius:3px;border:1px solid var(--line);',
   'background:var(--canvas);color:var(--txt-2);cursor:pointer;}',
   'slicc-file-tree .ft-act:hover{background:var(--ghost);}',
-  '.wcui-memory{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;',
-  'gap:8px;padding:10px;}',
+  '.wcui-memory{flex:1;min-height:0;overflow:hidden;}',
   '.wcui-monitor{flex:1;min-height:0;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
   'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
@@ -246,7 +246,7 @@ function buildWorkbench(): {
   header: HTMLElement;
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
-  memoryHost: HTMLElement;
+  memoryHost: WcShellRefs['memoryHost'];
   monitor: SliccMonitor;
   tabBar: WcShellRefs['tabBar'];
 } {
@@ -270,7 +270,7 @@ function buildWorkbench(): {
   termSurfaceHost.append(termSurface);
 
   const memorySurfaceHost = el('slicc-surface', { 'surface-id': 'memory', layout: 'flex' });
-  const memoryHost = el('div', { class: 'wcui-memory' });
+  const memoryHost = el('slicc-memory-panel', { class: 'wcui-memory' }) as SliccMemoryPanel;
   memorySurfaceHost.append(memoryHost);
 
   const monitorSurfaceHost = el('slicc-surface', { 'surface-id': 'monitor', layout: 'flex' });

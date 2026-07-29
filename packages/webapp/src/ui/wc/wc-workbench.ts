@@ -92,7 +92,7 @@ export interface WcWorkbenchDeps {
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   /** Container the memory rows render into. */
-  memoryHost: HTMLElement;
+  memoryHost: HTMLElement & { setRows?(rows: readonly HTMLElement[]): void };
   /** The `<slicc-monitor>` component. */
   monitor: SliccMonitor;
   /** Lazily resolved page-side VFS reader (routed through the worker's VfsRpcHost). */
@@ -176,7 +176,9 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       void deps
         .openFs()
         .then(async (fs) => {
-          deps.memoryHost.replaceChildren(...(await buildMemoryRows(fs)));
+          const rows = await buildMemoryRows(fs);
+          if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
+          else deps.memoryHost.replaceChildren(...rows);
         })
         .catch((err) => deps.log.error('WC memory refresh failed', err));
       return;

@@ -24,8 +24,14 @@ describe('slicc-memrow', () => {
     expect(customElements.get('slicc-memrow')).toBe(SliccMemrow);
   });
 
+  it('is keyboard reachable with button semantics by default', () => {
+    const el = mount({ heading: 'keyboard first' });
+    expect(el.getAttribute('role')).toBe('button');
+    expect(el.tabIndex).toBe(0);
+  });
+
   it('renders the .mt header and .ms summary into its own light DOM', () => {
-    const el = mount({ title: 'icon buttons need tooltips', summary: 'must have aria-label' });
+    const el = mount({ heading: 'icon buttons need tooltips', summary: 'must have aria-label' });
     expect(el.shadowRoot).toBeNull();
     const mt = el.querySelector('.mt');
     const title = el.querySelector('.mt b');
@@ -35,13 +41,24 @@ describe('slicc-memrow', () => {
     expect(ms?.textContent).toContain('must have aria-label');
   });
 
-  it('reflects title attribute ↔ property', () => {
+  it('hard-caps rendered titles at 96 characters without dropping the remainder', () => {
+    const heading = 'x'.repeat(120);
+    const el = mount({ heading });
+    const renderedTitle = el.querySelector('.mt b')?.textContent ?? '';
+    const renderedSummary = el.querySelector('.ms')?.textContent ?? '';
+    expect(renderedTitle).toHaveLength(96);
+    expect(renderedSummary).toBe('x'.repeat(24));
+    expect(renderedTitle + renderedSummary).toBe(heading);
+  });
+
+  it('reflects heading attribute ↔ property without using native title', () => {
     const el = mount();
-    el.title = 'palette preference';
-    expect(el.getAttribute('title')).toBe('palette preference');
-    expect(el.querySelector('.mt b')?.textContent).toBe('palette preference');
-    el.title = null;
+    el.heading = 'palette preference';
+    expect(el.getAttribute('heading')).toBe('palette preference');
     expect(el.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('.mt b')?.textContent).toBe('palette preference');
+    el.heading = null;
+    expect(el.hasAttribute('heading')).toBe(false);
   });
 
   it('reflects summary attribute ↔ property', () => {
@@ -67,6 +84,11 @@ describe('slicc-memrow', () => {
     expect(el.tag).toBe('user');
     const tag = el.querySelector('slicc-memtag');
     expect(tag?.getAttribute('type')).toBe('user');
+  });
+
+  it('does not render a tag when the host has no tag attribute', () => {
+    const el = mount();
+    expect((el.querySelector('slicc-memtag') as HTMLElement).hidden).toBe(true);
   });
 
   it('composes <slicc-memtag> by tag for each kind — through its type API, no host pill', () => {
@@ -99,7 +121,7 @@ describe('slicc-memrow', () => {
   });
 
   it('escapes interpolated title and summary text', () => {
-    const el = mount({ title: '<img src=x onerror=1>', summary: '<b>bold</b>' });
+    const el = mount({ heading: '<img src=x onerror=1>', summary: '<b>bold</b>' });
     expect(el.querySelector('.mt b')?.querySelector('img')).toBeNull();
     expect(el.querySelector('.mt b')?.textContent).toBe('<img src=x onerror=1>');
     expect(el.querySelector('.ms')?.querySelector('b')).toBeNull();
@@ -120,20 +142,20 @@ describe('slicc-memrow', () => {
   });
 
   it('emits a composed select event on click with title/summary/tag detail', () => {
-    const el = mount({ title: 'e2e via puppeteer-core', summary: 'use CDP', tag: 'feedback' });
-    let detail: { title: string; summary: string; tag: string } | null = null;
+    const el = mount({ heading: 'e2e via puppeteer-core', summary: 'use CDP', tag: 'feedback' });
+    let detail: { heading: string; summary: string; tag: string } | null = null;
     el.addEventListener('select', (e) => {
       detail = (e as CustomEvent).detail;
     });
     el.click();
     expect(detail).not.toBeNull();
-    expect(detail!.title).toBe('e2e via puppeteer-core');
+    expect(detail!.heading).toBe('e2e via puppeteer-core');
     expect(detail!.summary).toBe('use CDP');
     expect(detail!.tag).toBe('feedback');
   });
 
   it('emits select on Enter and Space keydown', () => {
-    const el = mount({ title: 't' });
+    const el = mount({ heading: 't' });
     let count = 0;
     el.addEventListener('select', () => {
       count += 1;
@@ -143,8 +165,25 @@ describe('slicc-memrow', () => {
     expect(count).toBe(2);
   });
 
+  it('renders disclosure only when clamped content is genuinely hidden', async () => {
+    const short = mount({ heading: 'short', summary: 'visible detail' });
+    const el = mount({ heading: 'long tail', summary: 'detail '.repeat(40) });
+    short.style.width = '320px';
+    el.style.width = '320px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(short.querySelector('.mexpand')).toBeNull();
+    const button = el.querySelector('.mexpand') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.textContent).toBe('Show more');
+    button.click();
+    expect(el.hasAttribute('expanded')).toBe(true);
+    expect(button.textContent).toBe('Show less');
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('stops emitting after disconnect (listener cleanup)', () => {
-    const el = mount({ title: 't' });
+    const el = mount({ heading: 't' });
     let count = 0;
     el.addEventListener('select', () => {
       count += 1;
@@ -157,7 +196,7 @@ describe('slicc-memrow', () => {
   });
 
   it('applies the prototype card geometry (border radius + padding)', () => {
-    const el = mount({ title: 't', summary: 's' });
+    const el = mount({ heading: 't', summary: 's' });
     const cs = getComputedStyle(el);
     expect(cs.display).toBe('block');
     expect(cs.borderTopLeftRadius).toBe('11px');
@@ -166,8 +205,8 @@ describe('slicc-memrow', () => {
   });
 
   it('rose-tints the fresh card background distinctly from a default row', () => {
-    const plain = mount({ title: 'plain' });
-    const fresh = mount({ title: 'fresh', fresh: '' });
+    const plain = mount({ heading: 'plain' });
+    const fresh = mount({ heading: 'fresh', fresh: '' });
     const plainBg = getComputedStyle(plain).backgroundColor;
     const freshBg = getComputedStyle(fresh).backgroundColor;
     // The default card is transparent; the fresh card carries a rose tint.
@@ -176,7 +215,7 @@ describe('slicc-memrow', () => {
   });
 
   it('rebases the fresh tint over the dark canvas in dark mode', () => {
-    const fresh = mount({ title: 'fresh', fresh: '' });
+    const fresh = mount({ heading: 'fresh', fresh: '' });
     const lightBg = getComputedStyle(fresh).backgroundColor;
     setTheme('dark');
     const darkBg = getComputedStyle(fresh).backgroundColor;
@@ -184,7 +223,7 @@ describe('slicc-memrow', () => {
   });
 
   it('pins the memtag to the right of the header (margin-left auto)', () => {
-    const el = mount({ title: 'a short title', tag: 'user' });
+    const el = mount({ heading: 'a short title', tag: 'user' });
     el.style.width = '320px';
     const title = el.querySelector('.mt b') as HTMLElement;
     const memtag = el.querySelector('slicc-memtag') as HTMLElement;
