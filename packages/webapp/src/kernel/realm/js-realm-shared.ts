@@ -44,8 +44,9 @@ import { createSerialBridge, type RealmSerialApi } from './realm-serial-bridge.j
 import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
 import { createUsbBridge, type RealmUsbApi } from './realm-usb-bridge.js';
 import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
+import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
-import { createSyncFsXhrBridge, type SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
+import { createSyncFsXhrBridge, type SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
@@ -98,8 +99,30 @@ function syncFsSnapshotErrorSink(
  * absent (default / in-process tests / boot-before-control) → `undefined` →
  * the bounded snapshot fallback. See `sync-fs-xhr-bridge.ts` + the plan.
  */
-function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrBridge | undefined {
+function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrMutatingBridge | undefined {
   return init.syncFsToken ? createSyncFsXhrBridge(init.syncFsToken) : undefined;
+}
+
+/**
+ * Install both synchronous bridges, built off the ONE per-realm capability
+ * token. The sync `fs` shim is merged into `fsBridge`; the `child_process` sync
+ * forms ride their own blocking channel but share the fs bridge and the cache,
+ * so they can flush pending sync-fs mutations to the live VFS before a command
+ * runs and invalidate the cache after it. Returns the exec bridge (`undefined`
+ * on a realm with no token — the sync `child_process` forms then throw).
+ */
+function installSyncBridges(
+  init: RealmInitMsg,
+  syncFs: SyncFsCache,
+  fsBridge: object
+): SyncExecXhrBridge | undefined {
+  const syncFsXhr = resolveSyncFsBridge(init);
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr));
+  if (!init.syncFsToken) return undefined;
+  return createSyncExecXhrBridge(init.syncFsToken, {
+    syncFs,
+    ...(syncFsXhr ? { fsBridge: syncFsXhr } : {}),
+  });
 }
 
 /**
@@ -166,7 +189,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const fsBridge = createFsBridge(rpc, realmFetch);
 
   const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, resolveSyncFsBridge(init)));
+  const syncExecBridge = installSyncBridges(init, syncFs, fsBridge);
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
@@ -240,7 +263,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     graph,
     fsBridge,
     processShim: proc.processShim,
-    childProcess: createNodeChildProcess(execBridge), // per-realm `child_process` shim over `exec`
+    childProcess: createNodeChildProcess(execBridge, syncExecBridge), // per-realm `child_process` shim over `exec`
     nodeConsole,
     sliccyModules,
     shimmedPackages: buildShimmedPackages(rpc),

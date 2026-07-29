@@ -47,10 +47,11 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   run in the kernel worker via `createJsWorkerRealm()` → `js-realm-shared.ts`, in every
   float.** Kernel-side `realm-host` proxies `vfs` / `exec` / `fetch` RPC. The extension
   iframe realm path (`createIframeRealm`) is fully removed.
-- `realm/sync-fs-*.ts` + `ui/sync-fs-sw-handler.ts` — synchronous `readFileSync`/
-  `writeFileSync` for realm scripts via bounded snapshot + SW BroadcastChannel XHR fallback;
-  capability-token-scoped to the calling realm's `RestrictedFS`.
-  See `docs/kernel/process-model.md` for method surface and cold-start behavior.
+- `realm/sync-{xhr,fs-*,exec-*}.ts` + `ui/sync-fs-sw-handler.ts` — synchronous
+  `readFileSync`/`writeFileSync` and `child_process.execSync`/`execFileSync`/`spawnSync`
+  for realm scripts, over one blocking sync-XHR transport (`synchronify`) and one
+  capability token scoped to the calling realm's `ctx.fs` / `ctx.exec`.
+  See `docs/kernel/process-model.md` for method surface, coherence, and cold-start.
 
 Deep reference: `docs/kernel/process-model.md`.
 

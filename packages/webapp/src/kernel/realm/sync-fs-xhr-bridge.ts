@@ -4,15 +4,10 @@
  * Runs INSIDE the realm's DedicatedWorker. Each op issues a **synchronous**
  * `XMLHttpRequest` to `/__slicc/fs-sync/<path>` — the controlling Service
  * Worker intercepts it (`llm-proxy-sw.ts`), round-trips to the kernel-worker
- * responder, and answers from the calling realm's own `ctx.fs`. The XHR blocks
- * the realm worker (a different thread from the VFS owner, so no deadlock)
- * until bytes come back.
- *
- * Synchronous XHR with `responseType='arraybuffer'` + a `timeout` is only
- * permitted OFF the main thread — which is exactly where realm code runs. On
- * any transport failure (timeout / no controlling SW / network error) the op
- * throws an `Error` whose `.code` is a POSIX errno, so it fails closed instead
- * of hanging, and ported Node code's `catch (e) { e.code === '…' }` still works.
+ * responder, and answers from the calling realm's own `ctx.fs`. The blocking
+ * round-trip itself (marker gate, errno recovery, fail-closed transport) lives
+ * in `sync-xhr.ts` and is shared with the exec channel; this module owns only
+ * the fs route shape and the per-op payload contracts.
  *
  * Phase-2 extends this to the metadata ops (`stat` / `readdir` / `exists`)
  * so the shim can fall back to the live filesystem on a cache miss — a file
@@ -21,18 +16,8 @@
  * param and return a JSON body; the read/write wire is unchanged.
  */
 
-// Wire contract shared with the SW handler + responder (single source of
-// truth — see sync-fs-wire.ts, a dependency-free module). The MARKER header
-// is load-bearing: its ABSENCE on a 2xx means the request was NOT answered by
-// our SW handler (a stale/absent SW let it hit the network → SPA fallback
-// `200` + `index.html`), so we reject it as EIO rather than reading HTML as
-// file bytes.
-import {
-  SYNC_FS_ERRNO_HEADER as ERRNO_HEADER,
-  SYNC_FS_MARKER_HEADER as MARKER_HEADER,
-  SYNC_FS_ROUTE_BASE,
-  SYNC_FS_TOKEN_HEADER as TOKEN_HEADER,
-} from './sync-fs-wire.js';
+import { SYNC_FS_ROUTE_BASE } from './sync-fs-wire.js';
+import { type SyncXhrRequest, synchronify, synchronifyJson, syncXhrError } from './sync-xhr.js';
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -43,6 +28,7 @@ export interface SyncFsBridgeStat {
   size: number;
 }
 
+/** What the `fs` shim consumes — read/write plus read-only metadata. */
 export interface SyncFsXhrBridge {
   readFile(path: string): Uint8Array;
   writeFile(path: string, bytes: Uint8Array): void;
@@ -51,12 +37,28 @@ export interface SyncFsXhrBridge {
   exists(path: string): boolean;
 }
 
-/** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's errors. */
-function errnoError(code: string, path: string): Error & { code: string } {
-  return Object.assign(new Error(`${code}: sync-fs bridge, '${path}'`), { code });
+/**
+ * The full bridge {@link createSyncFsXhrBridge} returns. The two mutating ops
+ * are kept OFF {@link SyncFsXhrBridge} because the `fs` shim deliberately keeps
+ * mkdir/rm cache-backed; only the sync-exec flush-before path drives them live,
+ * so the narrower type documents (and enforces) that split.
+ */
+export interface SyncFsXhrMutatingBridge extends SyncFsXhrBridge {
+  /** Live `mkdir -p`. */
+  mkdir(path: string): void;
+  /** Live recursive `rm`. */
+  rm(path: string): void;
 }
 
-function routeUrl(path: string, op?: 'stat' | 'readdir' | 'exists'): string {
+/** Ops the route carries as an `?op=` query param (bare read/write carry none). */
+type SyncFsRouteOp = 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+
+/** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's errors. */
+function errnoError(code: string, path: string): Error & { code: string } {
+  return syncXhrError(code, `sync-fs bridge, '${path}'`);
+}
+
+function routeUrl(path: string, op?: SyncFsRouteOp): string {
   const abs = path.startsWith('/') ? path : `/${path}`;
   // Encode PER SEGMENT: encodeURIComponent escapes `#`, `?`, `%`, space, and
   // unicode (which whole-string encodeURI leaves raw → dropped fragment/query
@@ -73,69 +75,28 @@ function routeUrl(path: string, op?: 'stat' | 'readdir' | 'exists'): string {
 export function createSyncFsXhrBridge(
   token: string,
   opts: { timeoutMs?: number } = {}
-): SyncFsXhrBridge {
+): SyncFsXhrMutatingBridge {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  function send(
+  function request(
     method: 'GET' | 'POST',
     path: string,
     body?: Uint8Array,
-    op?: 'stat' | 'readdir' | 'exists'
-  ): XMLHttpRequest {
-    const xhr = new XMLHttpRequest();
-    try {
-      xhr.open(method, routeUrl(path, op), false); // synchronous — realm worker only
-      xhr.responseType = 'arraybuffer'; // permitted for sync XHR off the main thread
-      xhr.timeout = timeoutMs; // bounds a no-controller network hang
-      xhr.setRequestHeader(TOKEN_HEADER, token);
-      if (body) xhr.send(new Uint8Array(body));
-      else xhr.send();
-    } catch {
-      // ANY failure fails closed as EIO — a sync XHR throws on timeout /
-      // network error / no controlling SW, and open/responseType/timeout could
-      // in principle reject. Never let a raw error (missing `.code`) escape,
-      // and never leave the realm hung.
-      throw errnoError('EIO', path);
-    }
-    return xhr;
-  }
-
-  /**
-   * Parse the JSON body of a genuine metadata response. Bytes → text → JSON
-   * so we can reuse the `arraybuffer` response type used by read/write (a sync
-   * XHR can only set one `responseType` per request). A malformed JSON body
-   * from an otherwise-genuine handler fails closed as EIO rather than
-   * surfacing SyntaxError with no `.code`.
-   */
-  function readJson(xhr: XMLHttpRequest, path: string): unknown {
-    try {
-      const bytes = new Uint8Array(xhr.response as ArrayBuffer);
-      return JSON.parse(new TextDecoder().decode(bytes));
-    } catch {
-      throw errnoError('EIO', path);
-    }
-  }
-
-  function fail(xhr: XMLHttpRequest, path: string): never {
-    // Only trust the errno header when OUR handler stamped the marker — symmetric
-    // with the 2xx marker gate. A non-2xx lacking the marker isn't ours (a
-    // foreign/injected response), so fall back to EIO rather than reading an
-    // attacker-supplied x-slicc-fs-errno as authoritative.
-    const trusted = xhr.getResponseHeader(MARKER_HEADER) === '1';
-    throw errnoError((trusted && xhr.getResponseHeader(ERRNO_HEADER)) || 'EIO', path);
-  }
-  /** A 2xx is only trustworthy if our handler stamped the marker. */
-  function isGenuine(xhr: XMLHttpRequest): boolean {
-    return xhr.status >= 200 && xhr.status < 300 && xhr.getResponseHeader(MARKER_HEADER) === '1';
+    op?: SyncFsRouteOp
+  ): SyncXhrRequest {
+    return {
+      method,
+      url: routeUrl(path, op),
+      token,
+      ...(body ? { body } : {}),
+      timeoutMs,
+      label: `sync-fs bridge, '${path}'`,
+    };
   }
 
   return {
     readFile(path: string): Uint8Array {
-      const xhr = send('GET', path);
-      if (isGenuine(xhr)) return new Uint8Array(xhr.response as ArrayBuffer);
-      // 2xx without the marker = SPA fallback / stale SW → not our bytes.
-      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
-      fail(xhr, path);
+      return synchronify(request('GET', path));
     },
     writeFile(path: string, bytes: Uint8Array): void {
       // AT-LEAST-ONCE (see spec §11): a thrown error here means the outcome is
@@ -143,39 +104,28 @@ export function createSyncFsXhrBridge(
       // fire AFTER the responder already committed the bytes to the live VFS.
       // The caller must re-read to confirm rather than trust the throw; the
       // shim only advances its cache/baseline (`commitWrite`) on a clean return.
-      const xhr = send('POST', path, bytes);
-      if (isGenuine(xhr)) return;
-      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
-      fail(xhr, path);
+      synchronify(request('POST', path, bytes));
     },
     stat(path: string): SyncFsBridgeStat {
-      const xhr = send('GET', path, undefined, 'stat');
-      if (isGenuine(xhr)) {
-        const json = readJson(xhr, path) as Partial<SyncFsBridgeStat> | null;
-        if (
-          !json ||
-          typeof json.isFile !== 'boolean' ||
-          typeof json.isDirectory !== 'boolean' ||
-          typeof json.size !== 'number'
-        ) {
-          throw errnoError('EIO', path);
-        }
-        return { isFile: json.isFile, isDirectory: json.isDirectory, size: json.size };
+      const json = synchronifyJson(
+        request('GET', path, undefined, 'stat')
+      ) as Partial<SyncFsBridgeStat> | null;
+      if (
+        !json ||
+        typeof json.isFile !== 'boolean' ||
+        typeof json.isDirectory !== 'boolean' ||
+        typeof json.size !== 'number'
+      ) {
+        throw errnoError('EIO', path);
       }
-      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
-      fail(xhr, path);
+      return { isFile: json.isFile, isDirectory: json.isDirectory, size: json.size };
     },
     readdir(path: string): string[] {
-      const xhr = send('GET', path, undefined, 'readdir');
-      if (isGenuine(xhr)) {
-        const json = readJson(xhr, path);
-        if (!Array.isArray(json) || !json.every((s) => typeof s === 'string')) {
-          throw errnoError('EIO', path);
-        }
-        return json as string[];
+      const json = synchronifyJson(request('GET', path, undefined, 'readdir'));
+      if (!Array.isArray(json) || !json.every((s) => typeof s === 'string')) {
+        throw errnoError('EIO', path);
       }
-      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
-      fail(xhr, path);
+      return json as string[];
     },
     exists(path: string): boolean {
       // A genuine `exists` returns a JSON boolean (never throws ENOENT — the
@@ -183,14 +133,15 @@ export function createSyncFsXhrBridge(
       // an out-of-sandbox path, EIO on transport failure) does propagate; the
       // shim wraps this in a try/catch so `existsSync` matches Node's
       // never-throws contract.
-      const xhr = send('GET', path, undefined, 'exists');
-      if (isGenuine(xhr)) {
-        const json = readJson(xhr, path);
-        if (typeof json !== 'boolean') throw errnoError('EIO', path);
-        return json;
-      }
-      if (xhr.status >= 200 && xhr.status < 300) throw errnoError('EIO', path);
-      fail(xhr, path);
+      const json = synchronifyJson(request('GET', path, undefined, 'exists'));
+      if (typeof json !== 'boolean') throw errnoError('EIO', path);
+      return json;
+    },
+    mkdir(path: string): void {
+      synchronify(request('POST', path, undefined, 'mkdir'));
+    },
+    rm(path: string): void {
+      synchronify(request('POST', path, undefined, 'rm'));
     },
   };
 }

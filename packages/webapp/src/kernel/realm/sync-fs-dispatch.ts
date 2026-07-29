@@ -16,8 +16,9 @@
  *
  * NOTE: this module is pure (no BroadcastChannel / SW). Phase-2 routes
  * `stat` / `readdir` / `exists` through the SW wire in addition to the
- * phase-1 `read` / `write`; the rest of the op set is kept for the responder's
- * completeness but is not reachable from the SW handler today.
+ * phase-1 `read` / `write`, and the sync-exec flush-before path adds
+ * `mkdir` / `rm`. `rename` is kept for the responder's completeness but is
+ * not reachable from the SW handler today.
  */
 
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
@@ -48,8 +49,12 @@ export type SyncFsResult =
   | { ok: true; kind: 'void' }
   | { ok: false; errno: string; message: string };
 
-/** Map any thrown error to a POSIX errno result. */
-function toErrno(err: unknown): SyncFsResult {
+/**
+ * Map any thrown error to a POSIX errno result. Shared with the exec channel
+ * (`sync-exec-dispatch.ts`) so a sudo denial's `EACCES` survives on BOTH paths
+ * rather than being flattened to a generic `EIO`.
+ */
+export function toErrno(err: unknown): SyncFsResult {
   const message = err instanceof Error ? err.message : String(err);
   // Validate the errno shape for EVERY error (FsError, sync-fs-cache errors, or
   // anything else with a `.code`). A malformed `.code` would otherwise become an
@@ -107,8 +112,8 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         // Extends realm-host.ts dispatchVfs (which probes only `rename`):
         // production ctx.fs (VfsAdapter, possibly sudo-wrapped) exposes `mv`,
         // not `rename`, so probe `mv` too, then fall back to copy+remove when
-        // neither is present. (Phase-2 only — the phase-1 SW wire is
-        // read/write; the responder keeps this for completeness.)
+        // neither is present. (Not reachable from the SW handler — the
+        // responder keeps this for completeness.)
         const dest = fs.resolvePath(cwd, req.arg2 ?? '');
         const maybe = fs as {
           rename?: (a: string, b: string) => Promise<void>;

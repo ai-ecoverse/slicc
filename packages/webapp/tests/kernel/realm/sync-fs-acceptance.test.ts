@@ -1,16 +1,17 @@
 /**
- * Phase-1 acceptance gates for the sync-fs bridge (node-testable layer).
+ * Acceptance gates for the sync bridges (node-testable layer).
  *
  * The ACL escape guard is proven in sync-fs-dispatch.test.ts (out-of-sandbox
- * read/write/`../` denied). Here we lock in the other two security properties
- * that are exercisable in node at the dispatch layer:
- *   - sudo inheritance: a sudo-gated write through dispatchSyncFs consults the
- *     broker and fails closed with EACCES on deny (the sync path inherits the
- *     same createSudoFs gate the async vfs path has).
+ * read/write/`../` denied). Here we lock in the other security properties
+ * that are exercisable in node at the dispatch layer, for BOTH channels:
+ *   - sudo inheritance: a sudo-gated write through dispatchSyncFs, and a
+ *     sudo-denied command through dispatchSyncExec, both fail closed with
+ *     EACCES (the sync paths inherit the same gates the async vfs / exec
+ *     paths have).
  *   - token isolation: one realm's token cannot reach another realm's scope,
- *     and a revoked token fails closed.
+ *     and a revoked token fails closed for reads AND for commands.
  *
- * The TRUE sudo-under-synchronous-write REENTRANCY (page services the sync-fs
+ * The TRUE sudo-under-synchronous-write REENTRANCY (page services the sync
  * request while the sudo modal is pending; broker-timeout → EACCES, never a
  * hang) and cross-float smoke are browser-only (real SW + DedicatedWorker) and
  * are documented as manual smokes in the plan (Task 8 step 2/4 / Task 9 docs) —
@@ -23,6 +24,10 @@ import { expect, test } from 'vitest';
 import { RestrictedFS } from '../../../src/fs/restricted-fs.js';
 import { createSudoFs } from '../../../src/fs/sudo-fs.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import {
+  dispatchSyncExec,
+  SYNC_EXEC_CHANNEL,
+} from '../../../src/kernel/realm/sync-exec-dispatch.js';
 import { dispatchSyncFs } from '../../../src/kernel/realm/sync-fs-dispatch.js';
 import {
   mintSyncFsToken,
@@ -129,4 +134,58 @@ test('GATE: token isolation — one realm cannot read another realm scope; revok
   const revoked = await dispatchSyncFs({ token: tokenA, op: 'read', path: 'anything' });
   expect(revoked.ok).toBe(false);
   if (!revoked.ok) expect(revoked.errno).toBe('EACCES');
+});
+
+// ---------------------------------------------------------------------------
+// Exec channel. Same three properties, now that the token also carries the
+// realm's gated `ctx.exec`: the sudo COMMAND guard must fire on the sync path,
+// the command must run in the realm's own cwd, and revocation must fail closed.
+// ---------------------------------------------------------------------------
+
+test('GATE: the sync-exec channel runs through the realm own gated ctx.exec, in its cwd', async () => {
+  const seen: Array<{ cmd: string; cwd: unknown }> = [];
+  const exec = (async (cmd: string, opts: { cwd?: string }) => {
+    seen.push({ cmd, cwd: opts.cwd });
+    return { stdout: 'ok', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/scoops/a' });
+
+  const r = await dispatchSyncExec({ token, channel: SYNC_EXEC_CHANNEL, command: 'ls' });
+
+  expect(r.ok).toBe(true);
+  // Not the ambient shell and not the global cwd — the realm's own handle/scope.
+  expect(seen).toEqual([{ cmd: 'ls', cwd: '/scoops/a' }]);
+});
+
+test('GATE: a sudo-denying ctx.exec propagates EACCES through the sync-exec channel', async () => {
+  // The command guard lives inside ctx.exec (same handle the async exec RPC
+  // uses), so a denial must surface as an errno rather than being swallowed.
+  const exec = (async () => {
+    throw Object.assign(new Error('sudo: command denied'), { code: 'EACCES' });
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+
+  const r = await dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'rm -rf /',
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EACCES');
+});
+
+test('GATE: a revoked token cannot run a command (exec capability dies with the realm)', async () => {
+  let ran = false;
+  const exec = (async () => {
+    ran = true;
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+
+  revokeSyncFsToken(token);
+  const r = await dispatchSyncExec({ token, channel: SYNC_EXEC_CHANNEL, command: 'whoami' });
+
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.errno).toBe('EACCES');
+  expect(ran).toBe(false);
 });

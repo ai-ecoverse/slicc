@@ -153,6 +153,48 @@ model). `accessSync`/`chmodSync` are existence-gated no-ops. `appendFileSync`,
 write-through, so an over-cap or post-snapshot source copies its real bytes
 (never a silent 0-byte).
 
+## Synchronous exec bridge
+
+`child_process.execSync` / `execFileSync` / `spawnSync` ride the same
+transport. `realm/sync-xhr.ts` (`synchronify`) holds the blocking round-trip
+both channels share — marker gate, errno recovery, fail-closed transport — so
+the fs and exec channels differ only in route and payload.
+
+**Route**: `POST /__slicc/exec-sync` with a JSON command envelope (the command
+never has to survive URL encoding). The kernel-worker responder resolves the
+same per-realm token and dispatches through the realm's own **`ctx.exec`** —
+the handle the async `exec` RPC uses — so the sudo command guard, path ACLs,
+and secret masking are inherited unchanged. The token entry widened from
+`{ fs, cwd }` to `{ fs, exec, cwd }`; one token covers both channels because
+they share a mint site, a lifetime, and a revocation, and a realm that can
+drive `ctx.exec` can already reach the filesystem through the shell.
+
+**Sudo while blocked**: the realm worker is blocked on the XHR, but the sudo
+brokers live in the kernel worker (HTTP) and the page (panel-RPC), so an
+approval prompt still renders and resolves — the blocked thread is never on the
+approval path.
+
+**Timeout**: a file read finishes in milliseconds, a build command does not, so
+the exec channel derives its budget from Node's `timeout` option (default 2
+minutes, capped at 10). The responder aborts the in-flight `ctx.exec` at the
+budget, and its dedupe TTL is derived from the larger of the two channel
+budgets so a late SW re-post replays the cached result instead of re-running
+the command.
+
+**Cache coherence**: the async exec bridge does flush-before / re-snapshot-
+after; neither await exists here. Instead the sync bridge flushes pending
+`SyncFsCache` mutations over the blocking fs channel (which is why the fs route
+also carries live `mkdir` / `rm`), then **invalidates** the cache after the
+command rather than re-snapshotting — every sync read already falls through to
+the live bridge on a miss, so invalidation is correct and far cheaper.
+
+**No bridge → throw**: without a controlling SW there is no way to block on a
+host round-trip, so the sync forms throw a message naming `promisify(exec)`.
+`spawnSync` reports it on `.error` instead (it never throws).
+
+**Not killable mid-call**: a blocked `execSync` cannot be SIGINT'd; only realm
+`worker.terminate()` (SIGKILL, exit 137) reaches it.
+
 ## Wiring map
 
 `createKernelHost` builds the manager and threads it explicitly through:
