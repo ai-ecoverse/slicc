@@ -200,4 +200,32 @@ describe('GitHub token renewal', () => {
 
     await expect(getValidAccessToken()).resolves.toBe('ghp_new_access');
   });
+
+  it('resyncs the git-token bridge to a fresh long-lived account without renewing', async () => {
+    // Simulates a cone-resume `coneConfigDelta.upsert.accounts` injection: the
+    // account store already holds a fresh, long-lived token + updated masked
+    // value (written by `applyHostedAccounts`/`saveOAuthAccount`, which never
+    // touches the VFS bridge file itself) while the git-token file on disk
+    // still holds the masked value from before resume. `getValidAccessToken()`
+    // must re-mirror the current masked value into the bridge file even
+    // though the token is far from expiry and the renewal branch never runs.
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale');
+
+    seedGitHubAccount({
+      accessToken: 'ghp_resumed_fresh',
+      tokenExpiresAt: Date.now() + 3_600_000,
+      maskedValue: 'ghp_masked_resumed',
+    });
+    globalThis.fetch = vi.fn() as typeof fetch;
+    const { getValidAccessToken } = await import('../../providers/github.js');
+
+    await expect(getValidAccessToken()).resolves.toBe('ghp_resumed_fresh');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghp_masked_resumed'
+    );
+  });
 });

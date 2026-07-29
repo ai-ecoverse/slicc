@@ -396,6 +396,26 @@ export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Pro
 
 const silentRenewBackoff = createSilentRenewBackoff();
 
+/**
+ * Mirror the account store's current masked token into the git-token VFS
+ * bridge file. Called on every `getValidAccessToken()` resolution (not just
+ * renewals) so a token injected out-of-band — e.g. a cone resume's
+ * `coneConfigDelta.upsert.accounts`, applied via the generic
+ * `applyHostedAccounts`/`saveOAuthAccount` path, which never calls
+ * `writeGitToken` itself — still reaches isomorphic-git. Without this, a
+ * fresh long-lived token bypasses the renewal branch entirely (its expiry is
+ * far off) and `/workspace/.git/github-token` keeps serving the token from
+ * before resume.
+ */
+async function syncGitTokenFromAccount(): Promise<void> {
+  const masked = getOAuthAccountInfo('github')?.maskedValue;
+  if (masked) {
+    await writeGitToken(masked);
+  } else {
+    await clearGitToken();
+  }
+}
+
 async function renewGitHubToken(): Promise<string | null> {
   try {
     const account = getGitHubAccount();
@@ -416,12 +436,7 @@ async function renewGitHubToken(): Promise<string | null> {
       userAvatar: account.userAvatar,
     });
 
-    const masked = getOAuthAccountInfo('github')?.maskedValue;
-    if (masked) {
-      await writeGitToken(masked);
-    } else {
-      await clearGitToken();
-    }
+    await syncGitTokenFromAccount();
     return tokenResult.access_token;
   } catch (err) {
     console.warn(
@@ -437,7 +452,10 @@ async function getValidAccessToken(): Promise<string> {
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
 
   const expiresIn = (account.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
-  if (expiresIn > 60000) return account.accessToken;
+  if (expiresIn > 60000) {
+    await syncGitTokenFromAccount();
+    return account.accessToken;
+  }
 
   const newToken = await silentRenewBackoff.run(() => renewGitHubToken());
   if (newToken) return newToken;
