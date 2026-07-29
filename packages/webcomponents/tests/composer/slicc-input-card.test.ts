@@ -473,7 +473,7 @@ describe('slicc-input-card', () => {
       source.value = 'alpha\nbeta\ngamma';
       document.body.appendChild(source);
       await userEvent.click(source);
-      await userEvent.keyboard('{Control>}a{/Control}');
+      await userEvent.keyboard('{ControlOrMeta>}a{/ControlOrMeta}');
       await userEvent.copy();
 
       const el = mount();
