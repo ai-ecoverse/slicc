@@ -10,13 +10,22 @@ const DEFAULT_LABEL = 'CLI float';
  * Format a spend value into a `$2.41` string. Accepts a number or a numeric
  * string; non-numeric / blank input yields `null` (no cost segment rendered).
  */
-function formatSpent(raw: string | null): string | null {
+function parseSpent(raw: string | null): number | null {
   if (raw == null) return null;
   const trimmed = raw.trim();
   if (trimmed === '') return null;
   const n = Number.parseFloat(trimmed.replace(/^\$/, ''));
   if (!Number.isFinite(n)) return null;
-  return `$${n.toFixed(2)}`;
+  return n;
+}
+
+function formatSpent(raw: string | null): string | null {
+  const value = parseSpent(raw);
+  return value == null ? null : `$${value.toFixed(2)}`;
+}
+
+function formatRate(raw: string | null): string {
+  return `${formatSpent(raw) ?? '$0.00'}/h`;
 }
 
 const NARROW_QUERY = '(max-width: 560px)';
@@ -66,7 +75,7 @@ const STYLE = `
   background: var(--line);
 }
 
-/* $ SPENT cost segment: lucide coin icon + formatted amount */
+/* Hourly rate segment: lucide coin icon + formatted amount */
 .spent {
   display: inline-flex;
   align-items: center;
@@ -146,17 +155,19 @@ const SHEET = sheet(STYLE);
  * @attr label - the runtime label text (defaults to "CLI float")
  * @attr linked - boolean; rose-tints the border to signal a linked runtime
  * @attr online - boolean; shows the green status dot
- * @attr spent - cost spent, a number or numeric string (e.g. `2.41`); renders a
- *   coin-icon + formatted `$2.41` cost segment after a thin divider
+ * @attr rate - hourly cost, a number or numeric string (e.g. `23.1`); renders a
+ *   coin-icon + formatted `$23.10/h` cost segment after a thin divider
+ * @attr spent - cumulative cost shown in the cost overlay's total row
  * @csspart dot - the green status dot (present only when `online`)
  * @csspart label - the runtime label span
- * @csspart sep - the thin divider before the cost segment (present only when `spent`)
- * @csspart spent - the cost segment wrapper (present only when `spent`)
+ * @csspart sep - the thin divider before the cost segment
+ * @csspart spent - the cost segment wrapper
+ * @csspart rate - alias for the cost segment wrapper
  * @csspart tip - the narrow-view hover/focus tooltip surfacing the collapsed label
  * @slot - default slot overrides the label text
  */
 export class SliccFloatbar extends HTMLElement {
-  static readonly observedAttributes = ['label', 'linked', 'online', 'spent'];
+  static readonly observedAttributes = ['label', 'linked', 'online', 'rate', 'spent'];
 
   readonly #root: ShadowRoot;
   readonly #narrow: MediaQueryList | null;
@@ -231,6 +242,16 @@ export class SliccFloatbar extends HTMLElement {
     else this.setAttribute('spent', String(value));
   }
 
+  /** Raw hourly `rate` attribute value, or `null` when unset. */
+  get rate(): string | null {
+    return this.getAttribute('rate');
+  }
+
+  set rate(value: string | number | null) {
+    if (value == null) this.removeAttribute('rate');
+    else this.setAttribute('rate', String(value));
+  }
+
   get costModels(): CostOverlayModel[] {
     return this.#costModels;
   }
@@ -251,13 +272,12 @@ export class SliccFloatbar extends HTMLElement {
 
   /**
    * The tooltip text for the narrow square badge — the label, the formatted
-   * spend (when present), and the connection state, joined with the same ` · `
+   * hourly rate and connection state, joined with the same ` · `
    * separator the verbose label uses, so the collapsed badge stays legible.
    */
   #tipText(): string {
     const parts: string[] = [this.label];
-    const amount = formatSpent(this.spent);
-    if (amount != null) parts.push(amount);
+    parts.push(formatRate(this.rate));
     parts.push(this.online ? 'online' : 'offline');
     return parts.join(' · ');
   }
@@ -279,19 +299,16 @@ export class SliccFloatbar extends HTMLElement {
 
     nodes.push(h('span', { class: 'label', part: 'label' }, h('slot', null, this.label)));
 
-    const amount = formatSpent(this.spent);
-    if (amount != null) {
-      nodes.push(h('span', { class: 'sep', part: 'sep' }));
-      const spentEl = h(
-        'span',
-        { class: 'spent', part: 'spent' },
-        iconEl('circle-dollar-sign', { size: 12 }),
-        h('span', { class: 'amount' }, amount)
-      );
-      spentEl.addEventListener('mouseenter', () => this.#showOverlay());
-      spentEl.addEventListener('mouseleave', () => this.#scheduleHide());
-      nodes.push(spentEl);
-    }
+    nodes.push(h('span', { class: 'sep', part: 'sep' }));
+    const spentEl = h(
+      'span',
+      { class: 'spent', part: 'spent rate' },
+      iconEl('circle-dollar-sign', { size: 12 }),
+      h('span', { class: 'amount' }, formatRate(this.rate))
+    );
+    spentEl.addEventListener('mouseenter', () => this.#showOverlay());
+    spentEl.addEventListener('mouseleave', () => this.#scheduleHide());
+    nodes.push(spentEl);
 
     nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
 
@@ -306,6 +323,7 @@ export class SliccFloatbar extends HTMLElement {
       const overlay = document.createElement('slicc-cost-overlay') as SliccCostOverlay;
       overlay.models = this.#costModels;
       overlay.scoops = this.#costScoops;
+      overlay.total = parseSpent(this.spent);
       overlay.addEventListener('mouseenter', () => this.#showOverlay());
       overlay.addEventListener('mouseleave', () => this.#scheduleHide());
       this.#root.appendChild(overlay);
