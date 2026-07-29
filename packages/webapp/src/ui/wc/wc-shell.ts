@@ -117,8 +117,9 @@ export interface WcShellRefs {
 const STYLE_ID = 'slicc-wcui-style';
 const CSS = [
   // The shell owns the page: kill the UA body margin (the legacy reset died
-  // with base.css) so the frame sits flush against the window edges.
-  'html,body{margin:0;padding:0;height:100%;}',
+  // with base.css) and suppress the manually verified root-viewport elastic
+  // overscroll (not scroll chaining) so the frame stays flush to the window.
+  'html,body{margin:0;padding:0;height:100%;overscroll-behavior:none;}',
   '.wcui-frame{position:relative;transform:translateZ(0);width:100%;height:100vh;',
   'overflow:hidden;background:var(--bg);font-family:var(--ui);}',
   '.wcui-shader{position:absolute;inset:0;z-index:0;}',
