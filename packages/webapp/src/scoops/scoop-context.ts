@@ -365,6 +365,11 @@ export class ScoopContext {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
 
+  /** Whether a prompt is active or the underlying agent is still streaming. */
+  get isBusy(): boolean {
+    return this.isProcessing || (this.agent?.state?.isStreaming ?? false);
+  }
+
   /**
    * Assemble the sudo enforcement surface for this scoop: the `SudoFS` broker
    * + policy getter + default disposition, plus a matching `ShellSudoConfig`.

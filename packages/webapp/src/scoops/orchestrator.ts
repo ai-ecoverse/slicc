@@ -294,6 +294,7 @@ export class Orchestrator implements ConeApprovalRouter {
       messageRouter: {
         ensureQueue: (jid) => this.messageRouter.ensureQueue(jid),
         forgetScoop: (jid) => this.messageRouter.forgetScoop(jid),
+        flushOnIdle: (jid) => this.messageRouter.flushOnIdle(jid),
       },
       costTracker: { snapshot: (jid) => this.costTracker.snapshot(jid) },
       approvalRouter: { failScoop: (jid) => this.approvalRouter.failScoop(jid) },

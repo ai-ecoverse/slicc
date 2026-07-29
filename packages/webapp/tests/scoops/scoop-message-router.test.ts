@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isAfterMessageWatermark, parseMessageWatermark } from '../../src/scoops/db.js';
+import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { ScoopMessageRouterDeps } from '../../src/scoops/scoop-message-router.js';
 import {
+  SCOOP_DEFERRAL_STARVATION_MS,
   SCOOP_QUEUE_DEBOUNCE_MS,
   SCOOP_QUEUE_MAX_COALESCE_MS,
   ScoopMessageRouter,
@@ -41,6 +43,9 @@ interface Harness {
   router: ScoopMessageRouter;
   sends: string[];
   probe: { max: number };
+  stateWrites: string[];
+  store: ChannelMessage[];
+  errors: string[];
 }
 
 function makeHarness(opts?: {
@@ -48,17 +53,24 @@ function makeHarness(opts?: {
   immediateIO?: boolean;
   jids?: string[];
   onSend?: () => Promise<void>;
+  busy?: { value: boolean };
+  tabStatus?: ScoopTabState['status'];
+  store?: ChannelMessage[];
+  lastAgentTimestamp?: string;
+  onError?: (jid: string, error: string) => void;
 }): Harness {
   const jids = opts?.jids ?? ['cone'];
   const scoops = new Map<string, RegisteredScoop>();
   const tabs = new Map<string, ScoopTabState>();
   for (const jid of jids) {
     scoops.set(jid, makeScoop(jid));
-    tabs.set(jid, { jid, contextId: jid, status: 'ready', lastActivity: '' });
+    tabs.set(jid, { jid, contextId: jid, status: opts?.tabStatus ?? 'ready', lastActivity: '' });
   }
 
-  const store: ChannelMessage[] = [];
+  const store = opts?.store ?? [];
   const sends: string[] = [];
+  const stateWrites: string[] = [];
+  const errors: string[] = [];
   const probe = { max: 0 };
   let active = 0;
   let sendCount = 0;
@@ -67,7 +79,18 @@ function makeHarness(opts?: {
   const deps: ScoopMessageRouterDeps = {
     getScoops: () => scoops,
     getTabs: () => tabs,
-    getContexts: () => new Map(),
+    getContexts: () =>
+      new Map(
+        jids.map((jid) => [
+          jid,
+          {
+            get isBusy() {
+              return opts?.busy?.value ?? false;
+            },
+            clearMessages() {},
+          } as ScoopContext,
+        ])
+      ),
     createScoopTab: async () => {},
     sendPrompt: async (_jid, text) => {
       await pause();
@@ -76,7 +99,10 @@ function makeHarness(opts?: {
       sends.push(text);
     },
     notifyIncomingMessage: () => {},
-    onError: () => {},
+    onError: (jid, error) => {
+      errors.push(error);
+      opts?.onError?.(jid, error);
+    },
     getSessionStore: () => null,
     resetCostTracker: () => {},
     db: {
@@ -84,9 +110,18 @@ function makeHarness(opts?: {
         await pause();
         store.push(msg);
       },
-      deleteMessage: async () => {},
-      clearMessagesForScoop: async () => {},
-      clearAllMessages: async () => {},
+      deleteMessage: async (id) => {
+        const index = store.findIndex((message) => message.id === id);
+        if (index !== -1) store.splice(index, 1);
+      },
+      clearMessagesForScoop: async (jid) => {
+        for (let index = store.length - 1; index >= 0; index -= 1) {
+          if (store[index].chatJid === jid) store.splice(index, 1);
+        }
+      },
+      clearAllMessages: async () => {
+        store.length = 0;
+      },
       getMessagesSince: async (jid, since, excludeName) => {
         active += 1;
         probe.max = Math.max(probe.max, active);
@@ -101,14 +136,17 @@ function makeHarness(opts?: {
         active -= 1;
         return result;
       },
-      setState: async () => {},
+      setState: async (_key, value) => {
+        stateWrites.push(value);
+      },
     },
     isExternalLickChannel: (channel) => channel === 'webhook',
   };
 
   const router = new ScoopMessageRouter(deps);
   for (const jid of jids) router.ensureQueue(jid);
-  return { router, sends, probe };
+  if (opts?.lastAgentTimestamp) router.setLastAgentTimestamp(jids[0], opts.lastAgentTimestamp);
+  return { router, sends, probe, stateWrites, store, errors };
 }
 
 describe('ScoopMessageRouter re-entrancy guard', () => {
@@ -352,6 +390,283 @@ describe('ScoopMessageRouter debounce', () => {
     await flushDebounce();
 
     await rejected;
+  });
+
+  it('defers a pure lick batch while busy without advancing its watermark', async () => {
+    const busy = { value: true };
+    const { router, sends, stateWrites } = makeHarness({
+      immediateIO: true,
+      busy,
+      tabStatus: 'processing',
+    });
+    const queued = await queueLicks(router, [
+      makeMessage('cone', 0, 'webhook'),
+      makeMessage('cone', 1, 'webhook'),
+    ]);
+
+    await flushDebounce();
+    await expect(queued.done).resolves.toEqual([undefined, undefined]);
+    expect(sends).toEqual([]);
+    expect(stateWrites).toEqual([]);
+
+    busy.value = false;
+    await router.flushOnIdle('cone');
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+    expect(sends[0]).toContain('MSG_001');
+    expect(stateWrites).toHaveLength(1);
+  });
+
+  it('dispatches a mixed web-and-lick batch immediately while busy', async () => {
+    const busy = { value: true };
+    const { router, sends } = makeHarness({ immediateIO: true, busy, tabStatus: 'processing' });
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+
+    await router.handleMessage(makeMessage('cone', 1, 'web'));
+    await lick.done;
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+    expect(sends[0]).toContain('MSG_001');
+  });
+
+  it('preserves baseline guard ordering for an active-turn mixed batch', async () => {
+    const busy = { value: false };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseTurn!: () => void;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let sendCount = 0;
+    const { router, sends } = makeHarness({
+      immediateIO: true,
+      busy,
+      onSend: async () => {
+        sendCount += 1;
+        if (sendCount !== 1) return;
+        busy.value = true;
+        markStarted();
+        await turnDone;
+        busy.value = false;
+      },
+    });
+    const activeTurn = router.handleMessage(makeMessage('cone', 0, 'web'));
+    await started;
+    const lick = await queueLicks(router, [makeMessage('cone', 1, 'webhook')]);
+    let webSettled = false;
+
+    const web = router.handleMessage(makeMessage('cone', 2, 'web')).then(() => {
+      webSettled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(webSettled).toBe(false);
+    expect(sends).toEqual([]);
+
+    releaseTurn();
+    await Promise.all([activeTurn, web, lick.done]);
+    expect(sends).toHaveLength(2);
+    for (const token of ['MSG_000', 'MSG_001', 'MSG_002']) {
+      expect(sends.filter((prompt) => prompt.includes(token))).toHaveLength(1);
+    }
+  });
+
+  it('settles lick waiters while an earlier queue drain is still mid-turn', async () => {
+    const busy = { value: false };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseTurn!: () => void;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let sendCount = 0;
+    const { router, sends } = makeHarness({
+      immediateIO: true,
+      busy,
+      onSend: async () => {
+        sendCount += 1;
+        if (sendCount !== 1) return;
+        busy.value = true;
+        markStarted();
+        await turnDone;
+        busy.value = false;
+      },
+    });
+    const activeTurn = router.handleMessage(makeMessage('cone', 0, 'web'));
+    await started;
+    const lick = await queueLicks(router, [makeMessage('cone', 1, 'webhook')]);
+
+    await flushDebounce();
+    await expect(lick.done).resolves.toEqual([undefined]);
+    expect(sends).toEqual([]);
+
+    releaseTurn();
+    await activeTurn;
+    await router.flushOnIdle('cone');
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toContain('MSG_001');
+  });
+
+  it('settles a starved lick waiter when the error callback throws during an active drain', async () => {
+    const busy = { value: false };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseTurn!: () => void;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const { router, errors } = makeHarness({
+      immediateIO: true,
+      busy,
+      onError: () => {
+        throw new Error('error callback failed');
+      },
+      onSend: async () => {
+        busy.value = true;
+        markStarted();
+        await turnDone;
+        busy.value = false;
+      },
+    });
+    const activeTurn = router.handleMessage(makeMessage('cone', 0, 'web'));
+    await started;
+    const first = await queueLicks(router, [makeMessage('cone', 1, 'webhook')]);
+    await flushDebounce();
+    await first.done;
+    await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS);
+    const starved = await queueLicks(router, [makeMessage('cone', 2, 'webhook')]);
+
+    await flushDebounce();
+    await expect(starved.done).resolves.toEqual([undefined]);
+    expect(errors).toHaveLength(1);
+
+    releaseTurn();
+    await activeTurn;
+  });
+
+  it('recovers deferred IDB messages through idle flush after router reconstruction', async () => {
+    const busy = { value: false };
+    const first = makeHarness({ immediateIO: true, busy });
+    await first.router.handleMessage(makeMessage('cone', 0, 'web'));
+    const restoredWatermark = first.stateWrites.at(-1);
+    busy.value = true;
+    const lick = await queueLicks(first.router, [makeMessage('cone', 1, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+
+    const restored = makeHarness({
+      immediateIO: true,
+      store: first.store,
+      lastAgentTimestamp: restoredWatermark,
+    });
+    await restored.router.flushOnIdle('cone');
+
+    expect(restored.sends).toHaveLength(1);
+    expect(restored.sends[0]).not.toContain('MSG_000');
+    expect(restored.sends[0]).toContain('MSG_001');
+  });
+
+  it('delivers a reconstructed deferred row once across concurrent startup probes', async () => {
+    const message = makeMessage('cone', 0, 'webhook');
+    const restored = makeHarness({ immediateIO: true, store: [message] });
+
+    await Promise.all([restored.router.flushOnIdle('cone'), restored.router.flushOnIdle('cone')]);
+
+    expect(restored.sends).toHaveLength(1);
+    expect(restored.sends[0]).toContain('MSG_000');
+  });
+
+  it('uses the poll loop as a safety-net flush after busy deferral', async () => {
+    const busy = { value: true };
+    const { router, sends } = makeHarness({ immediateIO: true, busy });
+    router.startMessageLoop();
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+
+    busy.value = false;
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+    router.stopMessageLoop();
+  });
+
+  it('clears deferred IDB messages after router reconstruction', async () => {
+    const busy = { value: true };
+    const first = makeHarness({ immediateIO: true, busy });
+    const lick = await queueLicks(first.router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+
+    const restored = makeHarness({ immediateIO: true, store: first.store });
+    await restored.router.clearQueuedMessages('cone');
+    restored.router.startMessageLoop();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(restored.store).toEqual([]);
+    expect(restored.sends).toEqual([]);
+    restored.router.stopMessageLoop();
+  });
+
+  it('preserves protected IDB rows when clearing a reconstructed deferred queue', async () => {
+    const busy = { value: false };
+    const first = makeHarness({ immediateIO: true, busy });
+    const processed = makeMessage('cone', 0, 'web');
+    await first.router.handleMessage(processed);
+    const restoredWatermark = first.stateWrites.at(-1);
+    busy.value = true;
+    const deferred = makeMessage('cone', 1, 'webhook');
+    const lick = await queueLicks(first.router, [deferred]);
+    await flushDebounce();
+    await lick.done;
+    const assistant = { ...makeMessage('cone', 2), senderName: 'sliccy', fromAssistant: true };
+    const otherScoop = makeMessage('other', 3, 'webhook');
+    first.store.push(assistant, otherScoop);
+
+    const restored = makeHarness({
+      immediateIO: true,
+      jids: ['cone', 'other'],
+      store: first.store,
+      lastAgentTimestamp: restoredWatermark,
+    });
+    await restored.router.clearQueuedMessages('cone');
+
+    expect(restored.store.map((message) => message.id)).toEqual([
+      processed.id,
+      assistant.id,
+      otherScoop.id,
+    ]);
+  });
+
+  it('reports a permanently busy deferred queue once without dispatching it', async () => {
+    const busy = { value: true };
+    const { router, sends, errors } = makeHarness({
+      immediateIO: true,
+      busy,
+      tabStatus: 'processing',
+    });
+    router.startMessageLoop();
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+
+    await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS + 2000);
+
+    expect(sends).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('remained deferred');
+    await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS);
+    expect(errors).toHaveLength(1);
+    router.stopMessageLoop();
   });
 
   const cleanupCases: Array<[string, (router: ScoopMessageRouter) => void | Promise<void>]> = [
