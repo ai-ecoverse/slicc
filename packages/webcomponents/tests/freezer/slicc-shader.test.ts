@@ -178,6 +178,30 @@ describe('slicc-shader', () => {
     await frame();
     expect(() => el.remove()).not.toThrow();
   });
+
+  it('releases partial GL resources when initialization fails', () => {
+    const createBufferSpy = vi
+      .spyOn(WebGLRenderingContext.prototype, 'createBuffer')
+      .mockImplementation(() => null as unknown as WebGLBuffer);
+    const deleteProgramSpy = vi.spyOn(WebGLRenderingContext.prototype, 'deleteProgram');
+    const deleteShaderSpy = vi.spyOn(WebGLRenderingContext.prototype, 'deleteShader');
+    const getExtensionSpy = vi.spyOn(WebGLRenderingContext.prototype, 'getExtension');
+    try {
+      const el = mount();
+      if (createBufferSpy.mock.calls.length === 0) return;
+      expect(el.noWebgl).toBe(true);
+      expect(deleteProgramSpy).toHaveBeenCalledOnce();
+      expect(deleteShaderSpy).toHaveBeenCalledTimes(2);
+      expect(getExtensionSpy).toHaveBeenCalledWith('WEBGL_lose_context');
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      expect(canvas.getContext('webgl')?.isContextLost()).toBe(true);
+    } finally {
+      createBufferSpy.mockRestore();
+      deleteProgramSpy.mockRestore();
+      deleteShaderSpy.mockRestore();
+      getExtensionSpy.mockRestore();
+    }
+  });
 });
 
 describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => {

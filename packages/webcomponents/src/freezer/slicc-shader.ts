@@ -683,22 +683,21 @@ export class SliccShader extends HTMLElement {
     if (!gl) return false;
     this.#gl = gl;
     this.#installContextHandlers(cv);
-    return this.#setupGlResources();
+    if (this.#setupGlResources()) return true;
+    // Resource setup can fail after acquiring a context and compiling a program
+    // (for example when buffer allocation is exhausted). Keep #gl alive until
+    // disposal so the partial program and the context are actually released.
+    this.#dispose();
+    return false;
   }
 
   /** Link the active mode and (re)build the fullscreen-triangle buffer. */
   #setupGlResources(): boolean {
     const gl = this.#gl;
     if (!gl) return false;
-    if (!this.#linkMode()) {
-      this.#gl = null;
-      return false;
-    }
+    if (!this.#linkMode()) return false;
     const buf = gl.createBuffer();
-    if (!buf) {
-      this.#gl = null;
-      return false;
-    }
+    if (!buf) return false;
     this.#buffer = buf;
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
