@@ -44,7 +44,7 @@ playwright-cli snapshot --tab=E9A3F
 
 - `frames --tab=<targetId>` lists frame IDs. A frame ID is not a tab target ID; never pass it to `--tab`.
 - Use `--tab=<targetId> --frame=<frameId>` with `eval` or `snapshot` to target a child frame, including cross-origin frames.
-- A frame-scoped `snapshot` prints only that frame's accessibility subtree. Interaction commands continue to use the frame-prefixed refs from snapshots; do not pass `--frame` to them.
+- A frame-scoped `snapshot` prints only that frame's accessibility subtree. Interaction commands except `drag` continue to use the frame-prefixed refs from snapshots; do not pass `--frame` to them. `drag` requires refs from a top-level snapshot.
 
 ## Common Failure Modes
 
