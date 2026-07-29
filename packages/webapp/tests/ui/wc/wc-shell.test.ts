@@ -63,6 +63,12 @@ describe('mountWcUiPreview', () => {
     expect(root.querySelector('slicc-dock')?.hasAttribute('system-tools')).toBe(true);
   });
 
+  it('mounts the memory panel with an empty state', () => {
+    const panel = mount().querySelector('slicc-memory-panel');
+    expect(panel?.hasAttribute('variant')).toBe(false);
+    expect(panel?.textContent).toContain('No memories yet');
+  });
+
   it('populates the cone thread from the chat fixture', () => {
     const root = mount();
     const thread = root.querySelector('slicc-chat-thread');

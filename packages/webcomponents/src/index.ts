@@ -71,10 +71,31 @@ export { SliccShader } from './freezer/slicc-shader.js';
 export { define } from './internal/define.js';
 export { escapeHtml } from './internal/html.js';
 export { hasIcon, iconSvg } from './internal/icons.js';
+export {
+  MACHINE_WRITTEN_MEMORY_CONSOLIDATED_MARKDOWN,
+  MACHINE_WRITTEN_MEMORY_MARKDOWN,
+  MACHINE_WRITTEN_MEMORY_PATH,
+  type MachineWrittenMemoryFixtureTarget,
+  type MachineWrittenMemoryVariant,
+  mountMachineWrittenMemoryFixture,
+} from './memory/machine-written-memory-fixture.js';
+export {
+  mountRedactedRealWorldMemoryFixture,
+  REDACTED_REAL_WORLD_MEMORY_MARKDOWN,
+  REDACTED_REAL_WORLD_MEMORY_PATH,
+  type RedactedRealWorldMemoryFixtureTarget,
+} from './memory/redacted-real-world-memory-fixture.js';
+export { SliccMemoryPanel } from './memory/slicc-memory-panel.js';
 export { SliccMemrow } from './memory/slicc-memrow.js';
 export { SliccMemtag } from './memory/slicc-memtag.js';
 export { SliccPaletteCell } from './memory/slicc-palette-cell.js';
 export { SliccPaletteGrid } from './memory/slicc-palette-grid.js';
+export {
+  mountSyntheticMemoryFixture,
+  SYNTHETIC_MEMORY_MARKDOWN,
+  SYNTHETIC_MEMORY_PATH,
+  type SyntheticMemoryFixtureTarget,
+} from './memory/synthetic-memory-fixture.js';
 export { SliccAvatarMenu } from './nav/slicc-avatar-menu.js';
 export { SliccNav } from './nav/slicc-nav.js';
 export {

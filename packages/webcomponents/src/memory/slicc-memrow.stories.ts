@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import './slicc-memrow.js';
 
 interface MemrowArgs {
-  title?: string;
+  heading?: string;
   summary?: string;
   tag?: 'user' | 'feedback' | 'project';
   fresh?: boolean;
@@ -11,7 +11,7 @@ interface MemrowArgs {
 /** Build a single memory row from story args. */
 function buildRow(args: MemrowArgs): HTMLElement {
   const row = document.createElement('slicc-memrow');
-  if (args.title) row.setAttribute('title', args.title);
+  if (args.heading) row.setAttribute('heading', args.heading);
   if (args.summary) row.setAttribute('summary', args.summary);
   if (args.tag) row.setAttribute('tag', args.tag);
   if (args.fresh) row.setAttribute('fresh', '');
@@ -23,7 +23,7 @@ const meta: Meta<MemrowArgs> = {
   component: 'slicc-memrow',
   tags: ['autodocs'],
   argTypes: {
-    title: { control: 'text', description: 'Bold memory title' },
+    heading: { control: 'text', description: 'Bold memory heading' },
     summary: { control: 'text', description: 'Muted summary line' },
     tag: {
       control: 'select',
@@ -40,7 +40,7 @@ type Story = StoryObj<MemrowArgs>;
 
 export const Default: Story = {
   args: {
-    title: 'icon buttons need tooltips',
+    heading: 'icon buttons need tooltips',
     summary: 'All icon-only buttons must have data-tooltip + aria-label.',
     tag: 'feedback',
   },
@@ -48,7 +48,7 @@ export const Default: Story = {
 
 export const Fresh: Story = {
   args: {
-    title: 'palette preference: warm paper',
+    heading: 'palette preference: warm paper',
     summary: 'Prefers paper #faf6f1 canvas + violet accent + single pill CTA for marketing pages.',
     tag: 'user',
     fresh: true,
@@ -57,7 +57,7 @@ export const Fresh: Story = {
 
 export const TagUser: Story = {
   args: {
-    title: 'palette preference: warm paper',
+    heading: 'palette preference: warm paper',
     summary: 'Prefers paper #faf6f1 canvas + violet accent + single pill CTA.',
     tag: 'user',
   },
@@ -65,7 +65,7 @@ export const TagUser: Story = {
 
 export const TagFeedback: Story = {
   args: {
-    title: 'e2e via puppeteer-core',
+    heading: 'e2e via puppeteer-core',
     summary: 'Use puppeteer-core against the dev-server CDP for browser E2E.',
     tag: 'feedback',
   },
@@ -73,7 +73,7 @@ export const TagFeedback: Story = {
 
 export const TagProject: Story = {
   args: {
-    title: 'UI redesign exploration',
+    heading: 'UI redesign exploration',
     summary: '3 axes — structure × palette × style; the "lick" blob; mockups in slicc-styles/.',
     tag: 'project',
   },
@@ -93,24 +93,24 @@ export const Panel: Story = {
 
     const rows: MemrowArgs[] = [
       {
-        title: 'palette preference: warm paper',
+        heading: 'palette preference: warm paper',
         summary:
           'Prefers paper #faf6f1 canvas + violet accent + single pill CTA for marketing pages.',
         tag: 'user',
         fresh: true,
       },
       {
-        title: 'icon buttons need tooltips',
+        heading: 'icon buttons need tooltips',
         summary: 'All icon-only buttons must have data-tooltip + aria-label.',
         tag: 'feedback',
       },
       {
-        title: 'e2e via puppeteer-core',
+        heading: 'e2e via puppeteer-core',
         summary: 'Use puppeteer-core against the dev-server CDP for browser E2E.',
         tag: 'feedback',
       },
       {
-        title: 'UI redesign exploration',
+        heading: 'UI redesign exploration',
         summary: '3 axes — structure × palette × style; the "lick" blob; mockups in slicc-styles/.',
         tag: 'project',
       },

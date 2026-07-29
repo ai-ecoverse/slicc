@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { SliccMemrow } from '../../src/memory/slicc-memrow.js';
 // Sibling composed by tag — importing here registers it so the row's
 // <slicc-memtag> upgrades during the test run.
@@ -24,8 +25,15 @@ describe('slicc-memrow', () => {
     expect(customElements.get('slicc-memrow')).toBe(SliccMemrow);
   });
 
+  it('uses a native row activation button without making the host interactive', () => {
+    const el = mount({ heading: 'keyboard first' });
+    expect(el.hasAttribute('role')).toBe(false);
+    expect(el.tabIndex).toBe(-1);
+    expect(el.querySelector('.mt')).toBeInstanceOf(HTMLButtonElement);
+  });
+
   it('renders the .mt header and .ms summary into its own light DOM', () => {
-    const el = mount({ title: 'icon buttons need tooltips', summary: 'must have aria-label' });
+    const el = mount({ heading: 'icon buttons need tooltips', summary: 'must have aria-label' });
     expect(el.shadowRoot).toBeNull();
     const mt = el.querySelector('.mt');
     const title = el.querySelector('.mt b');
@@ -35,13 +43,24 @@ describe('slicc-memrow', () => {
     expect(ms?.textContent).toContain('must have aria-label');
   });
 
-  it('reflects title attribute ↔ property', () => {
+  it('hard-caps rendered titles at 96 characters without dropping the remainder', () => {
+    const heading = 'x'.repeat(120);
+    const el = mount({ heading });
+    const renderedTitle = el.querySelector('.mt b')?.textContent ?? '';
+    const renderedSummary = el.querySelector('.ms')?.textContent ?? '';
+    expect(renderedTitle).toHaveLength(96);
+    expect(renderedSummary).toBe('x'.repeat(24));
+    expect(renderedTitle + renderedSummary).toBe(heading);
+  });
+
+  it('reflects heading attribute ↔ property without using native title', () => {
     const el = mount();
-    el.title = 'palette preference';
-    expect(el.getAttribute('title')).toBe('palette preference');
-    expect(el.querySelector('.mt b')?.textContent).toBe('palette preference');
-    el.title = null;
+    el.heading = 'palette preference';
+    expect(el.getAttribute('heading')).toBe('palette preference');
     expect(el.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('.mt b')?.textContent).toBe('palette preference');
+    el.heading = null;
+    expect(el.hasAttribute('heading')).toBe(false);
   });
 
   it('reflects summary attribute ↔ property', () => {
@@ -62,11 +81,25 @@ describe('slicc-memrow', () => {
     expect(el.classList.contains('fresh')).toBe(false);
   });
 
+  it('reflects expanded attribute ↔ property', () => {
+    const el = mount();
+    expect(el.expanded).toBe(false);
+    el.expanded = true;
+    expect(el.hasAttribute('expanded')).toBe(true);
+    el.removeAttribute('expanded');
+    expect(el.expanded).toBe(false);
+  });
+
   it('defaults the tag to user', () => {
     const el = mount();
     expect(el.tag).toBe('user');
     const tag = el.querySelector('slicc-memtag');
     expect(tag?.getAttribute('type')).toBe('user');
+  });
+
+  it('does not render a tag when the host has no tag attribute', () => {
+    const el = mount();
+    expect((el.querySelector('slicc-memtag') as HTMLElement).hidden).toBe(true);
   });
 
   it('composes <slicc-memtag> by tag for each kind — through its type API, no host pill', () => {
@@ -99,7 +132,7 @@ describe('slicc-memrow', () => {
   });
 
   it('escapes interpolated title and summary text', () => {
-    const el = mount({ title: '<img src=x onerror=1>', summary: '<b>bold</b>' });
+    const el = mount({ heading: '<img src=x onerror=1>', summary: '<b>bold</b>' });
     expect(el.querySelector('.mt b')?.querySelector('img')).toBeNull();
     expect(el.querySelector('.mt b')?.textContent).toBe('<img src=x onerror=1>');
     expect(el.querySelector('.ms')?.querySelector('b')).toBeNull();
@@ -119,32 +152,65 @@ describe('slicc-memrow', () => {
     expect(ms?.textContent).toContain('see ');
   });
 
+  it('renders trusted rich summary content instead of duplicating the plain summary', () => {
+    const el = document.createElement('slicc-memrow') as SliccMemrow;
+    el.summary = 'run the focused gate';
+    const fragment = document.createDocumentFragment();
+    const strong = document.createElement('strong');
+    strong.textContent = 'run';
+    fragment.append(strong, ' the focused gate');
+    el.setBodyContent(fragment);
+    document.body.append(el);
+    expect(el.querySelector('.ms')?.textContent).toBe('run the focused gate');
+    expect(el.querySelector('.ms strong')?.textContent).toBe('run');
+  });
+
   it('emits a composed select event on click with title/summary/tag detail', () => {
-    const el = mount({ title: 'e2e via puppeteer-core', summary: 'use CDP', tag: 'feedback' });
-    let detail: { title: string; summary: string; tag: string } | null = null;
+    const el = mount({ heading: 'e2e via puppeteer-core', summary: 'use CDP', tag: 'feedback' });
+    let detail: { heading: string; summary: string; tag: string } | null = null;
     el.addEventListener('select', (e) => {
       detail = (e as CustomEvent).detail;
     });
     el.click();
     expect(detail).not.toBeNull();
-    expect(detail!.title).toBe('e2e via puppeteer-core');
+    expect(detail!.heading).toBe('e2e via puppeteer-core');
     expect(detail!.summary).toBe('use CDP');
     expect(detail!.tag).toBe('feedback');
   });
 
-  it('emits select on Enter and Space keydown', () => {
-    const el = mount({ title: 't' });
+  it('emits select on native Enter and Space activation', async () => {
+    const el = mount({ heading: 't' });
     let count = 0;
     el.addEventListener('select', () => {
       count += 1;
     });
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    await userEvent.click(el.querySelector('.mt') as HTMLButtonElement);
+    count = 0;
+    await userEvent.keyboard('{Enter} ');
     expect(count).toBe(2);
   });
 
+  it('renders disclosure only when clamped content is genuinely hidden', async () => {
+    const short = mount({ heading: 'short', summary: 'visible detail' });
+    const el = mount({ heading: 'long tail', summary: 'detail '.repeat(40) });
+    short.style.width = '320px';
+    el.style.width = '320px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(short.querySelector('.mexpand')).toBeNull();
+    const button = el.querySelector('.mexpand') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.parentElement).toBe(el);
+    expect(button.closest('[role="button"]')).toBeNull();
+    expect(button.textContent).toBe('Show more');
+    button.click();
+    expect(el.hasAttribute('expanded')).toBe(true);
+    expect(button.textContent).toBe('Show less');
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('stops emitting after disconnect (listener cleanup)', () => {
-    const el = mount({ title: 't' });
+    const el = mount({ heading: 't' });
     let count = 0;
     el.addEventListener('select', () => {
       count += 1;
@@ -157,7 +223,7 @@ describe('slicc-memrow', () => {
   });
 
   it('applies the prototype card geometry (border radius + padding)', () => {
-    const el = mount({ title: 't', summary: 's' });
+    const el = mount({ heading: 't', summary: 's' });
     const cs = getComputedStyle(el);
     expect(cs.display).toBe('block');
     expect(cs.borderTopLeftRadius).toBe('11px');
@@ -166,8 +232,8 @@ describe('slicc-memrow', () => {
   });
 
   it('rose-tints the fresh card background distinctly from a default row', () => {
-    const plain = mount({ title: 'plain' });
-    const fresh = mount({ title: 'fresh', fresh: '' });
+    const plain = mount({ heading: 'plain' });
+    const fresh = mount({ heading: 'fresh', fresh: '' });
     const plainBg = getComputedStyle(plain).backgroundColor;
     const freshBg = getComputedStyle(fresh).backgroundColor;
     // The default card is transparent; the fresh card carries a rose tint.
@@ -176,7 +242,7 @@ describe('slicc-memrow', () => {
   });
 
   it('rebases the fresh tint over the dark canvas in dark mode', () => {
-    const fresh = mount({ title: 'fresh', fresh: '' });
+    const fresh = mount({ heading: 'fresh', fresh: '' });
     const lightBg = getComputedStyle(fresh).backgroundColor;
     setTheme('dark');
     const darkBg = getComputedStyle(fresh).backgroundColor;
@@ -184,7 +250,7 @@ describe('slicc-memrow', () => {
   });
 
   it('pins the memtag to the right of the header (margin-left auto)', () => {
-    const el = mount({ title: 'a short title', tag: 'user' });
+    const el = mount({ heading: 'a short title', tag: 'user' });
     el.style.width = '320px';
     const title = el.querySelector('.mt b') as HTMLElement;
     const memtag = el.querySelector('slicc-memtag') as HTMLElement;

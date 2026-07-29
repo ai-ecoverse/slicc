@@ -94,10 +94,11 @@ describe('buildVfsTreeItems', () => {
 describe('createWorkbenchActivator', () => {
   function makeDeps() {
     const fileTree = document.createElement('slicc-file-tree') as SliccFileTree;
+    const memoryHost = Object.assign(document.createElement('div'), { setRows: vi.fn() });
     const deps = {
       fileTree,
       termSurface: document.createElement('div'),
-      memoryHost: document.createElement('div'),
+      memoryHost,
       openFs: vi.fn(async () => await seededFs()),
       openWriter: vi.fn(async () => await seededFs()),
       mountTerminal: vi.fn(async () => undefined),
@@ -130,6 +131,13 @@ describe('createWorkbenchActivator', () => {
     activate('term');
     await vi.waitFor(() => expect(deps.mountTerminal).toHaveBeenCalledTimes(1));
     expect(deps.mountTerminal).toHaveBeenCalledWith(deps.termSurface);
+  });
+
+  it('hands parsed rows to the memory panel on memory activation', async () => {
+    const deps = makeDeps();
+    const activate = createWorkbenchActivator(deps);
+    activate('memory');
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledWith([]));
   });
 
   it('allows a terminal mount retry after failure', async () => {

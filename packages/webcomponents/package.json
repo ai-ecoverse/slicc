@@ -18,6 +18,18 @@
       "types": "./src/internal/icons.ts",
       "default": "./src/internal/icons.ts"
     },
+    "./memory/synthetic-fixture": {
+      "types": "./src/memory/synthetic-memory-fixture.ts",
+      "default": "./src/memory/synthetic-memory-fixture.ts"
+    },
+    "./memory/machine-written-fixture": {
+      "types": "./src/memory/machine-written-memory-fixture.ts",
+      "default": "./src/memory/machine-written-memory-fixture.ts"
+    },
+    "./memory/redacted-real-world-fixture": {
+      "types": "./src/memory/redacted-real-world-memory-fixture.ts",
+      "default": "./src/memory/redacted-real-world-memory-fixture.ts"
+    },
     "./audio/soundscape-cues": {
       "types": "./src/audio/soundscape-cues.ts",
       "default": "./src/audio/soundscape-cues.ts"
