@@ -73,6 +73,32 @@ describe('parseStartArgs', () => {
     expect(parseStartArgs(['-frobnicate', '-hda', 'x.img']).ok).toBe(false);
     expect(parseStartArgs(['-boot', 'q', '-hda', 'x.img']).ok).toBe(false);
   });
+
+  it('accepts -state as bootable media with -fs9p and -net (copy.sh Arch profile)', () => {
+    const result = parseStartArgs([
+      '-state',
+      'arch_state.bin.zst',
+      '-fs9p',
+      'https://i.copy.sh/arch/',
+      '-net',
+      'virtio',
+      '-m',
+      '512',
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.parsed).toMatchObject({
+      state: 'arch_state.bin.zst',
+      fs9p: 'https://i.copy.sh/arch/',
+      net: 'virtio',
+      memoryMib: 512,
+    });
+  });
+
+  it('rejects non-http fs9p URLs and unknown NIC models', () => {
+    expect(parseStartArgs(['-state', 's.bin', '-fs9p', '/local/dir']).ok).toBe(false);
+    expect(parseStartArgs(['-state', 's.bin', '-net', 'e1000']).ok).toBe(false);
+  });
 });
 
 describe('extractVmName', () => {
@@ -158,9 +184,13 @@ function makeFakeEmulator(): FakeEmulator {
   return fake;
 }
 
-function makeEngine(emulator: FakeEmulator): V86Module {
+function makeEngine(
+  emulator: FakeEmulator,
+  capture?: { options?: Record<string, unknown> }
+): V86Module {
   return {
-    V86: function FakeV86() {
+    V86: function FakeV86(options: Record<string, unknown>) {
+      if (capture) capture.options = options;
       return emulator;
     } as unknown as V86Module['V86'],
     wasmModule: {} as WebAssembly.Module,
@@ -217,6 +247,47 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const ls = await cmd.execute(['ls'], makeCtx().ctx);
     expect(ls.stdout).toContain('vm0');
     expect(ls.stdout).toContain('running');
+  });
+
+  it('threads -state / -fs9p / -net into the emulator options (copy.sh Arch boot)', async () => {
+    const emulator = makeFakeEmulator();
+    const capture: { options?: Record<string, unknown> } = {};
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator, capture) });
+    const { ctx } = makeCtx({
+      ...BIOS_FILES,
+      '/workspace/arch_state.bin.zst': new Uint8Array([40, 181, 47, 253]),
+    });
+    const result = await cmd.execute(
+      [
+        'start',
+        '-state',
+        'arch_state.bin.zst',
+        '-fs9p',
+        'https://i.copy.sh/arch/',
+        '-net',
+        'virtio',
+        '-m',
+        '512',
+      ],
+      ctx
+    );
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(capture.options?.initial_state).toBeDefined();
+    expect(capture.options?.filesystem).toEqual({ baseurl: 'https://i.copy.sh/arch/' });
+    expect(capture.options?.net_device).toEqual({ type: 'virtio' });
+    expect(capture.options?.memory_size).toBe(512 * 1024 * 1024);
+    // State resumes skip BIOS staging — the snapshot carries machine state.
+    expect(capture.options?.bios).toBeUndefined();
+  });
+
+  it('boots from -state without BIOS blobs present', async () => {
+    const emulator = makeFakeEmulator();
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx } = makeCtx({ '/workspace/saved.bin': new Uint8Array([1, 2, 3]) });
+    const result = await cmd.execute(['start', '-state', 'saved.bin'], ctx);
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
   });
 
   it('surfaces the BIOS download hint when blobs are missing', async () => {

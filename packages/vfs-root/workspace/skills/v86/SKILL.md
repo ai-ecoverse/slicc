@@ -33,6 +33,20 @@ v86 stop [-n name] [--force]             # power off
 v86 state [-n name] save|load <file>     # snapshot / restore full VM state
 ```
 
+## Arch Linux (copy.sh demo image)
+
+The fastest full-Linux guest is the pre-booted Arch state image from copy.sh (the same one behind https://copy.sh/v86/?profile=archlinux). It resumes straight into a root shell — no BIOS blobs, no boot wait:
+
+```bash
+curl -o /tmp/arch_state.bin.zst https://i.copy.sh/arch_state-v3.bin.zst   # ~15 MB
+v86 start -n arch -state /tmp/arch_state.bin.zst -fs9p https://i.copy.sh/arch/ -net virtio -m 512
+v86 text -n arch                         # should show a root@localhost prompt
+v86 type -n arch "uname -a\n"
+v86 text -n arch
+```
+
+`-state` resumes a snapshot (`.zst` decompresses inside the engine), `-fs9p` attaches the network-backed 9p root the guest's files live on (fetched on demand, host must send CORS headers), and `-net virtio` matches the NIC the snapshot was saved with.
+
 VMs run in the background as ProcessManager-tracked units — `ps` shows them and `kill <pid>` powers them off. Default VM name is `vm0`; every subcommand accepts `-n <name>`. RAM defaults to 128 MiB, capped at 512.
 
 ## Interaction loop

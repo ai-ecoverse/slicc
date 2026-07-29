@@ -76,12 +76,16 @@ Boot options (QEMU-flavored):
   -cdrom <vfs-path>   ISO image          -hda <vfs-path>   Raw disk image
   -fda <vfs-path>     Floppy image       -boot <a|c|d>     Boot order
   -kernel <path> -initrd <path> -append <cmdline>          Direct Linux boot
+  -state <vfs-path>   Resume from a saved state snapshot (.zst ok)
+  -fs9p <url>         Attach a 9p network filesystem (guest root=host9p)
+  -net <ne2k|virtio>  Guest NIC model (must match a -state snapshot's NIC)
   -bios <path> -vgabios <path>  BIOS blobs (default ${DEFAULT_BIOS_DIR}/{seabios,vgabios}.bin)
   -nographic          Serial-only guest (skip VGA)
 
 Notes:
   - x86 only, no KVM: expect a fraction of native speed. Small guests
     (Alpine, FreeDOS, Buildroot Linux) work best.
+  - The copy.sh Arch Linux image boots via -state + -fs9p; see the v86 skill.
   - BIOS blobs are not bundled; download once:
       mkdir -p ${DEFAULT_BIOS_DIR}
       curl -o ${DEFAULT_BIOS_DIR}/seabios.bin https://raw.githubusercontent.com/copy/v86/master/bios/seabios.bin
@@ -105,6 +109,9 @@ export interface ParsedStartArgs {
   kernel?: string;
   initrd?: string;
   append?: string;
+  state?: string;
+  fs9p?: string;
+  net?: 'ne2k' | 'virtio';
   bios?: string;
   vgabios?: string;
   nographic: boolean;
@@ -132,6 +139,17 @@ const START_FLAG_SETTERS: Record<string, (parsed: ParsedStartArgs, v: string) =>
   '-append': (parsed, v) => setPath(parsed, 'append', v),
   '-bios': (parsed, v) => setPath(parsed, 'bios', v),
   '-vgabios': (parsed, v) => setPath(parsed, 'vgabios', v),
+  '-state': (parsed, v) => setPath(parsed, 'state', v),
+  '-fs9p': (parsed, v) => {
+    if (!/^https?:\/\//u.test(v)) return '-fs9p requires an http(s) base URL';
+    parsed.fs9p = v;
+    return null;
+  },
+  '-net': (parsed, v) => {
+    if (v !== 'ne2k' && v !== 'virtio') return '-net requires ne2k or virtio';
+    parsed.net = v;
+    return null;
+  },
   '-boot': (parsed, v) => {
     if (v !== 'a' && v !== 'c' && v !== 'd') return '-boot requires a, c, or d';
     parsed.boot = v;
@@ -147,7 +165,7 @@ function setVmName(parsed: ParsedStartArgs, v: string): string | null {
 
 function setPath(
   parsed: ParsedStartArgs,
-  key: 'cdrom' | 'hda' | 'fda' | 'kernel' | 'initrd' | 'append' | 'bios' | 'vgabios',
+  key: 'cdrom' | 'hda' | 'fda' | 'kernel' | 'initrd' | 'append' | 'bios' | 'vgabios' | 'state',
   v: string
 ): null {
   parsed[key] = v;
@@ -175,8 +193,11 @@ export function parseStartArgs(args: readonly string[]): StartParseResult {
     if (error) return { ok: false, error };
     i++;
   }
-  if (!parsed.cdrom && !parsed.hda && !parsed.fda && !parsed.kernel) {
-    return { ok: false, error: 'no bootable media (-cdrom, -hda, -fda, or -kernel required)' };
+  if (!parsed.cdrom && !parsed.hda && !parsed.fda && !parsed.kernel && !parsed.state) {
+    return {
+      ok: false,
+      error: 'no bootable media (-cdrom, -hda, -fda, -kernel, or -state required)',
+    };
   }
   return { ok: true, parsed };
 }
@@ -462,6 +483,36 @@ async function v86Version(ctx: CommandContext, deps: V86CommandDeps): Promise<Cm
 }
 
 /**
+ * Stage BIOS blobs from the VFS. Explicit flags win; otherwise the
+ * conventional /workspace/.v86/ pair. Direct-kernel boots still need
+ * seabios; `-state` resumes skip the BIOS entirely (the snapshot
+ * already contains the machine state) unless a blob is passed
+ * explicitly — same rule as the copy.sh loader.
+ */
+async function stageBios(
+  parsed: ParsedStartArgs,
+  ctx: CommandContext,
+  options: Record<string, unknown>
+): Promise<CmdResult | null> {
+  if (parsed.state && !parsed.bios && !parsed.vgabios) return null;
+  const bios = await readVfsImage(ctx, parsed.bios ?? `${DEFAULT_BIOS_DIR}/seabios.bin`, '-bios');
+  if ('exitCode' in bios)
+    return parsed.bios ? bios : fail(BIOS_MISSING_HINT.replace(/^v86: /u, ''));
+  options.bios = bios;
+  if (parsed.nographic) return null;
+  const vgabios = await readVfsImage(
+    ctx,
+    parsed.vgabios ?? `${DEFAULT_BIOS_DIR}/vgabios.bin`,
+    '-vgabios'
+  );
+  if ('exitCode' in vgabios) {
+    return parsed.vgabios ? vgabios : fail(BIOS_MISSING_HINT.replace(/^v86: /u, ''));
+  }
+  options.vga_bios = vgabios;
+  return null;
+}
+
+/**
  * Stage BIOS blobs + guest images from the VFS into v86 constructor
  * options. Returns a CmdResult error when anything is missing.
  */
@@ -470,23 +521,8 @@ async function stageBootImages(
   ctx: CommandContext,
   options: Record<string, unknown>
 ): Promise<CmdResult | null> {
-  // BIOS blobs: explicit flags win; otherwise the conventional
-  // /workspace/.v86/ pair. Direct-kernel boots still need seabios.
-  const bios = await readVfsImage(ctx, parsed.bios ?? `${DEFAULT_BIOS_DIR}/seabios.bin`, '-bios');
-  if ('exitCode' in bios)
-    return parsed.bios ? bios : fail(BIOS_MISSING_HINT.replace(/^v86: /u, ''));
-  options.bios = bios;
-  if (!parsed.nographic) {
-    const vgabios = await readVfsImage(
-      ctx,
-      parsed.vgabios ?? `${DEFAULT_BIOS_DIR}/vgabios.bin`,
-      '-vgabios'
-    );
-    if ('exitCode' in vgabios) {
-      return parsed.vgabios ? vgabios : fail(BIOS_MISSING_HINT.replace(/^v86: /u, ''));
-    }
-    options.vga_bios = vgabios;
-  }
+  const biosError = await stageBios(parsed, ctx, options);
+  if (biosError) return biosError;
 
   for (const [flag, key] of [
     ['cdrom', 'cdrom'],
@@ -503,6 +539,21 @@ async function stageBootImages(
   }
   if (parsed.append) options.cmdline = parsed.append;
   if (parsed.boot) options.boot_order = BOOT_ORDER[parsed.boot];
+
+  // `-state`: a saved snapshot (from `v86 state save` or a published
+  // copy.sh image). `.zst` payloads are detected by magic and
+  // decompressed inside the engine wasm — pass the bytes through.
+  if (parsed.state) {
+    const state = await readVfsImage(ctx, parsed.state, '-state');
+    if ('exitCode' in state) return state;
+    options.initial_state = state;
+  }
+  // `-fs9p`: network-backed 9p root (copy.sh-style baseurl trees).
+  // Guest files are fetched on demand; the host must send CORS headers.
+  if (parsed.fs9p) options.filesystem = { baseurl: parsed.fs9p };
+  // `-net`: NIC model. A `-state` snapshot only resumes cleanly with
+  // the same device set it was saved with (copy.sh Arch uses virtio).
+  if (parsed.net) options.net_device = { type: parsed.net };
   return null;
 }
 
