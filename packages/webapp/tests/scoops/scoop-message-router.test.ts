@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isAfterMessageWatermark, parseMessageWatermark } from '../../src/scoops/db.js';
 import type { ScoopMessageRouterDeps } from '../../src/scoops/scoop-message-router.js';
-import { ScoopMessageRouter } from '../../src/scoops/scoop-message-router.js';
+import {
+  SCOOP_QUEUE_DEBOUNCE_MS,
+  SCOOP_QUEUE_MAX_COALESCE_MS,
+  ScoopMessageRouter,
+} from '../../src/scoops/scoop-message-router.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
 
 /** Yield to the microtask/timer queue so concurrent turns genuinely interleave. */
@@ -20,7 +24,7 @@ function makeScoop(jid: string): RegisteredScoop {
   };
 }
 
-function makeMessage(jid: string, i: number): ChannelMessage {
+function makeMessage(jid: string, i: number, channel = 'chat'): ChannelMessage {
   return {
     id: `id-${jid}-${i}`,
     chatJid: jid,
@@ -29,7 +33,7 @@ function makeMessage(jid: string, i: number): ChannelMessage {
     content: `MSG_${String(i).padStart(3, '0')}`,
     timestamp: new Date(Date.UTC(2026, 0, 1) + i).toISOString(),
     fromAssistant: false,
-    channel: 'chat',
+    channel,
   };
 }
 
@@ -41,6 +45,7 @@ interface Harness {
 
 function makeHarness(opts?: {
   failFirstSend?: boolean;
+  immediateIO?: boolean;
   jids?: string[];
   onSend?: () => Promise<void>;
 }): Harness {
@@ -57,6 +62,7 @@ function makeHarness(opts?: {
   const probe = { max: 0 };
   let active = 0;
   let sendCount = 0;
+  const pause = opts?.immediateIO ? async () => {} : tick;
 
   const deps: ScoopMessageRouterDeps = {
     getScoops: () => scoops,
@@ -64,7 +70,7 @@ function makeHarness(opts?: {
     getContexts: () => new Map(),
     createScoopTab: async () => {},
     sendPrompt: async (_jid, text) => {
-      await tick();
+      await pause();
       if (opts?.onSend) await opts.onSend();
       if (opts?.failFirstSend && sendCount++ === 0) throw new Error('boom');
       sends.push(text);
@@ -75,7 +81,7 @@ function makeHarness(opts?: {
     resetCostTracker: () => {},
     db: {
       saveMessage: async (msg) => {
-        await tick();
+        await pause();
         store.push(msg);
       },
       deleteMessage: async () => {},
@@ -84,7 +90,7 @@ function makeHarness(opts?: {
       getMessagesSince: async (jid, since, excludeName) => {
         active += 1;
         probe.max = Math.max(probe.max, active);
-        await tick();
+        await pause();
         const wm = parseMessageWatermark(since);
         const result = store
           .filter(
@@ -97,7 +103,7 @@ function makeHarness(opts?: {
       },
       setState: async () => {},
     },
-    isExternalLickChannel: () => false,
+    isExternalLickChannel: (channel) => channel === 'webhook',
   };
 
   const router = new ScoopMessageRouter(deps);
@@ -196,5 +202,191 @@ describe('ScoopMessageRouter same-millisecond high-water mark', () => {
       const count = sends.filter((p) => p.includes(token)).length;
       expect(count, `${token} appeared in ${count} payloads`).toBe(1);
     }
+  });
+});
+
+describe('ScoopMessageRouter debounce', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  async function queueLicks(router: ScoopMessageRouter, messages: ChannelMessage[]) {
+    const pending = Promise.all(messages.map((message) => router.handleMessage(message)));
+    await vi.advanceTimersByTimeAsync(0);
+    return { done: pending };
+  }
+
+  async function flushDebounce(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(SCOOP_QUEUE_DEBOUNCE_MS);
+  }
+
+  it('coalesces a burst into one trailing prompt', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    const messages = Array.from({ length: 10 }, (_, i) => makeMessage('cone', i, 'webhook'));
+
+    const { done } = await queueLicks(router, messages);
+    expect(sends).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(SCOOP_QUEUE_DEBOUNCE_MS - 1);
+    expect(sends).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+
+    expect(sends).toHaveLength(1);
+    for (let i = 0; i < messages.length; i += 1) {
+      expect(sends[0]).toContain(`MSG_${String(i).padStart(3, '0')}`);
+    }
+  });
+
+  it('dispatches an isolated message after one window', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+
+    const { done } = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await done;
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+  });
+
+  it('keeps trailing windows isolated per scoop', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true, jids: ['coneA', 'coneB'] });
+
+    const first = await queueLicks(router, [makeMessage('coneA', 0, 'webhook')]);
+    await vi.advanceTimersByTimeAsync(500);
+    const second = await queueLicks(router, [makeMessage('coneB', 1, 'webhook')]);
+    await vi.advanceTimersByTimeAsync(400);
+    const third = await queueLicks(router, [makeMessage('coneA', 2, 'webhook')]);
+    await vi.advanceTimersByTimeAsync(600);
+    await second.done;
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_001');
+    await vi.advanceTimersByTimeAsync(400);
+    await Promise.all([first.done, third.done]);
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toContain('MSG_000');
+    expect(sends[1]).toContain('MSG_002');
+  });
+
+  it('does not let the poll split an active trailing window', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    router.startMessageLoop();
+    await vi.advanceTimersByTimeAsync(1500);
+    const first = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sends).toEqual([]);
+    await vi.advanceTimersByTimeAsync(200);
+    const second = await queueLicks(router, [makeMessage('cone', 1, 'webhook')]);
+    await vi.advanceTimersByTimeAsync(SCOOP_QUEUE_DEBOUNCE_MS);
+    await Promise.all([first.done, second.done]);
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+    expect(sends[0]).toContain('MSG_001');
+    router.stopMessageLoop();
+  });
+
+  it('bounds a sustained lick stream by the max-wait deadline', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    router.startMessageLoop();
+    const pending = [await queueLicks(router, [makeMessage('cone', 0, 'webhook')])];
+    await vi.advanceTimersByTimeAsync(800);
+    pending.push(await queueLicks(router, [makeMessage('cone', 1, 'webhook')]));
+    await vi.advanceTimersByTimeAsync(800);
+    pending.push(await queueLicks(router, [makeMessage('cone', 2, 'webhook')]));
+    await vi.advanceTimersByTimeAsync(800);
+    pending.push(await queueLicks(router, [makeMessage('cone', 3, 'webhook')]));
+
+    await vi.advanceTimersByTimeAsync(SCOOP_QUEUE_MAX_COALESCE_MS - 2401);
+    expect(sends).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all(pending.map(({ done }) => done));
+
+    expect(sends).toHaveLength(1);
+    router.stopMessageLoop();
+  });
+
+  it('delivers web messages immediately without a debounce timer', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+
+    await router.handleMessage(makeMessage('cone', 0, 'web'));
+
+    expect(sends).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('lets an immediate web message flush a pending lick batch', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await vi.advanceTimersByTimeAsync(500);
+
+    await router.handleMessage(makeMessage('cone', 1, 'web'));
+    await lick.done;
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('MSG_000');
+    expect(sends[0]).toContain('MSG_001');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('propagates immediate web-message send failures', async () => {
+    const { router } = makeHarness({ failFirstSend: true, immediateIO: true });
+
+    await expect(router.handleMessage(makeMessage('cone', 0, 'web'))).rejects.toThrow('boom');
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps debounced delivery awaitable and propagates send failures', async () => {
+    const { router } = makeHarness({ failFirstSend: true, immediateIO: true });
+    const { done } = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    const rejected = expect(done).rejects.toThrow('boom');
+
+    await flushDebounce();
+
+    await rejected;
+  });
+
+  const cleanupCases: Array<[string, (router: ScoopMessageRouter) => void | Promise<void>]> = [
+    ['forgetScoop', (router) => router.forgetScoop('cone')],
+    ['clearScoopMessages', (router) => router.clearScoopMessages('cone', undefined)],
+    ['clearAllMessages', (router) => router.clearAllMessages()],
+    ['clearQueuedMessages', (router) => router.clearQueuedMessages('cone')],
+    ['stopMessageLoop', (router) => router.stopMessageLoop()],
+  ];
+
+  it.each(cleanupCases)('cancels pending dispatch on %s', async (_name, cleanup) => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    const { done } = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await cleanup(router);
+    expect(vi.getTimerCount()).toBe(0);
+    await done;
+    await flushDebounce();
+
+    expect(sends).toEqual([]);
+  });
+
+  it('cancels pending dispatch when the final queued message is deleted', async () => {
+    const { router, sends } = makeHarness({ immediateIO: true });
+    const message = makeMessage('cone', 0, 'webhook');
+    const { done } = await queueLicks(router, [message]);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await router.deleteQueuedMessage('cone', message.id);
+    expect(vi.getTimerCount()).toBe(0);
+    await done;
+    await flushDebounce();
+
+    expect(sends).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

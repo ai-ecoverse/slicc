@@ -20,6 +20,20 @@ import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
 
 const log = createLogger('scoop-message-router');
+export const SCOOP_QUEUE_DEBOUNCE_MS = 1000;
+export const SCOOP_QUEUE_MAX_COALESCE_MS = 3000;
+
+interface DebounceWaiter {
+  messageId: string;
+  resolve(): void;
+  reject(error: unknown): void;
+}
+
+interface DebounceState {
+  startedAt: number;
+  timer?: ReturnType<typeof setTimeout>;
+  waiters: DebounceWaiter[];
+}
 
 export interface ScoopMessageRouterDeps {
   /** Live snapshot of registered scoops; the router reads `isCone`, `assistantLabel`, `folder`, `name`, `trigger`, `requiresTrigger`. */
@@ -64,6 +78,7 @@ export class ScoopMessageRouter {
   private messageQueues: Map<string, ChannelMessage[]> = new Map();
   private lastAgentTimestamp: Map<string, string> = new Map();
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private debounceStates: Map<string, DebounceState> = new Map();
   /**
    * Per-jid re-entrancy guard for {@link processScoopQueue}. While a run is in
    * flight for a jid, its entry lives here; a re-entrant call sets `rerun` so
@@ -92,6 +107,7 @@ export class ScoopMessageRouter {
 
   /** Drop all per-scoop state on unregister. */
   forgetScoop(jid: string): void {
+    this.cancelDebounce(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
   }
@@ -217,9 +233,82 @@ export class ScoopMessageRouter {
         log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
       }
     }
-    if (tab?.status === 'ready') {
-      await this.processScoopQueue(message.chatJid);
+    if (tab?.status !== 'ready') return;
+
+    if (this.deps.isExternalLickChannel(message.channel)) {
+      await this.scheduleScoopQueue(message.chatJid, message.id);
+      return;
     }
+
+    await this.flushScoopQueue(message.chatJid);
+  }
+
+  /** Restart one scoop's trailing window, capped so sustained licks cannot starve. */
+  private scheduleScoopQueue(jid: string, messageId: string): Promise<void> {
+    const state = this.debounceStates.get(jid) ?? {
+      startedAt: Date.now(),
+      waiters: [],
+    };
+    if (state.timer !== undefined) clearTimeout(state.timer);
+
+    const done = new Promise<void>((resolve, reject) => {
+      state.waiters.push({ messageId, resolve, reject });
+    });
+    const remainingMaxWait = Math.max(
+      0,
+      SCOOP_QUEUE_MAX_COALESCE_MS - (Date.now() - state.startedAt)
+    );
+    const delay = Math.min(SCOOP_QUEUE_DEBOUNCE_MS, remainingMaxWait);
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      this.flushScoopQueue(jid).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('Debounced message queue processing failed', { jid, error: message });
+        this.deps.onError(jid, `Queue processing failed: ${message}`);
+      });
+    }, delay);
+    this.debounceStates.set(jid, state);
+    return done;
+  }
+
+  /** Drain now and settle every debounced caller whose batch was consumed. */
+  private async flushScoopQueue(jid: string): Promise<void> {
+    const state = this.takeDebounce(jid);
+    try {
+      await this.processScoopQueue(jid);
+      for (const waiter of state?.waiters ?? []) waiter.resolve();
+    } catch (err) {
+      for (const waiter of state?.waiters ?? []) waiter.reject(err);
+      throw err;
+    }
+  }
+
+  private takeDebounce(jid: string): DebounceState | undefined {
+    const state = this.debounceStates.get(jid);
+    if (state?.timer !== undefined) clearTimeout(state.timer);
+    this.debounceStates.delete(jid);
+    return state;
+  }
+
+  private cancelDebounce(jid: string): void {
+    const state = this.takeDebounce(jid);
+    for (const waiter of state?.waiters ?? []) waiter.resolve();
+  }
+
+  private cancelDebounces(): void {
+    for (const jid of this.debounceStates.keys()) this.cancelDebounce(jid);
+  }
+
+  private cancelDebounceWaiter(jid: string, messageId: string): void {
+    const state = this.debounceStates.get(jid);
+    if (!state) return;
+    const remaining: DebounceWaiter[] = [];
+    for (const waiter of state.waiters) {
+      if (waiter.messageId === messageId) waiter.resolve();
+      else remaining.push(waiter);
+    }
+    state.waiters = remaining;
+    if (remaining.length === 0) this.cancelDebounce(jid);
   }
 
   /**
@@ -372,7 +461,7 @@ export class ScoopMessageRouter {
     this.pollInterval = setInterval(() => {
       for (const jid of this.deps.getScoops().keys()) {
         const tab = this.deps.getTabs().get(jid);
-        if (tab?.status === 'ready') {
+        if (tab?.status === 'ready' && !this.debounceStates.has(jid)) {
           this.processScoopQueue(jid).catch((err) => {
             const message = err instanceof Error ? err.message : String(err);
             log.error('Message queue processing failed', { jid, error: message });
@@ -385,6 +474,7 @@ export class ScoopMessageRouter {
 
   /** Stop the message polling loop. */
   stopMessageLoop(): void {
+    this.cancelDebounces();
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
@@ -398,6 +488,7 @@ export class ScoopMessageRouter {
    * cleared too.
    */
   async clearScoopMessages(jid: string, context: ScoopContext | undefined): Promise<void> {
+    this.cancelDebounce(jid);
     if (context) {
       context.clearMessages();
       const sessionStore = this.deps.getSessionStore();
@@ -424,6 +515,7 @@ export class ScoopMessageRouter {
 
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
+    this.cancelDebounces();
     await this.deps.db.clearAllMessages();
     const sessionStore = this.deps.getSessionStore();
     if (sessionStore) {
@@ -446,6 +538,7 @@ export class ScoopMessageRouter {
 
   /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
   async clearQueuedMessages(jid: string): Promise<void> {
+    this.cancelDebounce(jid);
     const queue = this.messageQueues.get(jid);
     if (queue && queue.length > 0) {
       for (const msg of queue) {
@@ -462,6 +555,7 @@ export class ScoopMessageRouter {
       const idx = queue.findIndex((m) => m.id === messageId);
       if (idx !== -1) queue.splice(idx, 1);
     }
+    this.cancelDebounceWaiter(jid, messageId);
     await this.deps.db.deleteMessage(messageId);
   }
 }
