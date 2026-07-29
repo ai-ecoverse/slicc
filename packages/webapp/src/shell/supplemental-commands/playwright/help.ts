@@ -36,12 +36,14 @@ Commands:
   click <ref> [--modifiers=Alt,Control,...] Click element by ref (e.g. e5)
   type <text> [--submit] Type text into focused element
   fill <ref> <text> [--submit] Fill an input by ref with text
-  snapshot [target] [--no-iframes] [--depth=N] [--boxes] Print accessibility tree with refs
-  frames                 List all frames (iframes) in the current tab
+  snapshot [target] [--frame=<frameId>] [--no-iframes] [--depth=N] [--boxes]
+                         Print the tab tree, or only the selected frame subtree
+  frames                 List frame IDs for --frame (frame IDs are not valid --tab IDs)
   screenshot [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
-  eval <expression> [--filename=path] Evaluate JavaScript in tab (accepts top-level await/return)
+  eval <expression> [--frame=<frameId>] [--filename=path]
+                         Evaluate JavaScript in tab or frame (accepts top-level await/return)
   dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref
   hover <ref>            Hover over element by ref
   select <ref> <val>     Select value in <select> element

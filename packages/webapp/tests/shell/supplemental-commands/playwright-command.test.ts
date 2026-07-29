@@ -2080,6 +2080,41 @@ describe('playwright-cli unknown command', () => {
   });
 });
 
+describe('playwright-cli frame ID targeting errors', () => {
+  it('explains that a frame ID passed to --tab belongs in --frame', async () => {
+    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      if (targetId === 'frame-1') {
+        throw new Error('CDP error: No target with given id found (-32602)');
+      }
+      return fn('session-1');
+    });
+    const browser = createMockBrowser({
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([{ targetId: 'tab-1', title: 'Page', url: 'https://example.com' }]),
+      getFrameTree: vi.fn().mockResolvedValue([
+        { frameId: 'main', url: 'https://example.com', name: '' },
+        {
+          frameId: 'frame-1',
+          parentFrameId: 'main',
+          url: 'https://example.com/frame',
+          name: '',
+        },
+      ]),
+      withTab: withTab as BrowserAPI['withTab'],
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser, createMockFS());
+
+    const result = await cmd.execute(['eval', '--tab=frame-1', 'location.href'], mockCtx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('is a frame ID, not a tab target ID');
+    expect(result.stderr).toContain('--tab=tab-1 --frame=frame-1');
+    expect(result.stderr).toContain('playwright-cli frames --tab=tab-1');
+    expect(result.stderr).not.toContain('CDP error');
+  });
+});
+
 describe('playwright-cli session history logging', () => {
   let browser: ReturnType<typeof createMockBrowser>;
   let fs: ReturnType<typeof createMockFS>;

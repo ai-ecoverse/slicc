@@ -40,9 +40,16 @@ playwright-cli snapshot --tab=E9A3F
 - `tab-new` / `open` return the new tab's targetId — capture it for subsequent commands.
 - Use `--tab=<targetId>` on ALL commands that operate on a tab.
 
+## Frame IDs
+
+- `frames --tab=<targetId>` lists frame IDs. A frame ID is not a tab target ID; never pass it to `--tab`.
+- Use `--tab=<targetId> --frame=<frameId>` with `eval` or `snapshot` to target a child frame, including cross-origin frames.
+- A frame-scoped `snapshot` prints only that frame's accessibility subtree. Interaction commands continue to use the frame-prefixed refs from snapshots; do not pass `--frame` to them.
+
 ## Common Failure Modes
 
 - `--tab <targetId> is required` — you forgot `--tab=<id>`. Run `tab-list` to get IDs.
+- `is a frame ID, not a tab target ID` — keep the owning tab's targetId in `--tab` and pass the frame ID with `--frame`.
 - `No snapshot available` — run `snapshot --tab=<id>` before using refs.
 - Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, or reloads.
 
@@ -64,10 +71,10 @@ playwright-cli tab-new [url] [--foreground]                       # Same as open
 playwright-cli tab-close --tab=<id>                               # Close tab
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
-playwright-cli snapshot --tab=<id> [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Accessibility tree with refs
-playwright-cli eval --tab=<id> <expression> [--filename=path]     # Evaluate JS, incl. top-level await/return (save result to file if --filename set)
+playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Tab tree or one frame subtree
+playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return
 playwright-cli eval-file --tab=<id> <vfs-path>                    # Evaluate JS from a VFS file (top-level await/return supported)
-playwright-cli frames --tab=<id>                                  # List iframes in the page
+playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```
 
