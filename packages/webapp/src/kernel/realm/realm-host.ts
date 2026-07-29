@@ -155,11 +155,13 @@ export function attachRealmHost(
   // page-side `inputreport` listener (DOD: "no leaked subscriptions
   // on realm teardown").
   const hidSubscriptions = new Map<string, () => void | Promise<void>>();
-  // Mint a per-realm sync-fs capability token only when the bridge is enabled
+  // Mint a per-realm sync capability token only when the bridge is enabled
   // (see RealmHostOptions.syncFsBridgeEnabled). Bound to this realm's gated
-  // fs + cwd; revoked in dispose() so a dead realm's scope can't be reused.
+  // fs + exec + cwd; revoked in dispose() so a dead realm's scope can't be
+  // reused. `exec` backs the synchronous `child_process` channel and carries
+  // the same sudo command guard as the async `exec` RPC.
   const syncFsToken = opts.syncFsBridgeEnabled
-    ? mintSyncFsToken({ fs: ctx.fs, cwd: ctx.cwd })
+    ? mintSyncFsToken({ fs: ctx.fs, ...(ctx.exec ? { exec: ctx.exec } : {}), cwd: ctx.cwd })
     : undefined;
   let disposed = false;
   const pushEvent = (msg: RealmEventMsg, transfer: Transferable[] = []): void => {

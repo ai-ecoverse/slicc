@@ -6,7 +6,7 @@
  */
 import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
-import type { SyncFsXhrBridge } from './sync-fs-xhr-bridge.js';
+import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 
 /** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
 export function createFsBridge(
@@ -185,6 +185,114 @@ function syncFsErr(code: string, resolved: string, verb = ''): Error & { code: s
   });
 }
 
+/**
+ * Cache-first removal with a live-bridge fallback; `false` → genuinely absent,
+ * so the caller can raise Node's `ENOENT`.
+ *
+ * A cache miss is not proof of absence once `execSync` has invalidated the
+ * cache (`sync-exec-xhr-bridge`) or the file post-dates the boot snapshot — the
+ * live VFS may still hold it, and a cache-only delete would leave it behind
+ * while `unlinkSync` reported `ENOENT`. On a miss this deletes live, then
+ * tombstones so later reads don't resurrect it through the bridge.
+ *
+ * Module-level rather than a closure inside `createSyncFsBridge` only to keep
+ * that factory under the function-length lint gate.
+ */
+function removeWithBridgeFallback(
+  syncFs: SyncFsCache,
+  bridge: SyncFsXhrBridge | undefined,
+  resolved: string,
+  opts: { recursive?: boolean; requireFile?: boolean } = {}
+): boolean {
+  const recursive = opts.recursive === true;
+  try {
+    if (opts.requireFile) syncFs.unlink(resolved);
+    else syncFs.rm(resolved, recursive);
+    return true;
+  } catch (err) {
+    // Only a genuine miss falls through — EISDIR / ENOTEMPTY are real Node
+    // errors the caller must see.
+    if ((err as { code?: string })?.code !== 'ENOENT') throw err;
+  }
+  const mutating = bridge as SyncFsXhrMutatingBridge | undefined;
+  if (!mutating?.rm || syncFs.isTombstoned(resolved)) return false;
+  try {
+    if (!mutating.exists(resolved)) return false;
+  } catch {
+    return false;
+  }
+  mutating.rm(resolved);
+  syncFs.markRemoved(resolved, recursive);
+  return true;
+}
+
+/** The `createSyncFsBridge` internals the removal ops need. See {@link createRemovalOps}. */
+interface RemovalDeps {
+  syncFs: SyncFsCache;
+  bridge: SyncFsXhrBridge | undefined;
+  resolve: (p: string) => string;
+  existsResolved: (resolved: string) => boolean;
+  statResolved: (resolved: string) => { isFile: boolean; isDirectory: boolean; size: number };
+  readBytes: (resolved: string) => Uint8Array;
+  writeThrough: (resolved: string, bytes: Uint8Array) => void;
+}
+
+/**
+ * The four removal ops, split out of `createSyncFsBridge` purely to keep that
+ * factory under the function-length lint gate. All of them go through
+ * {@link removeWithBridgeFallback} so a live-only path is really deleted.
+ */
+function createRemovalOps(deps: RemovalDeps) {
+  const { syncFs, bridge, resolve, existsResolved, statResolved, readBytes, writeThrough } = deps;
+  const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
+    removeWithBridgeFallback(syncFs, bridge, resolved, opts);
+  return {
+    rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
+      const resolved = resolve(path);
+      // `existsResolved` (not `syncFs.exists`): with `force`, a live-only path
+      // must still be removed rather than treated as already gone.
+      if (opts?.force && !existsResolved(resolved)) return;
+      if (!remove(resolved, { recursive: opts?.recursive === true }) && !opts?.force) {
+        throw syncFsErr('ENOENT', resolved, 'rm');
+      }
+    },
+    rmdirSync(path: string, opts?: { recursive?: boolean }): void {
+      const resolved = resolve(path);
+      // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
+      // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
+      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
+        throw syncFsErr('ENOTDIR', resolved, 'rmdir');
+      }
+      if (!remove(resolved, { recursive: opts?.recursive === true })) {
+        throw syncFsErr('ENOENT', resolved, 'rmdir');
+      }
+    },
+    unlinkSync(path: string): void {
+      const resolved = resolve(path);
+      if (!remove(resolved, { requireFile: true })) throw syncFsErr('ENOENT', resolved, 'unlink');
+    },
+    renameSync(oldPath: string, newPath: string): void {
+      const src = resolve(oldPath);
+      const dest = resolve(newPath);
+      try {
+        syncFs.rename(src, dest);
+        return;
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'ENOENT') throw err;
+      }
+      // Cache miss on the source: it may still be live (post-`execSync`
+      // invalidate, or created after the snapshot). Copy-then-remove over the
+      // bridge — the sync surface has no live `rename` op, and a cache-only
+      // rename would lose the file. Directories are out of scope: a recursive
+      // live walk on a blocking XHR is prohibitively expensive.
+      if (!bridge || syncFs.isTombstoned(src)) throw syncFsErr('ENOENT', src, 'rename');
+      if (statResolved(src).isDirectory) throw syncFsErr('EISDIR', src, 'rename');
+      writeThrough(dest, readBytes(src));
+      if (!remove(src, { requireFile: true })) throw syncFsErr('ENOENT', src, 'rename');
+    },
+  };
+}
+
 /** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
 function toBytes(data: unknown): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
@@ -215,9 +323,13 @@ function toBytes(data: unknown): Uint8Array {
  * (commitWrite advances the mutation baseline so it is not double-flushed).
  * The snapshot cache stays a best-effort fast path for the hot working set;
  * reads served from a cache hit skip the bridge round-trip.
- * Mutating metadata ops (mkdir/rm/rename) stay cache-backed — the exec
+ * Mutating metadata ops (mkdir/rm/rename) are cache-backed on a hit — the exec
  * bridge's flush-before-exec pushes their pending cache mutations to `ctx.fs`
- * so a subprocess sees them. Read-only metadata ops (stat/exists/readdir)
+ * so a subprocess sees them — but the REMOVALS (`rmSync` / `rmdirSync` /
+ * `unlinkSync` / `renameSync`) fall through to the live bridge on a miss. A
+ * miss is not proof of absence once `execSync` has invalidated the cache or the
+ * file post-dates the snapshot; a cache-only delete would leave the live file
+ * behind while reporting `ENOENT`. Read-only metadata ops (stat/exists/readdir)
  * fall through to `bridge` on a cache miss (phase-2), so a file created after
  * the boot snapshot or beyond the entry cap is discovered live rather than
  * silently reported absent. A path deleted in-script keeps its tombstone: the
@@ -318,6 +430,15 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
   }
 
   return {
+    ...createRemovalOps({
+      syncFs,
+      bridge,
+      resolve,
+      existsResolved,
+      statResolved,
+      readBytes,
+      writeThrough,
+    }),
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
       const bytes = readBytes(resolve(path));
@@ -382,20 +503,6 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     readdirSync(path: string): string[] {
       return readdirResolved(resolve(path));
     },
-    rmSync(path: string, opts?: { recursive?: boolean; force?: boolean }): void {
-      const resolved = resolve(path);
-      if (opts?.force && !syncFs.exists(resolved)) return;
-      syncFs.rm(resolved, opts?.recursive);
-    },
-    rmdirSync(path: string, opts?: { recursive?: boolean }): void {
-      const resolved = resolve(path);
-      // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
-      // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
-      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
-        throw syncFsErr('ENOTDIR', resolved, 'rmdir');
-      }
-      syncFs.rm(resolved, opts?.recursive);
-    },
     copyFileSync(src: string, dest: string): void {
       // Bridge-aware copy (see copyTree): reading via `readBytes` + `writeThrough`
       // copies an over-cap or live-only (post-snapshot) source correctly, instead
@@ -412,12 +519,6 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     },
     mkdtempSync(prefix: string): string {
       return syncFs.mkdtemp(resolve(prefix));
-    },
-    unlinkSync(path: string): void {
-      syncFs.unlink(resolve(path));
-    },
-    renameSync(oldPath: string, newPath: string): void {
-      syncFs.rename(resolve(oldPath), resolve(newPath));
     },
   };
 }

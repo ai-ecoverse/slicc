@@ -1709,9 +1709,12 @@ export const nodeStream = {
 // exec pipeline. `spawn`'s `.stdout` / `.stderr` are the `nodeStream` Readable
 // stubs, each emitting a single `'data'` chunk then `'end'`; the `ChildProcess`
 // is an EventEmitter that fires `'exit'` / `'close'`. The sync forms
-// (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — just-bash has
-// no synchronous or long-lived process model. Because the shim needs the
-// per-realm `exec` bridge it is a FACTORY (unlike the static `node*` shims);
+// (`execSync` / `execFileSync` / `spawnSync`) run on the SEPARATE synchronous
+// exec bridge (blocking sync-XHR → SW → kernel responder), which is available
+// only when the realm has one — a float with no controlling Service Worker gets
+// a throw naming the async escape hatch instead. `fork` always throws:
+// just-bash has no long-lived process model. Because the shim needs the
+// per-realm bridges it is a FACTORY (unlike the static `node*` shims);
 // `js-realm-shared.ts` builds one instance per realm and `realm-module-system.ts`
 // serves it from `resolveServedBuiltin`.
 // ---------------------------------------------------------------------------
@@ -1741,14 +1744,41 @@ export interface CpExecBridge {
   start(commandOrArgv: string | string[], opts?: CpExecStartOptions): CpExecHandle;
 }
 
+/**
+ * Structural slice of the SYNCHRONOUS exec bridge (`sync-exec-xhr-bridge.ts`)
+ * the sync forms need. Present only when the realm's SW sync bridge is enabled;
+ * absent → the sync forms throw with an actionable message.
+ */
+export interface CpSyncExecBridge {
+  run(
+    command: string | string[],
+    opts?: { args?: string[]; input?: string; timeout?: number }
+  ): CpExecResult;
+}
+
 interface CpOptions {
   encoding?: string | null;
   input?: string | ArrayBufferView;
   shell?: boolean | string;
+  /** Milliseconds before the command is aborted (sync forms). */
+  timeout?: number;
+  /** `spawnSync`-family: `pipe` (default) or `inherit`-alike; unused, accepted for parity. */
+  stdio?: unknown;
 }
 
 type CpChunk = string | Buffer;
 type CpExecCallback = (error: Error | null, stdout: CpChunk, stderr: CpChunk) => void;
+
+/** `spawnSync`'s never-throws return shape. */
+export interface CpSpawnSyncResult {
+  pid: number;
+  status: number | null;
+  signal: string | null;
+  stdout: CpChunk;
+  stderr: CpChunk;
+  output: Array<CpChunk | null>;
+  error?: Error;
+}
 
 export interface NodeChildProcess {
   exec(
@@ -1763,9 +1793,9 @@ export interface NodeChildProcess {
     callback?: CpExecCallback
   ): ChildProcess;
   spawn(command: string, args?: string[] | CpOptions, options?: CpOptions): ChildProcess;
-  execSync(...args: unknown[]): never;
-  spawnSync(...args: unknown[]): never;
-  execFileSync(...args: unknown[]): never;
+  execSync(command: string, options?: CpOptions): CpChunk;
+  execFileSync(file: string, args?: string[] | CpOptions, options?: CpOptions): CpChunk;
+  spawnSync(command: string, args?: string[] | CpOptions, options?: CpOptions): CpSpawnSyncResult;
   fork(...args: unknown[]): never;
   ChildProcess: typeof ChildProcess;
 }
@@ -1876,6 +1906,137 @@ class ChildProcess extends EventEmitter {
 }
 
 /**
+ * Build the three synchronous forms over the blocking exec bridge. Kept out of
+ * {@link createNodeChildProcess} because the two families share nothing but the
+ * bridge: the async forms are callback/stream-shaped, these are blocking and
+ * follow Node's per-form return/throw contracts.
+ *
+ * Node defaults the sync forms to Buffer output (unlike `exec`, whose callback
+ * defaults to utf8), and splits the failure contract: `execSync` /
+ * `execFileSync` throw on a non-zero exit, `spawnSync` never throws and reports
+ * on `.status` / `.error`.
+ */
+function createCpSyncForms(
+  syncExec: CpSyncExecBridge | undefined
+): Pick<NodeChildProcess, 'execSync' | 'execFileSync' | 'spawnSync'> {
+  /**
+   * Run one command, or throw the no-bridge error. The sync forms need the SW
+   * sync bridge (a page-confirmed Service Worker controller); on a float that
+   * has none — an extension follower, an in-process test, or a boot before SW
+   * control — there is no way to block a realm worker on a host round-trip, so
+   * they fail with a message that names the async escape hatch.
+   */
+  const runSync = (
+    name: string,
+    command: string | string[],
+    opts: { input?: string; timeout?: number }
+  ): CpExecResult => {
+    if (!syncExec) {
+      throw new Error(
+        `child_process.${name} is not available in this browser realm ` +
+          '(no synchronous bridge — the page has no controlling Service Worker). ' +
+          `Use the async form instead: await promisify(${name.replace(/Sync$/, '')})(…).`
+      );
+    }
+    return syncExec.run(command, opts);
+  };
+
+  const runOptions = (options: CpOptions): { input?: string; timeout?: number } => ({
+    ...(options.input !== undefined ? { input: cpChunkToString(options.input) } : {}),
+    ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+  });
+
+  /** The shared `execSync` / `execFileSync` throw-on-non-zero-exit contract. */
+  const throwingSync = (
+    name: string,
+    command: string | string[],
+    label: string,
+    options: CpOptions
+  ): CpChunk => {
+    const encoding = options.encoding === undefined ? 'buffer' : options.encoding;
+    const result = runSync(name, command, runOptions(options));
+    const stdout = cpEncodeChunk(result.stdout, encoding);
+    const stderr = cpEncodeChunk(result.stderr, encoding);
+    if (result.exitCode === 0) return stdout;
+    throw Object.assign(new Error(`Command failed: ${label}\n${result.stderr}`), {
+      status: result.exitCode,
+      signal: null,
+      stdout,
+      stderr,
+      output: [null, stdout, stderr],
+      pid: nextCpPid++,
+    });
+  };
+
+  /** `(file, args?, options?)` / `(command, args?, options?)` normalization. */
+  const splitArgs = (
+    argsOrOptions?: string[] | CpOptions,
+    maybeOptions?: CpOptions
+  ): { args: string[]; options: CpOptions } => ({
+    args: Array.isArray(argsOrOptions) ? argsOrOptions : [],
+    options: (Array.isArray(argsOrOptions) ? maybeOptions : argsOrOptions) ?? {},
+  });
+
+  return {
+    execSync: (command: string, options: CpOptions = {}): CpChunk =>
+      throwingSync('execSync', command, command, options),
+
+    execFileSync: (
+      file: string,
+      argsOrOptions?: string[] | CpOptions,
+      maybeOptions?: CpOptions
+    ): CpChunk => {
+      const { args, options } = splitArgs(argsOrOptions, maybeOptions);
+      // Shell-free argv form — matches `execFile`'s no-shell semantics.
+      const argv = [file, ...args];
+      return throwingSync('execFileSync', argv, argv.join(' '), options);
+    },
+
+    spawnSync: (
+      command: string,
+      argsOrOptions?: string[] | CpOptions,
+      maybeOptions?: CpOptions
+    ): CpSpawnSyncResult => {
+      const { args, options } = splitArgs(argsOrOptions, maybeOptions);
+      const encoding = options.encoding === undefined ? 'buffer' : options.encoding;
+      const pid = nextCpPid++;
+      // Default is shell-free (argv form); `shell:true` runs the joined string —
+      // mirrors the async `spawn`.
+      const commandOrArgv: string | string[] = options.shell
+        ? `${command}${args.length ? ` ${args.join(' ')}` : ''}`
+        : [command, ...args];
+      let result: CpExecResult;
+      try {
+        result = runSync('spawnSync', commandOrArgv, runOptions(options));
+      } catch (err) {
+        // spawnSync NEVER throws — a transport / no-bridge failure surfaces on
+        // `.error` with a null status, exactly as it does for ENOENT in Node.
+        const empty = cpEncodeChunk('', encoding);
+        return {
+          pid,
+          status: null,
+          signal: null,
+          stdout: empty,
+          stderr: empty,
+          output: [null, empty, empty],
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+      }
+      const stdout = cpEncodeChunk(result.stdout, encoding);
+      const stderr = cpEncodeChunk(result.stderr, encoding);
+      return {
+        pid,
+        status: result.exitCode,
+        signal: null,
+        stdout,
+        stderr,
+        output: [null, stdout, stderr],
+      };
+    },
+  };
+}
+
+/**
  * Build a per-realm `child_process` shim over the supplied `exec` bridge. Each
  * of `exec` / `execFile` / `spawn` allocates one `exec.start` handle and
  * auto-launches it on the next microtask so synchronous `stdin.write` / `.end`
@@ -1883,7 +2044,10 @@ class ChildProcess extends EventEmitter {
  * no-op once the caller ended stdin). `exec` / `execFile` also carry a
  * `util.promisify.custom` implementation resolving `{ stdout, stderr }`.
  */
-export function createNodeChildProcess(exec: CpExecBridge): NodeChildProcess {
+export function createNodeChildProcess(
+  exec: CpExecBridge,
+  syncExec?: CpSyncExecBridge
+): NodeChildProcess {
   const launch = (
     commandOrArgv: string | string[],
     options: CpOptions,
@@ -2035,6 +2199,8 @@ export function createNodeChildProcess(exec: CpExecBridge): NodeChildProcess {
     throw new Error(`child_process.${name} is not available in the browser realm`);
   };
 
+  const sync = createCpSyncForms(syncExec);
+
   const attachPromisify = (fn: object, impl: Function): void => {
     Object.defineProperty(fn, UTIL_PROMISIFY_CUSTOM, {
       value: impl,
@@ -2049,9 +2215,9 @@ export function createNodeChildProcess(exec: CpExecBridge): NodeChildProcess {
     exec: execImpl,
     execFile: execFileImpl,
     spawn: spawnImpl,
-    execSync: cpUnavailable('execSync'),
-    spawnSync: cpUnavailable('spawnSync'),
-    execFileSync: cpUnavailable('execFileSync'),
+    execSync: sync.execSync,
+    spawnSync: sync.spawnSync,
+    execFileSync: sync.execFileSync,
     fork: cpUnavailable('fork'),
     ChildProcess,
   };

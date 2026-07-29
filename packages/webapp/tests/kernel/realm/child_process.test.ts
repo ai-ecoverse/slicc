@@ -196,18 +196,35 @@ describe('child_process: spawn', () => {
   });
 });
 
-describe('child_process: sync forms are unavailable', () => {
-  it('execSync / spawnSync / execFileSync / fork throw a clear browser-realm error', async () => {
+describe('child_process: sync forms without a bridge', () => {
+  it('execSync / execFileSync / fork throw a message naming the async escape hatch', async () => {
+    // An in-process realm has no controlling Service Worker, so it gets no sync
+    // bridge and the sync forms fail — but with an actionable message rather
+    // than the old flat "not available". `spawnSync` is excluded: it never
+    // throws (Node contract) and reports the failure on `.error` instead.
     const out = await runCode(
       `const cp = require('child_process');
-       for (const name of ['execSync', 'spawnSync', 'execFileSync', 'fork']) {
+       for (const name of ['execSync', 'execFileSync']) {
          try { cp[name]('x'); console.log(name, 'NO-THROW'); }
-         catch (e) { console.log(name, e.message.includes('not available in the browser realm')); }
-       }`,
+         catch (e) { console.log(name, e.message.includes('no synchronous bridge')); }
+       }
+       try { cp.fork('x'); console.log('fork', 'NO-THROW'); }
+       catch (e) { console.log('fork', e.message.includes('not available in the browser realm')); }`,
       makeExecCtx()
     );
     expect(out.exitCode).toBe(0);
-    expect(out.stdout.trim()).toBe('execSync true\nspawnSync true\nexecFileSync true\nfork true');
+    expect(out.stdout.trim()).toBe('execSync true\nexecFileSync true\nfork true');
+  });
+
+  it('spawnSync reports the missing bridge on .error and never throws', async () => {
+    const out = await runCode(
+      `const cp = require('child_process');
+       const r = cp.spawnSync('echo', ['hi']);
+       console.log(r.status, r.signal, !!r.error, r.error.message.includes('no synchronous bridge'));`,
+      makeExecCtx()
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('null null true true');
   });
 });
 
@@ -285,12 +302,103 @@ describe('child_process unit: command shapes', () => {
     expect(typeof (cp.execFile as unknown as Record<symbol, unknown>)[sym]).toBe('function');
   });
 
-  it('execSync / spawnSync / execFileSync / fork throw', () => {
+  it('without a sync bridge, execSync/execFileSync throw and fork throws', () => {
     const cp = createNodeChildProcess(makeFakeBridge());
-    expect(() => cp.execSync('x')).toThrow('not available in the browser realm');
-    expect(() => cp.spawnSync('x')).toThrow('not available in the browser realm');
-    expect(() => cp.execFileSync('x')).toThrow('not available in the browser realm');
+    expect(() => cp.execSync('x')).toThrow('no synchronous bridge');
+    expect(() => cp.execFileSync('x')).toThrow('no synchronous bridge');
     expect(() => cp.fork('x')).toThrow('not available in the browser realm');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sync forms over a fake synchronous exec bridge. Node's contracts differ per
+// form: execSync/execFileSync return stdout and THROW on a non-zero exit;
+// spawnSync returns a result object and never throws.
+// ---------------------------------------------------------------------------
+
+type SyncCall = { command: string | string[]; opts: Record<string, unknown> };
+
+function makeFakeSyncBridge(result: CpExecResult, calls: SyncCall[] = []) {
+  return {
+    calls,
+    run(command: string | string[], opts: Record<string, unknown> = {}): CpExecResult {
+      calls.push({ command, opts });
+      return result;
+    },
+  };
+}
+
+describe('child_process unit: sync forms', () => {
+  const ok: CpExecResult = { stdout: 'out\n', stderr: 'warn\n', exitCode: 0 };
+  const failed: CpExecResult = { stdout: 'partial', stderr: 'boom', exitCode: 3 };
+
+  it('execSync returns a Buffer by default and a string with an encoding', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeFakeSyncBridge(ok));
+    const buf = cp.execSync('echo out');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect((buf as Buffer).toString()).toBe('out\n');
+    expect(cp.execSync('echo out', { encoding: 'utf8' })).toBe('out\n');
+  });
+
+  it('execSync throws on a non-zero exit with Node status/stdout/stderr fields', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeFakeSyncBridge(failed));
+    try {
+      cp.execSync('false', { encoding: 'utf8' });
+      expect.unreachable('execSync must throw on a non-zero exit');
+    } catch (err) {
+      const e = err as Error & { status: number; stdout: string; stderr: string; signal: null };
+      expect(e.message).toContain('Command failed: false');
+      expect(e.status).toBe(3);
+      expect(e.stdout).toBe('partial');
+      expect(e.stderr).toBe('boom');
+      expect(e.signal).toBeNull();
+    }
+  });
+
+  it('execSync forwards input and timeout to the bridge', () => {
+    const bridge = makeFakeSyncBridge(ok);
+    const cp = createNodeChildProcess(makeFakeBridge(), bridge);
+    cp.execSync('cat', { input: 'piped', timeout: 500 });
+    expect(bridge.calls[0]?.opts).toMatchObject({ input: 'piped', timeout: 500 });
+  });
+
+  it('execFileSync runs the shell-free argv form', () => {
+    const bridge = makeFakeSyncBridge(ok);
+    const cp = createNodeChildProcess(makeFakeBridge(), bridge);
+    cp.execFileSync('ls', ['-la']);
+    expect(bridge.calls[0]?.command).toEqual(['ls', '-la']);
+  });
+
+  it('spawnSync returns a result object and NEVER throws on a non-zero exit', () => {
+    const cp = createNodeChildProcess(makeFakeBridge(), makeFakeSyncBridge(failed));
+    const r = cp.spawnSync('false', [], { encoding: 'utf8' });
+    expect(r.status).toBe(3);
+    expect(r.stdout).toBe('partial');
+    expect(r.stderr).toBe('boom');
+    expect(r.signal).toBeNull();
+    expect(r.error).toBeUndefined();
+    expect(r.output).toEqual([null, 'partial', 'boom']);
+  });
+
+  it('spawnSync surfaces a bridge failure on .error instead of throwing', () => {
+    const throwing = {
+      run(): CpExecResult {
+        throw Object.assign(new Error('EIO: sync-exec bridge'), { code: 'EIO' });
+      },
+    };
+    const cp = createNodeChildProcess(makeFakeBridge(), throwing);
+    const r = cp.spawnSync('ls');
+    expect(r.status).toBeNull();
+    expect(r.error?.message).toContain('EIO');
+  });
+
+  it('spawnSync defaults to argv and joins into a string when shell:true', () => {
+    const bridge = makeFakeSyncBridge(ok);
+    const cp = createNodeChildProcess(makeFakeBridge(), bridge);
+    cp.spawnSync('echo', ['a', 'b']);
+    expect(bridge.calls[0]?.command).toEqual(['echo', 'a', 'b']);
+    cp.spawnSync('echo', ['a', 'b'], { shell: true });
+    expect(bridge.calls[1]?.command).toBe('echo a b');
   });
 });
 

@@ -69,6 +69,7 @@ import {
 import {
   handleSyncFsRequest,
   parseSyncFsRequest,
+  SYNC_EXEC_ROUTE,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
   SYNC_FS_ROUTE_PREFIX,
@@ -192,15 +193,15 @@ self.addEventListener('fetch', (event: FetchEvent) => {
 });
 
 // ---------------------------------------------------------------------------
-// Synchronous-fs bridge route (`/__slicc/fs-sync/*`).
+// Synchronous bridge routes (`/__slicc/fs-sync/*`, `/__slicc/exec-sync`).
 //
-// The proxy listener above ignores same-origin fetches, so the sync-fs route
-// needs its OWN respondWith'ing listener (first respondWith wins, so this
-// coexists with the proxy listener and the importScripts'd preview-sw). A
-// realm's synchronous XHR is answered here by round-tripping over the
-// per-session nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>`) to the
+// The proxy listener above ignores same-origin fetches, so these routes need
+// their OWN respondWith'ing listener (first respondWith wins, so this coexists
+// with the proxy listener and the importScripts'd preview-sw). A realm's
+// synchronous XHR is answered here by round-tripping over the per-session
+// nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>`) to the
 // kernel-worker responder (`sync-fs-responder.ts`), which reads/writes the
-// CALLING realm's own ctx.fs.
+// CALLING realm's own ctx.fs or runs a command through its own ctx.exec.
 // ---------------------------------------------------------------------------
 // Per-session nonces naming the sync-fs channels — each same-origin leader tab
 // mints its own and delivers it over `postMessage` (never on a realm-observable
@@ -242,15 +243,16 @@ async function requestSyncFsNonce(): Promise<void> {
 self.addEventListener('fetch', (event: FetchEvent) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return;
+  if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX) && url.pathname !== SYNC_EXEC_ROUTE) return;
   event.respondWith(
     (async () => {
       const req = await parseSyncFsRequest(event.request);
-      // Prefix already matched above, so a null parse means a malformed path
-      // (bad percent-encoding from an untrusted caller) → fail closed EINVAL,
-      // never a network fallthrough that could return SPA HTML.
+      // Prefix already matched above, so a null parse means a malformed
+      // request (bad percent-encoding on the fs route, or a malformed /
+      // non-POST envelope on the exec route) → fail closed EINVAL, never a
+      // network fallthrough that could return SPA HTML.
       if (!req) {
-        return new Response('sync-fs bridge: malformed path', {
+        return new Response('sync bridge: malformed request', {
           status: 400,
           headers: { [SYNC_FS_ERRNO_HEADER]: 'EINVAL', [SYNC_FS_MARKER_HEADER]: '1' },
         });

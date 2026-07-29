@@ -1,15 +1,18 @@
 /**
- * Single source of truth for the synchronous-fs bridge wire contract.
+ * Single source of truth for the synchronous-bridge wire contract — both the
+ * `fs` channel (`/__slicc/fs-sync/*`) and the `exec` channel
+ * (`/__slicc/exec-sync`) that backs `child_process.execSync` & friends.
  *
  * The bridge spans three bundles that can't share a runtime import cheaply —
- * the realm worker (`sync-fs-xhr-bridge.ts`), the kernel-worker responder
- * (`sync-fs-responder.ts`), and the Service Worker (`ui/sync-fs-sw-handler.ts`
- * bundled into `llm-proxy-sw`). This module is **dependency-free** (only string
- * constants + wire types) so every side can import it without dragging logic
- * across bundle boundaries, and a rename can't silently desync the two ends
- * (which would fail at runtime, not compile time).
+ * the realm worker (`sync-fs-xhr-bridge.ts` / `sync-exec-xhr-bridge.ts`), the
+ * kernel-worker responder (`sync-fs-responder.ts`), and the Service Worker
+ * (`ui/sync-fs-sw-handler.ts` bundled into `llm-proxy-sw`). This module is
+ * **dependency-free** (only string constants + wire types) so every side can
+ * import it without dragging logic across bundle boundaries, and a rename can't
+ * silently desync the two ends (which would fail at runtime, not compile time).
  */
 
+import type { SyncExecRequest } from './sync-exec-dispatch.js';
 import type { SyncFsRequest, SyncFsResult } from './sync-fs-dispatch.js';
 
 /**
@@ -68,6 +71,12 @@ export interface SyncFsNeedNonceMsg {
 export const SYNC_FS_ROUTE_PREFIX = '/__slicc/fs-sync/';
 /** Same route without the trailing slash — the bridge joins the abs path onto it. */
 export const SYNC_FS_ROUTE_BASE = '/__slicc/fs-sync';
+/**
+ * Route for the synchronous `exec` channel. Unlike the fs routes it carries no
+ * path — the command rides in the POST body (see {@link SyncExecRequestPayload})
+ * so a command string never has to survive URL encoding.
+ */
+export const SYNC_EXEC_ROUTE = '/__slicc/exec-sync';
 
 /** Per-realm capability token header (realm → SW). */
 export const SYNC_FS_TOKEN_HEADER = 'x-slicc-fs-token';
@@ -91,8 +100,11 @@ export const SYNC_FS_REQ_MSG = 'sync-fs-req';
 export const SYNC_FS_ACK_MSG = 'sync-fs-ack';
 export const SYNC_FS_RES_MSG = 'sync-fs-res';
 
-/** SW → responder: a request to run one fs op against the token's realm. */
-export type SyncFsReqMsg = SyncFsRequest & { type: typeof SYNC_FS_REQ_MSG; id: string };
+/** SW → responder: a request to run one op against the token's realm. */
+export type SyncFsReqMsg = (SyncFsRequest | SyncExecRequest) & {
+  type: typeof SYNC_FS_REQ_MSG;
+  id: string;
+};
 /** responder → SW: receipt, posted synchronously before the async dispatch. */
 export type SyncFsAckMsg = { type: typeof SYNC_FS_ACK_MSG; id: string };
 /** responder → SW: the dispatch result. */
@@ -121,3 +133,39 @@ export const SYNC_FS_REQUEST_TIMEOUT_MS = 25_000;
  * The WARM path (a channel already exists) never waits.
  */
 export const SYNC_FS_NONCE_WAIT_MS = 2_000;
+
+/**
+ * Default round-trip budget for the `exec` channel when the caller supplies no
+ * `timeout`. A file read finishes in milliseconds; a build command does not, so
+ * the fs budget ({@link SYNC_FS_REQUEST_TIMEOUT_MS}) is far too tight here.
+ */
+export const SYNC_EXEC_DEFAULT_TIMEOUT_MS = 120_000;
+
+/**
+ * Ceiling on a caller-supplied `execSync(cmd, { timeout })`. A blocked realm
+ * worker cannot be interrupted, so an unbounded budget would make a runaway
+ * command unkillable short of terminating the realm. The responder retains a
+ * settled `id` for at least this long (plus a margin) so a late SW re-post
+ * replays the cached result instead of re-running the command.
+ */
+export const SYNC_EXEC_MAX_TIMEOUT_MS = 600_000;
+
+/**
+ * Margin the SW handler adds on top of the command budget before failing an
+ * exec closed. The dispatcher aborts `ctx.exec` exactly at the budget and then
+ * still has to build the `ETIMEDOUT` (or a just-in-time success) result,
+ * structured-clone it onto the channel, and have the SW turn it into a
+ * `Response`. Without this the two deadlines coincide and the SW's generic
+ * `EIO` races — usually wins — against the specific answer the responder is
+ * already producing. Kept BELOW the realm bridge's own XHR margin
+ * ({@link SYNC_EXEC_XHR_MARGIN_MS}) so the SW response still lands first.
+ */
+export const SYNC_EXEC_RESPONSE_MARGIN_MS = 2_000;
+
+/**
+ * Margin the realm bridge adds on top of the command budget for the blocking
+ * XHR's own `timeout`. Larger than {@link SYNC_EXEC_RESPONSE_MARGIN_MS} so the
+ * SW's authoritative errno wins the race with the bare XHR-timeout `EIO`; the
+ * XHR timeout stays the backstop for a dead SW that never answers at all.
+ */
+export const SYNC_EXEC_XHR_MARGIN_MS = 5_000;

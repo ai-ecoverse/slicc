@@ -66,6 +66,42 @@ test('responds to a sync-fs-req: acks immediately, then posts res with bytes', a
   handle.dispose();
 });
 
+test('routes an exec-channel request to the exec dispatch, not the fs one', async () => {
+  const { a, b } = makeChannelPair();
+  const received: Array<Record<string, unknown>> = [];
+  a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
+  const handle = installSyncFsResponder({ channel: b });
+  const exec = (async () => ({
+    stdout: 'ran\n',
+    stderr: '',
+    exitCode: 0,
+  })) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+
+  a.postMessage({ type: 'sync-fs-req', id: 'e1', token, channel: 'exec', command: 'echo ran' });
+
+  await vi.waitFor(() => expect(received.some((m) => m.type === 'sync-fs-res')).toBe(true));
+  const res = received.find((m) => m.type === 'sync-fs-res') as Record<string, unknown>;
+  expect(res.ok).toBe(true);
+  expect(res.json).toEqual({ stdout: 'ran\n', stderr: '', exitCode: 0 });
+  handle.dispose();
+});
+
+test('an unowned token gets NO response on the exec channel either', async () => {
+  // Same fail-silent contract as the fs channel: a non-owning worker must not
+  // answer, or a forged token could be served by whichever worker replies first.
+  const { a, b } = makeChannelPair();
+  const received: Array<Record<string, unknown>> = [];
+  a.addEventListener('message', (e) => received.push(e.data as Record<string, unknown>));
+  const handle = installSyncFsResponder({ channel: b });
+
+  a.postMessage({ type: 'sync-fs-req', id: 'e2', token: 'forged', channel: 'exec', command: 'ls' });
+
+  await new Promise((r) => setTimeout(r, 20));
+  expect(received).toEqual([]);
+  handle.dispose();
+});
+
 test('an unowned token gets NO response (stays silent — owner/timeout answers)', async () => {
   // Origin-scoped channel: a token this worker doesn't own (another worker's,
   // or forged/revoked) must NOT be answered here, so we can't win a race with

@@ -1,13 +1,13 @@
 /**
- * Pure Service-Worker handler half of the synchronous-fs bridge.
+ * Pure Service-Worker handler half of the synchronous bridges (fs + exec).
  *
  * A realm issues a synchronous XHR to `/__slicc/fs-sync/<vfs-path>` (GET =
- * read, POST = write). The controlling SW's fetch listener calls
- * `handleSyncFsRequest`, which round-trips the request over the per-session
- * nonce-named BroadcastChannel(s) (`slicc-sync-fs-<nonce>` — never the fixed
- * name `slicc-sync-fs`, which a realm could join; see `sync-fs-wire.ts`) to the
- * kernel-worker responder (`sync-fs-responder.ts`) and turns the reply into a
- * `Response`:
+ * read, POST = write) or to `/__slicc/exec-sync` (POST, JSON command envelope).
+ * The controlling SW's fetch listener calls `handleSyncFsRequest`, which
+ * round-trips the request over the per-session nonce-named BroadcastChannel(s)
+ * (`slicc-sync-fs-<nonce>` — never the fixed name `slicc-sync-fs`, which a realm
+ * could join; see `sync-fs-wire.ts`) to the kernel-worker responder
+ * (`sync-fs-responder.ts`) and turns the reply into a `Response`:
  *
  *   - ok read  → 200, raw bytes body
  *   - ok write → 200, empty body
@@ -25,6 +25,9 @@
 // of truth). Re-exported so `llm-proxy-sw` can keep importing the route prefix
 // from this handler.
 import {
+  SYNC_EXEC_DEFAULT_TIMEOUT_MS,
+  SYNC_EXEC_RESPONSE_MARGIN_MS,
+  SYNC_EXEC_ROUTE,
   SYNC_FS_ACK_MSG,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
@@ -35,8 +38,19 @@ import {
   SYNC_FS_TOKEN_HEADER,
 } from '../kernel/realm/sync-fs-wire.js';
 
-export { SYNC_FS_ERRNO_HEADER, SYNC_FS_MARKER_HEADER, SYNC_FS_ROUTE_PREFIX, SYNC_FS_TOKEN_HEADER };
+export {
+  SYNC_EXEC_ROUTE,
+  SYNC_FS_ERRNO_HEADER,
+  SYNC_FS_MARKER_HEADER,
+  SYNC_FS_ROUTE_PREFIX,
+  SYNC_FS_TOKEN_HEADER,
+};
 
+import {
+  clampSyncExecTimeout,
+  SYNC_EXEC_CHANNEL,
+  type SyncExecRequest,
+} from '../kernel/realm/sync-exec-dispatch.js';
 import type { SyncFsAckMsg, SyncFsResMsg } from '../kernel/realm/sync-fs-wire.js';
 
 /**
@@ -59,15 +73,53 @@ export interface SyncFsSwChannelLike {
   removeEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
 }
 
-export interface SyncFsHandlerRequest {
+export interface SyncFsHandlerFsRequest {
   token: string;
-  op: 'read' | 'write' | 'stat' | 'readdir' | 'exists';
+  op: 'read' | 'write' | 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
   path: string;
   body?: Uint8Array;
 }
 
-/** Metadata ops the SW parses off a GET `?op=` query param. */
+/**
+ * Either channel's wire request — the responder discriminates on `channel`.
+ * The exec arm's `op` / `path` / `body` are pinned absent so a consumer that
+ * reads them off the union gets `undefined` rather than a type error.
+ */
+export type SyncFsHandlerRequest =
+  | SyncFsHandlerFsRequest
+  | (SyncExecRequest & { op?: undefined; path?: undefined; body?: undefined });
+
+/** Read-only metadata ops the SW parses off a GET `?op=` query param. */
 const METADATA_OPS = new Set(['stat', 'readdir', 'exists']);
+/**
+ * Mutating metadata ops, parsed off a POST `?op=`. Only the sync-exec
+ * flush-before path issues these — the `fs` shim keeps mkdir/rm cache-backed —
+ * so a script's pending directory creations and deletions reach the live VFS
+ * before an `execSync` subprocess looks for them.
+ */
+const MUTATING_OPS = new Set(['mkdir', 'rm']);
+
+/**
+ * Per-request round-trip budget. The fs channel's budget is a fixed constant
+ * sized for a file read; the exec channel derives its own from the caller's
+ * `timeout` (clamped), because a build command legitimately runs for minutes.
+ *
+ * The exec budget gets {@link SYNC_EXEC_RESPONSE_MARGIN_MS} on top: the
+ * dispatcher aborts `ctx.exec` AT the command budget and then still has to
+ * serialize the result across the channel. Without the margin the two
+ * deadlines coincide and this handler's generic `EIO` races the responder's
+ * specific `ETIMEDOUT` (or a result that landed just in time).
+ */
+function budgetFor(req: SyncFsHandlerRequest): number {
+  if (!isExecHandlerRequest(req)) return DEFAULT_TIMEOUT_MS;
+  return (
+    clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_DEFAULT_TIMEOUT_MS) + SYNC_EXEC_RESPONSE_MARGIN_MS
+  );
+}
+
+function isExecHandlerRequest(req: SyncFsHandlerRequest): req is SyncExecRequest {
+  return (req as { channel?: unknown }).channel === SYNC_EXEC_CHANNEL;
+}
 
 /**
  * Map a POSIX errno to an HTTP status for the fail response. The realm bridge
@@ -94,9 +146,49 @@ export function errnoToStatus(errno: string): number {
 }
 
 /**
- * Parse a same-origin `/__slicc/fs-sync/*` request into a handler request.
- * GET → read, POST → write (body). Token comes from the `x-slicc-fs-token`
- * header. Returns `null` when the path is not a sync-fs route.
+ * Parse a same-origin `/__slicc/exec-sync` request into an exec handler
+ * request. Always a POST whose body is the JSON command envelope (a command
+ * string never has to survive URL encoding). Returns `null` for a malformed
+ * body so the caller fails it closed rather than forwarding an unvalidated
+ * shape to `ctx.exec`.
+ */
+async function parseSyncExecRequest(request: {
+  method: string;
+  headers: { get(name: string): string | null };
+  arrayBuffer(): Promise<ArrayBuffer>;
+}): Promise<SyncExecRequest | null> {
+  if (request.method !== 'POST') return null;
+  let payload: unknown;
+  try {
+    const buf = await request.arrayBuffer();
+    payload = JSON.parse(new TextDecoder().decode(new Uint8Array(buf)));
+  } catch {
+    return null;
+  }
+  if (!payload || typeof payload !== 'object') return null;
+  const p = payload as Record<string, unknown>;
+  const command = p.command;
+  const commandOk =
+    typeof command === 'string' ||
+    (Array.isArray(command) && command.every((a) => typeof a === 'string'));
+  if (!commandOk) return null;
+  return {
+    token: request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '',
+    channel: SYNC_EXEC_CHANNEL,
+    command: command as string | string[],
+    ...(Array.isArray(p.args) && p.args.every((a) => typeof a === 'string')
+      ? { args: p.args as string[] }
+      : {}),
+    ...(typeof p.stdin === 'string' ? { stdin: p.stdin } : {}),
+    ...(typeof p.timeoutMs === 'number' ? { timeoutMs: p.timeoutMs } : {}),
+  };
+}
+
+/**
+ * Parse a same-origin `/__slicc/fs-sync/*` or `/__slicc/exec-sync` request into
+ * a handler request. On the fs route GET → read, POST → write (body); the exec
+ * route is POST-only with a JSON envelope. Token comes from the
+ * `x-slicc-fs-token` header. Returns `null` when the path is neither route.
  */
 export async function parseSyncFsRequest(request: {
   url: string;
@@ -105,6 +197,7 @@ export async function parseSyncFsRequest(request: {
   arrayBuffer(): Promise<ArrayBuffer>;
 }): Promise<SyncFsHandlerRequest | null> {
   const url = new URL(request.url);
+  if (url.pathname === SYNC_EXEC_ROUTE) return parseSyncExecRequest(request);
   if (!url.pathname.startsWith(SYNC_FS_ROUTE_PREFIX)) return null;
   // Decode PER SEGMENT — the symmetric partner of the bridge's per-segment
   // `encodeURIComponent` (see sync-fs-xhr-bridge.ts `routeUrl`): decode each
@@ -121,7 +214,12 @@ export async function parseSyncFsRequest(request: {
     return null;
   }
   const token = request.headers.get(SYNC_FS_TOKEN_HEADER) ?? '';
+  const opParam = url.searchParams.get('op');
   if (request.method === 'POST') {
+    // Mutating metadata ops carry no body; a plain POST is still a write.
+    if (opParam && MUTATING_OPS.has(opParam)) {
+      return { token, op: opParam as 'mkdir' | 'rm', path };
+    }
     const buf = await request.arrayBuffer();
     return { token, op: 'write', path, body: new Uint8Array(buf) };
   }
@@ -130,7 +228,6 @@ export async function parseSyncFsRequest(request: {
   // `op` value falls through to `read` rather than being accepted verbatim,
   // so a typo can't traverse the discriminated union with an untyped op
   // string (the responder / route would fail closed EINVAL anyway).
-  const opParam = url.searchParams.get('op');
   if (opParam && METADATA_OPS.has(opParam)) {
     return { token, op: opParam as 'stat' | 'readdir' | 'exists', path };
   }
@@ -145,10 +242,10 @@ function buildResponse(res: SyncFsResMsg): Response {
       headers: { [SYNC_FS_ERRNO_HEADER]: errno, [SYNC_FS_MARKER_HEADER]: '1' },
     });
   }
-  // Phase-2 metadata result (stat/readdir/exists). Phase-1 never routes these
-  // over the SW (`SyncFsHandlerRequest.op` is read|write), but the discriminated
+  // A metadata result (stat/readdir/exists) or an exec result
+  // (`{stdout,stderr,exitCode}`) — both ride a JSON body. The discriminated
   // union forces us to handle it so it can't be silently dropped as an empty
-  // body when phase-2 wires metadata through.
+  // body.
   if (res.kind === 'json') {
     return new Response(JSON.stringify(res.json ?? null), {
       status: 200,
@@ -167,7 +264,7 @@ function buildResponse(res: SyncFsResMsg): Response {
 }
 
 /**
- * Round-trip a sync-fs request over the channel(s) and resolve a `Response`.
+ * Round-trip a sync request over the channel(s) and resolve a `Response`.
  * Always resolves (never rejects): a timeout / absent responder yields a
  * fail-closed 503 + `EIO` so the blocked realm worker unblocks.
  *
@@ -182,7 +279,7 @@ export function handleSyncFsRequest(
   req: SyncFsHandlerRequest,
   opts: { timeoutMs?: number; retryIntervalMs?: number } = {}
 ): Promise<Response> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? budgetFor(req);
   const retryIntervalMs = opts.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS;
   const id = crypto.randomUUID();
 

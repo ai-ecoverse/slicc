@@ -1,14 +1,14 @@
 /**
- * Kernel-worker responder for the synchronous-fs bridge.
+ * Kernel-worker responder for the synchronous bridges (fs + exec).
  *
  * The realm's synchronous XHR is intercepted by the controlling Service
  * Worker, which round-trips the request over the per-session
  * (nonce-named — see `sync-fs-wire.ts`) BroadcastChannel to THIS responder.
  * The responder runs in the kernel worker — co-located with the token registry
- * and every realm's `ctx.fs` — so it can answer from the calling realm's own
- * (ACL + sudo enforced) filesystem via `dispatchSyncFs`, and there is no page
- * hop and no deadlock (the blocked realm worker is a different thread from this
- * one).
+ * and every realm's `ctx.fs` / `ctx.exec` — so it can answer from the calling
+ * realm's own (ACL + sudo enforced) handles via `dispatchSyncFs` /
+ * `dispatchSyncExec`, and there is no page hop and no deadlock (the blocked
+ * realm worker is a different thread from this one).
  *
  * Wire protocol (see `sync-fs-wire.ts`, the shared contract):
  *   SW → responder:  { type: 'sync-fs-req', id, ...SyncFsRequest }
@@ -37,9 +37,11 @@
  * (EIO), which is the correct outcome for the abuse path (not the hot path).
  */
 
+import { dispatchSyncExec, isSyncExecRequest } from './sync-exec-dispatch.js';
 import { dispatchSyncFs, type SyncFsResult } from './sync-fs-dispatch.js';
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 import {
+  SYNC_EXEC_MAX_TIMEOUT_MS,
   SYNC_FS_ACK_MSG,
   SYNC_FS_REQ_MSG,
   SYNC_FS_REQUEST_TIMEOUT_MS,
@@ -56,9 +58,11 @@ import {
  * >= the SW handler's round-trip budget: the SW can re-post the same id until
  * that budget elapses, and a re-post arriving after eviction would be treated
  * as first-seen and RE-DISPATCHED — the double-write the dedupe exists to
- * prevent. Derive it (+5s margin) so the two can't drift apart.
+ * prevent. Derive it from the LARGER of the two channel budgets (+5s margin) so
+ * the exec channel's much longer round-trip can't outlive its dedupe entry and
+ * re-run a command.
  */
-const DEDUPE_TTL_MS = SYNC_FS_REQUEST_TIMEOUT_MS + 5_000;
+const DEDUPE_TTL_MS = Math.max(SYNC_FS_REQUEST_TIMEOUT_MS, SYNC_EXEC_MAX_TIMEOUT_MS) + 5_000;
 
 /** Structural subset of `BroadcastChannel` so tests can inject a fake. */
 export interface SyncFsChannelLike {
@@ -134,19 +138,18 @@ export function installSyncFsResponder(
       entry.timer = setTimeout(() => seen.delete(req.id), DEDUPE_TTL_MS);
       post({ type: SYNC_FS_RES_MSG, id: req.id, ...result });
     };
-    // dispatchSyncFs is written not to reject, but a future ctx.fs could throw
+    // dispatchSync* is written not to reject, but a future ctx.fs could throw
     // synchronously (e.g. in resolvePath). Catch it and post a terminal errno
     // so the blocked realm worker never waits out the SW handler's full
     // timeout — fail closed, not hang.
-    void dispatchSyncFs(req)
-      .then(settle)
-      .catch((err) =>
-        settle({
-          ok: false,
-          errno: 'EIO',
-          message: err instanceof Error ? err.message : String(err),
-        })
-      );
+    const dispatched = isSyncExecRequest(req) ? dispatchSyncExec(req) : dispatchSyncFs(req);
+    void dispatched.then(settle).catch((err) =>
+      settle({
+        ok: false,
+        errno: 'EIO',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    );
   };
 
   ch.addEventListener('message', listener);

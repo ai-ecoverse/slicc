@@ -1058,9 +1058,12 @@ const { stdout } = await h.done;
 realm) resolves to a shim over `exec.start`: `exec` / `execFile` / `spawn`
 return a `ChildProcess` EventEmitter (`'exit'` / `'close'`, Readable
 `.stdout` / `.stderr`); `exec` / `execFile` carry `util.promisify.custom`. The
-sync forms (`execSync` / `spawnSync` / `execFileSync`) and `fork` throw — no
-synchronous or long-lived process model. `.bsh` scripts run in the target page
-(no shell bridge), so `child_process` is unavailable there.
+sync forms (`execSync` / `execFileSync` / `spawnSync`) run on the blocking
+sync-XHR bridge and follow Node's return/throw contracts; they need a
+controlling Service Worker, so on a float without one they throw an error
+naming the async escape hatch. `fork` always throws — no long-lived process
+model. `.bsh` scripts run in the target page (no shell bridge), so
+`child_process` is unavailable there.
 
 #### require / module / exports
 
@@ -1559,15 +1562,15 @@ Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. V
 
 Some Node.js built-in modules are available via `require()`:
 
-| Module                                           | Status                                                                                            |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `fs`                                             | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm)                             |
-| `process`                                        | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                                                    |
-| `buffer`                                         | ✅ Browser polyfill                                                                               |
-| `path`                                           | ✅ Via esm.sh (browser polyfill)                                                                  |
-| `url`, `querystring`, `util`, `events`, `assert` | ✅ Via esm.sh                                                                                     |
-| `child_process`                                  | ✅ Realm shim over the `exec.start` bridge (`exec`/`execFile`/`spawn`; sync forms + `fork` throw) |
-| `http`, `https`, `crypto`, `net`, etc.           | ❌ Not available in browser                                                                       |
+| Module                                           | Status                                                                                                                     |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `fs`                                             | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm)                                                      |
+| `process`                                        | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                                                                             |
+| `buffer`                                         | ✅ Browser polyfill                                                                                                        |
+| `path`                                           | ✅ Via esm.sh (browser polyfill)                                                                                           |
+| `url`, `querystring`, `util`, `events`, `assert` | ✅ Via esm.sh                                                                                                              |
+| `child_process`                                  | ✅ Realm shim over the `exec.start` bridge (`exec`/`execFile`/`spawn`); sync forms over the sync-XHR bridge; `fork` throws |
+| `http`, `https`, `crypto`, `net`, etc.           | ❌ Not available in browser                                                                                                |
 
 The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
 

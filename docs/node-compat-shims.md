@@ -116,7 +116,25 @@ Async forms (backed by shell exec RPC):
 (Readable), `.stdin` (writable), `.pid`, `.exitCode`, `.kill(signal?)`,
 and `exit`/`close`/`error` events.
 
-**Not available (throws):** `execSync`, `spawnSync`, `execFileSync`, `fork`.
+Sync forms (backed by the blocking sync-XHR bridge — see
+[`architecture.md`](architecture.md)):
+
+| Method                             | Notes                                               |
+| ---------------------------------- | --------------------------------------------------- |
+| `execSync(cmd, opts?)`             | Returns stdout (Buffer, or string with `encoding`)  |
+| `execFileSync(file, args?, opts?)` | Shell-free argv form                                |
+| `spawnSync(cmd, args?, opts?)`     | Returns `{ status, stdout, stderr, signal, error }` |
+
+`execSync` / `execFileSync` throw on a non-zero exit with Node's
+`.status` / `.stdout` / `.stderr` / `.signal` fields; `spawnSync` never throws
+and reports on `.status` / `.error`. `opts.timeout` bounds the command (capped
+at 10 minutes); `opts.input` supplies stdin.
+
+These need a controlling Service Worker to block the realm worker on a host
+round-trip. On a float without one (extension follower, boot before SW control)
+they throw an error naming the async escape hatch instead.
+
+**Not available (throws):** `fork`.
 
 ### `process`
 

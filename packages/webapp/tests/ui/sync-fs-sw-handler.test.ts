@@ -1,4 +1,8 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
+import {
+  SYNC_EXEC_MAX_TIMEOUT_MS,
+  SYNC_EXEC_RESPONSE_MARGIN_MS,
+} from '../../src/kernel/realm/sync-fs-wire.js';
 import {
   errnoToStatus,
   handleSyncFsRequest,
@@ -31,6 +35,32 @@ function respondingChannel(
       queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
       const result = responder(req);
       if (result) queueMicrotask(() => emit({ type: 'sync-fs-res', id: req.id, ...result }));
+    },
+    addEventListener: (_t, l) => {
+      listeners.add(l);
+    },
+    removeEventListener: (_t, l) => {
+      listeners.delete(l);
+    },
+  };
+}
+
+/**
+ * Like {@link respondingChannel}, but the result lands `delayMs` after the
+ * request — modelling the responder that aborts at the command budget and then
+ * needs a moment to serialize its answer.
+ */
+function deferredChannel(delayMs: number, result: FakeResult): SyncFsSwChannelLike {
+  const listeners = new Set<(e: MessageEvent) => void>();
+  const emit = (data: unknown): void => {
+    for (const l of [...listeners]) l({ data } as MessageEvent);
+  };
+  return {
+    postMessage: (data: unknown) => {
+      const req = data as Record<string, unknown>;
+      if (req?.type !== 'sync-fs-req') return;
+      queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
+      setTimeout(() => emit({ type: 'sync-fs-res', id: req.id, ...result }), delayMs);
     },
     addEventListener: (_t, l) => {
       listeners.add(l);
@@ -181,6 +211,143 @@ test('parseSyncFsRequest: GET ?op=exists → exists op', async () => {
     arrayBuffer: async () => new ArrayBuffer(0),
   });
   expect(parsed?.op).toBe('exists');
+});
+
+test.each(['mkdir', 'rm'])(
+  'parseSyncFsRequest: POST ?op=%s → mutating op with no body',
+  async (op) => {
+    // The sync-exec flush-before path is the only caller — it needs live
+    // mkdir/rm so a subprocess sees the script's pending directory mutations.
+    const parsed = await parseSyncFsRequest({
+      url: `https://www.sliccy.ai/__slicc/fs-sync/workspace/d?op=${op}`,
+      method: 'POST',
+      headers: { get: () => 'tok' },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    expect(parsed).toEqual({ token: 'tok', op, path: '/workspace/d' });
+  }
+);
+
+test('parseSyncFsRequest: exec route → exec channel request off the JSON envelope', async () => {
+  const body = new TextEncoder().encode(
+    JSON.stringify({ command: 'echo hi', stdin: 'in', timeoutMs: 900 })
+  );
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/exec-sync',
+    method: 'POST',
+    headers: { get: (n) => (n === 'x-slicc-fs-token' ? 'tok' : null) },
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  });
+  expect(parsed).toEqual({
+    token: 'tok',
+    channel: 'exec',
+    command: 'echo hi',
+    stdin: 'in',
+    timeoutMs: 900,
+  });
+});
+
+test('parseSyncFsRequest: exec route rejects a GET (POST-only envelope)', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/exec-sync',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed).toBeNull();
+});
+
+test.each([
+  ['not JSON', 'not json at all'],
+  ['no command', '{"stdin":"x"}'],
+  ['command of the wrong type', '{"command":42}'],
+  ['argv with a non-string member', '{"command":[1,2]}'],
+])('parseSyncFsRequest: exec route fails closed on a malformed envelope (%s)', async (_l, raw) => {
+  // A null parse makes the SW answer EINVAL rather than forwarding an
+  // unvalidated shape toward ctx.exec.
+  const body = new TextEncoder().encode(raw);
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/exec-sync',
+    method: 'POST',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  });
+  expect(parsed).toBeNull();
+});
+
+test('an exec request waits on the exec budget, not the fs one', async () => {
+  // A build command legitimately outruns the fs channel's fixed 25s budget; the
+  // handler must derive its wait from the (clamped) caller timeout instead. The
+  // responder acks but never answers, so only the budget ends the wait.
+  vi.useFakeTimers();
+  try {
+    const ch = respondingChannel(() => null);
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'build',
+      timeoutMs: 300_000,
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(60_000); // well past the fs budget
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(250_000); // past the exec budget
+    const res = await pending;
+    expect(res.status).toBe(503);
+    expect(res.headers.get('x-slicc-fs-errno')).toBe('EIO');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('a caller budget above the ceiling is clamped, not honored verbatim', async () => {
+  vi.useFakeTimers();
+  try {
+    const ch = respondingChannel(() => null);
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'forever',
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    // SYNC_EXEC_MAX_TIMEOUT_MS is 10 minutes; a hair past it (plus the
+    // response margin) must settle.
+    await vi.advanceTimersByTimeAsync(
+      SYNC_EXEC_MAX_TIMEOUT_MS + SYNC_EXEC_RESPONSE_MARGIN_MS + 1_000
+    );
+    expect((await pending).status).toBe(503);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the SW waits past the command budget so the responder's ETIMEDOUT wins", async () => {
+  // The dispatcher aborts ctx.exec AT the budget, then still has to serialize
+  // the result. If the SW deadline coincided with the command budget, its
+  // generic EIO would race — and usually beat — that specific errno.
+  vi.useFakeTimers();
+  try {
+    const budgetMs = 10_000;
+    const ch = deferredChannel(budgetMs + 500, {
+      ok: false,
+      errno: 'ETIMEDOUT',
+      message: 'sync-exec: timed out',
+    });
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'sleep 99',
+      timeoutMs: budgetMs,
+    });
+    await vi.advanceTimersByTimeAsync(budgetMs + 1_000);
+    const res = await pending;
+    expect(res.headers.get('x-slicc-fs-errno')).toBe('ETIMEDOUT');
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test('parseSyncFsRequest: GET with an UNKNOWN ?op= falls back to read (typo → bytes route)', async () => {
