@@ -301,8 +301,8 @@ async function stitchIframeContent(
     for (const line of content.split('\n')) {
       stitchedLines.push(line);
 
-      // Match iframe placeholder lines like: - iframe "Title": "https://example.com/frame"
-      const iframeMatch = line.match(/^(\s*)- iframe\s/);
+      // Match named and unnamed placeholders: - iframe "Title": "..." or - iframe: "..."
+      const iframeMatch = line.match(/^(\s*)- iframe(?=\s|:)/);
       if (!iframeMatch) continue;
       const valueMatch = line.match(/:\s*"([^"]+)"\s*$/);
       if (!valueMatch) continue;
