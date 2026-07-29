@@ -62,6 +62,16 @@ export class ScoopMessageRouter {
   private messageQueues: Map<string, ChannelMessage[]> = new Map();
   private lastAgentTimestamp: Map<string, string> = new Map();
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Per-jid re-entrancy guard for {@link processScoopQueue}. While a run is in
+   * flight for a jid, its entry lives here; a re-entrant call sets `rerun` so
+   * the in-flight run loops once more instead of executing concurrently (which
+   * would let two invocations read the same stale high-water mark and format
+   * overlapping slices of the same rows) or being dropped (which would lose a
+   * message that arrived mid-flight). Keyed by jid so distinct scoops still
+   * process in parallel.
+   */
+  private processing: Map<string, { rerun: boolean }> = new Map();
 
   constructor(private deps: ScoopMessageRouterDeps) {}
 
@@ -209,8 +219,40 @@ export class ScoopMessageRouter {
     }
   }
 
-  /** Process queued messages for a scoop. */
+  /**
+   * Process queued messages for a scoop, serialized per jid.
+   *
+   * A burst of inbound messages fires one call per message; without this guard
+   * every concurrent call reads the same stale `lastAgentTimestamp` across the
+   * `await db.getMessagesSince` and formats an overlapping slice of the same
+   * rows, so each message reaches the agent multiple times. The guard runs the
+   * real work ({@link runScoopQueue}) one turn at a time per jid and coalesces
+   * re-entrant calls into a single rerun, so a message that arrives mid-flight
+   * is still delivered exactly once. The `finally` releases the guard even when
+   * a turn throws (e.g. `sendPrompt` rejects) so a failed turn cannot wedge the
+   * queue.
+   */
   async processScoopQueue(jid: string): Promise<void> {
+    const inFlight = this.processing.get(jid);
+    if (inFlight) {
+      inFlight.rerun = true;
+      return;
+    }
+
+    const state = { rerun: false };
+    this.processing.set(jid, state);
+    try {
+      do {
+        state.rerun = false;
+        await this.runScoopQueue(jid);
+      } while (state.rerun);
+    } finally {
+      this.processing.delete(jid);
+    }
+  }
+
+  /** Drain one turn of a scoop's queue. Callers must go through {@link processScoopQueue}. */
+  private async runScoopQueue(jid: string): Promise<void> {
     const queue = this.messageQueues.get(jid);
     if (!queue || queue.length === 0) {
       log.debug('processScoopQueue: empty queue', { jid });
