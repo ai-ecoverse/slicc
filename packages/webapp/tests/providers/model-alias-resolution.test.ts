@@ -11,7 +11,7 @@
  * Runs against the REAL pi-ai model catalogue (no mocked model lists) so a
  * catalogue change that breaks alias resolution fails here.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const storage = new Map<string, string>();
 const storageStub = {
@@ -115,6 +115,53 @@ describe('resolveModelIdForScoop (bedrock-camp selected)', () => {
     // the bare id would degrade to Opus at `resolveModelById` time.
     expect(resolved).toMatch(/anthropic\.claude-haiku-4-5/);
     expect(resolveModelById(resolved!).id).toBe(resolved);
+  });
+});
+
+describe('resolveModelIdForScoop (OAuth provider selected)', () => {
+  const PROVIDER_ID = 'test-oauth-proxy';
+
+  beforeEach(async () => {
+    storage.clear();
+    const { registerProviderConfig } = await import('../../src/providers/index.js');
+    registerProviderConfig({
+      id: PROVIDER_ID,
+      name: 'Test OAuth Proxy',
+      description: 'test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'claude-sonnet-4-6', name: 'Sonnet 4.6' }],
+    });
+    storage.set('slicc_accounts', JSON.stringify([{ providerId: PROVIDER_ID, accessToken: 'x' }]));
+    storage.set('selected-model', `${PROVIDER_ID}:claude-sonnet-4-6`);
+  });
+
+  afterEach(async () => {
+    const { unregisterProviderConfig } = await import('../../src/providers/index.js');
+    unregisterProviderConfig(PROVIDER_ID);
+  });
+
+  it('accepts an id the proxy actually offers', async () => {
+    const { resolveModelIdForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelIdForScoop('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
+  });
+
+  it('rejects a bogus id instead of accepting the synthesized fallback', async () => {
+    // `resolveModelById` synthesizes a provider-routed model echoing ANY id for
+    // OAuth providers, so the round-trip check alone would accept this.
+    const { resolveModelById, resolveModelIdForScoop } = await import(
+      '../../src/providers/account-store.js'
+    );
+    expect(resolveModelById('this-model-does-not-exist-xyz').id).toBe(
+      'this-model-does-not-exist-xyz'
+    );
+    expect(resolveModelIdForScoop('this-model-does-not-exist-xyz')).toBeNull();
+  });
+
+  it('rejects an id the proxy does not offer even when pi-ai knows it', async () => {
+    const { resolveModelIdForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelIdForScoop('claude-haiku-4-5')).toBeNull();
   });
 });
 

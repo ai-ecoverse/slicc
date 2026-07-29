@@ -1648,6 +1648,15 @@ function bestShorthandMatch(keyword: string, providerIds: string[]): string | nu
  *
  * Callers MUST treat null as a hard error rather than spawning without a
  * model id (which inherits the parent's, reintroducing the same overrun).
+ *
+ * The equality check alone is not sufficient for OAuth/custom providers:
+ * `resolveModelById()` synthesizes a provider-routed model that echoes ANY
+ * requested id (so an unknown-but-real proxy model still routes through the
+ * provider instead of leaking the token to api.anthropic.com), which would
+ * accept a typo verbatim. Candidates are therefore also checked against the
+ * selected provider's catalogue — skipped when that catalogue is empty (a
+ * cold/failed model list), where rejecting everything would be worse than
+ * deferring the error to the provider API.
  */
 export function resolveModelIdForScoop(input: string): string | null {
   if (!input) return null;
@@ -1655,7 +1664,15 @@ export function resolveModelIdForScoop(input: string): string | null {
   const alias = resolveModelByShorthand(input);
   if (alias !== null && alias !== input) candidates.push(alias);
 
+  let catalogue: Model<Api>[] = [];
+  try {
+    catalogue = getProviderModels(getSelectedProvider());
+  } catch {
+    /* storage fault — fall back to the resolver check alone */
+  }
+
   for (const candidate of candidates) {
+    if (catalogue.length > 0 && !catalogue.some((m) => m.id === candidate)) continue;
     try {
       if (resolveModelById(candidate).id === candidate) return candidate;
     } catch (err) {
