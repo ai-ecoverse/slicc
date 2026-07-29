@@ -39,8 +39,6 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   # PROVISION_PROFILE + KVSTORE_IDENTIFIER for this script, so published macOS
   # builds ship the iCloud KVS entitlement. (That is a distinct secret from the
   # iOS App Store APPLE_PROVISIONING_PROFILE_BASE64 used by TestFlight.)
-  # The macOS Developer ID profile secret is configured, so release builds embed
-  # the profile and cross-device tray sync is active in shipped builds.
   if [ -n "${PROVISION_PROFILE:-}" ]; then
     if [ ! -f "$PROVISION_PROFILE" ]; then
       echo "ERROR: PROVISION_PROFILE set but file not found: $PROVISION_PROFILE" >&2
@@ -63,6 +61,8 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
         "Set :com.apple.developer.ubiquity-kvstore-identifier ${KVSTORE_IDENTIFIER}" \
         "$MERGED_ENTITLEMENTS"
     ENTITLEMENTS="$MERGED_ENTITLEMENTS"
+  else
+    echo "No provisioning profile — signing base entitlements only (tray sessions stay local, no cross-device sync)."
   fi
 
   codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
