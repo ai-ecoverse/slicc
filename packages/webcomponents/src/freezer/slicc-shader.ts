@@ -19,6 +19,7 @@ import { h, sheet } from '../internal/dom.js';
  * @attr mode - `cone` (default) | `scoop` | `freezer` | `sugar`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
  * @attr coverage - 0..1 freezer frost growth / sugar cell density and geometry
+ * @attr speed - 0..2 sugar animation rate multiplier (default 1)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -147,10 +148,11 @@ void main(){
 }`;
 
 // Sugar Glass adapted from pbakaus/radiant (MIT), static/sugar-glass.html.
-// Uniform mapping: u_time*(u_life+0.15) is crack speed; u_falloff is light
+// Uniform mapping: u_time*(u_life+0.15)*u_speed is crack speed; u_falloff is light
 // bleed; u_center replaces mouse parallax; u_scroll pans the field; u_tint
 // washes the glass; u_energy/u_evt pulse at u_center; u_dark selects palette.
 const FRAG_SUGAR = `${HEAD}${NOISE}
+uniform float u_speed;
 vec2 sugarHash(vec2 p){ p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3))); return fract(sin(p)*43758.5453123); }
 vec3 sugarVoronoi(vec2 p,float t){
   vec2 n=floor(p),f=fract(p),nearPt=vec2(0.0),nearCell=vec2(0.0); float minDist=8.0;
@@ -184,7 +186,7 @@ vec3 sugarLattice(vec2 p,float scale){
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
   vec2 p=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y); p.y-=u_scroll;
-  vec2 parallax=-(u_center-0.5)*0.15; float t=u_time*(u_life+0.15);
+  vec2 parallax=-(u_center-0.5)*0.15; float t=u_time*(u_life+0.15)*u_speed;
   p+=vec2(sin(p.y*12.0+t*2.3),cos(p.x*10.0+t*1.7))*0.003;
   float sugarCoverage=clamp(u_freeze/2.2,0.0,1.0);
   float waffleMask=step(0.82,sugarCoverage);
@@ -239,11 +241,13 @@ export interface SugarGlassPreset {
   readonly noise: number;
   readonly blur: number;
   readonly coverage: number;
+  readonly speed: number;
 }
 
 /**
  * Tuned Sugar Glass storyboard presets (all remain within the 20% background budget):
  * - Caramel — Radiant-like warm amber cells with visible crack light.
+ * - Caramel-waffle — Caramel's field with the current Cone brightness and contrast.
  * - Frosted — broad, quiet seams and restrained contrast for maximum prose legibility.
  * - Brittle — dense small cells, sharp bright fractures, and low glass fill.
  * - Waffle-glass — sugar rendering over Cone's 45-degree, half-sheared lattice geometry.
@@ -253,11 +257,22 @@ export const SUGAR_GLASS_PRESETS = {
   caramel: {
     mode: 'sugar',
     tint: '#d08a3c',
-    brightness: 1,
-    contrast: 1,
+    brightness: 1.1,
+    contrast: 1.1,
     noise: 0.025,
     blur: 0.14,
     coverage: 0.28,
+    speed: 0.25,
+  },
+  'caramel-waffle': {
+    mode: 'sugar',
+    tint: '#d08a3c',
+    brightness: 1.2,
+    contrast: 0.75,
+    noise: 0.025,
+    blur: 0.14,
+    coverage: 0.28,
+    speed: 1,
   },
   frosted: {
     mode: 'sugar',
@@ -267,6 +282,7 @@ export const SUGAR_GLASS_PRESETS = {
     noise: 0.005,
     blur: 0.9,
     coverage: 0.08,
+    speed: 1,
   },
   brittle: {
     mode: 'sugar',
@@ -276,6 +292,7 @@ export const SUGAR_GLASS_PRESETS = {
     noise: 0.055,
     blur: 0.02,
     coverage: 0.68,
+    speed: 1,
   },
   'waffle-glass': {
     mode: 'sugar',
@@ -285,6 +302,7 @@ export const SUGAR_GLASS_PRESETS = {
     noise: 0.02,
     blur: 0.08,
     coverage: 0.9,
+    speed: 1,
   },
 } as const satisfies Readonly<Record<string, SugarGlassPreset>>;
 export type SugarGlassPresetName = keyof typeof SUGAR_GLASS_PRESETS;
@@ -340,6 +358,7 @@ const UNIFORMS = [
   'u_contrast',
   'u_noise',
   'u_blur',
+  'u_speed',
 ] as const;
 type UniformName = (typeof UNIFORMS)[number];
 
@@ -381,6 +400,7 @@ export class SliccShader extends HTMLElement {
     'contrast',
     'noise',
     'blur',
+    'speed',
   ];
 
   readonly #root: ShadowRoot;
@@ -544,6 +564,14 @@ export class SliccShader extends HTMLElement {
   }
   set blurAmount(value: number) {
     this.setAttribute('blur', String(value));
+  }
+
+  /** Sugar-mode animation rate multiplier (0 = paused, 1 = current rate). */
+  get speed(): number {
+    return clampNum(Number.parseFloat(this.getAttribute('speed') ?? ''), 0, 2, 1);
+  }
+  set speed(value: number) {
+    this.setAttribute('speed', String(value));
   }
 
   get noWebgl(): boolean {
@@ -824,6 +852,7 @@ export class SliccShader extends HTMLElement {
     gl.uniform1f(u.u_contrast ?? null, this.contrast);
     gl.uniform1f(u.u_noise ?? null, this.noise);
     gl.uniform1f(u.u_blur ?? null, this.blurAmount);
+    gl.uniform1f(u.u_speed ?? null, this.speed);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // Energy decays toward rest.
     this.#energy *= 0.95;
