@@ -149,3 +149,23 @@ export const SYNC_EXEC_DEFAULT_TIMEOUT_MS = 120_000;
  * replays the cached result instead of re-running the command.
  */
 export const SYNC_EXEC_MAX_TIMEOUT_MS = 600_000;
+
+/**
+ * Margin the SW handler adds on top of the command budget before failing an
+ * exec closed. The dispatcher aborts `ctx.exec` exactly at the budget and then
+ * still has to build the `ETIMEDOUT` (or a just-in-time success) result,
+ * structured-clone it onto the channel, and have the SW turn it into a
+ * `Response`. Without this the two deadlines coincide and the SW's generic
+ * `EIO` races — usually wins — against the specific answer the responder is
+ * already producing. Kept BELOW the realm bridge's own XHR margin
+ * ({@link SYNC_EXEC_XHR_MARGIN_MS}) so the SW response still lands first.
+ */
+export const SYNC_EXEC_RESPONSE_MARGIN_MS = 2_000;
+
+/**
+ * Margin the realm bridge adds on top of the command budget for the blocking
+ * XHR's own `timeout`. Larger than {@link SYNC_EXEC_RESPONSE_MARGIN_MS} so the
+ * SW's authoritative errno wins the race with the bare XHR-timeout `EIO`; the
+ * XHR timeout stays the backstop for a dead SW that never answers at all.
+ */
+export const SYNC_EXEC_XHR_MARGIN_MS = 5_000;

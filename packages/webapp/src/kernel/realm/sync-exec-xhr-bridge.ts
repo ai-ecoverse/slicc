@@ -30,7 +30,11 @@
 
 import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispatch.js';
 import type { SyncFsCache } from './sync-fs-cache.js';
-import { SYNC_EXEC_DEFAULT_TIMEOUT_MS, SYNC_EXEC_ROUTE } from './sync-fs-wire.js';
+import {
+  SYNC_EXEC_DEFAULT_TIMEOUT_MS,
+  SYNC_EXEC_ROUTE,
+  SYNC_EXEC_XHR_MARGIN_MS,
+} from './sync-fs-wire.js';
 import type { SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 import { synchronifyJson, syncXhrError } from './sync-xhr.js';
 
@@ -100,7 +104,7 @@ export function createSyncExecXhrBridge(
           // Give the transport a margin over the command budget so the SW's
           // authoritative errno wins the race with the bare XHR-timeout EIO —
           // same ordering the fs channel relies on.
-          timeoutMs: timeoutMs + 5_000,
+          timeoutMs: timeoutMs + SYNC_EXEC_XHR_MARGIN_MS,
           label,
         }) as Partial<SyncExecResultPayload> | null;
         if (

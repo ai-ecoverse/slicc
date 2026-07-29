@@ -26,6 +26,7 @@
 // from this handler.
 import {
   SYNC_EXEC_DEFAULT_TIMEOUT_MS,
+  SYNC_EXEC_RESPONSE_MARGIN_MS,
   SYNC_EXEC_ROUTE,
   SYNC_FS_ACK_MSG,
   SYNC_FS_ERRNO_HEADER,
@@ -102,10 +103,18 @@ const MUTATING_OPS = new Set(['mkdir', 'rm']);
  * Per-request round-trip budget. The fs channel's budget is a fixed constant
  * sized for a file read; the exec channel derives its own from the caller's
  * `timeout` (clamped), because a build command legitimately runs for minutes.
+ *
+ * The exec budget gets {@link SYNC_EXEC_RESPONSE_MARGIN_MS} on top: the
+ * dispatcher aborts `ctx.exec` AT the command budget and then still has to
+ * serialize the result across the channel. Without the margin the two
+ * deadlines coincide and this handler's generic `EIO` races the responder's
+ * specific `ETIMEDOUT` (or a result that landed just in time).
  */
 function budgetFor(req: SyncFsHandlerRequest): number {
   if (!isExecHandlerRequest(req)) return DEFAULT_TIMEOUT_MS;
-  return clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_DEFAULT_TIMEOUT_MS);
+  return (
+    clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_DEFAULT_TIMEOUT_MS) + SYNC_EXEC_RESPONSE_MARGIN_MS
+  );
 }
 
 function isExecHandlerRequest(req: SyncFsHandlerRequest): req is SyncExecRequest {

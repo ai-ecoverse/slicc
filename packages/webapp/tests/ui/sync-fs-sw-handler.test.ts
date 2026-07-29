@@ -1,5 +1,8 @@
 import { expect, test, vi } from 'vitest';
-import { SYNC_EXEC_MAX_TIMEOUT_MS } from '../../src/kernel/realm/sync-fs-wire.js';
+import {
+  SYNC_EXEC_MAX_TIMEOUT_MS,
+  SYNC_EXEC_RESPONSE_MARGIN_MS,
+} from '../../src/kernel/realm/sync-fs-wire.js';
 import {
   errnoToStatus,
   handleSyncFsRequest,
@@ -32,6 +35,32 @@ function respondingChannel(
       queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
       const result = responder(req);
       if (result) queueMicrotask(() => emit({ type: 'sync-fs-res', id: req.id, ...result }));
+    },
+    addEventListener: (_t, l) => {
+      listeners.add(l);
+    },
+    removeEventListener: (_t, l) => {
+      listeners.delete(l);
+    },
+  };
+}
+
+/**
+ * Like {@link respondingChannel}, but the result lands `delayMs` after the
+ * request — modelling the responder that aborts at the command budget and then
+ * needs a moment to serialize its answer.
+ */
+function deferredChannel(delayMs: number, result: FakeResult): SyncFsSwChannelLike {
+  const listeners = new Set<(e: MessageEvent) => void>();
+  const emit = (data: unknown): void => {
+    for (const l of [...listeners]) l({ data } as MessageEvent);
+  };
+  return {
+    postMessage: (data: unknown) => {
+      const req = data as Record<string, unknown>;
+      if (req?.type !== 'sync-fs-req') return;
+      queueMicrotask(() => emit({ type: 'sync-fs-ack', id: req.id }));
+      setTimeout(() => emit({ type: 'sync-fs-res', id: req.id, ...result }), delayMs);
     },
     addEventListener: (_t, l) => {
       listeners.add(l);
@@ -284,9 +313,38 @@ test('a caller budget above the ceiling is clamped, not honored verbatim', async
       command: 'forever',
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
-    // SYNC_EXEC_MAX_TIMEOUT_MS is 10 minutes; a hair past it must settle.
-    await vi.advanceTimersByTimeAsync(SYNC_EXEC_MAX_TIMEOUT_MS + 1_000);
+    // SYNC_EXEC_MAX_TIMEOUT_MS is 10 minutes; a hair past it (plus the
+    // response margin) must settle.
+    await vi.advanceTimersByTimeAsync(
+      SYNC_EXEC_MAX_TIMEOUT_MS + SYNC_EXEC_RESPONSE_MARGIN_MS + 1_000
+    );
     expect((await pending).status).toBe(503);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the SW waits past the command budget so the responder's ETIMEDOUT wins", async () => {
+  // The dispatcher aborts ctx.exec AT the budget, then still has to serialize
+  // the result. If the SW deadline coincided with the command budget, its
+  // generic EIO would race — and usually beat — that specific errno.
+  vi.useFakeTimers();
+  try {
+    const budgetMs = 10_000;
+    const ch = deferredChannel(budgetMs + 500, {
+      ok: false,
+      errno: 'ETIMEDOUT',
+      message: 'sync-exec: timed out',
+    });
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'sleep 99',
+      timeoutMs: budgetMs,
+    });
+    await vi.advanceTimersByTimeAsync(budgetMs + 1_000);
+    const res = await pending;
+    expect(res.headers.get('x-slicc-fs-errno')).toBe('ETIMEDOUT');
   } finally {
     vi.useRealTimers();
   }
