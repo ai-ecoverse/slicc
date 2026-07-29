@@ -7,10 +7,14 @@ import {
   screenshotHandler,
   snapshotHandler,
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/snapshot.js';
+import { buildSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/snapshot.js';
 import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import { createHandlerCtx, createPlaywrightState } from '../../../helpers/playwright-harness.js';
 
-vi.mock('../../../../../src/shell/supplemental-commands/playwright/snapshot.js', () => ({
+vi.mock('../../../../../src/shell/supplemental-commands/playwright/snapshot.js', async () => ({
+  ...(await vi.importActual(
+    '../../../../../src/shell/supplemental-commands/playwright/snapshot.js'
+  )),
   takeSnapshot: vi.fn(async () => ({ output: 'SNAPSHOT-TEXT' })),
 }));
 vi.mock('../../../../../src/shell/supplemental-commands/playwright/session-log.js', () => ({
@@ -60,6 +64,46 @@ function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
 }
 
 const okFs = (): Partial<VirtualFS> => ({ writeFile: vi.fn(async () => undefined) });
+
+describe('buildSnapshot', () => {
+  it('stitches unnamed iframe content beneath its placeholder', async () => {
+    const frameUrl = 'https://app.example.com/frame';
+    const getAccessibilityTreeForFrame = vi.fn(async () => ({
+      role: 'RootWebArea',
+      name: 'Frame Content',
+      children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
+    }));
+    const browser = {
+      evaluate: vi.fn(async () =>
+        JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+      ),
+      getAccessibilityTree: vi.fn(async () => ({
+        role: 'RootWebArea',
+        name: 'Test Page',
+        children: [
+          { role: 'link', name: 'iframe docs', value: frameUrl, children: [] },
+          { role: 'iframe', name: '', value: frameUrl, children: [] },
+        ],
+      })),
+      getFrameTree: vi.fn(async () => [
+        { frameId: 'main', url: 'https://example.com' },
+        { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
+      ]),
+      getAccessibilityTreeForFrame,
+    } as unknown as BrowserAPI;
+
+    const result = await buildSnapshot(browser);
+
+    expect(result.text).toContain(
+      `  - link "iframe docs" [ref=e1]: "${frameUrl}"\n` +
+        `  - iframe: "${frameUrl}"\n` +
+        '    - rootwebarea "Frame Content"\n' +
+        '      - button "Frame Button" [ref=f1e1]'
+    );
+    expect(getAccessibilityTreeForFrame).toHaveBeenCalledOnce();
+    expect(result.refToFrameId.get('f1e1')).toBe('frame-1');
+  });
+});
 
 describe('snapshotHandler', () => {
   it('requires a --tab flag', async () => {
