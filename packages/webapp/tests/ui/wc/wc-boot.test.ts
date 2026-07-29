@@ -56,7 +56,7 @@ afterAll(() => {
 });
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
-import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
+import type { OffscreenClient, SessionStats } from '../../../src/ui/offscreen-client.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { attachWcClient, prepareWcShell } from '../../../src/ui/wc/wc-live.js';
 
@@ -102,10 +102,15 @@ function makeFakeClient() {
         throw new Error('no transport in tests');
       },
     }),
-    getSessionStats: vi.fn(async () => ({
-      totalCost: 1.234,
-      fills: [{ jid: 'cone-1', fill: 0.5 }],
-    })),
+    getSessionStats: vi.fn(
+      async (): Promise<SessionStats> => ({
+        totalCost: 1.234,
+        burnRate: 2.345,
+        fills: [{ jid: 'cone-1', fill: 0.5 }],
+        models: [{ model: 'model-a', cost: 1.234, turns: 2, tokens: 123 }],
+        scoops: [{ name: 'sliccy', model: 'model-a', cost: 1.234, type: 'cone', source: 'live' }],
+      })
+    ),
   };
   return {
     client: client as unknown as OffscreenClient,
@@ -229,9 +234,38 @@ describe('prepareWcShell + attachWcClient', () => {
     await vi.waitFor(() => {
       expect(boot.refs.floatbar.getAttribute('spent')).toBe('1.23');
     });
+    expect(boot.refs.floatbar.getAttribute('rate')).toBe('2.35');
+    const floatbar = boot.refs.floatbar as HTMLElement & {
+      costModels?: unknown;
+      costScoops?: unknown;
+    };
+    expect(floatbar.costModels).toEqual([{ model: 'model-a', cost: 1.234, turns: 2, tokens: 123 }]);
+    expect(floatbar.costScoops).toEqual([
+      { name: 'sliccy', model: 'model-a', cost: 1.234, type: 'cone', source: 'live' },
+    ]);
     // The cone chip's pupils dilate with its context fill (0.5 → fill 50).
     expect(boot.wiring.fills.get('cone-1')).toBe(0.5);
     expect(boot.refs.switcher.scoops.find((s) => s.key === 'cone-1')?.fill).toBe(50);
+  });
+
+  it('removes the rate when an older stats payload omits burnRate', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+    fake.raw.getSessionStats.mockResolvedValueOnce({
+      totalCost: 1.234,
+      fills: [],
+      models: [],
+      scoops: [],
+    } as unknown as SessionStats);
+    boot.refs.floatbar.setAttribute('rate', '9.99');
+    attachWcClient(boot, fake.client, log);
+
+    boot.wiring.notifyReady?.();
+    await vi.waitFor(() => {
+      expect(boot.refs.floatbar.hasAttribute('rate')).toBe(false);
+    });
   });
 
   it('onClientReady fires listeners on notifyReady, and immediately when already ready', () => {

@@ -1,15 +1,24 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { FrozenSessionIndexEntry } from '../../ui/session-freezer.js';
+
+export type SessionCostScope = 'live' | 'all';
 
 export interface ScoopCostData {
   name: string;
   type: 'cone' | 'scoop';
   model: string;
+  /** All models used by this session, sorted by cost descending. */
+  models: string[];
+  /** Whether the session is live, was dropped, or was loaded from the frozen-session index. */
+  source: 'live' | 'dropped' | 'frozen';
+  /** False when a legacy frozen-session index entry has no persisted cost metadata. */
+  costAvailable?: boolean;
   usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
+    input: number | null;
+    output: number | null;
+    cacheRead: number | null;
+    cacheWrite: number | null;
     totalTokens: number;
     cost: {
       input: number;
@@ -28,12 +37,49 @@ export interface ScoopCostData {
   activeTimeMs?: number;
 }
 
-let sessionCostsProvider: (() => ScoopCostData[] | Promise<ScoopCostData[]>) | null = null;
+type SessionCostsProvider = (scope: SessionCostScope) => ScoopCostData[] | Promise<ScoopCostData[]>;
 
-export function registerSessionCostsProvider(
-  fn: () => ScoopCostData[] | Promise<ScoopCostData[]>
-): void {
+let sessionCostsProvider: SessionCostsProvider | null = null;
+
+export function registerSessionCostsProvider(fn: SessionCostsProvider): void {
   sessionCostsProvider = fn;
+}
+
+function finiteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** Map a frozen-session index entry into the shared cost-command row shape. */
+export function frozenSessionToCostData(entry: FrozenSessionIndexEntry): ScoopCostData {
+  const frozenModels = Array.isArray(entry.models) ? entry.models : [];
+  const models = frozenModels
+    .map((item) => (typeof item?.model === 'string' ? item.model : ''))
+    .filter(Boolean);
+  const costAvailable = Number.isFinite(entry.cost?.total);
+
+  return {
+    name: typeof entry.title === 'string' && entry.title.length > 0 ? entry.title : entry.filename,
+    type: 'cone',
+    model: models[0] ?? '-',
+    models,
+    source: 'frozen',
+    costAvailable,
+    usage: {
+      input: null,
+      output: null,
+      cacheRead: null,
+      cacheWrite: null,
+      totalTokens: frozenModels.reduce((total, item) => total + finiteNumber(item?.tokens), 0),
+      cost: {
+        input: finiteNumber(entry.cost?.input),
+        output: finiteNumber(entry.cost?.output),
+        cacheRead: finiteNumber(entry.cost?.cacheRead),
+        cacheWrite: finiteNumber(entry.cost?.cacheWrite),
+        total: finiteNumber(entry.cost?.total),
+      },
+    },
+    turns: frozenModels.reduce((total, item) => total + finiteNumber(item?.turns), 0),
+  };
 }
 
 /** @internal Reset provider — exposed for tests only. */
@@ -47,12 +93,14 @@ function helpText(): string {
 Usage: cost [options]
 
 Options:
+  --all        Include dropped scoops and frozen sessions
   --json       Output as JSON (for programmatic use)
   -h, --help   Show this help message
 `;
 }
 
-function fmtMTok(tokens: number): string {
+function fmtMTok(tokens: number | null): string {
+  if (tokens === null) return '-';
   const mtok = tokens / 1_000_000;
   if (mtok < 0.01) return '<0.01';
   return mtok.toFixed(2);
@@ -81,6 +129,7 @@ function formatTable(data: ScoopCostData[]): string {
 
   // Fixed column widths
   const COL_AGENT = 16;
+  const COL_SOURCE = 10;
   const COL_MODEL = 18;
   const COL_MTOK = 15; // "  0.01 /   0.03"
   const COL_CACHE = 15;
@@ -90,26 +139,29 @@ function formatTable(data: ScoopCostData[]): string {
   const hdr =
     '  ' +
     'Agent'.padEnd(COL_AGENT) +
+    'Source'.padEnd(COL_SOURCE) +
     'Model'.padEnd(COL_MODEL) +
     'MTok (in/out)'.padEnd(COL_MTOK) +
     'Cache (r/w)'.padEnd(COL_CACHE) +
     'Cost'.padStart(COL_COST) +
     '$/hour'.padStart(COL_HOURLY);
 
-  const totalWidth = 2 + COL_AGENT + COL_MODEL + COL_MTOK + COL_CACHE + COL_COST + COL_HOURLY;
+  const totalWidth =
+    2 + COL_AGENT + COL_SOURCE + COL_MODEL + COL_MTOK + COL_CACHE + COL_COST + COL_HOURLY;
   const sep = '  ' + '─'.repeat(totalWidth - 2);
 
   lines.push(hdr);
   lines.push(sep);
 
-  let totIn = 0,
-    totOut = 0,
-    totCR = 0,
-    totCW = 0,
-    totCost = 0;
+  let totIn: number | null = 0,
+    totOut: number | null = 0,
+    totCR: number | null = 0,
+    totCW: number | null = 0,
+    totCost: number | null = 0;
 
   for (const d of data) {
-    const agent = d.name.padEnd(COL_AGENT);
+    const agent = truncModel(d.name, COL_AGENT).padEnd(COL_AGENT);
+    const source = d.source.padEnd(COL_SOURCE);
     const model = truncModel(d.model, COL_MODEL).padEnd(COL_MODEL);
     const tokens =
       `${fmtMTok(d.usage.input).padStart(5)} / ${fmtMTok(d.usage.output).padStart(5)}`.padEnd(
@@ -119,21 +171,25 @@ function formatTable(data: ScoopCostData[]): string {
       `${fmtMTok(d.usage.cacheRead).padStart(5)} / ${fmtMTok(d.usage.cacheWrite).padStart(5)}`.padEnd(
         COL_CACHE
       );
-    const cost = fmtCost(d.usage.cost.total).padStart(COL_COST);
-    const hourly = fmtHourlyRate(d.usage.cost.total, d.activeTimeMs).padStart(COL_HOURLY);
+    const cost = (d.costAvailable === false ? '-' : fmtCost(d.usage.cost.total)).padStart(COL_COST);
+    const hourly =
+      d.costAvailable === false
+        ? '-'.padStart(COL_HOURLY)
+        : fmtHourlyRate(d.usage.cost.total, d.activeTimeMs).padStart(COL_HOURLY);
 
-    lines.push(`  ${agent}${model}${tokens}${cache}${cost}${hourly}`);
+    lines.push(`  ${agent}${source}${model}${tokens}${cache}${cost}${hourly}`);
 
-    totIn += d.usage.input;
-    totOut += d.usage.output;
-    totCR += d.usage.cacheRead;
-    totCW += d.usage.cacheWrite;
-    totCost += d.usage.cost.total;
+    totIn = totIn === null || d.usage.input === null ? null : totIn + d.usage.input;
+    totOut = totOut === null || d.usage.output === null ? null : totOut + d.usage.output;
+    totCR = totCR === null || d.usage.cacheRead === null ? null : totCR + d.usage.cacheRead;
+    totCW = totCW === null || d.usage.cacheWrite === null ? null : totCW + d.usage.cacheWrite;
+    totCost = totCost === null || d.costAvailable === false ? null : totCost + d.usage.cost.total;
   }
 
   lines.push(sep);
 
   const totalAgent = 'Total'.padEnd(COL_AGENT);
+  const totalSource = ''.padEnd(COL_SOURCE);
   const totalModel = ''.padEnd(COL_MODEL);
   const totalTokens = `${fmtMTok(totIn).padStart(5)} / ${fmtMTok(totOut).padStart(5)}`.padEnd(
     COL_MTOK
@@ -141,10 +197,12 @@ function formatTable(data: ScoopCostData[]): string {
   const totalCache = `${fmtMTok(totCR).padStart(5)} / ${fmtMTok(totCW).padStart(5)}`.padEnd(
     COL_CACHE
   );
-  const totalCost = fmtCost(totCost).padStart(COL_COST);
+  const totalCost = (totCost === null ? '-' : fmtCost(totCost)).padStart(COL_COST);
   const totalHourly = ''.padStart(COL_HOURLY);
 
-  lines.push(`  ${totalAgent}${totalModel}${totalTokens}${totalCache}${totalCost}${totalHourly}`);
+  lines.push(
+    `  ${totalAgent}${totalSource}${totalModel}${totalTokens}${totalCache}${totalCost}${totalHourly}`
+  );
 
   return lines.join('\n') + '\n';
 }
@@ -159,7 +217,8 @@ export function createCostCommand(): Command {
       return { stdout: '', stderr: 'Cost data not available.\n', exitCode: 1 };
     }
 
-    const data = await sessionCostsProvider();
+    const scope: SessionCostScope = args.includes('--all') ? 'all' : 'live';
+    const data = await sessionCostsProvider(scope);
 
     if (data.length === 0) {
       return { stdout: 'No session cost data yet.\n', stderr: '', exitCode: 0 };

@@ -59,12 +59,20 @@ void _assertLickWireCarrier;
 export interface SessionStats {
   /** Total session cost (USD) across all scoops, dropped ones included. */
   totalCost: number;
+  /** Active-session spend over the trailing window, extrapolated to USD/hour. */
+  burnRate: number;
   /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
   fills: Array<{ jid: string; fill: number }>;
   /** Per-model cost breakdown, sorted by cost descending. */
   models: Array<{ model: string; cost: number; turns: number; tokens: number }>;
-  /** Per-scoop cost breakdown. */
-  scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }>;
+  /** Per-scoop cost breakdown, including its active/historical source. */
+  scoops: Array<{
+    name: string;
+    model: string;
+    cost: number;
+    type: 'cone' | 'scoop';
+    source: 'live' | 'dropped' | 'frozen';
+  }>;
 }
 
 export interface OffscreenClientCallbacks {
@@ -750,6 +758,7 @@ export class OffscreenClient implements KernelClientFacade {
           this.pendingStatsRequests.delete(m.requestId);
           resolve({
             totalCost: m.totalCost,
+            burnRate: m.burnRate,
             fills: m.fills,
             models: m.models ?? [],
             scoops: m.scoops ?? [],
@@ -934,7 +943,12 @@ export class OffscreenClient implements KernelClientFacade {
       case 'response_done': {
         const msgId = this.currentMessageId.get(msg.scoopJid);
         if (msgId) {
-          this.emitToUI({ type: 'content_done', messageId: msgId });
+          this.emitToUI({
+            type: 'content_done',
+            messageId: msgId,
+            model: msg.model,
+            usage: msg.usage,
+          });
           this.currentMessageId.delete(msg.scoopJid);
         }
         break;

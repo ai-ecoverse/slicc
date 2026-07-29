@@ -6,6 +6,22 @@ import {
 } from '../../src/primitives/slicc-cost-overlay.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
+function liveScaleScoops(): CostOverlayScoop[] {
+  return [
+    { name: 'sliccy', model: 'opus-4-6', cost: 12.45, type: 'cone' },
+    { name: 'architect', model: 'opus-4-6', cost: 4.12, type: 'scoop' },
+    { name: 'implementer', model: 'sonnet-4-6', cost: 2.1, type: 'scoop' },
+    { name: 'reviewer', model: 'sonnet-4-6', cost: 1.15, type: 'scoop' },
+    { name: 'researcher', model: 'haiku-4-5', cost: 0.95, type: 'scoop' },
+    ...Array.from({ length: 117 }, (_, index) => ({
+      name: `agent-${index + 1}`,
+      model: 'haiku-4-5',
+      cost: index === 0 ? 0.1 : 0.02,
+      type: 'scoop' as const,
+    })),
+  ];
+}
+
 describe('slicc-cost-overlay', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -139,11 +155,73 @@ describe('slicc-cost-overlay', () => {
 
       const rows = scoopSection?.querySelectorAll('.scoop-row');
       expect(rows?.length).toBe(4);
+      expect(scoopSection?.querySelector('.bucket-row')).toBeNull();
 
       // Check first scoop row content
       const firstRow = rows?.[0];
       expect(firstRow?.textContent).toContain('sliccy');
       expect(firstRow?.textContent).toContain('$2.80');
+    });
+
+    it('keeps five agents as individual rows without sorting or bucketing', () => {
+      const el = document.createElement('slicc-cost-overlay');
+      el.scoops = Array.from({ length: 5 }, (_, index) => ({
+        name: `agent-${index + 1}`,
+        model: 'haiku-4-5',
+        cost: (index + 1) * 0.1,
+        type: 'scoop' as const,
+      }));
+      el.open = true;
+      document.body.appendChild(el);
+
+      const section = el.shadowRoot?.querySelector('.section--scoops');
+      const rows = section?.querySelectorAll('.scoop-row');
+      expect(rows).toHaveLength(5);
+      expect(rows?.[0]?.textContent).toContain('agent-1');
+      expect(section?.querySelectorAll('.bucket-row')).toHaveLength(0);
+    });
+
+    it('renders 122 agents as five highest-cost rows plus $1-or-larger buckets', () => {
+      const el = document.createElement('slicc-cost-overlay');
+      el.models = [{ model: 'all-models', cost: 23.19, turns: 122 }];
+      el.scoops = liveScaleScoops();
+      el.open = true;
+      document.body.appendChild(el);
+
+      const section = el.shadowRoot?.querySelector('.section--scoops');
+      const individualRows = Array.from(section?.querySelectorAll('.scoop-row') ?? []);
+      expect(individualRows).toHaveLength(5);
+      expect(individualRows.map((row) => row.querySelector('.scoop-name')?.textContent)).toEqual([
+        'sliccy',
+        'architect',
+        'implementer',
+        'reviewer',
+        'researcher',
+      ]);
+
+      const bucketRows = Array.from(section?.querySelectorAll('.bucket-row') ?? []);
+      expect(bucketRows.length).toBeGreaterThan(0);
+      expect(bucketRows.map((row) => row.textContent)).toEqual([
+        '46 agents · $1.00',
+        '71 agents · $1.42',
+      ]);
+      const bucketCosts = bucketRows.map((row) => {
+        expect(row.getAttribute('part')).toBe('bucket');
+        expect(row.textContent).toMatch(/^[0-9]+ agents? · \$[0-9]+\.[0-9]{2}$/);
+        return Number.parseFloat(row.textContent?.split('$')[1] ?? '0');
+      });
+      expect(bucketCosts.every((cost) => cost >= 1)).toBe(true);
+
+      const individualTotal = individualRows.reduce((sum, row) => {
+        return (
+          sum + Number.parseFloat(row.querySelector('.scoop-cost')?.textContent?.slice(1) ?? '0')
+        );
+      }, 0);
+      expect(individualTotal + bucketCosts.reduce((sum, cost) => sum + cost, 0)).toBeCloseTo(
+        23.19,
+        2
+      );
+      expect(el.shadowRoot?.querySelector('.total-cost')?.textContent).toBe('$23.19');
     });
 
     it('handles empty scoops array', () => {
@@ -182,6 +260,16 @@ describe('slicc-cost-overlay', () => {
 
       const totalRow = el.shadowRoot?.querySelector('.total-row');
       expect(totalRow?.textContent).toContain('$0.00');
+    });
+
+    it('uses an explicit cumulative total when provided', () => {
+      const el = document.createElement('slicc-cost-overlay');
+      el.models = [{ model: 'active-model', cost: 2.41, turns: 3 }];
+      el.total = 23.19;
+      el.open = true;
+      document.body.appendChild(el);
+
+      expect(el.shadowRoot?.querySelector('.total-cost')?.textContent).toBe('$23.19');
     });
   });
 

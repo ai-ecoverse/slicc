@@ -223,6 +223,12 @@ scoop_unmute({ scoop_names: ["scraper"] })
 - Unknown scoop names are reported in the result but do not abort the call.
 - Dropping or re-registering a muted scoop is safe: `unregisterScoop` releases waiters (resolving as `timedOut: true`) and clears mute/pending state.
 
+## Inspecting delegation cost
+
+Run `cost` to inspect spend for the cone and currently live scoops. The table labels each row's source, and `--json` returns the same live-only scope for scripts.
+
+Use `cost --all` only when you need the historical picture: it adds dropped scoops from the current runtime and frozen sessions recorded in `/sessions/index.json`. Combine it with `--json` for structured historical output. Legacy frozen sessions that predate cost persistence are retained with unknown cost rather than reported as zero.
+
 ## Model selection for scoops
 
 **Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model.

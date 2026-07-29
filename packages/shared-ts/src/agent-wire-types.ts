@@ -41,10 +41,29 @@ export interface MessageAttachment {
 // Agent events — emitted by the agent core, streamed to followers
 // ---------------------------------------------------------------------------
 
+export interface ChatMessageUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
 export type AgentEvent =
   | { type: 'message_start'; messageId: string }
   | { type: 'content_delta'; messageId: string; text: string }
-  | { type: 'content_done'; messageId: string }
+  | {
+      type: 'content_done';
+      messageId: string;
+      model?: string;
+      usage?: ChatMessageUsage;
+    }
   | { type: 'tool_use_start'; messageId: string; toolName: string; toolInput: unknown }
   | { type: 'tool_result'; messageId: string; toolName: string; result: string; isError?: boolean }
   | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
@@ -75,6 +94,10 @@ export interface ChatMessage {
   attachments?: MessageAttachment[];
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
+  /** Assistant model id, retained for cost attribution when the session freezes. */
+  model?: string;
+  /** Final assistant usage, present only after the provider reports the completed turn. */
+  usage?: ChatMessageUsage;
   /** Source of the message: 'cone' for main agent, scoop name for sub-agents, 'lick' for async events */
   source?: 'cone' | 'lick' | string;
   /** For licks: the channel type (webhook, cron, etc.) */

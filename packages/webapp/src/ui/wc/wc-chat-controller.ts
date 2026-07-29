@@ -758,7 +758,7 @@ export class WcChatController {
         this.#handleContentDelta(event.messageId, event.text);
         break;
       case 'content_done':
-        this.#handleContentDone(event.messageId);
+        this.#handleContentDone(event.messageId, event.model, event.usage);
         break;
       case 'tool_use_start':
         this.#handleToolUseStart(event.messageId, event.toolName, event.toolInput);
@@ -832,9 +832,15 @@ export class WcChatController {
     this.#rerenderMessage(message);
   }
 
-  #handleContentDone(messageId: string): void {
+  #handleContentDone(
+    messageId: string,
+    model?: ChatMessage['model'],
+    usage?: ChatMessage['usage']
+  ): void {
     const message = this.#findMessage(messageId);
     if (!message) return;
+    if (model) message.model = model;
+    if (usage) message.usage = usage;
     if (this.#pendingDelta && this.#currentStreamId === messageId) {
       message.content += this.#pendingDelta;
     }

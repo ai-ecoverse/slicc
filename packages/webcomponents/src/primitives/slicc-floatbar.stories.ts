@@ -5,6 +5,7 @@ interface FloatbarArgs {
   label?: string;
   linked?: boolean;
   online?: boolean;
+  rate?: string;
   spent?: string;
 }
 
@@ -16,13 +17,15 @@ const meta: Meta<FloatbarArgs> = {
     label: { control: 'text', description: 'Runtime label text' },
     linked: { control: 'boolean', description: 'Rose-tinted border (linked runtime)' },
     online: { control: 'boolean', description: 'Show the green status dot' },
-    spent: { control: 'text', description: '$ spent — number/string, renders a coin + $amount' },
+    rate: { control: 'text', description: 'Active-session hourly rate shown in the pill' },
+    spent: { control: 'text', description: 'Cumulative cost shown in the overlay total' },
   },
-  render: ({ label, linked, online, spent }) => {
+  render: ({ label, linked, online, rate, spent }) => {
     const el = document.createElement('slicc-floatbar');
     if (label != null) el.setAttribute('label', label);
     if (linked) el.toggleAttribute('linked', true);
     if (online) el.toggleAttribute('online', true);
+    if (rate != null && rate !== '') el.setAttribute('rate', rate);
     if (spent != null && spent !== '') el.setAttribute('spent', spent);
     return el;
   },
@@ -49,14 +52,19 @@ export const LinkedOnline: Story = {
   args: { label: 'CLI · tray · 1 follower', linked: true, online: true },
 };
 
-/** With a `$ SPENT` cost segment — coin icon + `$2.41` after a thin divider. */
+/** With an hourly rate segment — coin icon + `$2.41/h` after a thin divider. */
 export const WithSpent: Story = {
-  args: { label: 'CLI float', spent: '2.41' },
+  args: { label: 'CLI float', rate: '2.41', spent: '2.41' },
 };
 
 /** Online + spent — green dot, label, divider, and the cost segment together. */
 export const OnlineSpent: Story = {
-  args: { label: 'CLI · tray · 1 follower', online: true, spent: '12.07' },
+  args: { label: 'CLI · tray · 1 follower', online: true, rate: '12.07', spent: '18.42' },
+};
+
+/** Live burn-rate headline while the cumulative total remains available to the overlay. */
+export const RateHeadline: Story = {
+  args: { label: 'CLI · tray · 1 follower', online: true, rate: '23.10', spent: '23.19' },
 };
 
 /**
@@ -69,6 +77,6 @@ export const OnlineSpent: Story = {
  * square form, then hover the badge for the tooltip.
  */
 export const NarrowMobile: Story = {
-  args: { label: 'CLI · tray · 1 follower', online: true, spent: '2.41' },
+  args: { label: 'CLI · tray · 1 follower', online: true, rate: '2.41', spent: '12.07' },
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 };

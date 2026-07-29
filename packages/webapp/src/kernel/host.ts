@@ -430,7 +430,7 @@ async function initCostsAndLickManager(
   const { registerSessionCostsProvider } = await import(
     '../shell/supplemental-commands/cost-command.js'
   );
-  registerSessionCostsProvider(() => orchestrator.getSessionCosts());
+  registerSessionCostsProvider((scope) => orchestrator.getSessionCostsForCommand(scope));
 
   // 7. LickManager init + lick→cone routing.
   const { getLickManager } = await import('../scoops/lick-manager.js');

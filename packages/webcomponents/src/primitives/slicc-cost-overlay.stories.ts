@@ -11,6 +11,20 @@ const meta: Meta = {
 export default meta;
 type Story = StoryObj;
 
+const liveScaleScoops = () => [
+  { name: 'sliccy', model: 'claude-opus-4-6', cost: 12.45, type: 'cone' as const },
+  { name: 'architect', model: 'claude-opus-4-6', cost: 4.12, type: 'scoop' as const },
+  { name: 'implementer', model: 'claude-sonnet-4-6', cost: 2.1, type: 'scoop' as const },
+  { name: 'reviewer', model: 'claude-sonnet-4-6', cost: 1.15, type: 'scoop' as const },
+  { name: 'researcher', model: 'claude-haiku-4-5', cost: 0.95, type: 'scoop' as const },
+  ...Array.from({ length: 117 }, (_, index) => ({
+    name: `agent-${String(index + 1).padStart(3, '0')}`,
+    model: 'claude-haiku-4-5',
+    cost: index === 0 ? 0.1 : 0.02,
+    type: 'scoop' as const,
+  })),
+];
+
 /** Standalone overlay card (always open) showing typical session data. */
 export const Standalone: Story = {
   render: () => {
@@ -106,6 +120,27 @@ export const LargeSession: Story = {
       { name: 'implementer-2', model: 'claude-sonnet-4-6', cost: 1.41, type: 'scoop' },
       { name: 'reviewer', model: 'claude-haiku-4-5', cost: 0.18, type: 'scoop' },
     ];
+    el.open = true;
+    wrapper.appendChild(el);
+    return wrapper;
+  },
+};
+
+/** Live-scale 122-agent session: five leaders plus bounded aggregate buckets. */
+export const HundredTwentyTwoAgents: Story = {
+  render: () => {
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'relative';
+    wrapper.style.display = 'inline-block';
+    wrapper.style.margin = '16px 0 0 100px';
+
+    const el = document.createElement('slicc-cost-overlay');
+    el.models = [
+      { model: 'claude-opus-4-6', cost: 16.57, turns: 36, tokens: 5_400_000 },
+      { model: 'claude-sonnet-4-6', cost: 3.25, turns: 28, tokens: 1_900_000 },
+      { model: 'claude-haiku-4-5', cost: 3.37, turns: 122, tokens: 840_000 },
+    ];
+    el.scoops = liveScaleScoops();
     el.open = true;
     wrapper.appendChild(el);
     return wrapper;

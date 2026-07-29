@@ -215,6 +215,29 @@ describe('WcChatController', () => {
     expect(processingStates).toEqual([true, false]);
   });
 
+  it('retains final model and usage metadata on a live assistant message', () => {
+    const usage = {
+      input: 12,
+      output: 3,
+      cacheRead: 4,
+      cacheWrite: 1,
+      cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 },
+    };
+    agent.emit({ type: 'message_start', messageId: 'm-cost' });
+    agent.emit({
+      type: 'content_done',
+      messageId: 'm-cost',
+      model: 'claude-haiku-4-5',
+      usage,
+    });
+
+    expect(controller.getMessages().at(-1)).toMatchObject({
+      id: 'm-cost',
+      model: 'claude-haiku-4-5',
+      usage,
+    });
+  });
+
   it('folds un-flushed deltas into the final render on content_done', () => {
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({ type: 'content_delta', messageId: 'm1', text: 'tail text' });

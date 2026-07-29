@@ -122,12 +122,14 @@ describe('slicc-floatbar', () => {
     });
   });
 
-  describe('the cost segment (spent state)', () => {
-    it('is absent by default', () => {
+  describe('the cost segment (rate state)', () => {
+    it('renders a zero hourly rate when rate is absent or zero', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
-      expect(el.shadowRoot?.querySelector('.sep')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
+
+      el.rate = 0;
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
     });
 
     it('reflects the spent attribute to the property and back', () => {
@@ -149,9 +151,22 @@ describe('slicc-floatbar', () => {
       expect(el.getAttribute('spent')).toBe('2.41');
     });
 
+    it('reflects the rate attribute to the property and back', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.rate = 23.1;
+      document.body.appendChild(el);
+      expect(el.getAttribute('rate')).toBe('23.1');
+      expect(el.rate).toBe('23.1');
+
+      el.rate = null;
+      expect(el.hasAttribute('rate')).toBe(false);
+      expect(el.rate).toBeNull();
+    });
+
     it('renders a divider, an svg icon, and the formatted amount', () => {
       const el = document.createElement('slicc-floatbar');
-      el.spent = '2.41';
+      el.rate = '23.1';
+      el.spent = '99.50';
       document.body.appendChild(el);
 
       const sep = el.shadowRoot?.querySelector('.sep');
@@ -159,58 +174,57 @@ describe('slicc-floatbar', () => {
 
       const spent = el.shadowRoot?.querySelector('.spent') as HTMLElement;
       expect(spent).not.toBeNull();
-      expect(spent.getAttribute('part')).toBe('spent');
+      expect(spent.getAttribute('part')?.split(' ')).toEqual(['spent', 'rate']);
       // a real lucide <svg> is rendered (not an emoji / unicode glyph)
       expect(spent.querySelector('svg')).not.toBeNull();
       // the formatted amount, with the leading $
-      expect(spent.querySelector('.amount')?.textContent).toBe('$2.41');
+      expect(spent.querySelector('.amount')?.textContent).toBe('$23.10/h');
       // no bespoke currency glyph leaks through — only the $-prefixed amount
-      expect(spent.textContent).toBe('$2.41');
+      expect(spent.textContent).toBe('$23.10/h');
       expect(spent.textContent).not.toMatch(/[💲💵🪙€£¢]/u);
     });
 
     it('formats a bare integer string to two decimals', () => {
       const el = document.createElement('slicc-floatbar');
-      el.spent = '3';
+      el.rate = '3';
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$3.00');
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$3.00/h');
     });
 
     it('tolerates a value that already carries a leading $', () => {
       const el = document.createElement('slicc-floatbar');
-      el.setAttribute('spent', '$12.5');
+      el.setAttribute('rate', '$12.5');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.50');
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.50/h');
     });
 
-    it('renders nothing for blank or non-numeric values', () => {
+    it('renders zero for blank or non-numeric rate values', () => {
       const el = document.createElement('slicc-floatbar');
-      el.setAttribute('spent', '   ');
+      el.setAttribute('rate', '   ');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
 
-      el.setAttribute('spent', 'free');
-      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
+      el.setAttribute('rate', 'free');
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
     });
 
-    it('toggles back off when spent is cleared', () => {
+    it('falls back to zero when rate is cleared', () => {
       const el = document.createElement('slicc-floatbar');
-      el.spent = '2.41';
+      el.rate = '2.41';
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.spent')).not.toBeNull();
-      el.spent = null;
-      expect(el.shadowRoot?.querySelector('.spent')).toBeNull();
-      expect(el.shadowRoot?.querySelector('.sep')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$2.41/h');
+      el.rate = null;
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
     });
 
     it('coexists with the online status dot and the label', () => {
       const el = document.createElement('slicc-floatbar');
       el.online = true;
-      el.spent = '12.07';
+      el.rate = '12.07';
       document.body.appendChild(el);
       expect(el.shadowRoot?.querySelector('.fdot')).not.toBeNull();
       expect(el.shadowRoot?.querySelector('.label')?.textContent).toContain('CLI float');
-      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.07');
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.07/h');
       expect(el.shadowRoot?.querySelector('.spent svg')).not.toBeNull();
     });
   });
@@ -311,7 +325,7 @@ describe('slicc-floatbar', () => {
       const el = document.createElement('slicc-floatbar');
       el.label = 'CLI · tray · 1 follower';
       el.online = true;
-      el.spent = '2.41';
+      el.rate = '2.41';
       document.body.appendChild(el);
 
       const tip = el.shadowRoot?.querySelector('.tip') as HTMLElement;
@@ -319,13 +333,15 @@ describe('slicc-floatbar', () => {
       expect(tip.getAttribute('part')).toBe('tip');
       // decorative — the accessible name rides the host title, not the tip node
       expect(tip.getAttribute('aria-hidden')).toBe('true');
-      expect(tip.textContent).toBe('CLI · tray · 1 follower · $2.41 · online');
+      expect(tip.textContent).toBe('CLI · tray · 1 follower · $2.41/h · online');
     });
 
-    it('reflects the offline state and omits the spend segment when unset', () => {
+    it('reflects the offline state and the zero rate when unset', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe('CLI float · offline');
+      expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe(
+        'CLI float · $0.00/h · offline'
+      );
     });
 
     it('hides the tip in the wide pill and reveals it only below 560px', () => {
@@ -356,9 +372,9 @@ describe('slicc-floatbar', () => {
         window.matchMedia = fakeMatchMedia(true) as typeof window.matchMedia;
         const el = document.createElement('slicc-floatbar');
         el.online = true;
-        el.spent = '2.41';
+        el.rate = '2.41';
         document.body.appendChild(el);
-        expect(el.getAttribute('title')).toBe('CLI float · $2.41 · online');
+        expect(el.getAttribute('title')).toBe('CLI float · $2.41/h · online');
       } finally {
         window.matchMedia = original;
       }
@@ -408,6 +424,20 @@ describe('slicc-floatbar', () => {
       const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay');
       expect(overlay).not.toBeNull();
       expect(overlay?.hasAttribute('open')).toBe(true);
+    });
+
+    it('shows rate in the pill and spent as the cumulative overlay total', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      el.rate = 23.1;
+      el.spent = 23.19;
+      el.costModels = [{ model: 'active-model', cost: 4.5, turns: 8 }];
+      document.body.appendChild(el);
+
+      expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$23.10/h');
+      const rate = el.shadowRoot?.querySelector('.spent') as HTMLElement;
+      rate.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay');
+      expect(overlay?.shadowRoot?.querySelector('.total-cost')?.textContent).toBe('$23.19');
     });
 
     it('hides overlay on mouseleave after delay', async () => {

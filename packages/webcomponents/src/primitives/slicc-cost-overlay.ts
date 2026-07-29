@@ -16,6 +16,14 @@ export interface CostOverlayScoop {
   type: 'cone' | 'scoop';
 }
 
+interface CostOverlayBucket {
+  count: number;
+  cost: number;
+}
+
+const INDIVIDUAL_SCOOP_LIMIT = 5;
+const MIN_BUCKET_COST = 1;
+
 function shortModel(model: string): string {
   return model.replace('claude-', '');
 }
@@ -25,6 +33,41 @@ function fmtTokens(n: number | undefined): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
   return String(n);
+}
+
+function groupScoops(scoops: CostOverlayScoop[]): {
+  individuals: CostOverlayScoop[];
+  buckets: CostOverlayBucket[];
+} {
+  if (scoops.length <= INDIVIDUAL_SCOOP_LIMIT) {
+    return { individuals: scoops, buckets: [] };
+  }
+
+  const sorted = [...scoops].sort((a, b) => b.cost - a.cost);
+  const individuals = sorted.slice(0, INDIVIDUAL_SCOOP_LIMIT);
+  const buckets: CostOverlayBucket[] = [];
+  let tail: CostOverlayBucket = { count: 0, cost: 0 };
+
+  for (const scoop of sorted.slice(INDIVIDUAL_SCOOP_LIMIT)) {
+    tail.count += 1;
+    tail.cost += scoop.cost;
+    if (tail.cost >= MIN_BUCKET_COST) {
+      buckets.push(tail);
+      tail = { count: 0, cost: 0 };
+    }
+  }
+
+  if (tail.count > 0) {
+    const finalBucket = buckets.at(-1);
+    if (finalBucket) {
+      finalBucket.count += tail.count;
+      finalBucket.cost += tail.cost;
+    } else {
+      buckets.push(tail);
+    }
+  }
+
+  return { individuals, buckets };
 }
 
 const STYLE = `
@@ -51,7 +94,9 @@ const STYLE = `
   font-size: 12px;
   line-height: 1.4;
   color: var(--ink);
-  overflow: hidden;
+  max-height: calc(100vh - 64px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 :host([open]) .card {
@@ -80,12 +125,22 @@ const STYLE = `
 }
 
 .model-row,
-.scoop-row {
+.scoop-row,
+.bucket-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
   padding: 2px 0;
+}
+
+.bucket-row {
+  margin-top: 2px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ctx) 45%, transparent);
+  color: var(--txt-2);
+  font-weight: 600;
 }
 
 .model-row {
@@ -150,7 +205,9 @@ const SHEET = sheet(STYLE);
  * @attr open - boolean; shows the card when present, hides when absent
  * @property models - array of {@link CostOverlayModel} — per-model costs
  * @property scoops - array of {@link CostOverlayScoop} — per-scoop costs
+ * @property total - optional cumulative total overriding the per-model sum
  * @property open - boolean; reflects to/from the `open` attribute
+ * @csspart bucket - an aggregate row for lower-cost agents
  */
 export class SliccCostOverlay extends HTMLElement {
   static readonly observedAttributes = ['open'];
@@ -158,6 +215,7 @@ export class SliccCostOverlay extends HTMLElement {
   readonly #root: ShadowRoot;
   #models: CostOverlayModel[] = [];
   #scoops: CostOverlayScoop[] = [];
+  #total: number | null = null;
 
   constructor() {
     super();
@@ -202,6 +260,16 @@ export class SliccCostOverlay extends HTMLElement {
     if (this.isConnected) this.#render();
   }
 
+  /** Explicit cumulative total. Falls back to the per-model sum when unset. */
+  get total(): number | null {
+    return this.#total;
+  }
+
+  set total(value: number | null) {
+    this.#total = value != null && Number.isFinite(value) ? value : null;
+    if (this.isConnected) this.#render();
+  }
+
   #render(): void {
     const sections: Node[] = [];
 
@@ -230,12 +298,20 @@ export class SliccCostOverlay extends HTMLElement {
 
     // BY AGENT section
     if (this.#scoops.length > 0) {
-      const scoopRows = this.#scoops.map((s) =>
+      const grouped = groupScoops(this.#scoops);
+      const scoopRows = grouped.individuals.map((s) =>
         h(
           'div',
           { class: 'scoop-row' },
           h('span', { class: 'scoop-name' }, s.name),
           h('span', { class: 'scoop-cost' }, `$${s.cost.toFixed(2)}`)
+        )
+      );
+      const bucketRows = grouped.buckets.map((bucket) =>
+        h(
+          'div',
+          { class: 'bucket-row', part: 'bucket' },
+          `${bucket.count} ${bucket.count === 1 ? 'agent' : 'agents'} · $${bucket.cost.toFixed(2)}`
         )
       );
 
@@ -244,13 +320,14 @@ export class SliccCostOverlay extends HTMLElement {
           'div',
           { class: 'section section--scoops' },
           h('div', { class: 'section-title' }, 'BY AGENT'),
-          ...scoopRows
+          ...scoopRows,
+          ...bucketRows
         )
       );
     }
 
     // Total row
-    const total = this.#models.reduce((sum, m) => sum + m.cost, 0);
+    const total = this.#total ?? this.#models.reduce((sum, m) => sum + m.cost, 0);
     sections.push(
       h(
         'div',

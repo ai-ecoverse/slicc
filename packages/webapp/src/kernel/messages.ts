@@ -9,6 +9,7 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
+import type { ChatMessage } from '../scoops/chat-types.js';
 import type { ScoopTabState } from '../scoops/types.js';
 import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-protocol.js';
 
@@ -186,12 +187,20 @@ export interface SessionStatsMsg {
   requestId: string;
   /** Total session cost (USD) across all scoops, dropped ones included. */
   totalCost: number;
+  /** Active-session spend over the trailing window, extrapolated to USD/hour. */
+  burnRate: number;
   /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
   fills: Array<{ jid: string; fill: number }>;
   /** Per-model cost breakdown, sorted by cost descending. */
   models: Array<{ model: string; cost: number; turns: number; tokens: number }>;
-  /** Per-scoop cost breakdown. */
-  scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }>;
+  /** Per-scoop cost breakdown, including its active/historical source. */
+  scoops: Array<{
+    name: string;
+    model: string;
+    cost: number;
+    type: 'cone' | 'scoop';
+    source: 'live' | 'dropped' | 'frozen';
+  }>;
 }
 
 export interface ClearChatMsg {
@@ -775,6 +784,8 @@ export interface AgentEventMsg {
   isError?: boolean;
   requestId?: string;
   html?: string;
+  model?: string;
+  usage?: ChatMessage['usage'];
 }
 
 export interface ScoopStatusMsg {
@@ -911,6 +922,8 @@ export interface ScoopMessagesReplacedMsg {
       isError?: boolean;
     }>;
     isStreaming?: boolean;
+    model?: string;
+    usage?: ChatMessage['usage'];
   }>;
 }
 

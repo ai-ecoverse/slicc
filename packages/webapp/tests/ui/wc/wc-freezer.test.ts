@@ -12,6 +12,7 @@ installWcDomStubs();
 
 import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import { readSessionCount } from '../../../src/scoops/cone-memory-budget.js';
 import {
   enrichFreezerIcons,
   type FrozenSessionIndexEntry,
@@ -180,6 +181,8 @@ describe('corrupt-index recovery', () => {
         'title: "quick one"',
         'frozenAt: "2026-06-02T09:00:00Z"',
         'messageCount: 3',
+        'cost: {"total":0.25,"input":0.1,"output":0.15,"cacheRead":0,"cacheWrite":0}',
+        'models: [{"model":"model-a","cost":0.25,"turns":2,"tokens":300}]',
         '---',
         '',
       ].join('\n')
@@ -194,8 +197,27 @@ describe('corrupt-index recovery', () => {
       title: 'quick one',
       messageCount: 3,
       pendingEnrichment: true,
+      cost: { total: 0.25, input: 0.1, output: 0.15, cacheRead: 0, cacheWrite: 0 },
+      models: [{ model: 'model-a', cost: 0.25, turns: 2, tokens: 300 }],
     });
     expect(rebuilt[1]).toMatchObject({ filename: ENTRY.filename, title: 'Fix the build' });
+  });
+
+  it('keeps readSessionCount compatible with cost-bearing index entries', async () => {
+    const fs = await seededFs();
+    await fs.writeFile(
+      '/sessions/index.json',
+      JSON.stringify([
+        ENTRY,
+        {
+          ...ENTRY,
+          filename: 'cost-bearing.md',
+          cost: { total: 0.25, input: 0.1, output: 0.15, cacheRead: 0, cacheWrite: 0 },
+          models: [{ model: 'model-a', cost: 0.25, turns: 2, tokens: 300 }],
+        },
+      ])
+    );
+    expect(await readSessionCount(fs)).toBe(2);
   });
 
   it('enrichFreezerIcons refuses to write over a corrupt or empty re-read', async () => {

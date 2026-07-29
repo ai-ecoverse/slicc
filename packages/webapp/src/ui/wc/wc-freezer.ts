@@ -152,11 +152,14 @@ export async function rebuildFreezerIndexFromArchives(
       const title = /^title:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? filename;
       const frozenAt = /^frozenAt:\s*"?(.*?)"?\s*$/m.exec(header)?.[1] ?? new Date(0).toISOString();
       const messageCount = Number(/^messageCount:\s*(\d+)\s*$/m.exec(header)?.[1] ?? 0);
+      const parsed = parseFrozenArchive(text);
       entries.push({
         filename,
         title,
         frozenAt,
         messageCount,
+        ...(parsed.cost ? { cost: parsed.cost } : {}),
+        ...(parsed.models ? { models: parsed.models } : {}),
         ...(filename.startsWith('pending-') ? { pendingEnrichment: true } : {}),
       });
     } catch {
