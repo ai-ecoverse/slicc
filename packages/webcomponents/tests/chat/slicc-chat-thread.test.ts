@@ -181,11 +181,6 @@ describe('slicc-chat-thread', () => {
       expect(getComputedStyle(el).overflowY).toBe('auto');
     });
 
-    it('contains vertical overscroll at the thread boundary', () => {
-      const el = mount();
-      expect(getComputedStyle(el).overscrollBehaviorY).toBe('contain');
-    });
-
     it('reserves a stable scrollbar gutter so context swaps do not shift the column', () => {
       const el = mount();
       expect(getComputedStyle(el).scrollbarGutter).toBe('stable');

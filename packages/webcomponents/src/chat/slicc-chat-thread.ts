@@ -21,7 +21,6 @@ slicc-chat-thread {
   flex: 1 1 auto;
   display: block;
   overflow-y: auto;
-  overscroll-behavior-y: contain;
   min-height: 0;
   /* Always reserve the scrollbar gutter so the reading column's width — and
      therefore its aspect ratio — stays fixed when a context swap changes the

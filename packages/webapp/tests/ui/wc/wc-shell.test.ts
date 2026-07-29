@@ -35,6 +35,13 @@ describe('mountWcUiPreview', () => {
     expect(document.querySelectorAll('#slicc-wcui-style').length).toBe(1);
   });
 
+  it('suppresses root-viewport elastic overscroll in the shell document', () => {
+    mount();
+    const css = document.getElementById('slicc-wcui-style')?.textContent ?? '';
+    const rootRule = css.match(/html,body\{([^}]*)\}/)?.[1] ?? '';
+    expect(rootRule).toContain('overscroll-behavior:none;');
+  });
+
   it('replaces prior root content (idempotent mount)', () => {
     const root = mount();
     mountWcUiPreview(root);
