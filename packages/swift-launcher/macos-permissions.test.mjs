@@ -22,6 +22,24 @@ describe('Sliccstart Apple Events packaging', () => {
   });
 });
 
+describe('Sliccstart default-browser packaging', () => {
+  it('advertises the http and https handler role', () => {
+    // LaunchServices only lists Sliccstart under "Default web browser" — and
+    // only accepts a handler change — for schemes the bundle declares here.
+    // Keep in step with DefaultBrowserRegistration.handledSchemes.
+    expect(assemblySource).toContain('<key>CFBundleURLTypes</key>');
+    expect(assemblySource).toMatch(
+      /<key>CFBundleURLSchemes<\/key>\s*<array>\s*<string>http<\/string>\s*<string>https<\/string>\s*<\/array>/
+    );
+  });
+
+  it('claims HTML documents as a viewer without outranking real browsers', () => {
+    expect(assemblySource).toContain('<string>public.html</string>');
+    expect(assemblySource).toContain('<string>public.xhtml</string>');
+    expect(assemblySource).toMatch(/<key>LSHandlerRank<\/key>\s*<string>Alternate<\/string>/);
+  });
+});
+
 describe('Sliccstart iCloud sync packaging', () => {
   it('embeds the provisioning profile only when PROVISION_PROFILE is supplied', () => {
     expect(signingScript).toContain('if [ -n "${PROVISION_PROFILE:-}" ]; then');

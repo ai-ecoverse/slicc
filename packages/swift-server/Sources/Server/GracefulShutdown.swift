@@ -18,9 +18,15 @@ protocol GracefulShutdownClientSocketControlling: Sendable {
     func shutdown() async
 }
 
+protocol GracefulShutdownTabRecording: Sendable {
+    func snapshotNow() async
+    func stop() async
+}
+
 extension ElectronOverlayInjector: GracefulShutdownOverlayControlling {}
 extension CDPProxy: GracefulShutdownChromeProxyControlling {}
 extension LickSystem: GracefulShutdownClientSocketControlling {}
+extension TabSessionRecorder: GracefulShutdownTabRecording {}
 
 struct ShutdownContext: @unchecked Sendable {
     var browserProcess: Process?
@@ -38,6 +44,9 @@ struct ShutdownContext: @unchecked Sendable {
     var cdpProxy: (any GracefulShutdownChromeProxyControlling)?
     var clientSockets: (any GracefulShutdownClientSocketControlling)?
     var server: (any GracefulShutdownServer)?
+    /// Takes a final tab snapshot before the browser closes, so the tabs the
+    /// user had open at quit time are the ones the next launch reopens.
+    var tabRecorder: (any GracefulShutdownTabRecording)?
 
     init(
         browserProcess: Process? = nil,
@@ -48,7 +57,8 @@ struct ShutdownContext: @unchecked Sendable {
         overlayInjector: (any GracefulShutdownOverlayControlling)? = nil,
         cdpProxy: (any GracefulShutdownChromeProxyControlling)? = nil,
         clientSockets: (any GracefulShutdownClientSocketControlling)? = nil,
-        server: (any GracefulShutdownServer)? = nil
+        server: (any GracefulShutdownServer)? = nil,
+        tabRecorder: (any GracefulShutdownTabRecording)? = nil
     ) {
         self.browserProcess = browserProcess
         self.browserKillPid = browserKillPid
@@ -59,6 +69,7 @@ struct ShutdownContext: @unchecked Sendable {
         self.cdpProxy = cdpProxy
         self.clientSockets = clientSockets
         self.server = server
+        self.tabRecorder = tabRecorder
     }
 }
 
@@ -163,6 +174,13 @@ actor GracefulShutdownHandler {
         GracefulShutdownLastResortRegistry.markGracefulShutdownStarted()
 
         print(closeBrowser ? "\nShutting down..." : "\nDetaching (browser stays open)...")
+        // Snapshot the tabs while the browser is still up: `closeBrowser`
+        // below tears the CDP endpoint down, and on the detach path the next
+        // full launch is what consumes the snapshot.
+        if let tabRecorder = context.tabRecorder {
+            await tabRecorder.snapshotNow()
+            await tabRecorder.stop()
+        }
         context.fileLogger?.close()
         context.overlayInjector?.stop()
 

@@ -244,6 +244,21 @@ final class SliccProcess {
         launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.targetName
     }
 
+    /// CDP port of the running local leader browser, or `nil` while none is
+    /// up. Unlike `isLeaderReady()` this does not wait for a tray join URL:
+    /// opening a plain link as a tab (the default-browser role) only needs the
+    /// browser itself, which the listening CDP port proves.
+    var leaderCdpPort: UInt16? {
+        guard
+            let record = launchRecords.values.first(where: {
+                $0.targetType == .chromiumBrowser && !$0.isFollower
+            }),
+            record.process.isRunning,
+            Self.isPortInUse(record.cdpPort)
+        else { return nil }
+        return record.cdpPort
+    }
+
     func refreshRuntimeStates(for targets: [AppTarget]) {
         for target in targets {
             refreshRuntimeState(for: target)

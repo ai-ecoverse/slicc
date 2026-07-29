@@ -459,6 +459,32 @@ The extension SW runs `fetch()` in a Service Worker context, so the same browser
 - `packages/node-server/src/index.ts` — `/api/fetch-proxy` handler; decode + localhost-strip + default-origin synth
 - `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; decode + default-origin synth + `installForbiddenHeaderRule` (DNR session-rule shim, fragment-keyed, cleanup in `finally`)
 
+## Downloaded `slicc` CLI: Notarization Without a Staple
+
+**The Problem**
+
+Release Darwin `slicc` binaries are Developer ID-signed with hardened runtime and
+notarized by `packages/slicc-cli/sign-and-package.sh`, but a **bare Mach-O
+executable cannot have a notarization ticket stapled**. A quarantined copy may
+therefore need Apple's online Gatekeeper lookup on first execution.
+
+**What This Means for Sliccstart**
+
+- The launcher's `URLSession` data download followed by `Data.write` does not
+  create or propagate `com.apple.quarantine`, so Sliccstart does not need to
+  strip that attribute after installing the binary.
+- Verification against the release channel confirmed that even a manually
+  quarantined signed release binary runs `--version` without a Gatekeeper
+  override.
+- `spctl --assess --type execute` is **not** a useful check here: it rejects bare
+  CLI executables as "not an app", so a failure says nothing about Gatekeeper's
+  actual verdict.
+
+**Related Files**
+
+- `packages/slicc-cli/sign-and-package.sh` — signing + notarization
+- `packages/swift-launcher/Sliccstart/Models/SliccCliDownloader.swift` — download, signature validation, atomic install
+
 ## Local Network Access: Launched Chrome Must Disable the Check
 
 **The Problem**

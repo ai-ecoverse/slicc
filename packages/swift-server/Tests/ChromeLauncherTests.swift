@@ -55,6 +55,46 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(args.last, "http://127.0.0.1:5710")
     }
 
+    func testBuildLaunchArgsAppendsRestoredTabsAfterTheSliccURL() {
+        // Chromium activates the first URL on the command line, so the SLICC
+        // tab has to stay first — the restored tabs land to its right.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["https://example.com/a", "https://example.org/b"]
+        )
+
+        XCTAssertEqual(
+            Array(args.suffix(3)),
+            [
+                "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+                "https://example.com/a",
+                "https://example.org/b",
+            ]
+        )
+    }
+
+    func testBuildLaunchArgsRejectsRestoredEntriesThatCouldBeReadAsChromeFlags() {
+        // The snapshot file is user-writable, and each restored entry becomes
+        // an argv slot — a `--flag`-shaped or non-web entry must never reach
+        // Chrome's command line.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["--headless=new", "file:///etc/passwd", "https://example.com/a"]
+        )
+
+        XCTAssertEqual(args.last, "https://example.com/a")
+        XCTAssertFalse(args.contains("--headless=new"))
+        XCTAssertFalse(args.contains("file:///etc/passwd"))
+    }
+
     func testBuildLaunchArgsDisablesLocalNetworkAccessChecks() {
         // Regression: Sliccstart loads its UI from https://www.sliccy.ai and
         // dials back to the local bridge (public->local), which Chromium 142+

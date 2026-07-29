@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import os
 
@@ -62,6 +63,8 @@ struct SettingsView: View {
 struct StartupSettingsView: View {
     @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
     @State private var topBrowserName: String?
+    @State private var isDefaultBrowser = false
+    @State private var isRequestingDefaultBrowser = false
 
     var body: some View {
         Form {
@@ -75,21 +78,66 @@ struct StartupSettingsView: View {
             Text("Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // Only offered alongside auto-launch: as the default browser
+            // Sliccstart hands every link to the leader browser, so without a
+            // leader waiting at startup the links would have nowhere to go.
+            // Still shown once the role is held, so turning auto-launch back
+            // off never hides the fact that Sliccstart owns web links.
+            if launchAtStartup || isDefaultBrowser {
+                Divider()
+                defaultBrowserSection
+            }
         }
         .padding(20)
         .frame(width: 460)
         .fixedSize()
         .onAppear {
             StartupPreference.resolveEnabled(defaults: .standard)
-            let browsers = AppScanner.scan(hasAppManagementPermission: false)
-                .filter { $0.type == .chromiumBrowser }
             topBrowserName =
-                AppOrdering.ordered(
-                    browsers,
-                    savedOrder: AppOrderStore().load(AppOrderStore.browserKey),
-                    defaultPriority: AppOrdering.browserBundlePriority
-                ).first?.name
+                AppOrdering.topBrowser(
+                    in: AppScanner.scan(hasAppManagementPermission: false),
+                    savedOrder: AppOrderStore().load(AppOrderStore.browserKey)
+                )?.name
+            isDefaultBrowser = DefaultBrowserRegistration.isDefault()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // The role can also change in System Settings, or through the
+            // macOS confirmation panel we can't observe directly.
+            isDefaultBrowser = DefaultBrowserRegistration.isDefault()
+        }
+    }
+
+    @ViewBuilder
+    private var defaultBrowserSection: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Default web browser")
+                Text(defaultBrowserCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button(isDefaultBrowser ? "Enabled" : "Make Default") {
+                Task {
+                    isRequestingDefaultBrowser = true
+                    isDefaultBrowser = await DefaultBrowserRegistration.makeDefault()
+                    isRequestingDefaultBrowser = false
+                }
+            }
+            .disabled(isDefaultBrowser || isRequestingDefaultBrowser || !DefaultBrowserRegistration.isRegistrable)
+            .accessibilityIdentifier("make-default-browser")
+        }
+    }
+
+    private var defaultBrowserCaption: String {
+        if isDefaultBrowser {
+            return "Links from other apps open as tabs in your SLICC browser session."
+        }
+        if !DefaultBrowserRegistration.isRegistrable {
+            return "Available in the installed Sliccstart.app — this build runs from a source checkout."
+        }
+        return "Sliccstart takes over web links and opens each one in the SLICC browser, starting it first if needed. macOS will ask you to confirm."
     }
 }
 

@@ -71,6 +71,13 @@ and build the native server: `cd packages/swift-server && swift build`
   refresh/click so it can be started again. Status dots are refreshed
   periodically while Sliccstart is open and again whenever Sliccstart regains
   focus, so quitting an Electron app externally updates the row promptly.
+- **Default web browser**: With "launch browser at startup" enabled,
+  Settings → Startup offers to make Sliccstart the default browser. Sliccstart
+  renders nothing itself — links from other apps open as tabs in the SLICC
+  browser session, starting that browser first if it isn't running yet.
+- **Session restore**: A launched browser reopens the tabs from the previous
+  session. The SLICC tab is excluded and re-minted instead, because its bridge
+  key changes on every launch.
 - **Get extension**: Opens the Chrome Web Store listing to install the
   SLICC extension directly — no Developer Mode required.
 - **Update**: Pulls latest SLICC changes and rebuilds with one click.

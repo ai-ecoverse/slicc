@@ -85,6 +85,24 @@ final class AppOrderingTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.name), ["Chrome", "Alpha", "Zeta"])
     }
 
+    func testTopBrowserIgnoresNonBrowserTargetsAndHonoursSavedOrder() {
+        // Both the startup auto-launch and the default-browser link handler
+        // resolve "the" leader through this helper, so they can never
+        // disagree about which browser to start.
+        let targets = [
+            terminal("Alacritty", "org.alacritty"),
+            browser("Chrome", "com.google.Chrome"),
+            browser("Brave", "com.brave.Browser"),
+        ]
+
+        XCTAssertEqual(AppOrdering.topBrowser(in: targets, savedOrder: [])?.name, "Chrome")
+        XCTAssertEqual(
+            AppOrdering.topBrowser(in: targets, savedOrder: ["com.brave.Browser"])?.name,
+            "Brave"
+        )
+        XCTAssertNil(AppOrdering.topBrowser(in: [terminal("Terminal", "com.apple.Terminal")], savedOrder: []))
+    }
+
     func testPersistableOrderSkipsTargetsWithoutBundleId() {
         let reordered = [
             browser("Chrome", "com.google.Chrome"),

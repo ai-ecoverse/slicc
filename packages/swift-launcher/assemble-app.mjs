@@ -147,6 +147,36 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the microphone for sites you visit (Google Meet, Zoom, etc.). Grant access if you want microphone-enabled sites to work inside Slicc.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Sliccstart uses Apple Events to open a new Terminal or iTerm2 window and attach it to your running SLICC session.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Web site URL</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>http</string>
+                <string>https</string>
+            </array>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>HTML document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.html</string>
+                <string>public.xhtml</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 `;

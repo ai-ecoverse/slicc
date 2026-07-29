@@ -29,6 +29,8 @@ enum LauncherErrorReport {
         case reattach = "reattach"
         case secretsUnlock = "secrets-unlock"
         case secretsPersist = "secrets-persist"
+        case defaultBrowser = "default-browser"
+        case openIncomingUrl = "open-incoming-url"
     }
 
     /// Longest `target` we send. Long enough to keep an OS error message

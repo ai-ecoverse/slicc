@@ -1,0 +1,218 @@
+import AppKit
+import Foundation
+import os
+
+private let log = Logger(subsystem: "com.slicc.sliccstart", category: "IncomingURL")
+
+/// A SLICC leader browser that links can be handed to. `SliccProcess` is the
+/// production implementation; the protocol keeps the routing logic testable
+/// without spawning a browser.
+protocol LeaderBrowserLaunching: AnyObject {
+    /// CDP port of the running local leader, or `nil` when none is up.
+    var leaderCdpPort: UInt16? { get }
+    func launchStandalone(_ target: AppTarget) throws
+}
+
+extension SliccProcess: LeaderBrowserLaunching {}
+
+enum IncomingURLRouterError: LocalizedError {
+    case leaderUnavailable
+    case newTabRejected(status: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .leaderUnavailable:
+            return "No SLICC leader browser became available to open the link in."
+        case .newTabRejected(let status):
+            return "The browser rejected the new-tab request (HTTP \(status))."
+        }
+    }
+}
+
+/// Opens the links macOS hands to Sliccstart while it is the default web
+/// browser. Sliccstart draws no web content of its own, so every link becomes
+/// a tab in the SLICC leader browser — starting that browser first when it is
+/// not running yet, which is what makes a cold "click a link with Sliccstart
+/// as default browser" launch work.
+///
+/// Tabs are created over the browser's CDP HTTP endpoint rather than
+/// `NSWorkspace.open(_:withApplicationAt:)`: the SLICC browser runs on its own
+/// user-data-dir, so when the user also has the same browser open on their
+/// normal profile, LaunchServices would pick between the two instances
+/// non-deterministically. The CDP port only ever answers for the leader.
+@MainActor
+final class IncomingURLRouter {
+    /// Schemes we accept. `http`/`https` are the default-browser role;
+    /// `file` covers the HTML documents `CFBundleDocumentTypes` claims.
+    /// Everything else (`javascript:`, `data:`, custom app schemes) is
+    /// dropped rather than forwarded into the leader.
+    static let openableSchemes: Set<String> = ["http", "https", "file"]
+
+    static let leaderWaitPollInterval: TimeInterval = 0.5
+    /// ~45s of waiting: enough for a cold start that has to bootstrap and
+    /// boot Chrome before the CDP port answers.
+    static let maxLeaderWaitPolls = 90
+    /// Re-attempt the launch every ~10s while waiting. A launch can lose the
+    /// race against startup's own auto-launch (or against a still-bootstrapping
+    /// app), and a single attempt would then wait out the whole budget.
+    static let launchRetryEveryPolls = 20
+
+    private let process: any LeaderBrowserLaunching
+    private let topBrowser: () -> AppTarget?
+    private let send: (URLRequest) async throws -> (Int, Data)
+    private let sleep: (TimeInterval) async -> Void
+    private let activateBrowser: (AppTarget) -> Void
+
+    private var pending: [URL] = []
+    private var isDraining = false
+
+    init(
+        process: any LeaderBrowserLaunching,
+        topBrowser: @escaping () -> AppTarget? = { IncomingURLRouter.defaultTopBrowser() },
+        send: @escaping (URLRequest) async throws -> (Int, Data) = { request in
+            let (data, response) = try await URLSession.shared.data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
+        },
+        sleep: @escaping (TimeInterval) async -> Void = { seconds in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        },
+        activateBrowser: @escaping (AppTarget) -> Void = { target in
+            let bundleURL = URL(fileURLWithPath: target.path).standardizedFileURL
+            NSWorkspace.shared.runningApplications
+                .first { $0.bundleURL?.standardizedFileURL == bundleURL }?
+                .activate()
+        }
+    ) {
+        self.process = process
+        self.topBrowser = topBrowser
+        self.send = send
+        self.sleep = sleep
+        self.activateBrowser = activateBrowser
+    }
+
+    /// The browser Sliccstart starts on demand: the head of the (reorderable)
+    /// Browsers list, matching the startup auto-launch pick.
+    nonisolated static func defaultTopBrowser() -> AppTarget? {
+        AppOrdering.topBrowser(
+            in: AppScanner.scan(hasAppManagementPermission: false),
+            savedOrder: AppOrderStore().load(AppOrderStore.browserKey)
+        )
+    }
+
+    /// Queue `urls` and drain them into the leader. Re-entrant calls (macOS
+    /// delivers one `application(_:open:)` per user click) append to the queue
+    /// the in-flight drain is already working through, so a second click while
+    /// the browser is still booting is not lost.
+    func handle(_ urls: [URL]) async {
+        let openable = Self.openableURLs(from: urls)
+        guard !openable.isEmpty else { return }
+        pending.append(contentsOf: openable)
+        guard !isDraining else { return }
+        isDraining = true
+        defer { isDraining = false }
+
+        guard let cdpPort = await resolveLeaderCdpPort() else {
+            log.error("handle: no leader browser available; dropping \(self.pending.count, privacy: .public) link(s)")
+            LauncherErrorReport.report(.openIncomingUrl, IncomingURLRouterError.leaderUnavailable)
+            pending.removeAll()
+            return
+        }
+
+        while !pending.isEmpty {
+            await open(pending.removeFirst(), cdpPort: cdpPort)
+        }
+        if let target = topBrowser() {
+            activateBrowser(target)
+        }
+    }
+
+    static func openableURLs(from urls: [URL]) -> [URL] {
+        urls.filter { openableSchemes.contains($0.scheme?.lowercased() ?? "") }
+    }
+
+    /// Chrome's DevTools endpoint takes the **whole query string** as the
+    /// target URL (`PUT /json/new?<url>`) — a `?url=<url>` spelling opens
+    /// `about:blank` instead — and rejects GET since Chrome 111.
+    static func newTabRequest(cdpPort: UInt16, target: URL) -> URLRequest? {
+        guard
+            let encoded = target.absoluteString.addingPercentEncoding(
+                withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+            ),
+            let url = URL(string: "http://127.0.0.1:\(cdpPort)/json/new?\(encoded)")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 5
+        return request
+    }
+
+    /// `/json/new` creates the tab in the background, so the link the user
+    /// just clicked would stay hidden without this follow-up.
+    static func activateRequest(cdpPort: UInt16, targetId: String) -> URLRequest? {
+        guard
+            let encodedId = targetId.addingPercentEncoding(
+                withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+            ),
+            !encodedId.isEmpty,
+            let url = URL(string: "http://127.0.0.1:\(cdpPort)/json/activate/\(encodedId)")
+        else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        return request
+    }
+
+    /// Target id from a `/json/new` response body.
+    static func createdTargetId(from body: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+            let id = json["id"] as? String,
+            !id.isEmpty
+        else { return nil }
+        return id
+    }
+
+    private func open(_ url: URL, cdpPort: UInt16) async {
+        guard let request = Self.newTabRequest(cdpPort: cdpPort, target: url) else { return }
+        do {
+            let (status, body) = try await send(request)
+            guard (200..<300).contains(status) else {
+                throw IncomingURLRouterError.newTabRejected(status: status)
+            }
+            log.info("open: opened link in leader on cdp \(cdpPort, privacy: .public)")
+            if let targetId = Self.createdTargetId(from: body),
+                let activate = Self.activateRequest(cdpPort: cdpPort, targetId: targetId)
+            {
+                _ = try? await send(activate)
+            }
+        } catch {
+            log.error("open: failed: \(error.localizedDescription, privacy: .public)")
+            LauncherErrorReport.report(.openIncomingUrl, error)
+        }
+    }
+
+    private func resolveLeaderCdpPort() async -> UInt16? {
+        for attempt in 0..<Self.maxLeaderWaitPolls {
+            if let port = process.leaderCdpPort { return port }
+            if attempt % Self.launchRetryEveryPolls == 0 {
+                launchLeader()
+            }
+            await sleep(Self.leaderWaitPollInterval)
+        }
+        return process.leaderCdpPort
+    }
+
+    private func launchLeader() {
+        guard let target = topBrowser() else {
+            log.error("launchLeader: no browser installed")
+            return
+        }
+        do {
+            log.info("launchLeader: starting \(target.name, privacy: .public) for an incoming link")
+            try process.launchStandalone(target)
+        } catch {
+            // A losing race against startup's own auto-launch surfaces as
+            // "port in use"; the wait loop below picks the leader up either
+            // way, so this is logged rather than reported.
+            log.info("launchLeader: launch attempt failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+}
