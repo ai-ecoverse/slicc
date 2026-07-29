@@ -27,6 +27,14 @@ export interface ScoopManagementToolsConfig {
   /** Get tab state for a scoop by JID (status, lastActivity). */
   getScoopTabState?: (jid: string) => import('./types.js').ScoopTabState | undefined;
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
+  /**
+   * Canonicalize `scoop_scoop`'s `model` argument into the id the new scoop
+   * will actually run as, or null when it resolves to nothing. Wired to
+   * `resolveModelIdForScoop` by `ScoopContext`. Without it an unresolvable id
+   * lands in `config.modelId` and `ScoopContext.init()` silently degrades to
+   * the cone's own (typically far more expensive) model.
+   */
+  resolveModelId?: (modelId: string) => string | null;
   onDropScoop?: (scoopJid: string) => Promise<void>;
   onSetGlobalMemory?: (content: string) => Promise<void>;
   getGlobalMemory?: () => Promise<string>;
@@ -125,6 +133,28 @@ function parseThinkingLevel(
     };
   }
   return { ok: true, level: thinking };
+}
+
+/**
+ * Canonicalize `scoop_scoop`'s `model` argument, or return an error result.
+ * Omitting the model is fine (the scoop inherits the cone's), but an id that
+ * cannot be resolved MUST be rejected rather than silently inherited — see
+ * `resolveModelId` on {@link ScoopManagementToolsConfig}.
+ */
+function parseModelId(
+  model: string | undefined,
+  resolveModelId: ScoopManagementToolsConfig['resolveModelId']
+): { ok: true; modelId?: string } | { ok: false; content: string; isError: true } {
+  if (model === undefined || !resolveModelId) return { ok: true, modelId: model };
+  const resolved = resolveModelId(model);
+  if (resolved === null) {
+    return {
+      ok: false,
+      content: `Unknown model "${model}". Run the "models" shell command to list available model IDs.`,
+      isError: true,
+    };
+  }
+  return { ok: true, modelId: resolved };
 }
 
 /** Render a "scoop not found" error including the available list. */
@@ -344,12 +374,15 @@ async function executeScoopScoop(
   const parsed = parseThinkingLevel(thinking);
   if (!parsed.ok) return { content: parsed.content, isError: parsed.isError };
 
+  const parsedModel = parseModelId(model, config.resolveModelId);
+  if (!parsedModel.ok) return { content: parsedModel.content, isError: parsedModel.isError };
+
   const folder = folderFromDisplayName(name);
   try {
     const record = buildScoopRecord(
       name,
       folder,
-      model,
+      parsedModel.modelId,
       visiblePaths,
       writablePaths,
       allowedCommands,

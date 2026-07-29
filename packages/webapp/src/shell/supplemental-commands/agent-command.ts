@@ -76,7 +76,12 @@ Default sandbox:
 
 Options:
   --model <id>            Override the model id used by the spawned scoop.
-                          Defaults to inheriting the parent's model.
+                          Accepts an exact id or a shorthand ('haiku',
+                          'sonnet', 'claude-haiku-4-5'), resolved against the
+                          selected provider's catalog. An id that cannot be
+                          resolved exits 1 — it never falls back to the
+                          parent's model. Defaults to inheriting the parent's
+                          model.
   --thinking <level>      Reasoning / thinking level for the spawned scoop.
                           One of: off, minimal, low, medium, high, xhigh.
                           Defaults to inheriting the parent's level (or 'off'
