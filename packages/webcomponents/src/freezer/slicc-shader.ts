@@ -2,20 +2,21 @@ import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 
 /**
- * The SLICC background field — a single WebGL element with THREE program modes,
+ * The SLICC background field — a single WebGL element with four program modes,
  * lifted from the prototype's shared `#bg-canvas` (proto/StellarRubySwift.html,
  * `__sliccShaders`): `cone` (a sheared waffle lattice that behaves like a
  * probabilistic Game of Life near a floating focal point), `scoop` (a lush
  * flowing ice-cream gradient that swirls and breathes), and `freezer` (water
- * crystallizing into ice from the corner). One canvas, one program swapped by
+ * crystallizing into ice from the corner), and `sugar` (caramelized glass with
+ * Voronoi fractures). One canvas, one program swapped by
  * the `mode` attribute — exactly as the prototype swaps `FRAG_CONE` / `FRAG_SCOOP`
- * / `FRAG_FREEZER`.
+ * / `FRAG_FREEZER` / `FRAG_SUGAR`.
  *
  * Sits behind the app (`position: fixed; inset: 0; z-index: 0; pointer-events:
  * none`). Honors `prefers-reduced-motion` (one static frame), pauses on
  * disconnect, and falls back to a per-mode CSS gradient when WebGL is absent.
  *
- * @attr mode - `cone` (default) | `scoop` | `freezer`
+ * @attr mode - `cone` (default) | `scoop` | `freezer` | `sugar`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
  * @attr coverage - 0..1 freezer frost growth (feeds `u_freeze`)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
@@ -145,15 +146,82 @@ void main(){
   gl_FragColor=vec4(col,1.0);
 }`;
 
-export type ShaderMode = 'cone' | 'scoop' | 'freezer';
+// Sugar Glass adapted from pbakaus/radiant (MIT), static/sugar-glass.html.
+// Uniform mapping: u_time*(u_life+0.15) is crack speed; u_falloff is light
+// bleed; u_center replaces mouse parallax; u_scroll pans the field; u_tint
+// washes the glass; u_energy/u_evt pulse at u_center; u_dark selects palette.
+const FRAG_SUGAR = `${HEAD}${NOISE}
+vec2 sugarHash(vec2 p){ p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3))); return fract(sin(p)*43758.5453123); }
+vec3 sugarVoronoi(vec2 p,float t){
+  vec2 n=floor(p),f=fract(p),nearPt=vec2(0.0),nearCell=vec2(0.0); float minDist=8.0;
+  for(int j=-1;j<=1;j++){ for(int i=-1;i<=1;i++){ vec2 g=vec2(float(i),float(j));
+    vec2 o=sugarHash(n+g)*0.5+0.25; o=0.5+0.4*sin(t*0.3+6.2831*o); vec2 d=g+o-f; float dd=dot(d,d);
+    if(dd<minDist){ minDist=dd; nearPt=d; nearCell=n+g; } } }
+  float edge=8.0;
+  for(int j=-1;j<=1;j++){ for(int i=-1;i<=1;i++){ vec2 g=vec2(float(i),float(j));
+    vec2 o=sugarHash(n+g)*0.5+0.25; o=0.5+0.4*sin(t*0.3+6.2831*o); vec2 d=g+o-f; vec2 delta=d-nearPt;
+    if(dot(delta,delta)>0.001) edge=min(edge,dot(0.5*(nearPt+d),normalize(delta))); } }
+  return vec3(sqrt(minDist),edge,hash21(nearCell));
+}
+float sugarEdge(vec2 p,float t){
+  vec2 n=floor(p),f=fract(p),nearPt=vec2(0.0); float minDist=8.0;
+  for(int j=-1;j<=1;j++){ for(int i=-1;i<=1;i++){ vec2 g=vec2(float(i),float(j));
+    vec2 o=sugarHash(n+g); o=0.5+0.35*sin(t*0.5+6.2831*o); vec2 d=g+o-f; float dd=dot(d,d);
+    if(dd<minDist){ minDist=dd; nearPt=d; } } }
+  float edge=8.0;
+  for(int j=-1;j<=1;j++){ for(int i=-1;i<=1;i++){ vec2 g=vec2(float(i),float(j));
+    vec2 o=sugarHash(n+g); o=0.5+0.35*sin(t*0.5+6.2831*o); vec2 d=g+o-f; vec2 delta=d-nearPt;
+    if(dot(delta,delta)>0.001) edge=min(edge,dot(0.5*(nearPt+d),normalize(delta))); } }
+  return edge;
+}
+void main(){
+  vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
+  vec2 p=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y); p.y-=u_scroll;
+  vec2 parallax=-(u_center-0.5)*0.15; float t=u_time*(u_life+0.15);
+  p+=vec2(sin(p.y*12.0+t*2.3),cos(p.x*10.0+t*1.7))*0.003;
+  float scale=3.25+u_density*0.85; vec3 macro=sugarVoronoi((p+parallax)*scale+0.5,t);
+  float microEdge=sugarEdge((p+parallax*2.5)*9.0+vec2(3.7,1.2),t*0.7);
+  float crackPulse=0.5+0.3*sin(t*1.5)+0.2*sin(t*2.7+1.0);
+  float macroWidth=0.04*crackPulse, microWidth=0.025*crackPulse;
+  float macroCrack=1.0-smoothstep(0.0,macroWidth,macro.y);
+  float microCrack=1.0-smoothstep(0.0,microWidth,microEdge);
+  float crack=clamp(macroCrack+microCrack*0.4,0.0,1.0);
+  float macroGlow=1.0-smoothstep(0.0,macroWidth*4.0,macro.y);
+  float microGlow=1.0-smoothstep(0.0,microWidth*3.0,microEdge);
+  float glow=macroGlow*0.7+microGlow*0.3;
+  float thickness=0.6+0.4*macro.z, hue=macro.z*0.3;
+  vec3 amber=mix(vec3(0.78,0.585,0.424),vec3(0.34,0.16,0.035),u_dark);
+  vec3 caramel=mix(vec3(0.831,0.647,0.455),vec3(0.46,0.22,0.045),u_dark);
+  vec3 deepAmber=mix(vec3(0.29,0.125,0.0),vec3(0.10,0.035,0.0),u_dark);
+  vec3 glass=mix(deepAmber,mix(amber,caramel,hue),thickness);
+  glass=mix(glass*1.1,glass*0.85,smoothstep(0.0,0.5,macro.x));
+  vec3 rose=mix(vec3(0.90,0.65,0.60),vec3(0.42,0.19,0.10),u_dark);
+  glass=mix(glass,rose,glow*(0.3+0.2*sin(macro.z*12.0+t*0.8))*0.25);
+  glass=mix(glass,u_tint,0.06);
+  vec3 crackLight=mix(vec3(1.0,0.91,0.75),vec3(0.74,0.38,0.10),u_dark);
+  vec3 crackBright=mix(vec3(1.0,0.96,0.90),vec3(0.90,0.52,0.16),u_dark);
+  vec3 lightCol=mix(crackLight,crackBright,crack); float bleed=clamp(0.55+u_falloff*1.5,0.4,1.3);
+  vec3 col=mix(glass,lightCol*0.8,glow*bleed*0.5); col=mix(col,lightCol,crack*bleed);
+  float sss=0.5+0.5*sin(p.x*3.0+t*0.5)*sin(p.y*2.5+t*0.3); col+=vec3(0.05,0.03,0.01)*sss*thickness;
+  float vig=smoothstep(0.0,1.0,1.0-dot(p*0.8,p*0.8)); col*=0.6+0.4*vig; col=pow(col,vec3(0.95));
+  float focus=length(vec2((uv.x-u_center.x)*aspect,uv.y-u_center.y)); col+=u_evt*u_energy*exp(-focus*focus*10.0)*0.12;
+  /* Background budget: clamp the hero treatment, then expose at most 20%. */
+  vec3 bg=themeBg(); col=mix(bg,clamp(col,0.0,1.0),0.20);
+  float noiseFreq=mix(80.0,4.0,clamp(u_blur,0.0,1.0)); float grain=fbm(uv*noiseFreq)-0.5;
+  col+=u_noise*grain; col=(col-0.5)*u_contrast+0.5; col*=u_brightness; col=clamp(col,0.0,1.0);
+  gl_FragColor=vec4(col,1.0);
+}`;
+
+export type ShaderMode = 'cone' | 'scoop' | 'freezer' | 'sugar';
 const PROGRAMS: Record<ShaderMode, string> = {
   cone: FRAG_CONE,
   scoop: FRAG_SCOOP,
   freezer: FRAG_FREEZER,
+  sugar: FRAG_SUGAR,
 };
 /** Fragment sources, exposed so tests can compile and pixel-probe the fields. */
 export const SHADER_FRAGMENTS: Readonly<Record<ShaderMode, string>> = PROGRAMS;
-const MODES = new Set<ShaderMode>(['cone', 'scoop', 'freezer']);
+const MODES = new Set<ShaderMode>(['cone', 'scoop', 'freezer', 'sugar']);
 
 const FALLBACK: Record<ShaderMode, string> = {
   cone: 'radial-gradient(120% 120% at 35% 45%, color-mix(in srgb,#e0a866 40%,var(--bg)) 0%, var(--bg) 60%)',
@@ -161,6 +229,8 @@ const FALLBACK: Record<ShaderMode, string> = {
     'radial-gradient(120% 120% at 40% 50%, color-mix(in srgb,#ff9bc0 40%,var(--bg)) 0%, var(--bg) 62%)',
   freezer:
     'radial-gradient(120% 120% at 0% 100%, color-mix(in srgb,#7fb0e6 55%,var(--bg)) 0%, var(--bg) 70%)',
+  sugar:
+    'radial-gradient(120% 120% at 35% 45%, color-mix(in srgb,#c8956c 20%,var(--bg)) 0%, var(--bg) 70%)',
 };
 
 const STYLE = `
