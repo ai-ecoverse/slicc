@@ -13,6 +13,21 @@ final class AppRowDisplayTests: XCTestCase {
         XCTAssertEqual(AppRow.statusDot(for: .cannotStart(.needsLeader)), .needsLeader)
     }
 
+    func testStatusDotColorAndHelpForEachCase() {
+        let all: [AppRowStatusDot] = [
+            .runningWithDebug,
+            .runningWithoutDebug,
+            .needsPermission,
+            .needsDebugBuild,
+            .needsLeader,
+            .failed,
+        ]
+        for dot in all {
+            _ = dot.color
+            XCTAssertFalse(dot.help.isEmpty)
+        }
+    }
+
     func testSubtitleOverrideWins() {
         XCTAssertEqual(
             AppRow.subtitle(for: .runningWithoutDebug, override: "Custom", isDebugBuild: false),
