@@ -24,6 +24,38 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   # Sign nested executables first, then the outer app
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
     "$APP_DIR/Contents/Resources/slicc-server"
+
+  # iCloud key-value sync (cross-device tray sessions) needs an embedded
+  # Developer ID provisioning profile that authorizes the ubiquity-kvstore
+  # entitlement. When PROVISION_PROFILE points at that profile we embed it and
+  # sign against a merged entitlements file (base + iCloud KVS). Without it we
+  # sign against the base entitlements only, and the app degrades to a local
+  # key-value cache (no sync) — so CI stays green until the profile secret
+  # exists.
+  if [ -n "${PROVISION_PROFILE:-}" ]; then
+    if [ ! -f "$PROVISION_PROFILE" ]; then
+      echo "ERROR: PROVISION_PROFILE set but file not found: $PROVISION_PROFILE" >&2
+      exit 1
+    fi
+    echo "Embedding provisioning profile for iCloud sync..."
+    cp "$PROVISION_PROFILE" "$APP_DIR/Contents/embedded.provisionprofile"
+    # The key-value sync bucket namespace. Defaults to the team-prefixed
+    # bundle id (what the auto-generated profile pins). Override with
+    # KVSTORE_IDENTIFIER to use a brand-neutral, cross-app value the iOS
+    # follower can share (e.g. S8LB56P782.ai.sliccy.trays) — the outer
+    # codesign will fail fast if the embedded profile does not authorize it.
+    KVSTORE_IDENTIFIER="${KVSTORE_IDENTIFIER:-${APPLE_TEAM_ID}.com.slicc.sliccstart}"
+    MERGED_ENTITLEMENTS="$SCRIPT_DIR/build/Sliccstart.icloud.entitlements"
+    cp "$ENTITLEMENTS" "$MERGED_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c \
+      "Add :com.apple.developer.ubiquity-kvstore-identifier string ${KVSTORE_IDENTIFIER}" \
+      "$MERGED_ENTITLEMENTS" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c \
+        "Set :com.apple.developer.ubiquity-kvstore-identifier ${KVSTORE_IDENTIFIER}" \
+        "$MERGED_ENTITLEMENTS"
+    ENTITLEMENTS="$MERGED_ENTITLEMENTS"
+  fi
+
   codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
     --sign "$IDENTITY" --timestamp "$APP_DIR"
 

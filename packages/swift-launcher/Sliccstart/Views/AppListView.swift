@@ -1,14 +1,17 @@
 import AppUpdater
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AppListView: View {
     let targets: [AppTarget]
     @Bindable var sliccProcess: SliccProcess
+    let sessionStore: TraySessionSyncStore
     @Bindable var appManagementPermission: AppManagementPermission
     @ObservedObject var appUpdater: AppUpdater
     let updateCheckStatus: UpdateCheckStatus
     let onCheckForUpdates: () -> Void
     let onLaunchStandalone: (AppTarget) -> Void
+    let onLaunchBrowserFollower: (AppTarget, String) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onCreateDebugBuild: (AppTarget) -> Void
     let onUpdate: () -> Void
@@ -17,16 +20,45 @@ struct AppListView: View {
 
     @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
     @State private var pendingTerminalTarget: AppTarget?
+    @State private var pendingJoinURLOverride: String?
     @State private var showTerminalWarning = false
     @State private var suppressWarningAfterApproval = false
     @State private var showTerminalDownloadPrompt = false
     @State private var terminalLaunchError: String?
+    @State private var browserOrder: [String] = []
+    @State private var terminalOrder: [String] = []
+    @State private var draggingBundleId: String?
+    @State private var browserDialogTarget: AppTarget?
+
+    private let orderStore = AppOrderStore()
+
+    private var orderedBrowsers: [AppTarget] {
+        AppOrdering.ordered(
+            targets.filter { $0.type == .chromiumBrowser },
+            savedOrder: browserOrder,
+            defaultPriority: AppOrdering.browserBundlePriority
+        )
+    }
+
+    private var orderedTerminals: [AppTarget] {
+        AppOrdering.ordered(
+            targets.filter { $0.type == .terminal },
+            savedOrder: terminalOrder,
+            defaultPriority: AppOrdering.terminalBundlePriority
+        )
+    }
+
+    private var electronApps: [AppTarget] {
+        targets.filter { $0.type == .electronApp }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(AppListSection.visibleSections(for: targets), id: \.self) { section in
                 sectionContent(section)
             }
+
+            sessionsSection
 
             Spacer(minLength: 0)
 
@@ -44,6 +76,10 @@ struct AppListView: View {
                     .accessibilityIdentifier("rescan")
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
+        }
+        .onAppear {
+            browserOrder = orderStore.load(AppOrderStore.browserKey)
+            terminalOrder = orderStore.load(AppOrderStore.terminalKey)
         }
         .alert("Allow terminal access?", isPresented: $showTerminalWarning) {
             Toggle("Don't show this again", isOn: $suppressWarningAfterApproval)
@@ -69,21 +105,36 @@ struct AppListView: View {
         } message: {
             Text(terminalLaunchError ?? "")
         }
+        .confirmationDialog(
+            browserDialogTarget.map { "Launch \($0.name)" } ?? "Launch browser",
+            isPresented: Binding(
+                get: { browserDialogTarget != nil },
+                set: { if !$0 { browserDialogTarget = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: browserDialogTarget
+        ) { target in
+            Button("Launch standalone") {
+                onLaunchStandalone(target)
+                browserDialogTarget = nil
+            }
+            ForEach(sessionStore.remoteSessions) { session in
+                Button("Attach to \(session.label) on \(session.deviceName)") {
+                    onLaunchBrowserFollower(target, session.joinUrl)
+                    browserDialogTarget = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { browserDialogTarget = nil }
+        } message: { target in
+            Text("Launch \(target.name) as its own session, or attach it to a running iCloud session as a follower.")
+        }
     }
 
     @ViewBuilder
     private func sectionContent(_ section: AppListSection) -> some View {
         switch section {
         case .browsers:
-            SectionHeader("Browsers")
-            ForEach(targets.filter { $0.type == .chromiumBrowser }) { target in
-                AppRow(
-                    target: target,
-                    runtimeState: sliccProcess.runtimeState(for: target),
-                    onLaunch: { onLaunchStandalone(target) },
-                    onCreateDebugBuild: nil
-                )
-            }
+            browsersSection
         case .desktopApps:
             desktopAppsSection
         case .terminals:
@@ -94,9 +145,31 @@ struct AppListView: View {
     }
 
     @ViewBuilder
+    private var browsersSection: some View {
+        SectionHeader("Browsers")
+        ForEach(orderedBrowsers) { target in
+            AppRow(
+                target: target,
+                runtimeState: sliccProcess.runtimeState(for: target),
+                onLaunch: { handleBrowserLaunch(target) },
+                onCreateDebugBuild: nil
+            )
+            .modifier(
+                ReorderableRow(
+                    target: target,
+                    order: $browserOrder,
+                    displayed: orderedBrowsers,
+                    dragging: $draggingBundleId,
+                    onCommit: { orderStore.save($0, forKey: AppOrderStore.browserKey) }
+                )
+            )
+        }
+    }
+
+    @ViewBuilder
     private var desktopAppsSection: some View {
         SectionHeader("Desktop Apps")
-        ForEach(targets.filter { $0.type == .electronApp }) { target in
+        ForEach(electronApps) { target in
             let runtimeState = sliccProcess.runtimeState(
                 for: target,
                 hasAppManagementPermission: appManagementPermission.isGranted
@@ -113,7 +186,7 @@ struct AppListView: View {
     @ViewBuilder
     private var terminalsSection: some View {
         SectionHeader("Terminals")
-        ForEach(targets.filter { $0.type == .terminal }) { target in
+        ForEach(orderedTerminals) { target in
             let runtimeState = sliccProcess.runtimeState(for: target)
             AppRow(
                 target: target,
@@ -122,6 +195,15 @@ struct AppListView: View {
                 onCreateDebugBuild: nil,
                 subtitleOverride: terminalSubtitle(runtimeState: runtimeState),
                 interactionDisabled: sliccProcess.isLaunchingTerminalFollower
+            )
+            .modifier(
+                ReorderableRow(
+                    target: target,
+                    order: $terminalOrder,
+                    displayed: orderedTerminals,
+                    dragging: $draggingBundleId,
+                    onCommit: { orderStore.save($0, forKey: AppOrderStore.terminalKey) }
+                )
             )
         }
     }
@@ -154,6 +236,73 @@ struct AppListView: View {
         .accessibilityLabel("Get Extension")
     }
 
+    @ViewBuilder
+    private var sessionsSection: some View {
+        let remote = sessionStore.remoteSessions
+        let local = sessionStore.localSessions
+        if !remote.isEmpty || !local.isEmpty {
+            SectionHeader("iCloud Sessions")
+            ForEach(remote) { session in
+                TraySessionRow(
+                    session: session,
+                    isLocal: false,
+                    localBrowserIcon: localBrowserIcon(for: session),
+                    canAttachBrowser: orderedBrowsers.first != nil,
+                    canFollow: !orderedTerminals.isEmpty,
+                    onCopy: { copyJoinURL(session) },
+                    onAttachBrowser: { attachBrowser(to: session) },
+                    onFollow: { beginRemoteFollow(session) }
+                )
+            }
+            ForEach(local) { session in
+                TraySessionRow(
+                    session: session,
+                    isLocal: true,
+                    localBrowserIcon: localBrowserIcon(for: session),
+                    canAttachBrowser: false,
+                    canFollow: false,
+                    onCopy: { copyJoinURL(session) },
+                    onAttachBrowser: {},
+                    onFollow: {}
+                )
+            }
+        }
+    }
+
+    private func localBrowserIcon(for session: SyncedTraySession) -> NSImage? {
+        orderedBrowsers.first(where: { $0.name == session.label })?.icon
+    }
+
+    private func handleBrowserLaunch(_ target: AppTarget) {
+        // A running browser just re-focuses/restarts via the standalone path.
+        // Otherwise, when remote iCloud sessions exist, offer lead-vs-attach;
+        // with none, launch standalone directly (unchanged single-Mac flow).
+        if sliccProcess.runtimeState(for: target).isRunning || sessionStore.remoteSessions.isEmpty {
+            onLaunchStandalone(target)
+        } else {
+            browserDialogTarget = target
+        }
+    }
+
+    private func attachBrowser(to session: SyncedTraySession) {
+        guard let top = orderedBrowsers.first else { return }
+        onLaunchBrowserFollower(top, session.joinUrl)
+    }
+
+    private func copyJoinURL(_ session: SyncedTraySession) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(session.joinUrl, forType: .string)
+    }
+
+    private func beginRemoteFollow(_ session: SyncedTraySession) {
+        guard let terminal = orderedTerminals.first else {
+            terminalLaunchError = "Install a supported terminal to follow this session."
+            return
+        }
+        pendingJoinURLOverride = session.joinUrl
+        beginTerminalLaunch(terminal)
+    }
+
     private func handleElectronRow(_ target: AppTarget, runtimeState: AppRuntimeState) {
         if runtimeState == .cannotStart(.needsDebugBuild) {
             onCreateDebugBuild(target)
@@ -175,8 +324,11 @@ struct AppListView: View {
     }
 
     private func beginTerminalLaunch(_ target: AppTarget, warningAcknowledged: Bool = false) {
+        // A remote (iCloud) session supplies its own join URL, so the local
+        // leader-readiness gate does not apply when an override is pending.
+        let leaderReady = sliccProcess.isLeaderReady() || pendingJoinURLOverride != nil
         let nextStep = TerminalLaunchDecision.nextStep(
-            leaderReady: sliccProcess.isLeaderReady(),
+            leaderReady: leaderReady,
             warningSuppressed: suppressTerminalWarning,
             warningAcknowledged: warningAcknowledged,
             cliAvailable: sliccProcess.isTerminalCliAvailable()
@@ -203,9 +355,10 @@ struct AppListView: View {
 
     private func launchPendingTerminal() {
         guard let target = pendingTerminalTarget else { return }
+        let override = pendingJoinURLOverride
         Task { @MainActor in
             do {
-                try await sliccProcess.launchTerminalFollower(target)
+                try await sliccProcess.launchTerminalFollower(target, joinURLOverride: override)
                 clearPendingTerminalLaunch()
             } catch {
                 LauncherErrorReport.report(.terminalFollower, error)
@@ -217,6 +370,7 @@ struct AppListView: View {
 
     private func clearPendingTerminalLaunch(keepError: Bool = false) {
         pendingTerminalTarget = nil
+        pendingJoinURLOverride = nil
         suppressWarningAfterApproval = false
         if !keepError { terminalLaunchError = nil }
     }
@@ -278,6 +432,89 @@ struct AppListView: View {
         case .failed:
             return AnyShapeStyle(Color.red)
         }
+    }
+}
+
+struct TraySessionRow: View {
+    let session: SyncedTraySession
+    let isLocal: Bool
+    let localBrowserIcon: NSImage?
+    let canAttachBrowser: Bool
+    let canFollow: Bool
+    let onCopy: () -> Void
+    let onAttachBrowser: () -> Void
+    let onFollow: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            icon
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.label).font(.system(size: 13))
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: onCopy) {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy join URL")
+            .accessibilityIdentifier("session-copy-\(session.id)")
+            if !isLocal {
+                Button(action: onAttachBrowser) {
+                    Image(systemName: "globe")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canAttachBrowser)
+                .help(canAttachBrowser ? "Attach a browser to this session" : "Install a supported browser to attach")
+                .accessibilityIdentifier("session-attach-browser-\(session.id)")
+                Button(action: onFollow) {
+                    Image(systemName: "terminal")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canFollow)
+                .help(canFollow ? "Follow in a terminal" : "Install a supported terminal to follow")
+                .accessibilityIdentifier("session-follow-\(session.id)")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if let localBrowserIcon {
+            ZStack(alignment: .bottomTrailing) {
+                Image(nsImage: localBrowserIcon)
+                    .resizable()
+                    .frame(width: 28, height: 28)
+                Image(systemName: "icloud.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white)
+                    .padding(1)
+                    .background(Circle().fill(.blue))
+                    .offset(x: 2, y: 2)
+            }
+        } else {
+            Image(systemName: "icloud")
+                .font(.system(size: 15))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.blue)
+        }
+    }
+
+    private var subtitle: String {
+        let origin = isLocal ? "This device" : session.deviceName
+        return "\(origin) · \(TraySessionRow.age(of: session.lastSeenAt))"
+    }
+
+    static func age(of date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, now.timeIntervalSince(date))
+        if seconds < 60 { return "just now" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 }
 
@@ -458,5 +695,70 @@ extension AppRowStatusDot {
         case .failed:
             return "The last start attempt failed. Click to retry."
         }
+    }
+}
+
+/// Makes a row draggable to reorder its list. Live-reorders as the drag hovers
+/// over sibling rows and persists the new bundle-id order via `onCommit`.
+struct ReorderableRow: ViewModifier {
+    let target: AppTarget
+    @Binding var order: [String]
+    let displayed: [AppTarget]
+    @Binding var dragging: String?
+    let onCommit: ([String]) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(dragging == target.bundleId ? 0.5 : 1)
+            .onDrag {
+                dragging = target.bundleId
+                return NSItemProvider(object: (target.bundleId ?? target.id) as NSString)
+            }
+            .onDrop(
+                of: [.text],
+                delegate: ReorderDropDelegate(
+                    target: target,
+                    order: $order,
+                    displayed: displayed,
+                    dragging: $dragging,
+                    onCommit: onCommit
+                )
+            )
+    }
+}
+
+private struct ReorderDropDelegate: DropDelegate {
+    let target: AppTarget
+    @Binding var order: [String]
+    let displayed: [AppTarget]
+    @Binding var dragging: String?
+    let onCommit: ([String]) -> Void
+
+    private var currentIds: [String] {
+        order.isEmpty ? displayed.compactMap { $0.bundleId } : order
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging,
+            let over = target.bundleId,
+            dragging != over
+        else { return }
+        var ids = currentIds
+        guard let from = ids.firstIndex(of: dragging),
+            let to = ids.firstIndex(of: over)
+        else { return }
+        let moved = ids.remove(at: from)
+        ids.insert(moved, at: to)
+        order = ids
+        onCommit(ids)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }

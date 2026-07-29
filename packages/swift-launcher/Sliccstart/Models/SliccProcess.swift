@@ -103,6 +103,11 @@ final class SliccProcess {
         /// still-booting browser (slow Keychain prompt, cold start) whose
         /// CDP port has not come up yet is never prematurely reaped.
         var observedCdpListening: Bool = false
+        /// True for a chromium browser launched with `--join` to attach to a
+        /// *remote* tray as a follower. Such a record is not a local leader,
+        /// so it is excluded from `isLeaderReady`, leader-URL clearing, and
+        /// the smooth-update reattach snapshot.
+        var isFollower: Bool = false
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
@@ -230,7 +235,13 @@ final class SliccProcess {
     /// and a stale join URL (no live browser) would route to a dead leader.
     func isLeaderReady() -> Bool {
         guard let url = leaderJoinUrl, !url.isEmpty else { return false }
-        return launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+        return launchRecords.values.contains { $0.targetType == .chromiumBrowser && !$0.isFollower }
+    }
+
+    /// Display name of the running chromium leader, if any. Used to label
+    /// this device's session when it is advertised for cross-device sync.
+    var leaderTargetName: String? {
+        launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.targetName
     }
 
     func refreshRuntimeStates(for targets: [AppTarget]) {
@@ -279,6 +290,46 @@ final class SliccProcess {
         // Desktop App rows disabled rather than wiring followers to a
         // dead URL.
         startLeaderProbe(servePort: Self.browserPort)
+    }
+
+    // MARK: - Browser follower mode (attach a browser to a remote tray)
+
+    /// Launch a chromium browser as a *follower* attached to a remote tray
+    /// discovered via iCloud sync. Uses `--join=<url>` and its own port pair
+    /// so it can coexist with a local leader; the record is flagged
+    /// `isFollower` so it never counts as this device's leader.
+    func launchBrowserFollower(_ browser: AppTarget, joinUrl: String) throws {
+        guard browser.type == .chromiumBrowser else { throw LaunchError.invalidTerminalTarget }
+        guard !joinUrl.isEmpty else { throw LaunchError.leaderUnavailable }
+        refreshRuntimeState(for: browser)
+        if isRunning(browser) {
+            log.info("launchBrowserFollower: \(browser.name) already running")
+            return
+        }
+        startFailures.removeValue(forKey: browser.id)
+        let (port, cdpPort) = nextElectronPorts()
+        guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        log.info("launchBrowserFollower: \(browser.name, privacy: .public) on port \(port), cdp \(cdpPort) (join)")
+        do {
+            try spawn(
+                target: browser,
+                extraArgs: Self.browserFollowerArgs(cdpPort: cdpPort, joinUrl: joinUrl),
+                env: Self.standaloneBrowserEnv(
+                    executablePath: browser.executablePath,
+                    servePort: port,
+                    inheritedEnv: ProcessInfo.processInfo.environment
+                ),
+                cdpPort: cdpPort,
+                servePort: port,
+                electronAppPath: nil,
+                joinUrl: joinUrl,
+                bridgeToken: Self.standaloneBridgeToken,
+                isFollower: true
+            )
+        } catch {
+            recordStartFailure(for: browser, message: error.localizedDescription)
+            throw error
+        }
     }
 
     // MARK: - Electron mode (each app gets its own port)
@@ -334,12 +385,22 @@ final class SliccProcess {
         terminalFollowerLaunchService.isCliAvailable()
     }
 
+    /// Attach a terminal follower to a leader. With no `joinURLOverride`
+    /// the local leader's `leaderJoinUrl` is used (the existing single-Mac
+    /// flow). A non-empty override attaches to a *remote* leader discovered
+    /// via iCloud sync, so the local-leader readiness gate is skipped.
     @MainActor
-    func launchTerminalFollower(_ target: AppTarget) async throws {
+    func launchTerminalFollower(_ target: AppTarget, joinURLOverride: String? = nil) async throws {
         guard target.type == .terminal else { throw LaunchError.invalidTerminalTarget }
         guard !isLaunchingTerminalFollower else { return }
-        guard isLeaderReady(), let joinURL = leaderJoinUrl, !joinURL.isEmpty else {
-            throw LaunchError.leaderUnavailable
+        let joinURL: String
+        if let joinURLOverride, !joinURLOverride.isEmpty {
+            joinURL = joinURLOverride
+        } else {
+            guard isLeaderReady(), let local = leaderJoinUrl, !local.isEmpty else {
+                throw LaunchError.leaderUnavailable
+            }
+            joinURL = local
         }
 
         startFailures.removeValue(forKey: target.id)
@@ -377,6 +438,13 @@ final class SliccProcess {
     /// scheme/host shape on the CLI.
     static func standaloneBrowserArgs(cdpPort: UInt16) -> [String] {
         ["--cdp-port=\(cdpPort)", "--lead"]
+    }
+
+    /// Browser-follower extra args: `--join=<url>` instead of `--lead`, so
+    /// swift-server hands the join URL to the webapp and the browser attaches
+    /// to a remote tray as a follower rather than minting its own.
+    static func browserFollowerArgs(cdpPort: UInt16, joinUrl: String) -> [String] {
+        ["--cdp-port=\(cdpPort)", "--join=\(joinUrl)"]
     }
 
     /// Environment for the browser launch. Preserves user-supplied
@@ -609,7 +677,7 @@ final class SliccProcess {
     /// keeping the Desktop App rows accurately gated when the user closes
     /// the leader. Safe to call after any path that removes a record.
     private func clearLeaderIfNoBrowserRunning() {
-        let hasBrowser = launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+        let hasBrowser = launchRecords.values.contains { $0.targetType == .chromiumBrowser && !$0.isFollower }
         if !hasBrowser {
             leaderJoinUrl = nil
         }
@@ -637,7 +705,8 @@ final class SliccProcess {
         joinUrl: String? = nil,
         bridgeToken: String? = nil,
         startedAt: Date = Date(),
-        observedCdpListening: Bool = false
+        observedCdpListening: Bool = false,
+        isFollower: Bool = false
     ) {
         launchRecords[id] = LaunchRecord(
             process: process,
@@ -651,7 +720,8 @@ final class SliccProcess {
             observedAppPID: nil,
             joinUrl: joinUrl,
             bridgeToken: bridgeToken,
-            observedCdpListening: observedCdpListening
+            observedCdpListening: observedCdpListening,
+            isFollower: isFollower
         )
     }
 
@@ -668,6 +738,10 @@ final class SliccProcess {
         hasDetached = true
         let snapshot = launchRecords.compactMap { id, record -> PersistedLaunchRecord? in
             guard record.process.isRunning else { return nil }
+            // Follower browsers survive the detach signal but are not
+            // reattached: `reattachArgs` re-leads a chromiumBrowser, which
+            // would wrongly re-spawn a follower as its own leader.
+            guard !record.isFollower else { return nil }
             return PersistedLaunchRecord(
                 targetId: id,
                 targetName: record.targetName,
@@ -849,7 +923,8 @@ final class SliccProcess {
         servePort: UInt16,
         electronAppPath: String?,
         joinUrl: String? = nil,
-        bridgeToken: String? = nil
+        bridgeToken: String? = nil,
+        isFollower: Bool = false
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         let loggedArguments = Self.redactedSpawnArguments(launchConfig.arguments).joined(separator: " ")
@@ -919,7 +994,8 @@ final class SliccProcess {
             startedAt: Date(),
             observedAppPID: nil,
             joinUrl: joinUrl,
-            bridgeToken: bridgeToken
+            bridgeToken: bridgeToken,
+            isFollower: isFollower
         )
     }
 

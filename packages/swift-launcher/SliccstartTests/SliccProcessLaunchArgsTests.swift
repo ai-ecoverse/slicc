@@ -15,6 +15,15 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertEqual(args, ["--cdp-port=9222", "--lead"])
     }
 
+    func testBrowserFollowerArgsJoinInsteadOfLead() {
+        let args = SliccProcess.browserFollowerArgs(
+            cdpPort: 9222,
+            joinUrl: "https://example.test/join/abc.def"
+        )
+        XCTAssertEqual(args, ["--cdp-port=9222", "--join=https://example.test/join/abc.def"])
+        XCTAssertFalse(args.contains("--lead"))
+    }
+
     // MARK: - Browser launch env
 
     func testStandaloneBrowserEnvDefaultsWorkerBaseUrl() {

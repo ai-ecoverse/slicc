@@ -62,6 +62,28 @@ final class SliccProcessLeaderGatingTests: XCTestCase {
         )
     }
 
+    func testFollowerBrowserDoesNotCountAsLeader() throws {
+        let proc = SliccProcess()
+        let helper = try launchSleeper()
+        addTeardownBlock { if helper.isRunning { helper.terminate() } }
+        proc._testing_seedLaunchRecord(
+            id: "follower-1",
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39222,
+            servePort: 35710,
+            targetName: "FollowerBrowser",
+            isFollower: true
+        )
+        proc.leaderJoinUrl = nil
+
+        XCTAssertFalse(proc.isLeaderReady(), "a --join follower browser must not gate as this device's leader")
+        XCTAssertEqual(
+            proc.runtimeState(for: makeElectron(), hasAppManagementPermission: true),
+            .cannotStart(.needsLeader)
+        )
+    }
+
     func testStopAllClearsLeaderJoinUrl() throws {
         let proc = SliccProcess()
         let helper = try launchSleeper()
