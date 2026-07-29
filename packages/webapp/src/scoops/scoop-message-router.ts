@@ -14,6 +14,7 @@
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
+import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
@@ -63,6 +64,17 @@ export class ScoopMessageRouter {
   private messageQueues: Map<string, ChannelMessage[]> = new Map();
   private lastAgentTimestamp: Map<string, string> = new Map();
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Per-jid re-entrancy guard for {@link processScoopQueue}. While a run is in
+   * flight for a jid, its entry lives here; a re-entrant call sets `rerun` so
+   * the in-flight run loops once more instead of executing concurrently (which
+   * would let two invocations read the same stale high-water mark and format
+   * overlapping slices of the same rows) or being dropped (which would lose a
+   * message that arrived mid-flight). `done` settles when that run's drain
+   * finishes, so a coalesced caller can await the turn its message lands in.
+   * Keyed by jid so distinct scoops still process in parallel.
+   */
+  private processing: Map<string, { rerun: boolean; done: Promise<void> }> = new Map();
 
   constructor(private deps: ScoopMessageRouterDeps) {}
 
@@ -210,8 +222,73 @@ export class ScoopMessageRouter {
     }
   }
 
-  /** Process queued messages for a scoop. */
+  /**
+   * Process queued messages for a scoop, serialized per jid.
+   *
+   * A burst of inbound messages fires one call per message; without this guard
+   * every concurrent call reads the same stale `lastAgentTimestamp` across the
+   * `await db.getMessagesSince` and formats an overlapping slice of the same
+   * rows, so each message reaches the agent multiple times. The guard runs the
+   * real work ({@link runScoopQueue}) one turn at a time per jid and coalesces
+   * re-entrant calls into a single rerun, so a message that arrives mid-flight
+   * is still delivered exactly once.
+   *
+   * A coalesced caller awaits the active drain rather than returning as soon as
+   * it has flagged the rerun: {@link runScoopQueue} clears the shared queue
+   * after taking its DB snapshot, so an early return would let the caller
+   * believe its message was handled while the rerun that actually delivers it
+   * is still pending. The drain's failure belongs to the owning caller, which
+   * rethrows it, so it is swallowed on the coalesced path.
+   */
   async processScoopQueue(jid: string): Promise<void> {
+    const inFlight = this.processing.get(jid);
+    if (inFlight) {
+      inFlight.rerun = true;
+      await inFlight.done.catch(() => {});
+      return;
+    }
+
+    const state = { rerun: false, done: Promise.resolve() };
+    this.processing.set(jid, state);
+    state.done = this.drainScoopQueue(jid, state);
+    return state.done;
+  }
+
+  /**
+   * Run turns for a jid until no rerun is pending, then release the guard.
+   *
+   * A turn that throws (e.g. `sendPrompt` rejects) must not swallow a rerun
+   * requested while it was in flight: the coalesced message is already
+   * persisted but the in-memory queue was cleared, so it would sit stranded
+   * until unrelated traffic happens to enqueue work — long enough for a
+   * coalesced sudo request to reach its timeout. Turn errors are therefore held
+   * back until the loop drains, and the first one is rethrown to the owning
+   * caller. The `finally` releases the guard even on that path so a failed turn
+   * cannot wedge the queue.
+   */
+  private async drainScoopQueue(jid: string, state: { rerun: boolean }): Promise<void> {
+    let failed = false;
+    let firstError: unknown;
+    try {
+      do {
+        state.rerun = false;
+        try {
+          await this.runScoopQueue(jid);
+        } catch (err) {
+          if (!failed) {
+            failed = true;
+            firstError = err;
+          }
+        }
+      } while (state.rerun);
+    } finally {
+      this.processing.delete(jid);
+    }
+    if (failed) throw firstError;
+  }
+
+  /** Drain one turn of a scoop's queue. Callers must go through {@link processScoopQueue}. */
+  private async runScoopQueue(jid: string): Promise<void> {
     const queue = this.messageQueues.get(jid);
     if (!queue || queue.length === 0) {
       log.debug('processScoopQueue: empty queue', { jid });
@@ -265,8 +342,15 @@ export class ScoopMessageRouter {
     this.messageQueues.set(jid, []);
 
     const lastMsg = messages[messages.length - 1];
-    this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
-    await this.deps.db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
+    // Advance the high-water mark by the composite (timestamp, id) cursor so a
+    // batch that shares one millisecond is consumed exactly once: the id set
+    // accumulated at the max ms lets a later pass skip already-delivered rows
+    // without dropping same-ms siblings (which a bare-timestamp mark would).
+    const nextWatermark = serializeMessageWatermark(
+      advanceMessageWatermark(parseMessageWatermark(since), messages)
+    );
+    this.lastAgentTimestamp.set(jid, nextWatermark);
+    await this.deps.db.setState(`lastAgentTs_${jid}`, nextWatermark);
 
     // One steering send anywhere in the batch steers the whole batch — the
     // batch is delivered as a single prompt, so it cannot be split into a

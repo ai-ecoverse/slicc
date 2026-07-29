@@ -32,6 +32,16 @@ export interface PendingSudoRequest {
 }
 
 /**
+ * Why the registry settled a request fail-closed WITHOUT a cone decision.
+ * Surfaced to the owner (the {@link ScoopApprovalRouter}) so it can flip the
+ * persisted lick card off `pending`:
+ *   - `expired`      — the per-request fail-closed timer fired.
+ *   - `scoop-dropped`— the requesting scoop was unregistered.
+ *   - `shutdown`     — the orchestrator drained everything on shutdown.
+ */
+export type SudoSettleReason = 'expired' | 'scoop-dropped' | 'shutdown';
+
+/**
  * Trusted-realm seam between {@link createConeApprovalBroker} and whatever
  * owns the cone-side delivery + resolution (the {@link Orchestrator}, or a
  * fake in tests). A scoop's `requestApproval` becomes
@@ -69,6 +79,14 @@ export interface ConeRequestRegistryOptions {
   setTimer?: (cb: () => void, ms: number) => unknown;
   /** Timer canceller. Defaults to `clearTimeout`. Override in tests. */
   clearTimer?: (handle: unknown) => void;
+  /**
+   * Notified whenever a request is settled fail-closed WITHOUT a cone
+   * decision — timeout, scoop drop, or shutdown. The owner uses it to flip
+   * the persisted lick card off `pending`. Never fired for a normal
+   * {@link ConeRequestRegistry.resolve} (the cone already knows). Best-effort:
+   * any error thrown by the callback is swallowed so it can't wedge teardown.
+   */
+  onAutoSettle?: (id: string, reason: SudoSettleReason) => void;
 }
 
 interface RegistryEntry {
@@ -103,12 +121,23 @@ export class ConeRequestRegistry {
   private readonly newId: () => string;
   private readonly setTimer: (cb: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
+  private readonly onAutoSettle: (id: string, reason: SudoSettleReason) => void;
 
   constructor(opts: ConeRequestRegistryOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? CONE_SUDO_TIMEOUT_MS;
     this.newId = opts.newId ?? defaultId;
     this.setTimer = opts.setTimer ?? ((cb, ms) => setTimeout(cb, ms));
     this.clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+    this.onAutoSettle = opts.onAutoSettle ?? (() => {});
+  }
+
+  /** Fire the auto-settle hook, isolating a throwing callback from teardown. */
+  private notifyAutoSettle(id: string, reason: SudoSettleReason): void {
+    try {
+      this.onAutoSettle(id, reason);
+    } catch {
+      // Best-effort: a broken card-flip must never wedge timeout / drop / shutdown.
+    }
   }
 
   /**
@@ -128,6 +157,7 @@ export class ConeRequestRegistry {
           if (!entry) return;
           this.pending.delete(id);
           entry.resolve({ decision: 'deny' });
+          this.notifyAutoSettle(id, 'expired');
         }, this.timeoutMs);
       }
       this.pending.set(id, { scoopJid, request, resolve, timerHandle });
@@ -161,6 +191,7 @@ export class ConeRequestRegistry {
       this.pending.delete(id);
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
       entry.resolve({ decision: 'deny' });
+      this.notifyAutoSettle(id, 'scoop-dropped');
       count++;
     }
     return count;
@@ -169,9 +200,10 @@ export class ConeRequestRegistry {
   /** Fail-closed every pending request. Used by `Orchestrator.shutdown`. */
   failAll(): number {
     let count = 0;
-    for (const entry of this.pending.values()) {
+    for (const [id, entry] of this.pending) {
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
       entry.resolve({ decision: 'deny' });
+      this.notifyAutoSettle(id, 'shutdown');
       count++;
     }
     this.pending.clear();

@@ -26,6 +26,7 @@ export {
   type ConeRequestRegistryOptions,
   createConeApprovalBroker,
   type PendingSudoRequest,
+  type SudoSettleReason,
 } from './cone-broker.js';
 export { createExtensionSudoBroker } from './extension-broker.js';
 export { createHttpSudoBroker } from './http-broker.js';
