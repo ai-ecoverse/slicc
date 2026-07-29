@@ -200,4 +200,28 @@ describe('GitHub token renewal', () => {
 
     await expect(getValidAccessToken()).resolves.toBe('ghp_new_access');
   });
+
+  it('syncs the git-token bridge for a fresh externally-injected token with no refresh token', async () => {
+    // Mirrors a hosted cone's coneConfigDelta upsert: a GitHub App
+    // installation token landed via saveOAuthAccount with a full fresh
+    // expiry and no refreshToken, bypassing the interactive login/renewal
+    // paths that normally call writeGitToken.
+    seedGitHubAccount({
+      accessToken: 'ghs_installation_token',
+      tokenExpiresAt: Date.now() + 3_600_000,
+      maskedValue: 'ghs_masked_installation',
+    });
+    globalThis.fetch = vi.fn() as typeof fetch;
+    const { getValidAccessToken } = await import('../../providers/github.js');
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+
+    await expect(getValidAccessToken()).resolves.toBe('ghs_installation_token');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghs_masked_installation'
+    );
+  });
 });

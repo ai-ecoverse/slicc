@@ -346,6 +346,23 @@ async function clearGitToken(): Promise<void> {
   }
 }
 
+/**
+ * Sync the current account's masked value into the git-shim bridge file.
+ * Shared by the interactive login/renewal flows AND `getValidAccessToken`
+ * (called by `ensureFreshGithubToken` before every network git op) so a
+ * token injected via `saveOAuthAccount` — e.g. a hosted cone's
+ * `coneConfigDelta` upsert of a GitHub App installation token — reaches
+ * the file isomorphic-git actually reads, not just the account store.
+ */
+async function syncGitToken(): Promise<void> {
+  const masked = getOAuthAccountInfo('github')?.maskedValue;
+  if (masked) {
+    await writeGitToken(masked);
+  } else {
+    await clearGitToken();
+  }
+}
+
 // ── Git identity bridge ────────────────────────────────────────────
 
 /**
@@ -416,12 +433,7 @@ async function renewGitHubToken(): Promise<string | null> {
       userAvatar: account.userAvatar,
     });
 
-    const masked = getOAuthAccountInfo('github')?.maskedValue;
-    if (masked) {
-      await writeGitToken(masked);
-    } else {
-      await clearGitToken();
-    }
+    await syncGitToken();
     return tokenResult.access_token;
   } catch (err) {
     console.warn(
@@ -437,7 +449,15 @@ async function getValidAccessToken(): Promise<string> {
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
 
   const expiresIn = (account.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
-  if (expiresIn > 60000) return account.accessToken;
+  if (expiresIn > 60000) {
+    // Re-sync the git-shim bridge file even when the account's own token is
+    // still fresh: a hosted cone's `coneConfigDelta` upsert (GitHub App
+    // installation token, no refresh token) writes straight to the account
+    // store via `saveOAuthAccount` and never goes through the interactive
+    // login/renewal paths that normally call `writeGitToken`.
+    await syncGitToken();
+    return account.accessToken;
+  }
 
   const newToken = await silentRenewBackoff.run(() => renewGitHubToken());
   if (newToken) return newToken;
@@ -566,13 +586,7 @@ export const config: ProviderConfig = {
     });
 
     // Bridge token to isomorphic-git — use the masked value, not the real token
-    const info = getOAuthAccountInfo('github');
-    const masked = info?.maskedValue;
-    if (masked) {
-      await writeGitToken(masked);
-    } else {
-      await clearGitToken();
-    }
+    await syncGitToken();
 
     // Seed git user.name / user.email so commits are attributed to the
     // authenticated GitHub identity instead of the placeholder
