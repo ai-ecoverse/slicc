@@ -16,6 +16,7 @@ import type {
   BoundingBox,
   CDPConnectOptions,
   EvaluateOptions,
+  FrameEvaluateOptions,
   FrameInfo,
   PageInfo,
   TargetInfo,
@@ -71,6 +72,7 @@ export class BrowserAPI {
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private _frameContextCache = new Map<string, number>();
+  private _mainWorldContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
   private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
   /**
@@ -112,11 +114,37 @@ export class BrowserAPI {
       });
     }
   };
+  private readonly handleExecutionContextCreated = (params: Record<string, unknown>): void => {
+    const eventSessionId = params['sessionId'];
+    if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
+    const context = params['context'] as
+      | { id?: number; auxData?: { frameId?: string; isDefault?: boolean } }
+      | undefined;
+    const frameId = context?.auxData?.frameId;
+    if (context?.auxData?.isDefault === true && frameId && typeof context.id === 'number') {
+      this._mainWorldContextCache.set(frameId, context.id);
+    }
+  };
+  private readonly handleExecutionContextDestroyed = (params: Record<string, unknown>): void => {
+    const eventSessionId = params['sessionId'];
+    if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
+    const contextId = params['executionContextId'];
+    if (typeof contextId !== 'number') return;
+    for (const [frameId, cachedId] of this._mainWorldContextCache) {
+      if (cachedId === contextId) this._mainWorldContextCache.delete(frameId);
+    }
+  };
+  private readonly handleExecutionContextsCleared = (params: Record<string, unknown>): void => {
+    const eventSessionId = params['sessionId'];
+    if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
+    this._mainWorldContextCache.clear();
+  };
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
     this.localClient = this.client;
     this.addDialogListener(this.client);
+    this.addExecutionContextListeners(this.client);
   }
 
   /**
@@ -395,8 +423,9 @@ export class BrowserAPI {
     // Don't detach from previous target — just attach to the new one.
     // Detaching then re-attaching causes Chrome to steal window focus.
 
-    // Invalidate cached isolated-world context IDs from the previous target
+    // Invalidate cached execution context IDs from the previous target
     this._frameContextCache.clear();
+    this._mainWorldContextCache.clear();
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
@@ -1067,12 +1096,12 @@ export class BrowserAPI {
 
   /**
    * Evaluate a JavaScript expression in a specific frame.
-   * Creates an isolated world for the frame and caches the context ID.
+   * Uses an isolated world by default; callers may explicitly request the page's main world.
    */
   async evaluateInFrame(
     frameId: string,
     expression: string,
-    options?: EvaluateOptions
+    options?: FrameEvaluateOptions
   ): Promise<unknown> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -1096,18 +1125,41 @@ export class BrowserAPI {
       return id;
     };
 
-    let contextId = this._frameContextCache.get(frameId);
-    if (contextId === undefined) {
-      try {
-        contextId = await createIsolatedWorld();
-      } catch (err) {
-        throw new Error(
-          `Failed to create isolated world for frame ${frameId}: ${err instanceof Error ? err.message : String(err)}`
-        );
+    const resolveContext = async (): Promise<number> => {
+      if (options?.world !== 'main') {
+        return this._frameContextCache.get(frameId) ?? createIsolatedWorld();
       }
+      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      let id = this._mainWorldContextCache.get(frameId);
+      if (id === undefined) {
+        await this.client.send('Runtime.disable', {}, this.sessionId!);
+        await this.client.send('Runtime.enable', {}, this.sessionId!);
+        id = this._mainWorldContextCache.get(frameId);
+      }
+      if (id === undefined) {
+        throw new Error(`Failed to find main world execution context for frame ${frameId}`);
+      }
+      return id;
+    };
+
+    const invalidateContext = (): void => {
+      if (options?.world === 'main') this._mainWorldContextCache.delete(frameId);
+      else this._frameContextCache.delete(frameId);
+    };
+
+    let contextId: number;
+    try {
+      contextId = await resolveContext();
+    } catch (err) {
+      const world = options?.world === 'main' ? 'main world' : 'isolated world';
+      throw new Error(
+        `Failed to resolve ${world} for frame ${frameId}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
-    await this.client.send('Runtime.enable', {}, this.sessionId!);
+    if (options?.world !== 'main') {
+      await this.client.send('Runtime.enable', {}, this.sessionId!);
+    }
 
     const evaluateParams = {
       expression,
@@ -1121,8 +1173,8 @@ export class BrowserAPI {
       result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
     } catch (err) {
       if (isDestroyedContextError(err)) {
-        this._frameContextCache.delete(frameId);
-        contextId = await createIsolatedWorld();
+        invalidateContext();
+        contextId = await resolveContext();
         result = await this.client.send(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
@@ -1140,8 +1192,8 @@ export class BrowserAPI {
       const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
       // Check if this is a destroyed context error — retry once
       if (isDestroyedContextError(new Error(msg))) {
-        this._frameContextCache.delete(frameId);
-        contextId = await createIsolatedWorld();
+        invalidateContext();
+        contextId = await resolveContext();
         const retryResult = await this.client.send(
           'Runtime.evaluate',
           { ...evaluateParams, contextId },
@@ -1162,7 +1214,7 @@ export class BrowserAPI {
         return retryObj.value;
       }
       // Invalidate cache — the frame may have navigated
-      this._frameContextCache.delete(frameId);
+      invalidateContext();
       throw new Error(`Evaluation in frame ${frameId} failed: ${msg}`);
     }
 
@@ -1326,8 +1378,20 @@ export class BrowserAPI {
     client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
   }
 
+  private addExecutionContextListeners(client: CDPTransport): void {
+    client.on('Runtime.executionContextCreated', this.handleExecutionContextCreated);
+    client.on('Runtime.executionContextDestroyed', this.handleExecutionContextDestroyed);
+    client.on('Runtime.executionContextsCleared', this.handleExecutionContextsCleared);
+  }
+
   private removeDialogListener(client: CDPTransport): void {
     client.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private removeExecutionContextListeners(client: CDPTransport): void {
+    client.off('Runtime.executionContextCreated', this.handleExecutionContextCreated);
+    client.off('Runtime.executionContextDestroyed', this.handleExecutionContextDestroyed);
+    client.off('Runtime.executionContextsCleared', this.handleExecutionContextsCleared);
   }
 
   private setClient(client: CDPTransport): void {
@@ -1336,8 +1400,10 @@ export class BrowserAPI {
     }
 
     this.removeDialogListener(this.client);
+    this.removeExecutionContextListeners(this.client);
     this.client = client;
     this.addDialogListener(this.client);
+    this.addExecutionContextListeners(this.client);
   }
 
   /**

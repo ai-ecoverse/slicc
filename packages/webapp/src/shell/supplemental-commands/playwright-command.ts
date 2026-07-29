@@ -18,7 +18,12 @@ import type { VirtualFS } from '../../fs/index.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';
 import { formatHelp } from './playwright/help.js';
 import { autoSaveSnapshot, logSession } from './playwright/session-log.js';
-import { AUTO_SNAPSHOT_COMMANDS, getSharedState, parseFlags } from './playwright/state.js';
+import {
+  AUTO_SNAPSHOT_COMMANDS,
+  frameIdUsedAsTabError,
+  getSharedState,
+  parseFlags,
+} from './playwright/state.js';
 import type { CmdResult } from './playwright/types.js';
 
 export { asWebFetch } from './playwright/discover.js';
@@ -33,6 +38,16 @@ export type {
   GetConnectedFollowersFn,
   PlaywrightDiscoveryResult,
 } from './playwright/types.js';
+
+async function commandErrorResult(
+  browser: BrowserAPI,
+  flags: Record<string, string>,
+  err: unknown
+): Promise<CmdResult> {
+  const message = err instanceof Error ? err.message : String(err);
+  const frameHint = flags['tab'] ? await frameIdUsedAsTabError(browser, flags['tab'], err) : null;
+  return { stdout: '', stderr: `Error: ${frameHint ?? message}\n`, exitCode: 1 };
+}
 
 export function createPlaywrightCommand(
   name: string,
@@ -82,8 +97,7 @@ export function createPlaywrightCommand(
       try {
         result = await handler({ browser, fs, state, positional, flags });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { stdout: '', stderr: `Error: ${msg}\n`, exitCode: 1 };
+        result = await commandErrorResult(browser, flags, err);
       }
     }
 

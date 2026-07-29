@@ -7,10 +7,14 @@ import {
   screenshotHandler,
   snapshotHandler,
 } from '../../../../../src/shell/supplemental-commands/playwright/handlers/snapshot.js';
+import { buildSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/snapshot.js';
 import type { TabSnapshot } from '../../../../../src/shell/supplemental-commands/playwright/types.js';
 import { createHandlerCtx, createPlaywrightState } from '../../../helpers/playwright-harness.js';
 
-vi.mock('../../../../../src/shell/supplemental-commands/playwright/snapshot.js', () => ({
+vi.mock('../../../../../src/shell/supplemental-commands/playwright/snapshot.js', async () => ({
+  ...(await vi.importActual(
+    '../../../../../src/shell/supplemental-commands/playwright/snapshot.js'
+  )),
   takeSnapshot: vi.fn(async () => ({ output: 'SNAPSHOT-TEXT' })),
 }));
 vi.mock('../../../../../src/shell/supplemental-commands/playwright/session-log.js', () => ({
@@ -25,6 +29,7 @@ type SendImpl = (method: string, params?: Record<string, unknown>) => unknown;
 function makeBrowser(opts?: {
   sendImpl?: SendImpl;
   frames?: Array<{ frameId: string; parentFrameId?: string; url: string }>;
+  frameTree?: { role: string; name: string; children?: unknown[] };
   screenshotB64?: string;
   evaluateResult?: unknown;
 }) {
@@ -35,6 +40,9 @@ function makeBrowser(opts?: {
   const screenshot = vi.fn(async () => opts?.screenshotB64 ?? btoa('img'));
   const evaluate = vi.fn(async () => opts?.evaluateResult ?? null);
   const getFrameTree = vi.fn(async () => opts?.frames ?? []);
+  const getAccessibilityTreeForFrame = vi.fn(async () =>
+    opts?.frameTree ? opts.frameTree : { role: 'RootWebArea', name: '' }
+  );
   const browser = {
     withTab: async <T>(_t: string, fn: (sessionId: string) => Promise<T>) => fn('session-1'),
     getTransport: () => ({ send }),
@@ -42,8 +50,9 @@ function makeBrowser(opts?: {
     screenshot,
     evaluate,
     getFrameTree,
+    getAccessibilityTreeForFrame,
   } as unknown as BrowserAPI;
-  return { browser, send, screenshot, evaluate, getFrameTree };
+  return { browser, send, screenshot, evaluate, getFrameTree, getAccessibilityTreeForFrame };
 }
 
 function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
@@ -60,6 +69,46 @@ function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
 }
 
 const okFs = (): Partial<VirtualFS> => ({ writeFile: vi.fn(async () => undefined) });
+
+describe('buildSnapshot', () => {
+  it('stitches unnamed iframe content beneath its placeholder', async () => {
+    const frameUrl = 'https://app.example.com/frame';
+    const getAccessibilityTreeForFrame = vi.fn(async () => ({
+      role: 'RootWebArea',
+      name: 'Frame Content',
+      children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
+    }));
+    const browser = {
+      evaluate: vi.fn(async () =>
+        JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+      ),
+      getAccessibilityTree: vi.fn(async () => ({
+        role: 'RootWebArea',
+        name: 'Test Page',
+        children: [
+          { role: 'link', name: 'iframe docs', value: frameUrl, children: [] },
+          { role: 'iframe', name: '', value: frameUrl, children: [] },
+        ],
+      })),
+      getFrameTree: vi.fn(async () => [
+        { frameId: 'main', url: 'https://example.com' },
+        { frameId: 'frame-1', parentFrameId: 'main', url: frameUrl },
+      ]),
+      getAccessibilityTreeForFrame,
+    } as unknown as BrowserAPI;
+
+    const result = await buildSnapshot(browser);
+
+    expect(result.text).toContain(
+      `  - link "iframe docs" [ref=e1]: "${frameUrl}"\n` +
+        `  - iframe: "${frameUrl}"\n` +
+        '    - rootwebarea "Frame Content"\n' +
+        '      - button "Frame Button" [ref=f1e1]'
+    );
+    expect(getAccessibilityTreeForFrame).toHaveBeenCalledOnce();
+    expect(result.refToFrameId.get('f1e1')).toBe('frame-1');
+  });
+});
 
 describe('snapshotHandler', () => {
   it('requires a --tab flag', async () => {
@@ -87,6 +136,38 @@ describe('snapshotHandler', () => {
     expect(r.stdout).toBe('Snapshot saved to /snap.txt\n');
     expect(writeFile).toHaveBeenCalledWith('/snap.txt', 'SNAPSHOT-TEXT');
   });
+
+  it('prints only the selected frame subtree and records frame refs', async () => {
+    const { browser, getAccessibilityTreeForFrame } = makeBrowser({
+      frames: [
+        { frameId: 'main', url: 'https://x' },
+        { frameId: 'frame-1', parentFrameId: 'main', url: 'https://x/frame' },
+      ],
+      frameTree: {
+        role: 'RootWebArea',
+        name: 'Frame Content',
+        children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
+      },
+    });
+    const state = createPlaywrightState();
+
+    const r = await snapshotHandler(
+      createHandlerCtx({ browser, state, flags: { tab: TAB, frame: 'frame-1' } })
+    );
+
+    expect(r.stdout).toContain('- rootwebarea "Frame Content"');
+    expect(r.stdout).toContain('- button "Frame Button" [ref=f1e1]');
+    expect(r.stdout).not.toContain('SNAPSHOT-TEXT');
+    expect(getAccessibilityTreeForFrame).toHaveBeenCalledWith('frame-1');
+    expect(state.snapshots.get(TAB)?.refToFrameId.get('f1e1')).toBe('frame-1');
+  });
+
+  it('rejects an unknown --frame with an actionable frames command', async () => {
+    const { browser } = makeBrowser({ frames: [{ frameId: 'main', url: 'https://x' }] });
+    await expect(
+      snapshotHandler(createHandlerCtx({ browser, flags: { tab: TAB, frame: 'missing-frame' } }))
+    ).rejects.toThrow('playwright-cli frames --tab=tab-1');
+  });
 });
 
 describe('framesHandler', () => {
@@ -103,8 +184,9 @@ describe('framesHandler', () => {
       ],
     });
     const r = await framesHandler(createHandlerCtx({ browser, flags: { tab: TAB } }));
-    expect(r.stdout).toContain('[main] F1');
-    expect(r.stdout).toContain('[child] F2 (parent: F1)');
+    expect(r.stdout).toContain('use with --frame, never --tab');
+    expect(r.stdout).toContain('[main] frameId=F1');
+    expect(r.stdout).toContain('[child] frameId=F2 parentFrameId=F1');
   });
 });
 

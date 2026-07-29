@@ -3,13 +3,40 @@
  */
 
 import type { BrowserAPI } from '../../../../cdp/index.js';
+import type { FrameInfo } from '../../../../cdp/types.js';
 import { isExtensionRealm } from '../../../../core/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
-import { takeSnapshot } from '../snapshot.js';
-import { base64ToBytes, filenameSafeTimestamp, requireTab } from '../state.js';
-import type { PlaywrightHandler, TabSnapshot } from '../types.js';
+import { renderNode, takeSnapshot } from '../snapshot.js';
+import { base64ToBytes, filenameSafeTimestamp, requireTab, resolveFrame } from '../state.js';
+import type { PlaywrightHandler, PlaywrightState, TabSnapshot } from '../types.js';
 
 type ScreenshotClip = { x: number; y: number; width: number; height: number };
+
+async function takeFrameSnapshot(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  targetId: string,
+  frame: FrameInfo
+): Promise<string> {
+  const tree = await browser.getAccessibilityTreeForFrame(frame.frameId);
+  const refToSelector = new Map<string, string>();
+  const refToBackendNodeId = new Map<string, number>();
+  const refToFrameId = new Map<string, string>();
+  const lines = renderNode(tree, refToSelector, refToBackendNodeId, { value: 0 }, '', 'f1');
+  for (const ref of refToSelector.keys()) refToFrameId.set(ref, frame.frameId);
+
+  const output = lines.join('\n');
+  state.snapshots.set(targetId, {
+    url: frame.url,
+    title: frame.name,
+    refToSelector,
+    refToBackendNodeId,
+    refToFrameId,
+    content: output,
+    timestamp: Date.now(),
+  });
+  return output;
+}
 
 /** Resolve a clip rect from a ref via its backendNodeId (preferred, reliable). */
 async function clipFromBackendNode(
@@ -90,10 +117,13 @@ export const snapshotHandler: PlaywrightHandler = async ({
   // ponytail: depth/boxes not yet wired to injected script
   const _depth = flags['depth'] ? parseInt(flags['depth'], 10) : undefined;
   const _boxes = flags['boxes'] === 'true';
-  const { output } = await browser.withTab(tab.targetId, async () => {
-    return await takeSnapshot(browser, state, tab.targetId, {
+  const output = await browser.withTab(tab.targetId, async () => {
+    const frame = await resolveFrame(browser, flags);
+    if (frame) return takeFrameSnapshot(browser, state, tab.targetId, frame);
+    const snapshot = await takeSnapshot(browser, state, tab.targetId, {
       noIframes,
     });
+    return snapshot.output;
   });
   if (flags['filename']) {
     await fs.writeFile(flags['filename'], output);
@@ -115,10 +145,10 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
     const frames = await browser.getFrameTree();
     const lines = frames.map((f) => {
       const type = f.parentFrameId ? 'child' : 'main';
-      const parent = f.parentFrameId ? ` (parent: ${f.parentFrameId})` : '';
-      return `  [${type}] ${f.frameId}${parent} - ${f.url}`;
+      const parent = f.parentFrameId ? ` parentFrameId=${f.parentFrameId}` : '';
+      return `  [${type}] frameId=${f.frameId}${parent} - ${f.url}`;
     });
-    return `Frames in current tab:\n${lines.join('\n')}`;
+    return `Frame IDs (use with --frame, never --tab):\n${lines.join('\n')}`;
   });
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };

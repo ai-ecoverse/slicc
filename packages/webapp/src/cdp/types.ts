@@ -96,6 +96,12 @@ export interface EvaluateOptions {
   returnByValue?: boolean;
 }
 
+/** Options for evaluating within a frame. */
+export interface FrameEvaluateOptions extends EvaluateOptions {
+  /** Execution world to use. Default: isolated. */
+  world?: 'isolated' | 'main';
+}
+
 /** Options for waitForSelector(). */
 export interface WaitForSelectorOptions {
   /** Timeout in ms. Default: 30000. */

@@ -2,8 +2,7 @@
  * JavaScript evaluation subcommands: eval, eval-file.
  */
 
-import type { BrowserAPI } from '../../../../cdp/index.js';
-import { requireTab } from '../state.js';
+import { requireTab, resolveFrame } from '../state.js';
 import type { PlaywrightHandler } from '../types.js';
 
 /** True when an evaluation error is a SyntaxError (parse-time, nothing executed). */
@@ -33,19 +32,22 @@ function mayUseTopLevelAwaitOrReturn(source: string): boolean {
  * `JSON.parse('x')` after side effects, or `throw new SyntaxError(...)`) surfaces
  * the original error without re-executing any side-effecting code.
  */
-async function evaluateWithTopLevelAwait(browser: BrowserAPI, source: string): Promise<unknown> {
+async function evaluateWithTopLevelAwait(
+  evaluate: (source: string) => Promise<unknown>,
+  source: string
+): Promise<unknown> {
   try {
-    return await browser.evaluate(source);
+    return await evaluate(source);
   } catch (rawErr) {
     if (!isSyntaxError(rawErr) || !mayUseTopLevelAwaitOrReturn(source)) throw rawErr;
     // Expression wrap — handles `await fetch(url).then(...)`.
     try {
-      return await browser.evaluate(`(async () => (\n${source}\n))()`);
+      return await evaluate(`(async () => (\n${source}\n))()`);
     } catch (exprErr) {
       if (!isSyntaxError(exprErr)) throw exprErr;
       // Statement wrap — handles multi-statement scripts with an explicit `return`.
       try {
-        return await browser.evaluate(`(async () => {\n${source}\n})()`);
+        return await evaluate(`(async () => {\n${source}\n})()`);
       } catch (stmtErr) {
         if (!isSyntaxError(stmtErr)) throw stmtErr;
         // All forms failed to parse — surface the original error, not a wrapper artifact.
@@ -65,7 +67,11 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
   }
   const expression = positional.join(' ');
   const output = await browser.withTab(tab.targetId, async () => {
-    const evalResult = await evaluateWithTopLevelAwait(browser, expression);
+    const frame = await resolveFrame(browser, flags);
+    const evaluate = frame
+      ? (source: string) => browser.evaluateInFrame(frame.frameId, source, { world: 'main' })
+      : (source: string) => browser.evaluate(source);
+    const evalResult = await evaluateWithTopLevelAwait(evaluate, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
   if (flags['filename']) {
@@ -99,7 +105,10 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
   }
 
   const fileOutput = await browser.withTab(tab.targetId, async () => {
-    const fileEvalResult = await evaluateWithTopLevelAwait(browser, scriptContent);
+    const fileEvalResult = await evaluateWithTopLevelAwait(
+      (source) => browser.evaluate(source),
+      scriptContent
+    );
     return typeof fileEvalResult === 'string'
       ? fileEvalResult
       : JSON.stringify(fileEvalResult, null, 2);

@@ -89,6 +89,53 @@ describe('SyntheticCdpTransport', () => {
     expect((targets.targetInfos as any[])[0].targetId).toBe('cherry-target');
   });
 
+  it('creates a Page isolated world locally without forwarding to the host', async () => {
+    const t = new TestTransport({
+      targetUrl: 'https://test.local/',
+      targetOrigin: 'https://test.local',
+      title: 'Isolated World',
+    });
+    await t.connect();
+
+    const result = await t.send('Page.createIsolatedWorld', {
+      frameId: 'cherry-frame',
+      worldName: '__slicc_iframe',
+    });
+
+    expect(result).toEqual({ executionContextId: 1 });
+    expect(t.forwarded).toEqual([]);
+  });
+
+  it('synthesizes the default Runtime context and refreshes it after navigation', async () => {
+    const t = new TestTransport({
+      targetUrl: 'https://test.local/',
+      targetOrigin: 'https://test.local',
+      title: 'Runtime Context',
+    });
+    await t.connect();
+    const events: Array<{ method: string; params: Record<string, any> }> = [];
+    t.on('Runtime.executionContextCreated', (params) => events.push({ method: 'created', params }));
+    t.on('Runtime.executionContextsCleared', (params) =>
+      events.push({ method: 'cleared', params })
+    );
+
+    await t.send('Target.attachToTarget', { targetId: 'cherry-target' });
+    await t.send('Runtime.enable');
+    await t.send('Runtime.enable');
+    await t.send('Page.navigate', { url: 'https://test.local/next' });
+
+    expect(events.map(({ method }) => method)).toEqual(['created', 'cleared', 'created']);
+    expect(events[0]?.params).toMatchObject({
+      sessionId: 'cherry-session',
+      context: { id: 1, auxData: { frameId: 'cherry-frame', isDefault: true } },
+    });
+    expect(events[2]?.params).toMatchObject({ context: { id: 2 } });
+
+    await t.send('Runtime.disable');
+    await t.send('Runtime.enable');
+    expect(events.at(-1)?.params).toMatchObject({ context: { id: 3 } });
+  });
+
   it('emits frameNavigated + loadEventFired after Page.navigate', async () => {
     const t = new TestTransport({
       targetUrl: 'https://test.local/',

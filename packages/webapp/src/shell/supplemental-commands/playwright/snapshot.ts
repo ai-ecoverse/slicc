@@ -6,15 +6,9 @@
 import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../../cdp/types.js';
-import { createLogger } from '../../../core/logger.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import {
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
-} from '../../../scoops/tray-runtime-config.js';
+import { listAllTargetsWithRemote } from './state.js';
 import type { PlaywrightState, TabSnapshot } from './types.js';
-
-const log = createLogger('playwright');
 
 export function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -156,23 +150,6 @@ function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
   return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
 }
 
-/**
- * Cheap, synchronous check for whether a multi-browser tray is configured
- * (leader worker URL or follower join URL present). Reads `globalThis.localStorage`
- * — the real Storage on the page, or the page-seeded shim in the kernel worker.
- * Used to skip the `list-remote-targets` panel-RPC round-trip entirely when no
- * tray exists, so plain (non-tray) playwright commands stay at one local call.
- */
-function isTrayConfigured(): boolean {
-  try {
-    const ls = (globalThis as { localStorage?: Storage }).localStorage;
-    if (!ls) return false;
-    return !!(ls.getItem(TRAY_WORKER_STORAGE_KEY) || ls.getItem(TRAY_JOIN_STORAGE_KEY));
-  } catch {
-    return false;
-  }
-}
-
 export async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
@@ -184,27 +161,7 @@ export async function getActionablePages(
   // panel-RPC from the page-side BrowserAPI (fully wired) and dedupe by targetId.
   // The tray-configured gate keeps the no-tray common case to a single local call
   // (no per-command BroadcastChannel round-trip, no 3s-timeout exposure).
-  let pages: PageInfo[];
-  if (typeof browser.listAllTargets === 'function') {
-    pages = await browser.listAllTargets();
-    const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
-    if (rpc) {
-      try {
-        const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
-        const seen = new Set(pages.map((p) => p.targetId));
-        for (const t of targets) {
-          if (!seen.has(t.targetId)) {
-            seen.add(t.targetId);
-            pages.push({ targetId: t.targetId, title: t.title, url: t.url });
-          }
-        }
-      } catch (err) {
-        log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
-      }
-    }
-  } else {
-    pages = await browser.listPages();
-  }
+  const pages = await listAllTargetsWithRemote(browser);
   return pages.filter((page) => isActionablePage(state, page));
 }
 
@@ -301,8 +258,8 @@ async function stitchIframeContent(
     for (const line of content.split('\n')) {
       stitchedLines.push(line);
 
-      // Match iframe placeholder lines like: - iframe "Title": "https://example.com/frame"
-      const iframeMatch = line.match(/^(\s*)- iframe\s/);
+      // Match named and unnamed placeholders: - iframe "Title": "..." or - iframe: "..."
+      const iframeMatch = line.match(/^(\s*)- iframe(?=\s|:)/);
       if (!iframeMatch) continue;
       const valueMatch = line.match(/:\s*"([^"]+)"\s*$/);
       if (!valueMatch) continue;

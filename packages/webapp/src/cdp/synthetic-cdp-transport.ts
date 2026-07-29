@@ -56,6 +56,8 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
 
   protected _state: ConnectionState = 'disconnected';
   private listeners = new Map<string, Set<CDPEventListener>>();
+  private runtimeEnabled = false;
+  private nextExecutionContextId = 1;
 
   constructor(opts: SyntheticCdpTransportOptions) {
     this.currentUrl = opts.targetUrl;
@@ -184,16 +186,27 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
           ],
         });
       case 'Target.attachToTarget':
+        this.runtimeEnabled = false;
         return Promise.resolve({ sessionId: this.syntheticIds.session });
       case 'Target.detachFromTarget':
+        this.runtimeEnabled = false;
         return Promise.resolve({ success: true });
       case 'Target.closeTarget':
+        this.runtimeEnabled = false;
         this.onCloseTarget();
         return Promise.resolve({ success: true });
       case 'Page.enable':
-      case 'Runtime.enable':
       case 'DOM.enable':
       case 'Page.bringToFront':
+        return Promise.resolve({});
+      case 'Runtime.enable':
+        if (!this.runtimeEnabled) {
+          this.runtimeEnabled = true;
+          this.emitMainWorldContextCreated();
+        }
+        return Promise.resolve({});
+      case 'Runtime.disable':
+        this.runtimeEnabled = false;
         return Promise.resolve({});
       case 'Page.getFrameTree':
         return Promise.resolve({
@@ -208,7 +221,7 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
             childFrames: [],
           },
         });
-      case 'Runtime.createIsolatedWorld':
+      case 'Page.createIsolatedWorld':
         return Promise.resolve({ executionContextId: 1 });
       default:
         return null;
@@ -224,6 +237,9 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
     // Advance the last-known URL so subsequent getTargets/getFrameTree report the
     // navigated location (subclasses that override getCurrentUrl ignore this).
     if (navigatedUrl) this.currentUrl = navigatedUrl;
+    if (this.runtimeEnabled) {
+      this.emit('Runtime.executionContextsCleared', { sessionId: this.syntheticIds.session });
+    }
     this.emit('Page.frameNavigated', {
       frame: {
         id: frameId,
@@ -234,8 +250,26 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
       },
       sessionId: this.syntheticIds.session,
     });
+    if (this.runtimeEnabled) this.emitMainWorldContextCreated();
     this.emit('Page.loadEventFired', {
       timestamp: Date.now() / 1000,
+      sessionId: this.syntheticIds.session,
+    });
+  }
+
+  /** Expose the single host-page realm as the synthetic target's default main-world context. */
+  private emitMainWorldContextCreated(): void {
+    this.emit('Runtime.executionContextCreated', {
+      context: {
+        id: this.nextExecutionContextId++,
+        origin: this.targetOrigin,
+        name: '',
+        auxData: {
+          isDefault: true,
+          type: 'default',
+          frameId: this.syntheticIds.frame,
+        },
+      },
       sessionId: this.syntheticIds.session,
     });
   }

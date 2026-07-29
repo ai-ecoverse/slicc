@@ -5,12 +5,20 @@
 
 import { base64ToUint8 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../../cdp/index.js';
+import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
+import { createLogger } from '../../../core/logger.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
+import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../../scoops/tray-runtime-config.js';
 import type { PlaywrightState } from './types.js';
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
 
 const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
+const log = createLogger('playwright');
 
 export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
   let statesByFs = sharedStateByBrowser.get(browser);
@@ -175,6 +183,7 @@ import { type ArgSpec, parseArgs } from '../../arg-parser.js';
 export const PLAYWRIGHT_FLAG_SPEC: ArgSpec = {
   string: [
     'tab',
+    'frame',
     'filename',
     'max-width',
     'runtime',
@@ -260,4 +269,85 @@ export function requireTab(
     };
   }
   return { targetId: tabId };
+}
+
+/** Resolve and validate an optional --frame ID against the currently attached tab. */
+export async function resolveFrame(
+  browser: BrowserAPI,
+  flags: Record<string, string>
+): Promise<FrameInfo | null> {
+  const frameId = flags['frame'];
+  if (!frameId) return null;
+
+  const frame = (await browser.getFrameTree()).find((candidate) => candidate.frameId === frameId);
+  if (frame) return frame;
+
+  const targetId = flags['tab'] ?? '<targetId>';
+  throw new Error(
+    `Unknown frame ID "${frameId}" for tab ${targetId}. Run 'playwright-cli frames --tab=${targetId}' to list frame IDs.`
+  );
+}
+
+/** Whether a multi-browser tray is configured in the page or worker localStorage shim. */
+function isTrayConfigured(): boolean {
+  try {
+    const storage = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!storage) return false;
+    return !!(storage.getItem(TRAY_WORKER_STORAGE_KEY) || storage.getItem(TRAY_JOIN_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
+/** List local targets plus any remote tray/follower targets visible through panel RPC. */
+export async function listAllTargetsWithRemote(browser: BrowserAPI): Promise<PageInfo[]> {
+  if (typeof browser.listAllTargets !== 'function') return browser.listPages();
+
+  const pages = await browser.listAllTargets();
+  const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
+  if (!rpc) return pages;
+
+  try {
+    const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+    const seen = new Set(pages.map((page) => page.targetId));
+    for (const target of targets) {
+      if (seen.has(target.targetId)) continue;
+      seen.add(target.targetId);
+      pages.push({ targetId: target.targetId, title: target.title, url: target.url });
+    }
+  } catch (err) {
+    log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+  }
+  return pages;
+}
+
+async function listTargetsForFrameSearch(browser: BrowserAPI): Promise<PageInfo[]> {
+  try {
+    return await listAllTargetsWithRemote(browser);
+  } catch {
+    return [];
+  }
+}
+
+/** Explain a failed --tab attachment when the supplied target ID is actually a frame ID. */
+export async function frameIdUsedAsTabError(
+  browser: BrowserAPI,
+  targetId: string,
+  attachmentError: unknown
+): Promise<string | null> {
+  const message =
+    attachmentError instanceof Error ? attachmentError.message : String(attachmentError);
+  if (!message.includes('No target with given id found')) return null;
+
+  for (const page of await listTargetsForFrameSearch(browser)) {
+    try {
+      const frames = await browser.withTab(page.targetId, async () => browser.getFrameTree());
+      if (frames.some((frame) => frame.frameId === targetId)) {
+        return `"${targetId}" is a frame ID, not a tab target ID. Use --tab=${page.targetId} --frame=${targetId}; run 'playwright-cli frames --tab=${page.targetId}' to list frame IDs.`;
+      }
+    } catch {
+      // A tab may close while we inspect it; continue checking the remaining open tabs.
+    }
+  }
+  return null;
 }

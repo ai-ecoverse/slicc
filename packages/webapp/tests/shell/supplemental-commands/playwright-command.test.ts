@@ -2080,6 +2080,99 @@ describe('playwright-cli unknown command', () => {
   });
 });
 
+describe('playwright-cli frame ID targeting errors', () => {
+  it('explains that a frame ID passed to --tab belongs in --frame', async () => {
+    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      if (targetId === 'frame-1') {
+        throw new Error('CDP error: No target with given id found (-32602)');
+      }
+      return fn('session-1');
+    });
+    const browser = createMockBrowser({
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([{ targetId: 'tab-1', title: 'Page', url: 'https://example.com' }]),
+      getFrameTree: vi.fn().mockResolvedValue([
+        { frameId: 'main', url: 'https://example.com', name: '' },
+        {
+          frameId: 'frame-1',
+          parentFrameId: 'main',
+          url: 'https://example.com/frame',
+          name: '',
+        },
+      ]),
+      withTab: withTab as BrowserAPI['withTab'],
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser, createMockFS());
+
+    const result = await cmd.execute(['eval', '--tab=frame-1', 'location.href'], mockCtx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('is a frame ID, not a tab target ID');
+    expect(result.stderr).toContain('--tab=tab-1 --frame=frame-1');
+    expect(result.stderr).toContain('playwright-cli frames --tab=tab-1');
+    expect(result.stderr).not.toContain('CDP error');
+  });
+
+  it('finds frame IDs owned by remote follower targets from panel RPC', async () => {
+    let activeTargetId = '';
+    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      if (targetId === 'remote-frame') {
+        throw new Error('CDP error: No target with given id found (-32602)');
+      }
+      activeTargetId = targetId;
+      return fn('session-1');
+    });
+    const browser = createMockBrowser({
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([{ targetId: 'local-tab', title: 'Local', url: 'https://local.test' }]),
+      getFrameTree: vi.fn().mockImplementation(async () =>
+        activeTargetId === 'f-runtime:remote-tab'
+          ? [
+              { frameId: 'remote-main', url: 'https://remote.test', name: '' },
+              {
+                frameId: 'remote-frame',
+                parentFrameId: 'remote-main',
+                url: 'https://remote.test/frame',
+                name: '',
+              },
+            ]
+          : [{ frameId: 'local-main', url: 'https://local.test', name: '' }]
+      ),
+      withTab: withTab as BrowserAPI['withTab'],
+    });
+    const rpcCall = vi.fn().mockResolvedValue({
+      targets: [
+        {
+          targetId: 'f-runtime:remote-tab',
+          title: 'Follower',
+          url: 'https://remote.test',
+        },
+      ],
+    });
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call: rpcCall,
+      dispose: vi.fn(),
+    };
+    const restoreTray = withTrayConfigured();
+
+    try {
+      const cmd = createPlaywrightCommand('playwright-cli', browser, createMockFS());
+      const result = await cmd.execute(['eval', '--tab=remote-frame', 'location.href'], mockCtx);
+
+      expect(result.exitCode).toBe(1);
+      expect(rpcCall).toHaveBeenCalledWith('list-remote-targets', undefined, { timeoutMs: 3000 });
+      expect(result.stderr).toContain('--tab=f-runtime:remote-tab --frame=remote-frame');
+      expect(result.stderr).toContain('playwright-cli frames --tab=f-runtime:remote-tab');
+      expect(result.stderr).not.toContain('CDP error');
+    } finally {
+      (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = undefined;
+      restoreTray();
+    }
+  });
+});
+
 describe('playwright-cli session history logging', () => {
   let browser: ReturnType<typeof createMockBrowser>;
   let fs: ReturnType<typeof createMockFS>;
@@ -3704,6 +3797,7 @@ const FRAME_HTML = `<!DOCTYPE html>
 <html>
 <head><title>Child Frame</title></head>
 <body>
+  <script>window.appState = { status: 'visible' };</script>
   <h2>Frame Content</h2>
   <button id="frame-btn" aria-label="Frame Button" onclick="this.textContent='Clicked!'">Frame Button</button>
   <input id="frame-input" type="text" aria-label="Frame Input" placeholder="Type here" />
@@ -3860,6 +3954,27 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(result.stdout).toContain('/main.html');
     expect(result.stdout).toContain('[child]');
     expect(result.stdout).toContain('/frame.html');
+  });
+
+  it('eval --frame sees globals defined by the frame page', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const frameId = await browser.withTab(targetId, async () => {
+      const frames = await browser.getFrameTree();
+      return frames.find((frame) => frame.parentFrameId)?.frameId;
+    });
+    expect(frameId).toBeDefined();
+
+    const result = await cmd.execute(
+      ['eval', `--tab=${targetId}`, `--frame=${frameId}`, 'window.appState.status'],
+      mockCtx
+    );
+    expect(result).toEqual({ stdout: 'visible\n', stderr: '', exitCode: 0 });
   });
 
   it('click on iframe element works', async () => {
