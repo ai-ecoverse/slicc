@@ -1,5 +1,6 @@
 import type { LeaderToWorkerControlMessage } from '@slicc/shared-ts';
 import { describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import { PreviewBridgeCdpTransport } from '../../src/cdp/preview-bridge-cdp-transport.js';
 
 describe('PreviewBridgeCdpTransport', () => {
@@ -164,6 +165,40 @@ describe('PreviewBridgeCdpTransport', () => {
       };
       expect(targets.targetInfos).toHaveLength(1);
       expect(targets.targetInfos[0].targetId).toMatch(/^preview-/);
+    });
+
+    it('gets a frame snapshot through the synthetic preview isolated world', async () => {
+      const sent: LeaderToWorkerControlMessage[] = [];
+      const transport = new PreviewBridgeCdpTransport({
+        ...defaultOpts,
+        send: (message) => sent.push(message),
+      });
+      const api = new BrowserAPI(transport);
+      await api.connect();
+      await api.attachToPage('preview-target');
+
+      const snapshot = api.getAccessibilityTreeForFrame('preview-frame');
+      await vi.waitFor(() => {
+        expect(sent.some((message) => message.type === 'bridge.cdp.request')).toBe(true);
+      });
+      const requests = sent.filter((message) => message.type === 'bridge.cdp.request');
+      expect(requests.map((request) => request.method)).toEqual(['Runtime.evaluate']);
+      expect(requests[0].params).toMatchObject({
+        contextId: 1,
+        awaitPromise: false,
+        returnByValue: true,
+      });
+      transport.deliverResponse(requests[0].id, {
+        result: {
+          result: {
+            type: 'object',
+            value: { role: 'RootWebArea', name: 'Preview frame' },
+          },
+        },
+      });
+
+      await expect(snapshot).resolves.toMatchObject({ role: 'RootWebArea', name: 'Preview frame' });
+      api.disconnect();
     });
   });
 });

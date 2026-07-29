@@ -221,7 +221,7 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
             childFrames: [],
           },
         });
-      case 'Runtime.createIsolatedWorld':
+      case 'Page.createIsolatedWorld':
         return Promise.resolve({ executionContextId: 1 });
       default:
         return null;

@@ -150,6 +150,39 @@ describe('CherryHostTransport', () => {
     api.disconnect();
   });
 
+  it('gets a frame snapshot through the synthetic Cherry isolated world', async () => {
+    await connectHelper(h);
+    const api = new BrowserAPI(h.transport);
+    await api.attachToPage('cherry-target');
+
+    const snapshot = api.getAccessibilityTreeForFrame('cherry-frame');
+    await vi.waitFor(() => {
+      expect(h.posted.some((m) => m.kind === 'cdp.request')).toBe(true);
+    });
+    const requests = h.posted.filter((m) => m.kind === 'cdp.request');
+    expect(requests.map((request) => request.method)).toEqual(['Runtime.evaluate']);
+    expect(requests[0].params).toMatchObject({
+      contextId: 1,
+      awaitPromise: false,
+      returnByValue: true,
+    });
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: lastChannelId(h),
+      kind: 'cdp.response',
+      id: requests[0].id,
+      result: {
+        result: {
+          type: 'object',
+          value: { role: 'RootWebArea', name: 'Cherry frame' },
+        },
+      },
+    });
+
+    await expect(snapshot).resolves.toMatchObject({ role: 'RootWebArea', name: 'Cherry frame' });
+    api.disconnect();
+  });
+
   it('emits frameNavigated + loadEventFired after Page.navigate resolves', async () => {
     await connectHelper(h);
     const channelId = lastChannelId(h);

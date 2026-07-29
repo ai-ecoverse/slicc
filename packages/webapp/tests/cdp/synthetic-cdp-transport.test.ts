@@ -89,6 +89,23 @@ describe('SyntheticCdpTransport', () => {
     expect((targets.targetInfos as any[])[0].targetId).toBe('cherry-target');
   });
 
+  it('creates a Page isolated world locally without forwarding to the host', async () => {
+    const t = new TestTransport({
+      targetUrl: 'https://test.local/',
+      targetOrigin: 'https://test.local',
+      title: 'Isolated World',
+    });
+    await t.connect();
+
+    const result = await t.send('Page.createIsolatedWorld', {
+      frameId: 'cherry-frame',
+      worldName: '__slicc_iframe',
+    });
+
+    expect(result).toEqual({ executionContextId: 1 });
+    expect(t.forwarded).toEqual([]);
+  });
+
   it('synthesizes the default Runtime context and refreshes it after navigation', async () => {
     const t = new TestTransport({
       targetUrl: 'https://test.local/',
