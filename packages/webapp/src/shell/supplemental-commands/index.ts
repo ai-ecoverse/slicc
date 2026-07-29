@@ -68,6 +68,7 @@ import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createUsbCommand } from './usb-command.js';
+import { createV86Command } from './v86-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
@@ -226,6 +227,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUsbCommand(),
     createHidCommand(),
     createSerialCommand(),
+    createV86Command({ processManager: options.processManager }),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand(),

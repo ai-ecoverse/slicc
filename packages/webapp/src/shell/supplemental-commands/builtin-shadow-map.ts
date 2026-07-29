@@ -3,6 +3,7 @@ import { ESBUILD_VERSION } from './esbuild-wasm.js';
 import { BUNDLED_FFMPEG_CORE_VERSION } from './ffmpeg-wasm.js';
 import { BUNDLED_MAGICK_VERSION } from './magick-wasm.js';
 import { TYPESCRIPT_VFS_INSTALL_COMMAND } from './shared.js';
+import { V86_PINNED_VERSION } from './v86-wasm.js';
 
 export interface BuiltinShadow {
   command: string;
@@ -68,6 +69,11 @@ export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
     bootstrap: `ipk add @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`,
   },
   sqlite3: { command: 'sqlite3', example: 'sqlite3 database.db "SELECT 1"' },
+  v86: {
+    command: 'v86',
+    example: 'v86 start -cdrom alpine.iso',
+    bootstrap: `ipk add v86@${V86_PINNED_VERSION}`,
+  },
 };
 
 export function lookupBuiltinShadow(requestedPackage: string): BuiltinShadow | undefined {

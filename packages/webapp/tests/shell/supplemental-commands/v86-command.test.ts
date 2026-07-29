@@ -1,0 +1,370 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  chordToScancodes,
+  createV86Command,
+  extractVmName,
+  parseStartArgs,
+} from '../../../src/shell/supplemental-commands/v86-command.js';
+import {
+  DEFAULT_MEMORY_MIB,
+  dumpTextScreen,
+  getVm,
+  instrumentVm,
+  MAX_MEMORY_MIB,
+  registerVm,
+  resetVmRegistryForTests,
+  SERIAL_BUFFER_CAP,
+  type VmRecord,
+} from '../../../src/shell/supplemental-commands/v86-vm.js';
+import type { V86Emulator, V86Module } from '../../../src/shell/supplemental-commands/v86-wasm.js';
+import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
+
+afterEach(() => {
+  resetVmRegistryForTests();
+});
+
+describe('parseStartArgs', () => {
+  it('applies defaults and requires bootable media', () => {
+    const missing = parseStartArgs([]);
+    expect(missing.ok).toBe(false);
+
+    const result = parseStartArgs(['-cdrom', 'alpine.iso']);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.parsed.name).toBe('vm0');
+    expect(result.parsed.memoryMib).toBe(DEFAULT_MEMORY_MIB);
+    expect(result.parsed.cdrom).toBe('alpine.iso');
+    expect(result.parsed.nographic).toBe(false);
+  });
+
+  it('parses the full QEMU-flavored flag set', () => {
+    const result = parseStartArgs([
+      '-n',
+      'test-vm',
+      '-m',
+      '256',
+      '-kernel',
+      'bzImage',
+      '-initrd',
+      'rootfs.img',
+      '-append',
+      'console=ttyS0',
+      '-boot',
+      'd',
+      '-nographic',
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.parsed).toMatchObject({
+      name: 'test-vm',
+      memoryMib: 256,
+      kernel: 'bzImage',
+      initrd: 'rootfs.img',
+      append: 'console=ttyS0',
+      boot: 'd',
+      nographic: true,
+    });
+  });
+
+  it('rejects bad names, oversized memory, and unknown flags', () => {
+    expect(parseStartArgs(['-n', 'has space', '-hda', 'x.img']).ok).toBe(false);
+    expect(parseStartArgs(['-m', String(MAX_MEMORY_MIB + 1), '-hda', 'x.img']).ok).toBe(false);
+    expect(parseStartArgs(['-m', '-5', '-hda', 'x.img']).ok).toBe(false);
+    expect(parseStartArgs(['-frobnicate', '-hda', 'x.img']).ok).toBe(false);
+    expect(parseStartArgs(['-boot', 'q', '-hda', 'x.img']).ok).toBe(false);
+  });
+});
+
+describe('extractVmName', () => {
+  it('defaults to vm0 and strips the -n pair', () => {
+    expect(extractVmName(['hello'])).toEqual({ name: 'vm0', rest: ['hello'] });
+    expect(extractVmName(['-n', 'alt', 'hello', 'world'])).toEqual({
+      name: 'alt',
+      rest: ['hello', 'world'],
+    });
+    expect(extractVmName(['--name', 'x'])).toEqual({ name: 'x', rest: [] });
+  });
+});
+
+describe('chordToScancodes', () => {
+  it('maps single named keys to press+release', () => {
+    expect(chordToScancodes('enter')).toEqual([0x1c, 0x9c]);
+    expect(chordToScancodes('esc')).toEqual([0x01, 0x81]);
+    expect(chordToScancodes('f12')).toEqual([0x58, 0xd8]);
+  });
+
+  it('wraps modifiers around the final key', () => {
+    // ctrl down, c down, c up, ctrl up
+    expect(chordToScancodes('ctrl-c')).toEqual([0x1d, 0x2e, 0xae, 0x9d]);
+    expect(chordToScancodes('alt-tab')).toEqual([0x38, 0x0f, 0x8f, 0xb8]);
+  });
+
+  it('handles extended-code keys and ctrl-alt-del', () => {
+    expect(chordToScancodes('delete')).toEqual([0xe0, 0x53, 0xe0, 0xd3]);
+    expect(chordToScancodes('ctrl-alt-del')).toEqual([
+      0x1d, 0x38, 0xe0, 0x53, 0xe0, 0xd3, 0xb8, 0x9d,
+    ]);
+  });
+
+  it('returns null for unknown chords', () => {
+    expect(chordToScancodes('bogus-key')).toBeNull();
+    expect(chordToScancodes('')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle with a mocked emulator
+// ---------------------------------------------------------------------------
+
+type FakeEmulator = V86Emulator & {
+  listeners: Map<string, (arg: unknown) => void>;
+  busSends: Array<[string, unknown]>;
+  running: boolean;
+};
+
+function makeFakeEmulator(): FakeEmulator {
+  const fake: FakeEmulator = {
+    listeners: new Map(),
+    busSends: [],
+    running: false,
+    run: vi.fn(async () => {
+      fake.running = true;
+    }),
+    stop: vi.fn(async () => {
+      fake.running = false;
+    }),
+    destroy: vi.fn(async () => {}),
+    add_listener: (event, listener) => {
+      fake.listeners.set(event, listener);
+    },
+    is_running: () => fake.running,
+    save_state: vi.fn(async () => new ArrayBuffer(16)),
+    restore_state: vi.fn(async () => {}),
+    keyboard_send_text: vi.fn(),
+    keyboard_send_scancodes: vi.fn(),
+    serial0_send: vi.fn(),
+    bus: {
+      send: (name: string, data?: unknown) => {
+        fake.busSends.push([name, data]);
+      },
+    },
+    screen_adapter: {
+      set_mode: vi.fn(),
+      set_size_graphical: vi.fn(),
+      update_buffer: vi.fn(),
+      get_text_screen: () => ['SLICC boot menu   ', 'ok                '],
+    },
+  };
+  return fake;
+}
+
+function makeEngine(emulator: FakeEmulator): V86Module {
+  return {
+    V86: function FakeV86() {
+      return emulator;
+    } as unknown as V86Module['V86'],
+    wasmModule: {} as WebAssembly.Module,
+    version: V86_PINNED_VERSION,
+  };
+}
+
+function makeCtx(files: Record<string, Uint8Array> = {}) {
+  const written = new Map<string, Uint8Array>();
+  return {
+    written,
+    ctx: {
+      fs: {
+        resolvePath: (base: string, path: string) =>
+          path.startsWith('/') ? path : `${base}/${path}`,
+        exists: async (path: string) => path in files || written.has(path),
+        readFile: async (path: string) => new TextDecoder().decode(files[path]),
+        readFileBuffer: async (path: string) => files[path] ?? written.get(path)!,
+        writeFile: async (path: string, data: Uint8Array) => {
+          written.set(path, data);
+        },
+        stat: async () => ({ isDirectory: false }),
+      },
+      cwd: '/workspace',
+      env: new Map<string, string>(),
+      stdin: new Uint8Array(),
+    } as never,
+  };
+}
+
+const BIOS_FILES = {
+  '/workspace/.v86/seabios.bin': new Uint8Array([1]),
+  '/workspace/.v86/vgabios.bin': new Uint8Array([2]),
+  '/workspace/alpine.iso': new Uint8Array([3, 4]),
+};
+
+async function startVm(emulator: FakeEmulator, extraArgs: string[] = []) {
+  const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+  const { ctx } = makeCtx(BIOS_FILES);
+  return cmd.execute(['start', '-cdrom', 'alpine.iso', ...extraArgs], ctx);
+}
+
+describe('v86 command lifecycle (mocked engine)', () => {
+  it('boots a VM, registers it, and reports it in ls', async () => {
+    const emulator = makeFakeEmulator();
+    const result = await startVm(emulator);
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("VM 'vm0' booting");
+    expect(emulator.run).toHaveBeenCalled();
+    expect(getVm('vm0')).toBeDefined();
+
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const ls = await cmd.execute(['ls'], makeCtx().ctx);
+    expect(ls.stdout).toContain('vm0');
+    expect(ls.stdout).toContain('running');
+  });
+
+  it('surfaces the BIOS download hint when blobs are missing', async () => {
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
+    const { ctx } = makeCtx({ '/workspace/alpine.iso': new Uint8Array([1]) });
+    const result = await cmd.execute(['start', '-cdrom', 'alpine.iso'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('BIOS images not found');
+    expect(result.stderr).toContain('seabios.bin');
+  });
+
+  it('rejects duplicate VM names', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const dup = await startVm(makeFakeEmulator());
+    expect(dup.exitCode).toBe(1);
+    expect(dup.stderr).toContain('already running');
+  });
+
+  it('types text, sends key chords, and drives the mouse', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx } = makeCtx();
+
+    const typed = await cmd.execute(['type', 'root\\n'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(emulator.keyboard_send_text).toHaveBeenCalledWith('root\n');
+
+    await cmd.execute(['key', 'ctrl-c'], ctx);
+    expect(emulator.keyboard_send_scancodes).toHaveBeenCalledWith([0x1d, 0x2e, 0xae, 0x9d]);
+
+    await cmd.execute(['mouse', 'move', '10', '5'], ctx);
+    expect(emulator.busSends).toContainEqual(['mouse-delta', [10, -5]]);
+
+    await cmd.execute(['mouse', 'click', 'right'], ctx);
+    expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, true]]);
+    expect(emulator.busSends).toContainEqual(['mouse-click', [false, false, false]]);
+  });
+
+  it('dumps the text screen and buffers serial output', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx } = makeCtx();
+
+    const text = await cmd.execute(['text'], ctx);
+    expect(text.stdout).toBe('SLICC boot menu\nok\n');
+
+    const serialListener = emulator.listeners.get('serial0-output-byte')!;
+    for (const ch of 'login:') serialListener(ch.charCodeAt(0));
+    const serial = await cmd.execute(['serial'], ctx);
+    expect(serial.stdout).toContain('login:');
+
+    await cmd.execute(['serial', '--send', 'root\\n'], ctx);
+    expect(emulator.serial0_send).toHaveBeenCalledWith('root\n');
+  });
+
+  it('saves and restores state through the VFS', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx, written } = makeCtx();
+
+    const saved = await cmd.execute(['state', 'save', '/tmp/vm.state'], ctx);
+    expect(saved.exitCode).toBe(0);
+    expect(written.has('/tmp/vm.state')).toBe(true);
+
+    const loaded = await cmd.execute(['state', 'load', '/tmp/vm.state'], ctx);
+    expect(loaded.exitCode).toBe(0);
+    expect(emulator.restore_state).toHaveBeenCalled();
+  });
+
+  it('stops and unregisters a VM', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const stopped = await cmd.execute(['stop'], makeCtx().ctx);
+    expect(stopped.exitCode).toBe(0);
+    expect(emulator.stop).toHaveBeenCalled();
+    expect(emulator.destroy).toHaveBeenCalled();
+    expect(getVm('vm0')).toBeUndefined();
+  });
+
+  it('errors cleanly on subcommands against a missing VM', async () => {
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
+    const result = await cmd.execute(['type', 'hello'], makeCtx().ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("no VM named 'vm0'");
+  });
+
+  it('reports the engine version via --version', async () => {
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
+    const result = await cmd.execute(['--version'], makeCtx().ctx);
+    expect(result.stdout).toContain(`v86 ${V86_PINNED_VERSION}`);
+  });
+});
+
+describe('vm registry instrumentation', () => {
+  it('caps the serial ring buffer', () => {
+    const emulator = makeFakeEmulator();
+    const record: VmRecord = {
+      name: 'cap-test',
+      emulator,
+      engineVersion: V86_PINNED_VERSION,
+      pid: null,
+      startedAt: Date.now(),
+      bootArgv: ['v86', 'start'],
+      serial: { buffer: '' },
+      screen: { mode: 'text', width: 0, height: 0, frame: null },
+    };
+    instrumentVm(record);
+    registerVm(record);
+    const listener = emulator.listeners.get('serial0-output-byte')!;
+    for (let i = 0; i < SERIAL_BUFFER_CAP + 100; i++) listener(65);
+    expect(record.serial.buffer.length).toBe(SERIAL_BUFFER_CAP);
+  });
+
+  it('tracks screen mode and frame through the wrapped adapter', () => {
+    const emulator = makeFakeEmulator();
+    const record: VmRecord = {
+      name: 'screen-test',
+      emulator,
+      engineVersion: V86_PINNED_VERSION,
+      pid: null,
+      startedAt: Date.now(),
+      bootArgv: ['v86', 'start'],
+      serial: { buffer: '' },
+      screen: { mode: 'text', width: 0, height: 0, frame: null },
+    };
+    instrumentVm(record);
+    emulator.screen_adapter!.set_mode!(true);
+    expect(record.screen.mode).toBe('graphical');
+    emulator.screen_adapter!.set_size_graphical!(640, 480, 640, 480);
+    expect(record.screen.width).toBe(640);
+    const data = new Uint8ClampedArray(640 * 480 * 4);
+    emulator.screen_adapter!.update_buffer!([
+      {
+        image_data: { data, width: 640, height: 480 },
+        screen_x: 0,
+        screen_y: 0,
+        buffer_x: 0,
+        buffer_y: 0,
+        buffer_width: 640,
+        buffer_height: 480,
+      },
+    ]);
+    expect(record.screen.frame?.width).toBe(640);
+    expect(dumpTextScreen(record)).toBe('SLICC boot menu\nok');
+  });
+});
