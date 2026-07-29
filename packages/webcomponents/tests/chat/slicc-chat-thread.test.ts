@@ -16,6 +16,12 @@ function inner(el: SliccChatThread): HTMLElement {
   return el.querySelector('.slicc-thread__inner') as HTMLElement;
 }
 
+/** Wait for layout and its ResizeObserver delivery. */
+async function settleResize(): Promise<void> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 describe('slicc-chat-thread', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -300,6 +306,69 @@ describe('slicc-chat-thread', () => {
       expect(wrapper.childNodes.length).toBe(0);
     });
 
+    it('keeps an at= restore authoritative over same-frame column growth', async () => {
+      const originalUrl = window.location.href;
+      const restoreUrl = new URL(originalUrl);
+      restoreUrl.searchParams.set('at', '240');
+      const RealResizeObserver = globalThis.ResizeObserver;
+      let capturedCb: ResizeObserverCallback | undefined;
+      class FakeResizeObserver {
+        constructor(cb: ResizeObserverCallback) {
+          capturedCb = cb;
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      }
+      history.replaceState(null, '', restoreUrl);
+      globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+      let el: SliccChatThread | null = null;
+      try {
+        el = mount((thread) => {
+          thread.urlState = true;
+          thread.style.cssText = 'display:block;height:120px;overflow-y:auto;';
+        });
+        const tall = document.createElement('div');
+        tall.style.height = '1200px';
+        el.replaceContent(tall);
+
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        expect(el.scrollTop).toBe(240);
+        capturedCb?.([], {} as ResizeObserver);
+        expect(el.scrollTop).toBe(240);
+      } finally {
+        el?.remove();
+        globalThis.ResizeObserver = RealResizeObserver;
+        history.replaceState(null, '', originalUrl);
+      }
+    });
+
+    it('keeps following when an at= restore resolves to the bottom', async () => {
+      const originalUrl = window.location.href;
+      const restoreUrl = new URL(originalUrl);
+      restoreUrl.searchParams.set('at', '99999');
+      history.replaceState(null, '', restoreUrl);
+      let el: SliccChatThread | null = null;
+      try {
+        el = mount((thread) => {
+          thread.urlState = true;
+          thread.style.cssText = 'display:block;height:120px;overflow-y:auto;';
+        });
+        const tall = document.createElement('div');
+        tall.style.height = '1200px';
+        el.replaceContent(tall);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+
+        tall.style.height = '1600px';
+        await settleResize();
+        expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      } finally {
+        el?.remove();
+        history.replaceState(null, '', originalUrl);
+      }
+    });
+
     it('re-emits child clicks as a delegated slicc-thread-action', async () => {
       const el = mount();
       const btn = document.createElement('button');
@@ -393,6 +462,7 @@ describe('slicc-chat-thread', () => {
     it('requestFollow raises the chip instead of yanking a scrolled-away viewer', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
       el.requestFollow();
       expect(el.scrollTop).toBe(0);
       expect(el.hasAttribute('has-new')).toBe(true);
@@ -401,6 +471,7 @@ describe('slicc-chat-thread', () => {
     it('append() routes through requestFollow (chip when scrolled away)', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
       const m = document.createElement('div');
       m.textContent = 'new arrival';
       el.append(m);
@@ -411,6 +482,7 @@ describe('slicc-chat-thread', () => {
     it('clicking the chip scrolls to the bottom and clears has-new', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
       el.requestFollow();
       chip(el).click();
       expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
@@ -420,6 +492,7 @@ describe('slicc-chat-thread', () => {
     it('scrolling back near the bottom clears has-new without a click', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
       el.requestFollow();
       el.scrollTop = el.scrollHeight; // user scrolls down themselves
       el.dispatchEvent(new Event('scroll'));
@@ -429,9 +502,88 @@ describe('slicc-chat-thread', () => {
     it('replaceContent clears a stale chip', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
       el.requestFollow();
       expect(el.hasAttribute('has-new')).toBe(true);
       el.replaceContent(document.createElement('div'));
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('keeps a bottom-pinned viewer pinned after one large append', async () => {
+      const el = mountScrollable();
+      el.scrollToBottom();
+      const arrival = document.createElement('div');
+      arrival.style.height = `${SliccChatThread.FOLLOW_SLACK + 220}px`;
+      el.append(arrival);
+
+      await settleResize();
+
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('stays pinned through consecutive large appends', async () => {
+      const el = mountScrollable();
+      el.scrollToBottom();
+      for (let i = 0; i < 3; i += 1) {
+        const arrival = document.createElement('div');
+        arrival.style.height = `${SliccChatThread.FOLLOW_SLACK + 120}px`;
+        el.append(arrival);
+        await settleResize();
+        expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      }
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('does not yank a deliberately scrolled-up viewer after a large append', async () => {
+      const el = mountScrollable();
+      const pinnedArrival = document.createElement('div');
+      pinnedArrival.style.height = `${SliccChatThread.FOLLOW_SLACK + 220}px`;
+      el.append(pinnedArrival);
+      await settleResize();
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
+      const arrival = document.createElement('div');
+      arrival.style.height = `${SliccChatThread.FOLLOW_SLACK + 220}px`;
+      el.append(arrival);
+
+      await settleResize();
+
+      expect(el.scrollTop).toBe(0);
+      expect(el.hasAttribute('has-new')).toBe(true);
+    });
+
+    it('re-arms following from the chip for subsequent large appends', async () => {
+      const el = mountScrollable();
+      el.scrollTop = 0;
+      el.dispatchEvent(new Event('scroll'));
+      el.append(Object.assign(document.createElement('div'), { textContent: 'first arrival' }));
+      expect(el.hasAttribute('has-new')).toBe(true);
+
+      chip(el).click();
+      const arrival = document.createElement('div');
+      arrival.style.height = `${SliccChatThread.FOLLOW_SLACK + 220}px`;
+      el.append(arrival);
+      await settleResize();
+
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+      expect(el.hasAttribute('has-new')).toBe(false);
+    });
+
+    it('stays pinned when existing content grows without requestFollow', async () => {
+      const el = mountScrollable();
+      const lateContent = document.createElement('div');
+      lateContent.style.height = '24px';
+      el.append(lateContent);
+      await settleResize();
+      el.scrollToBottom();
+
+      lateContent.style.height = `${SliccChatThread.FOLLOW_SLACK + 320}px`;
+      await settleResize();
+
+      expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
       expect(el.hasAttribute('has-new')).toBe(false);
     });
   });
@@ -466,16 +618,16 @@ describe('slicc-chat-thread', () => {
     it('leaves a scrolled-up viewer where they are when the rail toggles', () => {
       const el = mountScrollable();
       el.scrollTop = 0;
-      // Not near the bottom → no re-anchor; the reading position is respected.
+      // A viewer parked in history is not following, so rail changes respect their position.
       el.open = true;
       expect(el.scrollTop).toBe(0);
     });
 
     it('re-anchors on CLOSE even when the viewer was near (not pixel-pinned to) the bottom', () => {
-      // Regression: the CLOSE loosen (24/32 → 56/72) grows the column by
-      // RAIL_CLOSE_PADDING_GROWTH, so a viewer sitting within FOLLOW_SLACK of
-      // the bottom — but not exactly on it — read as "past FOLLOW_SLACK" once
-      // the padding loosened and was stranded ~a padding-delta below the fold.
+      // Regression: the CLOSE loosen (24/32 → 56/72) grows the column after the
+      // viewer has already chosen to follow. The growth follow path must retain
+      // that intent instead of re-measuring after the padding change and leaving
+      // the newest message stranded below the fold.
       const el = mountScrollable();
       el.open = true; // rail open → tight padding
       el.scrollToBottom();
@@ -485,13 +637,13 @@ describe('slicc-chat-thread', () => {
         SliccChatThread.FOLLOW_SLACK
       );
       el.open = false; // CLOSE → padding loosens, column grows
-      // The widened close tolerance keeps them pinned: newest message stays in view.
+      // Column growth keeps a following viewer pinned: newest message stays in view.
       expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
     });
 
     it('does NOT re-anchor on CLOSE when the viewer is scrolled up in history', () => {
-      // The close-only widening must not become a blanket "jump to bottom": a
-      // reader parked in history stays put through a CLOSE just like an OPEN.
+      // A reader parked in history is not following, so CLOSE-driven column
+      // growth does not scroll them; their reading position stays fixed.
       const el = mountScrollable();
       el.open = true;
       el.scrollTop = 0;
@@ -500,10 +652,10 @@ describe('slicc-chat-thread', () => {
     });
 
     it('lets an intentional upward scroll mid-animation break the re-anchor pin', () => {
-      // The observer that keeps a pinned viewer glued to the bottom across the
-      // ~380ms width transition must re-check the near-bottom condition on each
-      // reflow tick: a viewer who deliberately scrolls up beyond the slack is
-      // no longer following, so the tick must NOT yank them back down.
+      // The persistent column-growth observer checks the explicit follow mode on
+      // each delivery instead of re-measuring near-bottom geometry. If an upward
+      // gesture lands during a guarded component write, the guard must preserve it
+      // until the scroll event disarms following rather than yank the viewer down.
       const RealResizeObserver = globalThis.ResizeObserver;
       let capturedCb: ResizeObserverCallback | undefined;
       class FakeResizeObserver {
@@ -519,11 +671,11 @@ describe('slicc-chat-thread', () => {
         const el = mountScrollable();
         el.open = true; // rail open → tight padding
         el.scrollToBottom();
-        el.open = false; // CLOSE while pinned → installs the guarded observer
+        el.open = false; // CLOSE while pinned → guarded synchronous follow write
         expect(capturedCb).toBeTypeOf('function');
-        // The viewer deliberately scrolls up past the (widened) tolerance.
+        // The viewer deliberately scrolls up past FOLLOW_SLACK.
         el.scrollTop = 0;
-        // A reflow tick fires: the guard must see they are no longer following.
+        // A resize delivery arrives before the scroll event; preserve the upward gesture.
         capturedCb?.([], {} as ResizeObserver);
         expect(el.scrollTop).toBe(0);
       } finally {
