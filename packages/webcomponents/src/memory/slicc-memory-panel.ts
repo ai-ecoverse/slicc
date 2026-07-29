@@ -130,11 +130,17 @@ export class SliccMemoryPanel extends HTMLElement {
 
   /** Replace the complete memory collection while keeping panel controls stable. */
   setRows(rows: readonly HTMLElement[]): void {
+    const previousSections = new Set(groupRows(this.#rows).keys());
     this.#rows = rows.filter((row) => row.matches('slicc-memrow'));
     this.#syncTagOptions();
     const sections = [...groupRows(this.#rows).keys()];
-    this.#openSections.clear();
-    for (const section of sections) this.#openSections.add(section);
+    const nextOpenSections = new Set<string>();
+    for (const section of sections) {
+      if (!previousSections.has(section) || this.#openSections.has(section)) {
+        nextOpenSections.add(section);
+      }
+    }
+    this.#openSections = nextOpenSections;
     if (this.#initialized) this.#render();
   }
 

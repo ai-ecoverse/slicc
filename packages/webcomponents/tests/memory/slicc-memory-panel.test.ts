@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { createMemoryRows } from '../../../webapp/src/ui/wc/wc-memory.js';
 import { REDACTED_REAL_WORLD_MEMORY_MARKDOWN } from '../../src/memory/redacted-real-world-memory-fixture.js';
 import { SliccMemoryPanel } from '../../src/memory/slicc-memory-panel.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
@@ -16,39 +17,6 @@ function mount(): SliccMemoryPanel {
   const panel = document.createElement('slicc-memory-panel') as SliccMemoryPanel;
   document.body.append(panel);
   return panel;
-}
-
-function realWorldRows(): HTMLElement[] {
-  const rows: HTMLElement[] = [];
-  let section = 'General';
-  let subsection = '';
-  for (const line of REDACTED_REAL_WORLD_MEMORY_MARKDOWN.split('\n')) {
-    const heading = /^(#{2,3})\s+(.+)$/.exec(line.trim());
-    if (heading) {
-      if (heading[1].length === 2) {
-        section = heading[2];
-        subsection = '';
-      } else {
-        subsection = heading[2];
-      }
-      continue;
-    }
-    const bullet = /^-\s+(.+)$/.exec(line);
-    if (!bullet) continue;
-    const text = bullet[1]
-      .replace(/\*\*(.+?)\*\*/g, '$1')
-      .replace(/`(.+?)`/g, '$1')
-      .replace(/\\([`*_])/g, '$1');
-    const currentSection = [section, subsection].filter(Boolean).join(' / ');
-    const el = row(text, currentSection);
-    if (/\b(feedback|reviews?|testing|verification)\b/i.test(`${currentSection} ${text}`)) {
-      el.setAttribute('tag', 'feedback');
-    } else if (/\b(preference|identity|interface|keyboard|accessibility)\b/i.test(text)) {
-      el.setAttribute('tag', 'user');
-    }
-    rows.push(el);
-  }
-  return rows;
 }
 
 describe('slicc-memory-panel', () => {
@@ -76,6 +44,29 @@ describe('slicc-memory-panel', () => {
     expect(groups[0].open).toBe(true);
     expect(groups[1].open).toBe(true);
     expect(panel.querySelector('.mp-count')?.textContent).toBe('3 of 3 memories');
+  });
+
+  it('preserves surviving collapsed sections and opens only new sections on refresh', () => {
+    const panel = mount();
+    panel.setRows([row('one', 'One'), row('two', 'Two')]);
+    const first = panel.querySelectorAll<HTMLDetailsElement>('details.mp-group')[0];
+    first.open = false;
+    first.dispatchEvent(new Event('toggle'));
+
+    panel.setRows([row('one updated', 'One'), row('two updated', 'Two'), row('three', 'Three')]);
+    const state = new Map(
+      [...panel.querySelectorAll<HTMLDetailsElement>('details.mp-group')].map((details) => [
+        details.querySelector('.mp-section-name')?.textContent,
+        details.open,
+      ])
+    );
+    expect(state).toEqual(
+      new Map([
+        ['One', false],
+        ['Two', true],
+        ['Three', true],
+      ])
+    );
   });
 
   it('searches headings and sections while preserving the focused input', () => {
@@ -138,8 +129,8 @@ describe('slicc-memory-panel', () => {
   it('renders the real-world fixture with bounded titles, useful tags, and a derived count', () => {
     const panel = mount();
     panel.style.cssText = 'width:520px;height:760px';
-    panel.setRows(realWorldRows());
-    expect(panel.querySelector('input')?.placeholder).toBe('Search 105 memories…');
+    panel.setRows(createMemoryRows(REDACTED_REAL_WORLD_MEMORY_MARKDOWN));
+    expect(panel.querySelector('input')?.placeholder).toBe('Search 106 memories…');
 
     const renderedTitleLengths = [...panel.querySelectorAll<HTMLElement>('.mt b')].map(
       (title) => title.textContent?.length ?? 0
