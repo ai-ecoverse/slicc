@@ -60,30 +60,35 @@ struct SettingsView: View {
 // MARK: - Startup tab
 
 struct StartupSettingsView: View {
-    @AppStorage(autoLaunchAppIdKey) private var autoLaunchAppId: String = ""
-    @State private var browsers: [AppTarget] = []
+    @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
+    @State private var topBrowserName: String?
 
     var body: some View {
         Form {
-            Picker(selection: $autoLaunchAppId) {
-                Text("None").tag("")
-                if !browsers.isEmpty {
-                    Divider()
-                    ForEach(browsers) { browser in
-                        Text(browser.name).tag(browser.id)
-                    }
+            Toggle(isOn: $launchAtStartup) {
+                if let topBrowserName {
+                    Text("Launch \(topBrowserName) on startup")
+                } else {
+                    Text("Launch top browser on startup")
                 }
-            } label: {
-                Text("Launch on startup:")
             }
-            .pickerStyle(.menu)
+            Text("Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(20)
         .frame(width: 460)
         .fixedSize()
         .onAppear {
-            browsers = AppScanner.scan(hasAppManagementPermission: false)
+            StartupPreference.resolveEnabled(defaults: .standard)
+            let browsers = AppScanner.scan(hasAppManagementPermission: false)
                 .filter { $0.type == .chromiumBrowser }
+            topBrowserName =
+                AppOrdering.ordered(
+                    browsers,
+                    savedOrder: AppOrderStore().load(AppOrderStore.browserKey),
+                    defaultPriority: AppOrdering.browserBundlePriority
+                ).first?.name
         }
     }
 }

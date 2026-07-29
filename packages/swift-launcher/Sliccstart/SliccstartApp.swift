@@ -16,15 +16,21 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 /// Sliccstart reattaches on next launch in `SliccstartApp.initialize()`.
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess = SliccProcess()
+    let sessionStore = TraySessionSyncStore()
 
     func applicationWillTerminate(_ notification: Notification) {
         if sliccProcess.isPreparingForUpdate {
+            // Browsers survive the update and the tray stays live, so leave
+            // this device's session advertised — the relaunched Sliccstart
+            // republishes it after reattach.
             log.info("applicationWillTerminate: detaching for update")
             sliccProcess.detachAll()
             return
         }
         log.info("applicationWillTerminate: stopping all processes")
         sliccProcess.stopAll()
+        // The leader is going away, so stop advertising it to other devices.
+        sessionStore.withdrawLocalSessions()
     }
 }
 
@@ -54,6 +60,9 @@ struct SliccstartApp: App {
         )
     )
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    // Re-advertise a still-running leader well inside the sync store's 12h TTL
+    // so a continuously-open leader is never pruned from other devices.
+    private let sessionRepublishTimer = Timer.publish(every: 4 * 60 * 60, on: .main, in: .common).autoconnect()
 
     private let optelAppID = Bundle.main.bundleIdentifier ?? "unknown.app"
 
@@ -63,6 +72,7 @@ struct SliccstartApp: App {
     }
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
+    private var sessionStore: TraySessionSyncStore { appDelegate.sessionStore }
 
     var body: some Scene {
         WindowGroup {
@@ -85,6 +95,7 @@ struct SliccstartApp: App {
                     AppListView(
                         targets: targets,
                         sliccProcess: sliccProcess,
+                        sessionStore: sessionStore,
                         appManagementPermission: appManagementPermission,
                         appUpdater: appUpdater,
                         updateCheckStatus: updateCheckStatus,
@@ -95,6 +106,16 @@ struct SliccstartApp: App {
                                 try sliccProcess.launchStandalone(target)
                             } catch {
                                 log.error("onLaunchStandalone failed: \(error.localizedDescription, privacy: .public)")
+                                LauncherErrorReport.report(.launchStandalone, error)
+                                showError(error.localizedDescription)
+                            }
+                        },
+                        onLaunchBrowserFollower: { target, joinUrl in
+                            log.info("onLaunchBrowserFollower: \(target.name, privacy: .public)")
+                            do {
+                                try sliccProcess.launchBrowserFollower(target, joinUrl: joinUrl)
+                            } catch {
+                                log.error("onLaunchBrowserFollower failed: \(error.localizedDescription, privacy: .public)")
                                 LauncherErrorReport.report(.launchStandalone, error)
                                 showError(error.localizedDescription)
                             }
@@ -148,6 +169,22 @@ struct SliccstartApp: App {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 guard isReady else { return }
                 sliccProcess.refreshRuntimeStates(for: targets)
+            }
+            .onChange(of: sliccProcess.leaderJoinUrl) { _, newValue in
+                // Advertise this device's leader session over iCloud when it
+                // becomes ready, and withdraw it when the leader goes away.
+                if let joinUrl = newValue, !joinUrl.isEmpty {
+                    let label = sliccProcess.leaderTargetName ?? "SLICC"
+                    sessionStore.publish(joinUrl: joinUrl, label: label)
+                } else {
+                    sessionStore.withdrawLocalSessions()
+                }
+            }
+            .onReceive(sessionRepublishTimer) { _ in
+                // Refresh lastSeenAt on a live leader so it never ages out of
+                // the sync store's TTL while it is still running.
+                guard isReady, let joinUrl = sliccProcess.leaderJoinUrl, !joinUrl.isEmpty else { return }
+                sessionStore.publish(joinUrl: joinUrl, label: sliccProcess.leaderTargetName ?? "SLICC")
             }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear
@@ -284,14 +321,18 @@ struct SliccstartApp: App {
         )
     }
 
-    /// Launch the browser the user picked in Settings > Startup, if any.
-    /// Stored as the `AppTarget.id` (bundle path) under
-    /// `autoLaunchAppIdKey`. Failures are logged but never block startup.
+    /// Launch the top browser at startup when the Settings > Startup checkbox
+    /// is enabled. The browser is the head of the (reorderable) Browsers list.
+    /// Failures are logged but never block startup.
     private func autoLaunchConfiguredBrowser() {
-        let savedId = UserDefaults.standard.string(forKey: autoLaunchAppIdKey) ?? ""
-        guard !savedId.isEmpty else { return }
-        guard let target = targets.first(where: { $0.id == savedId && $0.type == .chromiumBrowser }) else {
-            log.info("autoLaunch: no matching browser found for id=\(savedId, privacy: .public)")
+        guard StartupPreference.resolveEnabled(defaults: .standard) else { return }
+        let browsers = AppOrdering.ordered(
+            targets.filter { $0.type == .chromiumBrowser },
+            savedOrder: AppOrderStore().load(AppOrderStore.browserKey),
+            defaultPriority: AppOrdering.browserBundlePriority
+        )
+        guard let target = browsers.first else {
+            log.info("autoLaunch: no browser available to launch")
             return
         }
         log.info("autoLaunch: launching \(target.name, privacy: .public)")

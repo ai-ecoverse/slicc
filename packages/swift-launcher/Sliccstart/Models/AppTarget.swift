@@ -23,6 +23,12 @@ struct AppTarget: Identifiable {
     let debugSupport: ElectronDebugSupport
     let isDebugBuild: Bool  // True if this is a patched debug build
     let originalAppPath: String?  // For debug builds, path to original app
+    /// Bundle identifier for known browsers/terminals/electron apps. Used
+    /// for default-priority ordering and for matching an iCloud session's
+    /// browser against a locally installed one. `nil` for scanned Electron
+    /// apps discovered purely by CDP framework presence.
+    // swiftlint:disable:next redundant_optional_initialization
+    var bundleId: String? = nil  // explicit default keeps the memberwise init optional
 
     static let knownChromiumBrowsers: [(bundleId: String, name: String)] = [
         ("com.google.Chrome", "Google Chrome"),

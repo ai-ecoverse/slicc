@@ -21,3 +21,23 @@ describe('Sliccstart Apple Events packaging', () => {
     expect(signingScript).toContain('ENTITLEMENTS="$SCRIPT_DIR/Sliccstart.entitlements"');
   });
 });
+
+describe('Sliccstart iCloud sync packaging', () => {
+  it('embeds the provisioning profile only when PROVISION_PROFILE is supplied', () => {
+    expect(signingScript).toContain('if [ -n "${PROVISION_PROFILE:-}" ]; then');
+    expect(signingScript).toContain('Contents/embedded.provisionprofile');
+  });
+
+  it('defaults the kvstore identifier to the team-prefixed bundle id, overridable via KVSTORE_IDENTIFIER', () => {
+    expect(signingScript).toContain(
+      'KVSTORE_IDENTIFIER="${KVSTORE_IDENTIFIER:-${APPLE_TEAM_ID}.com.slicc.sliccstart}"'
+    );
+    expect(signingScript).toContain(
+      'com.apple.developer.ubiquity-kvstore-identifier string ${KVSTORE_IDENTIFIER}'
+    );
+  });
+
+  it('fails fast when PROVISION_PROFILE points at a missing file', () => {
+    expect(signingScript).toContain('ERROR: PROVISION_PROFILE set but file not found');
+  });
+});

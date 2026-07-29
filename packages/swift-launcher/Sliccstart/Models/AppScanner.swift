@@ -51,7 +51,8 @@ final class AppScanner {
                     type: .chromiumBrowser, icon: icon,
                     debugSupport: .supported,
                     isDebugBuild: false,
-                    originalAppPath: nil
+                    originalAppPath: nil,
+                    bundleId: bundleId
                 ))
         }
 
@@ -75,7 +76,8 @@ final class AppScanner {
                     type: .terminal, icon: icon,
                     debugSupport: .unknown,
                     isDebugBuild: false,
-                    originalAppPath: nil
+                    originalAppPath: nil,
+                    bundleId: bundleId
                 ))
         }
 
@@ -101,7 +103,8 @@ final class AppScanner {
                         type: .electronApp, icon: icon,
                         debugSupport: .unknown,
                         isDebugBuild: false,
-                        originalAppPath: nil
+                        originalAppPath: nil,
+                        bundleId: bundleId
                     ))
             }
             targets.append(contentsOf: debugBuilds.values)
