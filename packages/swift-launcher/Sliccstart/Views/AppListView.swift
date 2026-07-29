@@ -739,7 +739,7 @@ private struct ReorderDropDelegate: DropDelegate {
     // keying off `displayed` — not the raw saved `order` — lets a freshly
     // installed browser/terminal be dragged too.
     private var currentIds: [String] {
-        displayed.compactMap { $0.bundleId }
+        AppOrdering.persistableOrder(from: displayed)
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
