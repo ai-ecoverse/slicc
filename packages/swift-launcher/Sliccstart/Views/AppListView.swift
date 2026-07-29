@@ -734,8 +734,12 @@ private struct ReorderDropDelegate: DropDelegate {
     @Binding var dragging: String?
     let onCommit: ([String]) -> Void
 
+    // The on-screen order already merges the saved order with any app
+    // installed after it was saved (AppOrdering appends the newcomers), so
+    // keying off `displayed` — not the raw saved `order` — lets a freshly
+    // installed browser/terminal be dragged too.
     private var currentIds: [String] {
-        order.isEmpty ? displayed.compactMap { $0.bundleId } : order
+        displayed.compactMap { $0.bundleId }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {

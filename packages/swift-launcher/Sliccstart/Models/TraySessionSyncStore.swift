@@ -10,6 +10,9 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "TraySessi
 protocol KeyValueSyncBackend: AnyObject {
     func data(forKey key: String) -> Data?
     func setData(_ data: Data?, forKey key: String)
+    /// Every currently-stored key beginning with `prefix`. Used to merge each
+    /// device's own per-device session key into the combined view.
+    func keys(withPrefix prefix: String) -> [String]
     @discardableResult func synchronize() -> Bool
     /// When non-nil, the store registers a NotificationCenter observer for
     /// `name`/`object` and reloads when the backend reports an external
@@ -41,6 +44,10 @@ final class UbiquitousKeyValueBackend: KeyValueSyncBackend {
         }
     }
 
+    func keys(withPrefix prefix: String) -> [String] {
+        store.dictionaryRepresentation.keys.filter { $0.hasPrefix(prefix) }
+    }
+
     @discardableResult
     func synchronize() -> Bool {
         store.synchronize()
@@ -57,6 +64,9 @@ final class InMemoryKeyValueBackend: KeyValueSyncBackend {
 
     func data(forKey key: String) -> Data? { storage[key] }
     func setData(_ data: Data?, forKey key: String) { storage[key] = data }
+    func keys(withPrefix prefix: String) -> [String] {
+        storage.keys.filter { $0.hasPrefix(prefix) }
+    }
     @discardableResult func synchronize() -> Bool { true }
     var externalChange: (name: Notification.Name, object: AnyObject?)? { nil }
 }
@@ -72,7 +82,13 @@ final class InMemoryKeyValueBackend: KeyValueSyncBackend {
 /// backend.
 @Observable
 final class TraySessionSyncStore {
-    static let storageKey = "activeTraySessions.v1"
+    /// Each device writes its own sessions under `storageKeyPrefix + deviceId`
+    /// and reads the union of every such key. Per-device keys mean two devices
+    /// publishing at once never overwrite each other's advertisement (each
+    /// only ever writes its own key), which a single shared array could not
+    /// guarantee.
+    static let storageKeyPrefix = "traySessions.v2."
+    static let deviceIdDefaultsKey = "traySyncDeviceId"
     static let defaultTTL: TimeInterval = 12 * 60 * 60
     static let maxSessions = 64
 
@@ -82,16 +98,21 @@ final class TraySessionSyncStore {
     @ObservationIgnored private let backend: KeyValueSyncBackend
     @ObservationIgnored private let ttl: TimeInterval
     @ObservationIgnored private let clock: () -> Date
+    @ObservationIgnored let deviceId: String
     @ObservationIgnored let deviceName: String
     @ObservationIgnored private var observer: NSObjectProtocol?
 
+    private var ownKey: String { Self.storageKeyPrefix + deviceId }
+
     init(
         backend: KeyValueSyncBackend = UbiquitousKeyValueBackend(),
+        deviceId: String = TraySessionSyncStore.currentDeviceId(),
         deviceName: String = TraySessionSyncStore.currentDeviceName(),
         ttl: TimeInterval = TraySessionSyncStore.defaultTTL,
         clock: @escaping () -> Date = Date.init
     ) {
         self.backend = backend
+        self.deviceId = deviceId
         self.deviceName = deviceName
         self.ttl = ttl
         self.clock = clock
@@ -110,48 +131,54 @@ final class TraySessionSyncStore {
 
     /// Sessions published by other devices — the ones worth acting on here.
     var remoteSessions: [SyncedTraySession] {
-        sessions.filter { $0.deviceName != deviceName }
+        sessions.filter { $0.deviceId != deviceId }
     }
 
     /// Sessions this device published (shown read-only so the user can see
     /// their own leader is being advertised).
     var localSessions: [SyncedTraySession] {
-        sessions.filter { $0.deviceName == deviceName }
+        sessions.filter { $0.deviceId == deviceId }
     }
 
     func reload() {
-        sessions = TraySessionSyncStore.active(from: decodeRaw(), ttl: ttl, now: clock())
+        sessions = TraySessionSyncStore.active(from: decodeAll(), ttl: ttl, now: clock())
     }
 
     // MARK: - Write
 
-    /// Advertise (or refresh) a session originating from this device.
+    /// Advertise (or refresh) a session originating from this device. Only
+    /// ever writes this device's own key, so a concurrent publish on another
+    /// device cannot clobber it.
     func publish(joinUrl: String, label: String) {
         guard !joinUrl.isEmpty else { return }
         let now = clock()
-        var raw = decodeRaw()
-        let existing = raw.first { $0.id == SyncedTraySession.identifier(forJoinUrl: joinUrl) }
+        var own = decodeOwn()
+        let existing = own.first { $0.id == SyncedTraySession.identifier(forJoinUrl: joinUrl) }
         let session = SyncedTraySession(
             joinUrl: joinUrl,
             label: label,
+            deviceId: deviceId,
             deviceName: deviceName,
             createdAt: existing?.createdAt ?? now,
             lastSeenAt: now
         )
-        raw = TraySessionSyncStore.upsert(session, into: raw)
-        persist(TraySessionSyncStore.active(from: raw, ttl: ttl, now: now))
+        own = TraySessionSyncStore.upsert(session, into: own)
+        persistOwn(TraySessionSyncStore.active(from: own, ttl: ttl, now: now))
     }
 
-    /// Remove a single session by its join URL.
+    /// Remove a single session by its join URL (from this device's own key).
     func withdraw(joinUrl: String) {
         let id = SyncedTraySession.identifier(forJoinUrl: joinUrl)
-        persist(TraySessionSyncStore.active(from: decodeRaw().filter { $0.id != id }, ttl: ttl, now: clock()))
+        persistOwn(TraySessionSyncStore.active(from: decodeOwn().filter { $0.id != id }, ttl: ttl, now: clock()))
     }
 
-    /// Remove every session this device published. Called on a clean quit
-    /// so a dead leader stops being advertised to other devices.
+    /// Remove every session this device published by clearing its own key.
+    /// Called on a clean quit so a dead leader stops being advertised. Never
+    /// touches another device's key, even if two devices share a host name.
     func withdrawLocalSessions() {
-        persist(TraySessionSyncStore.active(from: decodeRaw().filter { $0.deviceName != deviceName }, ttl: ttl, now: clock()))
+        backend.setData(nil, forKey: ownKey)
+        _ = backend.synchronize()
+        reload()
     }
 
     // MARK: - Pure helpers (unit-testable without a backend)
@@ -175,27 +202,49 @@ final class TraySessionSyncStore {
         return name.isEmpty ? "This device" : name
     }
 
+    /// A stable per-device UUID persisted in `UserDefaults`, minted once.
+    /// Used as the ownership key so two devices with the same host name stay
+    /// distinct.
+    static func currentDeviceId(defaults: UserDefaults = .standard) -> String {
+        if let existing = defaults.string(forKey: deviceIdDefaultsKey), !existing.isEmpty {
+            return existing
+        }
+        let fresh = UUID().uuidString
+        defaults.set(fresh, forKey: deviceIdDefaultsKey)
+        return fresh
+    }
+
     // MARK: - Backend plumbing
 
-    private func decodeRaw() -> [SyncedTraySession] {
-        guard let data = backend.data(forKey: Self.storageKey) else { return [] }
+    /// This device's own advertised sessions.
+    private func decodeOwn() -> [SyncedTraySession] {
+        decode(key: ownKey)
+    }
+
+    /// The union of every device's advertised sessions.
+    private func decodeAll() -> [SyncedTraySession] {
+        backend.keys(withPrefix: Self.storageKeyPrefix).flatMap { decode(key: $0) }
+    }
+
+    private func decode(key: String) -> [SyncedTraySession] {
+        guard let data = backend.data(forKey: key) else { return [] }
         do {
             return try JSONDecoder().decode([SyncedTraySession].self, from: data)
         } catch {
-            log.error("decodeRaw: failed to decode payload: \(error.localizedDescription, privacy: .public)")
+            log.error("decode: failed to decode payload: \(error.localizedDescription, privacy: .public)")
             return []
         }
     }
 
-    private func persist(_ list: [SyncedTraySession]) {
+    private func persistOwn(_ list: [SyncedTraySession]) {
         do {
             let data = try JSONEncoder().encode(list)
-            backend.setData(data, forKey: Self.storageKey)
+            backend.setData(data, forKey: ownKey)
             _ = backend.synchronize()
         } catch {
-            log.error("persist: failed to encode payload: \(error.localizedDescription, privacy: .public)")
+            log.error("persistOwn: failed to encode payload: \(error.localizedDescription, privacy: .public)")
         }
-        sessions = TraySessionSyncStore.active(from: list, ttl: ttl, now: clock())
+        reload()
     }
 
     private func registerExternalObserver() {

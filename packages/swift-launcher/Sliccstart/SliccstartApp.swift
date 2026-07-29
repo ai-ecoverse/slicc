@@ -60,6 +60,9 @@ struct SliccstartApp: App {
         )
     )
     private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    // Re-advertise a still-running leader well inside the sync store's 12h TTL
+    // so a continuously-open leader is never pruned from other devices.
+    private let sessionRepublishTimer = Timer.publish(every: 4 * 60 * 60, on: .main, in: .common).autoconnect()
 
     private let optelAppID = Bundle.main.bundleIdentifier ?? "unknown.app"
 
@@ -176,6 +179,12 @@ struct SliccstartApp: App {
                 } else {
                     sessionStore.withdrawLocalSessions()
                 }
+            }
+            .onReceive(sessionRepublishTimer) { _ in
+                // Refresh lastSeenAt on a live leader so it never ages out of
+                // the sync store's TTL while it is still running.
+                guard isReady, let joinUrl = sliccProcess.leaderJoinUrl, !joinUrl.isEmpty else { return }
+                sessionStore.publish(joinUrl: joinUrl, label: sliccProcess.leaderTargetName ?? "SLICC")
             }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear

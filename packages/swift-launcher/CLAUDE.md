@@ -98,24 +98,34 @@ Mac can be joined from another device without hand-copying its join URL. The
 data model is Foundation-only and platform-agnostic so the iOS follower
 (`packages/ios-app`) can reuse it verbatim when it gains sync.
 
-- `Models/SyncedTraySession.swift` — one advertised session: `id` (derived
-  from the join URL so republish upserts and two devices observing the same
-  tray collapse to one entry), `joinUrl`, `label`, `deviceName`, `createdAt`,
-  `lastSeenAt`, plus `isStale(ttl:now:)`. No AppKit/UIKit import.
+- `Models/SyncedTraySession.swift` — one advertised session: `id` (the
+  **SHA-256 of the join URL** — stable for upsert/dedup but opaque, so it is
+  safe in accessibility identifiers / telemetry `source`; the raw `joinUrl`
+  carries the secret and is never surfaced to telemetry), `joinUrl`, `label`,
+  `deviceId` (stable per-device UUID for ownership), `deviceName` (display
+  only), `createdAt`, `lastSeenAt`, plus `isStale(ttl:now:)`. `CryptoKit` +
+  Foundation only; no AppKit/UIKit. Legacy payloads without `deviceId` decode
+  (empty).
 - `Models/TraySessionSyncStore.swift` — `@Observable` store over a
   `KeyValueSyncBackend`. Default backend is `UbiquitousKeyValueBackend`
   (`NSUbiquitousKeyValueStore`); tests inject `InMemoryKeyValueBackend` so no
-  unit test touches iCloud. Publishes/withdraws this device's session, prunes
-  stale entries by `defaultTTL` (12h) on every load, caps at `maxSessions`
+  unit test touches iCloud. **Each device writes its own sessions under a
+  per-device key `storageKeyPrefix + deviceId` and reads the union of all such
+  keys** (`keys(withPrefix:)`), so two devices publishing at once never
+  clobber each other's advertisement and same-host-name Macs stay distinct.
+  Ownership (local vs remote) keys on `deviceId`, not host name;
+  `withdrawLocalSessions()` clears only this device's key. Prunes stale entries
+  by `defaultTTL` (12h) on every load, caps the merged view at `maxSessions`
   (64, newest first), and registers a `didChangeExternallyNotification`
   observer so the UI redraws when another device pushes a change. Pure logic
   (`active(from:)`, `upsert(_:into:)`) is static and unit-tested.
 - **Producer** — `SliccstartApp` publishes on `sliccProcess.leaderJoinUrl`
   becoming non-nil (label = `SliccProcess.leaderTargetName`) and withdraws
-  when it clears. `SliccstartAppDelegate.applicationWillTerminate` withdraws
-  local sessions on the clean-quit path but **not** on the update/detach path
-  (the browser survives, so the relaunched Sliccstart republishes after
-  reattach).
+  when it clears. A 4-hour timer re-publishes a still-running leader so it
+  never ages out of the 12h TTL. `SliccstartAppDelegate.applicationWillTerminate`
+  withdraws local sessions on the clean-quit path but **not** on the
+  update/detach path (the browser survives, so the relaunched Sliccstart
+  republishes after reattach).
 - **Consumer** — `AppListView`'s "iCloud Sessions" section lists remote
   sessions (device + age) with three actions: Copy-join-URL,
   Attach-a-browser-as-follower, and Follow-in-Terminal. This device's own
@@ -162,7 +172,7 @@ data model is Foundation-only and platform-agnostic so the iOS follower
 ### iCloud provisioning (Developer ID app)
 
 The code above runs today but **does not sync** until the app is signed with an
-iCloud KVS entitlement backed by an *embedded* provisioning profile. Sliccstart
+iCloud KVS entitlement backed by an _embedded_ provisioning profile. Sliccstart
 is Developer ID-signed and notarized (team `S8LB56P782`), distributed outside
 the App Store, so Developer ID signing alone does not authorize iCloud.
 
