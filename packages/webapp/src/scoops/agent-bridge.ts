@@ -33,11 +33,7 @@ import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import {
-  getAccounts,
-  getProviderModels,
-  resolveModelByShorthand,
-} from '../providers/account-store.js';
+import { resolveModelIdForScoop } from '../providers/account-store.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -627,26 +623,25 @@ function tokenToJid(token: string): string {
 }
 
 /**
- * Default model resolver. Returns the input id if any configured provider's
- * FULL model list advertises it; otherwise null. Validates against
- * `getProviderModels()` (the unfiltered per-provider list), NOT
- * `getAllAvailableModels()` — the latter is picker-filtered
- * (`PICKER_HIDDEN_MODEL_PATTERNS`, e.g. `/haiku/i`), so a model hidden from the
- * cone picker would be wrongly rejected here as "unknown". A picker-hidden
- * model is still a legitimate explicit sub-agent target (the very "haiku scoop
- * for cheap throwaway work" the picker hides it to avoid as a *cone* default).
+ * Default model resolver. Returns the canonical id the spawned scoop will
+ * actually run as, or null when the requested id resolves to nothing.
+ *
+ * Delegates to `resolveModelIdForScoop()`, which validates every candidate
+ * (the id verbatim, then its shorthand expansion) through the SAME
+ * `resolveModelById()` the spawn path uses. Validating against a looser
+ * notion of "known" — e.g. any account's `getProviderModels()` list — let a
+ * bare alias like `claude-haiku-4-5` pass while the scoop silently ran as the
+ * cone's model. The picker filter (`PICKER_HIDDEN_MODEL_PATTERNS`, e.g.
+ * `/haiku/i`) is deliberately NOT consulted: a picker-hidden model is still a
+ * legitimate explicit sub-agent target (the very "haiku scoop for cheap
+ * throwaway work" the picker hides it to avoid as a *cone* default).
+ *
  * Tests can replace this via `deps.resolveModel` without touching
  * provider-settings state.
  */
 export function defaultResolveModel(modelId: string): string | null {
   try {
-    for (const account of getAccounts()) {
-      if (getProviderModels(account.providerId).some((m) => m.id === modelId)) return modelId;
-    }
-    // Try shorthand alias: keyword match against available model ids/names
-    const alias = resolveModelByShorthand(modelId);
-    if (alias) return alias;
-    return null;
+    return resolveModelIdForScoop(modelId);
   } catch (err) {
     // getAccounts/getProviderModels normally return [] (and self-log) on a provider/parse
     // failure; the only throws that reach here are residual storage/environment faults

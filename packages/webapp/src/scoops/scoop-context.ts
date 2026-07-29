@@ -43,6 +43,7 @@ import {
   getSelectedProvider,
   resolveCurrentModel,
   resolveModelById,
+  resolveModelIdForScoop,
 } from '../providers/account-store.js';
 import { AlmostBashShell } from '../shell/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
@@ -490,6 +491,7 @@ export class ScoopContext {
       getScoopTabState: this.callbacks.getScoopTabState,
       onFeedScoop: this.callbacks.onFeedScoop,
       onScoopScoop: this.callbacks.onScoopScoop,
+      resolveModelId: resolveModelIdForScoop,
       onDropScoop: this.callbacks.onDropScoop,
       onMuteScoops: this.callbacks.onMuteScoops,
       onUnmuteScoops: this.callbacks.onUnmuteScoops,
@@ -658,11 +660,23 @@ export class ScoopContext {
         return;
       }
 
-      const model = this.scoop.config?.modelId
-        ? resolveModelById(this.scoop.config.modelId)
-        : resolveCurrentModel();
+      const configuredModelId = this.scoop.config?.modelId;
+      const model = configuredModelId ? resolveModelById(configuredModelId) : resolveCurrentModel();
       const label = this.scoop.isCone ? 'Cone' : `Scoop "${this.scoop.name}"`;
       console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
+      // `resolveModelById` degrades to the *selected* model for an id the
+      // selected provider doesn't offer (e.g. a scoop persisted before a
+      // provider switch). Spawn-time callers reject that up front via
+      // `resolveModelIdForScoop`, but a stored config can still drift — and a
+      // silent drift from a cheap model to the cone's Opus is a real cost
+      // overrun, so leave a breadcrumb rather than only the info line above.
+      if (configuredModelId && model.id !== configuredModelId) {
+        log.warn('Configured scoop model did not resolve; using resolved model instead', {
+          folder: this.scoop.folder,
+          configuredModelId,
+          resolvedModelId: model.id,
+        });
+      }
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
       const restoredMessages = await this.restoreSession();

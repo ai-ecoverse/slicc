@@ -1576,17 +1576,46 @@ export function resolveCurrentModel(): Model<Api> {
  * The match is intentionally loose (any id/name containing the keyword
  * wins) so it works across providers without a hardcoded family list.
  *
+ * The SELECTED provider's catalog is searched first and wins outright when
+ * it has any match — `resolveModelById()` resolves against that provider,
+ * so an id borrowed from a different account would not resolve there and
+ * would degrade to the selected model instead (see
+ * {@link resolveModelIdForScoop}).
+ *
  * Returns the concrete model id, or null if no model matches.
  */
 export function resolveModelByShorthand(input: string): string | null {
   const keyword = input.toLowerCase();
   if (!keyword) return null;
 
+  let selectedProvider: string | null = null;
+  try {
+    selectedProvider = getSelectedProvider();
+  } catch {
+    /* storage fault — fall back to scanning every account */
+  }
+
+  if (selectedProvider !== null) {
+    const preferred = bestShorthandMatch(keyword, [selectedProvider]);
+    if (preferred !== null) return preferred;
+  }
+  return bestShorthandMatch(
+    keyword,
+    getAccounts().map((a) => a.providerId)
+  );
+}
+
+/**
+ * Best keyword match across the given providers. Shared by both passes of
+ * {@link resolveModelByShorthand} so the ranking rule (largest context
+ * window, numeric version tiebreak) is defined once.
+ */
+function bestShorthandMatch(keyword: string, providerIds: string[]): string | null {
   let bestId: string | null = null;
   let bestContextWindow = -1;
 
-  for (const account of getAccounts()) {
-    for (const model of getProviderModels(account.providerId)) {
+  for (const providerId of providerIds) {
+    for (const model of getProviderModels(providerId)) {
       const idLower = model.id.toLowerCase();
       const nameLower = (model.name ?? '').toLowerCase();
       if (!idLower.includes(keyword) && !nameLower.includes(keyword)) continue;
@@ -1603,6 +1632,58 @@ export function resolveModelByShorthand(input: string): string | null {
   }
 
   return bestId;
+}
+
+/**
+ * Canonicalize a caller-supplied model id (exact id or shorthand alias) into
+ * the id a spawned scoop will actually run as, or null when nothing matches.
+ *
+ * The invariant every candidate must satisfy is `resolveModelById(id).id ===
+ * id`: `ScoopContext.init()` resolves `config.modelId` through
+ * `resolveModelById()`, which resolves against the SELECTED provider and
+ * silently degrades to `resolveCurrentModel()` (the cone's own model) for an
+ * id that provider doesn't offer. Validating with a looser notion of "known"
+ * than the spawn path uses is what let `--model claude-haiku-4-5` exit 0 and
+ * then run as the cone's Opus — a ~5x cost overrun with no warning.
+ *
+ * Callers MUST treat null as a hard error rather than spawning without a
+ * model id (which inherits the parent's, reintroducing the same overrun).
+ *
+ * The equality check alone is not sufficient for OAuth/custom providers:
+ * `resolveModelById()` synthesizes a provider-routed model that echoes ANY
+ * requested id (so an unknown-but-real proxy model still routes through the
+ * provider instead of leaking the token to api.anthropic.com), which would
+ * accept a typo verbatim. Candidates are therefore also checked against the
+ * selected provider's catalogue — skipped when that catalogue is empty (a
+ * cold/failed model list), where rejecting everything would be worse than
+ * deferring the error to the provider API.
+ */
+export function resolveModelIdForScoop(input: string): string | null {
+  if (!input) return null;
+  const candidates = [input];
+  const alias = resolveModelByShorthand(input);
+  if (alias !== null && alias !== input) candidates.push(alias);
+
+  let catalogue: Model<Api>[] = [];
+  try {
+    catalogue = getProviderModels(getSelectedProvider());
+  } catch {
+    /* storage fault — fall back to the resolver check alone */
+  }
+
+  for (const candidate of candidates) {
+    if (catalogue.length > 0 && !catalogue.some((m) => m.id === candidate)) continue;
+    try {
+      if (resolveModelById(candidate).id === candidate) return candidate;
+    } catch (err) {
+      log.debug('resolveModelIdForScoop: candidate did not resolve', {
+        input,
+        candidate,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return null;
 }
 
 /**

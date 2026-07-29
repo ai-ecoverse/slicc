@@ -71,6 +71,7 @@ vi.mock('../../src/providers/account-store.js', () => ({
   getSelectedProvider: () => 'anthropic',
   resolveCurrentModel: () => ({ id: 'test-model', provider: 'anthropic' }),
   resolveModelById: () => ({ id: 'test-model', provider: 'anthropic' }),
+  resolveModelIdForScoop: (id: string) => id,
 }));
 
 vi.mock('../../src/scoops/skills.js', () => ({

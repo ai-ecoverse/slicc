@@ -17,71 +17,48 @@ import {
   publishAgentBridge,
 } from '../../src/scoops/agent-bridge.js';
 
-// Mock only the two model-list accessors defaultResolveModel uses; keep every other
-// provider-settings export real so the rest of the suite is unaffected. The full
-// adobe list here includes claude-haiku-4-5 (which the real picker hides via
-// PICKER_HIDDEN_MODEL_PATTERNS) — the regression: a picker-hidden model must still
-// validate for an explicit sub-agent target.
-const MOCK_ACCOUNTS = [
-  { providerId: 'adobe', accessToken: 'x' },
-  { providerId: 'openai', accessToken: 'y' },
+// `defaultResolveModel` is a thin delegate over account-store's
+// `resolveModelIdForScoop`; mock just that seam and keep every other
+// provider-settings export real so the rest of the suite is unaffected. The
+// resolver's own alias/provider-scoping semantics are covered against the real
+// pi-ai catalogue in tests/providers/model-alias-resolution.test.ts.
+//
+// The mock stands in for a single selected provider offering these ids. It
+// includes claude-haiku-4-5, which the real picker hides via
+// PICKER_HIDDEN_MODEL_PATTERNS — the regression: a picker-hidden model must
+// still validate for an explicit sub-agent target.
+const MOCK_MODELS = [
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000 },
+  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200000 },
+  { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', contextWindow: 1000000 },
+  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 1000000 },
+  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
+  { id: 'gpt-5', name: 'GPT-5', contextWindow: 1000000 },
+  { id: 'o3', name: 'o3', contextWindow: 200000 },
 ];
 
-function mockGetProviderModels(providerId: string) {
-  if (providerId === 'adobe')
-    return [
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000 },
-      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200000 },
-      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', contextWindow: 1000000 },
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 1000000 },
-    ];
-  if (providerId === 'openai')
-    return [
-      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
-      { id: 'gpt-5', name: 'GPT-5', contextWindow: 1000000 },
-      { id: 'o3', name: 'o3', contextWindow: 200000 },
-    ];
-  return [];
+/** Exact id, else the keyword match with the largest context window. */
+function mockResolveModelIdForScoop(input: string): string | null {
+  if (!input) return null;
+  if (MOCK_MODELS.some((m) => m.id === input)) return input;
+  const keyword = input.toLowerCase();
+  const matches = MOCK_MODELS.filter(
+    (m) => m.id.toLowerCase().includes(keyword) || m.name.toLowerCase().includes(keyword)
+  );
+  if (matches.length === 0) return null;
+  return matches.reduce((best, m) =>
+    m.contextWindow > best.contextWindow ||
+    (m.contextWindow === best.contextWindow && m.id > best.id)
+      ? m
+      : best
+  ).id;
 }
 
 vi.mock('../../src/providers/account-store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../src/providers/account-store.js')>();
   return {
     ...actual,
-    getAccounts: () => MOCK_ACCOUNTS,
-    getProviderModels: mockGetProviderModels,
-    resolveModelByShorthand: (input: string) => {
-      const keyword = input.toLowerCase();
-      if (!keyword) return null;
-      let bestId: string | null = null;
-      let bestContextWindow = -1;
-      for (const account of MOCK_ACCOUNTS) {
-        for (const model of mockGetProviderModels(account.providerId)) {
-          const idLower = model.id.toLowerCase();
-          const nameLower = (model.name ?? '').toLowerCase();
-          if (!idLower.includes(keyword) && !nameLower.includes(keyword)) continue;
-          const contextWindow = model.contextWindow ?? 0;
-          const segsA = model.id.match(/\d+/g)?.map(Number) ?? [];
-          const segsB = (bestId ?? '').match(/\d+/g)?.map(Number) ?? [];
-          let cmp = 0;
-          for (let i = 0; i < Math.max(segsA.length, segsB.length); i++) {
-            const diff = (segsA[i] ?? 0) - (segsB[i] ?? 0);
-            if (diff !== 0) {
-              cmp = diff;
-              break;
-            }
-          }
-          if (
-            contextWindow > bestContextWindow ||
-            (contextWindow === bestContextWindow && cmp > 0)
-          ) {
-            bestContextWindow = contextWindow;
-            bestId = model.id;
-          }
-        }
-      }
-      return bestId;
-    },
+    resolveModelIdForScoop: mockResolveModelIdForScoop,
   };
 });
 
@@ -593,6 +570,64 @@ describe('createAgentBridge — model resolution', () => {
     await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_parent' });
 
     expect(registerCalls[0].config?.modelId).toBe('claude-opus-4-7');
+  });
+
+  // Regression (#1752): an explicit --model must never be quietly replaced by
+  // the parent's (typically far more expensive) model. Either the resolved id
+  // lands on the config, or the spawn fails — never a silent inheritance.
+  it('never falls back to the parent model when an explicit modelId resolves', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'cone_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { modelId: 'claude-opus-4-8' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, modelId: 'claude-haiku-4-5', parentJid: 'cone_1' });
+
+    expect(registerCalls[0].config?.modelId).toBe('claude-haiku-4-5');
+  });
+
+  it('rejects the spawn rather than inheriting the parent when the model is unknown', async () => {
+    const { orchestrator, registerCalls, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'cone_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { modelId: 'claude-opus-4-8' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      modelId: 'this-model-does-not-exist-xyz',
+      parentJid: 'cone_1',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('unknown model');
+    expect(registerCalls).toHaveLength(0);
   });
 
   it('leaves modelId unset when neither explicit nor parent has one', async () => {

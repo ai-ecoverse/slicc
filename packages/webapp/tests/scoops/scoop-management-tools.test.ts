@@ -20,7 +20,7 @@ const cone: RegisteredScoop = {
   addedAt: new Date().toISOString(),
 };
 
-function findScoopScoopTool() {
+function findScoopScoopTool(resolveModelId?: (id: string) => string | null) {
   const onScoopScoop = vi.fn(
     async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
       ...scoop,
@@ -33,6 +33,7 @@ function findScoopScoopTool() {
     onSendMessage: vi.fn(),
     getScoops: () => [cone],
     onScoopScoop,
+    ...(resolveModelId ? { resolveModelId } : {}),
   });
 
   const tool = tools.find((t) => t.name === 'scoop_scoop');
@@ -106,6 +107,37 @@ describe('scoop_scoop tool — config defaults', () => {
     const created = onScoopScoop.mock.calls[0][0];
     expect(created.config?.visiblePaths).toEqual(['/workspace/']);
     expect(created.config?.modelId).toBe('claude-sonnet-4-6');
+  });
+
+  // Regression (#1752): an unresolvable model must be rejected, not written
+  // into config.modelId where ScoopContext.init() silently degrades it to the
+  // cone's own (typically far more expensive) model.
+  it('rejects a model the resolver cannot resolve', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => null);
+    const result = await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Unknown model "claude-haiku-4-5"');
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('stores the resolver-canonicalized id, not the caller-supplied alias', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(
+      () => 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
+    );
+    await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+  });
+
+  it('does not consult the resolver when no model is specified', async () => {
+    const resolveModelId = vi.fn(() => null);
+    const { tool, onScoopScoop } = findScoopScoopTool(resolveModelId);
+    await tool.execute({ name: 'hero-block' });
+
+    expect(resolveModelId).not.toHaveBeenCalled();
+    expect(onScoopScoop.mock.calls[0][0].config?.modelId).toBeUndefined();
   });
 
   it('injects writablePaths scoped to the new scoop folder plus /shared/', async () => {
