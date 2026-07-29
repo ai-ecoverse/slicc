@@ -21,10 +21,11 @@ export const SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 
 
 /** Estimate decoded byte size from base64 without full decode. */
 export function getImageByteSize(base64: string): number {
+  const data = normalizeBase64(base64);
   let padding = 0;
-  if (base64.endsWith('==')) padding = 2;
-  else if (base64.endsWith('=')) padding = 1;
-  return Math.ceil((base64.length * 3) / 4) - padding;
+  if (data.endsWith('==')) padding = 2;
+  else if (data.endsWith('=')) padding = 1;
+  return Math.ceil((data.length * 3) / 4) - padding;
 }
 
 export function isSupportedImageFormat(mimeType: string): boolean {
@@ -33,9 +34,22 @@ export function isSupportedImageFormat(mimeType: string): boolean {
 
 type Dimensions = { width: number; height: number };
 
+/**
+ * Restore the tolerance `atob` had before the strict shared decoder: tool
+ * output often arrives line-wrapped or with the trailing padding omitted, and
+ * `base64ToUint8` rejects both wherever the Node `Buffer` fast-path is active.
+ */
+function normalizeBase64(base64: string): string {
+  const compact = base64.replace(/[\t\n\f\r ]/g, '');
+  const remainder = compact.length % 4;
+  if (remainder === 2) return `${compact}==`;
+  if (remainder === 3) return `${compact}=`;
+  return compact;
+}
+
 /** Decode a base64 prefix and expose it as a byte view plus a `DataView`. */
 function readHeader(base64: string, chars: number): DataView {
-  const raw = base64ToUint8(base64.slice(0, chars));
+  const raw = base64ToUint8(normalizeBase64(base64.slice(0, chars)));
   return new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
 }
 
@@ -78,9 +92,12 @@ function jpegDimensions(base64: string): Dimensions | null {
  */
 export function getImageDimensions(base64: string, mimeType: string): Dimensions | null {
   try {
-    if (mimeType === 'image/png') return pngDimensions(base64);
-    if (mimeType === 'image/gif') return gifDimensions(base64);
-    if (mimeType === 'image/jpeg') return jpegDimensions(base64);
+    // Strip whitespace up front so the fixed prefix lengths below still cover
+    // the header bytes when the input arrives line-wrapped.
+    const data = normalizeBase64(base64);
+    if (mimeType === 'image/png') return pngDimensions(data);
+    if (mimeType === 'image/gif') return gifDimensions(data);
+    if (mimeType === 'image/jpeg') return jpegDimensions(data);
   } catch {
     // Corrupt header — can't determine dimensions
   }
@@ -159,7 +176,7 @@ export async function processImageContent(
 
   // Step 2: Decode and process
   try {
-    const bytes = base64ToUint8(image.data);
+    const bytes = base64ToUint8(normalizeBase64(image.data));
 
     const output: { data: Uint8Array | null; mime: string } = { data: null, mime: image.mimeType };
 

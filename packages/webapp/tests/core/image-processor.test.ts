@@ -29,6 +29,10 @@ describe('getImageByteSize', () => {
     expect(getImageByteSize('')).toBe(0);
   });
 
+  it('ignores line-wrapping whitespace', () => {
+    expect(getImageByteSize('SGVs\nbG8=')).toBe(5);
+  });
+
   it('estimates large base64 correctly', () => {
     // 1MB of data would be ~1,398,101 base64 chars
     const oneMB = 1024 * 1024;
@@ -280,6 +284,24 @@ describe('getImageDimensions', () => {
       0x58, // height = 600
     ];
     expect(getImageDimensions(makeBase64(png), 'image/png')).toBeNull();
+  });
+
+  it('extracts PNG dimensions when padding is omitted', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x03, 0x20, 0x00, 0x00, 0x02, 0x58, 0x00,
+    ];
+    const unpadded = makeBase64(png).replace(/=+$/, '');
+    expect(getImageDimensions(unpadded, 'image/png')).toEqual({ width: 800, height: 600 });
+  });
+
+  it('extracts PNG dimensions when the base64 is line-wrapped', () => {
+    const png = [
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x03, 0x20, 0x00, 0x00, 0x02, 0x58,
+    ];
+    const wrapped = makeBase64(png).replace(/(.{8})/g, '$1\n');
+    expect(getImageDimensions(wrapped, 'image/png')).toEqual({ width: 800, height: 600 });
   });
 
   it('returns null for too-short base64', () => {
