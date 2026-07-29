@@ -765,16 +765,12 @@ export class FollowerSyncManager implements AgentHandle {
         this.executeLocalCDP(requestId, localTargetId, method, params, sessionId);
         break;
       }
-
       case 'cdp.response': {
         this.routeCDPResponse(message);
         break;
       }
       case 'cdp.event': {
-        // Route CDP events from the leader to the appropriate RemoteCDPTransport
-        for (const transport of this.remoteTransports.values()) {
-          transport.handleEvent(message.method, message.params);
-        }
+        this.routeCDPEvent(message);
         break;
       }
       // tab.open and preview.open share executeLocalTabOpen for Phase 1 —
@@ -1270,6 +1266,9 @@ export class FollowerSyncManager implements AgentHandle {
       'Network.responseReceived',
       'Network.loadingFinished',
       'Network.requestWillBeSent',
+      'Runtime.executionContextCreated',
+      'Runtime.executionContextDestroyed',
+      'Runtime.executionContextsCleared',
     ];
 
     for (const eventName of events) {
@@ -1309,6 +1308,16 @@ export class FollowerSyncManager implements AgentHandle {
     // Find the transport that has this pending request by checking all transports
     for (const transport of this.remoteTransports.values()) {
       transport.handleResponse(message.requestId, assembled.result, assembled.error);
+    }
+  }
+
+  /** Route a leader CDP event to remote transports, restoring its flattened session identity. */
+  private routeCDPEvent(message: LeaderToFollowerMessage & { type: 'cdp.event' }): void {
+    const params = message.sessionId
+      ? { ...message.params, sessionId: message.sessionId }
+      : message.params;
+    for (const transport of this.remoteTransports.values()) {
+      transport.handleEvent(message.method, params);
     }
   }
 

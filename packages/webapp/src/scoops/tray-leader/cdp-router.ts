@@ -163,8 +163,9 @@ export class CDPRouter {
     if (!followerRuntimeId) return;
 
     const prefix = `${followerRuntimeId}:`;
+    const eventParams = sessionId ? { ...params, sessionId } : params;
     for (const [key, transport] of this.remoteTransports) {
-      if (key.startsWith(prefix)) transport.handleEvent(method, params);
+      if (key.startsWith(prefix)) transport.handleEvent(method, eventParams);
     }
   }
 

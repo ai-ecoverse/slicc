@@ -1132,6 +1132,30 @@ describe('FollowerSyncManager', () => {
         // sessionId should NOT be in the forwarded params (it's at message level)
         expect((eventMsg as any).params.sessionId).toBeUndefined();
       }
+
+      const runtimeEvents = [
+        [
+          'Runtime.executionContextCreated',
+          { context: { id: 42, auxData: { frameId: 'frame-1', isDefault: true } } },
+        ],
+        ['Runtime.executionContextDestroyed', { executionContextId: 42 }],
+        ['Runtime.executionContextsCleared', {}],
+      ] as const;
+      for (const [method, params] of runtimeEvents) {
+        channel.sent.length = 0;
+        for (const listener of eventListeners.get(method) ?? []) {
+          (listener as (event: Record<string, unknown>) => void)({
+            sessionId: 'sess-remote',
+            ...params,
+          });
+        }
+        expect(channel.parseSent()).toContainEqual({
+          type: 'cdp.event',
+          method,
+          params,
+          sessionId: 'sess-remote',
+        });
+      }
     });
 
     it('does NOT forward events for non-remote sessions', async () => {
@@ -1228,7 +1252,7 @@ describe('FollowerSyncManager', () => {
       expect(fakeBrowserTransport.off).toHaveBeenCalledTimes(onCallCount);
     });
 
-    it('routes cdp.event from leader to RemoteCDPTransport', () => {
+    it('routes Runtime lifecycle events from leader with the session identity restored', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
 
@@ -1236,18 +1260,21 @@ describe('FollowerSyncManager', () => {
 
       // Register an event listener on the remote transport
       const events: Record<string, unknown>[] = [];
-      transport.on('Page.frameNavigated', (params) => events.push(params));
+      transport.on('Runtime.executionContextCreated', (params) => events.push(params));
 
       // Simulate leader forwarding a cdp.event
       channel.simulateLeaderMessage({
         type: 'cdp.event',
-        method: 'Page.frameNavigated',
-        params: { frame: { url: 'https://remote-navigated.com', id: 'main' } },
+        method: 'Runtime.executionContextCreated',
+        params: { context: { id: 42, auxData: { frameId: 'frame-1', isDefault: true } } },
         sessionId: 'sess-1',
       } as any);
 
       expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({ frame: { url: 'https://remote-navigated.com', id: 'main' } });
+      expect(events[0]).toEqual({
+        context: { id: 42, auxData: { frameId: 'frame-1', isDefault: true } },
+        sessionId: 'sess-1',
+      });
     });
   });
 

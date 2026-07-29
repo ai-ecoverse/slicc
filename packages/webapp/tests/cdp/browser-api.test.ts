@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI, getDefaultCdpUrl } from '../../src/cdp/browser-api.js';
 import type { CDPClient } from '../../src/cdp/cdp-client.js';
+import { type RemoteCDPSender, RemoteCDPTransport } from '../../src/cdp/remote-cdp-transport.js';
 
 // ---------------------------------------------------------------------------
 // Mock CDPClient
@@ -795,6 +796,67 @@ describe('BrowserAPI', () => {
         expect.anything(),
         expect.anything()
       );
+    });
+
+    it('re-resolves remote main contexts after lifecycle invalidation', async () => {
+      let remoteTransport: RemoteCDPTransport;
+      let runtimeEnabled = false;
+      let nextContextId = 42;
+      const evaluatedContexts: number[] = [];
+      const sender: RemoteCDPSender = {
+        sendCDPRequest(requestId, method, params) {
+          if (method === 'Target.attachToTarget') {
+            remoteTransport.handleResponse(requestId, { sessionId: 'remote-sess' });
+          } else if (method === 'Runtime.enable') {
+            if (!runtimeEnabled) {
+              runtimeEnabled = true;
+              remoteTransport.handleEvent('Runtime.executionContextCreated', {
+                sessionId: 'remote-sess',
+                context: {
+                  id: nextContextId++,
+                  auxData: { frameId: 'frame-1', isDefault: true },
+                },
+              });
+            }
+            remoteTransport.handleResponse(requestId, {});
+          } else if (method === 'Runtime.disable') {
+            runtimeEnabled = false;
+            remoteTransport.handleResponse(requestId, {});
+          } else if (method === 'Runtime.evaluate') {
+            const contextId = params?.['contextId'] as number;
+            evaluatedContexts.push(contextId);
+            remoteTransport.handleResponse(requestId, {
+              result: { type: 'string', value: `context-${contextId}` },
+            });
+          } else {
+            remoteTransport.handleResponse(requestId, {});
+          }
+        },
+      };
+      remoteTransport = new RemoteCDPTransport(sender);
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteTransport,
+      });
+      await api.attachToPage('follower-1:tab-1');
+
+      await expect(
+        api.evaluateInFrame('frame-1', 'window.appState', { world: 'main' })
+      ).resolves.toBe('context-42');
+      remoteTransport.handleEvent('Runtime.executionContextDestroyed', {
+        sessionId: 'remote-sess',
+        executionContextId: 42,
+      });
+      await expect(
+        api.evaluateInFrame('frame-1', 'window.appState', { world: 'main' })
+      ).resolves.toBe('context-43');
+      remoteTransport.handleEvent('Runtime.executionContextsCleared', {
+        sessionId: 'remote-sess',
+      });
+      await expect(
+        api.evaluateInFrame('frame-1', 'window.appState', { world: 'main' })
+      ).resolves.toBe('context-44');
+      expect(evaluatedContexts).toEqual([42, 43, 44]);
     });
   });
 

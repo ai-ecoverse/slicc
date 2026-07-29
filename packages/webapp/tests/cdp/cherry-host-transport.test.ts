@@ -1,5 +1,6 @@
 import type { TranscriptExportProgress } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import {
   CHERRY_PROTOCOL_VERSION,
   SUPPORTED_CHERRY_PROTOCOL_VERSIONS,
@@ -122,6 +123,31 @@ describe('CherryHostTransport', () => {
       result: { result: { type: 'number', value: 2 } },
     });
     await expect(p).resolves.toEqual({ result: { type: 'number', value: 2 } });
+  });
+
+  it('evaluates a frame in the Cherry host page main world', async () => {
+    await connectHelper(h);
+    const api = new BrowserAPI(h.transport);
+    await api.attachToPage('cherry-target');
+
+    const evaluation = api.evaluateInFrame('cherry-frame', 'window.appState', { world: 'main' });
+    await vi.waitFor(() => {
+      expect(
+        h.posted.find((m) => m.kind === 'cdp.request' && m.method === 'Runtime.evaluate')
+      ).toBeTruthy();
+    });
+    const req = h.posted.find((m) => m.kind === 'cdp.request' && m.method === 'Runtime.evaluate');
+    expect(req.params).toMatchObject({ expression: 'window.appState', contextId: 1 });
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: lastChannelId(h),
+      kind: 'cdp.response',
+      id: req.id,
+      result: { result: { type: 'string', value: 'page-state' } },
+    });
+
+    await expect(evaluation).resolves.toBe('page-state');
+    api.disconnect();
   });
 
   it('emits frameNavigated + loadEventFired after Page.navigate resolves', async () => {

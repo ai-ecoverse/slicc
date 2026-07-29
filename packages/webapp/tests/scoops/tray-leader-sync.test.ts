@@ -1904,7 +1904,7 @@ describe('LeaderSyncManager', () => {
   // ---------------------------------------------------------------------------
 
   describe('CDP event forwarding', () => {
-    it('routes cdp.event from follower to leader RemoteCDPTransport', () => {
+    it('routes Runtime lifecycle events from follower with the session identity restored', () => {
       const { manager } = createManager();
       const ch1 = new FakeChannel();
       manager.addFollower('b1', ch1);
@@ -1919,18 +1919,21 @@ describe('LeaderSyncManager', () => {
       // Leader creates a remote transport for the follower
       const transport = manager.createRemoteTransport('follower-b1', 'tab1');
       const events: Record<string, unknown>[] = [];
-      transport.on('Page.frameNavigated', (params) => events.push(params));
+      transport.on('Runtime.executionContextCreated', (params) => events.push(params));
 
       // Follower sends a cdp.event
       ch1.simulateMessage({
         type: 'cdp.event',
-        method: 'Page.frameNavigated',
-        params: { frame: { url: 'https://navigated.com', id: 'main' } },
+        method: 'Runtime.executionContextCreated',
+        params: { context: { id: 42, auxData: { frameId: 'frame-1', isDefault: true } } },
         sessionId: 'sess-1',
       } as any);
 
       expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({ frame: { url: 'https://navigated.com', id: 'main' } });
+      expect(events[0]).toEqual({
+        context: { id: 42, auxData: { frameId: 'frame-1', isDefault: true } },
+        sessionId: 'sess-1',
+      });
     });
 
     it('does not deliver cdp.event for unknown follower bootstrapId', () => {
