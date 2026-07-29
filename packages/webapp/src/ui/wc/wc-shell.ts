@@ -366,7 +366,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   ensureSystemTheme();
 
   const frame = el('div', { class: 'wcui-frame' });
-  const shader = el('slicc-shader', { mode: 'cone', tint: 'var(--waffle)', class: 'wcui-shader' });
+  const shader = el('slicc-shader', { mode: 'cone', class: 'wcui-shader' });
 
   const freezer = el('slicc-freezer');
   freezer.append(el('slicc-freezer-new'));
@@ -452,8 +452,8 @@ export type ShellContext =
   | { kind: 'freezer' };
 
 /**
- * Flip the whole frame between its three moods: cone (waffle lattice, warm
- * amber), scoop (swirling ice-cream pastels, the scoop's accent), freezer
+ * Flip the whole frame between its three moods: cone (Caramel Sugar Glass),
+ * scoop (swirling ice-cream pastels, the scoop's accent), freezer
  * (frost crystallizing, ice blue). Swaps the WebGL program via the shader's
  * `mode`, washes its `tint`, and drives the inherited `--ctx` context accent
  * so every token-driven surface (freezer chrome, composer band, badges)
@@ -462,8 +462,8 @@ export type ShellContext =
 export function applyShellContext(refs: WcShellRefs, context: ShellContext): void {
   const { shader, frame, freezer } = refs;
   if (context.kind === 'cone') {
+    shader.removeAttribute('tint');
     shader.setAttribute('mode', 'cone');
-    shader.setAttribute('tint', 'var(--waffle)');
     frame.style.removeProperty('--ctx');
     freezer.removeAttribute('ctx');
   } else if (context.kind === 'scoop') {

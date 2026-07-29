@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SHADER_FRAGMENTS, SliccShader } from '../../src/freezer/slicc-shader.js';
+import {
+  SHADER_FRAGMENTS,
+  SliccShader,
+  SUGAR_GLASS_PRESETS,
+} from '../../src/freezer/slicc-shader.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 function mount(attrs: Record<string, string> = {}): SliccShader {
@@ -25,7 +29,7 @@ describe('slicc-shader', () => {
     expect(el.shadowRoot?.querySelector('[part="fallback"]')).not.toBeNull();
   });
 
-  it('defaults to cone mode and accepts cone/scoop/freezer', () => {
+  it('defaults to cone mode and accepts the three distinct programs', () => {
     expect(mount().mode).toBe('cone');
     expect(mount({ mode: 'scoop' }).mode).toBe('scoop');
     expect(mount({ mode: 'freezer' }).mode).toBe('freezer');
@@ -66,16 +70,25 @@ describe('slicc-shader', () => {
     expect(() => el.pulse()).not.toThrow();
   });
 
-  it('reflects cone-mode brightness/contrast/noise/blur knobs (tuned defaults)', () => {
+  it('uses the complete Caramel preset for an attribute-less cone', () => {
     const el = mount();
-    // Tuned defaults baked in so the cone field renders with the Storybook
-    // texture everywhere with no attributes required.
+    expect(el.getAttribute('tint')).toBeNull();
+    expect(el.coverage).toBe(SUGAR_GLASS_PRESETS.caramel.coverage);
+    expect(el.brightness).toBe(SUGAR_GLASS_PRESETS.caramel.brightness);
+    expect(el.contrast).toBe(SUGAR_GLASS_PRESETS.caramel.contrast);
+    expect(el.noise).toBe(SUGAR_GLASS_PRESETS.caramel.noise);
+    expect(el.blurAmount).toBe(SUGAR_GLASS_PRESETS.caramel.blur);
+    expect(el.speed).toBe(SUGAR_GLASS_PRESETS.caramel.speed);
+  });
+
+  it('reflects cone glass brightness/contrast/noise/blur knobs', () => {
+    const el = mount();
     // The blur attribute reflects to `blurAmount` because HTMLElement already
     // defines a `blur()` method — same renaming dance as `scroll`/`scrollOffset`.
-    expect(el.brightness).toBe(1.2);
-    expect(el.contrast).toBe(0.75);
-    expect(el.noise).toBeCloseTo(0.04, 5);
-    expect(el.blurAmount).toBeCloseTo(0.09, 5);
+    expect(el.brightness).toBe(1.1);
+    expect(el.contrast).toBe(1.1);
+    expect(el.noise).toBeCloseTo(0.025, 5);
+    expect(el.blurAmount).toBeCloseTo(0.14, 5);
     // Property → attribute round-trip.
     el.brightness = 1.25;
     el.contrast = 1.5;
@@ -99,10 +112,33 @@ describe('slicc-shader', () => {
     el.setAttribute('contrast', 'nope');
     el.setAttribute('noise', 'nope');
     el.setAttribute('blur', 'nope');
-    expect(el.brightness).toBe(1.2);
-    expect(el.contrast).toBe(0.75);
-    expect(el.noise).toBeCloseTo(0.04, 5);
-    expect(el.blurAmount).toBeCloseTo(0.09, 5);
+    expect(el.brightness).toBe(1.1);
+    expect(el.contrast).toBe(1.1);
+    expect(el.noise).toBeCloseTo(0.025, 5);
+    expect(el.blurAmount).toBeCloseTo(0.14, 5);
+  });
+
+  it('reflects and clamps the cone glass animation speed (Caramel default 0.25)', () => {
+    const el = mount();
+    expect(el.speed).toBe(0.25);
+    el.speed = 0.25;
+    expect(el.getAttribute('speed')).toBe('0.25');
+    expect(el.speed).toBe(0.25);
+    el.setAttribute('speed', '-1');
+    expect(el.speed).toBe(0);
+    el.setAttribute('speed', '99');
+    expect(el.speed).toBe(2);
+    el.setAttribute('speed', 'nope');
+    expect(el.speed).toBe(0.25);
+  });
+
+  it('keeps the cone glass render loop healthy when speed is zero', async () => {
+    const el = mount({ speed: '0' });
+    await frame();
+    await frame();
+    expect(el.speed).toBe(0);
+    const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+    expect(el.noWebgl || canvas.width > 0).toBe(true);
   });
 
   it('cone fragment program references the new brightness/contrast/noise/blur uniforms', () => {
@@ -116,6 +152,22 @@ describe('slicc-shader', () => {
     expect(cone).toContain('u_contrast');
     expect(cone).toContain('u_noise');
     expect(cone).toContain('u_blur');
+  });
+
+  it('leaves every declared uniform read by a program', () => {
+    const sources = Object.values(SHADER_FRAGMENTS);
+    const declarations = new Set(
+      sources.flatMap((source) =>
+        [...source.matchAll(/uniform\s+\w+\s+(u_\w+)/g)].map((match) => match[1])
+      )
+    );
+    for (const name of declarations) {
+      const declaration = new RegExp(`uniform\\s+\\w+\\s+${name};`, 'g');
+      expect(
+        sources.some((source) => source.replace(declaration, '').includes(name)),
+        `${name} is declared but unread`
+      ).toBe(true);
+    }
   });
 
   it('keeps the canvas pointer-transparent and disposes cleanly', async () => {
@@ -328,6 +380,173 @@ describe('freezer field colors (inside-of-a-freezer, not sand)', () => {
     // And no animated term reads the raw clock directly anymore.
     const body = SHADER_FRAGMENTS.freezer.split('float t=u_time*0.08;')[1] ?? '';
     expect(body).not.toContain('u_time');
+  });
+});
+
+describe('cone Sugar Glass field colors', () => {
+  const CONE_UNIFORMS = {
+    u_res: [64, 64],
+    u_time: 2,
+    u_energy: 0,
+    u_center: [0.35, 0.55],
+    u_evt: [0.95, 0.25, 0.37],
+    u_falloff: 0.3,
+    u_life: 0.35,
+    u_freeze: SUGAR_GLASS_PRESETS.caramel.coverage * 2.2,
+    u_tint: tintVec(SUGAR_GLASS_PRESETS.caramel.tint),
+    u_scroll: 0,
+    u_brightness: SUGAR_GLASS_PRESETS.caramel.brightness,
+    u_contrast: SUGAR_GLASS_PRESETS.caramel.contrast,
+    u_noise: SUGAR_GLASS_PRESETS.caramel.noise,
+    u_blur: SUGAR_GLASS_PRESETS.caramel.blur,
+    u_speed: SUGAR_GLASS_PRESETS.caramel.speed,
+  };
+
+  function tintVec(tint: string): [number, number, number] {
+    return [1, 3, 5].map((start) => Number.parseInt(tint.slice(start, start + 2), 16) / 255) as [
+      number,
+      number,
+      number,
+    ];
+  }
+
+  it('exports five exact, reachable storyboard presets', () => {
+    expect(SUGAR_GLASS_PRESETS).toEqual({
+      caramel: {
+        mode: 'cone',
+        tint: '#d08a3c',
+        brightness: 1.1,
+        contrast: 1.1,
+        noise: 0.025,
+        blur: 0.14,
+        coverage: 0.28,
+        speed: 0.25,
+      },
+      'caramel-soft': {
+        mode: 'cone',
+        tint: '#d08a3c',
+        brightness: 1.2,
+        contrast: 0.75,
+        noise: 0.025,
+        blur: 0.14,
+        coverage: 0.28,
+        speed: 1,
+      },
+      frosted: {
+        mode: 'cone',
+        tint: '#ead9bd',
+        brightness: 1,
+        contrast: 0.55,
+        noise: 0.005,
+        blur: 0.9,
+        coverage: 0.08,
+        speed: 1,
+      },
+      brittle: {
+        mode: 'cone',
+        tint: '#ffd089',
+        brightness: 0.96,
+        contrast: 1.2,
+        noise: 0.055,
+        blur: 0.02,
+        coverage: 0.68,
+        speed: 1,
+      },
+      'waffle-glass': {
+        mode: 'cone',
+        tint: '#d3a15f',
+        brightness: 1,
+        contrast: 0.9,
+        noise: 0.02,
+        blur: 0.08,
+        coverage: 0.9,
+        speed: 1,
+      },
+    });
+
+    for (const preset of Object.values(SUGAR_GLASS_PRESETS)) {
+      const attrs = Object.fromEntries(
+        Object.entries(preset).map(([name, value]) => [name, String(value)])
+      );
+      const el = mount(attrs);
+      expect(el.mode).toBe('cone');
+      expect(el.getAttribute('tint')).toBe(preset.tint);
+      expect(el.brightness).toBe(preset.brightness);
+      expect(el.contrast).toBe(preset.contrast);
+      expect(el.noise).toBe(preset.noise);
+      expect(el.blurAmount).toBe(preset.blur);
+      expect(el.coverage).toBe(preset.coverage);
+      expect(el.speed).toBe(preset.speed);
+      el.remove();
+    }
+  });
+
+  it('keeps Cone sheared-lattice geometry in the Waffle-glass branch', () => {
+    const cone = SHADER_FRAGMENTS.cone;
+    expect(cone).toContain('cos(0.7853981634)');
+    expect(cone).toContain('g.x+=g.y*0.5');
+    expect(cone).toContain('float waffleMask=step(0.82,sugarCoverage);');
+  });
+
+  it.each([
+    ['light', 0, [0.97, 0.95, 0.89]],
+    ['dark', 1, [0.09, 0.08, 0.06]],
+  ] as const)(
+    'default cone stays inside the 20%% background wash budget in %s',
+    (_name, uDark, bg) => {
+      const px = renderFragment(SHADER_FRAGMENTS.cone, { ...CONE_UNIFORMS, u_dark: uDark });
+      if (!px) return;
+      for (let i = 0; i < px.length; i += 4) {
+        expect(Math.abs(px[i] - bg[0] * 255)).toBeLessThanOrEqual(52);
+        expect(Math.abs(px[i + 1] - bg[1] * 255)).toBeLessThanOrEqual(52);
+        expect(Math.abs(px[i + 2] - bg[2] * 255)).toBeLessThanOrEqual(52);
+      }
+    }
+  );
+
+  it.each([
+    ['light', 0, [0.97, 0.95, 0.89]],
+    ['dark', 1, [0.09, 0.08, 0.06]],
+  ] as const)('keeps every preset inside the 20%% budget in %s mode', (_name, uDark, bg) => {
+    for (const preset of Object.values(SUGAR_GLASS_PRESETS)) {
+      const px = renderFragment(SHADER_FRAGMENTS.cone, {
+        ...CONE_UNIFORMS,
+        u_dark: uDark,
+        u_tint: tintVec(preset.tint),
+        u_brightness: preset.brightness,
+        u_contrast: preset.contrast,
+        u_noise: preset.noise,
+        u_blur: preset.blur,
+        u_freeze: preset.coverage * 2.2,
+        u_speed: preset.speed,
+      });
+      if (!px) continue;
+      for (let i = 0; i < px.length; i += 4) {
+        expect(Math.abs(px[i] - bg[0] * 255)).toBeLessThanOrEqual(52);
+        expect(Math.abs(px[i + 1] - bg[1] * 255)).toBeLessThanOrEqual(52);
+        expect(Math.abs(px[i + 2] - bg[2] * 255)).toBeLessThanOrEqual(52);
+      }
+    }
+  });
+
+  it('renders warm glass in both themes and carries the shared post chain', () => {
+    for (const uDark of [0, 1]) {
+      const px = renderFragment(SHADER_FRAGMENTS.cone, { ...CONE_UNIFORMS, u_dark: uDark });
+      if (!px) continue;
+      const { r, b } = meanRgb(px);
+      expect(r).toBeGreaterThan(b);
+    }
+    const cone = SHADER_FRAGMENTS.cone;
+    expect(cone).toContain('vec3 bg=themeBg(); col=mix(bg,clamp(col,0.0,1.0),0.20);');
+    expect(cone).toContain('u_time*(u_life+0.15)*u_speed');
+    expect(cone).toContain('u_center');
+    expect(cone).toContain('p.y-=u_scroll');
+    expect(cone).toContain('u_falloff');
+    expect(cone).toContain('u_tint');
+    expect(cone).toContain('u_evt*u_energy');
+    expect(cone).toContain('u_noise*grain');
+    expect(cone).toContain('u_contrast');
+    expect(cone).toContain('u_brightness');
   });
 });
 

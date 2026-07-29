@@ -2,24 +2,20 @@ import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 
 /**
- * The SLICC background field — a single WebGL element with four program modes,
- * lifted from the prototype's shared `#bg-canvas` (proto/StellarRubySwift.html,
- * `__sliccShaders`): `cone` (a sheared waffle lattice that behaves like a
- * probabilistic Game of Life near a floating focal point), `scoop` (a lush
- * flowing ice-cream gradient that swirls and breathes), and `freezer` (water
- * crystallizing into ice from the corner), and `sugar` (caramelized glass with
- * Voronoi fractures). One canvas, one program swapped by
- * the `mode` attribute — exactly as the prototype swaps `FRAG_CONE` / `FRAG_SCOOP`
- * / `FRAG_FREEZER` / `FRAG_SUGAR`.
+ * The SLICC background field — a single WebGL element with three program modes:
+ * `cone` (caramelized glass with Voronoi fractures), `scoop` (a lush flowing
+ * ice-cream gradient that swirls and breathes), and `freezer` (water
+ * crystallizing into ice from the corner). One canvas, one program swapped by
+ * the `mode` attribute.
  *
  * Sits behind the app (`position: fixed; inset: 0; z-index: 0; pointer-events:
  * none`). Honors `prefers-reduced-motion` (one static frame), pauses on
  * disconnect, and falls back to a per-mode CSS gradient when WebGL is absent.
  *
- * @attr mode - `cone` (default) | `scoop` | `freezer` | `sugar`
+ * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
- * @attr coverage - 0..1 freezer frost growth / sugar cell density and geometry
- * @attr speed - 0..2 sugar animation rate multiplier (default 1)
+ * @attr coverage - 0..1 freezer frost growth / cone glass density and geometry
+ * @attr speed - 0..2 cone glass animation rate multiplier (default 0.25)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -28,14 +24,12 @@ import { h, sheet } from '../internal/dom.js';
 
 const VERT = 'attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos,0.0,1.0); }';
 
-// Full uniform header + fbm noise — the prototype's HEAD + NOISE. Every program
-// declares the full set so a single render path can feed them; unused uniforms
-// are harmless.
+// Shared uniform header + fbm noise. Every declared uniform is read by at least
+// one program so the common render path contains no dead uniform plumbing.
 const HEAD = `precision highp float;
 uniform vec2 u_res; uniform float u_time; uniform float u_energy;
 uniform vec2 u_center; uniform vec3 u_evt; uniform float u_freeze; uniform float u_dark;
-uniform float u_density; uniform float u_falloff; uniform float u_life;
-uniform float u_blink; uniform float u_thick; uniform vec3 u_tint; uniform float u_scroll;
+uniform float u_falloff; uniform float u_life; uniform vec3 u_tint; uniform float u_scroll;
 uniform float u_brightness; uniform float u_contrast; uniform float u_noise; uniform float u_blur;
 vec3 themeBg(){ return mix(vec3(0.97,0.95,0.89), vec3(0.09,0.08,0.06), u_dark); }`;
 
@@ -46,56 +40,6 @@ float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p);
   vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
 float fbm(vec2 p){ float v=0.,a=0.5; for(int i=0;i<5;i++){ v+=a*vnoise(p); p=p*2.02+vec2(7.1,3.7); a*=0.5;} return v; }
 vec2 warp(vec2 p, float t){ float a=fbm(p+vec2(0.0,1.7)+t*0.10); float b=fbm(p+vec2(5.2,1.3)-t*0.08); return p+0.85*vec2(a,b); }`;
-
-const FRAG_CONE = `${HEAD}${NOISE}
-float cellCycle(vec2 q){ float s=hash21(q+11.7);
-  return 0.5+0.32*sin(u_time*u_blink+s*6.2831)+0.18*sin(u_time*0.6*u_blink+s*19.0); }
-void main(){
-  vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
-  vec2 p=uv-0.5; p.x*=aspect; vec2 c=u_center-0.5; c.x*=aspect;
-  vec3 bg=themeBg(); float dist=length(p-c);
-  /* Chat scroll pans the (periodic) lattice with the content. */
-  p.y-=u_scroll;
-  float ca=cos(0.7853981634), sa=sin(0.7853981634);
-  vec2 pr=mat2(ca,-sa,sa,ca)*p; float cells=12.0; vec2 g=pr*cells; g.x+=g.y*0.5;
-  vec2 id=floor(g); vec2 f=fract(g)-0.5;
-  float dia=mix(length(f),abs(f.x)+abs(f.y),0.82);
-  float ph=hash21(id)*6.2831; float radius=0.42+0.05*sin(u_time*0.5+ph);
-  float aa=2.2/cells; float outline=smoothstep(u_thick+aa,u_thick,abs(dia-radius));
-  float seedDen=clamp(u_density+u_energy*0.20*exp(-dist*2.0),0.0,1.0);
-  float selfCyc=cellCycle(id); float selfSoft=smoothstep(-0.05,0.05,seedDen-selfCyc);
-  float selfHard=step(selfCyc,seedDen); float nbs=0.0;
-  for(int j=-1;j<=1;j++){ for(int i=-1;i<=1;i++){ if(i==0&&j==0) continue;
-    vec2 nb=id+vec2(float(i),float(j)); nbs+=step(cellCycle(nb),seedDen); } }
-  float survive=smoothstep(1.5,1.9,nbs)-smoothstep(3.1,3.5,nbs);
-  float birth=smoothstep(2.6,3.0,nbs)-smoothstep(3.0,3.4,nbs);
-  float gol=clamp(selfHard*survive+(1.0-selfHard)*birth,0.0,1.0);
-  float golMix=1.0-smoothstep(0.0,max(u_life,0.001),dist);
-  float onState=mix(selfSoft,gol,golMix);
-  float falloff=clamp(1.0-u_falloff*max(dist-0.12,0.0),0.0,1.0);
-  falloff=clamp(falloff+u_energy*0.30*exp(-dist*2.0),0.0,1.0); onState*=falloff;
-  float bevel=clamp(0.5-(f.x-f.y)*0.9,0.0,1.0);
-  vec3 lineCol=mix(vec3(0.78,0.55,0.30),vec3(0.86,0.62,0.36),u_dark);
-  vec3 hiCol=mix(vec3(0.90,0.72,0.46),vec3(0.92,0.74,0.48),u_dark);
-  vec3 tint=mix(lineCol,hiCol,bevel*0.6); float stroke=outline*onState;
-  // Low-contrast lattice: chat prose sits DIRECTLY on this field (the frosted
-  // reading card is gone), so strokes stay close to the base color — toward
-  // the light bg in light mode, toward the dark bg in dark mode.
-  vec3 col=mix(bg,tint,clamp(stroke*0.20,0.0,0.20));
-  col+=u_evt*u_energy*stroke*exp(-dist*dist*4.0)*0.18;
-  /* Cone-only post: a noise/grain layer whose sample frequency is driven by
-     u_blur (high blur => low frequency / soft, low blur => sharp grain), then
-     contrast around 0.5 and brightness as a multiplier. The JS getters bake in
-     tuned defaults (brightness=1.2, contrast=0.75, noise=0.04, blur=0.09); at
-     the shader level the identity is still u_noise=0, u_contrast=1, u_brightness=1. */
-  float noiseFreq=mix(80.0,4.0,clamp(u_blur,0.0,1.0));
-  float grain=fbm(uv*noiseFreq)-0.5;
-  col+=u_noise*grain;
-  col=(col-0.5)*u_contrast+0.5;
-  col*=u_brightness;
-  col=clamp(col,0.0,1.0);
-  gl_FragColor=vec4(col,1.0);
-}`;
 
 const FRAG_SCOOP = `${HEAD}${NOISE}
 vec3 pal(float t){ vec3 strawberry=vec3(1.0,0.45,0.62); vec3 vanilla=vec3(1.0,0.95,0.82);
@@ -142,7 +86,7 @@ void main(){
   float rim=smoothstep(0.05,0.0,abs(edge))*0.6; col+=rim*iceCol;
   /* The field is a BACKGROUND: chat prose sits directly on it, so the final
      wash pins the whole pattern close to the icy ground — the same ~20%
-     deviation budget the cone lattice uses (strokes at 0.20 toward tint). */
+     deviation budget the cone glass uses. */
   col=mix(freezerBg(),col,0.22);
   gl_FragColor=vec4(col,1.0);
 }`;
@@ -232,9 +176,9 @@ void main(){
   gl_FragColor=vec4(col,1.0);
 }`;
 
-export type ShaderMode = 'cone' | 'scoop' | 'freezer' | 'sugar';
+export type ShaderMode = 'cone' | 'scoop' | 'freezer';
 export interface SugarGlassPreset {
-  readonly mode: 'sugar';
+  readonly mode: 'cone';
   readonly tint: string;
   readonly brightness: number;
   readonly contrast: number;
@@ -247,15 +191,15 @@ export interface SugarGlassPreset {
 /**
  * Tuned Sugar Glass storyboard presets (all remain within the 20% background budget):
  * - Caramel — Radiant-like warm amber cells with visible crack light.
- * - Caramel-waffle — Caramel's field with the current Cone brightness and contrast.
+ * - Caramel-soft — Caramel's field with a softer brightness and contrast treatment.
  * - Frosted — broad, quiet seams and restrained contrast for maximum prose legibility.
  * - Brittle — dense small cells, sharp bright fractures, and low glass fill.
  * - Waffle-glass — sugar rendering over Cone's 45-degree, half-sheared lattice geometry.
- * Sugar uses `coverage` for cell scale; values >= 0.82 select the lattice geometry.
+ * Cone glass uses `coverage` for cell scale; values >= 0.82 select the lattice geometry.
  */
 export const SUGAR_GLASS_PRESETS = {
   caramel: {
-    mode: 'sugar',
+    mode: 'cone',
     tint: '#d08a3c',
     brightness: 1.1,
     contrast: 1.1,
@@ -264,8 +208,8 @@ export const SUGAR_GLASS_PRESETS = {
     coverage: 0.28,
     speed: 0.25,
   },
-  'caramel-waffle': {
-    mode: 'sugar',
+  'caramel-soft': {
+    mode: 'cone',
     tint: '#d08a3c',
     brightness: 1.2,
     contrast: 0.75,
@@ -275,7 +219,7 @@ export const SUGAR_GLASS_PRESETS = {
     speed: 1,
   },
   frosted: {
-    mode: 'sugar',
+    mode: 'cone',
     tint: '#ead9bd',
     brightness: 1,
     contrast: 0.55,
@@ -285,7 +229,7 @@ export const SUGAR_GLASS_PRESETS = {
     speed: 1,
   },
   brittle: {
-    mode: 'sugar',
+    mode: 'cone',
     tint: '#ffd089',
     brightness: 0.96,
     contrast: 1.2,
@@ -295,7 +239,7 @@ export const SUGAR_GLASS_PRESETS = {
     speed: 1,
   },
   'waffle-glass': {
-    mode: 'sugar',
+    mode: 'cone',
     tint: '#d3a15f',
     brightness: 1,
     contrast: 0.9,
@@ -308,23 +252,20 @@ export const SUGAR_GLASS_PRESETS = {
 export type SugarGlassPresetName = keyof typeof SUGAR_GLASS_PRESETS;
 
 const PROGRAMS: Record<ShaderMode, string> = {
-  cone: FRAG_CONE,
+  cone: FRAG_SUGAR,
   scoop: FRAG_SCOOP,
   freezer: FRAG_FREEZER,
-  sugar: FRAG_SUGAR,
 };
 /** Fragment sources, exposed so tests can compile and pixel-probe the fields. */
 export const SHADER_FRAGMENTS: Readonly<Record<ShaderMode, string>> = PROGRAMS;
-const MODES = new Set<ShaderMode>(['cone', 'scoop', 'freezer', 'sugar']);
+const MODES = new Set<ShaderMode>(['cone', 'scoop', 'freezer']);
 
 const FALLBACK: Record<ShaderMode, string> = {
-  cone: 'radial-gradient(120% 120% at 35% 45%, color-mix(in srgb,#e0a866 40%,var(--bg)) 0%, var(--bg) 60%)',
+  cone: 'radial-gradient(120% 120% at 35% 45%, color-mix(in srgb,#d08a3c 20%,var(--bg)) 0%, var(--bg) 70%)',
   scoop:
     'radial-gradient(120% 120% at 40% 50%, color-mix(in srgb,#ff9bc0 40%,var(--bg)) 0%, var(--bg) 62%)',
   freezer:
     'radial-gradient(120% 120% at 0% 100%, color-mix(in srgb,#7fb0e6 55%,var(--bg)) 0%, var(--bg) 70%)',
-  sugar:
-    'radial-gradient(120% 120% at 35% 45%, color-mix(in srgb,#c8956c 20%,var(--bg)) 0%, var(--bg) 70%)',
 };
 
 const STYLE = `
@@ -348,11 +289,8 @@ const UNIFORMS = [
   'u_evt',
   'u_freeze',
   'u_dark',
-  'u_density',
   'u_falloff',
   'u_life',
-  'u_blink',
-  'u_thick',
   'u_tint',
   'u_brightness',
   'u_contrast',
@@ -421,7 +359,7 @@ export class SliccShader extends HTMLElement {
   // change — NEVER per frame: resolving them calls getComputedStyle and (via
   // colorToVec3) appends a probe to document.body, which forces a full-document
   // style recalc. Doing that every animation frame was the flicker's cause.
-  #tintVec: [number, number, number] = [0.545, 0.361, 0.965];
+  #tintVec: [number, number, number] = [0.816, 0.541, 0.235];
   #evtVec: [number, number, number] = [0.957, 0.247, 0.369];
   #darkVal = 0;
   #themeObserver: MutationObserver | null = null;
@@ -477,9 +415,9 @@ export class SliccShader extends HTMLElement {
 
   attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
-    // `tint` drives the tint + event-tint uniforms — re-resolve the cache before
-    // any repaint below. (`mode` only swaps the GL program, not the colors.)
-    if (name === 'tint') this.#refreshColorUniforms();
+    // `tint` drives the tint + event-tint uniforms. A mode change also refreshes
+    // the cache because a tint-less cone uses the Caramel default.
+    if (name === 'tint' || name === 'mode') this.#refreshColorUniforms();
     if (name === 'mode' && this.#gl && this.mode !== this.#builtMode) {
       // Switch to the (cached) program and repaint synchronously so the
       // previous mode's frame does not linger for a rAF — the blue flicker.
@@ -502,9 +440,10 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('mode', value);
   }
 
-  /** Freezer frost growth / Sugar cell density and geometry 0..1. */
+  /** Freezer frost growth / cone glass cell density and geometry 0..1. */
   get coverage(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('coverage') ?? ''), 0, 1, 0.66);
+    const fallback = this.mode === 'cone' ? SUGAR_GLASS_PRESETS.caramel.coverage : 0.66;
+    return clampNum(Number.parseFloat(this.getAttribute('coverage') ?? ''), 0, 1, fallback);
   }
   set coverage(value: number) {
     this.setAttribute('coverage', String(value));
@@ -530,45 +469,70 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('scroll', String(value));
   }
 
-  /** Cone-mode multiplier on final color (tuned default = 1.2). */
+  /** Cone glass multiplier on final color (Caramel default = 1.1). */
   get brightness(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('brightness') ?? ''), 0.5, 1.5, 1.2);
+    return clampNum(
+      Number.parseFloat(this.getAttribute('brightness') ?? ''),
+      0.5,
+      1.5,
+      SUGAR_GLASS_PRESETS.caramel.brightness
+    );
   }
   set brightness(value: number) {
     this.setAttribute('brightness', String(value));
   }
 
-  /** Cone-mode contrast around a 0.5 pivot (tuned default = 0.75). */
+  /** Cone glass contrast around a 0.5 pivot (Caramel default = 1.1). */
   get contrast(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('contrast') ?? ''), 0.5, 2, 0.75);
+    return clampNum(
+      Number.parseFloat(this.getAttribute('contrast') ?? ''),
+      0.5,
+      2,
+      SUGAR_GLASS_PRESETS.caramel.contrast
+    );
   }
   set contrast(value: number) {
     this.setAttribute('contrast', String(value));
   }
 
-  /** Cone-mode grain amount added to the final color (tuned default = 0.04). */
+  /** Cone glass grain amount added to the final color (Caramel default = 0.025). */
   get noise(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('noise') ?? ''), 0, 0.3, 0.04);
+    return clampNum(
+      Number.parseFloat(this.getAttribute('noise') ?? ''),
+      0,
+      0.3,
+      SUGAR_GLASS_PRESETS.caramel.noise
+    );
   }
   set noise(value: number) {
     this.setAttribute('noise', String(value));
   }
 
   /**
-   * Cone-mode blur of the noise layer only (0 = sharp grain, 1 = soft).
+   * Cone glass blur of the noise layer only (0 = sharp grain, 1 = soft).
    * Reflects the `blur` attribute; named `blurAmount` because `HTMLElement`
-   * already defines a `blur()` method. Tuned default = 0.09.
+   * already defines a `blur()` method. Caramel default = 0.14.
    */
   get blurAmount(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('blur') ?? ''), 0, 1, 0.09);
+    return clampNum(
+      Number.parseFloat(this.getAttribute('blur') ?? ''),
+      0,
+      1,
+      SUGAR_GLASS_PRESETS.caramel.blur
+    );
   }
   set blurAmount(value: number) {
     this.setAttribute('blur', String(value));
   }
 
-  /** Sugar-mode animation rate multiplier (0 = paused, 1 = current rate). */
+  /** Cone glass animation rate multiplier (0 = paused, Caramel default = 0.25). */
   get speed(): number {
-    return clampNum(Number.parseFloat(this.getAttribute('speed') ?? ''), 0, 2, 1);
+    return clampNum(
+      Number.parseFloat(this.getAttribute('speed') ?? ''),
+      0,
+      2,
+      SUGAR_GLASS_PRESETS.caramel.speed
+    );
   }
   set speed(value: number) {
     this.setAttribute('speed', String(value));
@@ -596,13 +560,14 @@ export class SliccShader extends HTMLElement {
   }
 
   /** Resolve + cache the CSS-derived uniforms (tint, event tint, dark mode).
-   *  Called on connect, on a `tint` change, and on a theme change — NEVER per
+   *  Called on connect, on a `mode`/`tint` change, and on a theme change — NEVER per
    *  frame. Each call uses getComputedStyle and (via colorToVec3) a one-shot
    *  probe appended to document.body, so running it every animation frame
    *  forced a full-document style recalc — the flicker. The values only change
    *  on a theme/tint switch, so caching them is safe. */
   #refreshColorUniforms(): void {
-    const tintAttr = this.getAttribute('tint') ?? '';
+    const tintAttr =
+      this.getAttribute('tint') ?? (this.mode === 'cone' ? SUGAR_GLASS_PRESETS.caramel.tint : '');
     this.#tintVec = colorToVec3(tintAttr, [0.545, 0.361, 0.965]);
     this.#evtVec = colorToVec3(tintAttr, [0.957, 0.247, 0.369]);
     this.#darkVal = this.#darkUniform();
@@ -840,13 +805,8 @@ export class SliccShader extends HTMLElement {
       u.u_scroll ?? null,
       (this.scrollOffset * SCROLL_PARALLAX) / Math.max(1, cv.clientHeight || cv.height)
     );
-    // Cone-mode knobs — pulled verbatim from the prototype's frame loop. u_blink
-    // in particular is 0.05 (NOT 1.0): the Game-of-Life cells breathe slowly.
-    gl.uniform1f(u.u_density ?? null, 0.29);
     gl.uniform1f(u.u_falloff ?? null, 0.3);
     gl.uniform1f(u.u_life ?? null, 0.35);
-    gl.uniform1f(u.u_blink ?? null, 0.05);
-    gl.uniform1f(u.u_thick ?? null, 0.02);
     gl.uniform3f(u.u_tint ?? null, tint[0], tint[1], tint[2]);
     gl.uniform1f(u.u_brightness ?? null, this.brightness);
     gl.uniform1f(u.u_contrast ?? null, this.contrast);

@@ -359,8 +359,8 @@ function app(opts: AppOpts): HTMLElement {
     'position:relative;transform:translateZ(0);width:100%;height:100vh;overflow:hidden;' +
     'background:var(--bg);font-family:var(--ui);';
 
-  // The cone background field (the chat context's animated waffle lattice).
-  const shader = el('slicc-shader', { mode: 'cone', tint: 'var(--waffle)' });
+  // The cone background field (the chat context's Caramel Sugar Glass).
+  const shader = el('slicc-shader', { mode: 'cone' });
   shader.style.cssText = 'position:absolute;inset:0;z-index:0;';
   frame.append(shader);
 

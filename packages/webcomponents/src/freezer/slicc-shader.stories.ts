@@ -12,20 +12,9 @@ interface ShaderArgs {
   speed: number;
 }
 
-const WAFFLE_CURRENT = {
-  mode: 'cone',
-  tint: '#b07823',
-  coverage: 0.66,
-  brightness: 1.2,
-  contrast: 0.75,
-  noise: 0.04,
-  blur: 0.09,
-  speed: 1,
-} as const satisfies Readonly<ShaderArgs>;
-
 const PRESET_LABELS: Readonly<Record<SugarGlassPresetName, string>> = {
   caramel: 'Caramel',
-  'caramel-waffle': 'Caramel-waffle-tone',
+  'caramel-soft': 'Caramel — soft tone',
   frosted: 'Frosted',
   brittle: 'Brittle',
   'waffle-glass': 'Waffle-glass',
@@ -211,7 +200,6 @@ function createStoryboard(interactive = false): HTMLElement {
   `;
   const grid = document.createElement('main');
   grid.className = 'storyboard-grid';
-  grid.appendChild(createStoryboardPanel('Waffle (current)', WAFFLE_CURRENT, interactive));
   for (const [name, preset] of Object.entries(SUGAR_GLASS_PRESETS)) {
     grid.appendChild(
       createStoryboardPanel(PRESET_LABELS[name as SugarGlassPresetName], preset, interactive)
@@ -226,7 +214,7 @@ const meta: Meta<ShaderArgs> = {
   component: 'slicc-shader',
   tags: ['autodocs'],
   argTypes: {
-    mode: { control: 'inline-radio', options: ['cone', 'scoop', 'freezer', 'sugar'] },
+    mode: { control: 'inline-radio', options: ['cone', 'scoop', 'freezer'] },
     tint: { control: 'color' },
     coverage: { control: { type: 'range', min: 0, max: 1, step: 0.05 } },
     brightness: { control: { type: 'range', min: 0.5, max: 1.5, step: 0.01 } },
@@ -254,16 +242,16 @@ export const Storyboard: Story = {
   render: () => createStoryboard(),
 };
 
-/** Six-up live comparison: every candidate owns an isolated control set. */
+/** Five-up live comparison: every retained preset owns an isolated control set. */
 export const Playground: Story = {
   name: 'PLAYGROUND',
   parameters: { layout: 'fullscreen', controls: { disable: true } },
   render: () => createStoryboard(true),
 };
 
-/** Cone — the sheared waffle lattice behind the cone/chat context. */
+/** Cone — the default Caramel Sugar Glass field behind the cone/chat context. */
 export const Cone: Story = {
-  args: { ...WAFFLE_CURRENT },
+  args: { mode: 'cone' },
 };
 /** Scoop — the flowing ice-cream swirl, tinted to the active scoop accent. */
 export const Scoop: Story = {
@@ -292,10 +280,8 @@ export const Freezer: Story = {
   },
 };
 
-/** Sugar Glass — warm amber cells and visible crack light. */
-export const Caramel: Story = { args: { ...SUGAR_GLASS_PRESETS.caramel } };
-/** Sugar Glass — Caramel color and texture with the current Waffle tone. */
-export const CaramelWaffle: Story = { args: { ...SUGAR_GLASS_PRESETS['caramel-waffle'] } };
+/** Sugar Glass — Caramel color and texture with a softer tone. */
+export const CaramelSoft: Story = { args: { ...SUGAR_GLASS_PRESETS['caramel-soft'] } };
 /** Sugar Glass — broad quiet seams tuned for prose legibility. */
 export const Frosted: Story = { args: { ...SUGAR_GLASS_PRESETS.frosted } };
 /** Sugar Glass — dense sharp fractures with low glass fill. */

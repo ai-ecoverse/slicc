@@ -351,8 +351,8 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
 async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
   refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
   refs.thread.setAttribute('accent', scoopColor(scoop));
-  // The whole frame changes mood with the selection: waffle lattice + warm
-  // amber for the cone, swirling pastels + the scoop's accent for scoops.
+  // The whole frame changes mood with the selection: Caramel Sugar Glass for
+  // the cone, swirling pastels + the scoop's accent for scoops.
   applyShellContext(
     refs,
     scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
