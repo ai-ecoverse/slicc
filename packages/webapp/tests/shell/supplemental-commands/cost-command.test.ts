@@ -208,4 +208,36 @@ describe('cost command', () => {
     expect(row).toContain('-');
     expect(row).not.toContain('$0.00');
   });
+
+  it('keeps aggregate-only frozen token categories unavailable', async () => {
+    const aggregateOnly = frozenSessionToCostData({
+      filename: 'aggregate-only.md',
+      title: 'aggregate-only',
+      frozenAt: '2026-07-01T12:00:00.000Z',
+      messageCount: 8,
+      cost: { input: 0.2, output: 0.3, cacheRead: 0.04, cacheWrite: 0.01, total: 0.55 },
+      models: [{ model: 'claude-sonnet-4-6', cost: 0.55, turns: 4, tokens: 12_000 }],
+    });
+
+    expect(aggregateOnly.usage).toMatchObject({
+      input: null,
+      output: null,
+      cacheRead: null,
+      cacheWrite: null,
+      totalTokens: 12_000,
+    });
+    registerSessionCostsProvider(() => [aggregateOnly]);
+    const jsonResult = await createCostCommand().execute(['--all', '--json'], ctx);
+    expect(JSON.parse(jsonResult.stdout)[0].usage).toMatchObject({
+      input: null,
+      output: null,
+      cacheRead: null,
+      cacheWrite: null,
+      totalTokens: 12_000,
+    });
+    const result = await createCostCommand().execute(['--all'], ctx);
+    const row = result.stdout.split('\n').find((line) => line.includes('aggregate-only')) ?? '';
+    expect(row).toContain('    - /     -');
+    expect(row).not.toContain('<0.01');
+  });
 });

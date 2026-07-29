@@ -378,7 +378,7 @@ function summarizeSessionUsage(
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
     const { model, usage } = message;
-    if (!model || !usage || !hasFiniteUsage(usage)) continue;
+    if (!model || !usage || !hasFiniteUsage(usage)) return null;
     const usageCost = usage.cost;
     hasUsage = true;
     cost.total += usageCost.total;

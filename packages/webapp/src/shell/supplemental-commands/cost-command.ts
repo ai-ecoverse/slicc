@@ -15,10 +15,10 @@ export interface ScoopCostData {
   /** False when a legacy frozen-session index entry has no persisted cost metadata. */
   costAvailable?: boolean;
   usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
+    input: number | null;
+    output: number | null;
+    cacheRead: number | null;
+    cacheWrite: number | null;
     totalTokens: number;
     cost: {
       input: number;
@@ -65,10 +65,10 @@ export function frozenSessionToCostData(entry: FrozenSessionIndexEntry): ScoopCo
     source: 'frozen',
     costAvailable,
     usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
+      input: null,
+      output: null,
+      cacheRead: null,
+      cacheWrite: null,
       totalTokens: frozenModels.reduce((total, item) => total + finiteNumber(item?.tokens), 0),
       cost: {
         input: finiteNumber(entry.cost?.input),
@@ -99,7 +99,8 @@ Options:
 `;
 }
 
-function fmtMTok(tokens: number): string {
+function fmtMTok(tokens: number | null): string {
+  if (tokens === null) return '-';
   const mtok = tokens / 1_000_000;
   if (mtok < 0.01) return '<0.01';
   return mtok.toFixed(2);
@@ -152,10 +153,10 @@ function formatTable(data: ScoopCostData[]): string {
   lines.push(hdr);
   lines.push(sep);
 
-  let totIn = 0,
-    totOut = 0,
-    totCR = 0,
-    totCW = 0,
+  let totIn: number | null = 0,
+    totOut: number | null = 0,
+    totCR: number | null = 0,
+    totCW: number | null = 0,
     totCost = 0;
 
   for (const d of data) {
@@ -178,10 +179,10 @@ function formatTable(data: ScoopCostData[]): string {
 
     lines.push(`  ${agent}${source}${model}${tokens}${cache}${cost}${hourly}`);
 
-    totIn += d.usage.input;
-    totOut += d.usage.output;
-    totCR += d.usage.cacheRead;
-    totCW += d.usage.cacheWrite;
+    totIn = totIn === null || d.usage.input === null ? null : totIn + d.usage.input;
+    totOut = totOut === null || d.usage.output === null ? null : totOut + d.usage.output;
+    totCR = totCR === null || d.usage.cacheRead === null ? null : totCR + d.usage.cacheRead;
+    totCW = totCW === null || d.usage.cacheWrite === null ? null : totCW + d.usage.cacheWrite;
     if (d.costAvailable !== false) totCost += d.usage.cost.total;
   }
 

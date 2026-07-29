@@ -347,6 +347,46 @@ describe('freezeConeSession', () => {
     expect(archiveContent).not.toMatch(/^models:/m);
   });
 
+  it('keeps a restored legacy session unknown after a production-attributed turn', async () => {
+    const [attributed] = await produceLiveAssistantMessages([
+      {
+        content: 'new attributed answer',
+        model: 'model-a',
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 20,
+          cacheWrite: 10,
+          cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 },
+        },
+      },
+    ]);
+    const vfs = makeFakeVfs();
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('legacy question'),
+          assistantMessage('legacy answer without accounting metadata'),
+          userMessage('new question'),
+          attributed,
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    expect(frozen?.cost).toBeUndefined();
+    expect(frozen?.models).toBeUndefined();
+    const [indexEntry] = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(indexEntry.cost).toBeUndefined();
+    expect(indexEntry.models).toBeUndefined();
+  });
+
   it('preserves existing /workspace/CLAUDE.md on a non-ENOENT read fault (never clobbers durable memory)', async () => {
     // Regression for issue #1500: the pre-fix `catch { }` reinterpreted ANY
     // readFile fault as "file doesn't exist", then unconditionally wrote back
