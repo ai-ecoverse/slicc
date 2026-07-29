@@ -58,6 +58,8 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
           APPLE_DISTRIBUTION_CERT_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
           APPLE_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 
@@ -166,6 +168,23 @@ jobs:
 
           # Store keychain path for later steps
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
+          # Decode the Developer ID provisioning profile that authorizes the
+          # iCloud ubiquity-kvstore entitlement and expose it (plus the KVS
+          # identifier) to the Publish step. semantic-release → release-native.mjs
+          # → packages/swift-launcher/sign-and-package.sh reads PROVISION_PROFILE
+          # (a file path) and KVSTORE_IDENTIFIER to embed the profile and sign the
+          # macOS app with cross-device tray sync enabled. Absent the secret the
+          # app still signs — it just degrades to local-only tray sessions.
+          if [ -n "${APPLE_PROVISIONING_PROFILE_BASE64:-}" ]; then
+            PROVISION_PROFILE_PATH="$RUNNER_TEMP/sliccstart.provisionprofile"
+            printf '%s' "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROVISION_PROFILE_PATH"
+            echo "PROVISION_PROFILE=$PROVISION_PROFILE_PATH" >> "$GITHUB_ENV"
+            echo "KVSTORE_IDENTIFIER=${APPLE_TEAM_ID}.ai.sliccy.trays" >> "$GITHUB_ENV"
+            echo "Provisioning profile decoded — macOS build will embed the iCloud KVS entitlement."
+          else
+            echo "No APPLE_PROVISIONING_PROFILE_BASE64 secret — signing without the iCloud KVS entitlement (local-only)."
+          fi
 
       - name: Publish release
         env:
