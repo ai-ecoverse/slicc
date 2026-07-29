@@ -130,7 +130,7 @@ vec3 sugarLattice(vec2 p,float scale){
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
   vec2 p=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y); p.y-=u_scroll;
-  vec2 parallax=-(u_center-0.5)*0.15; float t=u_time*(u_life+0.15)*u_speed;
+  vec2 parallax=-(u_center-0.5)*0.15*sign(u_speed); float t=u_time*(u_life+0.15)*u_speed;
   p+=vec2(sin(p.y*12.0+t*2.3),cos(p.x*10.0+t*1.7))*0.003;
   float sugarCoverage=clamp(u_freeze/2.2,0.0,1.0);
   float waffleMask=step(0.82,sugarCoverage);

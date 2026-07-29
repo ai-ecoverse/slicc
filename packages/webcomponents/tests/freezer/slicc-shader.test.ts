@@ -488,6 +488,34 @@ describe('cone Sugar Glass field colors', () => {
     expect(cone).toContain('float waffleMask=step(0.82,sugarCoverage);');
   });
 
+  it('freezes all cone motion at speed zero while keeping positive-speed parallax', () => {
+    const pausedStart = renderFragment(SHADER_FRAGMENTS.cone, {
+      ...CONE_UNIFORMS,
+      u_time: 0,
+      u_center: [0.2, 0.3],
+      u_speed: 0,
+    });
+    const pausedLater = renderFragment(SHADER_FRAGMENTS.cone, {
+      ...CONE_UNIFORMS,
+      u_time: 120,
+      u_center: [0.8, 0.7],
+      u_speed: 0,
+    });
+    if (!pausedStart || !pausedLater) return;
+    expect(pausedLater).toEqual(pausedStart);
+
+    const movingStart = renderFragment(SHADER_FRAGMENTS.cone, {
+      ...CONE_UNIFORMS,
+      u_center: [0.2, 0.3],
+    });
+    const movingLater = renderFragment(SHADER_FRAGMENTS.cone, {
+      ...CONE_UNIFORMS,
+      u_center: [0.8, 0.7],
+    });
+    if (!movingStart || !movingLater) return;
+    expect(movingLater).not.toEqual(movingStart);
+  });
+
   it.each([
     ['light', 0, [0.97, 0.95, 0.89]],
     ['dark', 1, [0.09, 0.08, 0.06]],
