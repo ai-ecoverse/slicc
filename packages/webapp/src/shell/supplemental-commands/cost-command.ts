@@ -157,7 +157,7 @@ function formatTable(data: ScoopCostData[]): string {
     totOut: number | null = 0,
     totCR: number | null = 0,
     totCW: number | null = 0,
-    totCost = 0;
+    totCost: number | null = 0;
 
   for (const d of data) {
     const agent = truncModel(d.name, COL_AGENT).padEnd(COL_AGENT);
@@ -183,7 +183,7 @@ function formatTable(data: ScoopCostData[]): string {
     totOut = totOut === null || d.usage.output === null ? null : totOut + d.usage.output;
     totCR = totCR === null || d.usage.cacheRead === null ? null : totCR + d.usage.cacheRead;
     totCW = totCW === null || d.usage.cacheWrite === null ? null : totCW + d.usage.cacheWrite;
-    if (d.costAvailable !== false) totCost += d.usage.cost.total;
+    totCost = totCost === null || d.costAvailable === false ? null : totCost + d.usage.cost.total;
   }
 
   lines.push(sep);
@@ -197,7 +197,7 @@ function formatTable(data: ScoopCostData[]): string {
   const totalCache = `${fmtMTok(totCR).padStart(5)} / ${fmtMTok(totCW).padStart(5)}`.padEnd(
     COL_CACHE
   );
-  const totalCost = fmtCost(totCost).padStart(COL_COST);
+  const totalCost = (totCost === null ? '-' : fmtCost(totCost)).padStart(COL_COST);
   const totalHourly = ''.padStart(COL_HOURLY);
 
   lines.push(

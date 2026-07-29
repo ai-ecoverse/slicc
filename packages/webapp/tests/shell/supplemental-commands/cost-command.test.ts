@@ -203,10 +203,33 @@ describe('cost command', () => {
     registerSessionCostsProvider(() => [legacyFrozen]);
     const result = await createCostCommand().execute(['--all'], ctx);
     const row = result.stdout.split('\n').find((line) => line.includes('legacy')) ?? '';
+    const total = result.stdout.split('\n').find((line) => line.includes('Total')) ?? '';
     expect(legacyFrozen.costAvailable).toBe(false);
     expect(row).toContain('frozen');
     expect(row).toContain('-');
     expect(row).not.toContain('$0.00');
+    expect(total).toContain('-');
+    expect(total).not.toContain('$0.00');
+  });
+
+  it('keeps a mixed known-and-unknown cost total unknown', async () => {
+    const legacyFrozen = frozenSessionToCostData({
+      filename: 'legacy.md',
+      title: 'legacy',
+      frozenAt: '2026-06-01T12:00:00.000Z',
+      messageCount: 5,
+    });
+    registerSessionCostsProvider(() => [mockCosts[0], legacyFrozen]);
+
+    const tableResult = await createCostCommand().execute(['--all'], ctx);
+    const total = tableResult.stdout.split('\n').find((line) => line.includes('Total')) ?? '';
+    expect(total).toContain('-');
+    expect(total).not.toContain('$1.13');
+
+    const jsonResult = await createCostCommand().execute(['--all', '--json'], ctx);
+    const rows = JSON.parse(jsonResult.stdout) as ScoopCostData[];
+    expect(rows[0].usage.cost.total).toBe(1.13);
+    expect(rows[1].costAvailable).toBe(false);
   });
 
   it('keeps aggregate-only frozen token categories unavailable', async () => {
