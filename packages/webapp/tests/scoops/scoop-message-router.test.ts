@@ -39,7 +39,11 @@ interface Harness {
   probe: { max: number };
 }
 
-function makeHarness(opts?: { failFirstSend?: boolean; jids?: string[] }): Harness {
+function makeHarness(opts?: {
+  failFirstSend?: boolean;
+  jids?: string[];
+  onSend?: () => Promise<void>;
+}): Harness {
   const jids = opts?.jids ?? ['cone'];
   const scoops = new Map<string, RegisteredScoop>();
   const tabs = new Map<string, ScoopTabState>();
@@ -61,6 +65,7 @@ function makeHarness(opts?: { failFirstSend?: boolean; jids?: string[] }): Harne
     createScoopTab: async () => {},
     sendPrompt: async (_jid, text) => {
       await tick();
+      if (opts?.onSend) await opts.onSend();
       if (opts?.failFirstSend && sendCount++ === 0) throw new Error('boom');
       sends.push(text);
     },
@@ -137,6 +142,26 @@ describe('ScoopMessageRouter re-entrancy guard', () => {
     await router.handleMessage(makeMessage('cone', 1));
 
     expect(sends.some((p) => p.includes('MSG_001'))).toBe(true);
+  });
+
+  it('drains a rerun coalesced onto a turn that then throws', async () => {
+    let coalesced: Promise<void> | undefined;
+    // Enqueued from inside the failing turn — after `runScoopQueue` took its DB
+    // snapshot and cleared the shared queue — so the rerun is the only thing
+    // left that can deliver it.
+    const harness: Harness = makeHarness({
+      failFirstSend: true,
+      onSend: async () => {
+        coalesced ??= harness.router.handleMessage(makeMessage('cone', 1));
+        await tick();
+        await tick();
+      },
+    });
+
+    await expect(harness.router.handleMessage(makeMessage('cone', 0))).rejects.toThrow('boom');
+    await coalesced;
+
+    expect(harness.sends.some((p) => p.includes('MSG_001'))).toBe(true);
   });
 });
 

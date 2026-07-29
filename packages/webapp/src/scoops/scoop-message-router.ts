@@ -69,10 +69,11 @@ export class ScoopMessageRouter {
    * the in-flight run loops once more instead of executing concurrently (which
    * would let two invocations read the same stale high-water mark and format
    * overlapping slices of the same rows) or being dropped (which would lose a
-   * message that arrived mid-flight). Keyed by jid so distinct scoops still
-   * process in parallel.
+   * message that arrived mid-flight). `done` settles when that run's drain
+   * finishes, so a coalesced caller can await the turn its message lands in.
+   * Keyed by jid so distinct scoops still process in parallel.
    */
-  private processing: Map<string, { rerun: boolean }> = new Map();
+  private processing: Map<string, { rerun: boolean; done: Promise<void> }> = new Map();
 
   constructor(private deps: ScoopMessageRouterDeps) {}
 
@@ -229,27 +230,60 @@ export class ScoopMessageRouter {
    * rows, so each message reaches the agent multiple times. The guard runs the
    * real work ({@link runScoopQueue}) one turn at a time per jid and coalesces
    * re-entrant calls into a single rerun, so a message that arrives mid-flight
-   * is still delivered exactly once. The `finally` releases the guard even when
-   * a turn throws (e.g. `sendPrompt` rejects) so a failed turn cannot wedge the
-   * queue.
+   * is still delivered exactly once.
+   *
+   * A coalesced caller awaits the active drain rather than returning as soon as
+   * it has flagged the rerun: {@link runScoopQueue} clears the shared queue
+   * after taking its DB snapshot, so an early return would let the caller
+   * believe its message was handled while the rerun that actually delivers it
+   * is still pending. The drain's failure belongs to the owning caller, which
+   * rethrows it, so it is swallowed on the coalesced path.
    */
   async processScoopQueue(jid: string): Promise<void> {
     const inFlight = this.processing.get(jid);
     if (inFlight) {
       inFlight.rerun = true;
+      await inFlight.done.catch(() => {});
       return;
     }
 
-    const state = { rerun: false };
+    const state = { rerun: false, done: Promise.resolve() };
     this.processing.set(jid, state);
+    state.done = this.drainScoopQueue(jid, state);
+    return state.done;
+  }
+
+  /**
+   * Run turns for a jid until no rerun is pending, then release the guard.
+   *
+   * A turn that throws (e.g. `sendPrompt` rejects) must not swallow a rerun
+   * requested while it was in flight: the coalesced message is already
+   * persisted but the in-memory queue was cleared, so it would sit stranded
+   * until unrelated traffic happens to enqueue work — long enough for a
+   * coalesced sudo request to reach its timeout. Turn errors are therefore held
+   * back until the loop drains, and the first one is rethrown to the owning
+   * caller. The `finally` releases the guard even on that path so a failed turn
+   * cannot wedge the queue.
+   */
+  private async drainScoopQueue(jid: string, state: { rerun: boolean }): Promise<void> {
+    let failed = false;
+    let firstError: unknown;
     try {
       do {
         state.rerun = false;
-        await this.runScoopQueue(jid);
+        try {
+          await this.runScoopQueue(jid);
+        } catch (err) {
+          if (!failed) {
+            failed = true;
+            firstError = err;
+          }
+        }
       } while (state.rerun);
     } finally {
       this.processing.delete(jid);
     }
+    if (failed) throw firstError;
   }
 
   /** Drain one turn of a scoop's queue. Callers must go through {@link processScoopQueue}. */
