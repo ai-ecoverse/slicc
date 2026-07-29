@@ -61,6 +61,8 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
         "Set :com.apple.developer.ubiquity-kvstore-identifier ${KVSTORE_IDENTIFIER}" \
         "$MERGED_ENTITLEMENTS"
     ENTITLEMENTS="$MERGED_ENTITLEMENTS"
+  else
+    echo "No provisioning profile — signing base entitlements only (tray sessions stay local, no cross-device sync)."
   fi
 
   codesign --force --options runtime --entitlements "$ENTITLEMENTS" \
