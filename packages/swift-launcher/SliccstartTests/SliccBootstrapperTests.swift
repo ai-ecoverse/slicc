@@ -93,6 +93,15 @@ final class SliccBootstrapperTests: XCTestCase {
         }
     }
 
+    func testEnrichedEnvironmentAddsToolPathsAndDedupes() {
+        let env = SliccBootstrapper.enrichedEnvironment
+        let entries = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        XCTAssertTrue(entries.contains("/opt/homebrew/bin"))
+        XCTAssertTrue(entries.contains("/usr/local/bin"))
+        XCTAssertTrue(entries.contains("/usr/bin"))
+        XCTAssertEqual(Set(entries).count, entries.count)
+    }
+
     private func createFile(at url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),

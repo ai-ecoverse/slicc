@@ -506,8 +506,21 @@ struct TraySessionRow: View {
     }
 
     private var subtitle: String {
-        let origin = isLocal ? "This device" : session.deviceName
-        return "\(origin) · \(TraySessionRow.age(of: session.lastSeenAt))"
+        TraySessionRow.subtitle(
+            isLocal: isLocal,
+            deviceName: session.deviceName,
+            lastSeenAt: session.lastSeenAt
+        )
+    }
+
+    static func subtitle(
+        isLocal: Bool,
+        deviceName: String,
+        lastSeenAt: Date,
+        now: Date = Date()
+    ) -> String {
+        let origin = isLocal ? "This device" : deviceName
+        return "\(origin) · \(age(of: lastSeenAt, now: now))"
     }
 
     static func age(of date: Date, now: Date = Date()) -> String {
@@ -568,6 +581,10 @@ struct AppRow: View {
     }
 
     private var isDisabled: Bool {
+        AppRow.isDisabled(runtimeState: runtimeState, interactionDisabled: interactionDisabled)
+    }
+
+    static func isDisabled(runtimeState: AppRuntimeState, interactionDisabled: Bool) -> Bool {
         runtimeState == .cannotStart(.needsLeader) || interactionDisabled
     }
 

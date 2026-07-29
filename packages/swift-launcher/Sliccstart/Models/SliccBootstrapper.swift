@@ -185,7 +185,7 @@ final class SliccBootstrapper {
 
     /// Ensure PATH includes common tool locations (Homebrew, nvm, etc.)
     /// Finder-launched apps get a minimal PATH that may miss these.
-    private static var enrichedEnvironment: [String: String] {
+    static var enrichedEnvironment: [String: String] {
         var env = ProcessInfo.processInfo.environment
         let extraPaths = [
             "/opt/homebrew/bin",

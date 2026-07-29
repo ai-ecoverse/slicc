@@ -22,10 +22,31 @@ final class AppRowDisplayTests: XCTestCase {
             .needsLeader,
             .failed,
         ]
+        var colors: Set<String> = []
         for dot in all {
-            _ = dot.color
+            colors.insert(String(describing: dot.color))
             XCTAssertFalse(dot.help.isEmpty)
         }
+        XCTAssertEqual(colors.count, 4)
+        XCTAssertEqual(AppRowStatusDot.needsLeader.help, "Start a browser first to enable this app.")
+    }
+
+    func testIsDisabledOnlyForNeedsLeaderOrExplicitFlag() {
+        XCTAssertTrue(
+            AppRow.isDisabled(runtimeState: .cannotStart(.needsLeader), interactionDisabled: false)
+        )
+        XCTAssertTrue(
+            AppRow.isDisabled(runtimeState: .notRunning, interactionDisabled: true)
+        )
+        XCTAssertFalse(
+            AppRow.isDisabled(runtimeState: .notRunning, interactionDisabled: false)
+        )
+        XCTAssertFalse(
+            AppRow.isDisabled(
+                runtimeState: .cannotStart(.needsPermission),
+                interactionDisabled: false
+            )
+        )
     }
 
     func testSubtitleOverrideWins() {

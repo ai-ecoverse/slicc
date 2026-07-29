@@ -171,6 +171,28 @@ final class TraySessionSyncTests: XCTestCase {
         XCTAssertFalse(TraySessionSyncStore.currentDeviceName().isEmpty)
     }
 
+    func testTraySessionRowSubtitle() {
+        let now = Date()
+        XCTAssertEqual(
+            TraySessionRow.subtitle(
+                isLocal: true,
+                deviceName: "Ignored",
+                lastSeenAt: now,
+                now: now
+            ),
+            "This device · just now"
+        )
+        XCTAssertEqual(
+            TraySessionRow.subtitle(
+                isLocal: false,
+                deviceName: "MacBook",
+                lastSeenAt: now.addingTimeInterval(-120),
+                now: now
+            ),
+            "MacBook · 2m ago"
+        )
+    }
+
     func testPublishIgnoresEmptyJoinURL() {
         let store = makeStore(deviceName: "MacA")
         store.publish(joinUrl: "", label: "Chrome")
@@ -182,6 +204,56 @@ final class TraySessionSyncTests: XCTestCase {
         store.publish(joinUrl: "https://slicc.test/join/a.secret", label: "Chrome")
         store.withdraw(joinUrl: "https://slicc.test/join/does-not-exist.secret")
         XCTAssertEqual(store.sessions.count, 1)
+    }
+
+    func testReloadIgnoresCorruptPayload() {
+        let backend = InMemoryKeyValueBackend()
+        backend.setData(
+            Data("not-json".utf8),
+            forKey: TraySessionSyncStore.storageKeyPrefix + "corrupt"
+        )
+        let store = TraySessionSyncStore(backend: backend, deviceId: "MacA", deviceName: "MacA")
+        XCTAssertTrue(store.sessions.isEmpty)
+    }
+
+    func testCurrentDeviceIdMintsOnceAndPersists() {
+        let suite = UserDefaults(suiteName: "SliccstartTest-\(UUID().uuidString)")!
+        let first = TraySessionSyncStore.currentDeviceId(defaults: suite)
+        XCTAssertFalse(first.isEmpty)
+        // Second call reads the persisted value rather than minting a new one.
+        XCTAssertEqual(TraySessionSyncStore.currentDeviceId(defaults: suite), first)
+    }
+
+    func testStoreReloadsOnExternalChangeThenTearsDownObserver() throws {
+        let backend = ObservableTestBackend()
+        var store: TraySessionSyncStore? = TraySessionSyncStore(
+            backend: backend,
+            deviceId: "devLocal",
+            deviceName: "MacLocal"
+        )
+        XCTAssertEqual(store?.remoteSessions.count, 0)
+
+        let remote = SyncedTraySession(
+            joinUrl: "https://slicc.test/join/r.secret",
+            label: "Chrome",
+            deviceId: "devRemote",
+            deviceName: "MacRemote",
+            createdAt: Date(),
+            lastSeenAt: Date()
+        )
+        backend.setData(
+            try JSONEncoder().encode([remote]),
+            forKey: TraySessionSyncStore.storageKeyPrefix + "devRemote"
+        )
+
+        NotificationCenter.default.post(name: ObservableTestBackend.changeName, object: nil)
+        // The observer reloads on the main queue; pump the run loop so it runs.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(store?.remoteSessions.count, 1)
+
+        // Dropping the last reference runs `deinit`, removing the observer.
+        store = nil
+        XCTAssertNil(store)
     }
 
     // MARK: - Age formatting
@@ -267,5 +339,23 @@ final class TraySessionSyncTests: XCTestCase {
             isDebugBuild: false,
             originalAppPath: nil
         )
+    }
+}
+
+/// In-memory backend that also advertises an `externalChange` notification, so
+/// the store's observer registration/teardown path (which the iCloud backend
+/// drives in production) is exercisable without touching iCloud.
+private final class ObservableTestBackend: KeyValueSyncBackend {
+    static let changeName = Notification.Name("SliccstartTest.kvChanged")
+    private var storage: [String: Data] = [:]
+
+    func data(forKey key: String) -> Data? { storage[key] }
+    func setData(_ data: Data?, forKey key: String) { storage[key] = data }
+    func keys(withPrefix prefix: String) -> [String] {
+        storage.keys.filter { $0.hasPrefix(prefix) }
+    }
+    @discardableResult func synchronize() -> Bool { true }
+    var externalChange: (name: Notification.Name, object: AnyObject?)? {
+        (Self.changeName, nil)
     }
 }
