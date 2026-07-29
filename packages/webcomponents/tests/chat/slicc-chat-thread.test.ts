@@ -181,6 +181,11 @@ describe('slicc-chat-thread', () => {
       expect(getComputedStyle(el).overflowY).toBe('auto');
     });
 
+    it('contains vertical overscroll at the thread boundary', () => {
+      const el = mount();
+      expect(getComputedStyle(el).overscrollBehaviorY).toBe('contain');
+    });
+
     it('reserves a stable scrollbar gutter so context swaps do not shift the column', () => {
       const el = mount();
       expect(getComputedStyle(el).scrollbarGutter).toBe('stable');
@@ -417,6 +422,47 @@ describe('slicc-chat-thread', () => {
       // Allow for sub-pixel rounding at the scroll extent.
       expect(el.scrollTop).toBeGreaterThan(0);
       expect(el.scrollHeight - el.scrollTop - el.clientHeight).toBeLessThanOrEqual(1);
+    });
+
+    it('persists rounded at= positions during a continuous scroll without adding history', async () => {
+      const originalUrl = window.location.href;
+      const cleanUrl = new URL(originalUrl);
+      cleanUrl.search = '';
+      history.replaceState(null, '', cleanUrl);
+      const historyDepth = history.length;
+      let scrollTimer: number | undefined;
+      let el: SliccChatThread | null = null;
+      try {
+        el = mount((thread) => {
+          thread.urlState = true;
+          thread.style.cssText = 'display:block;height:120px;overflow-y:auto;';
+        });
+        const thread = el;
+        const tall = document.createElement('div');
+        tall.style.height = '1200px';
+        thread.replaceContent(tall);
+        let position = 160.4;
+        thread.scrollTop = position;
+        thread.dispatchEvent(new Event('scroll'));
+        expect(new URLSearchParams(window.location.search).get('at')).toBe('160');
+
+        scrollTimer = window.setInterval(() => {
+          position += 80.4;
+          thread.scrollTop = position;
+          thread.dispatchEvent(new Event('scroll'));
+        }, 40);
+
+        await new Promise((resolve) => setTimeout(resolve, 190));
+
+        const liveAt = Number(new URLSearchParams(window.location.search).get('at'));
+        expect(liveAt).toBeGreaterThan(Math.round(160.4));
+        expect(Number.isInteger(liveAt)).toBe(true);
+        expect(history.length).toBe(historyDepth);
+      } finally {
+        if (scrollTimer != null) clearInterval(scrollTimer);
+        el?.remove();
+        history.replaceState(null, '', originalUrl);
+      }
     });
   });
 

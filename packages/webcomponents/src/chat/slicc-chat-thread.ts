@@ -21,6 +21,7 @@ slicc-chat-thread {
   flex: 1 1 auto;
   display: block;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   min-height: 0;
   /* Always reserve the scrollbar gutter so the reading column's width — and
      therefore its aspect ratio — stays fixed when a context swap changes the
@@ -117,6 +118,7 @@ slicc-chat-thread[open] > .slicc-thread__inner {
 `;
 
 const STYLE_ID = 'slicc-chat-thread-style';
+const SCROLL_PERSIST_INTERVAL_MS = 120;
 
 /** Inject the scoped thread stylesheet into a document once (idempotent). */
 function ensureThreadStyle(doc: Document): void {
@@ -153,7 +155,7 @@ function ensureThreadStyle(doc: Document): void {
  * @slot - default; message / day-label / card children, rendered in DOM order
  * @attr url-state - boolean; the thread persists its own URL params — `ctx`
  *   (context, pushed as a history entry) and `at` (scroll position, replaced,
- *   debounced). On `popstate` it re-applies `at` itself and asks the host to
+ *   throttled). On `popstate` it re-applies `at` itself and asks the host to
  *   route `ctx` via `slicc-url-context` (selection is app state).
  * @fires slicc-url-context - composed + bubbling; `detail.context` when a
  *   popstate carries a different context than the current one
@@ -185,13 +187,29 @@ export class SliccChatThread extends HTMLElement {
   /** Persistent observer that follows every source of inner-column growth. */
   #growthObserver: ResizeObserver | null = null;
   #scrollWriteTimer: ReturnType<typeof setTimeout> | null = null;
+  #lastScrollWriteAt: number | null = null;
+  #persistScrollPosition = (): void => {
+    this.#scrollWriteTimer = null;
+    this.#lastScrollWriteAt = performance.now();
+    writeUrlState('at', String(Math.round(this.scrollTop)));
+  };
   #onScrollPersist = (): void => {
     if (!this.urlState) return;
-    if (this.#scrollWriteTimer != null) clearTimeout(this.#scrollWriteTimer);
-    this.#scrollWriteTimer = setTimeout(() => {
-      this.#scrollWriteTimer = null;
-      writeUrlState('at', String(Math.round(this.scrollTop)));
-    }, 300);
+    const elapsed =
+      this.#lastScrollWriteAt == null
+        ? SCROLL_PERSIST_INTERVAL_MS
+        : performance.now() - this.#lastScrollWriteAt;
+    if (elapsed >= SCROLL_PERSIST_INTERVAL_MS) {
+      if (this.#scrollWriteTimer != null) clearTimeout(this.#scrollWriteTimer);
+      this.#persistScrollPosition();
+      return;
+    }
+    if (this.#scrollWriteTimer == null) {
+      this.#scrollWriteTimer = setTimeout(
+        this.#persistScrollPosition,
+        SCROLL_PERSIST_INTERVAL_MS - elapsed
+      );
+    }
   };
   #onPopState = (): void => {
     if (!this.urlState) return;
@@ -248,6 +266,7 @@ export class SliccChatThread extends HTMLElement {
       clearTimeout(this.#scrollWriteTimer);
       this.#scrollWriteTimer = null;
     }
+    this.#lastScrollWriteAt = null;
     this.#growthObserver?.disconnect();
     this.#growthObserver = null;
     this.#clearScrollWriteGuard();
