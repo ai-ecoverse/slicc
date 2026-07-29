@@ -29,6 +29,7 @@ type SendImpl = (method: string, params?: Record<string, unknown>) => unknown;
 function makeBrowser(opts?: {
   sendImpl?: SendImpl;
   frames?: Array<{ frameId: string; parentFrameId?: string; url: string }>;
+  frameTree?: { role: string; name: string; children?: unknown[] };
   screenshotB64?: string;
   evaluateResult?: unknown;
 }) {
@@ -39,6 +40,9 @@ function makeBrowser(opts?: {
   const screenshot = vi.fn(async () => opts?.screenshotB64 ?? btoa('img'));
   const evaluate = vi.fn(async () => opts?.evaluateResult ?? null);
   const getFrameTree = vi.fn(async () => opts?.frames ?? []);
+  const getAccessibilityTreeForFrame = vi.fn(async () =>
+    opts?.frameTree ? opts.frameTree : { role: 'RootWebArea', name: '' }
+  );
   const browser = {
     withTab: async <T>(_t: string, fn: (sessionId: string) => Promise<T>) => fn('session-1'),
     getTransport: () => ({ send }),
@@ -46,8 +50,9 @@ function makeBrowser(opts?: {
     screenshot,
     evaluate,
     getFrameTree,
+    getAccessibilityTreeForFrame,
   } as unknown as BrowserAPI;
-  return { browser, send, screenshot, evaluate, getFrameTree };
+  return { browser, send, screenshot, evaluate, getFrameTree, getAccessibilityTreeForFrame };
 }
 
 function makeSnapshot(over: Partial<TabSnapshot> = {}): TabSnapshot {
@@ -131,6 +136,38 @@ describe('snapshotHandler', () => {
     expect(r.stdout).toBe('Snapshot saved to /snap.txt\n');
     expect(writeFile).toHaveBeenCalledWith('/snap.txt', 'SNAPSHOT-TEXT');
   });
+
+  it('prints only the selected frame subtree and records frame refs', async () => {
+    const { browser, getAccessibilityTreeForFrame } = makeBrowser({
+      frames: [
+        { frameId: 'main', url: 'https://x' },
+        { frameId: 'frame-1', parentFrameId: 'main', url: 'https://x/frame' },
+      ],
+      frameTree: {
+        role: 'RootWebArea',
+        name: 'Frame Content',
+        children: [{ role: 'button', name: 'Frame Button', backendNodeId: 7, children: [] }],
+      },
+    });
+    const state = createPlaywrightState();
+
+    const r = await snapshotHandler(
+      createHandlerCtx({ browser, state, flags: { tab: TAB, frame: 'frame-1' } })
+    );
+
+    expect(r.stdout).toContain('- rootwebarea "Frame Content"');
+    expect(r.stdout).toContain('- button "Frame Button" [ref=f1e1]');
+    expect(r.stdout).not.toContain('SNAPSHOT-TEXT');
+    expect(getAccessibilityTreeForFrame).toHaveBeenCalledWith('frame-1');
+    expect(state.snapshots.get(TAB)?.refToFrameId.get('f1e1')).toBe('frame-1');
+  });
+
+  it('rejects an unknown --frame with an actionable frames command', async () => {
+    const { browser } = makeBrowser({ frames: [{ frameId: 'main', url: 'https://x' }] });
+    await expect(
+      snapshotHandler(createHandlerCtx({ browser, flags: { tab: TAB, frame: 'missing-frame' } }))
+    ).rejects.toThrow('playwright-cli frames --tab=tab-1');
+  });
 });
 
 describe('framesHandler', () => {
@@ -147,8 +184,9 @@ describe('framesHandler', () => {
       ],
     });
     const r = await framesHandler(createHandlerCtx({ browser, flags: { tab: TAB } }));
-    expect(r.stdout).toContain('[main] F1');
-    expect(r.stdout).toContain('[child] F2 (parent: F1)');
+    expect(r.stdout).toContain('use with --frame, never --tab');
+    expect(r.stdout).toContain('[main] frameId=F1');
+    expect(r.stdout).toContain('[child] frameId=F2 parentFrameId=F1');
   });
 });
 

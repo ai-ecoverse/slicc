@@ -5,6 +5,7 @@
 
 import { base64ToUint8 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../../cdp/index.js';
+import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import type { PlaywrightState } from './types.js';
 
@@ -175,6 +176,7 @@ import { type ArgSpec, parseArgs } from '../../arg-parser.js';
 export const PLAYWRIGHT_FLAG_SPEC: ArgSpec = {
   string: [
     'tab',
+    'frame',
     'filename',
     'max-width',
     'runtime',
@@ -260,4 +262,54 @@ export function requireTab(
     };
   }
   return { targetId: tabId };
+}
+
+/** Resolve and validate an optional --frame ID against the currently attached tab. */
+export async function resolveFrame(
+  browser: BrowserAPI,
+  flags: Record<string, string>
+): Promise<FrameInfo | null> {
+  const frameId = flags['frame'];
+  if (!frameId) return null;
+
+  const frame = (await browser.getFrameTree()).find((candidate) => candidate.frameId === frameId);
+  if (frame) return frame;
+
+  const targetId = flags['tab'] ?? '<targetId>';
+  throw new Error(
+    `Unknown frame ID "${frameId}" for tab ${targetId}. Run 'playwright-cli frames --tab=${targetId}' to list frame IDs.`
+  );
+}
+
+async function listTargetsForFrameSearch(browser: BrowserAPI): Promise<PageInfo[]> {
+  try {
+    return typeof browser.listAllTargets === 'function'
+      ? await browser.listAllTargets()
+      : await browser.listPages();
+  } catch {
+    return [];
+  }
+}
+
+/** Explain a failed --tab attachment when the supplied target ID is actually a frame ID. */
+export async function frameIdUsedAsTabError(
+  browser: BrowserAPI,
+  targetId: string,
+  attachmentError: unknown
+): Promise<string | null> {
+  const message =
+    attachmentError instanceof Error ? attachmentError.message : String(attachmentError);
+  if (!message.includes('No target with given id found')) return null;
+
+  for (const page of await listTargetsForFrameSearch(browser)) {
+    try {
+      const frames = await browser.withTab(page.targetId, async () => browser.getFrameTree());
+      if (frames.some((frame) => frame.frameId === targetId)) {
+        return `"${targetId}" is a frame ID, not a tab target ID. Use --tab=${page.targetId} --frame=${targetId}; run 'playwright-cli frames --tab=${page.targetId}' to list frame IDs.`;
+      }
+    } catch {
+      // A tab may close while we inspect it; continue checking the remaining open tabs.
+    }
+  }
+  return null;
 }
