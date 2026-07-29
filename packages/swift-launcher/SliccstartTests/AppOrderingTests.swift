@@ -96,4 +96,39 @@ final class AppOrderingTests: XCTestCase {
             ["com.google.Chrome", "com.brave.Browser"]
         )
     }
+
+    func testReorderMovesItemDown() {
+        XCTAssertEqual(
+            AppOrdering.reorder(["a", "b", "c"], moving: "a", over: "c"),
+            ["b", "c", "a"]
+        )
+    }
+
+    func testReorderMovesItemUp() {
+        XCTAssertEqual(
+            AppOrdering.reorder(["a", "b", "c"], moving: "c", over: "a"),
+            ["c", "a", "b"]
+        )
+    }
+
+    func testReorderIsNoOpWhenIdsMatchOrAbsent() {
+        XCTAssertEqual(AppOrdering.reorder(["a", "b"], moving: "a", over: "a"), ["a", "b"])
+        XCTAssertEqual(AppOrdering.reorder(["a", "b"], moving: "z", over: "a"), ["a", "b"])
+        XCTAssertEqual(AppOrdering.reorder(["a", "b"], moving: "a", over: "z"), ["a", "b"])
+    }
+
+    func testBrowserLaunchActionResolves() {
+        XCTAssertEqual(
+            BrowserLaunchAction.resolve(isRunning: false, hasRemoteSessions: true),
+            .chooseLeadOrAttach
+        )
+        XCTAssertEqual(
+            BrowserLaunchAction.resolve(isRunning: true, hasRemoteSessions: true),
+            .standalone
+        )
+        XCTAssertEqual(
+            BrowserLaunchAction.resolve(isRunning: false, hasRemoteSessions: false),
+            .standalone
+        )
+    }
 }

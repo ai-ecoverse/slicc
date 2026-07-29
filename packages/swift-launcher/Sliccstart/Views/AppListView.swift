@@ -274,12 +274,13 @@ struct AppListView: View {
     }
 
     private func handleBrowserLaunch(_ target: AppTarget) {
-        // A running browser just re-focuses/restarts via the standalone path.
-        // Otherwise, when remote iCloud sessions exist, offer lead-vs-attach;
-        // with none, launch standalone directly (unchanged single-Mac flow).
-        if sliccProcess.runtimeState(for: target).isRunning || sessionStore.remoteSessions.isEmpty {
+        switch BrowserLaunchAction.resolve(
+            isRunning: sliccProcess.runtimeState(for: target).isRunning,
+            hasRemoteSessions: !sessionStore.remoteSessions.isEmpty
+        ) {
+        case .standalone:
             onLaunchStandalone(target)
-        } else {
+        case .chooseLeadOrAttach:
             browserDialogTarget = target
         }
     }
@@ -624,6 +625,20 @@ struct AppRow: View {
     }
 
     private var statusDot: AppRowStatusDot? {
+        AppRow.statusDot(for: runtimeState)
+    }
+
+    private var subtitle: String? {
+        AppRow.subtitle(
+            for: runtimeState,
+            override: subtitleOverride,
+            isDebugBuild: target.isDebugBuild
+        )
+    }
+
+    // Pure state → display mappings, split out from the computed view
+    // properties so every branch is unit-testable without rendering the row.
+    static func statusDot(for runtimeState: AppRuntimeState) -> AppRowStatusDot? {
         switch runtimeState {
         case .notRunning:
             return nil
@@ -642,11 +657,15 @@ struct AppRow: View {
         }
     }
 
-    private var subtitle: String? {
-        if let subtitleOverride { return subtitleOverride }
+    static func subtitle(
+        for runtimeState: AppRuntimeState,
+        override: String?,
+        isDebugBuild: Bool
+    ) -> String? {
+        if let override { return override }
         switch runtimeState {
         case .notRunning:
-            return target.isDebugBuild ? "Debug Build" : nil
+            return isDebugBuild ? "Debug Build" : nil
         case .runningWithoutDebug:
             return "Running without SLICC"
         case .runningWithDebug(let cdpPort):
@@ -747,16 +766,9 @@ private struct ReorderDropDelegate: DropDelegate {
     }
 
     func dropEntered(info: DropInfo) {
-        guard let dragging,
-            let over = target.bundleId,
-            dragging != over
-        else { return }
-        var ids = currentIds
-        guard let from = ids.firstIndex(of: dragging),
-            let to = ids.firstIndex(of: over)
-        else { return }
-        let moved = ids.remove(at: from)
-        ids.insert(moved, at: to)
+        guard let dragging, let over = target.bundleId else { return }
+        let ids = AppOrdering.reorder(currentIds, moving: dragging, over: over)
+        guard ids != currentIds else { return }
         order = ids
         onCommit(ids)
     }

@@ -81,6 +81,34 @@ enum AppOrdering {
     static func persistableOrder(from reordered: [AppTarget]) -> [String] {
         reordered.compactMap { $0.bundleId }
     }
+
+    /// Move `moving` to the current position of `over` within `ids`. Returns
+    /// `ids` unchanged when the two match or either id is absent — the pure
+    /// core of the drag-reorder drop delegate, so it is unit-testable without
+    /// SwiftUI drag events.
+    static func reorder(_ ids: [String], moving: String, over: String) -> [String] {
+        guard moving != over,
+            let from = ids.firstIndex(of: moving),
+            let to = ids.firstIndex(of: over)
+        else { return ids }
+        var next = ids
+        next.insert(next.remove(at: from), at: to)
+        return next
+    }
+}
+
+/// Whether clicking a browser row should launch it standalone or offer the
+/// lead-vs-attach dialog. Split out so the choice is unit-testable without the
+/// view. A running browser (re-focus/restart) or the absence of any remote
+/// iCloud session both go straight to standalone — the dialog only helps when
+/// there is a remote tray to attach to.
+enum BrowserLaunchAction: Equatable {
+    case standalone
+    case chooseLeadOrAttach
+
+    static func resolve(isRunning: Bool, hasRemoteSessions: Bool) -> BrowserLaunchAction {
+        (isRunning || !hasRemoteSessions) ? .standalone : .chooseLeadOrAttach
+    }
 }
 
 /// UserDefaults-backed persistence for custom Browsers/Terminals ordering.

@@ -105,7 +105,82 @@ final class SliccProcessLeaderGatingTests: XCTestCase {
         XCTAssertFalse(proc.isLeaderReady())
     }
 
+    func testLaunchBrowserFollowerRejectsNonBrowserTarget() {
+        let proc = SliccProcess()
+        XCTAssertThrowsError(
+            try proc.launchBrowserFollower(makeElectron(), joinUrl: "https://x.test/join/a.b")
+        )
+    }
+
+    func testLaunchBrowserFollowerRejectsEmptyJoinURL() {
+        let proc = SliccProcess()
+        XCTAssertThrowsError(try proc.launchBrowserFollower(makeBrowser(), joinUrl: ""))
+    }
+
+    func testLaunchBrowserFollowerNoOpsWhenBrowserAlreadyRunning() throws {
+        let proc = SliccProcess()
+        let browser = makeBrowser()
+        let helper = try launchSleeper()
+        addTeardownBlock { if helper.isRunning { helper.terminate() } }
+        proc._testing_seedLaunchRecord(
+            id: browser.id,
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39321,
+            servePort: 35821,
+            targetName: browser.name
+        )
+        XCTAssertTrue(proc.isRunning(browser))
+        // Already running → early return, never reaches the (test-unavailable)
+        // slicc-server spawn.
+        XCTAssertNoThrow(try proc.launchBrowserFollower(browser, joinUrl: "https://x.test/join/a.b"))
+    }
+
+    func testLeaderTargetNameIgnoresFollowerRecords() throws {
+        let proc = SliccProcess()
+        let follower = try launchSleeper()
+        addTeardownBlock { if follower.isRunning { follower.terminate() } }
+        proc._testing_seedLaunchRecord(
+            id: "follower",
+            process: follower,
+            targetType: .chromiumBrowser,
+            cdpPort: 39331,
+            servePort: 35831,
+            targetName: "FollowerBrowser",
+            isFollower: true
+        )
+        XCTAssertNil(proc.leaderTargetName)
+
+        let leader = try launchSleeper()
+        addTeardownBlock { if leader.isRunning { leader.terminate() } }
+        proc._testing_seedLaunchRecord(
+            id: "leader",
+            process: leader,
+            targetType: .chromiumBrowser,
+            cdpPort: 39332,
+            servePort: 35832,
+            targetName: "LeaderBrowser"
+        )
+        XCTAssertEqual(proc.leaderTargetName, "LeaderBrowser")
+    }
+
     // MARK: - Helpers
+
+    private func makeBrowser() -> AppTarget {
+        let path = "/Applications/Sliccstart-Test-Browser-\(UUID().uuidString).app"
+        return AppTarget(
+            id: path,
+            name: "TestBrowser",
+            path: path,
+            executablePath: "\(path)/Contents/MacOS/TestBrowser",
+            type: .chromiumBrowser,
+            icon: NSImage(size: NSSize(width: 1, height: 1)),
+            debugSupport: .unknown,
+            isDebugBuild: false,
+            originalAppPath: nil,
+            bundleId: "com.test.browser"
+        )
+    }
 
     private func makeElectron() -> AppTarget {
         // Synthetic path that won't match any installed app — keeps

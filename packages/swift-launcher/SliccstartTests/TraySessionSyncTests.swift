@@ -167,6 +167,23 @@ final class TraySessionSyncTests: XCTestCase {
         XCTAssertEqual(decoded.deviceName, "MacA")
     }
 
+    func testCurrentDeviceNameIsNonEmpty() {
+        XCTAssertFalse(TraySessionSyncStore.currentDeviceName().isEmpty)
+    }
+
+    func testPublishIgnoresEmptyJoinURL() {
+        let store = makeStore(deviceName: "MacA")
+        store.publish(joinUrl: "", label: "Chrome")
+        XCTAssertTrue(store.sessions.isEmpty)
+    }
+
+    func testWithdrawUnknownJoinURLIsNoOp() {
+        let store = makeStore(deviceName: "MacA")
+        store.publish(joinUrl: "https://slicc.test/join/a.secret", label: "Chrome")
+        store.withdraw(joinUrl: "https://slicc.test/join/does-not-exist.secret")
+        XCTAssertEqual(store.sessions.count, 1)
+    }
+
     // MARK: - Age formatting
 
     func testAgeFormatting() {
