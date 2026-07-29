@@ -161,7 +161,24 @@ function translateAssistantMessage(
     content: textOf(m.content),
     timestamp: m.timestamp,
     source,
+    model: m.model,
   };
+  const { usage } = m;
+  if (usage) {
+    msg.usage = {
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      cost: {
+        input: usage.cost.input,
+        output: usage.cost.output,
+        cacheRead: usage.cost.cacheRead,
+        cacheWrite: usage.cost.cacheWrite,
+        total: usage.cost.total,
+      },
+    };
+  }
   if (visibleToolCalls.length > 0) msg.toolCalls = visibleToolCalls;
   return msg;
 }

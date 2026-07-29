@@ -93,6 +93,8 @@ interface BufferedChatMessage {
     isError?: boolean;
   }>;
   isStreaming?: boolean;
+  model?: string;
+  usage?: ChatMessage['usage'];
 }
 
 export class Bridge implements KernelFacade {
@@ -223,11 +225,15 @@ export class Bridge implements KernelFacade {
       },
 
       onResponseDone: (scoopJid) => {
+        const metadata = bridge.getLatestAssistantMetadata(scoopJid);
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
           const buf = bridge.getBuffer(scoopJid);
           const msg = buf.find((m) => m.id === msgId);
-          if (msg) msg.isStreaming = false;
+          if (msg) {
+            msg.isStreaming = false;
+            if (metadata) Object.assign(msg, metadata);
+          }
           bridge.currentMessageId.delete(scoopJid);
         }
 
@@ -237,6 +243,7 @@ export class Bridge implements KernelFacade {
           type: 'agent-event',
           scoopJid,
           eventType: 'response_done',
+          ...(metadata ?? {}),
         });
       },
 
@@ -745,7 +752,12 @@ export class Bridge implements KernelFacade {
       case 'response_done': {
         const messageId = this.fanOutMessageId.get(scoopJid);
         if (!messageId) return;
-        events.push({ type: 'content_done', messageId });
+        events.push({
+          type: 'content_done',
+          messageId,
+          model: msg.model,
+          usage: msg.usage,
+        });
         this.fanOutMessageId.delete(scoopJid);
         // NB: `turn_end` synthesis is deliberately deferred. Do NOT
         // synthesize `turn_end` here without first capturing the
@@ -886,6 +898,8 @@ export class Bridge implements KernelFacade {
         isError: tc.isError,
       })),
       isStreaming: m.isStreaming,
+      model: m.model,
+      usage: m.usage,
     }));
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
@@ -924,7 +938,13 @@ export class Bridge implements KernelFacade {
         });
         break;
       case 'content_done':
-        this.emit({ type: 'agent-event', scoopJid, eventType: 'response_done' });
+        this.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'response_done',
+          model: event.model,
+          usage: event.usage,
+        });
         break;
       case 'tool_use_start':
         this.emit({
@@ -1014,6 +1034,8 @@ export class Bridge implements KernelFacade {
         result: tc.result,
         isError: tc.isError,
       })),
+      model: m.model,
+      usage: m.usage,
       isStreaming: false,
     }));
   }
@@ -1177,12 +1199,21 @@ export class Bridge implements KernelFacade {
    */
   private handleRequestSessionStats(requestId: string): void {
     let totalCost = 0;
+    let burnRate = 0;
     let fills: Array<{ jid: string; fill: number }> = [];
     let models: Array<{ model: string; cost: number; turns: number; tokens: number }> = [];
-    let scoops: Array<{ name: string; model: string; cost: number; type: 'cone' | 'scoop' }> = [];
+    let scoops: Array<{
+      name: string;
+      model: string;
+      cost: number;
+      type: 'cone' | 'scoop';
+      source: 'live' | 'dropped' | 'frozen';
+    }> = [];
     try {
       const sessionCosts = this.orchestrator?.getSessionCosts() ?? [];
-      totalCost = sessionCosts.reduce((sum, scoop) => sum + scoop.usage.cost.total, 0);
+      const allSessionCosts = this.orchestrator?.getSessionCosts({ includeDropped: true }) ?? [];
+      totalCost = allSessionCosts.reduce((sum, scoop) => sum + scoop.usage.cost.total, 0);
+      burnRate = this.orchestrator?.getBurnRate() ?? 0;
       fills = this.orchestrator?.getContextFills() ?? [];
       models = (this.orchestrator?.getModelCosts() ?? []).map((m) => ({
         model: m.model,
@@ -1195,11 +1226,12 @@ export class Bridge implements KernelFacade {
         model: s.model,
         cost: s.usage.cost.total,
         type: s.type,
+        source: s.source,
       }));
     } catch {
       // Stats are decorative — never fail the request loop over them.
     }
-    this.emit({ type: 'session-stats', requestId, totalCost, fills, models, scoops });
+    this.emit({ type: 'session-stats', requestId, totalCost, burnRate, fills, models, scoops });
   }
 
   private async handleRequestScoopTranscript(requestId: string, scoopJid: string): Promise<void> {
@@ -1374,6 +1406,34 @@ export class Bridge implements KernelFacade {
     };
     buf.push(msg);
     return msg;
+  }
+
+  /** @internal — final canonical turn metadata for the live UI/session buffer. */
+  getLatestAssistantMetadata(jid: string): Pick<ChatMessage, 'model' | 'usage'> | null {
+    const messages = this.orchestrator?.getScoopContext?.(jid)?.getAgentMessages() ?? [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role !== 'assistant') continue;
+      const metadata: Pick<ChatMessage, 'model' | 'usage'> = { model: message.model };
+      const { usage } = message;
+      if (usage) {
+        metadata.usage = {
+          input: usage.input,
+          output: usage.output,
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
+          cost: {
+            input: usage.cost.input,
+            output: usage.cost.output,
+            cacheRead: usage.cost.cacheRead,
+            cacheWrite: usage.cost.cacheWrite,
+            total: usage.cost.total,
+          },
+        };
+      }
+      return metadata;
+    }
+    return null;
   }
 
   // -------------------------------------------------------------------------

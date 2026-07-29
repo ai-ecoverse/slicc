@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { Bridge } from '../../src/kernel/facade.js';
 import { resetNewSessionTmp } from '../../src/ui/new-session.js';
 import type { ChatMessage, Session } from '../../src/ui/types.js';
 
@@ -95,6 +97,47 @@ function assistantMessage(content: string): ChatMessage {
   return { id: crypto.randomUUID(), role: 'assistant', content, timestamp: 2 };
 }
 
+type ChatUsage = NonNullable<ChatMessage['usage']>;
+
+function assistantAgentMessage(content: string, model: string, usage: ChatUsage): AgentMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text: content }],
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    model,
+    usage: {
+      ...usage,
+      totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+async function produceLiveAssistantMessages(
+  turns: Array<{ content: string; model: string; usage: ChatUsage }>
+): Promise<ChatMessage[]> {
+  const canonical: AgentMessage[] = [];
+  const bridge = new Bridge({
+    onMessage: () => () => {},
+    send: () => {},
+  });
+  const scoop = { jid: 'cone-jid', name: 'cone', folder: 'cone', isCone: true };
+  const orchestrator = {
+    getScoops: () => [scoop],
+    getScoopContext: () => ({ getAgentMessages: () => canonical }),
+  } as unknown as Parameters<typeof bridge.bind>[0];
+  await bridge.bind(orchestrator);
+  const callbacks = Bridge.createCallbacks(bridge);
+  for (const turn of turns) {
+    canonical.push(assistantAgentMessage(turn.content, turn.model, turn.usage));
+    callbacks.onResponse(scoop.jid, turn.content, false);
+    callbacks.onResponseDone(scoop.jid);
+  }
+  return bridge.getMessagesForJid(scoop.jid);
+}
+
 const fakeModel = { id: 'test-model', provider: 'anthropic' } as unknown as Parameters<
   typeof freezeConeSession
 >[0]['model'];
@@ -186,6 +229,122 @@ describe('freezeConeSession', () => {
     expect(memoryDoc).toContain('user prefers vim');
     // /shared/CLAUDE.md is not touched by the freezer anymore.
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
+  });
+
+  it('round-trips aggregate cost and per-model usage through the index and archive', async () => {
+    const [first, second, third] = await produceLiveAssistantMessages([
+      {
+        content: 'first',
+        model: 'model-a',
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 20,
+          cacheWrite: 10,
+          cost: {
+            input: 0.01,
+            output: 0.02,
+            cacheRead: 0.003,
+            cacheWrite: 0.004,
+            total: 0.037,
+          },
+        },
+      },
+      {
+        content: 'second',
+        model: 'model-a',
+        usage: {
+          input: 200,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0.02, output: 0.03, cacheRead: 0, cacheWrite: 0, total: 0.05 },
+        },
+      },
+      {
+        content: 'third',
+        model: 'model-b',
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0.1, output: 0.1, cacheRead: 0, cacheWrite: 0, total: 0.2 },
+        },
+      },
+    ]);
+    const messages = [
+      userMessage('measure this session'),
+      first,
+      userMessage('continue'),
+      second,
+      userMessage('switch models'),
+      third,
+    ];
+    const vfs = makeFakeVfs();
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages,
+        createdAt: 100,
+        updatedAt: 200,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    const expectedCost = {
+      total: 0.28700000000000003,
+      input: 0.13,
+      output: 0.15000000000000002,
+      cacheRead: 0.003,
+      cacheWrite: 0.004,
+    };
+    const expectedModels = [
+      { model: 'model-b', cost: 0.2, turns: 1, tokens: 15 },
+      { model: 'model-a', cost: 0.087, turns: 2, tokens: 480 },
+    ];
+    expect(frozen?.cost).toEqual(expectedCost);
+    expect(frozen?.models).toEqual(expectedModels);
+
+    const [indexEntry] = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(indexEntry.cost).toEqual(expectedCost);
+    expect(indexEntry.models).toEqual(expectedModels);
+
+    const archiveContent = vfs.files.get(`/sessions/${frozen!.filename}`)!;
+    expect(archiveContent).toContain(`cost: ${JSON.stringify(expectedCost)}`);
+    expect(archiveContent).toContain(`models: ${JSON.stringify(expectedModels)}`);
+    const parsed = parseFrozenArchive(archiveContent);
+    expect(parsed.cost).toEqual(expectedCost);
+    expect(parsed.models).toEqual(expectedModels);
+  });
+
+  it('omits cost metadata when assistant usage is unavailable', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    expect(frozen?.cost).toBeUndefined();
+    expect(frozen?.models).toBeUndefined();
+    const archiveContent = vfs.files.get(`/sessions/${frozen!.filename}`)!;
+    expect(archiveContent).not.toMatch(/^cost:/m);
+    expect(archiveContent).not.toMatch(/^models:/m);
   });
 
   it('preserves existing /workspace/CLAUDE.md on a non-ENOENT read fault (never clobbers durable memory)', async () => {
@@ -1029,6 +1188,27 @@ describe('freezeConeSession quick mode', () => {
 });
 
 describe('listPendingEnrichments', () => {
+  it('loads a legacy index entry without cost metadata', async () => {
+    const vfs = makeFakeVfs();
+    vfs.files.set(
+      '/sessions/index.json',
+      JSON.stringify([
+        {
+          filename: 'legacy.md',
+          title: 'legacy',
+          frozenAt: '2026-05-12T10:00:00.000Z',
+          messageCount: 4,
+        },
+      ])
+    );
+
+    const [entry] = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(entry.cost).toBeUndefined();
+    expect(entry.models).toBeUndefined();
+  });
+
   it('returns [] when the index is missing', async () => {
     const vfs = makeFakeVfs();
     const out = await listPendingEnrichments(

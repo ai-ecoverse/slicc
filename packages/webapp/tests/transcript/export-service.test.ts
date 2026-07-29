@@ -117,7 +117,8 @@ async function collectChunks(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Ar
 /** Build a minimal frozen archive markdown that parseFrozenArchive can parse. */
 function makeArchiveMarkdown(
   title: string,
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  includeUsageMetadata = false
 ): string {
   const frozenAt = '2024-01-01T00:00:00.000Z';
   const dataBlock = JSON.stringify(
@@ -136,6 +137,10 @@ function makeArchiveMarkdown(
     `createdAt: 1000\n` +
     `updatedAt: 2000\n` +
     `messageCount: ${messages.length}\n` +
+    (includeUsageMetadata
+      ? `cost: {"total":0.037,"input":0.01,"output":0.02,"cacheRead":0.003,"cacheWrite":0.004}\n` +
+        `models: [{"model":"claude-haiku-4-5","cost":0.037,"turns":1,"tokens":20}]\n`
+      : '') +
     `---\n\n` +
     `<!-- slicc:session-data\n${dataBlock}\n-->\n\n` +
     `# ${title}\n\n` +
@@ -406,6 +411,42 @@ describe('DefaultTranscriptExportService — new-frozen path', () => {
 // ---------------------------------------------------------------------------
 
 describe('DefaultTranscriptExportService — legacy path', () => {
+  it('parses timestamps when cost metadata follows them in frontmatter', async () => {
+    const markdown = makeArchiveMarkdown(
+      'Costed Legacy Session',
+      [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi there' },
+      ],
+      true
+    );
+    const indexJson = JSON.stringify([
+      {
+        filename: 'costed-legacy.md',
+        sessionId: 'sess-costed-legacy',
+        title: 'Costed Legacy Session',
+        frozenAt: '2024-01-01T00:00:00.000Z',
+        messageCount: 2,
+      },
+    ]);
+    const deps = makeDeps({
+      snapshotStore: makeEmptySnapshotStore(),
+      vfs: makeVfs({
+        indexJson,
+        sessionMarkdown: new Map([['costed-legacy.md', markdown]]),
+      }) as any,
+    });
+
+    const result = await new DefaultTranscriptExportService(deps).export({
+      kind: 'frozen',
+      sessionId: 'sess-costed-legacy',
+    });
+    const files = unzipSync(await collectChunks(result.chunks));
+    const doc = JSON.parse(strFromU8(files['transcript.json']!));
+    expect(doc.session.createdAt).toBe('1970-01-01T00:00:01.000Z');
+    expect(doc.session.updatedAt).toBe('1970-01-01T00:00:02.000Z');
+  });
+
   it('falls back to legacy archive when no snapshot exists', async () => {
     const markdown = makeArchiveMarkdown('Legacy Session', [
       { role: 'user', content: 'hello' },

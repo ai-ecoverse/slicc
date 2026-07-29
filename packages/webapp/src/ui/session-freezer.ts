@@ -53,6 +53,21 @@ const SESSIONS_DIR = '/sessions';
 const SESSION_ATTACHMENTS_DIR = `${SESSIONS_DIR}/attachments`;
 export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
+export interface FrozenSessionCost {
+  total: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface FrozenSessionModel {
+  model: string;
+  cost: number;
+  turns: number;
+  tokens: number;
+}
+
 export interface FrozenSessionIndexEntry {
   /** Filename within /sessions/, e.g. "2026-05-13T19-30-00Z-fix-build.json". */
   filename: string;
@@ -62,6 +77,10 @@ export interface FrozenSessionIndexEntry {
   frozenAt: string;
   /** Count of messages in the frozen session. */
   messageCount: number;
+  /** Aggregate cone cost at freeze time. Absent when usage metadata is unavailable. */
+  cost?: FrozenSessionCost;
+  /** Per-model cone usage at freeze time, sorted by cost descending. */
+  models?: FrozenSessionModel[];
   /**
    * Stable opaque identifier for the frozen session. Generated with
    * `crypto.randomUUID()` before the quick filename is assigned and
@@ -104,6 +123,8 @@ export interface FrozenSessionArchive {
   updatedAt: number;
   messageCount: number;
   messages: ChatMessage[];
+  cost?: FrozenSessionCost;
+  models?: FrozenSessionModel[];
 }
 
 export interface FreezeConeSessionOptions {
@@ -302,12 +323,14 @@ async function writeFrozenArchive(
     mode === 'quick'
       ? `pending-${pendingShortId()}.md`
       : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
+  const usageSummary = summarizeSessionUsage(session.messages);
   const indexEntry: FrozenSessionIndexEntry = {
     filename,
     sessionId,
     title,
     frozenAt,
     messageCount: session.messages.length,
+    ...(usageSummary ?? {}),
     ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
   };
@@ -326,6 +349,7 @@ async function writeFrozenArchive(
       updatedAt: session.updatedAt,
       messageCount: session.messages.length,
       messages,
+      ...(usageSummary ?? {}),
     };
     const archiveMarkdown = formatArchiveAsMarkdown(archive);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
@@ -343,6 +367,50 @@ async function writeFrozenArchive(
     });
     return null;
   }
+}
+
+function summarizeSessionUsage(
+  messages: readonly ChatMessage[]
+): Pick<FrozenSessionArchive, 'cost' | 'models'> | null {
+  const cost: FrozenSessionCost = { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const models = new Map<string, FrozenSessionModel>();
+  let hasUsage = false;
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    const { model, usage } = message;
+    if (!model || !usage || !hasFiniteUsage(usage)) continue;
+    const usageCost = usage.cost;
+    hasUsage = true;
+    cost.total += usageCost.total;
+    cost.input += usageCost.input;
+    cost.output += usageCost.output;
+    cost.cacheRead += usageCost.cacheRead;
+    cost.cacheWrite += usageCost.cacheWrite;
+    const existing = models.get(model) ?? {
+      model,
+      cost: 0,
+      turns: 0,
+      tokens: 0,
+    };
+    existing.cost += usageCost.total;
+    existing.turns += 1;
+    existing.tokens += usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    models.set(model, existing);
+  }
+  if (!hasUsage) return null;
+  return { cost, models: [...models.values()].sort((a, b) => b.cost - a.cost) };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function hasFiniteUsage(usage: NonNullable<ChatMessage['usage']>): boolean {
+  const { cost } = usage;
+  return (
+    [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].every(isFiniteNumber) &&
+    [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, cost.total].every(isFiniteNumber)
+  );
 }
 
 async function persistTmpAttachments(
@@ -523,6 +591,9 @@ function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
  * human-readable.
  */
 function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
+  const usageFrontmatter =
+    (archive.cost ? `cost: ${JSON.stringify(archive.cost)}\n` : '') +
+    (archive.models ? `models: ${JSON.stringify(archive.models)}\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
@@ -531,6 +602,7 @@ function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     `createdAt: ${archive.createdAt}\n` +
     `updatedAt: ${archive.updatedAt}\n` +
     `messageCount: ${archive.messageCount}\n` +
+    usageFrontmatter +
     `---\n\n`;
   // Escape the only sequence that would prematurely close an HTML comment.
   const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
@@ -947,6 +1019,8 @@ async function commitEnrichedArchive(
     title: newTitle,
     frozenAt: entry.frozenAt,
     messageCount: entry.messageCount,
+    ...(entry.cost ? { cost: entry.cost } : {}),
+    ...(entry.models ? { models: entry.models } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
   };
@@ -1118,12 +1192,12 @@ export async function markSnapshotUnavailable(
  * fall back to a heading-based text parser that recovers user/assistant
  * roles only — tool calls become flat text under the assistant message.
  */
-export function parseFrozenArchive(markdown: string): {
-  title: string;
-  messages: ChatMessage[];
-} {
+export function parseFrozenArchive(
+  markdown: string
+): Pick<FrozenSessionArchive, 'title' | 'messages' | 'cost' | 'models'> {
   let body = markdown;
   let title = 'Untitled';
+  const usageSummary: Pick<FrozenSessionArchive, 'cost' | 'models'> = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
   //    The writer emits `title: ${JSON.stringify(value)}`, which means
@@ -1134,6 +1208,10 @@ export function parseFrozenArchive(markdown: string): {
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
   if (fmMatch) {
     body = body.slice(fmMatch[0].length);
+    const cost = parseFrontmatterJson<FrozenSessionCost>(fmMatch[1], 'cost');
+    const models = parseFrontmatterJson<FrozenSessionModel[]>(fmMatch[1], 'models');
+    if (cost) usageSummary.cost = cost;
+    if (models) usageSummary.models = models;
     const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
     if (titleLine) {
       const raw = titleLine[1].trim();
@@ -1161,7 +1239,7 @@ export function parseFrozenArchive(markdown: string): {
       const restored = dataMatch[1].replace(/-- >/g, '-->');
       const parsed = JSON.parse(restored);
       if (Array.isArray(parsed)) {
-        return { title, messages: parsed as ChatMessage[] };
+        return { title, messages: parsed as ChatMessage[], ...usageSummary };
       }
     } catch {
       // Malformed block — fall through to text parser.
@@ -1173,7 +1251,17 @@ export function parseFrozenArchive(markdown: string): {
   // 3. Drop the leading `# title` heading if present.
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
-  return { title, messages: parseHeadingFallback(body) };
+  return { title, messages: parseHeadingFallback(body), ...usageSummary };
+}
+
+function parseFrontmatterJson<T>(frontmatter: string, key: string): T | undefined {
+  const value = new RegExp(`^${key}:\\s*(.+?)\\s*$`, 'm').exec(frontmatter)?.[1];
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
