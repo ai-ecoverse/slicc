@@ -746,6 +746,58 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('evaluateInFrame', () => {
+    beforeEach(async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });
+      await api.attachToPage('target-1');
+    });
+
+    it('uses an isolated world by default for injected automation code', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ executionContextId: 41 })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({ result: { type: 'string', value: 'isolated' } });
+
+      await expect(api.evaluateInFrame('frame-1', 'window.helper')).resolves.toBe('isolated');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.createIsolatedWorld',
+        { frameId: 'frame-1', worldName: '__slicc_iframe' },
+        'sess-1'
+      );
+    });
+
+    it('uses the frame default context when the main world is requested', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
+        async (method: string, params?: Record<string, unknown>) => {
+          if (method === 'Runtime.enable') {
+            mockClient._fireEvent('Runtime.executionContextCreated', {
+              sessionId: 'sess-1',
+              context: {
+                id: 42,
+                auxData: { frameId: 'frame-1', isDefault: true },
+              },
+            });
+            return {};
+          }
+          if (method === 'Runtime.evaluate') {
+            expect(params?.['contextId']).toBe(42);
+            return { result: { type: 'string', value: 'page-global' } };
+          }
+          return {};
+        }
+      );
+
+      await expect(
+        api.evaluateInFrame('frame-1', 'window.appState', { world: 'main' })
+      ).resolves.toBe('page-global');
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Page.createIsolatedWorld',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+
   describe('click', () => {
     beforeEach(async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });

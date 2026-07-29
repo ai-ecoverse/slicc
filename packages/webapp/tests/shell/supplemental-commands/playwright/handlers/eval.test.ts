@@ -4,7 +4,7 @@ import { evalHandler } from '../../../../../src/shell/supplemental-commands/play
 import { createHandlerCtx } from '../../../helpers/playwright-harness.js';
 
 describe('evalHandler frame targeting', () => {
-  it('evaluates in a validated frame through BrowserAPI.evaluateInFrame', async () => {
+  it('evaluates user expressions in the validated frame main world', async () => {
     const evaluate = vi.fn(async () => 'main-result');
     const evaluateInFrame = vi.fn(async () => 'frame-result');
     const browser = {
@@ -31,7 +31,7 @@ describe('evalHandler frame targeting', () => {
     );
 
     expect(result).toEqual({ stdout: 'frame-result\n', stderr: '', exitCode: 0 });
-    expect(evaluateInFrame).toHaveBeenCalledWith('frame-1', 'location.href');
+    expect(evaluateInFrame).toHaveBeenCalledWith('frame-1', 'location.href', { world: 'main' });
     expect(evaluate).not.toHaveBeenCalled();
   });
 });

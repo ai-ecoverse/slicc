@@ -3797,6 +3797,7 @@ const FRAME_HTML = `<!DOCTYPE html>
 <html>
 <head><title>Child Frame</title></head>
 <body>
+  <script>window.appState = { status: 'visible' };</script>
   <h2>Frame Content</h2>
   <button id="frame-btn" aria-label="Frame Button" onclick="this.textContent='Clicked!'">Frame Button</button>
   <input id="frame-input" type="text" aria-label="Frame Input" placeholder="Type here" />
@@ -3953,6 +3954,27 @@ describeIntegration('iframe integration', { timeout: 90_000 }, () => {
     expect(result.stdout).toContain('/main.html');
     expect(result.stdout).toContain('[child]');
     expect(result.stdout).toContain('/frame.html');
+  });
+
+  it('eval --frame sees globals defined by the frame page', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const frameId = await browser.withTab(targetId, async () => {
+      const frames = await browser.getFrameTree();
+      return frames.find((frame) => frame.parentFrameId)?.frameId;
+    });
+    expect(frameId).toBeDefined();
+
+    const result = await cmd.execute(
+      ['eval', `--tab=${targetId}`, `--frame=${frameId}`, 'window.appState.status'],
+      mockCtx
+    );
+    expect(result).toEqual({ stdout: 'visible\n', stderr: '', exitCode: 0 });
   });
 
   it('click on iframe element works', async () => {

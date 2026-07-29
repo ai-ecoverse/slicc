@@ -69,7 +69,7 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
   const output = await browser.withTab(tab.targetId, async () => {
     const frame = await resolveFrame(browser, flags);
     const evaluate = frame
-      ? (source: string) => browser.evaluateInFrame(frame.frameId, source)
+      ? (source: string) => browser.evaluateInFrame(frame.frameId, source, { world: 'main' })
       : (source: string) => browser.evaluate(source);
     const evalResult = await evaluateWithTopLevelAwait(evaluate, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);

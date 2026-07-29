@@ -19,6 +19,7 @@ export type {
   CDPResponse,
   ConnectionState,
   EvaluateOptions,
+  FrameEvaluateOptions,
   PageInfo,
   TargetInfo,
   WaitForSelectorOptions,
