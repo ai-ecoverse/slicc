@@ -328,6 +328,17 @@ describe('ScoopContext prompt queueing', () => {
     expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
   });
 
+  it('reports busy state from prompt processing or agent streaming', () => {
+    injectMockAgent(ctx, async () => {});
+
+    expect(ctx.isBusy).toBe(false);
+    (ctx as any).isProcessing = true;
+    expect(ctx.isBusy).toBe(true);
+    (ctx as any).isProcessing = false;
+    (ctx as any).agent.state.isStreaming = true;
+    expect(ctx.isBusy).toBe(true);
+  });
+
   it('queues prompts via followUp when already processing', async () => {
     const prompts: string[] = [];
     let resolveFirst: () => void;

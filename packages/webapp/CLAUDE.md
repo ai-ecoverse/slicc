@@ -57,18 +57,19 @@ Deep reference: `docs/kernel/process-model.md`.
 ### Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
-- `orchestrator.ts` creates/destroys scoops, routes messages, manages shared runtime state.
-  `observeScoop(jid, handler)` exposes per-scoop event taps; observers dropped by both
-  `unregisterScoop` and `destroyScoopTab`. `unregisterScoop` fires `onScoopUnregistered`
-  with the pre-removal snapshot for every teardown path — stateful consumers (e.g. the kernel
-  bridge) use it to evict per-scoop chat buffers.
+- `orchestrator.ts` owns scoop lifecycle, routing, shared state, observer teardown, and
+  pre-removal `onScoopUnregistered` snapshots.
+- `scoop-message-router.ts`: licks use `SCOOP_QUEUE_DEBOUNCE_MS` (1 s), bounded by
+  `SCOOP_QUEUE_MAX_COALESCE_MS` (3 s). Pure-lick batches defer while `ScoopContext.isBusy`
+  without queue or watermark loss; `SCOOP_DEFERRAL_STARVATION_MS` warns once at 60 s. User
+  `web` bypasses the window, stays immediate/awaited, and prevents deferral. The 2 s safety
+  poll skips active windows.
 - `scoop-context.ts` owns per-scoop prompt execution and filesystem/tool isolation.
-- `agent-bridge.ts` — `globalThis.__slicc_agent` surface for the `agent` shell command.
-  Sandbox defaults: `writablePaths = [cwd, /shared/, <scratch>/, /tmp/]`,
-  `visiblePaths = [/workspace/, invokingCwd]`; `--read-only` is pure-replace.
-- `transcript-limits.ts` — 64 KB caps for the chat-TRANSCRIPT boundary (bridge buffers,
-  emitted agent events). The canonical agent history (`agent-sessions` DB, compaction input)
-  must **never** route through these helpers.
+- `agent-bridge.ts` exposes `globalThis.__slicc_agent`. Defaults: writable
+  `[cwd, /shared/, <scratch>/, /tmp/]`, visible `[/workspace/, invokingCwd]`; `--read-only`
+  replaces them.
+- `transcript-limits.ts` caps bridge/event transcripts at 64 KB, never canonical
+  `agent-sessions` history or compaction input.
 
 ### VirtualFS
 

@@ -118,6 +118,7 @@ export interface ScoopLifecycleDeps {
   messageRouter: {
     ensureQueue(jid: string): void;
     forgetScoop(jid: string): void;
+    flushOnIdle(jid: string): Promise<void>;
   };
   /** Cost-tracker snapshot taken before destroying a scoop's context. */
   costTracker: { snapshot(jid: string): void };
@@ -335,6 +336,16 @@ export class ScoopLifecycleManager {
       this.tabs.set(jid, initTab);
       this.deps.callbacks.onStatusChange(jid, 'ready');
       this.dispatch(jid, 'onStatusChange', 'ready');
+      // Probe persisted messages when context init did not emit its own ready
+      // callback (for example, a rehydrated idle scoop).
+      void Promise.resolve()
+        .then(() => this.deps.messageRouter.flushOnIdle(jid))
+        .catch((err) => {
+          log.warn('Initial idle queue probe failed', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
     }
 
     const scoopForTimer = this.deps.getScoops().get(jid);
@@ -747,6 +758,10 @@ export class ScoopLifecycleManager {
         }
         callbacks.onStatusChange(jid, status);
         this.dispatch(jid, 'onStatusChange', status);
+
+        if (status === 'ready') {
+          void this.deps.messageRouter.flushOnIdle(jid);
+        }
 
         // When a non-cone scoop finishes, route its response to the cone
         // with a VFS path + preview so the cone can decide how to follow up.

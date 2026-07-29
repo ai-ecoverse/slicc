@@ -652,11 +652,21 @@ Cone executes feed_scoop tool
 ```
 External webhook POST / scheduled cron task / fswatch change fires
   → LickManager receives event in IndexedDB
-    → dispatch() routes to target scoop
-      → ScoopContext processes lick
-        → Agent reacts to event
-        → No human in the loop
+    → dispatch() routes the external lick channel to ScoopMessageRouter
+      → Per-scoop coalescing window (1 s trailing debounce, capped at 3 s)
+        → Router drains all messages since the persisted watermark as one batch
+          ├─ Scoop busy + pure-lick batch
+          │    → Keep queue and watermark unchanged
+          │    → flushOnIdle() probes IndexedDB on the next ready transition
+          │    → createTab() fallback starts the same probe fire-and-forget
+          │    → After 60 s deferred, emit one log warning + onError notification
+          └─ Scoop idle, or batch contains a user message
+               → ScoopContext processes one formatted prompt
+                 → Agent reacts to the batched events
+                 → No human in the loop
 ```
+
+Only external lick channels use the coalescing window. User-typed `web` messages remain immediate, awaited, and error-propagating; one arriving during an open window drains the accumulated licks with it, and a batch containing one is never busy-deferred. The unchanged 2 s poll remains an in-memory safety net for ready scoops, but skips JIDs with an active coalescing window so it cannot split a burst. Idle probes query IndexedDB even when the in-memory queue is empty, preserving deferred delivery across reloads. The `createTab()` fallback does not block startup: it starts the probe fire-and-forget and catches a rejection for logging.
 
 **Topology note:** Lick legs (webhook, crontask, the `/licks-ws` bridge) are `node-rest`-only (standalone thin-bridge, electron, hosted/cloud). Extension-delegate leaders run `crontask` on the in-tab worker `LickManager` (tab-lifetime) and get `webhook` URLs from the connected tray worker. Followers forward `navigate` licks (including SLICC handoffs) to the leader instead of handling them locally. Float discriminator: `resolveFloatTopology()` in `packages/webapp/src/core/float-topology.ts`.
 

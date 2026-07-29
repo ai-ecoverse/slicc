@@ -20,6 +20,31 @@ import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
 
 const log = createLogger('scoop-message-router');
+export const SCOOP_QUEUE_DEBOUNCE_MS = 1000;
+export const SCOOP_QUEUE_MAX_COALESCE_MS = 3000;
+export const SCOOP_DEFERRAL_STARVATION_MS = 60_000;
+
+interface DebounceWaiter {
+  messageId: string;
+  resolve(): void;
+  reject(error: unknown): void;
+}
+
+interface DebounceState {
+  startedAt: number;
+  timer?: ReturnType<typeof setTimeout>;
+  waiters: DebounceWaiter[];
+}
+
+interface ProcessingState {
+  rerun: boolean;
+  done: Promise<void>;
+}
+
+interface BusyDeferralState {
+  startedAt: number;
+  reported: boolean;
+}
 
 export interface ScoopMessageRouterDeps {
   /** Live snapshot of registered scoops; the router reads `isCone`, `assistantLabel`, `folder`, `name`, `trigger`, `requiresTrigger`. */
@@ -64,6 +89,7 @@ export class ScoopMessageRouter {
   private messageQueues: Map<string, ChannelMessage[]> = new Map();
   private lastAgentTimestamp: Map<string, string> = new Map();
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private debounceStates: Map<string, DebounceState> = new Map();
   /**
    * Per-jid re-entrancy guard for {@link processScoopQueue}. While a run is in
    * flight for a jid, its entry lives here; a re-entrant call sets `rerun` so
@@ -74,7 +100,8 @@ export class ScoopMessageRouter {
    * finishes, so a coalesced caller can await the turn its message lands in.
    * Keyed by jid so distinct scoops still process in parallel.
    */
-  private processing: Map<string, { rerun: boolean; done: Promise<void> }> = new Map();
+  private processing: Map<string, ProcessingState> = new Map();
+  private busyDeferrals: Map<string, BusyDeferralState> = new Map();
 
   constructor(private deps: ScoopMessageRouterDeps) {}
 
@@ -92,8 +119,10 @@ export class ScoopMessageRouter {
 
   /** Drop all per-scoop state on unregister. */
   forgetScoop(jid: string): void {
+    this.cancelDebounce(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
+    this.busyDeferrals.delete(jid);
   }
 
   /** Handle incoming message from a channel. */
@@ -179,22 +208,13 @@ export class ScoopMessageRouter {
       return;
     }
 
-    // Check trigger requirement using the scoop's own trigger
-    // Bypass trigger check for lick messages — they're explicitly routed to this scoop
-    const isLick =
-      message.channel === 'webhook' ||
-      message.channel === 'cron' ||
-      message.channel === 'fswatch' ||
-      message.channel === 'sprinkle';
-    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
-      if (!message.content.includes(scoop.trigger)) {
-        log.info('routeToScoop: trigger not found in content', {
-          chatJid: message.chatJid,
-          trigger: scoop.trigger,
-          contentPreview: message.content.slice(0, 80),
-        });
-        return;
-      }
+    if (!this.passesTriggerGate(scoop, message)) {
+      log.info('routeToScoop: trigger not found in content', {
+        chatJid: message.chatJid,
+        trigger: scoop.trigger,
+        contentPreview: message.content.slice(0, 80),
+      });
+      return;
     }
 
     const queue = this.messageQueues.get(message.chatJid) ?? [];
@@ -217,9 +237,142 @@ export class ScoopMessageRouter {
         log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
       }
     }
-    if (tab?.status === 'ready') {
-      await this.processScoopQueue(message.chatJid);
+    if (tab?.status !== 'ready' && tab?.status !== 'processing') return;
+
+    if (this.deps.isExternalLickChannel(message.channel)) {
+      await this.scheduleScoopQueue(message.chatJid, message.id);
+      return;
     }
+
+    await this.flushScoopQueue(message.chatJid);
+  }
+
+  private passesTriggerGate(scoop: RegisteredScoop | undefined, message: ChannelMessage): boolean {
+    const isLick =
+      message.channel === 'webhook' ||
+      message.channel === 'cron' ||
+      message.channel === 'fswatch' ||
+      message.channel === 'sprinkle';
+    return (
+      !scoop ||
+      scoop.isCone ||
+      !scoop.requiresTrigger ||
+      !scoop.trigger ||
+      isLick ||
+      message.content.includes(scoop.trigger)
+    );
+  }
+
+  /** Restart one scoop's trailing window, capped so sustained licks cannot starve. */
+  private scheduleScoopQueue(jid: string, messageId: string): Promise<void> {
+    const state = this.debounceStates.get(jid) ?? {
+      startedAt: Date.now(),
+      waiters: [],
+    };
+    if (state.timer !== undefined) clearTimeout(state.timer);
+
+    const done = new Promise<void>((resolve, reject) => {
+      state.waiters.push({ messageId, resolve, reject });
+    });
+    const remainingMaxWait = Math.max(
+      0,
+      SCOOP_QUEUE_MAX_COALESCE_MS - (Date.now() - state.startedAt)
+    );
+    const delay = Math.min(SCOOP_QUEUE_DEBOUNCE_MS, remainingMaxWait);
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      this.flushScoopQueue(jid).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('Debounced message queue processing failed', { jid, error: message });
+        this.deps.onError(jid, `Queue processing failed: ${message}`);
+      });
+    }, delay);
+    this.debounceStates.set(jid, state);
+    return done;
+  }
+
+  /** Drain now and settle every debounced caller whose batch was consumed. */
+  private async flushScoopQueue(jid: string): Promise<void> {
+    const state = this.takeDebounce(jid);
+    if (state && this.processing.has(jid) && this.shouldDeferQueuedLicks(jid)) {
+      for (const waiter of state.waiters) waiter.resolve();
+      this.recordBusyDeferral(jid);
+      return;
+    }
+    try {
+      await this.processScoopQueue(jid);
+      for (const waiter of state?.waiters ?? []) waiter.resolve();
+    } catch (err) {
+      for (const waiter of state?.waiters ?? []) waiter.reject(err);
+      throw err;
+    }
+  }
+
+  /** Flush work retained while a scoop was busy, using the normal serialized drain path. */
+  async flushOnIdle(jid: string): Promise<void> {
+    if (!this.messageQueues.has(jid)) return;
+    try {
+      await this.flushScoopQueue(jid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error('Idle message queue processing failed', { jid, error: message });
+      this.deps.onError(jid, `Queue processing failed: ${message}`);
+    }
+  }
+
+  private shouldDeferQueuedLicks(jid: string): boolean {
+    const queue = this.messageQueues.get(jid);
+    return (
+      queue !== undefined &&
+      queue.length > 0 &&
+      queue.every((message) => this.deps.isExternalLickChannel(message.channel))
+    );
+  }
+
+  private recordBusyDeferral(jid: string): void {
+    const state = this.busyDeferrals.get(jid) ?? { startedAt: Date.now(), reported: false };
+    this.busyDeferrals.set(jid, state);
+    if (state.reported || Date.now() - state.startedAt < SCOOP_DEFERRAL_STARVATION_MS) return;
+
+    state.reported = true;
+    const error = `Lick queue remained deferred while scoop was busy for ${SCOOP_DEFERRAL_STARVATION_MS / 1000}s`;
+    log.warn('Busy lick queue may be starved', { jid, error });
+    try {
+      this.deps.onError(jid, error);
+    } catch (err) {
+      log.warn('Busy lick queue error callback failed', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private takeDebounce(jid: string): DebounceState | undefined {
+    const state = this.debounceStates.get(jid);
+    if (state?.timer !== undefined) clearTimeout(state.timer);
+    this.debounceStates.delete(jid);
+    return state;
+  }
+
+  private cancelDebounce(jid: string): void {
+    const state = this.takeDebounce(jid);
+    for (const waiter of state?.waiters ?? []) waiter.resolve();
+  }
+
+  private cancelDebounces(): void {
+    for (const jid of this.debounceStates.keys()) this.cancelDebounce(jid);
+  }
+
+  private cancelDebounceWaiter(jid: string, messageId: string): void {
+    const state = this.debounceStates.get(jid);
+    if (!state) return;
+    const remaining: DebounceWaiter[] = [];
+    for (const waiter of state.waiters) {
+      if (waiter.messageId === messageId) waiter.resolve();
+      else remaining.push(waiter);
+    }
+    state.waiters = remaining;
+    if (remaining.length === 0) this.cancelDebounce(jid);
   }
 
   /**
@@ -248,7 +401,10 @@ export class ScoopMessageRouter {
       return;
     }
 
-    const state = { rerun: false, done: Promise.resolve() };
+    const state: ProcessingState = {
+      rerun: false,
+      done: Promise.resolve(),
+    };
     this.processing.set(jid, state);
     state.done = this.drainScoopQueue(jid, state);
     return state.done;
@@ -266,7 +422,7 @@ export class ScoopMessageRouter {
    * caller. The `finally` releases the guard even on that path so a failed turn
    * cannot wedge the queue.
    */
-  private async drainScoopQueue(jid: string, state: { rerun: boolean }): Promise<void> {
+  private async drainScoopQueue(jid: string, state: ProcessingState): Promise<void> {
     let failed = false;
     let firstError: unknown;
     try {
@@ -290,13 +446,13 @@ export class ScoopMessageRouter {
   /** Drain one turn of a scoop's queue. Callers must go through {@link processScoopQueue}. */
   private async runScoopQueue(jid: string): Promise<void> {
     const queue = this.messageQueues.get(jid);
-    if (!queue || queue.length === 0) {
-      log.debug('processScoopQueue: empty queue', { jid });
+    if (!queue) {
+      log.debug('processScoopQueue: queue not registered', { jid });
       return;
     }
 
     const tab = this.deps.getTabs().get(jid);
-    if (tab?.status !== 'ready') {
+    if (tab?.status !== 'ready' && tab?.status !== 'processing') {
       log.debug('processScoopQueue: tab not ready', { jid, status: tab?.status ?? 'no-tab' });
       return;
     }
@@ -308,6 +464,7 @@ export class ScoopMessageRouter {
     const excludeName = scoop?.assistantLabel ?? jid;
     const since = this.lastAgentTimestamp.get(jid) ?? '';
     const messages = await this.deps.db.getMessagesSince(jid, since, excludeName);
+    const eligibleMessages = messages.filter((message) => this.passesTriggerGate(scoop, message));
 
     log.debug('processScoopQueue: DB query', {
       jid,
@@ -315,16 +472,44 @@ export class ScoopMessageRouter {
       excludeName,
       since,
       dbMessageCount: messages.length,
+      eligibleMessageCount: eligibleMessages.length,
       queueLength: queue.length,
     });
 
     if (messages.length === 0) {
       log.debug('processScoopQueue: no messages from DB, clearing queue', { jid });
       this.messageQueues.set(jid, []);
+      this.busyDeferrals.delete(jid);
       return;
     }
 
-    const formatted = messages
+    if (eligibleMessages.length === 0) {
+      log.debug('processScoopQueue: no messages passed trigger gate, clearing queue', { jid });
+      this.messageQueues.set(jid, []);
+      this.busyDeferrals.delete(jid);
+      const nextWatermark = serializeMessageWatermark(
+        advanceMessageWatermark(parseMessageWatermark(since), messages)
+      );
+      this.lastAgentTimestamp.set(jid, nextWatermark);
+      await this.deps.db.setState(`lastAgentTs_${jid}`, nextWatermark);
+      return;
+    }
+
+    const isPureLickBatch = eligibleMessages.every((message) =>
+      this.deps.isExternalLickChannel(message.channel)
+    );
+    if (isPureLickBatch && this.deps.getContexts().get(jid)?.isBusy) {
+      log.debug('processScoopQueue: deferring lick batch while scoop is busy', {
+        jid,
+        messageCount: eligibleMessages.length,
+      });
+      this.recordBusyDeferral(jid);
+      return;
+    }
+
+    this.busyDeferrals.delete(jid);
+
+    const formatted = eligibleMessages
       .map((m) => {
         const date = new Date(m.timestamp);
         const time = date.toLocaleString('en-US', {
@@ -337,11 +522,11 @@ export class ScoopMessageRouter {
         return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
       })
       .join('\n');
-    const images = messages.flatMap((m) => imageContentFromAttachments(m.attachments));
+    const images = eligibleMessages.flatMap((m) => imageContentFromAttachments(m.attachments));
 
     this.messageQueues.set(jid, []);
 
-    const lastMsg = messages[messages.length - 1];
+    const lastMsg = eligibleMessages[eligibleMessages.length - 1];
     // Advance the high-water mark by the composite (timestamp, id) cursor so a
     // batch that shares one millisecond is consumed exactly once: the id set
     // accumulated at the max ms lets a later pass skip already-delivered rows
@@ -355,7 +540,7 @@ export class ScoopMessageRouter {
     // One steering send anywhere in the batch steers the whole batch — the
     // batch is delivered as a single prompt, so it cannot be split into a
     // steered and a queued half.
-    const steer = messages.some((m) => m.steer);
+    const steer = eligibleMessages.some((m) => m.steer);
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
       steer,
@@ -372,7 +557,9 @@ export class ScoopMessageRouter {
     this.pollInterval = setInterval(() => {
       for (const jid of this.deps.getScoops().keys()) {
         const tab = this.deps.getTabs().get(jid);
-        if (tab?.status === 'ready') {
+        this.recordBusyDeferralIfPresent(jid);
+        const queueHasMessages = (this.messageQueues.get(jid)?.length ?? 0) > 0;
+        if (tab?.status === 'ready' && queueHasMessages && !this.debounceStates.has(jid)) {
           this.processScoopQueue(jid).catch((err) => {
             const message = err instanceof Error ? err.message : String(err);
             log.error('Message queue processing failed', { jid, error: message });
@@ -383,8 +570,13 @@ export class ScoopMessageRouter {
     }, 2000);
   }
 
+  private recordBusyDeferralIfPresent(jid: string): void {
+    if (this.busyDeferrals.has(jid)) this.recordBusyDeferral(jid);
+  }
+
   /** Stop the message polling loop. */
   stopMessageLoop(): void {
+    this.cancelDebounces();
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
@@ -398,6 +590,7 @@ export class ScoopMessageRouter {
    * cleared too.
    */
   async clearScoopMessages(jid: string, context: ScoopContext | undefined): Promise<void> {
+    this.cancelDebounce(jid);
     if (context) {
       context.clearMessages();
       const sessionStore = this.deps.getSessionStore();
@@ -419,11 +612,13 @@ export class ScoopMessageRouter {
     });
     this.lastAgentTimestamp.delete(jid);
     this.messageQueues.set(jid, []);
+    this.busyDeferrals.delete(jid);
     log.info('Scoop messages cleared', { jid });
   }
 
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
+    this.cancelDebounces();
     await this.deps.db.clearAllMessages();
     const sessionStore = this.deps.getSessionStore();
     if (sessionStore) {
@@ -437,6 +632,7 @@ export class ScoopMessageRouter {
       ctx.clearMessages();
     }
     this.lastAgentTimestamp.clear();
+    this.busyDeferrals.clear();
     for (const jid of this.deps.getScoops().keys()) {
       this.messageQueues.set(jid, []);
     }
@@ -446,13 +642,18 @@ export class ScoopMessageRouter {
 
   /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
   async clearQueuedMessages(jid: string): Promise<void> {
-    const queue = this.messageQueues.get(jid);
-    if (queue && queue.length > 0) {
-      for (const msg of queue) {
-        await this.deps.db.deleteMessage(msg.id);
-      }
-      this.messageQueues.set(jid, []);
+    this.cancelDebounce(jid);
+    const queue = this.messageQueues.get(jid) ?? [];
+    const scoop = this.deps.getScoops().get(jid);
+    const excludeName = scoop?.assistantLabel ?? jid;
+    const since = this.lastAgentTimestamp.get(jid) ?? '';
+    const persisted = await this.deps.db.getMessagesSince(jid, since, excludeName);
+    const ids = new Set([...queue, ...persisted].map((message) => message.id));
+    for (const id of ids) {
+      await this.deps.db.deleteMessage(id);
     }
+    this.messageQueues.set(jid, []);
+    this.busyDeferrals.delete(jid);
   }
 
   /** Delete a queued message by ID (removes from both IndexedDB and in-memory queue). */
@@ -461,7 +662,9 @@ export class ScoopMessageRouter {
     if (queue) {
       const idx = queue.findIndex((m) => m.id === messageId);
       if (idx !== -1) queue.splice(idx, 1);
+      if (queue.length === 0) this.busyDeferrals.delete(jid);
     }
+    this.cancelDebounceWaiter(jid, messageId);
     await this.deps.db.deleteMessage(messageId);
   }
 }
