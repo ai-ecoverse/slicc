@@ -42,6 +42,7 @@ function makeMessage(jid: string, i: number, channel = 'chat'): ChannelMessage {
 interface Harness {
   router: ScoopMessageRouter;
   sends: string[];
+  senders: string[];
   probe: { max: number };
   stateWrites: string[];
   store: ChannelMessage[];
@@ -58,17 +59,19 @@ function makeHarness(opts?: {
   store?: ChannelMessage[];
   lastAgentTimestamp?: string;
   onError?: (jid: string, error: string) => void;
+  scoop?: Partial<RegisteredScoop>;
 }): Harness {
   const jids = opts?.jids ?? ['cone'];
   const scoops = new Map<string, RegisteredScoop>();
   const tabs = new Map<string, ScoopTabState>();
   for (const jid of jids) {
-    scoops.set(jid, makeScoop(jid));
+    scoops.set(jid, { ...makeScoop(jid), ...opts?.scoop });
     tabs.set(jid, { jid, contextId: jid, status: opts?.tabStatus ?? 'ready', lastActivity: '' });
   }
 
   const store = opts?.store ?? [];
   const sends: string[] = [];
+  const senders: string[] = [];
   const stateWrites: string[] = [];
   const errors: string[] = [];
   const probe = { max: 0 };
@@ -92,11 +95,12 @@ function makeHarness(opts?: {
         ])
       ),
     createScoopTab: async () => {},
-    sendPrompt: async (_jid, text) => {
+    sendPrompt: async (_jid, text, senderId, senderName) => {
       await pause();
       if (opts?.onSend) await opts.onSend();
       if (opts?.failFirstSend && sendCount++ === 0) throw new Error('boom');
       sends.push(text);
+      senders.push(`${senderId}:${senderName}`);
     },
     notifyIncomingMessage: () => {},
     onError: (jid, error) => {
@@ -140,13 +144,20 @@ function makeHarness(opts?: {
         stateWrites.push(value);
       },
     },
-    isExternalLickChannel: (channel) => channel === 'webhook',
+    isExternalLickChannel: (channel) =>
+      new Set<ChannelMessage['channel']>([
+        'webhook',
+        'cron',
+        'fswatch',
+        'sprinkle',
+        'navigate',
+      ]).has(channel),
   };
 
   const router = new ScoopMessageRouter(deps);
   for (const jid of jids) router.ensureQueue(jid);
   if (opts?.lastAgentTimestamp) router.setLastAgentTimestamp(jids[0], opts.lastAgentTimestamp);
-  return { router, sends, probe, stateWrites, store, errors };
+  return { router, sends, senders, probe, stateWrites, store, errors };
 }
 
 describe('ScoopMessageRouter re-entrancy guard', () => {
@@ -240,6 +251,89 @@ describe('ScoopMessageRouter same-millisecond high-water mark', () => {
       const count = sends.filter((p) => p.includes(token)).length;
       expect(count, `${token} appeared in ${count} payloads`).toBe(1);
     }
+  });
+});
+
+describe('ScoopMessageRouter trigger gate', () => {
+  const triggerScoop: Partial<RegisteredScoop> = {
+    isCone: false,
+    requiresTrigger: true,
+    trigger: '@scoop',
+  };
+
+  it('advances past a persisted rejected row without deferring or replaying it', async () => {
+    const busy = { value: true };
+    const { router, sends, stateWrites } = makeHarness({
+      busy,
+      jids: ['scoop'],
+      scoop: triggerScoop,
+      tabStatus: 'processing',
+    });
+    const rejected = { ...makeMessage('scoop', 0, 'navigate'), content: 'not for this scoop' };
+
+    await router.handleMessage(rejected);
+    await router.flushOnIdle('scoop');
+    await router.flushOnIdle('scoop');
+
+    expect(sends).toEqual([]);
+    expect(stateWrites).toHaveLength(1);
+  });
+
+  it('delivers only eligible rows and uses the last eligible sender', async () => {
+    const eligible = {
+      ...makeMessage('scoop', 0),
+      content: 'hello @scoop',
+      senderId: 'eligible-id',
+      senderName: 'eligible-name',
+    };
+    const rejected = {
+      ...makeMessage('scoop', 1),
+      content: 'not for this scoop',
+      senderId: 'rejected-id',
+      senderName: 'rejected-name',
+    };
+    const { router, sends, senders } = makeHarness({
+      jids: ['scoop'],
+      scoop: triggerScoop,
+      store: [eligible, rejected],
+    });
+
+    await router.flushOnIdle('scoop');
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('hello @scoop');
+    expect(sends[0]).not.toContain('not for this scoop');
+    expect(senders).toEqual(['eligible-id:eligible-name']);
+  });
+
+  it.each<ChannelMessage['channel']>(['webhook', 'cron', 'fswatch', 'sprinkle'])(
+    'lets %s rows bypass the trigger gate',
+    async (channel) => {
+      const message = { ...makeMessage('scoop', 0, channel), content: 'no trigger' };
+      const { router, sends } = makeHarness({
+        jids: ['scoop'],
+        scoop: triggerScoop,
+        store: [message],
+      });
+
+      await router.flushOnIdle('scoop');
+
+      expect(sends).toHaveLength(1);
+      expect(sends[0]).toContain('no trigger');
+    }
+  );
+
+  it('never gates a cone', async () => {
+    const message = { ...makeMessage('cone', 0), content: 'no trigger' };
+    const { router, sends } = makeHarness({
+      scoop: { requiresTrigger: true, trigger: '@cone' },
+      store: [message],
+    });
+
+    await router.flushOnIdle('cone');
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toContain('no trigger');
   });
 });
 

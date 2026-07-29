@@ -208,22 +208,13 @@ export class ScoopMessageRouter {
       return;
     }
 
-    // Check trigger requirement using the scoop's own trigger
-    // Bypass trigger check for lick messages — they're explicitly routed to this scoop
-    const isLick =
-      message.channel === 'webhook' ||
-      message.channel === 'cron' ||
-      message.channel === 'fswatch' ||
-      message.channel === 'sprinkle';
-    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
-      if (!message.content.includes(scoop.trigger)) {
-        log.info('routeToScoop: trigger not found in content', {
-          chatJid: message.chatJid,
-          trigger: scoop.trigger,
-          contentPreview: message.content.slice(0, 80),
-        });
-        return;
-      }
+    if (!this.passesTriggerGate(scoop, message)) {
+      log.info('routeToScoop: trigger not found in content', {
+        chatJid: message.chatJid,
+        trigger: scoop.trigger,
+        contentPreview: message.content.slice(0, 80),
+      });
+      return;
     }
 
     const queue = this.messageQueues.get(message.chatJid) ?? [];
@@ -254,6 +245,22 @@ export class ScoopMessageRouter {
     }
 
     await this.flushScoopQueue(message.chatJid);
+  }
+
+  private passesTriggerGate(scoop: RegisteredScoop | undefined, message: ChannelMessage): boolean {
+    const isLick =
+      message.channel === 'webhook' ||
+      message.channel === 'cron' ||
+      message.channel === 'fswatch' ||
+      message.channel === 'sprinkle';
+    return (
+      !scoop ||
+      scoop.isCone ||
+      !scoop.requiresTrigger ||
+      !scoop.trigger ||
+      isLick ||
+      message.content.includes(scoop.trigger)
+    );
   }
 
   /** Restart one scoop's trailing window, capped so sustained licks cannot starve. */
@@ -457,6 +464,7 @@ export class ScoopMessageRouter {
     const excludeName = scoop?.assistantLabel ?? jid;
     const since = this.lastAgentTimestamp.get(jid) ?? '';
     const messages = await this.deps.db.getMessagesSince(jid, since, excludeName);
+    const eligibleMessages = messages.filter((message) => this.passesTriggerGate(scoop, message));
 
     log.debug('processScoopQueue: DB query', {
       jid,
@@ -464,6 +472,7 @@ export class ScoopMessageRouter {
       excludeName,
       since,
       dbMessageCount: messages.length,
+      eligibleMessageCount: eligibleMessages.length,
       queueLength: queue.length,
     });
 
@@ -474,13 +483,25 @@ export class ScoopMessageRouter {
       return;
     }
 
-    const isPureLickBatch = messages.every((message) =>
+    if (eligibleMessages.length === 0) {
+      log.debug('processScoopQueue: no messages passed trigger gate, clearing queue', { jid });
+      this.messageQueues.set(jid, []);
+      this.busyDeferrals.delete(jid);
+      const nextWatermark = serializeMessageWatermark(
+        advanceMessageWatermark(parseMessageWatermark(since), messages)
+      );
+      this.lastAgentTimestamp.set(jid, nextWatermark);
+      await this.deps.db.setState(`lastAgentTs_${jid}`, nextWatermark);
+      return;
+    }
+
+    const isPureLickBatch = eligibleMessages.every((message) =>
       this.deps.isExternalLickChannel(message.channel)
     );
     if (isPureLickBatch && this.deps.getContexts().get(jid)?.isBusy) {
       log.debug('processScoopQueue: deferring lick batch while scoop is busy', {
         jid,
-        messageCount: messages.length,
+        messageCount: eligibleMessages.length,
       });
       this.recordBusyDeferral(jid);
       return;
@@ -488,7 +509,7 @@ export class ScoopMessageRouter {
 
     this.busyDeferrals.delete(jid);
 
-    const formatted = messages
+    const formatted = eligibleMessages
       .map((m) => {
         const date = new Date(m.timestamp);
         const time = date.toLocaleString('en-US', {
@@ -501,11 +522,11 @@ export class ScoopMessageRouter {
         return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
       })
       .join('\n');
-    const images = messages.flatMap((m) => imageContentFromAttachments(m.attachments));
+    const images = eligibleMessages.flatMap((m) => imageContentFromAttachments(m.attachments));
 
     this.messageQueues.set(jid, []);
 
-    const lastMsg = messages[messages.length - 1];
+    const lastMsg = eligibleMessages[eligibleMessages.length - 1];
     // Advance the high-water mark by the composite (timestamp, id) cursor so a
     // batch that shares one millisecond is consumed exactly once: the id set
     // accumulated at the max ms lets a later pass skip already-delivered rows
@@ -519,7 +540,7 @@ export class ScoopMessageRouter {
     // One steering send anywhere in the batch steers the whole batch — the
     // batch is delivered as a single prompt, so it cannot be split into a
     // steered and a queued half.
-    const steer = messages.some((m) => m.steer);
+    const steer = eligibleMessages.some((m) => m.steer);
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
       steer,
