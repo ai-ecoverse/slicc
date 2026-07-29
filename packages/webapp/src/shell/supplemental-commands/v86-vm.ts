@@ -32,6 +32,14 @@ export interface VmScreenState {
   frame: { data: Uint8ClampedArray; width: number; height: number } | null;
 }
 
+/** Live screen-serve pump attached to a VM by `v86 serve`. */
+export interface VmServeState {
+  /** VFS directory the viewer + frames are written into. */
+  dir: string;
+  fps: number;
+  timer: ReturnType<typeof setInterval>;
+}
+
 export interface VmRecord {
   name: string;
   emulator: V86Emulator;
@@ -41,6 +49,7 @@ export interface VmRecord {
   bootArgv: readonly string[];
   serial: { buffer: string };
   screen: VmScreenState;
+  serve: VmServeState | null;
 }
 
 const registry = new Map<string, VmRecord>();
@@ -63,7 +72,15 @@ export function unregisterVm(name: string): void {
 
 /** Test-only: drop all records without touching the emulators. */
 export function resetVmRegistryForTests(): void {
+  for (const record of registry.values()) stopServe(record);
   registry.clear();
+}
+
+/** Stop the screen-serve pump, if one is running. Idempotent. */
+export function stopServe(record: VmRecord): void {
+  if (!record.serve) return;
+  clearInterval(record.serve.timer);
+  record.serve = null;
 }
 
 /**

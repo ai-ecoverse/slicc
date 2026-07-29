@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chordToScancodes,
   createV86Command,
+  DEFAULT_VGA_MEMORY_MIB,
   extractVmName,
+  MAX_VGA_MEMORY_MIB,
   parseStartArgs,
 } from '../../../src/shell/supplemental-commands/v86-command.js';
 import {
@@ -98,6 +100,17 @@ describe('parseStartArgs', () => {
   it('rejects non-http fs9p URLs and unknown NIC models', () => {
     expect(parseStartArgs(['-state', 's.bin', '-fs9p', '/local/dir']).ok).toBe(false);
     expect(parseStartArgs(['-state', 's.bin', '-net', 'e1000']).ok).toBe(false);
+  });
+
+  it('parses -vga and enforces the video-memory cap', () => {
+    const dflt = parseStartArgs(['-hda', 'x.img']);
+    expect(dflt.ok && dflt.parsed.vgaMemoryMib).toBe(DEFAULT_VGA_MEMORY_MIB);
+    const raised = parseStartArgs(['-hda', 'x.img', '-vga', '16']);
+    expect(raised.ok && raised.parsed.vgaMemoryMib).toBe(16);
+    expect(parseStartArgs(['-hda', 'x.img', '-vga', String(MAX_VGA_MEMORY_MIB + 1)]).ok).toBe(
+      false
+    );
+    expect(parseStartArgs(['-hda', 'x.img', '-vga', '0']).ok).toBe(false);
   });
 });
 
@@ -199,7 +212,7 @@ function makeEngine(
 }
 
 function makeCtx(files: Record<string, Uint8Array> = {}) {
-  const written = new Map<string, Uint8Array>();
+  const written = new Map<string, Uint8Array | string>();
   return {
     written,
     ctx: {
@@ -208,10 +221,11 @@ function makeCtx(files: Record<string, Uint8Array> = {}) {
           path.startsWith('/') ? path : `${base}/${path}`,
         exists: async (path: string) => path in files || written.has(path),
         readFile: async (path: string) => new TextDecoder().decode(files[path]),
-        readFileBuffer: async (path: string) => files[path] ?? written.get(path)!,
-        writeFile: async (path: string, data: Uint8Array) => {
+        readFileBuffer: async (path: string) => files[path] ?? (written.get(path)! as Uint8Array),
+        writeFile: async (path: string, data: Uint8Array | string) => {
           written.set(path, data);
         },
+        mkdir: async () => {},
         stat: async () => ({ isDirectory: false }),
       },
       cwd: '/workspace',
@@ -379,6 +393,51 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(result.stderr).toContain("no VM named 'vm0'");
   });
 
+  it('serves the screen into a VFS directory and stops on --stop', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx, written } = makeCtx();
+
+    const served = await cmd.execute(['serve'], ctx);
+    expect(served.stderr).toBe('');
+    expect(served.exitCode).toBe(0);
+    expect(served.stdout).toContain('/tmp/v86-serve-vm0');
+    expect(served.stdout).toContain('serve /tmp/v86-serve-vm0');
+    expect(written.has('/tmp/v86-serve-vm0/index.html')).toBe(true);
+    // Text-mode guest: the pump writes screen.txt + state.json.
+    expect(written.has('/tmp/v86-serve-vm0/screen.txt')).toBe(true);
+    const state = JSON.parse(written.get('/tmp/v86-serve-vm0/state.json') as string);
+    expect(state).toMatchObject({ name: 'vm0', mode: 'text' });
+    expect(getVm('vm0')?.serve?.fps).toBe(2);
+
+    const dup = await cmd.execute(['serve'], ctx);
+    expect(dup.exitCode).toBe(1);
+    expect(dup.stderr).toContain('already serving');
+
+    const stopped = await cmd.execute(['serve', '--stop'], ctx);
+    expect(stopped.exitCode).toBe(0);
+    expect(getVm('vm0')?.serve).toBeNull();
+  });
+
+  it('validates --fps and clears the serve pump on VM stop', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx } = makeCtx();
+
+    const bad = await cmd.execute(['serve', '--fps', '99'], ctx);
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr).toContain('--fps');
+
+    const served = await cmd.execute(['serve', '--fps', '5'], ctx);
+    expect(served.exitCode).toBe(0);
+    expect(getVm('vm0')?.serve?.fps).toBe(5);
+
+    await cmd.execute(['stop'], ctx);
+    expect(getVm('vm0')).toBeUndefined();
+  });
+
   it('reports the engine version via --version', async () => {
     const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
     const result = await cmd.execute(['--version'], makeCtx().ctx);
@@ -398,6 +457,7 @@ describe('vm registry instrumentation', () => {
       bootArgv: ['v86', 'start'],
       serial: { buffer: '' },
       screen: { mode: 'text', width: 0, height: 0, frame: null },
+      serve: null,
     };
     instrumentVm(record);
     registerVm(record);
@@ -417,6 +477,7 @@ describe('vm registry instrumentation', () => {
       bootArgv: ['v86', 'start'],
       serial: { buffer: '' },
       screen: { mode: 'text', width: 0, height: 0, frame: null },
+      serve: null,
     };
     instrumentVm(record);
     emulator.screen_adapter!.set_mode!(true);

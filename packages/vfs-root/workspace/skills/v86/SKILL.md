@@ -66,6 +66,20 @@ v86 serial --tail 25            # read buffered serial output
 
 Prefer `v86 text` over `screenshot` whenever the guest is in text mode — it is cheaper and machine-readable. For `-nographic` guests use the `serial` subcommands.
 
+## Live screen streaming (iframe-able)
+
+`v86 serve` pumps the screen into `/tmp/v86-serve-<name>/` — a self-refreshing `index.html` viewer plus live `frame.png`/`screen.txt` + `state.json`. Mint an iframe-able preview URL from it with the regular `serve` command so a human (or sprinkle) can watch the VM:
+
+```bash
+v86 serve -n arch --fps 4          # start the pump (1-10 fps, default 2)
+serve /tmp/v86-serve-arch          # mint a worker-hosted URL to iframe
+v86 serve -n arch --stop           # stop the pump (directory stays)
+```
+
+## SVGA / high-res video modes
+
+The guest sees a Bochs-dispi (VBE) SVGA adapter; VESA modes are limited by video memory. The default 8 MiB covers up to 1600x1200x32 — pass `-vga <MiB>` at boot for more (e.g. `-vga 16`). Inside a Linux guest, pick a mode with `vga=` kernel parameters or the guest's own modesetting tools.
+
 ## Expectations
 
 x86 emulation without KVM runs at a fraction of native speed. Small guests (Alpine, FreeDOS, Buildroot Linux, KolibriOS) work best; give slow boots time and poll with `v86 text` between steps.

@@ -31,6 +31,7 @@ import {
   listVms,
   MAX_MEMORY_MIB,
   registerVm,
+  stopServe,
   unregisterVm,
   type VmRecord,
 } from './v86-vm.js';
@@ -49,6 +50,12 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 const DEFAULT_VM_NAME = 'vm0';
 const DEFAULT_BIOS_DIR = '/workspace/.v86';
 
+/** SVGA/VBE video memory bounds (MiB). v86's Bochs-dispi VBE modes are
+ * limited by `vga_memory_size` — 8 MiB covers 1600x1200x32; bigger
+ * VESA modes need more. */
+export const DEFAULT_VGA_MEMORY_MIB = 8;
+export const MAX_VGA_MEMORY_MIB = 64;
+
 const HELP = `v86 - run an x86 virtual machine (v86 wasm engine)
 
 Requires: ipk add v86@${V86_PINNED_VERSION}
@@ -64,6 +71,9 @@ Usage:
   v86 mouse [-n name] --to <x>,<y>        Best-effort absolute positioning
   v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default /tmp/v86-<name>.png)
   v86 text [-n name]                      Dump text-mode screen as plain text
+  v86 serve [-n name] [--fps <1-10>]      Stream the screen into /tmp/v86-serve-<name>/
+  v86 serve [-n name] --stop              (viewer index.html + live frames; mint an
+                                          iframe-able URL with \`serve <that dir>\`)
   v86 serial [-n name] --send <text>      Write to the guest serial console
   v86 serial [-n name] [--tail <lines>]   Read buffered serial output
   v86 state [-n name] save|load <file>    Save / restore full VM state
@@ -79,6 +89,8 @@ Boot options (QEMU-flavored):
   -state <vfs-path>   Resume from a saved state snapshot (.zst ok)
   -fs9p <url>         Attach a 9p network filesystem (guest root=host9p)
   -net <ne2k|virtio>  Guest NIC model (must match a -state snapshot's NIC)
+  -vga <MiB>          SVGA/VBE video memory (default ${DEFAULT_VGA_MEMORY_MIB}, max ${MAX_VGA_MEMORY_MIB}) —
+                      raise for high-res VESA modes (1080p32 needs ~9)
   -bios <path> -vgabios <path>  BIOS blobs (default ${DEFAULT_BIOS_DIR}/{seabios,vgabios}.bin)
   -nographic          Serial-only guest (skip VGA)
 
@@ -102,6 +114,7 @@ or pass -bios / -vgabios with explicit VFS paths.`;
 export interface ParsedStartArgs {
   name: string;
   memoryMib: number;
+  vgaMemoryMib: number;
   cdrom?: string;
   hda?: string;
   fda?: string;
@@ -129,6 +142,13 @@ const START_FLAG_SETTERS: Record<string, (parsed: ParsedStartArgs, v: string) =>
     if (!Number.isFinite(mib) || mib <= 0) return '-m requires a positive MiB value';
     if (mib > MAX_MEMORY_MIB) return `-m ${mib} exceeds the ${MAX_MEMORY_MIB} MiB cap`;
     parsed.memoryMib = mib;
+    return null;
+  },
+  '-vga': (parsed, v) => {
+    const mib = Number.parseInt(v, 10);
+    if (!Number.isFinite(mib) || mib <= 0) return '-vga requires a positive MiB value';
+    if (mib > MAX_VGA_MEMORY_MIB) return `-vga ${mib} exceeds the ${MAX_VGA_MEMORY_MIB} MiB cap`;
+    parsed.vgaMemoryMib = mib;
     return null;
   },
   '-cdrom': (parsed, v) => setPath(parsed, 'cdrom', v),
@@ -177,6 +197,7 @@ export function parseStartArgs(args: readonly string[]): StartParseResult {
   const parsed: ParsedStartArgs = {
     name: DEFAULT_VM_NAME,
     memoryMib: DEFAULT_MEMORY_MIB,
+    vgaMemoryMib: DEFAULT_VGA_MEMORY_MIB,
     nographic: false,
   };
   for (let i = 0; i < args.length; i++) {
@@ -452,6 +473,8 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
           return await v86Screenshot(subArgs, ctx);
         case 'text':
           return v86Text(subArgs);
+        case 'serve':
+          return await v86Serve(subArgs, ctx);
         case 'serial':
           return v86Serial(subArgs);
         case 'state':
@@ -575,7 +598,9 @@ async function v86Start(
   const options: Record<string, unknown> = {
     wasm_fn: makeWasmFn(engine.wasmModule),
     memory_size: parsed.memoryMib * 1024 * 1024,
-    vga_memory_size: 8 * 1024 * 1024,
+    // Sizes the Bochs-dispi SVGA/VBE framebuffer — high-res VESA modes
+    // need more than the 8 MiB default (raise via `-vga`).
+    vga_memory_size: parsed.vgaMemoryMib * 1024 * 1024,
     autostart: false,
     disable_speaker: true,
     fastboot: true,
@@ -593,6 +618,7 @@ async function v86Start(
     bootArgv: ['v86', 'start', ...args],
     serial: { buffer: '' },
     screen: { mode: 'text', width: 0, height: 0, frame: null },
+    serve: null,
   };
   instrumentVm(record);
 
@@ -628,6 +654,7 @@ async function v86Start(
 }
 
 async function teardownVm(record: VmRecord, pm: ProcessManager | null): Promise<void> {
+  stopServe(record);
   unregisterVm(record.name);
   try {
     if (record.emulator.is_running()) await record.emulator.stop();
@@ -756,6 +783,131 @@ function v86Text(args: readonly string[]): CmdResult {
     );
   }
   return ok(`${dump}\n`);
+}
+
+/** Serve pump rates (frames/second) — VFS writes are not free. */
+const SERVE_DEFAULT_FPS = 2;
+const SERVE_MAX_FPS = 10;
+
+/**
+ * Static viewer page dropped into the serve directory. Polls
+ * `state.json` at the pump rate and swaps in `frame.png` (graphical
+ * mode) or `screen.txt` (text mode). Self-contained so `serve <dir>`
+ * can host it for an iframe.
+ */
+function serveViewerHtml(name: string, fps: number): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>v86 — ${name}</title><style>
+  html,body{margin:0;height:100%;background:#111;color:#ddd;font-family:monospace}
+  body{display:flex;align-items:center;justify-content:center}
+  img{max-width:100%;max-height:100%;image-rendering:pixelated}
+  pre{margin:0;padding:8px;font-size:14px;line-height:1.15;white-space:pre}
+  .off{opacity:.4}
+</style></head><body>
+<img id="fb" alt="v86 screen" hidden><pre id="txt" hidden></pre>
+<script>
+const fb = document.getElementById('fb'), txt = document.getElementById('txt');
+let seq = -1;
+async function tick() {
+  try {
+    const s = await (await fetch('state.json?t=' + Date.now(), {cache:'no-store'})).json();
+    if (s.seq !== seq) {
+      seq = s.seq;
+      if (s.mode === 'graphical') {
+        fb.src = 'frame.png?t=' + seq; fb.hidden = false; txt.hidden = true;
+      } else {
+        txt.textContent = await (await fetch('screen.txt?t=' + seq, {cache:'no-store'})).text();
+        txt.hidden = false; fb.hidden = true;
+      }
+    }
+    fb.classList.remove('off'); txt.classList.remove('off');
+  } catch {
+    fb.classList.add('off'); txt.classList.add('off');
+  }
+  setTimeout(tick, ${Math.round(1000 / fps)});
+}
+tick();
+</script></body></html>
+`;
+}
+
+/** One serve-pump tick: snapshot the screen into the serve directory. */
+async function pumpServeFrame(
+  record: VmRecord,
+  ctx: CommandContext,
+  dir: string,
+  seq: number
+): Promise<void> {
+  let mode: 'text' | 'graphical' = 'text';
+  const frame = record.screen.mode === 'graphical' ? captureFrame(record) : null;
+  if (frame) {
+    await ctx.fs.writeFile(`${dir}/frame.png`, await encodeFramePng(frame));
+    mode = 'graphical';
+  } else {
+    const dump = dumpTextScreen(record);
+    await ctx.fs.writeFile(`${dir}/screen.txt`, dump ?? '(no screen output yet)');
+  }
+  const state = { name: record.name, mode, seq, ts: Date.now() };
+  await ctx.fs.writeFile(`${dir}/state.json`, JSON.stringify(state));
+}
+
+/**
+ * `v86 serve` — stream the VM screen into a VFS directory as a static
+ * viewer (index.html + frame.png/screen.txt + state.json) refreshed by
+ * a kernel-worker interval. Pair with the `serve` command to mint a
+ * worker-hosted URL a sprinkle can iframe.
+ */
+async function v86Serve(args: readonly string[], ctx: CommandContext): Promise<CmdResult> {
+  const { name, rest } = extractVmName(args);
+  const record = requireVm(name);
+  if (isCmdResult(record)) return record;
+
+  if (rest.includes('--stop')) {
+    if (!record.serve) return fail(`serve: no screen serve running for '${name}'`);
+    const dir = record.serve.dir;
+    stopServe(record);
+    return ok(`screen serve for '${name}' stopped (${dir} left in place)\n`);
+  }
+  if (record.serve) {
+    return fail(`serve: already serving '${name}' at ${record.serve.dir} — --stop first`);
+  }
+
+  let fps = SERVE_DEFAULT_FPS;
+  const fpsIdx = rest.indexOf('--fps');
+  if (fpsIdx !== -1) {
+    fps = Number.parseInt(rest[fpsIdx + 1] ?? '', 10);
+    if (!Number.isFinite(fps) || fps < 1 || fps > SERVE_MAX_FPS) {
+      return fail(`serve: --fps requires 1-${SERVE_MAX_FPS}`);
+    }
+  }
+
+  const dir = `/tmp/v86-serve-${name}`;
+  await ctx.fs.mkdir(dir, { recursive: true });
+  await ctx.fs.writeFile(`${dir}/index.html`, serveViewerHtml(name, fps));
+
+  let seq = 0;
+  let busy = false;
+  const timer = setInterval(
+    () => {
+      // Skip a tick rather than queueing when encoding falls behind.
+      if (busy) return;
+      busy = true;
+      pumpServeFrame(record, ctx, dir, seq++)
+        .catch(() => {})
+        .finally(() => {
+          busy = false;
+        });
+    },
+    Math.round(1000 / fps)
+  );
+  record.serve = { dir, fps, timer };
+  await pumpServeFrame(record, ctx, dir, seq++).catch(() => {});
+
+  return ok(
+    `serving '${name}' screen at ${dir} (${fps} fps).\n` +
+      `Mint an iframe-able URL with: serve ${dir}\n` +
+      `Stop with: v86 serve -n ${name} --stop\n`
+  );
 }
 
 function v86Serial(args: readonly string[]): CmdResult {
