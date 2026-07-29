@@ -278,6 +278,71 @@ export async function getMessagesForScoop(chatJid: string): Promise<ChannelMessa
   });
 }
 
+/**
+ * Per-scoop message high-water mark. A bare millisecond timestamp cannot
+ * disambiguate messages that share a millisecond, so the cursor pairs the max
+ * delivered `ts` with the set of message ids already delivered exactly at that
+ * `ts`. Timestamps strictly below `ts` are fully consumed; at `ts` only ids in
+ * the set are consumed. `ids === null` marks a legacy bare-timestamp watermark
+ * whose whole millisecond was consumed by the previous exclusive-bound query.
+ */
+export interface MessageWatermark {
+  ts: string;
+  ids: Set<string> | null;
+}
+
+const WATERMARK_PREFIX = 'wm1:';
+
+/** Parse a persisted/in-memory watermark string, tolerating the legacy bare-ISO form. */
+export function parseMessageWatermark(since: string): MessageWatermark {
+  if (!since) return { ts: '', ids: new Set() };
+  if (since.startsWith(WATERMARK_PREFIX)) {
+    try {
+      const parsed = JSON.parse(since.slice(WATERMARK_PREFIX.length)) as {
+        ts: string;
+        ids: string[];
+      };
+      return { ts: parsed.ts, ids: new Set(parsed.ids) };
+    } catch {
+      // Fall through to legacy handling on any corruption.
+    }
+  }
+  // Legacy bare-ISO-timestamp watermark: the old exclusive lower bound consumed
+  // every message at `since`, so treat the whole millisecond as delivered.
+  return { ts: since, ids: null };
+}
+
+/** Serialize a watermark for `lastAgentTs_<jid>` state and the in-memory map. */
+export function serializeMessageWatermark(wm: MessageWatermark): string {
+  const ids = wm.ids ? Array.from(wm.ids) : [];
+  return `${WATERMARK_PREFIX}${JSON.stringify({ ts: wm.ts, ids })}`;
+}
+
+/** True when `msg` is strictly after `wm` under the composite (ts, id) ordering. */
+export function isAfterMessageWatermark(
+  msg: { timestamp: string; id: string },
+  wm: MessageWatermark
+): boolean {
+  if (msg.timestamp > wm.ts) return true;
+  if (msg.timestamp < wm.ts) return false;
+  if (wm.ids === null) return false;
+  return !wm.ids.has(msg.id);
+}
+
+/** Advance a watermark past a delivered batch, accumulating ids within the max millisecond. */
+export function advanceMessageWatermark(
+  prev: MessageWatermark,
+  delivered: { timestamp: string; id: string }[]
+): MessageWatermark {
+  if (delivered.length === 0) return prev;
+  let ts = prev.ts;
+  for (const m of delivered) if (m.timestamp > ts) ts = m.timestamp;
+  const ids = new Set<string>();
+  if (prev.ts === ts && prev.ids) for (const id of prev.ids) ids.add(id);
+  for (const m of delivered) if (m.timestamp === ts) ids.add(m.id);
+  return { ts, ids };
+}
+
 export async function getMessagesSince(
   chatJid: string,
   since: string,
@@ -285,12 +350,15 @@ export async function getMessagesSince(
 ): Promise<ChannelMessage[]> {
   const store = await getStore(STORES.MESSAGES);
   const index = store.index('chatJid_timestamp');
-  const range = IDBKeyRange.bound([chatJid, since], [chatJid, '\uffff'], true, false);
+  const wm = parseMessageWatermark(since);
+  // Inclusive lower bound so same-millisecond messages at `wm.ts` are read; the
+  // id-aware filter below drops the ones already delivered.
+  const range = IDBKeyRange.bound([chatJid, wm.ts], [chatJid, '\uffff'], false, false);
 
   return new Promise((resolve, reject) => {
     const req = index.getAll(range);
     req.onsuccess = () => {
-      let msgs = req.result as ChannelMessage[];
+      let msgs = (req.result as ChannelMessage[]).filter((m) => isAfterMessageWatermark(m, wm));
       if (excludeSender) {
         msgs = msgs.filter((m) => m.senderName !== excludeSender);
       }

@@ -14,6 +14,7 @@
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
+import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
@@ -306,8 +307,15 @@ export class ScoopMessageRouter {
     this.messageQueues.set(jid, []);
 
     const lastMsg = messages[messages.length - 1];
-    this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
-    await this.deps.db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
+    // Advance the high-water mark by the composite (timestamp, id) cursor so a
+    // batch that shares one millisecond is consumed exactly once: the id set
+    // accumulated at the max ms lets a later pass skip already-delivered rows
+    // without dropping same-ms siblings (which a bare-timestamp mark would).
+    const nextWatermark = serializeMessageWatermark(
+      advanceMessageWatermark(parseMessageWatermark(since), messages)
+    );
+    this.lastAgentTimestamp.set(jid, nextWatermark);
+    await this.deps.db.setState(`lastAgentTs_${jid}`, nextWatermark);
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images);
   }

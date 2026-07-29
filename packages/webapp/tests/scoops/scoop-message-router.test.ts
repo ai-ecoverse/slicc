@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isAfterMessageWatermark, parseMessageWatermark } from '../../src/scoops/db.js';
 import type { ScoopMessageRouterDeps } from '../../src/scoops/scoop-message-router.js';
 import { ScoopMessageRouter } from '../../src/scoops/scoop-message-router.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
@@ -79,9 +80,13 @@ function makeHarness(opts?: { failFirstSend?: boolean; jids?: string[] }): Harne
         active += 1;
         probe.max = Math.max(probe.max, active);
         await tick();
+        const wm = parseMessageWatermark(since);
         const result = store
-          .filter((m) => m.chatJid === jid && m.timestamp > since && m.senderName !== excludeName)
-          .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+          .filter(
+            (m) =>
+              m.chatJid === jid && isAfterMessageWatermark(m, wm) && m.senderName !== excludeName
+          )
+          .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
         active -= 1;
         return result;
       },
@@ -132,5 +137,39 @@ describe('ScoopMessageRouter re-entrancy guard', () => {
     await router.handleMessage(makeMessage('cone', 1));
 
     expect(sends.some((p) => p.includes('MSG_001'))).toBe(true);
+  });
+});
+
+describe('ScoopMessageRouter same-millisecond high-water mark', () => {
+  /** A message pinned to a shared millisecond; ids arrive in descending order so an id-ordered tie-break would drop siblings. */
+  function makeSameMsMessage(jid: string, i: number, count: number): ChannelMessage {
+    return {
+      id: `same-${jid}-${String(count - i).padStart(3, '0')}`,
+      chatJid: jid,
+      senderId: 'user',
+      senderName: 'user',
+      content: `MSG_${String(i).padStart(3, '0')}`,
+      timestamp: new Date(Date.UTC(2026, 0, 1)).toISOString(),
+      fromAssistant: false,
+      channel: 'chat',
+    };
+  }
+
+  it('delivers each of N same-millisecond messages exactly once across successive passes', async () => {
+    const { router, sends } = makeHarness();
+    const N = 8;
+
+    // Awaited sequentially, so each handleMessage drains a separate
+    // processScoopQueue pass — the watermark must carry enough state to skip
+    // the already-delivered same-ms rows without dropping the new ones.
+    for (let i = 0; i < N; i += 1) {
+      await router.handleMessage(makeSameMsMessage('cone', i, N));
+    }
+
+    for (let i = 0; i < N; i += 1) {
+      const token = `MSG_${String(i).padStart(3, '0')}`;
+      const count = sends.filter((p) => p.includes(token)).length;
+      expect(count, `${token} appeared in ${count} payloads`).toBe(1);
+    }
   });
 });
