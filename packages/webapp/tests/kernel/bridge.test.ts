@@ -834,12 +834,29 @@ describe('Bridge handlePanelMessage', () => {
     }
   }
 
-  it('answers request-session-stats with the total cost and per-scoop fills', async () => {
-    mockOrchestrator.getSessionCosts = vi.fn(() => [
-      { usage: { cost: { total: 0.2 } } },
-      { usage: { cost: { total: 0.03 } } },
-    ]);
+  it('answers request-session-stats with cumulative total and live-scoped details', async () => {
+    const live = {
+      name: 'sliccy',
+      model: 'model-a',
+      type: 'cone',
+      source: 'live',
+      usage: { cost: { total: 0.2 } },
+    };
+    const dropped = {
+      name: 'archived-scoop',
+      model: 'model-b',
+      type: 'scoop',
+      source: 'dropped',
+      usage: { cost: { total: 0.03 } },
+    };
+    mockOrchestrator.getSessionCosts = vi.fn((options) =>
+      options?.includeDropped ? [live, dropped] : [live]
+    );
+    mockOrchestrator.getBurnRate = vi.fn(() => 0.8);
     mockOrchestrator.getContextFills = vi.fn(() => [{ jid: 'cone_1', fill: 0.4 }]);
+    mockOrchestrator.getModelCosts = vi.fn(() => [
+      { model: 'model-a', cost: 0.2, turns: 1, input: 10, output: 5, cacheRead: 2, cacheWrite: 1 },
+    ]);
 
     simulatePanelMessage({ type: 'request-session-stats', requestId: 'st-1' });
     await new Promise((r) => setTimeout(r, 10));
@@ -849,7 +866,12 @@ describe('Bridge handlePanelMessage', () => {
     ) as any;
     expect(reply).toBeTruthy();
     expect(reply.payload.totalCost).toBeCloseTo(0.23);
+    expect(reply.payload.burnRate).toBe(0.8);
     expect(reply.payload.fills).toEqual([{ jid: 'cone_1', fill: 0.4 }]);
+    expect(reply.payload.models).toEqual([{ model: 'model-a', cost: 0.2, turns: 1, tokens: 18 }]);
+    expect(reply.payload.scoops).toEqual([
+      { name: 'sliccy', model: 'model-a', cost: 0.2, type: 'cone', source: 'live' },
+    ]);
   });
 
   it('answers request-session-stats with zeros when the cost provider throws', async () => {
@@ -865,7 +887,10 @@ describe('Bridge handlePanelMessage', () => {
     ) as any;
     expect(reply).toBeTruthy();
     expect(reply.payload.totalCost).toBe(0);
+    expect(reply.payload.burnRate).toBe(0);
     expect(reply.payload.fills).toEqual([]);
+    expect(reply.payload.models).toEqual([]);
+    expect(reply.payload.scoops).toEqual([]);
   });
 
   it('dispatches cone-create through the extracted handler', async () => {

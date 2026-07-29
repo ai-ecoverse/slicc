@@ -18,6 +18,7 @@ export async function mountWcUiExtension(
 ): Promise<void> {
   const boot = prepareWcShell(app, 'extension · wc');
   const client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
+  // Shared attach wiring applies session stats (rate + scoped costs) in this float too.
   attachWcClient(boot, client, log);
   // Detached-popout mutual exclusion: a detached tab claims the SW lock,
   // every other surface yields on the `detached-active` broadcast.

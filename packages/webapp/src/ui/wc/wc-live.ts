@@ -1144,6 +1144,11 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
     void client.getSessionStats?.().then((stats) => {
       if (!stats) return;
       wiring.refs.floatbar.setAttribute('spent', stats.totalCost.toFixed(2));
+      if (typeof stats.burnRate === 'number' && Number.isFinite(stats.burnRate)) {
+        wiring.refs.floatbar.setAttribute('rate', stats.burnRate.toFixed(2));
+      } else {
+        wiring.refs.floatbar.removeAttribute('rate');
+      }
       // Feed per-model and per-scoop breakdown to the floatbar overlay
       const fb = wiring.refs.floatbar as HTMLElement & {
         costModels?: unknown;
