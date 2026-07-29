@@ -201,6 +201,41 @@ describe('getImageDimensions', () => {
     expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
   });
 
+  it('extracts JPEG dimensions from an SOF marker after a leading APP0 segment', () => {
+    const jpeg = [
+      0xff,
+      0xd8, // SOI
+      0xff,
+      0xe0, // APP0
+      0x00,
+      0x10, // APP0 length
+      0x4a,
+      0x46,
+      0x49,
+      0x46,
+      0x00,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x01,
+      0x00,
+      0x01,
+      0x00,
+      0x00,
+      0xff,
+      0xc0, // SOF0
+      0x00,
+      0x11,
+      0x08,
+      0x02,
+      0x58, // height = 600
+      0x03,
+      0x20, // width = 800
+    ];
+    expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
+  });
+
   it('returns null for JPEG with no SOF marker', () => {
     const jpeg = [
       0xff,
