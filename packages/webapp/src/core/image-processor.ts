@@ -6,6 +6,7 @@
  * if the image is unrecoverable (corrupt, unsupported format).
  */
 
+import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import { createLogger } from './logger.js';
 import type { ImageContent, TextContent } from './types.js';
 
@@ -20,67 +21,83 @@ export const SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 
 
 /** Estimate decoded byte size from base64 without full decode. */
 export function getImageByteSize(base64: string): number {
+  const data = normalizeBase64(base64);
   let padding = 0;
-  if (base64.endsWith('==')) padding = 2;
-  else if (base64.endsWith('=')) padding = 1;
-  return Math.ceil((base64.length * 3) / 4) - padding;
+  if (data.endsWith('==')) padding = 2;
+  else if (data.endsWith('=')) padding = 1;
+  return Math.ceil((data.length * 3) / 4) - padding;
 }
 
 export function isSupportedImageFormat(mimeType: string): boolean {
   return SUPPORTED_MIMES.has(mimeType);
 }
 
+type Dimensions = { width: number; height: number };
+
+/**
+ * Restore the tolerance `atob` had before the strict shared decoder: tool
+ * output often arrives line-wrapped or with the trailing padding omitted, and
+ * `base64ToUint8` rejects both wherever the Node `Buffer` fast-path is active.
+ */
+function normalizeBase64(base64: string): string {
+  const compact = base64.replace(/[\t\n\f\r ]/g, '');
+  const remainder = compact.length % 4;
+  if (remainder === 2) return `${compact}==`;
+  if (remainder === 3) return `${compact}=`;
+  return compact;
+}
+
+/** Decode a base64 prefix and expose it as a byte view plus a `DataView`. */
+function readHeader(base64: string, chars: number): DataView {
+  const raw = base64ToUint8(normalizeBase64(base64.slice(0, chars)));
+  return new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+}
+
+function nonZero(width: number, height: number): Dimensions | null {
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function pngDimensions(base64: string): Dimensions | null {
+  // PNG IHDR: width @ bytes 16-19, height @ bytes 20-23 (big-endian uint32)
+  // Need first 24 raw bytes = 32 base64 chars
+  if (base64.length < 32) return null;
+  const dv = readHeader(base64, 32);
+  return nonZero(dv.getUint32(16, false), dv.getUint32(20, false));
+}
+
+function gifDimensions(base64: string): Dimensions | null {
+  // GIF: width @ bytes 6-7, height @ bytes 8-9 (little-endian uint16)
+  if (base64.length < 16) return null;
+  const dv = readHeader(base64, 16);
+  return nonZero(dv.getUint16(6, true), dv.getUint16(8, true));
+}
+
+function jpegDimensions(base64: string): Dimensions | null {
+  // JPEG: scan for SOF0 (0xFFC0) or SOF2 (0xFFC2) marker in first 64KB
+  const scanChars = Math.min(Math.ceil(65536 / 3) * 4, base64.length);
+  const dv = readHeader(base64, scanChars);
+  for (let i = 0; i < dv.byteLength - 8; i++) {
+    if (dv.getUint8(i) !== 0xff) continue;
+    const marker = dv.getUint8(i + 1);
+    if (marker === 0xc0 || marker === 0xc2) {
+      return nonZero(dv.getUint16(i + 7, false), dv.getUint16(i + 5, false));
+    }
+  }
+  return null;
+}
+
 /**
  * Extract image dimensions from base64 data by parsing format headers.
  * Returns null if dimensions can't be determined (unknown format, corrupt header).
  */
-export function getImageDimensions(
-  base64: string,
-  mimeType: string
-): { width: number; height: number } | null {
+export function getImageDimensions(base64: string, mimeType: string): Dimensions | null {
   try {
-    if (mimeType === 'image/png') {
-      // PNG IHDR: width @ bytes 16-19, height @ bytes 20-23 (big-endian uint32)
-      // Need first 24 raw bytes = 32 base64 chars
-      if (base64.length < 32) return null;
-      const raw = atob(base64.slice(0, 32));
-      const w =
-        (raw.charCodeAt(16) << 24) |
-        (raw.charCodeAt(17) << 16) |
-        (raw.charCodeAt(18) << 8) |
-        raw.charCodeAt(19);
-      const h =
-        (raw.charCodeAt(20) << 24) |
-        (raw.charCodeAt(21) << 16) |
-        (raw.charCodeAt(22) << 8) |
-        raw.charCodeAt(23);
-      return w > 0 && h > 0 ? { width: w, height: h } : null;
-    }
-
-    if (mimeType === 'image/gif') {
-      // GIF: width @ bytes 6-7, height @ bytes 8-9 (little-endian uint16)
-      if (base64.length < 16) return null;
-      const raw = atob(base64.slice(0, 16));
-      const w = raw.charCodeAt(6) | (raw.charCodeAt(7) << 8);
-      const h = raw.charCodeAt(8) | (raw.charCodeAt(9) << 8);
-      return w > 0 && h > 0 ? { width: w, height: h } : null;
-    }
-
-    if (mimeType === 'image/jpeg') {
-      // JPEG: scan for SOF0 (0xFFC0) or SOF2 (0xFFC2) marker in first 64KB
-      const scanBytes = Math.min(Math.ceil(65536 / 3) * 4, base64.length);
-      const raw = atob(base64.slice(0, scanBytes));
-      for (let i = 0; i < raw.length - 8; i++) {
-        if (raw.charCodeAt(i) === 0xff) {
-          const marker = raw.charCodeAt(i + 1);
-          if (marker === 0xc0 || marker === 0xc2) {
-            const h = (raw.charCodeAt(i + 5) << 8) | raw.charCodeAt(i + 6);
-            const w = (raw.charCodeAt(i + 7) << 8) | raw.charCodeAt(i + 8);
-            return w > 0 && h > 0 ? { width: w, height: h } : null;
-          }
-        }
-      }
-    }
+    // Strip whitespace up front so the fixed prefix lengths below still cover
+    // the header bytes when the input arrives line-wrapped.
+    const data = normalizeBase64(base64);
+    if (mimeType === 'image/png') return pngDimensions(data);
+    if (mimeType === 'image/gif') return gifDimensions(data);
+    if (mimeType === 'image/jpeg') return jpegDimensions(data);
   } catch {
     // Corrupt header — can't determine dimensions
   }
@@ -159,11 +176,7 @@ export async function processImageContent(
 
   // Step 2: Decode and process
   try {
-    const binaryString = atob(image.data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    const bytes = base64ToUint8(normalizeBase64(image.data));
 
     const output: { data: Uint8Array | null; mime: string } = { data: null, mime: image.mimeType };
 
@@ -223,11 +236,7 @@ export async function processImageContent(
     }
 
     // Encode back to base64
-    let binary = '';
-    for (let i = 0; i < output.data.length; i++) {
-      binary += String.fromCharCode(output.data[i]);
-    }
-    const newBase64 = btoa(binary);
+    const newBase64 = uint8ToBase64(output.data);
 
     log.info('Image processed successfully', {
       originalBase64: base64Size,
