@@ -93,129 +93,85 @@ Terminal.app and iTerm2 launch through Apple Events. `assemble-app.mjs` supplies
 
 ## iCloud Sync (Tray Sessions)
 
-Cross-device discovery of active tray join URLs, so a leader started on one
-Mac can be joined from another device without hand-copying its join URL. The
-data model is Foundation-only and platform-agnostic so the iOS follower
-(`packages/ios-app`) can reuse it verbatim when it gains sync.
+Cross-device discovery of active tray join URLs so a leader on one Mac can be
+joined from another without hand-copying. The model is Foundation-only so the
+iOS follower (`packages/ios-app`) can reuse it.
 
-- `Models/SyncedTraySession.swift` — one advertised session: `id` (the
-  **SHA-256 of the join URL** — stable for upsert/dedup but opaque, so it is
-  safe in accessibility identifiers / telemetry `source`; the raw `joinUrl`
-  carries the secret and is never surfaced to telemetry), `joinUrl`, `label`,
-  `deviceId` (stable per-device UUID for ownership), `deviceName` (display
-  only), `createdAt`, `lastSeenAt`, plus `isStale(ttl:now:)`. `CryptoKit` +
-  Foundation only; no AppKit/UIKit. Legacy payloads without `deviceId` decode
-  (empty).
+- `Models/SyncedTraySession.swift` — one session: `id` (**SHA-256 of the join
+  URL** — stable for upsert/dedup but opaque, so it is safe in accessibility
+  identifiers / telemetry; the raw `joinUrl` carries the secret and is never
+  surfaced), `joinUrl`, `label`, `deviceId` (per-device UUID for ownership),
+  `deviceName` (display), `createdAt`, `lastSeenAt`, `isStale(ttl:now:)`.
+  `CryptoKit` + Foundation only. Legacy payloads without `deviceId` decode empty.
 - `Models/TraySessionSyncStore.swift` — `@Observable` store over a
-  `KeyValueSyncBackend`. Default backend is `UbiquitousKeyValueBackend`
-  (`NSUbiquitousKeyValueStore`); tests inject `InMemoryKeyValueBackend` so no
-  unit test touches iCloud. **Each device writes its own sessions under a
-  per-device key `storageKeyPrefix + deviceId` and reads the union of all such
-  keys** (`keys(withPrefix:)`), so two devices publishing at once never
-  clobber each other's advertisement and same-host-name Macs stay distinct.
-  Ownership (local vs remote) keys on `deviceId`, not host name;
-  `withdrawLocalSessions()` clears only this device's key. Prunes stale entries
-  by `defaultTTL` (12h) on every load, caps the merged view at `maxSessions`
-  (64, newest first), and registers a `didChangeExternallyNotification`
-  observer so the UI redraws when another device pushes a change. Pure logic
-  (`active(from:)`, `upsert(_:into:)`) is static and unit-tested.
-- **Producer** — `SliccstartApp` publishes on `sliccProcess.leaderJoinUrl`
-  becoming non-nil (label = `SliccProcess.leaderTargetName`) and withdraws
-  when it clears. A 4-hour timer re-publishes a still-running leader so it
-  never ages out of the 12h TTL. `SliccstartAppDelegate.applicationWillTerminate`
-  withdraws local sessions on the clean-quit path but **not** on the
-  update/detach path (the browser survives, so the relaunched Sliccstart
-  republishes after reattach).
-- **Consumer** — `AppListView`'s "iCloud Sessions" section lists remote
-  sessions (device + age) with three actions: Copy-join-URL,
-  Attach-a-browser-as-follower, and Follow-in-Terminal. This device's own
-  sessions are read-only (copy only). Each row's icon overlays the matching
-  local browser's icon (matched by `label`/name) over an `icloud` badge when
-  that browser is installed. Follow reuses the terminal follower flow via
-  `SliccProcess.launchTerminalFollower(_:joinURLOverride:)`, which skips the
-  local-leader readiness gate when an override is supplied so it can attach to
-  a **remote** leader. Attach-browser launches the **top** browser via
-  `SliccProcess.launchBrowserFollower(_:joinUrl:)`.
+  `KeyValueSyncBackend` (default `UbiquitousKeyValueBackend`; tests inject
+  `InMemoryKeyValueBackend`). **Each device writes its own sessions under a
+  per-device key `storageKeyPrefix + deviceId` and reads the union**, so
+  concurrent publishes never clobber and same-host-name Macs stay distinct;
+  ownership keys on `deviceId`, and `withdrawLocalSessions()` clears only this
+  device's key. Prunes stale by `defaultTTL` (12h) on load,
+  caps the merged view at `maxSessions` (64), and observes
+  `didChangeExternallyNotification`. Pure `active(from:)`/`upsert(_:into:)` are
+  static and unit-tested.
+- **Producer** — `SliccstartApp` publishes when `leaderJoinUrl` becomes non-nil
+  (label = `leaderTargetName`) and withdraws when it clears; a 4-hour timer
+  re-publishes a live leader so it never ages out of the TTL.
+  `applicationWillTerminate` withdraws on clean quit but **not** on
+  update/detach (the browser survives; the relaunched app republishes).
+- **Consumer** — `AppListView`'s "iCloud Sessions" section lists remote sessions
+  (device + age) with Copy, Attach-browser, Follow-in-Terminal; own sessions are
+  copy-only. A row's icon overlays the matching local browser icon on an
+  `icloud` badge. Follow reuses `launchTerminalFollower(_:joinURLOverride:)`
+  (override skips the local-leader gate → attaches to a **remote** leader);
+  Attach-browser launches the **top** browser via `launchBrowserFollower`.
+- **Security** — join URLs carry the session secret and sync only through the
+  user's own (encrypted, same-Apple-ID) iCloud KVS. Tests:
+  `TraySessionSyncTests`.
 
 ## App Ordering, Browser Followers, and Startup
 
-- `Models/AppOrdering.swift` — pure ordering for the Browsers and Terminals
-  lists: `browserBundlePriority` (market share, Chrome first) and
-  `terminalBundlePriority` (power-user terminals before Terminal.app) supply
-  the defaults; a user drag-reorder is persisted by `AppOrderStore` (UserDefaults
-  keys `browserOrder`/`terminalOrder`, bundle-id arrays) and wins over the
-  default. `AppTarget.bundleId` is the ordering/matching key (populated by
-  `AppScanner` for known browsers/terminals/electron apps; `nil` for
-  CDP-sniffed electron apps). `AppListView` drag-reorders via the
-  `ReorderableRow` modifier (`.onDrag`/`.onDrop`, live reorder on hover).
-- **Browser as follower** — `SliccProcess.browserFollowerArgs(cdpPort:joinUrl:)`
-  passes `--join=<url>` (vs standalone's `--lead`) so swift-server opens the
-  browser attached to a **remote** tray. `launchBrowserFollower` flags the
-  `LaunchRecord` `isFollower = true`, which excludes it from `isLeaderReady`,
-  `leaderTargetName`, leader-URL clearing, and the smooth-update reattach
-  snapshot (a follower is not this device's leader). Clicking a browser row
-  with remote sessions present opens a confirmation dialog (lead vs attach);
-  with none it launches standalone (unchanged single-Mac flow).
-- **Startup** — `Models/StartupPreference.swift` replaces the per-browser
-  auto-launch picker with the `launchBrowserAtStartup` boolean (Settings >
-  Startup checkbox). `resolveEnabled(defaults:)` migrates the legacy
-  `autoLaunchAppId` (non-empty == enabled) once. On launch the app starts the
-  **top** browser of the ordered Browsers list.
-- Tests: `AppOrderingTests`, `StartupPreferenceTests`,
-  `SliccProcessLaunchArgsTests` (browser-follower args), and
-  `SliccProcessLeaderGatingTests` (follower does not gate as leader).
-- **Security** — join URLs carry the session secret. They sync through the
-  user's own iCloud key-value store (encrypted, same-Apple-ID devices only),
-  which the user has accepted for this feature.
-- Tests: `SliccstartTests/TraySessionSyncTests.swift`.
+- `Models/AppOrdering.swift` — pure default ordering (`browserBundlePriority`
+  market-share, `terminalBundlePriority` power-user-first); a user drag-reorder
+  persists via `AppOrderStore` (UserDefaults `browserOrder`/`terminalOrder`,
+  bundle-id arrays) and wins. `AppTarget.bundleId` (populated by `AppScanner`;
+  `nil` for CDP-sniffed electron apps) is the ordering/matching key.
+  `AppListView` drag-reorders via the `ReorderableRow` modifier
+  (`.onDrag`/`.onDrop`), keyed off the on-screen order so newly installed apps
+  are draggable too.
+- **Browser as follower** — `browserFollowerArgs(cdpPort:joinUrl:)` passes
+  `--join=<url>` (vs `--lead`). `launchBrowserFollower` flags the record
+  `isFollower`, excluding it from `isLeaderReady`, `leaderTargetName`,
+  leader-URL clearing, and reattach. Clicking a browser with remote sessions
+  opens a lead-vs-attach dialog; with none it launches standalone.
+- **Startup** — `Models/StartupPreference.swift`: the `launchBrowserAtStartup`
+  checkbox replaces the per-browser picker; `resolveEnabled(defaults:)` migrates
+  legacy `autoLaunchAppId` once; launch starts the **top** ordered browser.
+- Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
 
 ### iCloud provisioning (Developer ID app)
 
-The code above runs today but **does not sync** until the app is signed with an
-iCloud KVS entitlement backed by an _embedded_ provisioning profile. Sliccstart
-is Developer ID-signed and notarized (team `S8LB56P782`), distributed outside
-the App Store, so Developer ID signing alone does not authorize iCloud.
+Sync stays dark until the app is signed with an iCloud KVS entitlement backed
+by an _embedded_ provisioning profile (Developer ID signing alone does not
+authorize iCloud). `sign-and-package.sh` gates this on optional
+**`PROVISION_PROFILE`**: **unset** (default, incl. CI) signs against
+`Sliccstart.entitlements` only and `NSUbiquitousKeyValueStore` degrades to a
+local cache; **set** embeds the profile at `Contents/embedded.provisionprofile`
+and signs against a merged entitlements file (base + `ubiquity-kvstore-identifier`,
+base never mutated).
 
-`sign-and-package.sh` handles this via the optional **`PROVISION_PROFILE`** env
-var (path to the downloaded `.provisionprofile`):
+The KVS bucket (`ubiquity-kvstore-identifier`) defaults to
+`${APPLE_TEAM_ID}.com.slicc.sliccstart`, overridable via **`KVSTORE_IDENTIFIER`**
+(the iOS follower must match it; a brand-neutral `S8LB56P782.ai.sliccy.trays` is
+preferable, but a custom value fails the outer `codesign` unless the embedded
+profile authorizes it). The iCloud **container** is separate (CloudKit-only,
+unused), so any `iCloud.<reverse-dns>` you own works.
 
-- **unset** (default, incl. current CI): signs against `Sliccstart.entitlements`
-  only. No iCloud; `NSUbiquitousKeyValueStore` degrades to a local cache, so
-  builds stay valid.
-- **set**: embeds the profile at `Contents/embedded.provisionprofile` and signs
-  against a merged entitlements file (base + `com.apple.developer.ubiquity-kvstore-identifier`).
-  The base entitlements file is never mutated.
-
-The KVS bucket namespace (`ubiquity-kvstore-identifier`) defaults to
-`${APPLE_TEAM_ID}.com.slicc.sliccstart` and is overridable via the
-**`KVSTORE_IDENTIFIER`** env var. This is the value the code actually keys the
-sync bucket on and the value the future iOS follower must match to share it, so
-a brand-neutral value like `S8LB56P782.ai.sliccy.trays` is preferable — but the
-auto-generated Developer ID profile pins the bundle-id form, so a custom value
-must be verified at sign time (the outer `codesign` fails if the embedded
-profile does not authorize it). The **iCloud container** is separate: it only
-matters for CloudKit (unused here), so it can be any `iCloud.<reverse-dns>` you
-own (e.g. `iCloud.ai.sliccy`) with no code impact.
-
-One-time portal setup:
-
-1. Enable **iCloud** on the `com.slicc.sliccstart` App ID (attach an iCloud
-   container, e.g. `iCloud.ai.sliccy`; key-value storage rides along).
-2. Create a **Developer ID** distribution **provisioning profile** (App
-   variant) for that App ID + the Developer ID Application cert; download it.
-
-Local signed build with sync:
-
-```bash
-APPLE_TEAM_ID=S8LB56P782 APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... \
-  PROVISION_PROFILE=/path/to/Sliccstart_DeveloperID_iCloud.provisionprofile \
-  ./sign-and-package.sh
-```
-
-Then verify sync between two devices on the same Apple ID (both signed into
-iCloud). To enable in CI, add the profile as a base64 secret, decode it to a
-file in the release job, and export `PROVISION_PROFILE` before the script runs.
-Signing contract is covered by `macos-permissions.test.mjs`.
+One-time portal setup: enable iCloud on the `com.slicc.sliccstart` App ID
+(attach a container; KVS rides along), then create a Developer ID **provisioning
+profile** (App variant) for it. Local signed build passes `PROVISION_PROFILE=...`
+to `./sign-and-package.sh` with the usual `APPLE_*` env. For CI, add the profile
+as a base64 secret and decode it before exporting `PROVISION_PROFILE`. Signing
+contract: `macos-permissions.test.mjs`.
 
 ## Debug Build Creation
 
