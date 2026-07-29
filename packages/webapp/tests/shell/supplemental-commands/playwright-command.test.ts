@@ -2113,6 +2113,64 @@ describe('playwright-cli frame ID targeting errors', () => {
     expect(result.stderr).toContain('playwright-cli frames --tab=tab-1');
     expect(result.stderr).not.toContain('CDP error');
   });
+
+  it('finds frame IDs owned by remote follower targets from panel RPC', async () => {
+    let activeTargetId = '';
+    const withTab = vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      if (targetId === 'remote-frame') {
+        throw new Error('CDP error: No target with given id found (-32602)');
+      }
+      activeTargetId = targetId;
+      return fn('session-1');
+    });
+    const browser = createMockBrowser({
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([{ targetId: 'local-tab', title: 'Local', url: 'https://local.test' }]),
+      getFrameTree: vi.fn().mockImplementation(async () =>
+        activeTargetId === 'f-runtime:remote-tab'
+          ? [
+              { frameId: 'remote-main', url: 'https://remote.test', name: '' },
+              {
+                frameId: 'remote-frame',
+                parentFrameId: 'remote-main',
+                url: 'https://remote.test/frame',
+                name: '',
+              },
+            ]
+          : [{ frameId: 'local-main', url: 'https://local.test', name: '' }]
+      ),
+      withTab: withTab as BrowserAPI['withTab'],
+    });
+    const rpcCall = vi.fn().mockResolvedValue({
+      targets: [
+        {
+          targetId: 'f-runtime:remote-tab',
+          title: 'Follower',
+          url: 'https://remote.test',
+        },
+      ],
+    });
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call: rpcCall,
+      dispose: vi.fn(),
+    };
+    const restoreTray = withTrayConfigured();
+
+    try {
+      const cmd = createPlaywrightCommand('playwright-cli', browser, createMockFS());
+      const result = await cmd.execute(['eval', '--tab=remote-frame', 'location.href'], mockCtx);
+
+      expect(result.exitCode).toBe(1);
+      expect(rpcCall).toHaveBeenCalledWith('list-remote-targets', undefined, { timeoutMs: 3000 });
+      expect(result.stderr).toContain('--tab=f-runtime:remote-tab --frame=remote-frame');
+      expect(result.stderr).toContain('playwright-cli frames --tab=f-runtime:remote-tab');
+      expect(result.stderr).not.toContain('CDP error');
+    } finally {
+      (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = undefined;
+      restoreTray();
+    }
+  });
 });
 
 describe('playwright-cli session history logging', () => {

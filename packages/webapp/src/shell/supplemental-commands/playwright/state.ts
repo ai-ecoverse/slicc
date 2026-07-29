@@ -6,12 +6,19 @@
 import { base64ToUint8 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../../cdp/index.js';
 import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
+import { createLogger } from '../../../core/logger.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
+import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../../scoops/tray-runtime-config.js';
 import type { PlaywrightState } from './types.js';
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
 
 const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
+const log = createLogger('playwright');
 
 export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
   let statesByFs = sharedStateByBrowser.get(browser);
@@ -281,11 +288,42 @@ export async function resolveFrame(
   );
 }
 
+/** Whether a multi-browser tray is configured in the page or worker localStorage shim. */
+function isTrayConfigured(): boolean {
+  try {
+    const storage = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!storage) return false;
+    return !!(storage.getItem(TRAY_WORKER_STORAGE_KEY) || storage.getItem(TRAY_JOIN_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
+/** List local targets plus any remote tray/follower targets visible through panel RPC. */
+export async function listAllTargetsWithRemote(browser: BrowserAPI): Promise<PageInfo[]> {
+  if (typeof browser.listAllTargets !== 'function') return browser.listPages();
+
+  const pages = await browser.listAllTargets();
+  const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
+  if (!rpc) return pages;
+
+  try {
+    const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+    const seen = new Set(pages.map((page) => page.targetId));
+    for (const target of targets) {
+      if (seen.has(target.targetId)) continue;
+      seen.add(target.targetId);
+      pages.push({ targetId: target.targetId, title: target.title, url: target.url });
+    }
+  } catch (err) {
+    log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+  }
+  return pages;
+}
+
 async function listTargetsForFrameSearch(browser: BrowserAPI): Promise<PageInfo[]> {
   try {
-    return typeof browser.listAllTargets === 'function'
-      ? await browser.listAllTargets()
-      : await browser.listPages();
+    return await listAllTargetsWithRemote(browser);
   } catch {
     return [];
   }
