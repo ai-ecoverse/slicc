@@ -23,11 +23,16 @@ import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
 class FakeAgent implements AgentHandle {
   listeners = new Set<(event: AgentEvent) => void>();
-  sent: Array<{ text: string; messageId?: string }> = [];
+  sent: Array<{ text: string; messageId?: string; steer?: boolean }> = [];
   stopped = 0;
 
-  sendMessage(text: string, messageId?: string): void {
-    this.sent.push({ text, messageId });
+  sendMessage(
+    text: string,
+    messageId?: string,
+    _attachments?: unknown,
+    options?: { steer?: boolean }
+  ): void {
+    this.sent.push({ text, messageId, steer: options?.steer });
   }
 
   onEvent(callback: (event: AgentEvent) => void): () => void {
@@ -74,7 +79,9 @@ describe('WcChatController', () => {
 
   it('sends user prompts to the agent and renders the bubble locally', () => {
     controller.sendUserMessage('  build me a shader  ');
-    expect(agent.sent).toEqual([{ text: 'build me a shader', messageId: expect.any(String) }]);
+    expect(agent.sent).toEqual([
+      { text: 'build me a shader', messageId: expect.any(String), steer: undefined },
+    ]);
     const bubble = thread.querySelector('slicc-user-message');
     expect(bubble?.shadowRoot?.textContent).toContain('build me a shader');
   });
@@ -638,6 +645,26 @@ describe('WcChatController', () => {
     expect(queuedChanges[0]).toHaveLength(1);
     expect(queuedChanges[0][0].text).toBe('queued one');
     expect(localController.getQueuedMessages()).toHaveLength(1);
+  });
+
+  it('forwards a steering submit straight into the thread instead of the queued stack', () => {
+    const queuedChanges: Array<readonly { id: string }[]> = [];
+    const localController = new WcChatController({
+      thread,
+      agent,
+      onQueuedChange: (items) => queuedChanges.push(items.slice()),
+    });
+    agent.emit({ type: 'message_start', messageId: 'm1' });
+    const bubblesBefore = thread.querySelectorAll('slicc-user-message').length;
+    localController.sendUserMessage('steer me', undefined, { steer: true });
+    // The steer flag rides along to the agent handle so the scoop context can
+    // pick pi's steering queue over the follow-up queue.
+    expect(agent.sent.at(-1)).toMatchObject({ text: 'steer me', steer: true });
+    // A steering send belongs to the RUNNING turn, which never crosses another
+    // rising edge — so it renders inline now rather than parking in the stack.
+    expect(thread.querySelectorAll('slicc-user-message').length).toBe(bubblesBefore + 1);
+    expect(localController.getQueuedMessages()).toHaveLength(0);
+    expect(queuedChanges).toHaveLength(0);
   });
 
   it('flushes queued submissions into the thread at the next turn start', () => {

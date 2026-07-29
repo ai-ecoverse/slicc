@@ -730,20 +730,30 @@ export class ScoopContext {
     return true;
   }
 
-  /** Queue prompt if agent is busy. Returns true if queued. */
-  private queuePromptIfBusy(text: string, images: ImageContent[]): boolean {
+  /**
+   * Queue prompt if agent is busy. Returns true if queued.
+   *
+   * `steer` picks pi's steering queue over the follow-up queue: a steering
+   * message is injected as soon as the in-flight assistant turn finishes its
+   * current step, whereas a follow-up waits until the agent would otherwise
+   * stop. An idle agent has nothing to interrupt, so `steer` is a no-op there
+   * and the prompt runs immediately through the normal path.
+   */
+  private queuePromptIfBusy(text: string, images: ImageContent[], steer = false): boolean {
     const agentIsStreaming = this.agent!.state?.isStreaming ?? false;
     if (this.isProcessing || agentIsStreaming) {
-      log.info('Queueing prompt via followUp while processing', {
+      log.info(`Queueing prompt via ${steer ? 'steer' : 'followUp'} while processing`, {
         folder: this.scoop.folder,
         isProcessing: this.isProcessing,
         agentIsStreaming,
       });
-      this.agent!.followUp({
-        role: 'user',
-        content: [{ type: 'text', text }, ...images],
+      const message = {
+        role: 'user' as const,
+        content: [{ type: 'text' as const, text }, ...images],
         timestamp: Date.now(),
-      });
+      };
+      if (steer) this.agent!.steer(message);
+      else this.agent!.followUp(message);
       return true;
     }
     return false;
@@ -972,10 +982,18 @@ export class ScoopContext {
     return lastError;
   }
 
-  /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
-  async prompt(text: string, images: ImageContent[] = []): Promise<void> {
+  /**
+   * Send a prompt to this scoop's agent. If already processing, queues it —
+   * via `steer()` when `options.steer` is set (interrupt the running turn),
+   * otherwise via `followUp()`.
+   */
+  async prompt(
+    text: string,
+    images: ImageContent[] = [],
+    options?: { steer?: boolean }
+  ): Promise<void> {
     if (!(await this.ensureAgentReady())) return;
-    if (this.queuePromptIfBusy(text, images)) return;
+    if (this.queuePromptIfBusy(text, images, options?.steer)) return;
 
     const agent = this.agent!;
 

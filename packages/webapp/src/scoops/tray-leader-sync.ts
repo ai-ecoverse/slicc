@@ -81,7 +81,12 @@ export interface LeaderSyncManagerOptions {
    */
   onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   /** Handle a user message arriving from a follower. */
-  onFollowerMessage: (text: string, messageId: string, attachments?: MessageAttachment[]) => void;
+  onFollowerMessage: (
+    text: string,
+    messageId: string,
+    attachments?: MessageAttachment[],
+    options?: { steer?: boolean }
+  ) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;
   /**

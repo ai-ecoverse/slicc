@@ -249,8 +249,8 @@ export class Orchestrator implements ConeApprovalRouter {
     getTabs: () => this.lifecycle.getTabsMap(),
     getContexts: () => this.lifecycle.getContexts(),
     createScoopTab: (jid) => this.createScoopTab(jid),
-    sendPrompt: (jid, text, senderId, senderName, images) =>
-      this.sendPrompt(jid, text, senderId, senderName, images ?? []),
+    sendPrompt: (jid, text, senderId, senderName, images, options) =>
+      this.sendPrompt(jid, text, senderId, senderName, images ?? [], options),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
     onError: (jid, error) => this.callbacks.onError(jid, error),
     getSessionStore: () => this.sessionStore,
@@ -954,9 +954,10 @@ export class Orchestrator implements ConeApprovalRouter {
     text: string,
     senderId: string,
     senderName: string,
-    images: ImageContent[] = []
+    images: ImageContent[] = [],
+    options?: { steer?: boolean }
   ): Promise<void> {
-    return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images);
+    return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images, options);
   }
 
   /** Stop the message polling loop */

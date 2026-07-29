@@ -60,6 +60,12 @@ export interface UserMessageMsg {
   text: string;
   messageId: string;
   attachments?: MessageAttachment[];
+  /**
+   * Steering send (Ctrl/Cmd+Enter in the composer): interrupt a running turn
+   * with this message instead of queueing it behind the turn. Ignored when the
+   * agent is idle — there is nothing to interrupt.
+   */
+  steer?: boolean;
 }
 
 /**

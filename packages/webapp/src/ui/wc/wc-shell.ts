@@ -485,6 +485,15 @@ export function submittedText(event: Event): string | undefined {
   return (event as Event & { detail?: { value?: string } }).detail?.value;
 }
 
+/**
+ * Whether the submit was a steering send (Ctrl/Cmd+Enter), from the input
+ * card's `submit` CustomEvent. A steering send interrupts a running turn
+ * instead of queueing behind it; a plain Enter enqueues as before.
+ */
+export function submittedSteer(event: Event): boolean {
+  return (event as Event & { detail?: { steer?: boolean } }).detail?.steer === true;
+}
+
 /** Mount the design-time preview: the WC shell over the chat fixture. */
 export function mountWcUiPreview(root: HTMLElement): void {
   const refs = mountWcShell(root, {

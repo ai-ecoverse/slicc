@@ -116,7 +116,9 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *     </slicc-input-card>
  *
  * Behavior: the textarea autosizes from a 28px min-height up to a 140px max
- * (then scrolls). Enter sends (emits `submit`); Shift+Enter inserts a newline.
+ * (then scrolls). Enter sends (emits `submit`); Shift+Enter inserts a newline;
+ * Ctrl/Cmd+Enter sends with `detail.steer` set, which hosts read as "interrupt
+ * the running turn with this rather than queue it behind the turn".
  * Every keystroke emits `input`. When a `suggestion` is set (e.g. the host's
  * LLM-proposed follow-up prompt), it is shown as the placeholder of an empty
  * composer and Tab accepts it into the textarea — instead of tabbing focus
@@ -144,6 +146,8 @@ const DEFAULT_PLACEHOLDER = 'Ask sliccy, or describe a change…';
  *   at the very end — the host scrolls to the next user message (or refocuses)
  * @fires submit - composed + bubbling; on Enter without Shift; `detail.value`
  *   carries the submitted text (suppressed when the textarea is empty/disabled).
+ *   `detail.steer` is `true` when the send came from Ctrl/Cmd+Enter — the host's
+ *   cue to interrupt a running turn instead of queueing behind it.
  *   Programmatic `submit(source)` calls additionally carry `detail.source`
  *   (e.g. `'dictation'` from the composer's push-to-talk)
  */
@@ -307,9 +311,12 @@ export class SliccInputCard extends HTMLElement {
 
   #onKeydown = (e: KeyboardEvent): void => {
     if (e.isComposing) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Enter sends; Shift+Enter falls through to the native newline. Ctrl/Cmd+
+    // Enter sends too, flagged as a steering send so the host can interrupt a
+    // running turn with it. Alt is left to the platform.
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
       e.preventDefault();
-      this.#emitSubmit();
+      this.#emitSubmit(undefined, e.ctrlKey || e.metaKey);
       return;
     }
     // Tab-to-accept: an empty composer showing a suggested follow-up fills the
@@ -378,7 +385,7 @@ export class SliccInputCard extends HTMLElement {
     ta.setSelectionRange(len, len);
   }
 
-  #emitSubmit(source?: string): void {
+  #emitSubmit(source?: string, steer?: boolean): void {
     if (this.disabled) return;
     const value = this.#textarea.value;
     if (value.trim() === '') return;
@@ -390,7 +397,7 @@ export class SliccInputCard extends HTMLElement {
       new CustomEvent('submit', {
         bubbles: true,
         composed: true,
-        detail: { value, ...(source ? { source } : {}) },
+        detail: { value, ...(source ? { source } : {}), ...(steer ? { steer: true } : {}) },
       })
     );
   }

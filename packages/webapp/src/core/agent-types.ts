@@ -19,8 +19,18 @@ export type { AgentEvent } from '@slicc/shared-ts';
 // ---------------------------------------------------------------------------
 
 export interface AgentHandle {
-  /** Send a user message to the agent. */
-  sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void;
+  /**
+   * Send a user message to the agent. `options.steer` marks a steering send
+   * (Ctrl/Cmd+Enter in the composer): when the agent is mid-turn, interrupt the
+   * running turn with this message instead of queueing it behind the turn. An
+   * idle agent has nothing to interrupt, so the flag is ignored there.
+   */
+  sendMessage(
+    text: string,
+    messageId?: string,
+    attachments?: MessageAttachment[],
+    options?: { steer?: boolean }
+  ): void;
   /** Subscribe to agent events. Returns an unsubscribe function. */
   onEvent(callback: (event: AgentEvent) => void): () => void;
   /** Stop the current agent response. */

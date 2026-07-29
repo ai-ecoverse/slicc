@@ -182,7 +182,15 @@ export class FollowerDispatch {
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;
-    this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
+    // Only a steering send carries the options argument, so the ordinary
+    // hand-off stays a three-argument call.
+    if (message.steer) {
+      this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
+        steer: true,
+      });
+    } else {
+      this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
+    }
   }
 
   private handleFollowerNewSession(bootstrapId: string, action: 'save' | 'skip' | 'erase'): void {

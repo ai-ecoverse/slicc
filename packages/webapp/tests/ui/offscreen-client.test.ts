@@ -70,6 +70,18 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.messageId).toBe('msg-1');
   });
 
+  it('forwards the steer flag on a steering send and leaves it unset otherwise', () => {
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+
+    handle.sendMessage('interrupt', 'msg-1', undefined, { steer: true });
+    handle.sendMessage('enqueue', 'msg-2');
+
+    const payloads = sentMessages.map((m) => (m as { payload: any }).payload);
+    expect(payloads[0].steer).toBe(true);
+    expect(payloads[1].steer).toBeUndefined();
+  });
+
   it('sends attachments with user-message payloads', () => {
     client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();

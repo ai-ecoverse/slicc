@@ -439,13 +439,18 @@ export class ScoopLifecycleManager {
     return false;
   }
 
-  /** Send a prompt to a scoop, creating its tab if necessary. */
+  /**
+   * Send a prompt to a scoop, creating its tab if necessary. `options.steer`
+   * asks the context to interrupt a running turn with this prompt rather than
+   * queue it behind the turn (see `ScoopContext.prompt`).
+   */
   async sendPrompt(
     jid: string,
     text: string,
     _senderId: string,
     _senderName: string,
-    images: ImageContent[] = []
+    images: ImageContent[] = [],
+    options?: { steer?: boolean }
   ): Promise<void> {
     let context = this.contexts.get(jid);
 
@@ -484,7 +489,7 @@ export class ScoopLifecycleManager {
 
     log.debug('Prompt sent to scoop', { jid, textLength: text.length, imageCount: images.length });
 
-    await context.prompt(text, images);
+    await context.prompt(text, images, options);
   }
 
   /**

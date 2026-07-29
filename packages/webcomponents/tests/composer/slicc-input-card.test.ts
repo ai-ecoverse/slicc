@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 // Siblings composed by tag in the default toolbar — importing here registers
 // them so the composed elements upgrade during the test run.
 import '../../src/add-menu/slicc-add-menu.js';
@@ -32,6 +33,18 @@ function enter(el: SliccInputCard, shift = false): void {
   textarea(el).dispatchEvent(
     new KeyboardEvent('keydown', { key: 'Enter', shiftKey: shift, bubbles: true, cancelable: true })
   );
+}
+
+/** Enter with an arbitrary modifier set; returns the event so callers can read `defaultPrevented`. */
+function enterWith(el: SliccInputCard, modifiers: KeyboardEventInit): KeyboardEvent {
+  const ev = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+    ...modifiers,
+  });
+  textarea(el).dispatchEvent(ev);
+  return ev;
 }
 
 describe('slicc-input-card', () => {
@@ -338,7 +351,58 @@ describe('slicc-input-card', () => {
       el.value = 'line one';
       const submit = vi.fn();
       el.addEventListener('submit', submit);
-      enter(el, true);
+      const ev = enterWith(el, { shiftKey: true });
+      expect(submit).not.toHaveBeenCalled();
+      // The native newline insertion must survive: no preventDefault.
+      expect(ev.defaultPrevented).toBe(false);
+    });
+
+    it('submits WITHOUT a steer flag on a plain Enter (queue as before)', () => {
+      const el = mount();
+      el.value = 'queue me';
+      const submit = vi.fn();
+      el.addEventListener('submit', (e) => submit((e as Event as CustomEvent).detail));
+      enter(el);
+      expect(submit).toHaveBeenCalledWith({ value: 'queue me' });
+    });
+
+    it.each([
+      ['Ctrl+Enter', { ctrlKey: true }],
+      ['Cmd+Enter', { metaKey: true }],
+    ])('submits with detail.steer on %s', (_label, modifiers) => {
+      const el = mount();
+      el.value = 'steer me';
+      const submit = vi.fn();
+      el.addEventListener('submit', (e) => submit((e as Event as CustomEvent).detail));
+      const ev = enterWith(el, modifiers);
+      expect(submit).toHaveBeenCalledWith({ value: 'steer me', steer: true });
+      expect(ev.defaultPrevented).toBe(true);
+    });
+
+    it('does NOT submit on Alt+Enter (left to the platform)', () => {
+      const el = mount();
+      el.value = 'alt held';
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      const ev = enterWith(el, { altKey: true });
+      expect(submit).not.toHaveBeenCalled();
+      expect(ev.defaultPrevented).toBe(false);
+    });
+
+    it('Shift wins over Ctrl — Shift+Ctrl+Enter stays a newline', () => {
+      const el = mount();
+      el.value = 'both held';
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      enterWith(el, { shiftKey: true, ctrlKey: true });
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    it('suppresses a steering submit when the textarea is empty', () => {
+      const el = mount();
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      enterWith(el, { ctrlKey: true });
       expect(submit).not.toHaveBeenCalled();
     });
 
@@ -373,6 +437,56 @@ describe('slicc-input-card', () => {
       });
       textarea(el).dispatchEvent(ev);
       expect(ev.defaultPrevented).toBe(true);
+    });
+  });
+
+  // Synthetic KeyboardEvents can only assert that `preventDefault` was NOT
+  // called; only a real keystroke proves the browser actually inserted the
+  // newline into the textarea and that the value reflected back out.
+  describe('real keystrokes (browser-driven)', () => {
+    it('Shift+Enter inserts a newline and does not submit', async () => {
+      const el = mount();
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      await userEvent.click(textarea(el));
+      await userEvent.keyboard('first');
+      await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
+      await userEvent.keyboard('second');
+      expect(el.value).toBe('first\nsecond');
+      expect(submit).not.toHaveBeenCalled();
+    });
+
+    it('Ctrl+Enter submits the multi-line value with detail.steer', async () => {
+      const el = mount();
+      const submit = vi.fn();
+      el.addEventListener('submit', (e) => submit((e as Event as CustomEvent).detail));
+      await userEvent.click(textarea(el));
+      await userEvent.keyboard('one');
+      await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
+      await userEvent.keyboard('two');
+      await userEvent.keyboard('{Control>}{Enter}{/Control}');
+      expect(submit).toHaveBeenCalledWith({ value: 'one\ntwo', steer: true });
+    });
+
+    it('preserves the line breaks of pasted multi-line text', async () => {
+      const source = document.createElement('textarea');
+      source.value = 'alpha\nbeta\ngamma';
+      document.body.appendChild(source);
+      await userEvent.click(source);
+      await userEvent.keyboard('{Control>}a{/Control}');
+      await userEvent.copy();
+
+      const el = mount();
+      const submit = vi.fn();
+      el.addEventListener('submit', submit);
+      await userEvent.click(textarea(el));
+      await userEvent.paste();
+
+      expect(el.value).toBe('alpha\nbeta\ngamma');
+      // A paste must not be mistaken for a send, and it has to reflect out
+      // through the same value pipeline typing uses.
+      expect(submit).not.toHaveBeenCalled();
+      expect(el.getAttribute('value')).toBe('alpha\nbeta\ngamma');
     });
   });
 
