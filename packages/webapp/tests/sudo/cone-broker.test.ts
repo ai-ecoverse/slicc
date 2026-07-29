@@ -189,6 +189,76 @@ describe('ConeRequestRegistry fail-closed paths', () => {
   });
 });
 
+describe('ConeRequestRegistry onAutoSettle', () => {
+  function makeRegistryWithSettle(ids?: string[]) {
+    const onAutoSettle = vi.fn();
+    const timers = new Set<() => void>();
+    let i = 0;
+    const registry = new ConeRequestRegistry({
+      newId: () => ids?.[i++] ?? `sudo-${i}`,
+      setTimer: (cb: () => void) => {
+        timers.add(cb);
+        return cb;
+      },
+      clearTimer: (h: unknown) => {
+        timers.delete(h as () => void);
+      },
+      onAutoSettle,
+    });
+    const fireAllTimers = () => {
+      for (const cb of timers) cb();
+    };
+    return { registry, onAutoSettle, fireAllTimers };
+  }
+
+  it('fires with reason "expired" when the timer settles a request', () => {
+    const { registry, onAutoSettle, fireAllTimers } = makeRegistryWithSettle(['sudo-1']);
+    registry.register('scoop_a', REQ);
+    fireAllTimers();
+    expect(onAutoSettle).toHaveBeenCalledExactlyOnceWith('sudo-1', 'expired');
+  });
+
+  it('fires with reason "scoop-dropped" for each request failScoop drains', () => {
+    const { registry, onAutoSettle } = makeRegistryWithSettle(['a1', 'a2', 'b1']);
+    registry.register('scoop_a', REQ);
+    registry.register('scoop_a', REQ);
+    registry.register('scoop_b', REQ);
+    registry.failScoop('scoop_a');
+    expect(onAutoSettle.mock.calls).toEqual([
+      ['a1', 'scoop-dropped'],
+      ['a2', 'scoop-dropped'],
+    ]);
+  });
+
+  it('fires with reason "shutdown" for every request failAll drains', () => {
+    const { registry, onAutoSettle } = makeRegistryWithSettle(['x1', 'x2']);
+    registry.register('scoop_a', REQ);
+    registry.register('scoop_b', REQ);
+    registry.failAll();
+    expect(onAutoSettle.mock.calls).toEqual([
+      ['x1', 'shutdown'],
+      ['x2', 'shutdown'],
+    ]);
+  });
+
+  it('does NOT fire for a normal cone-driven resolve', () => {
+    const { registry, onAutoSettle } = makeRegistryWithSettle(['sudo-1']);
+    const { id } = registry.register('scoop_a', REQ);
+    registry.resolve(id, { decision: 'allow' });
+    expect(onAutoSettle).not.toHaveBeenCalled();
+  });
+
+  it('swallows a throwing callback so teardown is not wedged', () => {
+    const onAutoSettle = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const registry = new ConeRequestRegistry({ newId: () => 'sudo-1', onAutoSettle });
+    const { pending } = registry.register('scoop_a', REQ);
+    expect(() => registry.failAll()).not.toThrow();
+    return expect(pending).resolves.toEqual({ decision: 'deny' });
+  });
+});
+
 describe('ConeRequestRegistry timeout configuration', () => {
   it('does NOT install a timer when timeoutMs <= 0', () => {
     const { registry, setTimer } = makeRegistry({ timeoutMs: 0 });

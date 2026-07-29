@@ -24,6 +24,7 @@ import {
   type SudoBroker,
   type SudoDecision,
   type SudoRequest,
+  type SudoSettleReason,
 } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { LickManager } from './lick-manager.js';
@@ -64,9 +65,34 @@ export interface ResolveSudoRequestAndPersistResult {
 }
 
 export class ScoopApprovalRouter implements ConeApprovalRouter {
-  private registry: ConeRequestRegistry = new ConeRequestRegistry();
+  private registry: ConeRequestRegistry;
 
-  constructor(private deps: ScoopApprovalRouterDeps) {}
+  constructor(private deps: ScoopApprovalRouterDeps) {
+    // Fail-closed settles that bypass the cone (timeout / scoop drop /
+    // shutdown) must still retire the persisted `pending` lick card, or the
+    // chat keeps showing a request `list_sudo_requests` no longer knows about.
+    this.registry = new ConeRequestRegistry({
+      onAutoSettle: (id, reason) => this.handleAutoSettle(id, reason),
+    });
+  }
+
+  /**
+   * Retire a lick card the registry settled fail-closed without a cone
+   * decision. Reuses the existing `dismissed` state (a deny outcome) and never
+   * re-delivers to the cone — {@link persistLickDecision} only re-renders the
+   * stored card. Fire-and-forget: settling is synchronous, persistence is
+   * best-effort.
+   */
+  private handleAutoSettle(id: string, reason: SudoSettleReason): void {
+    log.info('Sudo request auto-settled fail-closed; retiring lick card', { id, reason });
+    void this.persistLickDecision(id, 'deny').catch((err) => {
+      log.warn('Failed to persist auto-settled lick decision', {
+        id,
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
   /** Build the per-scoop {@link SudoBroker}; scoop's gated FS / shell calls route here. */
   getConeSudoBroker(scoopJid: string): SudoBroker {
