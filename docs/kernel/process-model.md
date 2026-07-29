@@ -186,14 +186,21 @@ after; neither await exists here. Instead the sync bridge flushes pending
 `SyncFsCache` mutations over the blocking fs channel (which is why the fs route
 also carries live `mkdir` / `rm`), then **invalidates** the cache after the
 command rather than re-snapshotting — every sync read already falls through to
-the live bridge on a miss, so invalidation is correct and far cheaper.
+the live bridge on a miss, so invalidation is correct and far cheaper. That
+fall-through covers the removals too (`rmSync` / `rmdirSync` / `unlinkSync` /
+`renameSync`): after an invalidate a cache miss is not proof of absence, so a
+miss deletes through the live bridge and tombstones the path. `renameSync` of a
+live-only **directory** is the one gap — a recursive live walk over a blocking
+XHR is too expensive, so it raises `EISDIR`.
 
 **No bridge → throw**: without a controlling SW there is no way to block on a
 host round-trip, so the sync forms throw a message naming `promisify(exec)`.
 `spawnSync` reports it on `.error` instead (it never throws).
 
 **Not killable mid-call**: a blocked `execSync` cannot be SIGINT'd; only realm
-`worker.terminate()` (SIGKILL, exit 137) reaches it.
+`worker.terminate()` (SIGKILL, exit 137) reaches it. Realm disposal then revokes
+the sync token, which aborts the in-flight `ctx.exec` too (`trackSyncExec`), so
+a killed realm cannot strand a running command.
 
 ## Wiring map
 

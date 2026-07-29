@@ -41,6 +41,16 @@ export interface SyncFsTokenEntry {
 
 const registry = new Map<string, SyncFsTokenEntry>();
 
+/**
+ * In-flight synchronous execs per token. A sync exec runs entirely inside one
+ * `dispatchSyncExec` call, so — unlike `exec.start` — it has no `spawnId` the
+ * realm host could track. Without this, killing a realm that is blocked in
+ * `execSync` (SIGINT / SIGTERM / SIGKILL) reports the realm as exited while the
+ * already-started `ctx.exec` keeps running, and producing side effects, for the
+ * rest of its budget. {@link revokeSyncFsToken} aborts them on realm dispose.
+ */
+const inFlightExecs = new Map<string, Set<AbortController>>();
+
 /** Mint an unguessable token bound to a realm's fs + exec handles and cwd. */
 export function mintSyncFsToken(entry: SyncFsTokenEntry): SyncFsToken {
   // The one place a raw random string becomes a capability token. The registry
@@ -56,7 +66,41 @@ export function resolveSyncFsToken(token: string): SyncFsTokenEntry | null {
   return registry.get(token) ?? null;
 }
 
-/** Revoke on realm dispose so a dead realm's token can never be reused. */
+/**
+ * Register an in-flight synchronous exec against its realm's token. Returns the
+ * disposer the dispatcher must call once the command settles; a token already
+ * revoked (the realm died between resolve and dispatch) aborts immediately so a
+ * late command cannot outlive its realm.
+ */
+export function trackSyncExec(token: string, controller: AbortController): () => void {
+  if (!registry.has(token)) {
+    controller.abort();
+    return () => {};
+  }
+  let set = inFlightExecs.get(token);
+  if (!set) {
+    set = new Set();
+    inFlightExecs.set(token, set);
+  }
+  set.add(controller);
+  return () => {
+    const live = inFlightExecs.get(token);
+    if (!live) return;
+    live.delete(controller);
+    if (live.size === 0) inFlightExecs.delete(token);
+  };
+}
+
+/**
+ * Revoke on realm dispose so a dead realm's token can never be reused, and
+ * abort anything it still has running — see {@link inFlightExecs}.
+ */
 export function revokeSyncFsToken(token: string): void {
   registry.delete(token);
+  const live = inFlightExecs.get(token);
+  if (!live) return;
+  inFlightExecs.delete(token);
+  for (const controller of live) {
+    if (!controller.signal.aborted) controller.abort();
+  }
 }

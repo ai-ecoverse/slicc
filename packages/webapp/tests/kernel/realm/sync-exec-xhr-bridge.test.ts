@@ -1,6 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest';
 import { createSyncExecXhrBridge } from '../../../src/kernel/realm/sync-exec-xhr-bridge.js';
 import { SyncFsCache } from '../../../src/kernel/realm/sync-fs-cache.js';
+import { SYNC_EXEC_MAX_TIMEOUT_MS } from '../../../src/kernel/realm/sync-fs-wire.js';
 import type { SyncFsXhrMutatingBridge } from '../../../src/kernel/realm/sync-fs-xhr-bridge.js';
 
 interface FakeReply {
@@ -105,6 +106,23 @@ test('argv, stdin and timeout ride the envelope', () => {
     stdin: 'piped',
     timeoutMs: 1234,
   });
+});
+
+test("Node's `{ timeout: 0 }` becomes the default budget, not a 0 transport budget", () => {
+  // 0 means "no timeout" in Node. Sending it verbatim made the SW use its
+  // 120s fallback while the XHR gave up after only the margin, so any command
+  // slower than the margin failed early with EIO.
+  installFakeXhr();
+  reply = okReply({ stdout: '', stderr: '', exitCode: 0 });
+  createSyncExecXhrBridge('t', { timeoutMs: 60_000 }).run('slow', { timeout: 0 });
+  expect(JSON.parse(lastSent!.body).timeoutMs).toBe(60_000);
+});
+
+test('a caller budget above the wire ceiling is clamped before it reaches the XHR', () => {
+  installFakeXhr();
+  reply = okReply({ stdout: '', stderr: '', exitCode: 0 });
+  createSyncExecXhrBridge('t').run('forever', { timeout: Number.MAX_SAFE_INTEGER });
+  expect(JSON.parse(lastSent!.body).timeoutMs).toBe(SYNC_EXEC_MAX_TIMEOUT_MS);
 });
 
 test('an errno reply throws an Error carrying .code', () => {

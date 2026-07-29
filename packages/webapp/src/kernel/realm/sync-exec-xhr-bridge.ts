@@ -28,7 +28,11 @@
  * sync-fs (`wasUsed()`), matching the async bridge's perf gate.
  */
 
-import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispatch.js';
+import {
+  clampSyncExecTimeout,
+  SYNC_EXEC_CHANNEL,
+  type SyncExecResultPayload,
+} from './sync-exec-dispatch.js';
 import type { SyncFsCache } from './sync-fs-cache.js';
 import {
   SYNC_EXEC_DEFAULT_TIMEOUT_MS,
@@ -87,7 +91,13 @@ export function createSyncExecXhrBridge(
       const coherent = syncFs?.wasUsed() === true && fsBridge !== undefined;
       if (coherent) flushBeforeSyncExec(syncFs!, fsBridge!);
       const label = `sync-exec bridge, '${Array.isArray(command) ? command.join(' ') : command}'`;
-      const timeoutMs = runOpts.timeout ?? defaultTimeoutMs;
+      // Clamp HERE, not just server-side: the transport budget below derives
+      // from this value, so an unclamped one desyncs the two. Node's
+      // `{ timeout: 0 }` means "no timeout" and must become the default budget
+      // (the SW's own fallback) rather than a 0 that makes the XHR give up in
+      // SYNC_EXEC_XHR_MARGIN_MS; an oversized one must hit the wire ceiling
+      // here too, or the XHR waits long past the command the SW already killed.
+      const timeoutMs = clampSyncExecTimeout(runOpts.timeout, defaultTimeoutMs);
       const payload = {
         command,
         ...(runOpts.args !== undefined ? { args: runOpts.args } : {}),

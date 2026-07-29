@@ -6,7 +6,10 @@ import {
   isSyncExecRequest,
   SYNC_EXEC_CHANNEL,
 } from '../../../src/kernel/realm/sync-exec-dispatch.js';
-import { mintSyncFsToken } from '../../../src/kernel/realm/sync-fs-token-registry.js';
+import {
+  mintSyncFsToken,
+  revokeSyncFsToken,
+} from '../../../src/kernel/realm/sync-fs-token-registry.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS } from '../../../src/kernel/realm/sync-fs-wire.js';
 
 type ExecCall = { cmd: string; opts: Record<string, unknown> };
@@ -136,6 +139,34 @@ test('the budget aborts a hung command and reports ETIMEDOUT', async () => {
   vi.useRealTimers();
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.errno).toBe('ETIMEDOUT');
+});
+
+test('revoking the token aborts an in-flight command (realm killed mid-execSync)', async () => {
+  // A sync exec has no spawnId the realm host can track, so without the
+  // registry hook a SIGKILL'd realm left its ctx.exec running — and producing
+  // side effects — for the rest of its budget.
+  let aborted = false;
+  const exec = (async (_cmd: string, opts: { signal: AbortSignal }) =>
+    new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => {
+        aborted = true;
+        reject(new Error('aborted'));
+      });
+    })) as unknown as CommandContext['exec'];
+  const token = mintSyncFsToken({ fs: {} as CommandContext['fs'], exec, cwd: '/workspace' });
+  const pending = dispatchSyncExec({
+    token,
+    channel: SYNC_EXEC_CHANNEL,
+    command: 'sleep 999',
+    timeoutMs: 600_000,
+  });
+  await Promise.resolve(); // let the dispatch reach ctx.exec
+  revokeSyncFsToken(token);
+  const r = await pending;
+  expect(aborted).toBe(true);
+  expect(r.ok).toBe(false);
+  // Not ETIMEDOUT — the budget never elapsed.
+  if (!r.ok) expect(r.errno).toBe('ECANCELED');
 });
 
 test('clampSyncExecTimeout bounds the caller budget and falls back on garbage', () => {

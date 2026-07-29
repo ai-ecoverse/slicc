@@ -6,6 +6,7 @@ import {
   mintSyncFsToken,
   resolveSyncFsToken,
   revokeSyncFsToken,
+  trackSyncExec,
 } from '../../../src/kernel/realm/sync-fs-token-registry.js';
 
 const fakeFs = {} as never;
@@ -43,6 +44,42 @@ test('two mints are distinct and isolated', () => {
 
 test('revoking an unknown token is a no-op (no throw)', () => {
   expect(() => revokeSyncFsToken('does-not-exist')).not.toThrow();
+});
+
+test('trackSyncExec: revoke aborts every in-flight command for that token', () => {
+  const token = mintSyncFsToken({ fs: fakeFs, cwd: '/' });
+  const a = new AbortController();
+  const b = new AbortController();
+  trackSyncExec(token, a);
+  trackSyncExec(token, b);
+  revokeSyncFsToken(token);
+  expect(a.signal.aborted).toBe(true);
+  expect(b.signal.aborted).toBe(true);
+});
+
+test('trackSyncExec: an untracked (settled) command is not aborted by a later revoke', () => {
+  const token = mintSyncFsToken({ fs: fakeFs, cwd: '/' });
+  const controller = new AbortController();
+  trackSyncExec(token, controller)();
+  revokeSyncFsToken(token);
+  expect(controller.signal.aborted).toBe(false);
+});
+
+test('trackSyncExec: an already-revoked token aborts immediately (resolve/revoke race)', () => {
+  const token = mintSyncFsToken({ fs: fakeFs, cwd: '/' });
+  revokeSyncFsToken(token);
+  const controller = new AbortController();
+  trackSyncExec(token, controller);
+  expect(controller.signal.aborted).toBe(true);
+});
+
+test('trackSyncExec: one realm\u2019s revoke leaves another realm\u2019s command running', () => {
+  const mine = mintSyncFsToken({ fs: fakeFs, cwd: '/a' });
+  const theirs = mintSyncFsToken({ fs: fakeFs, cwd: '/b' });
+  const controller = new AbortController();
+  trackSyncExec(theirs, controller);
+  revokeSyncFsToken(mine);
+  expect(controller.signal.aborted).toBe(false);
 });
 
 test('attachRealmHost mints a resolvable token when the bridge is enabled', () => {

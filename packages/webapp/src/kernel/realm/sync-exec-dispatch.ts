@@ -20,7 +20,7 @@
  */
 
 import { type SyncFsRequest, type SyncFsResult, toErrno } from './sync-fs-dispatch.js';
-import { resolveSyncFsToken } from './sync-fs-token-registry.js';
+import { resolveSyncFsToken, trackSyncExec } from './sync-fs-token-registry.js';
 import { SYNC_EXEC_MAX_TIMEOUT_MS } from './sync-fs-wire.js';
 
 /** Discriminator distinguishing an exec request from an fs one on the wire. */
@@ -115,10 +115,17 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   // Abort the in-flight `ctx.exec` at the budget so the command cannot outlive
   // the realm's blocked XHR and keep running with no consumer for its result.
   const controller = new AbortController();
+  let timedOut = false;
   const timer = setTimeout(
-    () => controller.abort(),
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
     clampSyncExecTimeout(req.timeoutMs, SYNC_EXEC_MAX_TIMEOUT_MS)
   );
+  // Register with the token so realm disposal (SIGKILL and friends) aborts the
+  // command too — a sync exec has no `spawnId` for the host to track.
+  const untrack = trackSyncExec(req.token, controller);
   try {
     const result = await entry.exec(normalized.cmd, {
       cwd: entry.cwd,
@@ -138,14 +145,21 @@ export async function dispatchSyncExec(req: SyncExecRequest): Promise<SyncFsResu
   } catch (err) {
     // An aborted exec is a timeout, not a shell failure — surface it as
     // ETIMEDOUT so the shim can throw the Node-shaped timeout error.
-    if (controller.signal.aborted) {
+    if (timedOut) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, errno: 'ETIMEDOUT', message: `sync-exec: timed out — ${message}` };
+    }
+    // Aborted without the timer firing = the realm was disposed mid-command.
+    // ECANCELED, not ETIMEDOUT: nothing is left to receive it either way, but
+    // the errno should not claim the budget elapsed.
+    if (controller.signal.aborted) {
+      return { ok: false, errno: 'ECANCELED', message: 'sync-exec: realm disposed' };
     }
     // Shared with the fs channel so a sudo denial's EACCES survives rather than
     // being flattened to a generic EIO.
     return toErrno(err);
   } finally {
     clearTimeout(timer);
+    untrack();
   }
 }

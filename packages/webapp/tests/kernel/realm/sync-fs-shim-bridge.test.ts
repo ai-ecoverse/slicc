@@ -1,7 +1,10 @@
 import { expect, test } from 'vitest';
 import { createSyncFsBridge } from '../../../src/kernel/realm/realm-fs-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from '../../../src/kernel/realm/sync-fs-cache.js';
-import type { SyncFsXhrBridge } from '../../../src/kernel/realm/sync-fs-xhr-bridge.js';
+import type {
+  SyncFsXhrBridge,
+  SyncFsXhrMutatingBridge,
+} from '../../../src/kernel/realm/sync-fs-xhr-bridge.js';
 
 function fakeBridge(
   store: Map<string, Uint8Array>,
@@ -448,6 +451,70 @@ test('chmodSync is a no-op for an existing path, ENOENT for a missing one', () =
   const shim = createSyncFsBridge(cache([textEntry('/workspace/m.txt', 'x')]), '/workspace');
   expect(() => shim.chmodSync('/workspace/m.txt')).not.toThrow();
   expect(() => shim.chmodSync('/workspace/gone.txt')).toThrow(/ENOENT/);
+});
+
+/** A `fakeBridge` widened with the live mkdir/rm the removal fallback needs. */
+function mutatingBridge(
+  store: Map<string, Uint8Array>,
+  dirs: Set<string> = new Set(['/workspace'])
+): SyncFsXhrMutatingBridge {
+  return {
+    ...fakeBridge(store, dirs),
+    mkdir: (p: string) => {
+      dirs.add(p);
+    },
+    rm: (p: string) => {
+      store.delete(p);
+      dirs.delete(p);
+      for (const k of [...store.keys()]) if (k.startsWith(`${p}/`)) store.delete(k);
+    },
+  };
+}
+
+test('unlinkSync removes a live file the (post-execSync) empty cache does not hold', () => {
+  // execSync invalidates the cache, so a miss is not proof of absence — a
+  // cache-only unlink would throw ENOENT and leave the live file behind.
+  const store = new Map([['/workspace/live.txt', new TextEncoder().encode('L')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', mutatingBridge(store));
+  expect(() => shim.unlinkSync('/workspace/live.txt')).not.toThrow();
+  expect(store.has('/workspace/live.txt')).toBe(false);
+  expect(shim.existsSync('/workspace/live.txt')).toBe(false);
+});
+
+test('unlinkSync still throws ENOENT when the path is absent live too', () => {
+  const shim = createSyncFsBridge(cache(), '/workspace', mutatingBridge(new Map()));
+  expect(() => shim.unlinkSync('/workspace/nope.txt')).toThrow(/ENOENT/);
+});
+
+test('rmSync removes a live-only path; force stays silent on a real miss', () => {
+  const store = new Map([['/workspace/live.txt', new TextEncoder().encode('L')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', mutatingBridge(store));
+  shim.rmSync('/workspace/live.txt');
+  expect(store.has('/workspace/live.txt')).toBe(false);
+  expect(() => shim.rmSync('/workspace/gone.txt', { force: true })).not.toThrow();
+});
+
+test('rmSync without force throws ENOENT on a path absent from cache AND live', () => {
+  const shim = createSyncFsBridge(cache(), '/workspace', mutatingBridge(new Map()));
+  expect(() => shim.rmSync('/workspace/gone.txt')).toThrow(/ENOENT/);
+});
+
+test('renameSync moves a live-only file via copy-then-remove', () => {
+  const store = new Map([['/workspace/src.txt', new TextEncoder().encode('BODY')]]);
+  const shim = createSyncFsBridge(cache(), '/workspace', mutatingBridge(store));
+  shim.renameSync('/workspace/src.txt', '/workspace/dst.txt');
+  expect(shim.readFileSync('/workspace/dst.txt', 'utf8')).toBe('BODY');
+  expect(shim.existsSync('/workspace/src.txt')).toBe(false);
+  expect(store.has('/workspace/src.txt')).toBe(false);
+});
+
+test('a removal fallback does NOT resurrect a tombstoned path via the bridge', () => {
+  const store = new Map([['/workspace/del.txt', new TextEncoder().encode('LIVE')]]);
+  const syncFs = cache([textEntry('/workspace/del.txt', 'LIVE')]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', mutatingBridge(store));
+  shim.unlinkSync('/workspace/del.txt'); // cache hit → tombstone, live delete deferred
+  // The second unlink must be ENOENT from the tombstone, not a live re-delete.
+  expect(() => shim.unlinkSync('/workspace/del.txt')).toThrow(/ENOENT/);
 });
 
 test('appendFileSync does NOT resurrect a tombstoned (deleted-in-script) path', () => {

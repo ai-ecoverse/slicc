@@ -514,6 +514,22 @@ export class SyncFsCache {
   }
 
   /**
+   * Tombstone a path the shim has ALREADY deleted from the live VFS over the
+   * fs bridge — the cache-miss counterpart to {@link rm} / {@link unlink}.
+   * Needed because a post-`execSync` {@link invalidate} empties the tree, so a
+   * subsequent `unlinkSync` / `rmSync` of a still-live file finds no entry to
+   * remove. No mutation is recorded (the path was never in the baseline, and
+   * the live delete already happened) — only the tombstone, so later reads see
+   * `ENOENT` instead of resurrecting the file through the bridge.
+   */
+  markRemoved(path: string, recursive = false): void {
+    this.touched = true;
+    const normalized = normalizePath(path);
+    this.tombstones.add(normalized);
+    if (recursive) this.removedDirs.add(normalized);
+  }
+
+  /**
    * True if `path` was deleted in-script (exact tombstone) or lies under a
    * recursively-removed directory. The `readFileSync` bridge fallback consults
    * this so a cache-miss on a deleted path throws `ENOENT` rather than
