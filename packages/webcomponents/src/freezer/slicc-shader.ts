@@ -18,7 +18,7 @@ import { h, sheet } from '../internal/dom.js';
  *
  * @attr mode - `cone` (default) | `scoop` | `freezer` | `sugar`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
- * @attr coverage - 0..1 freezer frost growth (feeds `u_freeze`)
+ * @attr coverage - 0..1 freezer frost growth / sugar cell density and geometry
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -174,17 +174,32 @@ float sugarEdge(vec2 p,float t){
     if(dot(delta,delta)>0.001) edge=min(edge,dot(0.5*(nearPt+d),normalize(delta))); } }
   return edge;
 }
+vec3 sugarLattice(vec2 p,float scale){
+  float ca=cos(0.7853981634), sa=sin(0.7853981634);
+  vec2 pr=mat2(ca,-sa,sa,ca)*p; vec2 g=pr*scale; g.x+=g.y*0.5;
+  vec2 id=floor(g), f=fract(g)-0.5;
+  float edge=min(0.5-abs(f.x),0.5-abs(f.y));
+  return vec3(length(f)*0.70710678,edge,hash21(id));
+}
 void main(){
   vec2 uv=gl_FragCoord.xy/u_res; float aspect=u_res.x/u_res.y;
   vec2 p=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y); p.y-=u_scroll;
   vec2 parallax=-(u_center-0.5)*0.15; float t=u_time*(u_life+0.15);
   p+=vec2(sin(p.y*12.0+t*2.3),cos(p.x*10.0+t*1.7))*0.003;
-  float scale=3.25+u_density*0.85; vec3 macro=sugarVoronoi((p+parallax)*scale+0.5,t);
+  float sugarCoverage=clamp(u_freeze/2.2,0.0,1.0);
+  float waffleMask=step(0.82,sugarCoverage);
+  float scale=mix(2.9,6.6,smoothstep(0.0,0.75,sugarCoverage));
+  vec3 voronoiMacro=sugarVoronoi((p+parallax)*scale+0.5,t);
+  vec3 latticeMacro=sugarLattice(p+parallax,8.0);
+  vec3 macro=mix(voronoiMacro,latticeMacro,waffleMask);
   float microEdge=sugarEdge((p+parallax*2.5)*9.0+vec2(3.7,1.2),t*0.7);
   float crackPulse=0.5+0.3*sin(t*1.5)+0.2*sin(t*2.7+1.0);
-  float macroWidth=0.04*crackPulse, microWidth=0.025*crackPulse;
-  float macroCrack=1.0-smoothstep(0.0,macroWidth,macro.y);
-  float microCrack=1.0-smoothstep(0.0,microWidth,microEdge);
+  float softness=clamp(u_blur,0.0,1.0);
+  float macroWidth=mix(0.025,0.085,softness)*crackPulse;
+  float microWidth=mix(0.015,0.055,softness)*crackPulse;
+  float seamStrength=mix(1.0,0.28,softness);
+  float macroCrack=(1.0-smoothstep(0.0,macroWidth,macro.y))*seamStrength;
+  float microCrack=(1.0-smoothstep(0.0,microWidth,microEdge))*seamStrength;
   float crack=clamp(macroCrack+microCrack*0.4,0.0,1.0);
   float macroGlow=1.0-smoothstep(0.0,macroWidth*4.0,macro.y);
   float microGlow=1.0-smoothstep(0.0,microWidth*3.0,microEdge);
@@ -198,6 +213,8 @@ void main(){
   vec3 rose=mix(vec3(0.90,0.65,0.60),vec3(0.42,0.19,0.10),u_dark);
   glass=mix(glass,rose,glow*(0.3+0.2*sin(macro.z*12.0+t*0.8))*0.25);
   glass=mix(glass,u_tint,0.06);
+  float fill=mix(1.0,0.35,smoothstep(0.45,0.75,sugarCoverage));
+  fill=mix(fill,0.75,waffleMask); glass=mix(themeBg(),glass,fill);
   vec3 crackLight=mix(vec3(1.0,0.91,0.75),vec3(0.74,0.38,0.10),u_dark);
   vec3 crackBright=mix(vec3(1.0,0.96,0.90),vec3(0.90,0.52,0.16),u_dark);
   vec3 lightCol=mix(crackLight,crackBright,crack); float bleed=clamp(0.55+u_falloff*1.5,0.4,1.3);
@@ -209,10 +226,69 @@ void main(){
   vec3 bg=themeBg(); col=mix(bg,clamp(col,0.0,1.0),0.20);
   float noiseFreq=mix(80.0,4.0,clamp(u_blur,0.0,1.0)); float grain=fbm(uv*noiseFreq)-0.5;
   col+=u_noise*grain; col=(col-0.5)*u_contrast+0.5; col*=u_brightness; col=clamp(col,0.0,1.0);
+  col=clamp(col,max(bg-vec3(0.20),vec3(0.0)),min(bg+vec3(0.20),vec3(1.0)));
   gl_FragColor=vec4(col,1.0);
 }`;
 
 export type ShaderMode = 'cone' | 'scoop' | 'freezer' | 'sugar';
+export interface SugarGlassPreset {
+  readonly mode: 'sugar';
+  readonly tint: string;
+  readonly brightness: number;
+  readonly contrast: number;
+  readonly noise: number;
+  readonly blur: number;
+  readonly coverage: number;
+}
+
+/**
+ * Tuned Sugar Glass storyboard presets (all remain within the 20% background budget):
+ * - Caramel — Radiant-like warm amber cells with visible crack light.
+ * - Frosted — broad, quiet seams and restrained contrast for maximum prose legibility.
+ * - Brittle — dense small cells, sharp bright fractures, and low glass fill.
+ * - Waffle-glass — sugar rendering over Cone's 45-degree, half-sheared lattice geometry.
+ * Sugar uses `coverage` for cell scale; values >= 0.82 select the lattice geometry.
+ */
+export const SUGAR_GLASS_PRESETS = {
+  caramel: {
+    mode: 'sugar',
+    tint: '#d08a3c',
+    brightness: 1,
+    contrast: 1,
+    noise: 0.025,
+    blur: 0.14,
+    coverage: 0.28,
+  },
+  frosted: {
+    mode: 'sugar',
+    tint: '#ead9bd',
+    brightness: 1,
+    contrast: 0.55,
+    noise: 0.005,
+    blur: 0.9,
+    coverage: 0.08,
+  },
+  brittle: {
+    mode: 'sugar',
+    tint: '#ffd089',
+    brightness: 0.96,
+    contrast: 1.2,
+    noise: 0.055,
+    blur: 0.02,
+    coverage: 0.68,
+  },
+  'waffle-glass': {
+    mode: 'sugar',
+    tint: '#d3a15f',
+    brightness: 1,
+    contrast: 0.9,
+    noise: 0.02,
+    blur: 0.08,
+    coverage: 0.9,
+  },
+} as const satisfies Readonly<Record<string, SugarGlassPreset>>;
+export type SugarGlassPresetName = keyof typeof SUGAR_GLASS_PRESETS;
+
 const PROGRAMS: Record<ShaderMode, string> = {
   cone: FRAG_CONE,
   scoop: FRAG_SCOOP,
@@ -406,7 +482,7 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('mode', value);
   }
 
-  /** Freezer frost growth 0..1. */
+  /** Freezer frost growth / Sugar cell density and geometry 0..1. */
   get coverage(): number {
     return clampNum(Number.parseFloat(this.getAttribute('coverage') ?? ''), 0, 1, 0.66);
   }
