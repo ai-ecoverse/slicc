@@ -32,6 +32,13 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   # sign against the base entitlements only, and the app degrades to a local
   # key-value cache (no sync) — so CI stays green until the profile secret
   # exists.
+  #
+  # In CI, the release workflow (.github/workflows/release.yml, "Import Apple
+  # certificates" step) decodes the macOS-specific
+  # APPLE_MACOS_PROVISIONING_PROFILE_BASE64 secret to a file and exports
+  # PROVISION_PROFILE + KVSTORE_IDENTIFIER for this script, so published macOS
+  # builds ship the iCloud KVS entitlement. (That is a distinct secret from the
+  # iOS App Store APPLE_PROVISIONING_PROFILE_BASE64 used by TestFlight.)
   if [ -n "${PROVISION_PROFILE:-}" ]; then
     if [ ! -f "$PROVISION_PROFILE" ]; then
       echo "ERROR: PROVISION_PROFILE set but file not found: $PROVISION_PROFILE" >&2
