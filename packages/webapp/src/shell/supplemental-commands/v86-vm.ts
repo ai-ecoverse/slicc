@@ -85,7 +85,11 @@ export function stopServe(record: VmRecord): void {
 
 /**
  * Attach the serial listener and screen-adapter wrappers to a freshly
- * constructed emulator. Must run before `run()` so no output is missed.
+ * initialized emulator (post `emulator-loaded`, pre `run()`).
+ *
+ * Mode is seeded from the live VGA rather than assumed 'text': a state
+ * resume replays `set_mode` during init — before these wrappers attach
+ * — so a snapshot saved in graphical mode would otherwise read 'text'.
  */
 export function instrumentVm(record: VmRecord): void {
   const { emulator } = record;
@@ -95,6 +99,9 @@ export function instrumentVm(record: VmRecord): void {
       record.serial.buffer = record.serial.buffer.slice(-SERIAL_BUFFER_CAP);
     }
   });
+  if (emulator.v86?.cpu?.devices?.vga?.graphical_mode) {
+    record.screen.mode = 'graphical';
+  }
 
   const adapter = emulator.screen_adapter;
   if (!adapter) return;

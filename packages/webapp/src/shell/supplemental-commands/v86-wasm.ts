@@ -77,7 +77,11 @@ export interface V86Emulator {
   serial0_send(data: string): void;
   bus: { send(name: string, data?: unknown): void };
   screen_adapter?: V86ScreenAdapter;
-  v86?: { cpu?: { devices?: { vga?: { screen_fill_buffer(): void } } } };
+  v86?: {
+    cpu?: {
+      devices?: { vga?: { screen_fill_buffer(): void; graphical_mode?: boolean } };
+    };
+  };
 }
 
 export type V86Constructor = new (options: Record<string, unknown>) => V86Emulator;

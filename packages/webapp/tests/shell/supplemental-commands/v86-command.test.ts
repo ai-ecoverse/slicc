@@ -193,6 +193,9 @@ function makeFakeEmulator(): FakeEmulator {
       update_buffer: vi.fn(),
       get_text_screen: () => ['SLICC boot menu   ', 'ok                '],
     },
+    // Marks the engine as already initialized — v86Start skips the
+    // `emulator-loaded` wait when `emulator.v86` is present.
+    v86: {},
   };
   return fake;
 }
@@ -261,6 +264,25 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const ls = await cmd.execute(['ls'], makeCtx().ctx);
     expect(ls.stdout).toContain('vm0');
     expect(ls.stdout).toContain('running');
+  });
+
+  it('waits for emulator-loaded before instrumenting and running (async engine init)', async () => {
+    const emulator = makeFakeEmulator();
+    delete (emulator as { v86?: unknown }).v86;
+    const startPromise = startVm(emulator);
+    // Let v86Start reach the emulator-loaded wait, then simulate the
+    // engine finishing its async init.
+    await vi.waitFor(() => {
+      expect(emulator.listeners.has('emulator-loaded')).toBe(true);
+    });
+    expect(emulator.run).not.toHaveBeenCalled();
+    emulator.listeners.get('emulator-loaded')!(undefined);
+    const result = await startPromise;
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(emulator.run).toHaveBeenCalled();
+    // Instrumentation happened post-load: serial listener is attached.
+    expect(emulator.listeners.has('serial0-output-byte')).toBe(true);
   });
 
   it('threads -state / -fs9p / -net into the emulator options (copy.sh Arch boot)', async () => {

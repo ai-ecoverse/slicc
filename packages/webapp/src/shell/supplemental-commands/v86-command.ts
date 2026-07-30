@@ -42,6 +42,7 @@ import {
   tryLoadV86FromNodeModules,
   V86_NOT_INSTALLED,
   V86_PINNED_VERSION,
+  type V86Emulator,
   type V86Module,
 } from './v86-wasm.js';
 
@@ -580,6 +581,30 @@ async function stageBootImages(
   return null;
 }
 
+/** Cap on waiting for the engine's async init (wasm bring-up + state
+ * decompress + 9p basefs index fetch all happen inside the constructor). */
+const ENGINE_INIT_TIMEOUT_MS = 60_000;
+
+/**
+ * The `V86` constructor returns immediately but initializes async —
+ * `emulator.v86` (the runtime core) and `screen_adapter` only exist
+ * once the bus fires `emulator-loaded`. An already-initialized engine
+ * (mock, or hypothetical sync path) is detected via `emulator.v86`.
+ */
+function waitForEmulatorLoaded(emulator: V86Emulator): Promise<void> {
+  if (emulator.v86) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`engine init timed out after ${ENGINE_INIT_TIMEOUT_MS / 1000}s`)),
+      ENGINE_INIT_TIMEOUT_MS
+    );
+    emulator.add_listener('emulator-loaded', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
 async function v86Start(
   args: readonly string[],
   ctx: CommandContext,
@@ -620,7 +645,6 @@ async function v86Start(
     screen: { mode: 'text', width: 0, height: 0, frame: null },
     serve: null,
   };
-  instrumentVm(record);
 
   // Register with the ProcessManager so `ps` sees the VM and
   // `kill <pid>` powers it off (via the abort signal).
@@ -640,6 +664,12 @@ async function v86Start(
 
   registerVm(record);
   try {
+    // The constructor kicks off async wasm init; `run()` dereferences
+    // internals (`this.v86`, screen adapter) that only exist once the
+    // engine fires `emulator-loaded`. Wait for it before instrumenting
+    // (the DummyScreenAdapter is also created during init) and booting.
+    await waitForEmulatorLoaded(emulator);
+    instrumentVm(record);
     await emulator.run();
   } catch (err) {
     await teardownVm(record, pm);
