@@ -9,16 +9,40 @@
  * script is the fix it suggests.
  */
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildCorpusDocument } from '../../webapp/src/scoops/tray-sync-protocol-corpus.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const swiftMirror = resolve(here, '../../ios-app/SliccFollower/Models/SyncProtocol.swift');
 const out = resolve(
   here,
   '../../ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
 );
 
-writeFileSync(out, `${JSON.stringify(buildCorpusDocument(), null, 2)}\n`);
-console.log(`Wrote ${out}`);
+const document = buildCorpusDocument();
+
+// `@slicc/shared-ts` resolves types from `src/` but RUNTIME from `dist/`, so a
+// stale or missing `dist` hands this script an out-of-date
+// `TRAY_SYNC_PROTOCOL_VERSION` and it writes a wrong version with exit 0. The
+// Swift suite asserts the two are equal, so that lands as a confusing iOS-only
+// CI failure far from the cause. Cross-check here and fail loudly instead.
+const swiftSource = readFileSync(swiftMirror, 'utf8');
+const swiftVersion = Number(
+  /^\s*let traySyncProtocolVersion\s*=\s*(\d+)/m.exec(swiftSource)?.[1] ?? Number.NaN
+);
+if (!Number.isInteger(swiftVersion)) {
+  throw new Error(`Could not read 'let traySyncProtocolVersion' from ${swiftMirror}`);
+}
+if (document.traySyncProtocolVersion !== swiftVersion) {
+  throw new Error(
+    `Refusing to write a corpus with traySyncProtocolVersion=${document.traySyncProtocolVersion} ` +
+      `while the Swift mirror declares ${swiftVersion}.\n` +
+      'If this is an intentional protocol bump, update SyncProtocol.swift in the same change. ' +
+      'Otherwise your @slicc/shared-ts dist/ is stale — run: npm run build -w @slicc/shared-ts'
+  );
+}
+
+writeFileSync(out, `${JSON.stringify(document, null, 2)}\n`);
+console.log(`Wrote ${out} (protocol version ${swiftVersion})`);

@@ -21,7 +21,18 @@
  * generator executes it under plain tsx, outside the Vite define environment.
  */
 
-import type { FollowerToLeaderMessage, LeaderToFollowerMessage } from '@slicc/shared-ts';
+import type {
+  AgentEvent,
+  ChatMessage,
+  FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
+  MessageAttachment,
+  RemoteTargetInfo,
+  ScoopSummary,
+  SprinkleSummary,
+  ToolCall,
+  TrayTargetEntry,
+} from '@slicc/shared-ts';
 import { SLICC_HOSTED_ORIGIN, TRAY_SYNC_PROTOCOL_VERSION } from '@slicc/shared-ts';
 
 /**
@@ -37,6 +48,74 @@ export type IosLeaderDecodeExpectation = 'decoded' | 'unknown';
  * - `undecodable`: TS-only variant iOS never originates — its decoder throws.
  */
 export type IosFollowerDecodeExpectation = 'decoded' | 'undecodable';
+
+/**
+ * What the iOS mirror must do with an `AgentEvent` variant. The envelope
+ * (`agent_event`) has a single fixture above, which only ever proved that ONE
+ * event type decodes; this is the per-variant enforcement.
+ * - `decoded`: `AgentEvent` in `SyncProtocol.swift` has a real case for it.
+ * - `unknown`: no Swift case — it falls to `.unknown(type:)` and the payload
+ *   is dropped. Asserted so the gap stays inventoried rather than silent.
+ */
+export type IosAgentEventExpectation = 'decoded' | 'unknown';
+
+/**
+ * What the iOS mirror must do with ONE field of a nested payload type.
+ * - `mirrored`: the Swift struct has the property and a decode→encode
+ *   round-trip preserves it.
+ * - `dropped`: the Swift struct has no property for it, so the value is lost
+ *   on arrival. Asserted (the round-trip must NOT produce it) so every known
+ *   data-loss field is inventoried here instead of discovered in the field.
+ * - `local`: never crosses the wire at all — transient UI/bridge state that
+ *   the TS side strips before send. Excluded from the fixture.
+ */
+export type IosFieldExpectation = 'mirrored' | 'dropped' | 'local';
+
+/**
+ * Whether iOS mirrors a nested payload type at all.
+ * - `mirrored`: a Swift struct exists; the Swift suite round-trips the sample.
+ * - `absent`: no Swift type exists, so there is nothing to round-trip. A Swift
+ *   test cannot assert the non-existence of a Swift type, so `absent` is held
+ *   honest from the TS side instead — see `carriedBy`.
+ */
+export type IosPayloadExpectation = 'mirrored' | 'absent';
+
+/**
+ * Forces an explicit per-field iOS decision. `-?` strips optionality so an
+ * OPTIONAL field added to `ChatMessage` (etc.) fails typecheck here until it
+ * is classified — the field-level analogue of the variant maps below.
+ */
+type FieldExpectations<T> = { [K in keyof T]-?: IosFieldExpectation };
+
+type NestedPayloadEntry<T> = {
+  ios: IosPayloadExpectation;
+  fields: FieldExpectations<T>;
+  /** Must populate every non-`local` field; asserted by the vitest guard. */
+  sample: T;
+  /**
+   * Required when `ios` is `absent`: every `Type.field` site that carries this
+   * payload. Each must stay classified `dropped` while no Swift mirror exists.
+   * This is what actually forces `absent` to be revisited — the moment Swift
+   * learns to keep `ChatMessage.attachments`, that field is promoted to
+   * `mirrored` and this cross-check fails until the payload is promoted too.
+   */
+  carriedBy?: string[];
+};
+
+/**
+ * Per-variant `AgentEvent` entry. `fields` pushes the same field-level
+ * enforcement one level BELOW the discriminator: without it, `content_done`
+ * could carry `model` and `usage` (it does) while the variant still reads as
+ * cleanly `decoded`, because Swift's `.contentDone(messageId:)` throws both
+ * away and the discriminator check cannot see it.
+ */
+type AgentEventCorpus = {
+  [K in AgentEvent['type']]: {
+    ios: IosAgentEventExpectation;
+    fields: FieldExpectations<Extract<AgentEvent, { type: K }>>;
+    event: Extract<AgentEvent, { type: K }>;
+  };
+};
 
 type LeaderCorpus = {
   [K in LeaderToFollowerMessage['type']]: {
@@ -498,13 +577,388 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   pong: { ios: 'decoded', message: { type: 'pong' } },
 };
 
+/**
+ * One fixture per `AgentEvent` variant. The mapped type is the enforcement:
+ * adding a variant to `AgentEvent` fails typecheck here until it has a fixture
+ * AND an explicit iOS decision.
+ *
+ * `broadcast.ts` forwards every agent event to followers unconditionally, so
+ * "the leader never sends this one" is not an available excuse for any entry.
+ */
+export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
+  message_start: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored' },
+    event: { type: 'message_start', messageId: 'm2' },
+  },
+  content_delta: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored', text: 'mirrored' },
+    event: { type: 'content_delta', messageId: 'm2', text: 'partial' },
+  },
+  // Decodes to a real case, yet `.contentDone(messageId:)` carries neither
+  // `model` nor `usage` — the cost attribution for the turn is thrown away.
+  content_done: {
+    ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      model: 'dropped',
+      usage: 'dropped',
+    },
+    event: {
+      type: 'content_done',
+      messageId: 'm2',
+      model: 'claude-opus-4-6',
+      usage: {
+        input: 1200,
+        output: 340,
+        cacheRead: 900,
+        cacheWrite: 100,
+        cost: {
+          input: 0.0036,
+          output: 0.0051,
+          cacheRead: 0.00027,
+          cacheWrite: 0.000375,
+          total: 0.009345,
+        },
+      },
+    },
+  },
+  tool_use_start: {
+    ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      toolInput: 'mirrored',
+    },
+    event: {
+      type: 'tool_use_start',
+      messageId: 'm2',
+      toolName: 'read_file',
+      toolInput: { path: '/workspace/notes.md' },
+    },
+  },
+  tool_result: {
+    ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      result: 'mirrored',
+      isError: 'mirrored',
+    },
+    event: {
+      type: 'tool_result',
+      messageId: 'm2',
+      toolName: 'read_file',
+      result: 'file contents',
+      isError: false,
+    },
+  },
+  // Tool-UI cards render as interactive HTML on the leader. iOS has no case,
+  // so an approval card silently never appears. `.unknown` re-encodes the type
+  // tag and nothing else, which is why every payload field below is `dropped`.
+  tool_ui: {
+    ios: 'unknown',
+    fields: {
+      type: 'mirrored',
+      messageId: 'dropped',
+      toolName: 'dropped',
+      requestId: 'dropped',
+      html: 'dropped',
+    },
+    event: {
+      type: 'tool_ui',
+      messageId: 'm2',
+      toolName: 'ask_user',
+      requestId: 'ui-1',
+      html: '<div>approve?</div>',
+    },
+  },
+  tool_ui_done: {
+    ios: 'unknown',
+    fields: { type: 'mirrored', messageId: 'dropped', requestId: 'dropped' },
+    event: { type: 'tool_ui_done', messageId: 'm2', requestId: 'ui-1' },
+  },
+  turn_end: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored' },
+    event: { type: 'turn_end', messageId: 'm2' },
+  },
+  error: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', error: 'mirrored' },
+    event: { type: 'error', error: 'boom' },
+  },
+  // `degradeOversizeAgentEvent` in broadcast.ts explicitly handles screenshots,
+  // so they are expected on the wire; iOS still has no case for them.
+  screenshot: {
+    ios: 'unknown',
+    fields: { type: 'mirrored', base64: 'dropped', url: 'dropped' },
+    event: { type: 'screenshot', base64: 'iVBORw0KGgo=', url: 'https://example.com' },
+  },
+  terminal_output: {
+    ios: 'unknown',
+    fields: { type: 'mirrored', text: 'dropped' },
+    event: { type: 'terminal_output', text: '$ ls\nnotes.md\n' },
+  },
+};
+
+const CHAT_MESSAGE: NestedPayloadEntry<ChatMessage> = {
+  ios: 'mirrored',
+  fields: {
+    id: 'mirrored',
+    role: 'mirrored',
+    content: 'mirrored',
+    timestamp: 'mirrored',
+    attachments: 'dropped',
+    toolCalls: 'mirrored',
+    isStreaming: 'mirrored',
+    model: 'dropped',
+    usage: 'dropped',
+    source: 'mirrored',
+    channel: 'mirrored',
+    lickCount: 'dropped',
+    lickParts: 'dropped',
+    lickId: 'dropped',
+    lickState: 'dropped',
+    queued: 'mirrored',
+    error: 'dropped',
+  },
+  sample: {
+    id: 'm-full',
+    role: 'assistant',
+    content: 'every field populated',
+    timestamp: 1750000002000,
+    attachments: [
+      { id: 'a1', name: 'notes.txt', mimeType: 'text/plain', size: 5, kind: 'text', text: 'notes' },
+    ],
+    toolCalls: [
+      {
+        id: 't1',
+        name: 'read_file',
+        input: { path: '/workspace/notes.md' },
+        result: 'ok',
+        isError: false,
+      },
+    ],
+    isStreaming: false,
+    model: 'claude-opus-4-6',
+    usage: {
+      input: 1200,
+      output: 340,
+      cacheRead: 900,
+      cacheWrite: 100,
+      cost: {
+        input: 0.0036,
+        output: 0.0051,
+        cacheRead: 0.00027,
+        cacheWrite: 0.000375,
+        total: 0.009345,
+      },
+    },
+    source: 'cone',
+    channel: 'webhook',
+    lickCount: 3,
+    lickParts: ['first', 'second', 'third'],
+    lickId: 'lick-1',
+    lickState: 'pending',
+    queued: false,
+    error: false,
+  },
+};
+
+const TOOL_CALL: NestedPayloadEntry<ToolCall> = {
+  ios: 'mirrored',
+  fields: {
+    id: 'mirrored',
+    name: 'mirrored',
+    input: 'mirrored',
+    result: 'mirrored',
+    isError: 'mirrored',
+    // Underscore-prefixed fields are stripped before persistence and before
+    // send; they exist only inside one runtime's own UI pass.
+    _screenshotDataUrl: 'local',
+    _toolUIRequestId: 'local',
+  },
+  sample: {
+    id: 't1',
+    name: 'read_file',
+    input: { path: '/workspace/notes.md' },
+    result: 'file contents',
+    isError: false,
+  },
+};
+
+const MESSAGE_ATTACHMENT: NestedPayloadEntry<MessageAttachment> = {
+  // No Swift type exists at all, so every field is lost wherever attachments
+  // ride along (`ChatMessage.attachments`, `user_message_echo.attachments`).
+  ios: 'absent',
+  carriedBy: ['ChatMessage.attachments'],
+  fields: {
+    id: 'dropped',
+    name: 'dropped',
+    mimeType: 'dropped',
+    size: 'dropped',
+    kind: 'dropped',
+    data: 'dropped',
+    text: 'dropped',
+    path: 'dropped',
+    error: 'dropped',
+  },
+  sample: {
+    id: 'a1',
+    name: 'shot.png',
+    mimeType: 'image/png',
+    size: 12,
+    kind: 'image',
+    data: 'iVBORw0KGgo=',
+    text: 'alt text',
+    path: '/tmp/attachment-a1.png',
+    error: 'too large to inline',
+  },
+};
+
+const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
+  ios: 'mirrored',
+  fields: {
+    jid: 'mirrored',
+    name: 'mirrored',
+    folder: 'mirrored',
+    isCone: 'mirrored',
+    assistantLabel: 'mirrored',
+    trigger: 'mirrored',
+  },
+  sample: {
+    jid: 'reviewer',
+    name: 'reviewer',
+    folder: '/scoops/reviewer',
+    isCone: false,
+    assistantLabel: 'Reviewer',
+    trigger: 'on-push',
+  },
+};
+
+const SPRINKLE_SUMMARY: NestedPayloadEntry<SprinkleSummary> = {
+  ios: 'mirrored',
+  fields: {
+    name: 'mirrored',
+    title: 'mirrored',
+    path: 'mirrored',
+    open: 'mirrored',
+    autoOpen: 'mirrored',
+    icon: 'mirrored',
+  },
+  sample: {
+    name: 'todo',
+    title: 'Todo',
+    path: '/workspace/sprinkles/todo.shtml',
+    open: true,
+    autoOpen: true,
+    icon: 'rocket',
+  },
+};
+
+const REMOTE_TARGET_INFO: NestedPayloadEntry<RemoteTargetInfo> = {
+  ios: 'mirrored',
+  fields: {
+    targetId: 'mirrored',
+    title: 'mirrored',
+    url: 'mirrored',
+    kind: 'mirrored',
+    capabilities: 'mirrored',
+  },
+  sample: {
+    targetId: 'wk1',
+    title: 'Hosted tab',
+    url: 'https://example.com',
+    kind: 'cherry',
+    capabilities: { navigate: true, network: false, screenshot: true },
+  },
+};
+
+const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
+  ios: 'mirrored',
+  fields: {
+    targetId: 'mirrored',
+    localTargetId: 'mirrored',
+    runtimeId: 'mirrored',
+    title: 'mirrored',
+    url: 'mirrored',
+    isLocal: 'mirrored',
+    // Without `kind`, the follower cannot tell a cherry host page from a real
+    // browser tab; without `capabilities`, it cannot tell what that page lends.
+    kind: 'dropped',
+    capabilities: 'dropped',
+  },
+  sample: {
+    targetId: 'leader:tab1',
+    localTargetId: 'tab1',
+    runtimeId: 'leader',
+    title: 'Example',
+    url: 'https://example.com',
+    isLocal: false,
+    kind: 'cherry',
+    capabilities: { navigate: true, network: false, screenshot: true },
+  },
+};
+
+/**
+ * Field-level coverage for the payload types nested INSIDE the message
+ * variants. The variant maps above only ever proved that an envelope reaches a
+ * real Swift case; a mirror can decode `snapshot` into a real `.snapshot` and
+ * still throw away two thirds of every `ChatMessage` it carries — which is
+ * exactly what happens today.
+ *
+ * Every entry pairs an explicit per-field expectation with a sample that
+ * populates all of them, so the Swift suite can round-trip the sample and
+ * prove which fields actually survive.
+ */
+export const NESTED_PAYLOAD_CORPUS = {
+  ChatMessage: CHAT_MESSAGE,
+  ToolCall: TOOL_CALL,
+  MessageAttachment: MESSAGE_ATTACHMENT,
+  ScoopSummary: SCOOP_SUMMARY,
+  SprinkleSummary: SPRINKLE_SUMMARY,
+  RemoteTargetInfo: REMOTE_TARGET_INFO,
+  TrayTargetEntry: TRAY_TARGET_ENTRY,
+} as const;
+
+/** Field names of a nested payload entry carrying the given expectation. */
+function fieldsWith(
+  entry: { fields: Record<string, IosFieldExpectation> },
+  expectation: IosFieldExpectation
+): string[] {
+  return Object.entries(entry.fields)
+    .filter(([, value]) => value === expectation)
+    .map(([key]) => key)
+    .sort();
+}
+
 /** Stable JSON document shared with the Swift test suite. */
 export function buildCorpusDocument(): {
   traySyncProtocolVersion: number;
   leaderVariantCount: number;
   followerVariantCount: number;
+  agentEventVariantCount: number;
   leaderToFollower: Array<{ type: string; ios: string; message: unknown }>;
   followerToLeader: Array<{ type: string; ios: string; message: unknown }>;
+  agentEvents: Array<{
+    type: string;
+    ios: string;
+    mirrored: string[];
+    dropped: string[];
+    event: unknown;
+  }>;
+  nestedPayloads: Array<{
+    name: string;
+    ios: string;
+    mirrored: string[];
+    dropped: string[];
+    sample: unknown;
+  }>;
 } {
   const flatten = (corpus: Record<string, { ios: string; message: { type: string } }>) =>
     Object.values(corpus)
@@ -519,7 +973,26 @@ export function buildCorpusDocument(): {
     // arrays match so a truncated/stale JSON copy fails loudly.
     leaderVariantCount: Object.keys(LEADER_TO_FOLLOWER_CORPUS).length,
     followerVariantCount: Object.keys(FOLLOWER_TO_LEADER_CORPUS).length,
+    agentEventVariantCount: Object.keys(AGENT_EVENT_CORPUS).length,
     leaderToFollower: flatten(LEADER_TO_FOLLOWER_CORPUS),
     followerToLeader: flatten(FOLLOWER_TO_LEADER_CORPUS),
+    agentEvents: Object.values(AGENT_EVENT_CORPUS)
+      .map((entry) => ({
+        type: entry.event.type,
+        ios: entry.ios,
+        mirrored: fieldsWith(entry, 'mirrored'),
+        dropped: fieldsWith(entry, 'dropped'),
+        event: entry.event as unknown,
+      }))
+      .sort((a, b) => a.type.localeCompare(b.type)),
+    nestedPayloads: Object.entries(NESTED_PAYLOAD_CORPUS)
+      .map(([name, entry]) => ({
+        name,
+        ios: entry.ios,
+        mirrored: fieldsWith(entry, 'mirrored'),
+        dropped: fieldsWith(entry, 'dropped'),
+        sample: entry.sample as unknown,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }

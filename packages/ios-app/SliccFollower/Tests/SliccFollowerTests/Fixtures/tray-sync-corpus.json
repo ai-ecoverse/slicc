@@ -2,6 +2,7 @@
   "traySyncProtocolVersion": 4,
   "leaderVariantCount": 37,
   "followerVariantCount": 30,
+  "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -714,6 +715,420 @@
         "type": "user_message",
         "text": "hello from follower",
         "messageId": "f-1"
+      }
+    }
+  ],
+  "agentEvents": [
+    {
+      "type": "content_delta",
+      "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "text",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "content_delta",
+        "messageId": "m2",
+        "text": "partial"
+      }
+    },
+    {
+      "type": "content_done",
+      "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [
+        "model",
+        "usage"
+      ],
+      "event": {
+        "type": "content_done",
+        "messageId": "m2",
+        "model": "claude-opus-4-6",
+        "usage": {
+          "input": 1200,
+          "output": 340,
+          "cacheRead": 900,
+          "cacheWrite": 100,
+          "cost": {
+            "input": 0.0036,
+            "output": 0.0051,
+            "cacheRead": 0.00027,
+            "cacheWrite": 0.000375,
+            "total": 0.009345
+          }
+        }
+      }
+    },
+    {
+      "type": "error",
+      "ios": "decoded",
+      "mirrored": [
+        "error",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "error",
+        "error": "boom"
+      }
+    },
+    {
+      "type": "message_start",
+      "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "message_start",
+        "messageId": "m2"
+      }
+    },
+    {
+      "type": "screenshot",
+      "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "base64",
+        "url"
+      ],
+      "event": {
+        "type": "screenshot",
+        "base64": "iVBORw0KGgo=",
+        "url": "https://example.com"
+      }
+    },
+    {
+      "type": "terminal_output",
+      "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "text"
+      ],
+      "event": {
+        "type": "terminal_output",
+        "text": "$ ls\nnotes.md\n"
+      }
+    },
+    {
+      "type": "tool_result",
+      "ios": "decoded",
+      "mirrored": [
+        "isError",
+        "messageId",
+        "result",
+        "toolName",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "tool_result",
+        "messageId": "m2",
+        "toolName": "read_file",
+        "result": "file contents",
+        "isError": false
+      }
+    },
+    {
+      "type": "tool_ui",
+      "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "html",
+        "messageId",
+        "requestId",
+        "toolName"
+      ],
+      "event": {
+        "type": "tool_ui",
+        "messageId": "m2",
+        "toolName": "ask_user",
+        "requestId": "ui-1",
+        "html": "<div>approve?</div>"
+      }
+    },
+    {
+      "type": "tool_ui_done",
+      "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "messageId",
+        "requestId"
+      ],
+      "event": {
+        "type": "tool_ui_done",
+        "messageId": "m2",
+        "requestId": "ui-1"
+      }
+    },
+    {
+      "type": "tool_use_start",
+      "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "toolInput",
+        "toolName",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "tool_use_start",
+        "messageId": "m2",
+        "toolName": "read_file",
+        "toolInput": {
+          "path": "/workspace/notes.md"
+        }
+      }
+    },
+    {
+      "type": "turn_end",
+      "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [],
+      "event": {
+        "type": "turn_end",
+        "messageId": "m2"
+      }
+    }
+  ],
+  "nestedPayloads": [
+    {
+      "name": "ChatMessage",
+      "ios": "mirrored",
+      "mirrored": [
+        "channel",
+        "content",
+        "id",
+        "isStreaming",
+        "queued",
+        "role",
+        "source",
+        "timestamp",
+        "toolCalls"
+      ],
+      "dropped": [
+        "attachments",
+        "error",
+        "lickCount",
+        "lickId",
+        "lickParts",
+        "lickState",
+        "model",
+        "usage"
+      ],
+      "sample": {
+        "id": "m-full",
+        "role": "assistant",
+        "content": "every field populated",
+        "timestamp": 1750000002000,
+        "attachments": [
+          {
+            "id": "a1",
+            "name": "notes.txt",
+            "mimeType": "text/plain",
+            "size": 5,
+            "kind": "text",
+            "text": "notes"
+          }
+        ],
+        "toolCalls": [
+          {
+            "id": "t1",
+            "name": "read_file",
+            "input": {
+              "path": "/workspace/notes.md"
+            },
+            "result": "ok",
+            "isError": false
+          }
+        ],
+        "isStreaming": false,
+        "model": "claude-opus-4-6",
+        "usage": {
+          "input": 1200,
+          "output": 340,
+          "cacheRead": 900,
+          "cacheWrite": 100,
+          "cost": {
+            "input": 0.0036,
+            "output": 0.0051,
+            "cacheRead": 0.00027,
+            "cacheWrite": 0.000375,
+            "total": 0.009345
+          }
+        },
+        "source": "cone",
+        "channel": "webhook",
+        "lickCount": 3,
+        "lickParts": [
+          "first",
+          "second",
+          "third"
+        ],
+        "lickId": "lick-1",
+        "lickState": "pending",
+        "queued": false,
+        "error": false
+      }
+    },
+    {
+      "name": "MessageAttachment",
+      "ios": "absent",
+      "mirrored": [],
+      "dropped": [
+        "data",
+        "error",
+        "id",
+        "kind",
+        "mimeType",
+        "name",
+        "path",
+        "size",
+        "text"
+      ],
+      "sample": {
+        "id": "a1",
+        "name": "shot.png",
+        "mimeType": "image/png",
+        "size": 12,
+        "kind": "image",
+        "data": "iVBORw0KGgo=",
+        "text": "alt text",
+        "path": "/tmp/attachment-a1.png",
+        "error": "too large to inline"
+      }
+    },
+    {
+      "name": "RemoteTargetInfo",
+      "ios": "mirrored",
+      "mirrored": [
+        "capabilities",
+        "kind",
+        "targetId",
+        "title",
+        "url"
+      ],
+      "dropped": [],
+      "sample": {
+        "targetId": "wk1",
+        "title": "Hosted tab",
+        "url": "https://example.com",
+        "kind": "cherry",
+        "capabilities": {
+          "navigate": true,
+          "network": false,
+          "screenshot": true
+        }
+      }
+    },
+    {
+      "name": "ScoopSummary",
+      "ios": "mirrored",
+      "mirrored": [
+        "assistantLabel",
+        "folder",
+        "isCone",
+        "jid",
+        "name",
+        "trigger"
+      ],
+      "dropped": [],
+      "sample": {
+        "jid": "reviewer",
+        "name": "reviewer",
+        "folder": "/scoops/reviewer",
+        "isCone": false,
+        "assistantLabel": "Reviewer",
+        "trigger": "on-push"
+      }
+    },
+    {
+      "name": "SprinkleSummary",
+      "ios": "mirrored",
+      "mirrored": [
+        "autoOpen",
+        "icon",
+        "name",
+        "open",
+        "path",
+        "title"
+      ],
+      "dropped": [],
+      "sample": {
+        "name": "todo",
+        "title": "Todo",
+        "path": "/workspace/sprinkles/todo.shtml",
+        "open": true,
+        "autoOpen": true,
+        "icon": "rocket"
+      }
+    },
+    {
+      "name": "ToolCall",
+      "ios": "mirrored",
+      "mirrored": [
+        "id",
+        "input",
+        "isError",
+        "name",
+        "result"
+      ],
+      "dropped": [],
+      "sample": {
+        "id": "t1",
+        "name": "read_file",
+        "input": {
+          "path": "/workspace/notes.md"
+        },
+        "result": "file contents",
+        "isError": false
+      }
+    },
+    {
+      "name": "TrayTargetEntry",
+      "ios": "mirrored",
+      "mirrored": [
+        "isLocal",
+        "localTargetId",
+        "runtimeId",
+        "targetId",
+        "title",
+        "url"
+      ],
+      "dropped": [
+        "capabilities",
+        "kind"
+      ],
+      "sample": {
+        "targetId": "leader:tab1",
+        "localTargetId": "tab1",
+        "runtimeId": "leader",
+        "title": "Example",
+        "url": "https://example.com",
+        "isLocal": false,
+        "kind": "cherry",
+        "capabilities": {
+          "navigate": true,
+          "network": false,
+          "screenshot": true
+        }
       }
     }
   ]
