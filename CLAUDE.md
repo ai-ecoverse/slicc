@@ -156,7 +156,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Verification
 
-Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file complexity gate — before committing. Commands, lint internals, and the CI-only gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md). CI runs these gates in `.github/workflows/ci.yml`.
+Run the full pre-push/PR pass — `lint` (always first; the most common CI failure), `typecheck`, `test`, `test:coverage`, both `build`s, plus the touched-file debt gate — before committing. Commands, lint internals, and the CI-only gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md). CI runs these gates in `.github/workflows/ci.yml`.
 
 ## Developer Agent Skills (.agents/skills/)
 

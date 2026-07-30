@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   BASELINE_PATH,
+  baselineFiles,
   compareToBaseline,
   isWebappSource,
   scanBackEdges,
@@ -33,6 +34,19 @@ describe('check-ui-back-edges: isWebappSource', () => {
     expect(isWebappSource('export-service.test.ts')).toBe(false);
     expect(isWebappSource('widget.test.tsx')).toBe(false);
     expect(isWebappSource('README.md')).toBe(false);
+  });
+});
+
+describe('check-ui-back-edges: baselineFiles', () => {
+  it('returns the baseline keys as a debt list', () => {
+    expect(baselineFiles({ 'a.ts': 2, 'b.ts': 1 })).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('returns [] for non-object or empty input', () => {
+    expect(baselineFiles(null)).toEqual([]);
+    expect(baselineFiles(undefined)).toEqual([]);
+    expect(baselineFiles([])).toEqual([]);
+    expect(baselineFiles({})).toEqual([]);
   });
 });
 

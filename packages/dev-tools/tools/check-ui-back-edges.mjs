@@ -36,6 +36,16 @@ export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
 }
 
+/**
+ * File paths listed in a parsed baseline object (its keys). Used by the
+ * boy-scout gate (check-touched-exemptions.mjs) to treat the baseline as a
+ * debt list. Non-object input yields [].
+ */
+export function baselineFiles(baseline) {
+  if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) return [];
+  return Object.keys(baseline).filter((k) => typeof k === 'string' && k.length > 0);
+}
+
 /** Recursively collect source files under `dir`, skipping SKIP_DIRS at the top level. */
 function collect(dir, topLevel = true) {
   const out = [];
