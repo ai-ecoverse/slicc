@@ -3,7 +3,8 @@
  * slicc-cdp — zero-dependency CDP driver for a running SLICC dev harness.
  *
  * Attaches to the Chrome the harness launched (port auto-detected from
- * /tmp/slicc-dev-harness.log, or pass --port / SLICC_CDP_PORT) and drives
+ * SLICC_HARNESS_LOG, default /tmp/slicc-dev-harness.log, or pass --port /
+ * SLICC_CDP_PORT) and drives
  * the leader tab (matched on the wrangler UI origin — default
  * http://localhost:8787, override with SLICC_UI_ORIGIN for a
  * WRANGLER_PORT-overridden harness). Node 22+ (built-in WebSocket).
@@ -32,14 +33,18 @@ const [cmd, ...rest] = args;
 
 async function detectPort() {
   const { readFileSync } = await import('node:fs');
+  const logPath = process.env.SLICC_HARNESS_LOG ?? '/tmp/slicc-dev-harness.log';
   try {
-    const log = readFileSync('/tmp/slicc-dev-harness.log', 'utf8');
+    const log = readFileSync(logPath, 'utf8');
     // Last occurrence wins: a restarted harness appends a fresh
     // "listening" line, so the first match may be a dead port.
     const m = [...log.matchAll(/Chrome CDP listening on port (\d+)/g)].pop();
     if (m) return Number(m[1]);
   } catch {}
-  console.error('Cannot detect CDP port — pass --port or set SLICC_CDP_PORT');
+  console.error(
+    `Cannot detect CDP port from ${logPath} — pass --port, set SLICC_CDP_PORT, ` +
+      'or set SLICC_HARNESS_LOG'
+  );
   process.exit(1);
 }
 

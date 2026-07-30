@@ -157,31 +157,33 @@ or the wrong provider/feature code may be served.
 npm run build -w @slicc/webapp
 npm run build -w @slicc/node-server
 
-# Then launch a fresh local instance (wrangler UI + node-server thin-bridge)
-npm run dev:standalone:fresh
+# Then launch an isolated local instance (wrangler UI + node-server thin-bridge)
+PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh
 ```
 
 Or rebuild everything in one shot (slower, ~2–3 min, but catches all packages):
 
 ```bash
-npm run build && npm run dev:standalone:fresh
+npm run build && PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh
 ```
 
 What `dev:standalone:fresh` does:
 
 1. Starts wrangler serving `dist/ui/` on `http://localhost:8787`.
-2. Starts node-server on port 5710, pointing Chrome at the wrangler origin.
+2. Starts node-server on the selected `PORT` (`5715` above), pointing Chrome
+   at the wrangler origin.
 3. Opens a labeled Chrome clone (`SLICC-Node`) with an ephemeral profile — no
    production profile is touched, and parallel instances stay isolated.
 
 To run a second instance alongside (e.g. for A/B testing two builds):
 
 ```bash
-PORT=5720 npm run dev:standalone:fresh
+PORT=5716 WRANGLER_PORT=8787 npm run dev:standalone:fresh
 ```
 
-Each instance gets its own Chrome profile and CDP port auto-resolved from its
-bridge port.
+Each instance gets its own Chrome profile. Node-server independently requests
+CDP port `0`, so Chrome selects an available OS-assigned port; `slicc-cdp` reads
+the selected port from the harness log.
 
 ### Fresh Dev Harness Details
 
@@ -191,10 +193,6 @@ profile collisions.
 
 **Shared behavior across all harnesses:**
 
-- **Port-scoped reaping**: before binding, each harness resolves the PID
-  bound to its own bridge/CDP port via `lsof -t` and kills it (TERM, then
-  KILL if still bound). It **never** blanket-kills by process name, so
-  concurrent harnesses survive.
 - **Wrangler reuse-or-start**: an already-listening `:8787` is reused as-is;
   otherwise the harness starts one and gates cleanup behind
   `STARTED_WRANGLER`. A `kill -0 "$WRANGLER_PID"` liveness guard in the
@@ -206,11 +204,18 @@ profile collisions.
   the label with `CHROME_LABEL=…`; falls back to the unlabeled bundle on
   failure or non-darwin.
 
-**Standalone** (`dev-standalone-fresh.sh`, bridge `:5710`, CDP `:9222`,
+**Standalone** (`dev-standalone-fresh.sh`, bridge `:$PORT`, OS-assigned CDP,
 label `SLICC-Node`):
 The primary two-service harness (wrangler UI/leader origin on `:8787` +
 node-server thin-bridge). Self-builds the leader UI
 (`npm run build -w @slicc/webapp`) when `dist/ui/index.html` is missing.
+Use an isolated bridge such as `PORT=5715`; `:5710` and `:9222` may belong to
+a production instance and must not be cleared. If the selected bridge is
+occupied, the harness exits non-zero and reports the holding PID and command.
+Only `SLICC_FRESH_REAP=1` opts into reaping that selected bridge, and only for
+a confirmed stale harness you own. The standalone harness never reaps a Chrome
+CDP port. Other fresh harnesses retain their documented port-scoped cleanup;
+none should blanket-kill by process name.
 On exit, SIGTERMs only the node-server it foregrounds (which closes the
 Chrome it launched), then removes the ephemeral profile.
 
