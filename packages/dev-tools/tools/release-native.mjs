@@ -288,7 +288,9 @@ export function buildBiomeJshManifest(manifest, version) {
 }
 
 // Small IO wrapper: stamp the release version into the biome-jsh manifest,
-// preserving the checked-in 2-space + trailing-newline format.
+// preserving the checked-in 2-space + trailing-newline format. The re-serialize
+// is intentionally opinionated — any other formatting in the manifest gets
+// canonicalized to that shape (matching root package.json / `npm init`).
 function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
   const current = JSON.parse(readFileSync(targetPath, 'utf8'));
   const manifest = buildBiomeJshManifest(current, version);
