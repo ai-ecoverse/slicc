@@ -14,10 +14,17 @@ import XCTest
 ///  - `unknown`: TS-only leader→follower variant — must decode to `.unknown`.
 ///  - `undecodable`: TS-only follower→leader variant — the decoder must throw.
 ///
+/// Two further axes sit below the message variants, because reaching a real
+/// case says nothing about what arrives inside it:
+///  - every `AgentEvent` variant, not just the one the `agent_event` envelope
+///    fixture happens to carry;
+///  - every FIELD of the payload types nested in those messages, round-tripped
+///    through its Swift mirror so dropped fields are proven rather than assumed.
+///
 /// A TS-side union change regenerates the corpus (the TS mapped types force a
-/// fixture + iOS decision per variant), so a variant this decoder mishandles
-/// fails HERE, in CI, instead of shipping as silently-dropped messages — the
-/// `theme.apply` drift class.
+/// fixture + iOS decision per variant and per nested field), so a variant or
+/// field this decoder mishandles fails HERE, in CI, instead of shipping as
+/// silently-dropped data — the `theme.apply` drift class.
 final class SyncProtocolCorpusTests: XCTestCase {
     private struct CorpusError: Error, CustomStringConvertible {
         let description: String
@@ -27,8 +34,24 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let traySyncProtocolVersion: Int
         let declaredLeaderVariantCount: Int
         let declaredFollowerVariantCount: Int
+        let declaredAgentEventVariantCount: Int
         let leaderToFollower: [(type: String, ios: String, messageData: Data)]
         let followerToLeader: [(type: String, ios: String, messageData: Data)]
+        let agentEvents: [(type: String, ios: String, eventData: Data)]
+        let nestedPayloads: [NestedPayload]
+    }
+
+    /// One nested payload type carried INSIDE a message variant, with the
+    /// per-field expectations the TS corpus declares for this mirror.
+    private struct NestedPayload {
+        let name: String
+        let ios: String
+        /// Fields the Swift struct must preserve through decode → encode.
+        let mirrored: [String]
+        /// Fields the Swift struct has no property for, so they are lost.
+        /// Asserted absent so the inventory cannot silently go stale.
+        let dropped: [String]
+        let sampleData: Data
     }
 
     private func loadCorpus() throws -> RawCorpus {
@@ -44,16 +67,19 @@ final class SyncProtocolCorpusTests: XCTestCase {
             let version = root["traySyncProtocolVersion"] as? Int,
             let leaderCount = root["leaderVariantCount"] as? Int,
             let followerCount = root["followerVariantCount"] as? Int,
+            let agentEventCount = root["agentEventVariantCount"] as? Int,
             let leader = root["leaderToFollower"] as? [[String: Any]],
-            let follower = root["followerToLeader"] as? [[String: Any]]
+            let follower = root["followerToLeader"] as? [[String: Any]],
+            let events = root["agentEvents"] as? [[String: Any]],
+            let payloads = root["nestedPayloads"] as? [[String: Any]]
         else {
             throw CorpusError(description: "tray-sync-corpus.json has an unexpected shape — regenerate it")
         }
-        func entries(_ items: [[String: Any]]) throws -> [(String, String, Data)] {
+        func entries(_ items: [[String: Any]], payloadKey: String) throws -> [(String, String, Data)] {
             try items.map { item in
                 let type = item["type"] as? String ?? "<missing>"
                 let ios = item["ios"] as? String ?? "<missing>"
-                let messageData = try JSONSerialization.data(withJSONObject: item["message"] ?? [:])
+                let messageData = try JSONSerialization.data(withJSONObject: item[payloadKey] ?? [:])
                 return (type, ios, messageData)
             }
         }
@@ -61,9 +87,46 @@ final class SyncProtocolCorpusTests: XCTestCase {
             traySyncProtocolVersion: version,
             declaredLeaderVariantCount: leaderCount,
             declaredFollowerVariantCount: followerCount,
-            leaderToFollower: try entries(leader),
-            followerToLeader: try entries(follower)
+            declaredAgentEventVariantCount: agentEventCount,
+            leaderToFollower: try entries(leader, payloadKey: "message"),
+            followerToLeader: try entries(follower, payloadKey: "message"),
+            agentEvents: try entries(events, payloadKey: "event"),
+            nestedPayloads: try payloads.map { item in
+                NestedPayload(
+                    name: item["name"] as? String ?? "<missing>",
+                    ios: item["ios"] as? String ?? "<missing>",
+                    mirrored: item["mirrored"] as? [String] ?? [],
+                    dropped: item["dropped"] as? [String] ?? [],
+                    sampleData: try JSONSerialization.data(withJSONObject: item["sample"] ?? [:])
+                )
+            }
         )
+    }
+
+    /// Decode a nested payload sample into its Swift mirror and re-encode it,
+    /// so the caller can see which fields actually survived. `nil` means this
+    /// type has no Swift mirror at all.
+    private func roundTripThroughSwiftMirror(name: String, sample: Data) throws -> [String: Any]? {
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+        let reencoded: Data
+        switch name {
+        case "ChatMessage":
+            reencoded = try encoder.encode(try decoder.decode(ChatMessage.self, from: sample))
+        case "ToolCall":
+            reencoded = try encoder.encode(try decoder.decode(ToolCall.self, from: sample))
+        case "ScoopSummary":
+            reencoded = try encoder.encode(try decoder.decode(ScoopSummary.self, from: sample))
+        case "SprinkleSummary":
+            reencoded = try encoder.encode(try decoder.decode(SprinkleSummary.self, from: sample))
+        case "RemoteTargetInfo":
+            reencoded = try encoder.encode(try decoder.decode(RemoteTargetInfo.self, from: sample))
+        case "TrayTargetEntry":
+            reencoded = try encoder.encode(try decoder.decode(TrayTargetEntry.self, from: sample))
+        default:
+            return nil
+        }
+        return try JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
     }
 
     func testCorpusVersionMatchesThisBuild() throws {
@@ -86,6 +149,76 @@ final class SyncProtocolCorpusTests: XCTestCase {
         XCTAssertEqual(
             Set(corpus.followerToLeader.map(\.type)).count, corpus.followerToLeader.count,
             "duplicate followerToLeader fixture types")
+        XCTAssertEqual(corpus.agentEvents.count, corpus.declaredAgentEventVariantCount)
+        XCTAssertEqual(
+            Set(corpus.agentEvents.map(\.type)).count, corpus.agentEvents.count,
+            "duplicate agentEvents fixture types")
+    }
+
+    /// The `agent_event` envelope has a single fixture, so before this test the
+    /// suite only ever proved that ONE event type decodes. Every other variant
+    /// could fall to `.unknown` unnoticed — and four of them do.
+    func testAgentEventCorpusDecodesPerExpectation() throws {
+        let corpus = try loadCorpus()
+        let decoder = JSONDecoder()
+        for (type, ios, eventData) in corpus.agentEvents {
+            let decoded: AgentEvent
+            do {
+                decoded = try decoder.decode(AgentEvent.self, from: eventData)
+            } catch {
+                XCTFail("agentEvent '\(type)' failed to decode entirely: \(error)")
+                continue
+            }
+            let isUnknown: Bool
+            if case .unknown = decoded { isUnknown = true } else { isUnknown = false }
+            switch ios {
+            case "decoded":
+                XCTAssertFalse(
+                    isUnknown,
+                    "agent event '\(type)' decoded to .unknown but the corpus expects a real case — AgentEvent in SyncProtocol.swift is missing it")
+            case "unknown":
+                XCTAssertTrue(
+                    isUnknown,
+                    "agent event '\(type)' now decodes to a real case — flip its expectation to 'decoded' in tray-sync-protocol-corpus.ts")
+            default:
+                XCTFail("agent event '\(type)' has unexpected ios expectation '\(ios)'")
+            }
+        }
+    }
+
+    /// Envelope-level tests only prove a message reached a real case. A mirror
+    /// can decode `snapshot` into `.snapshot` and still discard most of every
+    /// `ChatMessage` it carries, because the Swift structs simply have no
+    /// property for those keys and `Codable` ignores what it does not know.
+    ///
+    /// Round-tripping each sample through its Swift mirror shows exactly which
+    /// fields survive. `dropped` is asserted as firmly as `mirrored`: a field
+    /// that starts surviving must be promoted in the corpus, so the inventory
+    /// of known data loss cannot drift out of date in either direction.
+    func testNestedPayloadFieldsSurviveTheSwiftMirror() throws {
+        let corpus = try loadCorpus()
+        for payload in corpus.nestedPayloads {
+            guard let survived = try roundTripThroughSwiftMirror(name: payload.name, sample: payload.sampleData)
+            else {
+                XCTAssertEqual(
+                    payload.ios, "absent",
+                    "'\(payload.name)' is declared mirrored but has no Swift type wired into roundTripThroughSwiftMirror")
+                continue
+            }
+            XCTAssertEqual(
+                payload.ios, "mirrored",
+                "'\(payload.name)' has a Swift mirror wired in but the corpus declares it '\(payload.ios)' — update tray-sync-protocol-corpus.ts")
+            for field in payload.mirrored {
+                XCTAssertNotNil(
+                    survived[field],
+                    "'\(payload.name).\(field)' is expected to survive but the Swift mirror dropped it")
+            }
+            for field in payload.dropped {
+                XCTAssertNil(
+                    survived[field],
+                    "'\(payload.name).\(field)' now survives the Swift mirror — promote it to 'mirrored' in tray-sync-protocol-corpus.ts")
+            }
+        }
     }
 
     func testLeaderToFollowerCorpusDecodesPerExpectation() throws {
