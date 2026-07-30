@@ -45,6 +45,10 @@ interface ChromeTab {
   url?: string;
   windowId?: number;
   pinned?: boolean;
+  /** True when Chrome discarded the tab (memory saver); it runs no JS until reloaded. */
+  discarded?: boolean;
+  /** 'unloaded' = restored-but-never-loaded (lazy session restore); runs no JS either. */
+  status?: 'unloaded' | 'loading' | 'complete';
 }
 
 interface ChromeTabChangeInfo {

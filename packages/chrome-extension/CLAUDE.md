@@ -68,8 +68,11 @@ stale stored id. `ensureLeaderTab()` (adopt-or-create + dedup) runs **on
 demand** when the icon is clicked or a cherry-panel Port connects. After
 restart, the restored leader re-pins itself via **self-adopt**: when no leader
 id is stored, a top-frame connection from an allowlisted origin carrying
-`?slicc=leader` is accepted and persisted. See
-`docs/extension-thin-bridge.md` "Leader-Tab Lifecycle" for the full rationale.
+`?slicc=leader` is accepted and persisted. Adoption reloads a
+discarded/unloaded leader tab (memory saver, lazy session restore) — it runs
+no JS and could never deliver `leader.join-url` to the side panel otherwise.
+See `docs/extension-thin-bridge.md` "Leader-Tab Lifecycle" for the full
+rationale.
 
 ### Tray leader / multi-browser sync
 
