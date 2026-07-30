@@ -50,6 +50,29 @@ final class GracefulShutdownHandlerTests: XCTestCase {
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
     }
 
+    func testRunShutdownSequenceSnapshotsTabsBeforeStoppingTheRecorder() async {
+        // The snapshot has to happen while CDP is still reachable, so the
+        // tabs the user had open at quit time are the ones the next launch
+        // reopens. Detach takes the same path (the browser survives, and the
+        // next full launch consumes the snapshot).
+        for closeBrowser in [true, false] {
+            let tabRecorder = TabRecorderSpy()
+
+            let handler = GracefulShutdownHandler(exitHandler: { _ in })
+            await handler.runShutdownSequence(
+                context: ShutdownContext(
+                    browserLabel: "Chrome",
+                    cdpPort: 9222,
+                    tabRecorder: tabRecorder
+                ),
+                closeBrowser: closeBrowser
+            )
+
+            let events = await tabRecorder.events
+            XCTAssertEqual(events, ["snapshot", "stop"])
+        }
+    }
+
     func testRunShutdownSequenceSendsBrowserCloseBeforeForcedKill() async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -315,6 +338,18 @@ final class GracefulShutdownHandlerTests: XCTestCase {
         XCTAssertEqual(killTargets.snapshot(), [chromePid])
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
     }
+
+    func testEveryShutdownFailureExplainsWhichStepGaveUp() {
+        let descriptions: [String] = [
+            GracefulShutdownError.cdpUnavailable(9222),
+            .invalidBrowserWebSocketURL("not a url"),
+            .missingBrowserWebSocketURL,
+        ].map(\.localizedDescription)
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+        XCTAssertTrue(descriptions.contains { $0.contains("9222") })
+    }
 }
 
 private final class OverlayControllerSpy: @unchecked Sendable, GracefulShutdownOverlayControlling {
@@ -355,6 +390,18 @@ private actor ClientSocketSpy: GracefulShutdownClientSocketControlling {
 
     func shutdownCount() -> Int {
         count
+    }
+}
+
+private actor TabRecorderSpy: GracefulShutdownTabRecording {
+    private(set) var events: [String] = []
+
+    func snapshotNow() async {
+        events.append("snapshot")
+    }
+
+    func stop() async {
+        events.append("stop")
     }
 }
 

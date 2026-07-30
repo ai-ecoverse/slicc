@@ -1,3 +1,4 @@
+import Logging
 import XCTest
 
 @testable import slicc_server
@@ -460,6 +461,46 @@ final class ServerCommandTests: XCTestCase {
                 thinBridgeMode: true,
                 bridgeToken: nil
             ))
+    }
+
+    func testNormalizeTrayWorkerBaseURLStripsEverythingButTheOrigin() {
+        // The value ends up in URLs the webapp dials, so a stray trailing
+        // slash or a leftover query would produce a double-slashed endpoint.
+        XCTAssertEqual(
+            ServerCommand.normalizeTrayWorkerBaseURL(" https://tray.example.com/base/?a=1#f "),
+            "https://tray.example.com/base"
+        )
+        XCTAssertEqual(ServerCommand.normalizeTrayWorkerBaseURL("https://tray.example.com/"), "https://tray.example.com")
+        XCTAssertEqual(ServerCommand.normalizeTrayWorkerBaseURL("https://tray.example.com///"), "https://tray.example.com")
+        XCTAssertNil(ServerCommand.normalizeTrayWorkerBaseURL("   "))
+        XCTAssertNil(ServerCommand.normalizeTrayWorkerBaseURL("tray.example.com"))
+        XCTAssertNil(ServerCommand.normalizeTrayWorkerBaseURL(nil))
+    }
+
+    func testParseEnvFileSecretsReadsTheSameSyntaxAsTheKeychainBlob() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("slicc-env-\(UUID().uuidString).env")
+        try """
+        GITHUB_TOKEN=ghp_test
+        GITHUB_TOKEN_DOMAINS=api.github.com
+        """.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let secrets = try XCTUnwrap(ServerCommand.parseEnvFileSecrets(at: url))
+
+        XCTAssertEqual(secrets.map(\.name), ["GITHUB_TOKEN"])
+        XCTAssertEqual(secrets.first?.domains, ["api.github.com"])
+        // A missing file is "no override", not an empty secret set.
+        XCTAssertNil(ServerCommand.parseEnvFileSecrets(at: url.appendingPathExtension("gone")))
+    }
+
+    func testLoggerLevelMapsTheCliVocabularyOntoSwiftLog() {
+        XCTAssertEqual(ServerCommand.loggerLevel(from: "debug"), .debug)
+        // The CLI says "warn", swift-log says "warning".
+        XCTAssertEqual(ServerCommand.loggerLevel(from: "warn"), .warning)
+        XCTAssertEqual(ServerCommand.loggerLevel(from: "error"), .error)
+        XCTAssertEqual(ServerCommand.loggerLevel(from: "info"), .info)
+        XCTAssertEqual(ServerCommand.loggerLevel(from: "verbose"), .info)
     }
 
     func testShouldMountThinBridgeCorsOffInLegacyModesWithoutToken() {

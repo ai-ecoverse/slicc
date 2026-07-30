@@ -15,6 +15,17 @@ enum AppStartBlocker: Equatable {
     case needsLeader
 }
 
+/// A running leader browser addressed by both halves callers need: the CDP
+/// port to talk to and the app bundle that owns it. Keeping them together
+/// stops a caller from talking to one browser while bringing another forward
+/// (the leader is not necessarily the head of the reorderable Browsers list —
+/// the user can start any of them by hand).
+struct LeaderBrowserEndpoint: Equatable {
+    let cdpPort: UInt16
+    /// Bundle path (`AppTarget.id`) of the browser owning `cdpPort`.
+    let appPath: String
+}
+
 enum AppRuntimeState: Equatable {
     case notRunning
     case runningWithoutDebug
@@ -242,6 +253,32 @@ final class SliccProcess {
     /// this device's session when it is advertised for cross-device sync.
     var leaderTargetName: String? {
         launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.targetName
+    }
+
+    /// The running local leader browser's CDP endpoint, or `nil` while none is
+    /// up. Unlike `isLeaderReady()` this does not wait for a tray join URL:
+    /// opening a plain link as a tab (the default-browser role) only needs the
+    /// browser itself, which the listening CDP port proves.
+    var leaderBrowserEndpoint: LeaderBrowserEndpoint? {
+        guard
+            let entry = launchRecords.first(where: {
+                $0.value.targetType == .chromiumBrowser && !$0.value.isFollower
+            }),
+            entry.value.process.isRunning,
+            Self.isPortInUse(entry.value.cdpPort)
+        else { return nil }
+        return LeaderBrowserEndpoint(cdpPort: entry.value.cdpPort, appPath: entry.key)
+    }
+
+    /// True when `target` is occupied by a launch record that can never become
+    /// this device's leader: a browser attached to a *remote* tray with
+    /// `--join`. `launchStandalone` no-ops on such a browser ("already
+    /// running") while `leaderBrowserEndpoint` keeps ignoring it, so a caller
+    /// waiting for a leader has to move on to the next browser instead of
+    /// retrying this one.
+    func isRunningAsFollower(_ target: AppTarget) -> Bool {
+        guard let record = launchRecords[target.id] else { return false }
+        return record.isFollower && record.process.isRunning
     }
 
     func refreshRuntimeStates(for targets: [AppTarget]) {

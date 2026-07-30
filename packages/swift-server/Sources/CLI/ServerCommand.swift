@@ -111,6 +111,11 @@ struct ServerCommand: AsyncParsableCommand {
         var browserKillPid: pid_t?
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
+        // Records the launched Chrome's open tabs so the next launch reopens
+        // them. Only the Chrome launch path sets it: `--serve-only` attaches to
+        // a browser someone else launched (and whose profile dir it does not
+        // know), and Electron has no restorable tab set.
+        var tabSessionRecorder: TabSessionRecorder?
 
         // Read the Keychain before launching the browser so the macOS ACL
         // prompt appears in front of the still-focused terminal instead of
@@ -184,6 +189,18 @@ struct ServerCommand: AsyncParsableCommand {
                 bridgeToken: bridgeToken
             )
             let userDataDir = chromeLauncher.resolveUserDataDir(servePort: servePort)
+            // Origins whose tabs are SLICC surfaces rather than user tabs:
+            // the hosted UI origin and this server's own bridge origin. They
+            // are excluded from the snapshot so the stale leader tab (dead
+            // bridge token) is never reopened — `launchURL` re-mints it.
+            let sliccOrigins = [resolveHostedLeaderOrigin(environment: environment), serveOrigin]
+            let tabSessionStore = TabSessionStore(
+                fileURL: TabSessionStore.defaultFileURL(userDataDir: userDataDir)
+            )
+            let restoreUrls = tabSessionStore.load(hostedOrigins: sliccOrigins)
+            if !restoreUrls.isEmpty {
+                logger.info("Reopening \(restoreUrls.count) tab(s) from the previous session")
+            }
 
             let launchedChrome = try await chromeLauncher.launch(
                 config: ChromeLaunchConfig(
@@ -192,13 +209,19 @@ struct ServerCommand: AsyncParsableCommand {
                     launchUrl: launchURL,
                     userDataDir: userDataDir,
                     executablePath: chromeExecutable,
-                    currentDirectoryPath: currentDirectoryPath
+                    currentDirectoryPath: currentDirectoryPath,
+                    restoreUrls: restoreUrls
                 )
             )
             browserProcess = launchedChrome.process
             browserKillPid = launchedChrome.chromePid
             browserLabel = "Chrome"
             cdpPort = launchedChrome.cdpPort
+            tabSessionRecorder = TabSessionRecorder(
+                store: tabSessionStore,
+                cdpPort: cdpPort,
+                hostedOrigins: sliccOrigins
+            )
         }
 
         let lickSystem = LickSystem()
@@ -340,9 +363,12 @@ struct ServerCommand: AsyncParsableCommand {
                     overlayInjector: overlayInjector,
                     cdpProxy: cdpProxy,
                     clientSockets: lickSystem,
-                    server: serverController
+                    server: serverController,
+                    tabRecorder: tabSessionRecorder
                 )
             )
+
+            await tabSessionRecorder?.start()
 
             if thinBridgeMode {
                 print("Thin /cdp bridge + /api at \(serveOrigin)")
@@ -355,10 +381,12 @@ struct ServerCommand: AsyncParsableCommand {
 
             try await appTask.value
             await consoleForwarder?.stop()
+            await tabSessionRecorder?.stop()
             overlayInjector?.stop()
             try await httpClient.shutdown()
         } catch {
             appTask.cancel()
+            await tabSessionRecorder?.stop()
             overlayInjector?.stop()
             try? await httpClient.shutdown()
             throw error

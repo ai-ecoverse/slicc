@@ -87,7 +87,7 @@ The **Terminals** Settings tab persists these `UserDefaults` keys:
 
 `SliccCliLocator` resolves an executable in this order: the managed `~/Library/Application Support/Sliccstart/bin/slicc`, the repository's local `make build` output, its architecture-specific `make dist` output, then `/usr/local/bin`, `~/.local/bin`, and `/opt/homebrew/bin`. The CLI is never bundled in `Sliccstart.app`. If none is found, the launcher asks before downloading the current Darwin release from `https://www.sliccy.ai/download/slicc-cli/darwin-<arch>`, validates its Developer ID Application signature and release team identifier (`S8LB56P782`) before making it executable or running `--version`, then atomically installs it in the managed location. A successful terminal launch exposes that managed binary through `~/.local/bin/slicc`; the best-effort symlink step preserves regular files and unrelated user symlinks, and only re-points stale links under Sliccstart's own Application Support root.
 
-Release Darwin binaries are Developer ID-signed with hardened runtime and notarized by `packages/slicc-cli/sign-and-package.sh`. A bare Mach-O executable cannot have a notarization ticket stapled, so a quarantined copy may require Apple's online Gatekeeper lookup on first execution. The launcher's `URLSession` data download followed by `Data.write` does not create or propagate `com.apple.quarantine`, so Sliccstart does not need to remove that attribute. Verification against the release channel also confirmed that a manually quarantined signed release binary runs `--version` without a Gatekeeper override. (`spctl --assess --type execute` is not a useful check here because it rejects bare CLI executables as “not an app.”)
+Release Darwin binaries are signed and notarized, but a bare Mach-O gets no stapled ticket: [`docs/pitfalls.md`](../../docs/pitfalls.md) § "Downloaded `slicc` CLI" covers why Sliccstart neither strips quarantine nor trusts `spctl`.
 
 Terminal.app and iTerm2 launch through Apple Events. `assemble-app.mjs` supplies the user-facing usage description, and `sign-and-package.sh` signs the outer app with `Sliccstart.entitlements`, including `com.apple.security.automation.apple-events`. A TCC denial is surfaced with a direct path to the Sliccstart controls in System Settings → Privacy & Security → Automation.
 
@@ -154,8 +154,18 @@ the real control and the dialog a speed bump.
   opens a lead-vs-attach dialog; with none it launches standalone.
 - **Startup** — `Models/StartupPreference.swift`: the `launchBrowserAtStartup`
   checkbox replaces the per-browser picker; `resolveEnabled(defaults:)` migrates
-  legacy `autoLaunchAppId` once; launch starts the **top** ordered browser.
+  legacy `autoLaunchAppId` once; launch starts the **top** ordered browser
+  (`AppOrdering.topBrowser`, shared with the link handler).
 - Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
+
+## Default Browser Role
+
+Sliccstart can hold the macOS http/https handler role (Settings → Startup).
+`Models/DefaultBrowserRegistration.swift` claims it, `assemble-app.mjs`'s
+`CFBundleURLTypes` is the precondition, and `Models/IncomingURLRouter.swift`
+opens each link `application(_:open:)` receives as a tab in the leader browser
+over CDP, starting it first when none runs. See
+[`docs/sliccstart-browser.md`](../../docs/sliccstart-browser.md).
 
 ### iCloud provisioning (Developer ID app)
 

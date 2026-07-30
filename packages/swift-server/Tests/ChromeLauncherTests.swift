@@ -55,6 +55,46 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(args.last, "http://127.0.0.1:5710")
     }
 
+    func testBuildLaunchArgsAppendsRestoredTabsAfterTheSliccURL() {
+        // Chromium activates the first URL on the command line, so the SLICC
+        // tab has to stay first — the restored tabs land to its right.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["https://example.com/a", "https://example.org/b"]
+        )
+
+        XCTAssertEqual(
+            Array(args.suffix(3)),
+            [
+                "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t",
+                "https://example.com/a",
+                "https://example.org/b",
+            ]
+        )
+    }
+
+    func testBuildLaunchArgsRejectsRestoredEntriesThatCouldBeReadAsChromeFlags() {
+        // The snapshot file is user-writable, and each restored entry becomes
+        // an argv slot — a `--flag`-shaped or non-web entry must never reach
+        // Chrome's command line.
+        let launcher = makeLauncher()
+        let args = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "https://www.sliccy.ai",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil,
+            restoreUrls: ["--headless=new", "file:///etc/passwd", "https://example.com/a"]
+        )
+
+        XCTAssertEqual(args.last, "https://example.com/a")
+        XCTAssertFalse(args.contains("--headless=new"))
+        XCTAssertFalse(args.contains("file:///etc/passwd"))
+    }
+
     func testBuildLaunchArgsDisablesLocalNetworkAccessChecks() {
         // Regression: Sliccstart loads its UI from https://www.sliccy.ai and
         // dials back to the local bridge (public->local), which Chromium 142+
@@ -442,6 +482,26 @@ final class ChromeLauncherTests: XCTestCase {
         let browser = await launcher.probeExistingChrome(cdpPort: 9222)
 
         XCTAssertNil(browser)
+    }
+
+    func testEveryLaunchFailureExplainsItselfToTheUser() {
+        // These strings are what the launcher surfaces in its error report,
+        // so an empty or duplicated one leaves the user with no next step.
+        let descriptions: [String] = [
+            ChromeLauncherError.chromeExecutableNotFound,
+            .invalidChromeExecutable("/no/such/chrome"),
+            .chromeExitedBeforeReportingPort(9),
+            .timedOutWaitingForPort(2.5),
+            .cdpUnavailable(9222),
+            .openLaunchFailed(exitCode: 1, executable: "/Applications/Google Chrome.app"),
+            .chromeAlreadyRunning(port: 9222, browser: "Chrome/147"),
+            .chromeAlreadyRunning(port: 9222, browser: nil),
+        ].map(\.localizedDescription)
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+        XCTAssertTrue(descriptions.contains { $0.contains("2500ms") })
+        XCTAssertTrue(descriptions.contains { $0.contains("(Chrome/147)") })
     }
 
     func testLaunchFailsFastWhenCdpPortIsAlreadyServingChrome() async throws {

@@ -56,4 +56,12 @@ final class OAuthSecretStoreTests: XCTestCase {
         XCTAssertEqual(entries.map(\.name), ["A", "B"])
         XCTAssertEqual(entries.map(\.value), ["1", "2"])
     }
+
+    func testEmptyDomainsRejectionExplainsItself() {
+        // Surfaces to the webapp through the API route's error body.
+        XCTAssertEqual(
+            OAuthSecretStore.OAuthSecretStoreError.emptyDomains.errorDescription,
+            "OAuthSecretStore: domains must be non-empty"
+        )
+    }
 }

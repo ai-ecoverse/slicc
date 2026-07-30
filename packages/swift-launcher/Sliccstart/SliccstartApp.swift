@@ -17,6 +17,23 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess = SliccProcess()
     let sessionStore = TraySessionSyncStore()
+    /// Created on the first incoming link (only reachable while Sliccstart is
+    /// the default web browser, or the handler for an HTML document) and kept
+    /// afterwards, so its queue survives a burst of clicks.
+    @MainActor private var urlRouter: IncomingURLRouter?
+
+    /// Links macOS routes to us because we hold the http/https handler role.
+    /// Sliccstart shows no web content itself, so each one becomes a tab in
+    /// the SLICC leader browser — started on demand when it isn't running.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        log.info("application(open:): \(urls.count, privacy: .public) url(s)")
+        let process = sliccProcess
+        Task { @MainActor in
+            let router = urlRouter ?? IncomingURLRouter(process: process)
+            urlRouter = router
+            await router.handle(urls)
+        }
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         if sliccProcess.isPreparingForUpdate {
@@ -325,12 +342,12 @@ struct SliccstartApp: App {
     /// Failures are logged but never block startup.
     private func autoLaunchConfiguredBrowser() {
         guard StartupPreference.resolveEnabled(defaults: .standard) else { return }
-        let browsers = AppOrdering.ordered(
-            targets.filter { $0.type == .chromiumBrowser },
-            savedOrder: AppOrderStore().load(AppOrderStore.browserKey),
-            defaultPriority: AppOrdering.browserBundlePriority
-        )
-        guard let target = browsers.first else {
+        guard
+            let target = AppOrdering.topBrowser(
+                in: targets,
+                savedOrder: AppOrderStore().load(AppOrderStore.browserKey)
+            )
+        else {
             log.info("autoLaunch: no browser available to launch")
             return
         }

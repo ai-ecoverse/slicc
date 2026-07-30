@@ -96,6 +96,21 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 
 - **swift-server serves no static UI in any mode** — the launched Chrome loads the hosted webapp from `https://www.sliccy.ai` (or `http://localhost:8787` in the wrangler dev harness). `StaticFileMiddleware` and `--static-root` have been removed; the root router only mounts `ThinBridgeCorsMiddleware` (gated by `shouldMountThinBridgeCors`). This matches node-server, which is thin-bridge in **every** mode and serves no static UI either.
 
+## Tab Session Restore
+
+A launched Chrome reopens the tabs the previous session had open, minus the SLICC
+tab (its bridge token is dead by then, and a second leader tab restarts the
+`/cdp` eviction war `clearChromeSessionRestore` exists to prevent). Chrome's own
+session restore therefore stays wiped; swift-server keeps its own URL-only
+snapshot in `Sources/Browser/TabSessionStore.swift` (sanitized on save **and**
+load — every entry becomes a Chrome argv slot) fed by
+`Sources/Browser/TabSessionRecorder.swift` (polls `/json/list`, so it can never
+evict the webapp's CDP session) and replayed through
+`ChromeLaunchConfig.restoreUrls`. Not wired for `--serve-only` or `--electron`,
+and **node-server has no equivalent** — `chrome-launch.ts` keeps the plain
+session wipe. Full reference:
+[`docs/sliccstart-browser.md`](../../docs/sliccstart-browser.md).
+
 ## Lick / WebSocket System
 
 - `LickSystem` is an actor that tracks connected browser clients and pending requests.

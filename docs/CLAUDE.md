@@ -65,6 +65,7 @@ Subsystems:
 - `link-discovery.md` — the standalone `discover` shell command and the `--discover` flag on `playwright-cli` subcommands (`fetch`, `goto`, `navigate`, `open`, `tab-new`); covers RFC 8288 / RFC 9727 parsing, emission, and the SLICC handoff/upskill rels
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow
+- `sliccstart-browser.md` — Sliccstart's browser-like surfaces: the macOS default-browser role (registration, Info.plist declarations, incoming-link routing over CDP) and previous-session tab restore
 
 Review & gotchas:
 

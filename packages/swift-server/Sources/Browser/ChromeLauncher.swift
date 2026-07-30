@@ -42,6 +42,11 @@ struct ChromeLaunchConfig: Sendable {
     let currentDirectoryPath: String?
     let environment: [String: String]
     let launchTimeout: TimeInterval
+    /// Tabs from the previous session, reopened alongside the SLICC tab.
+    /// Sourced from `TabSessionStore` (which sanitizes them) because Chrome's
+    /// own session restore is wiped on every launch — see
+    /// `clearChromeSessionRestore`.
+    let restoreUrls: [String]
 
     init(
         projectRoot: String? = nil,
@@ -52,7 +57,8 @@ struct ChromeLaunchConfig: Sendable {
         executablePath: String? = nil,
         currentDirectoryPath: String? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        launchTimeout: TimeInterval = defaultChromeLaunchTimeout
+        launchTimeout: TimeInterval = defaultChromeLaunchTimeout,
+        restoreUrls: [String] = []
     ) {
         self.projectRoot = projectRoot
         self.cdpPort = cdpPort
@@ -63,6 +69,7 @@ struct ChromeLaunchConfig: Sendable {
         self.currentDirectoryPath = currentDirectoryPath
         self.environment = environment
         self.launchTimeout = launchTimeout
+        self.restoreUrls = restoreUrls
     }
 }
 
@@ -187,7 +194,8 @@ struct ChromeLauncher: Sendable {
         cdpPort: Int,
         launchUrl: String,
         userDataDir: String,
-        extensionPath: String?
+        extensionPath: String?,
+        restoreUrls: [String] = []
     ) -> [String] {
         var args = [
             "--remote-debugging-port=\(cdpPort)",
@@ -216,7 +224,17 @@ struct ChromeLauncher: Sendable {
             args.append("--load-extension=\(extensionPath)")
         }
 
+        // The SLICC tab goes first so it is the leftmost and initially active
+        // tab; Chromium activates the first URL on the command line. Restored
+        // tabs are re-sanitized here because every entry becomes an argv slot,
+        // where a `--flag`-shaped string would be read as a Chrome switch.
         args.append(launchUrl)
+        args.append(
+            contentsOf: TabSessionStore.sanitize(
+                rawUrls: restoreUrls,
+                hostedOrigins: []
+            )
+        )
         return args
     }
 
@@ -418,7 +436,8 @@ struct ChromeLauncher: Sendable {
             cdpPort: config.cdpPort,
             launchUrl: config.launchUrl,
             userDataDir: config.userDataDir,
-            extensionPath: config.extensionPath
+            extensionPath: config.extensionPath,
+            restoreUrls: config.restoreUrls
         )
         process.environment = config.environment.merging(["GOOGLE_CRASHPAD_DISABLE": "1"]) { _, new in new }
         if let currentDirectoryPath = normalizedPath(config.currentDirectoryPath) {
