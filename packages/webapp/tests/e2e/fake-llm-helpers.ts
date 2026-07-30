@@ -317,3 +317,28 @@ export async function readCdpPageState(
   }
   return targets;
 }
+
+/**
+ * Close matching Chrome targets through the HTTP CDP discovery API and wait
+ * until they disappear. The dedicated E2E CDP browser outlives Playwright test
+ * workers, so scenario-owned tabs must be cleared explicitly between retries.
+ */
+export async function closeCdpPageTargets(options: ReadCdpPageStateOptions = {}): Promise<void> {
+  const base = (options.cdpEndpoint ?? 'http://127.0.0.1:9222').replace(/\/+$/, '');
+  const targets = await readCdpPageState(options);
+  await Promise.all(
+    targets.map(async (target) => {
+      const res = await fetch(`${base}/json/close/${encodeURIComponent(target.id)}`);
+      if (!res.ok) {
+        throw new Error(`Failed to close CDP target ${target.id}: HTTP ${res.status}`);
+      }
+    })
+  );
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if ((await readCdpPageState(options)).length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('Timed out waiting for CDP targets to close');
+}

@@ -21,8 +21,8 @@ export const FAKE_LLM_PORT = resolvePort('SLICC_E2E_FAKE_LLM_PORT', 5781);
  * webapp is served by `wrangler dev` from `dist/ui` on {@link WRANGLER_PORT}
  * (the leader origin / `baseURL`) and dials back to the node-server thin-bridge
  * on {@link BRIDGE_PORT} for CDP + cross-origin `/api`. The CDP proxy's outbound
- * target stays {@link CDP_PORT}, matching the `--remote-debugging-port` the
- * CDP-binding scenarios launch Playwright Chrome with.
+ * target stays {@link CDP_PORT}, matching the dedicated Chrome process the
+ * harness keeps alive across Playwright worker restarts and CI retries.
  */
 export const WRANGLER_PORT = resolvePort('SLICC_E2E_WRANGLER_PORT', 8787);
 export const BRIDGE_PORT = resolvePort('SLICC_E2E_BRIDGE_PORT', 5710);
@@ -68,6 +68,18 @@ export default defineConfig({
   testDir: '.',
   webServer: [
     {
+      // Keep the agent-driven CDP target outside Playwright's test-worker
+      // browser lifecycle. A failed attempt restarts its worker browser; when
+      // that browser also owned port 9222, node-server retained its now-stale
+      // /devtools/browser/<id> URL and every retry failed with HTTP 404.
+      command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/cdp-browser.ts')}`,
+      port: CDP_PORT,
+      reuseExistingServer: !process.env['CI'],
+      env: {
+        SLICC_E2E_CDP_PORT: String(CDP_PORT),
+      },
+    },
+    {
       // wrangler serves `dist/ui` (the leader/UI origin) with SPA fallback,
       // exactly as the production worker does. The webapp must be built
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
@@ -82,9 +94,8 @@ export default defineConfig({
     {
       // Thin /cdp bridge + `/api` surface only — no UI. `--cdp-port=9222` pins
       // the proxy's outbound CDP target so the agent's `playwright-cli` and the
-      // harness's `readCdpPageState` both speak to the same Chrome (see
-      // `reference-scenario.test.ts`, which launches Playwright Chrome with
-      // `--remote-debugging-port=9222`). `SLICC_BRIDGE_TOKEN` arms the `/cdp`
+      // harness's `readCdpPageState` both speak to the dedicated Chrome above.
+      // `SLICC_BRIDGE_TOKEN` arms the `/cdp`
       // upgrade gate + cross-origin `/api` token check; `BRIDGE_DEV_ALLOWED_ORIGINS`
       // allowlists the wrangler leader origin so its cross-origin requests pass.
       command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only --cdp-port=${CDP_PORT}`,
@@ -115,11 +126,9 @@ export default defineConfig({
   use: {
     baseURL: LEADER_ORIGIN,
   },
-  // Single-worker by construction: the node-server CDP proxy points at one
-  // Chrome on port 9222, and every CDP-binding scenario (reference-scenario,
-  // preview-serve) launches Playwright Chrome with `--remote-debugging-port=9222`.
-  // Running them in parallel would collide on the port and on the proxy's
-  // outbound target.
+  // Keep one worker because fake-LLM fixture state and browser-driven scenarios
+  // are process-global. The agent-driven Chrome itself is a dedicated webServer
+  // process, so retries can restart Playwright's worker without replacing CDP.
   workers: 1,
   fullyParallel: true,
   timeout: 30_000,

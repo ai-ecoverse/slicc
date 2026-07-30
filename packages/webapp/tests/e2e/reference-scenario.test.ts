@@ -18,8 +18,8 @@
  *      completing, so a silent "turn never started" failure mode
  *      surfaces as a timeout, not a false green.
  *
- *   3. CDP port matches the harness default — Playwright launches
- *      Chrome with `--remote-debugging-port=9222` for this file,
+ *   3. CDP port matches the harness default — the dedicated E2E Chrome
+ *      process listens on `--remote-debugging-port=9222`, while
  *      `node-server --serve-only --cdp-port=9222` (from
  *      `playwright.config.ts`) proxies to the same port, and
  *      {@link readCdpPageState} probes it by default. The per-phase
@@ -35,6 +35,7 @@
 
 import { expect, test } from '@playwright/test';
 import {
+  closeCdpPageTargets,
   FAKE_LLM_BASE_URL,
   readCdpPageState,
   resetFakeLlm,
@@ -66,26 +67,26 @@ const PAGE_C_URL = `data:text/html,${PAGE_C_HTML}`;
 const ALL_TITLES_SORTED = [PAGE_A_TITLE, PAGE_B_TITLE, PAGE_C_TITLE].slice().sort();
 const PHASE2_TITLES_SORTED = [PAGE_B_TITLE, PAGE_C_TITLE].slice().sort();
 
-// Bind 9222 on the Playwright-launched Chrome so:
+// The dedicated E2E Chrome process binds 9222 so:
 //   - the `node-server --serve-only` CDP proxy (`--cdp-port=9222`)
 //     connects to a real Chrome
 //   - the agent's `playwright-cli tab-new` opens a CDP-driven tab there
 //   - {@link readCdpPageState} sees the same target at its default port
-// Project-level `workers: 1` in `playwright.config.ts` already
-// serializes every CDP-binding scenario (preview-serve.test.ts also
-// claims 9222), so no per-file `mode: 'serial'` is needed here.
-test.use({
-  launchOptions: { args: ['--remote-debugging-port=9222'] },
-});
+// It stays alive when Playwright replaces a failed test worker for a retry,
+// avoiding stale `/devtools/browser/<id>` URLs in the long-lived CDP proxy.
 
 test.describe('fake-llm reference scenario', () => {
   // The fake LLM is a long-lived `webServer` with a per-process turn
   // cursor. Playwright retries reuse that server, so rewind the cursor
-  // before every attempt — otherwise a retry resumes mid-fixture and
-  // fails deterministically with `fixture_overflow` (runs before the
-  // first attempt too, where it's a harmless no-op).
+  // and clear scenario-owned CDP targets before every attempt — otherwise a
+  // retry resumes mid-fixture or counts tabs left by its predecessor.
   test.beforeEach(async () => {
     await resetFakeLlm();
+    await closeCdpPageTargets({
+      filter: (target) =>
+        target.type === 'page' &&
+        (target.url === PAGE_A_URL || target.url === PAGE_B_URL || target.url === PAGE_C_URL),
+    });
   });
 
   test('multi-phase scripted tool calls drive multiple CDP navigations', async ({ page }) => {
