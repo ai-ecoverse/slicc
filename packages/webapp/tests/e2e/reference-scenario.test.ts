@@ -168,10 +168,20 @@ test.describe('fake-llm reference scenario', () => {
     // only (no tool call) — proves both the regex path and a
     // text-only terminal turn.
     await submitUserMessage(page, 'give me a summary');
-    await waitForTurnComplete(page);
-
     await expect(page.locator('slicc-chat-thread')).toContainText(
-      'Summary: opened three CDP targets'
+      'Summary: opened three CDP targets',
+      { timeout: 20_000 }
+    );
+    // A text-only fake response can rise and fall between processing-state
+    // polls. Synchronize on its terminal text first, then the level-triggered
+    // idle state so a missed transient edge cannot consume the test budget.
+    await page.waitForFunction(
+      () => {
+        const frame = document.querySelector('.wcui-frame');
+        return frame !== null && !frame.hasAttribute('data-processing');
+      },
+      undefined,
+      { timeout: 20_000 }
     );
 
     await expect
