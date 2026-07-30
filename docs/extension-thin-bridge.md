@@ -65,6 +65,16 @@ connection:
   by `leaderTabLock` and shared by the cherry-panel connect and
   cherry-recovery. This also heals any pre-fix pile: the next icon click
   collapses it to one.
+- **Unloaded tabs are reloaded on adoption.** Chrome's memory saver can
+  discard the pinned background leader, and lazy session restore restores it
+  without loading it (`discarded` / `status: 'unloaded'`). Such a tab runs no
+  JS, so it can never dial the bridge Port or deliver `leader.join-url` —
+  adopting it as-is strands the side panel on "Disconnected — reopen to
+  retry" (the panel's 20s boot watchdog fires, and reopening re-adopts the
+  same dead tab). `adoptSingleLeaderTab` therefore prefers a live match over
+  an unloaded duplicate when deduping and `chrome.tabs.reload`s an unloaded
+  keeper (skipped when the `ext=` stamp already navigated — and thereby
+  loaded — it).
 
 Net: a restart can never duplicate the tab (nothing creates on startup), and
 the restored tab stays fully functional (self-adopt re-pins its bridge).

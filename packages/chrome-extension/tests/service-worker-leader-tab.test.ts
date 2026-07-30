@@ -18,7 +18,14 @@ import { CHERRY_PANEL_PORT_NAME } from '../src/cherry-panel-protocol.js';
 const sessionStorage = new Map<string, unknown>();
 const tabsStore = new Map<
   number,
-  { id: number; windowId?: number; url?: string; pinned?: boolean }
+  {
+    id: number;
+    windowId?: number;
+    url?: string;
+    pinned?: boolean;
+    discarded?: boolean;
+    status?: 'unloaded' | 'loading' | 'complete';
+  }
 >();
 const tabsRemoved: number[] = [];
 
@@ -408,7 +415,120 @@ describe('leader tab — ensure on demand (icon click), never on startup', () =>
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(mockChrome.tabs.update).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.reload).not.toHaveBeenCalled();
     expect(sessionStorage.get(LEADER_KEY)).toBe(9);
+  });
+
+  it('reloads an adopted leader tab that Chrome discarded (memory saver)', async () => {
+    // A discarded tab keeps its URL but runs no JS — it can never dial the
+    // bridge Port or deliver leader.join-url. Adopting it without a reload
+    // strands the side panel on "Disconnected — reopen to retry" forever.
+    tabsStore.set(21, {
+      id: 21,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      discarded: true,
+      status: 'unloaded',
+    });
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(21);
+    expect(sessionStorage.get(LEADER_KEY)).toBe(21);
+  });
+
+  it('reloads an adopted leader tab restored lazily by session restore (status unloaded)', async () => {
+    tabsStore.set(22, {
+      id: 22,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      status: 'unloaded',
+    });
+    await loadSw();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(22);
+    expect(sessionStorage.get(LEADER_KEY)).toBe(22);
+  });
+
+  it('does NOT double-load a discarded leader whose adoption already navigates it (ext= stamp)', async () => {
+    // The ext= stamp goes through tabs.update({url}), which itself loads a
+    // discarded tab — a reload on top would boot the page twice.
+    tabsStore.set(23, {
+      id: 23,
+      windowId: 100,
+      url: LEADER_URL,
+      pinned: true,
+      discarded: true,
+      status: 'unloaded',
+    });
+    await loadSw();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(23, {
+      pinned: true,
+      url: LEADER_URL_WITH_EXT,
+    });
+    expect(mockChrome.tabs.reload).not.toHaveBeenCalled();
+    expect(sessionStorage.get(LEADER_KEY)).toBe(23);
+  });
+
+  it('prefers a live leader tab over a discarded duplicate when deduping', async () => {
+    // matches[0] is the dead one — keeping it (and closing the live tab) would
+    // trade a working leader for one that cannot serve the panel.
+    tabsStore.set(31, {
+      id: 31,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      discarded: true,
+      status: 'unloaded',
+    });
+    tabsStore.set(32, {
+      id: 32,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      status: 'complete',
+    });
+    await loadSw();
+    mockChrome.tabs.create.mockClear();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith(31);
+    expect(mockChrome.tabs.remove).not.toHaveBeenCalledWith(32);
+    expect(mockChrome.tabs.reload).not.toHaveBeenCalled();
+    expect(sessionStorage.get(LEADER_KEY)).toBe(32);
+  });
+
+  it('still adopts (and reloads) when every leader duplicate is unloaded', async () => {
+    tabsStore.set(41, {
+      id: 41,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      discarded: true,
+      status: 'unloaded',
+    });
+    tabsStore.set(42, {
+      id: 42,
+      windowId: 100,
+      url: LEADER_URL_WITH_EXT,
+      pinned: true,
+      discarded: true,
+      status: 'unloaded',
+    });
+    await loadSw();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith(42);
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(41);
+    expect(sessionStorage.get(LEADER_KEY)).toBe(41);
   });
 
   it('re-creates the leader tab on icon click after the user closed it', async () => {

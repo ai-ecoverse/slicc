@@ -256,10 +256,22 @@ async function createLeaderTab(): Promise<void> {
   if (created.id !== undefined) await writeStoredLeaderTabId(created.id);
 }
 
-/** Keep the first leader tab (stamp `ext=` + pin if needed, store its id) and
- *  close every duplicate. `matches` must be non-empty. */
+/** True when the tab exists but runs no JS: discarded by Chrome's memory saver,
+ *  or restored-but-never-loaded by lazy session restore. Such a tab can never
+ *  dial the bridge Port or deliver `leader.join-url`, so adopting it as-is
+ *  strands the side panel on "Disconnected — reopen to retry" (its 20s boot
+ *  watchdog fires with no joinUrl, and reopening re-adopts the same dead tab). */
+function isUnloadedTab(tab: ChromeTab): boolean {
+  return tab.discarded === true || tab.status === 'unloaded';
+}
+
+/** Keep the first LIVE leader tab (stamp `ext=` + pin if needed, store its id,
+ *  reload it when Chrome unloaded it) and close every duplicate. Preferring a
+ *  live match over an unloaded one avoids closing a working leader in favor of
+ *  a dead duplicate. `matches` must be non-empty. */
 async function adoptSingleLeaderTab(matches: ChromeTab[]): Promise<void> {
-  const [keep, ...extras] = matches;
+  const keep = matches.find((t) => !isUnloadedTab(t)) ?? matches[0];
+  const extras = matches.filter((t) => t !== keep);
   if (keep.id === undefined) return;
 
   for (const extra of extras) {
@@ -281,6 +293,17 @@ async function adoptSingleLeaderTab(matches: ChromeTab[]): Promise<void> {
     const props: { pinned: true; url?: string } = { pinned: true };
     if (extIdUrl !== undefined) props.url = extIdUrl;
     await chrome.tabs.update(keep.id, props);
+  }
+  // A discarded/unloaded leader runs no JS, so it can never deliver the tray
+  // joinUrl — reload it (loads without focusing) unless the ext= stamp above
+  // already navigated it. Without this the panel loops booting → disconnected
+  // until the user happens to activate the tab manually.
+  if (extIdUrl === undefined && isUnloadedTab(keep)) {
+    try {
+      await chrome.tabs.reload(keep.id);
+    } catch (err) {
+      console.error('[slicc-sw] failed to reload unloaded leader tab', err);
+    }
   }
   await writeStoredLeaderTabId(keep.id);
 }
