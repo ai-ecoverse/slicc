@@ -103,6 +103,25 @@ final class AppOrderingTests: XCTestCase {
         XCTAssertNil(AppOrdering.topBrowser(in: [terminal("Terminal", "com.apple.Terminal")], savedOrder: []))
     }
 
+    func testOrderedBrowsersKeepsEveryBrowserInDisplayOrder() {
+        // The link handler walks the whole list to skip browsers that can no
+        // longer become the leader, so it needs more than the head.
+        let targets = [
+            terminal("Alacritty", "org.alacritty"),
+            browser("Brave", "com.brave.Browser"),
+            browser("Chrome", "com.google.Chrome"),
+        ]
+
+        XCTAssertEqual(
+            AppOrdering.orderedBrowsers(in: targets, savedOrder: []).map(\.name),
+            ["Chrome", "Brave"]
+        )
+        XCTAssertEqual(
+            AppOrdering.orderedBrowsers(in: targets, savedOrder: ["com.brave.Browser"]).map(\.name),
+            ["Brave", "Chrome"]
+        )
+    }
+
     func testPersistableOrderSkipsTargetsWithoutBundleId() {
         let reordered = [
             browser("Chrome", "com.google.Chrome"),

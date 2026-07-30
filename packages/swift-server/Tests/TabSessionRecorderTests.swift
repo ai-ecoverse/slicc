@@ -4,56 +4,108 @@ import XCTest
 
 final class TabSessionRecorderTests: XCTestCase {
     private let sliccOrigins = ["https://www.sliccy.ai", "http://localhost:5710"]
+    private static let defaultContext = "DEFAULT-CTX"
+    private static let incognitoContext = "OTR-CTX"
 
     func testSnapshotPersistsPageTargetsAndSkipsTheSliccTab() async {
         let store = TabSessionStore(fileURL: makeTemporaryFileURL())
-        let payload = """
-            [
-              {"type":"page","url":"https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t"},
-              {"type":"page","url":"https://example.com/a"},
-              {"type":"service_worker","url":"https://example.com/sw.js"},
-              {"type":"page","url":"chrome://settings"}
+        let recorder = makeRecorder(
+            store: store,
+            targets: [
+                (Self.defaultContext, "page", "https://www.sliccy.ai/?bridge=ws://localhost:5710/cdp&bridgeToken=t"),
+                (Self.defaultContext, "page", "https://example.com/a"),
+                (Self.defaultContext, "service_worker", "https://example.com/sw.js"),
+                (Self.defaultContext, "page", "chrome://settings"),
             ]
-            """
-        let recorder = makeRecorder(store: store, responses: [.success((200, Data(payload.utf8)))])
+        )
 
         await recorder.snapshotNow()
 
         XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/a"])
     }
 
-    func testSnapshotRequestsTheCdpTargetListForTheConfiguredPort() async {
+    func testSnapshotNeverPersistsIncognitoTabs() async {
+        // Incognito pages show up in the target list with nothing but their
+        // browser context to tell them apart, and writing browsing the user
+        // made private into a file on disk would outlive the session.
+        let store = TabSessionStore(fileURL: makeTemporaryFileURL())
+        let recorder = makeRecorder(
+            store: store,
+            targets: [
+                (Self.defaultContext, "page", "https://example.com/normal"),
+                (Self.incognitoContext, "page", "https://example.com/private"),
+            ]
+        )
+
+        await recorder.snapshotNow()
+
+        XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/normal"])
+    }
+
+    func testSnapshotIsSkippedWhenTheDefaultContextCannotBeIdentified() async {
+        // `defaultBrowserContextId` is an optional CDP field. Without it every
+        // tab is potentially Incognito, so the snapshot is skipped rather than
+        // written optimistically.
+        let store = TabSessionStore(fileURL: makeTemporaryFileURL())
+        store.save(urls: ["https://example.com/keep"], hostedOrigins: sliccOrigins)
+        let recorder = makeRecorder(
+            store: store,
+            targets: [(Self.defaultContext, "page", "https://example.com/new")],
+            defaultContextId: nil
+        )
+
+        await recorder.snapshotNow()
+
+        XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/keep"])
+    }
+
+    func testSnapshotReadsTheBrowserEndpointForTheConfiguredPort() async {
         let requested = RequestRecorder()
+        let session = BrowserSessionStub(defaultContextId: Self.defaultContext, targets: [])
         let recorder = TabSessionRecorder(
             store: TabSessionStore(fileURL: makeTemporaryFileURL()),
             cdpPort: 9333,
             hostedOrigins: sliccOrigins,
             fetch: { url in
                 await requested.record(url)
-                return (200, Data("[]".utf8))
-            }
+                return (200, Data(#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/abc"}"#.utf8))
+            },
+            openSession: { _ in session }
         )
 
         await recorder.snapshotNow()
 
         let urls = await requested.urls
-        XCTAssertEqual(urls, ["http://127.0.0.1:9333/json/list"])
+        XCTAssertEqual(urls, ["http://127.0.0.1:9333/json/version"])
+        // Browser-level reads only: a page attach could evict the webapp's
+        // own `/cdp` session.
+        let methods = await session.methods
+        XCTAssertEqual(methods, ["Target.getBrowserContexts", "Target.getTargets"])
+        let isClosed = await session.isClosed
+        XCTAssertTrue(isClosed)
     }
 
     func testFailedOrNonSuccessProbeLeavesThePreviousSnapshotIntact() async {
         let store = TabSessionStore(fileURL: makeTemporaryFileURL())
         store.save(urls: ["https://example.com/keep"], hostedOrigins: sliccOrigins)
-        let good = Data(#"[{"type":"page","url":"https://example.com/new"}]"#.utf8)
-        let recorder = makeRecorder(
+        let version = Data(#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}"#.utf8)
+        let queue = ResponseQueue(responses: [
+            .failure(URLError(.cannotConnectToHost)),
+            .success((500, version)),
+            .success((200, Data("not json".utf8))),
+            .success((200, Data("{}".utf8))),
+            .success((200, version)),
+        ])
+        let recorder = TabSessionRecorder(
             store: store,
-            responses: [
-                .failure(URLError(.cannotConnectToHost)),
-                .success((500, good)),
-                .success((200, Data("not json".utf8))),
-            ]
+            cdpPort: 9222,
+            hostedOrigins: sliccOrigins,
+            fetch: { _ in try await queue.next() },
+            // The last round reaches a browser that refuses the read.
+            openSession: { _ in BrowserSessionStub(defaultContextId: nil, targets: [], failing: true) }
         )
 
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             await recorder.snapshotNow()
             XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/keep"])
         }
@@ -69,7 +121,13 @@ final class TabSessionRecorderTests: XCTestCase {
             intervalNanoseconds: 1_000_000,
             fetch: { url in
                 await requested.record(url)
-                return (200, Data(#"[{"type":"page","url":"https://example.com/a"}]"#.utf8))
+                return (200, Data(#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}"#.utf8))
+            },
+            openSession: { _ in
+                BrowserSessionStub(
+                    defaultContextId: Self.defaultContext,
+                    targets: [(Self.defaultContext, "page", "https://example.com/a")]
+                )
             }
         )
 
@@ -90,14 +148,19 @@ final class TabSessionRecorderTests: XCTestCase {
 
     private func makeRecorder(
         store: TabSessionStore,
-        responses: [Result<(Int, Data), Error>]
+        targets: [(context: String, type: String, url: String)],
+        defaultContextId: String? = TabSessionRecorderTests.defaultContext
     ) -> TabSessionRecorder {
-        let queue = ResponseQueue(responses: responses)
-        return TabSessionRecorder(
+        TabSessionRecorder(
             store: store,
             cdpPort: 9222,
             hostedOrigins: sliccOrigins,
-            fetch: { _ in try await queue.next() }
+            fetch: { _ in
+                (200, Data(#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}"#.utf8))
+            },
+            openSession: { _ in
+                BrowserSessionStub(defaultContextId: defaultContextId, targets: targets)
+            }
         )
     }
 
@@ -105,6 +168,47 @@ final class TabSessionRecorderTests: XCTestCase {
         URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("slicc-tab-recorder-tests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("tabs.json")
+    }
+}
+
+/// Canned browser-level CDP endpoint: answers `Target.getBrowserContexts` and
+/// `Target.getTargets` and records what was asked of it.
+private actor BrowserSessionStub: CDPBrowserSession {
+    private let defaultContextId: String?
+    private let targets: [(context: String, type: String, url: String)]
+    private let failing: Bool
+    private(set) var methods: [String] = []
+    private(set) var isClosed = false
+
+    init(
+        defaultContextId: String?,
+        targets: [(context: String, type: String, url: String)],
+        failing: Bool = false
+    ) {
+        self.defaultContextId = defaultContextId
+        self.targets = targets
+        self.failing = failing
+    }
+
+    func call(method: String) async throws -> Data {
+        methods.append(method)
+        if failing { throw CDPBrowserSessionError.noReply(method: method) }
+        switch method {
+        case "Target.getBrowserContexts":
+            let payload = defaultContextId.map { #"{"defaultBrowserContextId":"\#($0)"}"# } ?? "{}"
+            return Data(payload.utf8)
+        case "Target.getTargets":
+            let infos = targets.map {
+                #"{"type":"\#($0.type)","url":"\#($0.url)","browserContextId":"\#($0.context)"}"#
+            }
+            return Data(#"{"targetInfos":[\#(infos.joined(separator: ","))]}"#.utf8)
+        default:
+            return Data("{}".utf8)
+        }
+    }
+
+    func close() {
+        isClosed = true
     }
 }
 

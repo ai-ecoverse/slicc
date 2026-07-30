@@ -10,14 +10,19 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "IncomingU
 protocol LeaderBrowserLaunching: AnyObject {
     /// CDP endpoint of the running local leader, or `nil` when none is up.
     var leaderBrowserEndpoint: LeaderBrowserEndpoint? { get }
+    /// True when this browser is already attached to a remote tray as a
+    /// follower, so it can never become the local leader.
+    func isRunningAsFollower(_ target: AppTarget) -> Bool
     func launchStandalone(_ target: AppTarget) throws
 }
 
 extension SliccProcess: LeaderBrowserLaunching {}
 
-enum IncomingURLRouterError: LocalizedError {
+enum IncomingURLRouterError: LocalizedError, Equatable {
     case leaderUnavailable
     case newTabRejected(status: Int)
+    case newTabResponseUnreadable
+    case activateRejected(status: Int)
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +30,10 @@ enum IncomingURLRouterError: LocalizedError {
             return "No SLICC leader browser became available to open the link in."
         case .newTabRejected(let status):
             return "The browser rejected the new-tab request (HTTP \(status))."
+        case .newTabResponseUnreadable:
+            return "The browser did not report a target id for the new tab, so it stayed in the background."
+        case .activateRejected(let status):
+            return "The browser rejected the tab-activation request (HTTP \(status)), so the link stayed in the background."
         }
     }
 }
@@ -58,17 +67,18 @@ final class IncomingURLRouter {
     static let launchRetryEveryPolls = 20
 
     private let process: any LeaderBrowserLaunching
-    private let topBrowser: () -> AppTarget?
+    private let orderedBrowsers: () -> [AppTarget]
     private let send: (URLRequest) async throws -> (Int, Data)
     private let sleep: (TimeInterval) async -> Void
     private let activateBrowser: (String) -> Void
+    private let report: (Error) -> Void
 
     private var pending: [URL] = []
     private var isDraining = false
 
     init(
         process: any LeaderBrowserLaunching,
-        topBrowser: @escaping () -> AppTarget? = { IncomingURLRouter.defaultTopBrowser() },
+        orderedBrowsers: @escaping () -> [AppTarget] = { IncomingURLRouter.defaultOrderedBrowsers() },
         send: @escaping (URLRequest) async throws -> (Int, Data) = { request in
             let (data, response) = try await URLSession.shared.data(for: request)
             return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
@@ -81,19 +91,21 @@ final class IncomingURLRouter {
             NSWorkspace.shared.runningApplications
                 .first { $0.bundleURL?.standardizedFileURL == bundleURL }?
                 .activate()
-        }
+        },
+        report: @escaping (Error) -> Void = { LauncherErrorReport.report(.openIncomingUrl, $0) }
     ) {
         self.process = process
-        self.topBrowser = topBrowser
+        self.orderedBrowsers = orderedBrowsers
         self.send = send
         self.sleep = sleep
         self.activateBrowser = activateBrowser
+        self.report = report
     }
 
-    /// The browser Sliccstart starts on demand: the head of the (reorderable)
-    /// Browsers list, matching the startup auto-launch pick.
-    nonisolated static func defaultTopBrowser() -> AppTarget? {
-        AppOrdering.topBrowser(
+    /// The (reorderable) Browsers list in display order; its head is the same
+    /// pick startup auto-launch makes.
+    nonisolated static func defaultOrderedBrowsers() -> [AppTarget] {
+        AppOrdering.orderedBrowsers(
             in: AppScanner.scan(hasAppManagementPermission: false),
             savedOrder: AppOrderStore().load(AppOrderStore.browserKey)
         )
@@ -113,7 +125,7 @@ final class IncomingURLRouter {
 
         guard let leader = await resolveLeader() else {
             log.error("handle: no leader browser available; dropping \(self.pending.count, privacy: .public) link(s)")
-            LauncherErrorReport.report(.openIncomingUrl, IncomingURLRouterError.leaderUnavailable)
+            report(IncomingURLRouterError.leaderUnavailable)
             pending.removeAll()
             return
         }
@@ -179,14 +191,21 @@ final class IncomingURLRouter {
                 throw IncomingURLRouterError.newTabRejected(status: status)
             }
             log.info("open: opened link in leader on cdp \(cdpPort, privacy: .public)")
-            if let targetId = Self.createdTargetId(from: body),
+            // The tab exists but is in the background, so a failure here is a
+            // user-visible failure — the browser comes forward showing the
+            // tab the user was already on and the clicked link looks lost.
+            guard let targetId = Self.createdTargetId(from: body),
                 let activate = Self.activateRequest(cdpPort: cdpPort, targetId: targetId)
-            {
-                _ = try? await send(activate)
+            else {
+                throw IncomingURLRouterError.newTabResponseUnreadable
+            }
+            let (activateStatus, _) = try await send(activate)
+            guard (200..<300).contains(activateStatus) else {
+                throw IncomingURLRouterError.activateRejected(status: activateStatus)
             }
         } catch {
             log.error("open: failed: \(error.localizedDescription, privacy: .public)")
-            LauncherErrorReport.report(.openIncomingUrl, error)
+            report(error)
         }
     }
 
@@ -202,8 +221,14 @@ final class IncomingURLRouter {
     }
 
     private func launchLeader() {
-        guard let target = topBrowser() else {
-            log.error("launchLeader: no browser installed")
+        let browsers = orderedBrowsers()
+        // Skip a browser already attached to a remote tray as a follower:
+        // `launchStandalone` would no-op on it ("already running") while the
+        // wait loop keeps ignoring follower records, so retrying it would burn
+        // the whole budget and drop the link. A browser that is merely still
+        // booting is *not* skipped — it is the leader-to-be.
+        guard let target = browsers.first(where: { !process.isRunningAsFollower($0) }) else {
+            log.error("launchLeader: no browser available to become the leader")
             return
         }
         do {

@@ -270,6 +270,17 @@ final class SliccProcess {
         return LeaderBrowserEndpoint(cdpPort: entry.value.cdpPort, appPath: entry.key)
     }
 
+    /// True when `target` is occupied by a launch record that can never become
+    /// this device's leader: a browser attached to a *remote* tray with
+    /// `--join`. `launchStandalone` no-ops on such a browser ("already
+    /// running") while `leaderBrowserEndpoint` keeps ignoring it, so a caller
+    /// waiting for a leader has to move on to the next browser instead of
+    /// retrying this one.
+    func isRunningAsFollower(_ target: AppTarget) -> Bool {
+        guard let record = launchRecords[target.id] else { return false }
+        return record.isFollower && record.process.isRunning
+    }
+
     func refreshRuntimeStates(for targets: [AppTarget]) {
         for target in targets {
             refreshRuntimeState(for: target)

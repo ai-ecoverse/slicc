@@ -117,6 +117,62 @@ final class IncomingURLRouterTests: XCTestCase {
         XCTAssertGreaterThan(process.launchedTargets.count, 1)
     }
 
+    func testSkipsAFollowerBrowserWhenPickingOneToStart() async {
+        // Chrome is attached to a remote tray with `--join`, so it can never
+        // become the local leader and `launchStandalone` would no-op on it.
+        // Retrying it would burn the whole wait budget and drop the link.
+        let browsers = [browserTarget(name: "Google Chrome"), browserTarget(name: "Brave Browser")]
+        let process = LeaderStub(leader: nil, followerNames: ["Google Chrome"])
+        let transport = TransportSpy()
+        let router = makeRouter(process: process, transport: transport, browsers: browsers)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertFalse(process.launchedTargets.contains("Google Chrome"))
+        XCTAssertEqual(Set(process.launchedTargets), ["Brave Browser"])
+    }
+
+    func testReportsWhenTheCreatedTabCannotBeActivated() async {
+        // `/json/new` creates the tab in the background, so a failed activate
+        // leaves the browser foregrounded on the tab the user was already on
+        // and the clicked link looks lost. That must not be swallowed.
+        let process = LeaderStub(leader: Self.chromeLeader)
+        let transport = TransportSpy(activateStatus: 500)
+        let reported = ErrorSpy()
+        let router = makeRouter(process: process, transport: transport, report: reported.record)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(
+            reported.errors as? [IncomingURLRouterError],
+            [.activateRejected(status: 500)]
+        )
+    }
+
+    func testReportsWhenTheNewTabResponseHasNoTargetId() async {
+        let process = LeaderStub(leader: Self.chromeLeader)
+        let transport = TransportSpy(newTabBody: Data("{}".utf8))
+        let reported = ErrorSpy()
+        let router = makeRouter(process: process, transport: transport, report: reported.record)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(
+            reported.errors as? [IncomingURLRouterError],
+            [.newTabResponseUnreadable]
+        )
+    }
+
+    func testDroppedLinksAreReported() async {
+        let process = LeaderStub(leader: nil)
+        let reported = ErrorSpy()
+        let router = makeRouter(process: process, transport: TransportSpy(), report: reported.record)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(reported.errors as? [IncomingURLRouterError], [.leaderUnavailable])
+    }
+
     func testIgnoresLinksWithNoOpenableScheme() async {
         let process = LeaderStub(leader: Self.chromeLeader)
         let transport = TransportSpy()
@@ -147,30 +203,36 @@ final class IncomingURLRouterTests: XCTestCase {
         appPath: "/Applications/Google Chrome.app"
     )
 
-    private func makeRouter(process: LeaderStub, transport: TransportSpy) -> IncomingURLRouter {
-        let chrome = browserTarget()
+    private func makeRouter(
+        process: LeaderStub,
+        transport: TransportSpy,
+        browsers: [AppTarget]? = nil,
+        report: @escaping (Error) -> Void = { _ in }
+    ) -> IncomingURLRouter {
+        let ordered = browsers ?? [browserTarget(name: "Google Chrome")]
         return IncomingURLRouter(
             process: process,
-            topBrowser: { chrome },
+            orderedBrowsers: { ordered },
             send: { request in try await transport.send(request) },
             sleep: { _ in await process.tick() },
-            activateBrowser: { appPath in transport.recordActivation(appPath) }
+            activateBrowser: { appPath in transport.recordActivation(appPath) },
+            report: report
         )
     }
 
-    private func browserTarget() -> AppTarget {
-        let path = "/Applications/Google Chrome.app"
+    private func browserTarget(name: String) -> AppTarget {
+        let path = "/Applications/\(name).app"
         return AppTarget(
             id: path,
-            name: "Google Chrome",
+            name: name,
             path: path,
-            executablePath: "\(path)/Contents/MacOS/Google Chrome",
+            executablePath: "\(path)/Contents/MacOS/\(name)",
             type: .chromiumBrowser,
             icon: NSImage(size: NSSize(width: 1, height: 1)),
             debugSupport: .supported,
             isDebugBuild: false,
             originalAppPath: nil,
-            bundleId: "com.google.Chrome"
+            bundleId: "com.example.\(name)"
         )
     }
 }
@@ -185,17 +247,26 @@ private final class LeaderStub: LeaderBrowserLaunching {
     private var ticks = 0
     private(set) var launchedTargets: [String] = []
 
+    /// Browser names Sliccstart already has attached to a remote tray.
+    private let followerNames: Set<String>
+
     init(
         leader: LeaderBrowserEndpoint?,
         endpointAfterPolls: Int? = nil,
-        endpointWhenReady: LeaderBrowserEndpoint? = nil
+        endpointWhenReady: LeaderBrowserEndpoint? = nil,
+        followerNames: Set<String> = []
     ) {
         self.endpoint = leader
         self.endpointAfterPolls = endpointAfterPolls
         self.endpointWhenReady = endpointWhenReady
+        self.followerNames = followerNames
     }
 
     var leaderBrowserEndpoint: LeaderBrowserEndpoint? { endpoint }
+
+    func isRunningAsFollower(_ target: AppTarget) -> Bool {
+        followerNames.contains(target.name)
+    }
 
     func launchStandalone(_ target: AppTarget) throws {
         launchedTargets.append(target.name)
@@ -213,13 +284,32 @@ private final class LeaderStub: LeaderBrowserLaunching {
 private final class TransportSpy {
     private(set) var requests: [URLRequest] = []
     private(set) var activatedApps: [String] = []
+    private let activateStatus: Int
+    private let newTabBody: Data
+
+    init(activateStatus: Int = 200, newTabBody: Data = Data(#"{"id":"tab-1"}"#.utf8)) {
+        self.activateStatus = activateStatus
+        self.newTabBody = newTabBody
+    }
 
     func send(_ request: URLRequest) async throws -> (Int, Data) {
         requests.append(request)
-        return (200, Data(#"{"id":"tab-1"}"#.utf8))
+        if request.url?.path.hasPrefix("/json/activate") == true {
+            return (activateStatus, Data())
+        }
+        return (200, newTabBody)
     }
 
     func recordActivation(_ appPath: String) {
         activatedApps.append(appPath)
+    }
+}
+
+@MainActor
+private final class ErrorSpy {
+    private(set) var errors: [Error] = []
+
+    func record(_ error: Error) {
+        errors.append(error)
     }
 }

@@ -60,13 +60,26 @@ Contract test: `packages/swift-launcher/macos-permissions.test.mjs`.
    `topBrowser()`: the user can start any browser by hand, so the leader is not
    necessarily the head of the Browsers list, and re-deriving the pick here
    would foreground the wrong app and leave the link hidden.
-4. With no leader, the router starts the top ordered browser
-   (`AppOrdering.topBrowser(in:savedOrder:)` — the same pick startup auto-launch
-   uses) and waits up to ~45s for `SliccProcess.leaderBrowserEndpoint`,
-   re-attempting the launch every ~10s. A single attempt is not enough: it can
-   lose the race against startup's own auto-launch, or run while the app is
-   still bootstrapping. Links that never find a leader are reported through
+4. With no leader, the router starts the first browser in
+   `AppOrdering.orderedBrowsers(in:savedOrder:)` that is **not** already attached
+   to a remote tray as a follower, and waits up to ~45s for
+   `SliccProcess.leaderBrowserEndpoint`, re-attempting the launch every ~10s. A
+   single attempt is not enough: it can lose the race against startup's own
+   auto-launch, or run while the app is still bootstrapping. Links that never
+   find a leader are reported through
    `LauncherErrorReport.report(.openIncomingUrl, …)`.
+
+The follower skip matters because `launchStandalone` no-ops on a browser
+Sliccstart already launched, while `leaderBrowserEndpoint` ignores follower
+records: retrying that browser would burn the whole 45s budget and then drop the
+link. A browser that is merely still booting is deliberately **not** skipped —
+it is the leader-to-be, and starting a second browser instead would give the
+machine two leaders.
+
+Every delivery failure is reported, including a rejected `/json/activate` or a
+`/json/new` response with no target id: the tab exists but stays in the
+background, so silently swallowing that would foreground the browser on whatever
+tab the user was already on and make the clicked link look lost.
 
 `leaderBrowserEndpoint` pairs the CDP port with the launch record's key (the
 browser's bundle path) so callers cannot address one browser while activating
@@ -100,11 +113,23 @@ swift-server keeps its own snapshot.
   first-seen order, capped at `maxRestoredTabs` (50). The file is user-writable
   and every surviving entry becomes a Chrome argv slot, so a `--flag`-shaped or
   `file://` entry must never survive — `buildLaunchArgs` re-sanitizes as well.
-- `Sources/Browser/TabSessionRecorder.swift` — actor polling `/json/list` every
-  5s. Polling rather than subscribing to `Target.targetInfoChanged` keeps this off
-  the `/cdp` socket the webapp owns, so it cannot evict the leader's CDP session.
-  A failed or non-2xx poll is dropped rather than persisted, so a quitting browser
-  never erases the last good snapshot.
+- `Sources/Browser/TabSessionRecorder.swift` — actor polling the target list
+  every 5s. Polling rather than subscribing to `Target.targetInfoChanged` keeps
+  this off the `/cdp` socket the webapp owns, so it cannot evict the leader's CDP
+  session. A failed or non-2xx poll is dropped rather than persisted, so a
+  quitting browser never erases the last good snapshot.
+- **Incognito tabs are never written to disk.** `/json/list` lists an Incognito
+  page with nothing to distinguish it from a normal tab (verified against
+  Chrome), so the recorder reads `Target.getTargets` over the **browser** CDP
+  endpoint instead and keeps only targets whose `browserContextId` matches
+  `Target.getBrowserContexts`' `defaultBrowserContextId`. That field is optional
+  in the protocol, so a browser that does not report it fails **closed**: the
+  snapshot is skipped rather than written optimistically.
+- `Sources/Browser/CDPBrowserSession.swift` — the short-lived browser-endpoint
+  channel those two reads use. Chrome multiplexes browser-level clients, so this
+  cannot evict anything: verified against Chrome that two browser-level clients
+  plus a live page session coexist, with the page session still answering
+  `Runtime.evaluate` while the browser clients poll.
 - `ChromeLaunchConfig.restoreUrls` → `buildLaunchArgs` appends them **after**
   `launchUrl`, because Chromium activates the first URL on the command line: the
   SLICC tab stays leftmost and focused (verified against Chrome 147).
@@ -112,10 +137,10 @@ swift-server keeps its own snapshot.
   the server is up. `ShutdownContext.tabRecorder` takes the final snapshot in
   `runShutdownSequence` while CDP is still reachable — including the detach path,
   where the browser survives and the next full launch consumes the snapshot.
-- Restored order follows `/json/list`, which is roughly most-recently-used rather
-  than left-to-right tab order, so tab positions are not preserved. Pinned tabs,
-  tab groups, window layout, scroll positions, and per-tab back/forward history
-  are lost as well — the snapshot is URLs only.
+- Restored order follows the CDP target list, which is not left-to-right tab
+  order, so tab positions are not preserved. Pinned tabs, tab groups, window
+  layout, scroll positions, and per-tab back/forward history are lost as well —
+  the snapshot is URLs only.
 
 Not wired for `--serve-only` (it attaches to a browser it did not launch, so it
 knows neither the profile directory nor the SLICC origin set) or for
@@ -123,6 +148,6 @@ knows neither the profile directory nor the SLICC origin set) or for
 swift-server-only, so `packages/node-server/src/chrome-launch.ts` keeps the plain
 session wipe.
 
-Tests: `TabSessionStoreTests`, `TabSessionRecorderTests`, plus the restore-arg
-cases in `ChromeLauncherTests` and the snapshot ordering case in
-`GracefulShutdownHandlerTests`.
+Tests: `TabSessionStoreTests`, `TabSessionRecorderTests`,
+`CDPBrowserSessionTests`, plus the restore-arg cases in `ChromeLauncherTests` and
+the snapshot ordering case in `GracefulShutdownHandlerTests`.

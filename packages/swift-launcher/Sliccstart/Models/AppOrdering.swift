@@ -75,15 +75,21 @@ enum AppOrdering {
             .map { $0.element }
     }
 
-    /// The browser Sliccstart starts by itself — startup auto-launch and the
-    /// default-browser link handler both use this pick, so they can never
-    /// disagree about which browser is "the" leader.
-    static func topBrowser(in targets: [AppTarget], savedOrder: [String]) -> AppTarget? {
+    /// The Browsers list in display order. The link handler walks it to find a
+    /// browser that can still become the leader.
+    static func orderedBrowsers(in targets: [AppTarget], savedOrder: [String]) -> [AppTarget] {
         ordered(
             targets.filter { $0.type == .chromiumBrowser },
             savedOrder: savedOrder,
             defaultPriority: browserBundlePriority
-        ).first
+        )
+    }
+
+    /// The browser Sliccstart starts by itself — startup auto-launch and the
+    /// default-browser link handler both use this pick, so they can never
+    /// disagree about which browser is "the" leader.
+    static func topBrowser(in targets: [AppTarget], savedOrder: [String]) -> AppTarget? {
+        orderedBrowsers(in: targets, savedOrder: savedOrder).first
     }
 
     /// The bundle-id order to persist after a drag reorder produced
