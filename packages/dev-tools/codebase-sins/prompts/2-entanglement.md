@@ -10,6 +10,12 @@ imports that violate it:
 - The layer stack flows `fs → shell/git → cdp → tools → core → scoops → ui`.
   Look for back-edges, e.g. `packages/webapp/src/core/` importing from
   `packages/webapp/src/ui/`, or low layers reaching up into orchestration.
+  Note: NEW `ui/` back-edges are now lint-blocked (`npm run lint:ui-back-edges`);
+  the grandfathered ones live in
+  `packages/dev-tools/tools/ui-back-edge-baseline.json`. Prefer hunting either
+  a baseline entry worth paying down (the god-module split it implies) or
+  boundary violations the lint cannot see: cross-package back-edges,
+  circular deps, wrong-direction imports between non-ui layers.
 - `packages/node-server/` importing deep `packages/webapp/src/` internals
   instead of a stable entry point; `@slicc/shared-ts` (meant to be
   platform-agnostic) importing browser- or node-only code.

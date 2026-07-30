@@ -1,7 +1,7 @@
 ---
 name: verifying-before-push
 description: |
-  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout complexity gate (check-touched-exemptions.mjs — not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
+  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout debt gate (check-touched-exemptions.mjs — complexity + ui back-edges; not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
 ---
 
 # verifying-before-push
@@ -67,7 +67,9 @@ Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
 then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
-`lint:patches`, and `lint:duplication`.
+`lint:ui-back-edges` (no new `ui/` imports below the ui layer — baseline-ratcheted;
+fix the layering, never grow `ui-back-edge-baseline.json`), `lint:patches`, and
+`lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
@@ -117,7 +119,7 @@ which builds both apps itself.
 Budgets are ratchets like the duplication threshold: tighten them as payloads shrink. Raising
 one needs a justification in the PR body.
 
-## Boy-scout complexity gate (`check-touched-exemptions.mjs`)
+## Boy-scout debt gate (`check-touched-exemptions.mjs`)
 
 Run this separate gate after lint:
 
@@ -128,28 +130,36 @@ node packages/dev-tools/tools/check-touched-exemptions.mjs
 CI's `lint` job runs this step **after** `lint:ci`. It is **not** part of `npm run lint`, so
 it is easy to miss locally.
 
-`biome.json` keeps two `overrides` "debt lists" of files that are grandfathered out of the
-complexity rules:
+The gate enforces three "debt lists" of files grandfathered out of a rule:
 
-- `complexity.noExcessiveCognitiveComplexity` (cap: cognitive complexity **≤ 25**)
-- `complexity.noExcessiveLinesPerFunction` (cap: **≤ 150** lines per function)
+- `complexity.noExcessiveCognitiveComplexity` (`biome.json` `overrides`; cap: cognitive
+  complexity **≤ 25**)
+- `complexity.noExcessiveLinesPerFunction` (`biome.json` `overrides`; cap: **≤ 150** lines
+  per function)
+- `ui/` layer back-edges (`packages/dev-tools/tools/ui-back-edge-baseline.json`; cap: **0**
+  imports from `ui/` below the ui layer)
 
 When a PR **touches** any file still on one of those debt lists, this gate **fails** unless,
-in the same change, you:
+in the same change, you pay the file's debt down and remove its entry:
 
-1. Refactor every function in that file under the relevant cap, then
-2. Remove the file's entry from the corresponding `biome.json` `overrides` block.
+- Complexity lists: refactor every function in that file under the relevant cap, then delete
+  the file's entry from the corresponding `biome.json` `overrides` block.
+- Back-edge baseline: remove every `ui/` import from the file (move the pure helper into a
+  lower-layer module), then run
+  `node packages/dev-tools/tools/check-ui-back-edges.mjs --update`.
 
-Treat this as a one-way ratchet: never add a file to the debt list to silence it. The gate
-auto-skips on `merge_group` / `push` events (it resolves the merge-base against
-`$GITHUB_BASE_REF`), so always run it locally before pushing if you touched a listed file.
+Treat all three as one-way ratchets: never add a file to a debt list to silence it — the gate
+also fails when a PR grows any list vs the base ref. The gate auto-skips on `merge_group` /
+`push` events (it resolves the merge-base against `$GITHUB_BASE_REF`), so always run it
+locally before pushing if you touched a listed file.
 
 For warning-only cleanup PRs, this means "lint warning count down" is not enough: if you
-touch a debt-listed file, you must fully pay down that file's complexity debt in the same
-PR or avoid touching that file.
+touch a debt-listed file, you must fully pay down that file's debt in the same PR or avoid
+touching that file.
 
 To check whether a file is exempt, search `biome.json` for its path under the
-`noExcessiveCognitiveComplexity: "off"` / `noExcessiveLinesPerFunction: "off"` overrides.
+`noExcessiveCognitiveComplexity: "off"` / `noExcessiveLinesPerFunction: "off"` overrides,
+and `ui-back-edge-baseline.json` for its path key.
 
 ## Coverage
 

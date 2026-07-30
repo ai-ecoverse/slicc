@@ -177,10 +177,21 @@ jobs:
             Then `Read docs/review-patterns.md` and check the diff against the
             recurring blind-spot categories it documents (error-path coverage,
             UI state preservation, cross-runtime parity across the five
-            runtimes, CDP edge cases, native/macOS permissions, test coverage).
-            Apply the severity rubric from that file (Critical/Major/Minor) when
-            labelling findings, and reason contextually — only flag a category
-            when the surrounding code does not already handle it.
+            runtimes, CDP edge cases, native/macOS permissions, test coverage,
+            layer-stack import direction). Apply the severity rubric from that
+            file (Critical/Major/Minor) when labelling findings, and reason
+            contextually — only flag a category when the surrounding code does
+            not already handle it.
+
+            Two checks are cheap and deterministic — do them on every review:
+            - Layering: the webapp layer stack is fs → shell/git → cdp → tools
+              → core → scoops → ui. Scan the diff for any ADDED import of a
+              `packages/webapp/src/ui/` module from a lower-layer file (static,
+              dynamic `import()`, or `import type`). A pure-looking helper does
+              not excuse the back-edge — the helper is mislocated; say so.
+            - Baseline growth: a diff that adds entries or raises counts in
+              `packages/dev-tools/tools/ui-back-edge-baseline.json` is
+              grandfathering a new violation. Flag it as Major.
 
             You have a full shell. When a finding depends on runtime behaviour,
             actually run the code to confirm it before reporting — e.g. `npm ci`

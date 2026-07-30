@@ -160,8 +160,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Full history so the function-size + cognitive-complexity boy-scout
-          # gate (check-touched-exemptions.mjs) can resolve merge-base
+          # Full history so the debt boy-scout gate
+          # (check-touched-exemptions.mjs) can resolve merge-base
           # against $GITHUB_BASE_REF.
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -171,11 +171,11 @@ jobs:
       - uses: ./.github/actions/npm-ci
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
-      - name: Function-size + cognitive-complexity debt boy-scout gate
-        # Fail when this PR touches a file that is still on either of the
-        # biome.json complexity debt lists (function-size or cognitive-
-        # complexity) without removing its override entry. Skips
-        # automatically on merge_group / push.
+      - name: Debt boy-scout gate (complexity + ui back-edges)
+        # Fail when this PR touches a file that is still on a debt list —
+        # the biome.json complexity lists (function-size or cognitive-
+        # complexity) or the ui-back-edge baseline — without removing its
+        # entry. Skips automatically on merge_group / push.
         run: node packages/dev-tools/tools/check-touched-exemptions.mjs
       - name: Check Chrome Web Store manifest justifications
         # Fail if the extension manifest gains/drops a permission without a

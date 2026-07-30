@@ -1,10 +1,10 @@
 # SLICC — Copilot Code Review Instructions
 
 SLICC is a browser-centric AI coding agent shipped across five runtimes — `webapp`
-(browser), `chrome-extension`, `node-server`, `swift-server`, and `ios-app` — that share
+(browser), `chrome-extension`, `node-server`, `swift-server`, and `ios-app` — sharing
 behavior but not code. Review changed code against these recurring blind spots, highest
-value first. Reason contextually: only flag a category when the surrounding code does not
-already handle it. Full catalog: `docs/review-patterns.md`.
+value first. Only flag a category when the surrounding code does not already handle it.
+Full catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
@@ -56,7 +56,7 @@ needs a matching follower handler in `tray-follower-sync.ts` AND a UI action wir
 Check all three boot paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`).
 Also flag: a fallback removed from a shared helper for a leader-only replacement, or a
 gate keyed on a float name (`isCherry`) where a capability check belongs (#1706).
-The largest empirical failure class (~30–40 commits since 2026-03).
+The largest empirical failure class.
 
 ## 8. Origin / bridge routing contract (often Major)
 
@@ -71,9 +71,13 @@ origin comparisons without trailing-slash normalization. 15 call-site fixes acro
 
 ## 9. Transcript export — redaction boundary (Critical)
 
-- Fail-closed: redactor failure → abort with `redaction-unavailable`, never emit raw bundle.
+- Fail-closed: redactor failure → abort with `redaction-unavailable`, never emit raw.
 - `privacy.reasoningExcluded` must always be `true`.
-- All follower/Cherry paths must call `openTranscriptExportApproval()`. Approval is one-time.
-- Unknown follower error codes → `transfer-corrupt`. SHA-256 mismatch → `transfer-corrupt`.
+- Follower/Cherry paths must call `openTranscriptExportApproval()`; approval is one-time.
+- Unknown follower error codes and SHA-256 mismatches → `transfer-corrupt`.
 
-See `docs/transcript-export.md` for error messages. See `docs/review-patterns.md` for spec.
+## 10. Layer import direction (Major)
+
+Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag new imports of
+`webapp/src/ui/` from lower layers — even types or pure helpers; move the helper
+down instead. Flag growth of `ui-back-edge-baseline.json`.

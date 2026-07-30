@@ -34,39 +34,53 @@ const SCAN_ROOT = resolve(repoRoot, 'packages/webapp/src/providers/built-in');
 // back-edge can take: a static `import ... from '<...>ui/...'` /
 // `export ... from '<...>ui/...'` (both end in `from '...'`), a
 // string-literal dynamic `import('<...>ui/...')`, or a `require('<...>ui/...')`.
-// `<...>` is any chain of `../` (one or more levels up).
-const UI_IMPORT_RE = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](?:\.\.\/)+ui\/[^'"]+['"]/;
+// `<...>` is any chain of `../` (one or more levels up). `\s` spans newlines,
+// so Prettier's multiline `await import(\n  '../ui/...'\n)` form matches when
+// the regex runs over the whole source (not line by line).
+const UI_IMPORT_RE = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](?:\.\.\/)+ui\/[^'"]+['"]/g;
 
 /** A `.ts` source file (built-ins are .ts only; no .tsx in this tree). */
 export function isProviderSource(name) {
   return name.endsWith('.ts') && !name.endsWith('.test.ts');
 }
 
+// One source token at a time, left to right: a '…' / "…" / `…` string
+// literal (escapes honored, templates may span lines), a `//` line comment,
+// or a `/* */` block comment. Scanning strings and comments as alternatives
+// of ONE regex means a comment opener inside a string (or a quote inside a
+// comment) can never start the other construct.
+const COMMENT_OR_STRING_RE =
+  /'(?:\\[\s\S]|[^'\\\n])*'|"(?:\\[\s\S]|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+
 /**
  * Blank out `//` line comments and `/* *\/` block comments (preserving
  * newlines) so prose mentions of the forbidden pattern never trip the
- * gate. Good enough for source scanning; it does not parse string
- * literals.
+ * gate. String-literal-aware: `//` or `/*` inside a '…', "…", or `…`
+ * literal (e.g. a URL pattern like `http://host/*` in help text) does NOT
+ * open a comment, and string contents are preserved. Good enough for
+ * source scanning; regex literals and nested templates are not parsed.
  */
 export function stripComments(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/\/\/[^\n]*/g, '');
+  return source.replace(COMMENT_OR_STRING_RE, (m) =>
+    m.startsWith('//') || m.startsWith('/*') ? m.replace(/[^\n]/g, ' ') : m
+  );
 }
 
 /**
  * Find every `<...>ui/...` import in `source` - covers `from '<...>ui/...'`
  * (static import / re-export), `import('<...>ui/...')` (string-literal
- * dynamic import), and `require('<...>ui/...')`. Returns
- * `[{ line, match }]` (1-based line numbers); comments are ignored.
+ * dynamic import), and `require('<...>ui/...')`, including Prettier's
+ * multiline `import(\n'...')` form. Returns `[{ line, match }]` (1-based
+ * line number where the match starts, match whitespace collapsed);
+ * comments are ignored.
  */
 export function findUiImports(source) {
   const hits = [];
-  const lines = stripComments(source).split('\n');
-  lines.forEach((line, i) => {
-    const m = line.match(UI_IMPORT_RE);
-    if (m) hits.push({ line: i + 1, match: m[0] });
-  });
+  const stripped = stripComments(source);
+  for (const m of stripped.matchAll(UI_IMPORT_RE)) {
+    const line = stripped.slice(0, m.index).split('\n').length;
+    hits.push({ line, match: m[0].replace(/\s+/g, ' ') });
+  }
   return hits;
 }
 
