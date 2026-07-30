@@ -1,6 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { FrozenSessionIndexEntry } from '../../ui/session-freezer.js';
+import type { FrozenSessionIndexEntry } from '../../transcript/frozen-archive-format.js';
 
 export type SessionCostScope = 'live' | 'all';
 
