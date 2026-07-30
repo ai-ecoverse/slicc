@@ -596,15 +596,13 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     fields: { type: 'mirrored', messageId: 'mirrored', text: 'mirrored' },
     event: { type: 'content_delta', messageId: 'm2', text: 'partial' },
   },
-  // Decodes to a real case, yet `.contentDone(messageId:)` carries neither
-  // `model` nor `usage` — the cost attribution for the turn is thrown away.
   content_done: {
     ios: 'decoded',
     fields: {
       type: 'mirrored',
       messageId: 'mirrored',
-      model: 'dropped',
-      usage: 'dropped',
+      model: 'mirrored',
+      usage: 'mirrored',
     },
     event: {
       type: 'content_done',
@@ -657,17 +655,17 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       isError: false,
     },
   },
-  // Tool-UI cards render as interactive HTML on the leader. iOS has no case,
-  // so an approval card silently never appears. `.unknown` re-encodes the type
-  // tag and nothing else, which is why every payload field below is `dropped`.
+  // Tool-UI cards render as interactive HTML on the leader. A follower has no
+  // permissions surface, so the browser follower shows a read-only "waiting on
+  // the leader" placeholder; iOS decodes the payload but does not render it yet.
   tool_ui: {
-    ios: 'unknown',
+    ios: 'decoded',
     fields: {
       type: 'mirrored',
-      messageId: 'dropped',
-      toolName: 'dropped',
-      requestId: 'dropped',
-      html: 'dropped',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      requestId: 'mirrored',
+      html: 'mirrored',
     },
     event: {
       type: 'tool_ui',
@@ -678,8 +676,8 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     },
   },
   tool_ui_done: {
-    ios: 'unknown',
-    fields: { type: 'mirrored', messageId: 'dropped', requestId: 'dropped' },
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored', requestId: 'mirrored' },
     event: { type: 'tool_ui_done', messageId: 'm2', requestId: 'ui-1' },
   },
   turn_end: {
@@ -692,16 +690,18 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     fields: { type: 'mirrored', error: 'mirrored' },
     event: { type: 'error', error: 'boom' },
   },
-  // `degradeOversizeAgentEvent` in broadcast.ts explicitly handles screenshots,
-  // so they are expected on the wire; iOS still has no case for them.
+  // Both are deliberate render no-ops on every follower — the webapp chat
+  // thread names them explicitly for exactly this reason. They still have to
+  // DECODE, so that deleting a case is a compile error rather than a silent
+  // regression, which is why the fields are `mirrored` and not `dropped`.
   screenshot: {
-    ios: 'unknown',
-    fields: { type: 'mirrored', base64: 'dropped', url: 'dropped' },
+    ios: 'decoded',
+    fields: { type: 'mirrored', base64: 'mirrored', url: 'mirrored' },
     event: { type: 'screenshot', base64: 'iVBORw0KGgo=', url: 'https://example.com' },
   },
   terminal_output: {
-    ios: 'unknown',
-    fields: { type: 'mirrored', text: 'dropped' },
+    ios: 'decoded',
+    fields: { type: 'mirrored', text: 'mirrored' },
     event: { type: 'terminal_output', text: '$ ls\nnotes.md\n' },
   },
 };
@@ -713,19 +713,19 @@ const CHAT_MESSAGE: NestedPayloadEntry<ChatMessage> = {
     role: 'mirrored',
     content: 'mirrored',
     timestamp: 'mirrored',
-    attachments: 'dropped',
+    attachments: 'mirrored',
     toolCalls: 'mirrored',
     isStreaming: 'mirrored',
-    model: 'dropped',
-    usage: 'dropped',
+    model: 'mirrored',
+    usage: 'mirrored',
     source: 'mirrored',
     channel: 'mirrored',
-    lickCount: 'dropped',
-    lickParts: 'dropped',
-    lickId: 'dropped',
-    lickState: 'dropped',
+    lickCount: 'mirrored',
+    lickParts: 'mirrored',
+    lickId: 'mirrored',
+    lickState: 'mirrored',
     queued: 'mirrored',
-    error: 'dropped',
+    error: 'mirrored',
   },
   sample: {
     id: 'm-full',
@@ -793,20 +793,17 @@ const TOOL_CALL: NestedPayloadEntry<ToolCall> = {
 };
 
 const MESSAGE_ATTACHMENT: NestedPayloadEntry<MessageAttachment> = {
-  // No Swift type exists at all, so every field is lost wherever attachments
-  // ride along (`ChatMessage.attachments`, `user_message_echo.attachments`).
-  ios: 'absent',
-  carriedBy: ['ChatMessage.attachments'],
+  ios: 'mirrored',
   fields: {
-    id: 'dropped',
-    name: 'dropped',
-    mimeType: 'dropped',
-    size: 'dropped',
-    kind: 'dropped',
-    data: 'dropped',
-    text: 'dropped',
-    path: 'dropped',
-    error: 'dropped',
+    id: 'mirrored',
+    name: 'mirrored',
+    mimeType: 'mirrored',
+    size: 'mirrored',
+    kind: 'mirrored',
+    data: 'mirrored',
+    text: 'mirrored',
+    path: 'mirrored',
+    error: 'mirrored',
   },
   sample: {
     id: 'a1',
@@ -888,10 +885,8 @@ const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
     title: 'mirrored',
     url: 'mirrored',
     isLocal: 'mirrored',
-    // Without `kind`, the follower cannot tell a cherry host page from a real
-    // browser tab; without `capabilities`, it cannot tell what that page lends.
-    kind: 'dropped',
-    capabilities: 'dropped',
+    kind: 'mirrored',
+    capabilities: 'mirrored',
   },
   sample: {
     targetId: 'leader:tab1',

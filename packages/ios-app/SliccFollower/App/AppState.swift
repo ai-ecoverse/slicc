@@ -608,7 +608,7 @@ class AppState: ObservableObject {
             logger.debug("Agent event received: scoopJid=\(scoopJid)")
             handleAgentEvent(event, scoopJid: scoopJid)
 
-        case .userMessageEcho(let text, let messageId, let scoopJid):
+        case .userMessageEcho(let text, let messageId, let scoopJid, let attachments):
             logger.debug("User message echo: id=\(messageId)")
             var buffer = messagesByScoop[scoopJid] ?? []
             if !buffer.contains(where: { $0.id == messageId }) {
@@ -616,7 +616,8 @@ class AppState: ObservableObject {
                     id: messageId,
                     role: .user,
                     content: text,
-                    timestamp: Date().timeIntervalSince1970 * 1000
+                    timestamp: Date().timeIntervalSince1970 * 1000,
+                    attachments: attachments
                 )
                 buffer.append(msg)
                 messagesByScoop[scoopJid] = buffer
@@ -848,10 +849,14 @@ class AppState: ObservableObject {
                 }
             }
 
-        case .contentDone(let messageId):
+        case .contentDone(let messageId, let model, let usage):
             logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
+                // Retained for cost attribution, as the webapp does. Neither
+                // surface renders these in the thread.
+                if let model { buffer[idx].model = model }
+                if let usage { buffer[idx].usage = usage }
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
                     cancelPendingMessagesFlush()
@@ -905,7 +910,34 @@ class AppState: ObservableObject {
             logger.error("Agent event: error — \(error)")
             if isVisible { lastError = error }
 
-        case .unknown:
+        // Events that decode but mutate no transcript state. Kept as a single
+        // arm so the switch stays exhaustive — a new protocol case is then a
+        // compile error rather than a silent drop — without charging this
+        // dispatcher's complexity budget once per case.
+        case .toolUI, .toolUIDone, .screenshot, .terminalOutput, .unknown:
+            logNonRenderingAgentEvent(event)
+        }
+    }
+
+    /// Agent events the follower decodes but does not render.
+    ///
+    /// `tool_ui` / `tool_ui_done` are approval cards the leader owns; a
+    /// follower has no permissions surface, so the browser follower degrades
+    /// them to a read-only placeholder (`buildReadOnlyToolUiHtml` in
+    /// `wc-chat-controller.ts`) and iOS shows nothing yet. `screenshot` and
+    /// `terminal_output` are deliberate no-ops on every follower — the webapp
+    /// chat thread names both explicitly for the same reason.
+    private func logNonRenderingAgentEvent(_ event: AgentEvent) {
+        switch event {
+        case .toolUI(let messageId, let toolName, let requestId, _):
+            logger.debug(
+                "Agent event: tool_ui id=\(messageId) tool=\(toolName) request=\(requestId) — not rendered"
+            )
+        case .toolUIDone(let messageId, let requestId):
+            logger.debug("Agent event: tool_ui_done id=\(messageId) request=\(requestId)")
+        case .screenshot, .terminalOutput:
+            break
+        default:
             logger.debug("Agent event: unknown type")
         }
     }

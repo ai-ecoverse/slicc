@@ -72,6 +72,88 @@ enum MessageRole: String, Codable {
     case assistant
 }
 
+// MARK: - MessageAttachment
+
+/// Mirrors `MessageAttachmentKind` from agent-wire-types.ts.
+///
+/// Decoding is lenient on purpose. `ChatMessage` arrays arrive inside
+/// `snapshot`, which decodes them with `try? … ?? []` — so one unrecognized
+/// kind string would not surface as an error, it would silently empty the
+/// whole transcript. An unknown kind degrades to `.file`, the neutral
+/// icon-only presentation, instead.
+///
+/// The fallback is lossy on re-encode: an unknown tag becomes `"file"` rather
+/// than round-tripping. That is invisible today because iOS only ever decodes
+/// `ChatMessage` — it never re-broadcasts one — and the corpus cannot catch it
+/// either, since its samples use known values. Preserving the original tag
+/// would need a sidecar field; only worth it if a follower ever re-emits a
+/// transcript.
+enum MessageAttachmentKind: String, Codable {
+    case image
+    case text
+    case file
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = MessageAttachmentKind(rawValue: raw) ?? .file
+    }
+}
+
+/// Mirrors `MessageAttachment` from agent-wire-types.ts.
+struct MessageAttachment: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let mimeType: String
+    let size: Int
+    let kind: MessageAttachmentKind
+    /// Base64 payload for LLM-supported image attachments.
+    var data: String?
+    /// UTF-8 content for text-like file attachments.
+    var text: String?
+    /// VFS path when the file was too large to inline.
+    var path: String?
+    /// Human-readable reason the payload could not be included.
+    var error: String?
+}
+
+// MARK: - Usage
+
+/// Mirrors `ChatMessageUsage['cost']` from agent-wire-types.ts.
+struct ChatMessageCost: Codable, Hashable {
+    let input: Double
+    let output: Double
+    let cacheRead: Double
+    let cacheWrite: Double
+    let total: Double
+}
+
+/// Mirrors `ChatMessageUsage` from agent-wire-types.ts. Carried for cost
+/// attribution; the leader reports it once the provider closes the turn.
+struct ChatMessageUsage: Codable, Hashable {
+    let input: Int
+    let output: Int
+    let cacheRead: Int
+    let cacheWrite: Int
+    let cost: ChatMessageCost
+}
+
+// MARK: - LickState
+
+/// Mirrors `LickState` from agent-wire-types.ts: the settled result of an
+/// actionable lick card. Lenient for the same reason as
+/// `MessageAttachmentKind`, and lossy on re-encode in the same way: an unknown
+/// state must not empty a snapshot, so it degrades to `.pending`.
+enum LickState: String, Codable {
+    case pending
+    case confirmed
+    case dismissed
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = LickState(rawValue: raw) ?? .pending
+    }
+}
+
 // MARK: - ToolCall
 
 struct ToolCall: Codable, Identifiable {
@@ -89,9 +171,25 @@ struct ChatMessage: Codable, Identifiable {
     let role: MessageRole
     var content: String
     let timestamp: Double  // Unix ms
+    var attachments: [MessageAttachment]?
     var toolCalls: [ToolCall]?
     var isStreaming: Bool?
+    /// Assistant model id, retained for cost attribution.
+    var model: String?
+    /// Final assistant usage, present once the provider reports the turn.
+    var usage: ChatMessageUsage?
     var source: String?  // "cone", "lick", scoop name
     var channel: String?  // "webhook", "cron"
+    /// How many consecutive same-channel licks this row stands for.
+    var lickCount: Int?
+    /// The individual lick bodies folded into this row.
+    var lickParts: [String]?
+    /// Orchestrator-minted id of an actionable lick, used to locate this card
+    /// when its decision settles so the state can flip live.
+    var lickId: String?
+    var lickState: LickState?
     var queued: Bool?
+    /// Cone-error marker. The message is an error report rather than an
+    /// ordinary assistant turn.
+    var error: Bool?
 }
