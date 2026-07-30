@@ -2,6 +2,16 @@ import Foundation
 import Logging
 
 private let defaultTabSnapshotIntervalNanoseconds: UInt64 = 5_000_000_000
+/// Hard ceiling on one browser read. `snapshotNow()` is awaited by the
+/// shutdown sequence *before* the browser is closed and force-killed, so a
+/// browser that accepts the socket and then stops answering must not be able
+/// to stall shutdown — exactly when the kill path is needed most.
+private let tabSnapshotReadTimeoutNanoseconds: UInt64 = 3_000_000_000
+
+private enum SnapshotRead: Sendable {
+    case completed([String]?)
+    case timedOut
+}
 
 private struct CDPVersionEntry: Decodable {
     let webSocketDebuggerUrl: String?
@@ -42,6 +52,7 @@ actor TabSessionRecorder {
     private let fetch: @Sendable (URL) async throws -> (Int, Data)
     private let openSession: @Sendable (URL) -> any CDPBrowserSession
     private let intervalNanoseconds: UInt64
+    private let readTimeoutNanoseconds: UInt64
     private let logger: Logger
 
     private var pollTask: Task<Void, Never>?
@@ -52,6 +63,7 @@ actor TabSessionRecorder {
         cdpPort: Int,
         hostedOrigins: [String],
         intervalNanoseconds: UInt64 = defaultTabSnapshotIntervalNanoseconds,
+        readTimeoutNanoseconds: UInt64 = tabSnapshotReadTimeoutNanoseconds,
         logger: Logger = Logger(label: "slicc.browser.tab-session"),
         fetch: @escaping @Sendable (URL) async throws -> (Int, Data) = { url in
             var request = URLRequest(url: url)
@@ -68,6 +80,7 @@ actor TabSessionRecorder {
         self.cdpPort = cdpPort
         self.hostedOrigins = hostedOrigins
         self.intervalNanoseconds = intervalNanoseconds
+        self.readTimeoutNanoseconds = readTimeoutNanoseconds
         self.logger = logger
         self.fetch = fetch
         self.openSession = openSession
@@ -112,9 +125,26 @@ actor TabSessionRecorder {
     private func restorableTabUrls() async -> [String]? {
         guard let browserURL = await browserDebuggerURL() else { return nil }
         let session = openSession(browserURL)
-        let urls = await defaultContextPageUrls(in: session)
+        let read = await withTaskGroup(of: SnapshotRead.self) { group in
+            group.addTask { .completed(await self.defaultContextPageUrls(in: session)) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: self.readTimeoutNanoseconds)
+                return .timedOut
+            }
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+        // Closing the socket is what unblocks a read that is still waiting on
+        // a browser that went quiet.
         await session.close()
-        return urls
+        switch read {
+        case .completed(let urls):
+            return urls
+        case .timedOut:
+            logger.debug("Tab snapshot skipped: browser did not answer in time")
+            return nil
+        }
     }
 
     private func browserDebuggerURL() async -> URL? {

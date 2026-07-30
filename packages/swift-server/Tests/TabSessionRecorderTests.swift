@@ -111,6 +111,34 @@ final class TabSessionRecorderTests: XCTestCase {
         }
     }
 
+    func testSnapshotGivesUpOnABrowserThatStopsAnswering() async {
+        // The shutdown sequence awaits snapshotNow() before closing and
+        // force-killing the browser, so a browser that accepts the socket and
+        // then goes quiet must not be able to stall shutdown.
+        let store = TabSessionStore(fileURL: makeTemporaryFileURL())
+        store.save(urls: ["https://example.com/keep"], hostedOrigins: sliccOrigins)
+        let session = HangingSessionStub()
+        let recorder = TabSessionRecorder(
+            store: store,
+            cdpPort: 9222,
+            hostedOrigins: sliccOrigins,
+            readTimeoutNanoseconds: 20_000_000,
+            fetch: { _ in
+                (200, Data(#"{"webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}"#.utf8))
+            },
+            openSession: { _ in session }
+        )
+
+        let started = Date()
+        await recorder.snapshotNow()
+
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/keep"])
+        // Closing the socket is what releases a read still waiting on the browser.
+        let isClosed = await session.isClosed
+        XCTAssertTrue(isClosed)
+    }
+
     func testStartPollsRepeatedlyUntilStopped() async throws {
         let store = TabSessionStore(fileURL: makeTemporaryFileURL())
         let requested = RequestRecorder()
@@ -205,6 +233,22 @@ private actor BrowserSessionStub: CDPBrowserSession {
         default:
             return Data("{}".utf8)
         }
+    }
+
+    func close() {
+        isClosed = true
+    }
+}
+
+/// A browser that accepts the connection and then never answers.
+private actor HangingSessionStub: CDPBrowserSession {
+    private(set) var isClosed = false
+
+    func call(method: String) async throws -> Data {
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw CancellationError()
     }
 
     func close() {

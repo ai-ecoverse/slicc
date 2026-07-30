@@ -130,6 +130,12 @@ swift-server keeps its own snapshot.
   cannot evict anything: verified against Chrome that two browser-level clients
   plus a live page session coexist, with the page session still answering
   `Runtime.evaluate` while the browser clients poll.
+- The read is bounded by `tabSnapshotReadTimeoutNanoseconds` (3s) and the socket
+  is closed on expiry. `runShutdownSequence` awaits `snapshotNow()` _before_
+  closing and force-killing the browser, so a browser that accepts the socket
+  and then stops answering must not be able to stall shutdown — the moment the
+  kill path matters most. `URLSessionWebSocketTask.receive()` has no deadline of
+  its own, so the timeout lives in the recorder.
 - `ChromeLaunchConfig.restoreUrls` → `buildLaunchArgs` appends them **after**
   `launchUrl`, because Chromium activates the first URL on the command line: the
   SLICC tab stays leftmost and focused (verified against Chrome 147).
