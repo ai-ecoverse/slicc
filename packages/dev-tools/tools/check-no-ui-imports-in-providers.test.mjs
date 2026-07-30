@@ -43,6 +43,26 @@ describe('check-no-ui-imports-in-providers: stripComments', () => {
     expect(stripped).not.toContain('ui/');
     expect(stripped.split('\n')).toHaveLength(src.split('\n').length);
   });
+
+  it('does not treat /* or // inside a string literal as a comment opener', () => {
+    const src =
+      'const help = `pattern: http://127.0.0.1/*`;\n' + "const x = await import('../ui/foo.js');";
+    const stripped = stripComments(src);
+    expect(stripped).toContain("'../ui/foo.js'");
+    expect(stripped).toContain('http://127.0.0.1/*');
+  });
+
+  it('does not open a string from a quote inside a comment', () => {
+    const src = '// it\'s a comment\nconst x = 1; // "quoted"\nb';
+    const stripped = stripComments(src);
+    expect(stripped).not.toContain("it's");
+    expect(stripped.split('\n')).toHaveLength(3);
+  });
+
+  it('honors escaped quotes inside strings', () => {
+    const src = "const s = 'a\\'b'; // from '../ui/x.js'";
+    expect(stripComments(src)).not.toContain('ui/');
+  });
 });
 
 describe('check-no-ui-imports-in-providers: findUiImports', () => {
@@ -100,6 +120,38 @@ describe('check-no-ui-imports-in-providers: findUiImports', () => {
 
   it('does not flag an identifier-suffixed dynamic import (no path literal)', () => {
     expect(findUiImports('const m = await import(uiSpec);')).toEqual([]);
+  });
+
+  it('flags a multiline (Prettier-wrapped) dynamic import with its start line', () => {
+    const hits = findUiImports(
+      "const a = 1;\nconst { x } = await import(\n  '../../ui/provider-settings.js'\n);"
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(2);
+    expect(hits[0].match).toContain("'../../ui/provider-settings.js'");
+  });
+
+  it('flags a multiline static import (from on its own line)', () => {
+    const hits = findUiImports("import {\n  x,\n  y,\n} from\n  '../ui/foo.js';");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(4);
+  });
+
+  it('flags a type-level typeof import of a ui module', () => {
+    const hits = findUiImports("type T = typeof import('../../ui/provider-settings.js');");
+    expect(hits).toHaveLength(1);
+  });
+
+  it('counts every import in a file mixing single-line and multiline forms', () => {
+    const src = [
+      "type P = typeof import('../../ui/provider-settings.js');",
+      'const help = `http://127.0.0.1/*`;',
+      "const a = await import('../../ui/provider-settings.js');",
+      'const { b } = await import(',
+      "  '../../ui/provider-settings.js'",
+      ');',
+    ].join('\n');
+    expect(findUiImports(src)).toHaveLength(3);
   });
 });
 
