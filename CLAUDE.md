@@ -182,11 +182,12 @@ Automated reviewers (Claude action, Codex via `AGENTS.md`, Copilot via `.github/
 3. **Cross-runtime parity** — peer runtimes updated or explicitly excluded.
 4. **CDP edge cases** — foreground before screenshots; validate target/port.
 5. **Native/macOS permissions** — entitlements + TCC check + graceful denial.
-6. **Model metadata / provider pipeline** — verify metadata forwarding, version predicates, thinking levels, costs; see `docs/pitfalls.md`.
-7. **Test coverage** — mirrored `tests/`; bug fixes ship regression tests; stay above floor.
+6. **Model metadata / provider pipeline** — metadata forwarding, version predicates, thinking levels, costs; see `docs/pitfalls.md`.
+7. **Test coverage** — mirrored `tests/`; bug fixes ship regression tests.
 8. **Follower wiring parity** — leader broadcasts need matching follower handler + UI action; check all boot paths.
 9. **Origin/bridge routing** — `fetch('/api/...')` must work in thin-bridge mode; normalize trailing slashes.
 10. **Agent skill freshness** — shell command changes → update matching `vfs-root/workspace/skills/*/SKILL.md`.
 11. **Transcript export** — fail-closed redaction; approval gate; unknown errors → `transfer-corrupt`; SHA-256.
+12. **Layer import direction** — no new `ui/` imports below ui; move helpers down.
 
 When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.

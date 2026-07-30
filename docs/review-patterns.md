@@ -268,6 +268,39 @@ URLs by hand. Verify the call works when the UI origin is the hosted origin and 
 the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
 Test in both CLI and extension floats.
 
+### 10. Layer-stack import direction (ui/ back-edges)
+
+**Trigger patterns**
+
+- Any new `import`/`import type`/`import(...)`/`require(...)` of a `packages/webapp/src/ui/`
+  module from a lower layer (`fs/`, `shell/`, `git/`, `cdp/`, `tools/`, `core/`, `scoops/`,
+  `providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`). The layer stack is
+  `fs → shell/git → cdp → tools → core → scoops → ui`; imports must point down, never up.
+- The tell-tale disguise: the imported symbol is a **pure helper** (a parser, a data
+  accessor, a constant, a type) that merely _lives_ in a DOM-heavy `ui/` god module. The
+  import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
+- `packages/dev-tools/tools/ui-back-edge-baseline.json` growing in a diff — someone is
+  trying to grandfather a new violation instead of fixing it.
+
+**Historical precedents**
+
+- **Issues #869, #968, #1071, #1145, #1630, #1772** — six recurrences of the identical
+  shape in under two months: worker-resident or lower-layer code importing `ui/` for pure
+  helpers (`trackShellCommand`, provider-settings accessors, `quick-llm`, sprinkle routes,
+  `parseFrozenArchive`/`readSessionsIndex`). Every one was introduced in a reviewed PR
+  (e.g. #1638 shipped the #1772 back-edge) and caught only _after_ merge by nightly triage.
+  None was flagged at review time — reviewers had no layering category to check against.
+
+**Class size** — 34 grandfathered back-edges across 27 files at baseline freeze (2026-07).
+
+**Remediation** — never import `ui/` from a lower layer. If the symbol you need is pure
+(no DOM, no `window`), it is mislocated: move it (or extract it) into the appropriate lower
+layer and have `ui/` re-export it for its existing callers, so the dependency points down.
+Deterministic enforcement: `npm run lint:ui-back-edges`
+(`packages/dev-tools/tools/check-ui-back-edges.mjs`) fails on any back-edge not in the
+frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.
+`providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
+
 ## Transcript export — redaction boundary and protocol parity
 
 Changes to export-service, redaction logic, or the Cherry/follower export protocol.

@@ -67,7 +67,9 @@ Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
 then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
-`lint:patches`, and `lint:duplication`.
+`lint:ui-back-edges` (no new `ui/` imports below the ui layer — baseline-ratcheted;
+fix the layering, never grow `ui-back-edge-baseline.json`), `lint:patches`, and
+`lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
