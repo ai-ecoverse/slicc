@@ -41,7 +41,7 @@ jobs:
 
       # Go toolchain for the `slicc` CLI binaries, built + signed by
       # release-native.mjs (semantic-release prepareCmd) when slicc-cli changed.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: packages/slicc-cli/go.mod
           cache-dependency-path: packages/slicc-cli/go.sum
