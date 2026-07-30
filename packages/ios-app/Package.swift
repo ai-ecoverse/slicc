@@ -23,10 +23,7 @@ let package = Package(
             ],
             path: "SliccFollower",
             resources: [
-                .copy("WebView/chat.html"),
-                .copy("WebView/chat.css"),
-                .copy("WebView/chat.js"),
-                .process("Resources/Assets.xcassets"),
+                .process("Resources/Assets.xcassets")
             ]
         )
     ]

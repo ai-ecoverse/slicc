@@ -94,25 +94,6 @@ class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Streaming Bridge
-
-    /// Closure the view layer can set to receive streaming deltas. Originally
-    /// consumed by the now-retired `MessageWebView` coordinator (which called
-    /// `evaluateJavaScript` per event); the current `MessageListView` reads
-    /// from `messages` instead, so no live subscriber is wired today. Kept on
-    /// `AppState` for potential future re-use; remove together with
-    /// `MessageWebView.swift` when that file is deleted.
-    /// Parameters: (eventName, messageId, payload)
-    var onStreamingEvent: ((_ event: StreamingEvent) -> Void)?
-
-    /// Events forwarded to the WebView for incremental rendering.
-    enum StreamingEvent {
-        case messageStart(messageId: String)
-        case contentDelta(messageId: String, text: String)
-        case contentDone(messageId: String)
-        case toolUseStart(messageId: String, toolName: String, toolInput: String)
-    }
-
     // MARK: - Private Networking / Sync
 
     // These are fileprivate so WebRTCBridge (same file) can access them.
@@ -576,8 +557,7 @@ class AppState: ObservableObject {
     /// `routeLeaderMessage` and its switch never see framing (#1700).
     func handleDataChannelMessage(_ data: Data) {
         if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
-            frame.type == TrayChunkFrame.typeTag
-        {
+            frame.type == TrayChunkFrame.typeTag {
             acceptChunkFrame(frame)
             return
         }
@@ -856,7 +836,6 @@ class AppState: ObservableObject {
                 messages = buffer
                 isStreaming = true
                 streamingMessageId = messageId
-                onStreamingEvent?(.messageStart(messageId: messageId))
             }
 
         case .contentDelta(let messageId, let text):
@@ -865,7 +844,6 @@ class AppState: ObservableObject {
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
                     scheduleMessagesFlush(for: scoopJid)
-                    onStreamingEvent?(.contentDelta(messageId: messageId, text: text))
                 }
             }
 
@@ -877,21 +855,12 @@ class AppState: ObservableObject {
                 if isVisible {
                     cancelPendingMessagesFlush()
                     messages = buffer
-                    onStreamingEvent?(.contentDone(messageId: messageId))
                 }
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
             logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
-                let inputStr: String
-                if let toolInput, let data = try? JSONEncoder().encode(toolInput),
-                    let str = String(data: data, encoding: .utf8)
-                {
-                    inputStr = str
-                } else {
-                    inputStr = "{}"
-                }
                 let tc = ToolCall(id: UUID().uuidString, name: toolName, input: toolInput)
                 if buffer[idx].toolCalls == nil {
                     buffer[idx].toolCalls = [tc]
@@ -902,9 +871,6 @@ class AppState: ObservableObject {
                 if isVisible {
                     cancelPendingMessagesFlush()
                     messages = buffer
-                    onStreamingEvent?(
-                        .toolUseStart(
-                            messageId: messageId, toolName: toolName, toolInput: inputStr))
                 }
             }
 
@@ -937,10 +903,8 @@ class AppState: ObservableObject {
         case .error(let error):
             logger.error("Agent event: error — \(error)")
             if isVisible { lastError = error }
-
-        case .unknown:
+            case .unknown:
             logger.debug("Agent event: unknown type")
-            break
         }
     }
 
@@ -1011,8 +975,7 @@ class AppState: ObservableObject {
             // Only publish if the user is still viewing the same scoop and the
             // buffer still exists — drop stale flushes after a scoop switch.
             if self.selectedScoopJid == scoopJid,
-                let buffer = self.messagesByScoop[scoopJid]
-            {
+                let buffer = self.messagesByScoop[scoopJid] {
                 self.messages = buffer
             }
         }
