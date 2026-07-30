@@ -81,6 +81,13 @@ enum MessageRole: String, Codable {
 /// kind string would not surface as an error, it would silently empty the
 /// whole transcript. An unknown kind degrades to `.file`, the neutral
 /// icon-only presentation, instead.
+///
+/// The fallback is lossy on re-encode: an unknown tag becomes `"file"` rather
+/// than round-tripping. That is invisible today because iOS only ever decodes
+/// `ChatMessage` — it never re-broadcasts one — and the corpus cannot catch it
+/// either, since its samples use known values. Preserving the original tag
+/// would need a sidecar field; only worth it if a follower ever re-emits a
+/// transcript.
 enum MessageAttachmentKind: String, Codable {
     case image
     case text
@@ -134,7 +141,8 @@ struct ChatMessageUsage: Codable, Hashable {
 
 /// Mirrors `LickState` from agent-wire-types.ts: the settled result of an
 /// actionable lick card. Lenient for the same reason as
-/// `MessageAttachmentKind` — an unknown state must not empty a snapshot.
+/// `MessageAttachmentKind`, and lossy on re-encode in the same way: an unknown
+/// state must not empty a snapshot, so it degrades to `.pending`.
 enum LickState: String, Codable {
     case pending
     case confirmed
