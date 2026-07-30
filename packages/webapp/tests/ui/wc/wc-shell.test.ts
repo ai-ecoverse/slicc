@@ -336,8 +336,9 @@ describe('mountWcUiPreview', () => {
       placeholder: 'p',
     });
 
-    // Cone (boot default): waffle lattice, warm amber, no --ctx override.
+    // Cone (boot default): Caramel Sugar Glass, default tint, no --ctx override.
     expect(refs.shader.getAttribute('mode')).toBe('cone');
+    expect(refs.shader.getAttribute('tint')).toBeNull();
 
     applyShellContext(refs, { kind: 'scoop', accent: '#06b6d4' });
     expect(refs.shader.getAttribute('mode')).toBe('scoop');
@@ -353,7 +354,7 @@ describe('mountWcUiPreview', () => {
 
     applyShellContext(refs, { kind: 'cone' });
     expect(refs.shader.getAttribute('mode')).toBe('cone');
-    expect(refs.shader.getAttribute('tint')).toBe('var(--waffle)');
+    expect(refs.shader.getAttribute('tint')).toBeNull();
     expect(refs.frame.style.getPropertyValue('--ctx')).toBe('');
     expect(refs.freezer.hasAttribute('ctx')).toBe(false);
   });
