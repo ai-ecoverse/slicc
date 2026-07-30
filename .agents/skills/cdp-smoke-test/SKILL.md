@@ -90,7 +90,8 @@ anomalies, and the total session cost from the header counter.
 - The standalone guard fails fast, exits non-zero, and reports the PID and
   command holding the selected bridge port. `SLICC_FRESH_REAP=1` opts into
   reaping only a stale harness on a non-production bridge port that you have
-  verified you own; never use it with `PORT=5710`. Chrome CDP is never reaped.
+  verified you own. Forced reaping of `:5710` is refused; choose another port
+  or stop your own `:5710` process manually. Chrome CDP is never reaped.
 - **Closed the leader tab?** The harness survives. **Diagnostic-only, do
   not automate**: the harness log redacts `bridgeToken` deliberately — the
   token is a capability. As a manual last resort during an interactive

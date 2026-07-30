@@ -213,8 +213,10 @@ Use an isolated bridge such as `PORT=5715`; `:5710` and `:9222` may belong to
 a production instance and must not be cleared. If the selected bridge is
 occupied, the harness exits non-zero and reports the holding PID and command.
 Only `SLICC_FRESH_REAP=1` opts into reaping that selected bridge, and only for
-a confirmed stale harness you own. The standalone harness never reaps a Chrome
-CDP port. Other fresh harnesses retain their documented port-scoped cleanup;
+a confirmed stale harness you own. Forced reaping of the documented production
+bridge `:5710` is refused; choose another port or stop your own `:5710` process
+manually. The standalone harness never reaps a Chrome CDP port. Other fresh
+harnesses retain their documented port-scoped cleanup;
 none should blanket-kill by process name.
 On exit, SIGTERMs only the node-server it foregrounds (which closes the
 Chrome it launched), then removes the ephemeral profile.

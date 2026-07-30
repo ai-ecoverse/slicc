@@ -43,6 +43,20 @@ function reapPort(port) {
   );
 }
 
+function bridgeSuggestions(port) {
+  return execFileSync(
+    'bash',
+    [
+      '-c',
+      'lsof() { :; }; kill() { :; }; source "$1"; print_bridge_port_suggestions "$2" 2>&1',
+      'bash',
+      scriptPath,
+      port,
+    ],
+    { encoding: 'utf8' }
+  );
+}
+
 describe('dev-standalone-fresh bridge port guard', () => {
   it('proceeds when the bridge port has no listener', () => {
     expect(guardDecision('')).toBe('proceed');
@@ -54,6 +68,37 @@ describe('dev-standalone-fresh bridge port guard', () => {
 
   it('reaps an occupied bridge port only with the explicit opt-in', () => {
     expect(guardDecision('node 456 user', '1')).toBe('reap');
+  });
+
+  it('keeps the production bridge usable when it is free', () => {
+    expect(guardDecision('', '0', '5710')).toBe('proceed');
+    expect(guardDecision('', '1', '5710')).toBe('proceed');
+  });
+
+  it('refuses forced reaping of the production bridge at both guard layers', () => {
+    expect(guardDecision('slicc-server 123 user', '1', '5710')).toBe('production-protected');
+
+    const result = reapPort('5710');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Choose a different port');
+    expect(result.stderr).toContain('stop your own :5710 process manually');
+  });
+
+  it.each(['05710', '5710-5710'])(
+    'rejects alternate production-port spelling %j at both guard layers',
+    (port) => {
+      expect(guardDecision('slicc-server 123 user', '1', port)).toBe('invalid');
+
+      const result = reapPort(port);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Refusing to reap invalid port:');
+    }
+  );
+
+  it('carries the resolved bridge port into the forced-reap retry suggestion', () => {
+    const output = bridgeSuggestions('5715');
+    expect(output).toContain('SLICC_FRESH_REAP=1 PORT=5715 npm run dev:standalone:fresh');
+    expect(output).toContain('PORT=<unused-port> npm run dev:standalone:fresh');
   });
 
   it.each(['1', '5715', '65535'])('accepts canonical decimal port %s', (port) => {

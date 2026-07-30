@@ -17,6 +17,9 @@
 #   - npx playwright install chromium
 set -euo pipefail
 
+# Documented production bridge: valid when free, never eligible for automated reaping.
+PRODUCTION_BRIDGE_PORT=5710
+
 canonicalize_port() {
 	local port="${1:-}"
 	case "$port" in
@@ -45,6 +48,8 @@ bridge_port_guard_action() {
 		echo "protected"
 	elif [ -z "$holders" ]; then
 		echo "proceed"
+	elif [ "$force_reap" = "1" ] && [ "$port" = "$PRODUCTION_BRIDGE_PORT" ]; then
+		echo "production-protected"
 	elif [ "$force_reap" = "1" ]; then
 		echo "reap"
 	else
@@ -62,6 +67,10 @@ reap_port() {
 		echo "❌  Refusing to reap protected Chrome/Electron CDP port :$port" >&2
 		return 1
 	fi
+	if [ "$port" = "$PRODUCTION_BRIDGE_PORT" ]; then
+		echo "❌  Refusing to reap documented production bridge :$port. Choose a different port, or stop your own :$port process manually." >&2
+		return 1
+	fi
 	pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
 	[ -z "$pids" ] && return 0
 	for pid in $pids; do
@@ -76,6 +85,20 @@ reap_port() {
 		kill -KILL "$pid" 2>/dev/null || true
 	done
 	sleep 1
+}
+
+print_bridge_port_suggestions() {
+	local requested_port="$1" port
+	if ! port="$(canonicalize_port "$requested_port")"; then
+		echo "    Choose a different unused bridge port." >&2
+		return 0
+	fi
+	echo "    Re-run with a different unused port: PORT=<unused-port> npm run dev:standalone:fresh" >&2
+	if [ "$port" = "$PRODUCTION_BRIDGE_PORT" ]; then
+		echo "    Automated reaping of :$port is disabled; stop your own :$port process manually instead." >&2
+	else
+		echo "    Or explicitly opt into reaping the bridge holder: SLICC_FRESH_REAP=1 PORT=$port npm run dev:standalone:fresh" >&2
+	fi
 }
 
 # Allow Vitest to source and exercise the guard and protected-port refusal
@@ -104,6 +127,10 @@ BRIDGE_HOLDERS="$(lsof -nP -iTCP:"$BRIDGE_PORT" -sTCP:LISTEN 2>/dev/null || true
 case "$(bridge_port_guard_action "$BRIDGE_PORT" "$BRIDGE_HOLDERS" "${SLICC_FRESH_REAP:-0}")" in
 proceed) ;;
 reap) reap_port "$BRIDGE_PORT" "bridge" ;;
+production-protected)
+	echo "❌  Refusing to reap documented production bridge :$BRIDGE_PORT. Choose a different port, or stop your own :$BRIDGE_PORT process manually." >&2
+	exit 1
+	;;
 invalid)
 	echo "❌  Refusing invalid bridge port: $BRIDGE_PORT" >&2
 	exit 1
@@ -111,8 +138,7 @@ invalid)
 fail-fast)
 	echo "❌  Bridge port :$BRIDGE_PORT is already in use:" >&2
 	printf '%s\n' "$BRIDGE_HOLDERS" >&2
-	echo "    Re-run with a different port, for example: PORT=5715 npm run dev:standalone:fresh" >&2
-	echo "    Or explicitly opt into reaping the bridge holder: SLICC_FRESH_REAP=1 npm run dev:standalone:fresh" >&2
+	print_bridge_port_suggestions "$BRIDGE_PORT"
 	exit 1
 	;;
 esac

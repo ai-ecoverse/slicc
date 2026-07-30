@@ -46,7 +46,7 @@ This file covers the repo's developer-tooling surface.
 
 ### Fresh Dev Harnesses
 
-Five harness scripts bring up isolated dev environments on distinct ports so they can run concurrently. The standalone harness fails if its selected bridge is occupied unless `SLICC_FRESH_REAP=1` explicitly opts into reaping a confirmed stale harness; it never reaps Chrome CDP. Other harness cleanup remains strictly port-scoped, never by process name. Labeled Chrome bundle clones (`clone-labeled-chrome.sh`) provide distinct ⌘-Tab entries.
+Five harness scripts bring up isolated dev environments on distinct ports so they can run concurrently. The standalone harness fails if its selected bridge is occupied unless `SLICC_FRESH_REAP=1` explicitly opts into reaping a confirmed stale harness; forced reaping of the documented production bridge `:5710` is refused, and it never reaps Chrome CDP. Other harness cleanup remains strictly port-scoped, never by process name. Labeled Chrome bundle clones (`clone-labeled-chrome.sh`) provide distinct ⌘-Tab entries.
 
 | Harness        | Script                        | Bridge                 | CDP     | Chrome Label  | Notes                                                                          |
 | -------------- | ----------------------------- | ---------------------- | ------- | ------------- | ------------------------------------------------------------------------------ |
