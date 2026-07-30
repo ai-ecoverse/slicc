@@ -15,7 +15,10 @@ vi.mock('node:child_process', async (importActual) => {
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import {
+  BIOME_JSH_PATH_PREFIXES,
+  buildBiomeJshManifest,
   buildKnownGoodPointer,
+  decideBiomeJshGating,
   decideChromeGating,
   decideGating,
   decideSliccCliGating,
@@ -455,6 +458,94 @@ describe('decideWorkerGating', () => {
   });
 });
 
+describe('decideBiomeJshGating', () => {
+  it('publishes on first release with an empty last tag', () => {
+    expect(decideBiomeJshGating({ lastTag: '', changedFiles: [] })).toEqual({
+      biomeJsh: true,
+      firstRelease: true,
+    });
+  });
+
+  it('publishes for a change inside the package', () => {
+    expect(BIOME_JSH_PATH_PREFIXES).toContain('packages/dev-tools/biome-jsh/');
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: ['packages/dev-tools/biome-jsh/lib.mjs'],
+      })
+    ).toEqual({ biomeJsh: true, firstRelease: false });
+  });
+
+  it('skips a SLICC release that touched nothing in the package', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: [
+          'packages/webapp/src/main.ts',
+          'packages/dev-tools/tools/release-native.mjs',
+          'docs/development.md',
+        ],
+      })
+    ).toEqual({ biomeJsh: false, firstRelease: false });
+  });
+
+  it('skips a test-only change inside the package (not in the tarball)', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: [
+          'packages/dev-tools/biome-jsh/lib.test.mjs',
+          'packages/dev-tools/biome-jsh/biome-jsh.test.mjs',
+        ],
+      })
+    ).toEqual({ biomeJsh: false, firstRelease: false });
+  });
+
+  it('publishes when a shipped file changes alongside its test', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: [
+          'packages/dev-tools/biome-jsh/lib.test.mjs',
+          'packages/dev-tools/biome-jsh/lib.mjs',
+        ],
+      })
+    ).toEqual({ biomeJsh: true, firstRelease: false });
+  });
+
+  it('publishes for a README change (README.md ships in the tarball)', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: ['packages/dev-tools/biome-jsh/README.md'],
+      })
+    ).toEqual({ biomeJsh: true, firstRelease: false });
+  });
+});
+
+describe('buildBiomeJshManifest', () => {
+  const manifest = { name: '@ai-ecoverse/biome-jsh', version: '5.85.2', main: './lib.mjs' };
+
+  it('sets the version and preserves the other fields and their order', () => {
+    expect(buildBiomeJshManifest(manifest, '5.92.0')).toEqual({
+      name: '@ai-ecoverse/biome-jsh',
+      version: '5.92.0',
+      main: './lib.mjs',
+    });
+    expect(Object.keys(buildBiomeJshManifest(manifest, '5.92.0'))).toEqual(Object.keys(manifest));
+  });
+
+  it('trims a leading v (git-tag style) and surrounding whitespace', () => {
+    expect(buildBiomeJshManifest(manifest, ' v5.92.0 ').version).toBe('5.92.0');
+  });
+
+  it('throws on empty / whitespace / non-string input', () => {
+    expect(() => buildBiomeJshManifest(manifest, '')).toThrow();
+    expect(() => buildBiomeJshManifest(manifest, '   ')).toThrow();
+    expect(() => buildBiomeJshManifest(manifest, undefined)).toThrow();
+  });
+});
+
 describe('parseArgs', () => {
   it('parses --last= inline form (as passed by the release template)', () => {
     expect(parseArgs(['--last=v1.2.3'])).toEqual({
@@ -592,6 +683,32 @@ describe('main native gate — dry-run', () => {
     } finally {
       logSpy.mockRestore();
       warnSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('main biome-jsh gate', () => {
+  it('does not stamp the manifest when nothing in the package changed', () => {
+    // execFileSync is mocked, so getChangedFiles resolves to an empty file list
+    // => the gate is closed and the version stamp must be skipped.
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(main(['--gate=biome-jsh-version', '--last=v5.91.1', '--next=5.92.0'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does not stamp the manifest on a dry-run with the gate open', () => {
+    writeFileSync.mockClear();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(main(['--gate=biome-jsh-version', '--last=', '--next=5.92.0', '--dry-run'])).toBe(0);
+    } finally {
+      logSpy.mockRestore();
     }
     expect(writeFileSync).not.toHaveBeenCalled();
   });

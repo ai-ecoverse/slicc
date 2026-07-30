@@ -57,6 +57,8 @@ The **Chrome Web Store publish** (`npm run publish:chrome`) is gated the same wa
 - CLI entrypoint: `slicc`
 - Node requirement: `>=22`
 
+`@ai-ecoverse/biome-jsh` (`packages/dev-tools/biome-jsh/`) is published **conditionally**, not on every release: `packages/dev-tools/tools/release-native.mjs --gate=biome-jsh-version` stamps the release version into its `package.json` during `prepareCmd` (committed by `@semantic-release/git`) and `--gate=biome-jsh` runs `npm publish` during `publishCmd`, both only when `packages/dev-tools/biome-jsh/` changed since the previous tag (or on a first release). Otherwise the package stays at its last published version instead of republishing an identical tarball.
+
 ### Required repo configuration
 
 - Release branch: semantic-release is configured for `main` only.

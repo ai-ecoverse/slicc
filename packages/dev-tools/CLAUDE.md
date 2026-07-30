@@ -34,7 +34,7 @@ This file covers the repo's developer-tooling surface.
 - **Optional-binary guard**: `packages/dev-tools/tools/run-if-installed.mjs <binary> [args...]` — runs a command only when its binary resolves on `PATH`, otherwise warns and exits 0. Used by the root `lint-staged` Swift/Go globs so a missing `swiftlint`/`gofmt` cannot break `git commit`.
 - **Cross-impl mask vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` — regenerate pinned mask vectors for TS/Swift parity tests after intentional masking changes.
 - **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — fast `npm ci` staleness check wired via `pretypecheck` and `pretest` scripts.
-- **Release gating**: `packages/dev-tools/tools/release-native.mjs` — gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), and Chrome Web Store/worker publish steps on whether relevant source changed since the last tag.
+- **Release gating**: `packages/dev-tools/tools/release-native.mjs` — gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish steps, and the `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare, `--gate=biome-jsh` in publish) on whether relevant source changed since the last tag.
 
 ### SLICC CDP Debug Toolkit
 

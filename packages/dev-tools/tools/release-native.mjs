@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Gate the native macOS (Sliccstart DMG + update ZIP) and iOS (TestFlight)
 // packaging steps of the semantic-release prepareCmd — and the Chrome Web Store
-// publish steps of the publishCmd (`--gate=chrome` / `--gate=worker`) — on whether
-// their relevant source changed since the previous release tag. The always-run
-// build/package steps stay in .releaserc.json; only gated steps are decided here.
+// publish steps of the publishCmd (`--gate=chrome` / `--gate=worker`) — plus the
+// `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare,
+// `--gate=biome-jsh` in publish) — on whether their relevant source changed since
+// the previous release tag. The always-run build/package steps stay in
+// .releaserc.json; only gated steps are decided here.
 //
 // The pure decision helpers (no IO) are unit-tested by the `dev-tools` vitest
 // project via the co-located release-native.test.mjs. Only main() touches git
@@ -73,6 +75,18 @@ export const WORKER_PATH_PREFIXES = [
   'package-lock.json',
 ];
 
+// APPROVED relevant path set for the standalone `@ai-ecoverse/biome-jsh` npm
+// package. It ships only its own directory (see its package.json `files`) and
+// resolves the Biome binary at runtime, so it has no other build inputs — a
+// SLICC release that touches nothing here would publish a byte-identical tarball
+// under a new version number.
+export const BIOME_JSH_PATH_PREFIXES = ['packages/dev-tools/biome-jsh/'];
+
+// Files inside the package that never reach the tarball (the `files` array ships
+// only biome-jsh.mjs, lib.mjs, jsh-biome-source.mjs and README.md), so a change
+// confined to them would publish a byte-identical tarball.
+export const BIOME_JSH_IGNORED_PATTERN = /\.test\.mjs$/;
+
 // Command strings preserve the current .releaserc.json fail-fast behavior
 // (chmod then run; a non-zero exit throws out of execSync).
 export const MACOS_SCRIPT_CMD =
@@ -87,6 +101,11 @@ export const IOS_SCRIPT_CMD =
 export const SLICC_CLI_SCRIPT = 'packages/slicc-cli/sign-and-package.sh';
 // A failing publish must fail the release (fail-fast preserved via execSync).
 export const CHROME_PUBLISH_CMD = 'npm run publish:chrome';
+// biome-jsh is published from its own directory (it is not an npm workspace of
+// the root package). `--provenance` / `--access public` mirror the settings the
+// former second @semantic-release/npm target used.
+export const BIOME_JSH_PUBLISH_CMD =
+  'npm publish packages/dev-tools/biome-jsh --provenance --access public';
 
 // An empty / unset / placeholder tag means "first release" — build both.
 export function isFirstRelease(lastTag) {
@@ -154,6 +173,22 @@ export function decideWorkerGating({ lastTag, changedFiles = [] } = {}) {
   }
   return {
     worker: changedFiles.some((f) => matchesAnyPrefix(f, WORKER_PATH_PREFIXES)),
+    firstRelease: false,
+  };
+}
+
+// Core gating decision for the @ai-ecoverse/biome-jsh npm release. The same
+// decision drives both phases — the prepare-phase version bump and the
+// publish-phase `npm publish` — so a published version always matches the
+// version committed back by @semantic-release/git.
+export function decideBiomeJshGating({ lastTag, changedFiles = [] } = {}) {
+  if (isFirstRelease(lastTag)) {
+    return { biomeJsh: true, firstRelease: true };
+  }
+  return {
+    biomeJsh: changedFiles
+      .filter((f) => !BIOME_JSH_IGNORED_PATTERN.test(f))
+      .some((f) => matchesAnyPrefix(f, BIOME_JSH_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
@@ -237,22 +272,55 @@ function writeKnownGoodPointer(version, targetPath = KNOWN_GOOD_MACOS_PATH) {
   return pointer;
 }
 
-const HELP = `release-native — gate native packaging, worker deploy, and Chrome publish on source changes
+// Repo path of the biome-jsh package manifest, resolved relative to this script
+// so it works from any cwd.
+export const BIOME_JSH_PKG_JSON_PATH = fileURLToPath(
+  new URL('../biome-jsh/package.json', import.meta.url)
+);
+
+// Pure helper (no IO): the biome-jsh manifest with `version` set to the release
+// version. Trims a leading `v` (git-tag style). Throws on empty so the caller
+// must decide whether to skip.
+export function buildBiomeJshManifest(manifest, version) {
+  const v = (typeof version === 'string' ? version : '').trim().replace(/^v/, '');
+  if (!v) throw new Error('buildBiomeJshManifest: a non-empty version is required');
+  return { ...manifest, version: v };
+}
+
+// Small IO wrapper: stamp the release version into the biome-jsh manifest,
+// preserving the checked-in 2-space + trailing-newline format. The re-serialize
+// is intentionally opinionated — any other formatting in the manifest gets
+// canonicalized to that shape (matching root package.json / `npm init`).
+function writeBiomeJshVersion(version, targetPath = BIOME_JSH_PKG_JSON_PATH) {
+  const current = JSON.parse(readFileSync(targetPath, 'utf8'));
+  const manifest = buildBiomeJshManifest(current, version);
+  writeFileSync(targetPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
+const HELP = `release-native — gate native packaging, worker deploy, Chrome publish, and the biome-jsh npm release on source changes
 
 Usage:
-  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome|worker] [--dry-run]
+  node packages/dev-tools/tools/release-native.mjs --last=<tag> [--gate=chrome|worker|biome-jsh|biome-jsh-version] [--dry-run]
 
 Options:
   --last=<tag>   Previous release git tag. Empty => first release => run ALL gated steps.
                  In .releaserc.json use --last='\${lastRelease.gitTag}'.
   --next=<ver>   Next release version. When the macOS gate is open and its packaging
                  step succeeds (non-dry-run), record it in the committed known-good
-                 macOS pointer. Empty => skip the pointer update (never fails the release).
+                 macOS pointer. Also the version stamped into the biome-jsh manifest by
+                 --gate=biome-jsh-version. Empty => skip the pointer update / version
+                 stamp (never fails the release).
                  In .releaserc.json use --next='\${nextRelease.version}'.
   --gate=chrome  Gate the Chrome Web Store publish (\`${CHROME_PUBLISH_CMD}\`) instead of
                  the default native macOS/iOS packaging.
   --gate=worker  Print "deploy" when the production worker/UI should deploy, otherwise
                  print "skip". This decision mode never runs the deploy itself.
+  --gate=biome-jsh-version
+                 Prepare phase: stamp --next into packages/dev-tools/biome-jsh/package.json
+                 (committed by @semantic-release/git) only when the biome-jsh gate is open.
+  --gate=biome-jsh
+                 Publish phase: run \`${BIOME_JSH_PUBLISH_CMD}\` only when the gate is open.
   --classify-deploy-log=<path>
                  Read a captured \`wrangler deploy\` log and print "routes-only" when the
                  ONLY failure was route reconciliation (the script + assets deployed and
@@ -271,6 +339,9 @@ Behavior:
     ${EXTENSION_PATH_PREFIXES.join(', ')} changed.
   - --gate=worker: use the same resolved diff ref and print deploy only if one of
     ${WORKER_PATH_PREFIXES.join(', ')} changed.
+  - --gate=biome-jsh[-version]: use the same resolved diff ref and bump / publish
+    @ai-ecoverse/biome-jsh only if ${BIOME_JSH_PATH_PREFIXES.join(', ')} changed, so the
+    package is not republished unchanged on every SLICC release.
   - A failing packaging / publish script fails the release (fail-fast preserved).`;
 
 export function getChangedFiles(lastTag) {
@@ -360,6 +431,50 @@ function runNativeGate(args, changedFiles) {
   }
 }
 
+// biome-jsh gate. Two phases share one decision: `--gate=biome-jsh-version`
+// stamps the release version into the manifest during prepare (so
+// @semantic-release/git commits it), `--gate=biome-jsh` publishes during publish.
+// A closed gate leaves the manifest at the last published version.
+function runBiomeJshGate(args, changedFiles) {
+  const publishPhase = args.gate === 'biome-jsh';
+  const decision = decideBiomeJshGating({ lastTag: args.last, changedFiles });
+
+  if (!decision.biomeJsh) {
+    console.log(
+      `[release-native] Skipping @ai-ecoverse/biome-jsh ${publishPhase ? 'npm publish' : 'version stamp'} (no packages/dev-tools/biome-jsh changes).`
+    );
+    return;
+  }
+
+  if (publishPhase) {
+    runStep(
+      '@ai-ecoverse/biome-jsh (npm)',
+      BIOME_JSH_PUBLISH_CMD,
+      args.dryRun,
+      'Publishing',
+      'publish'
+    );
+    return;
+  }
+
+  if (args.dryRun) {
+    console.log(
+      `[release-native] (dry-run) would stamp @ai-ecoverse/biome-jsh version ${args.next}.`
+    );
+    return;
+  }
+
+  if (!args.next.trim()) {
+    console.warn(
+      '[release-native] --next is empty; skipping the @ai-ecoverse/biome-jsh version stamp.'
+    );
+    return;
+  }
+
+  const manifest = writeBiomeJshVersion(args.next);
+  console.log(`[release-native] Stamped @ai-ecoverse/biome-jsh version → ${manifest.version}.`);
+}
+
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   if (args.help) {
@@ -377,6 +492,11 @@ export function main(argv = process.argv.slice(2)) {
   if (args.gate === 'worker') {
     const decision = decideWorkerGating({ lastTag: args.last, changedFiles });
     console.log(decision.worker ? 'deploy' : 'skip');
+    return 0;
+  }
+
+  if (args.gate === 'biome-jsh' || args.gate === 'biome-jsh-version') {
+    runBiomeJshGate(args, changedFiles);
     return 0;
   }
 

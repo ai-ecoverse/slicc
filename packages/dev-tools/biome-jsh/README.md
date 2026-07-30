@@ -74,11 +74,13 @@ Any already-installed Biome is reused, so no fresh install is required.
 
 ## Published package
 
-Published to npm as **`@ai-ecoverse/biome-jsh`** (public), released **in lockstep
-with SLICC** via slicc's semantic-release pipeline — its version tracks the
-`sliccy` release version (see the second `@semantic-release/npm` target with
-`pkgRoot: packages/dev-tools/biome-jsh` in `.releaserc.json`). Downstream repos
-consume it as a dev dependency:
+Published to npm as **`@ai-ecoverse/biome-jsh`** (public) by slicc's
+semantic-release pipeline, but only on releases that actually change this
+directory — the `--gate=biome-jsh-version` / `--gate=biome-jsh` steps in
+`.releaserc.json` (see `packages/dev-tools/tools/release-native.mjs`) skip the
+version stamp and the publish otherwise, so unchanged code is never republished.
+Published versions are still SLICC release versions, just not every one of them.
+Downstream repos consume it as a dev dependency:
 
 ```sh
 npm i -D @ai-ecoverse/biome-jsh
