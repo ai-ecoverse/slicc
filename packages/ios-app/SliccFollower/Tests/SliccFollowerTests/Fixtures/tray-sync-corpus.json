@@ -722,6 +722,12 @@
     {
       "type": "content_delta",
       "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "text",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "content_delta",
         "messageId": "m2",
@@ -731,6 +737,14 @@
     {
       "type": "content_done",
       "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [
+        "model",
+        "usage"
+      ],
       "event": {
         "type": "content_done",
         "messageId": "m2",
@@ -753,6 +767,11 @@
     {
       "type": "error",
       "ios": "decoded",
+      "mirrored": [
+        "error",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "error",
         "error": "boom"
@@ -761,6 +780,11 @@
     {
       "type": "message_start",
       "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "message_start",
         "messageId": "m2"
@@ -769,6 +793,13 @@
     {
       "type": "screenshot",
       "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "base64",
+        "url"
+      ],
       "event": {
         "type": "screenshot",
         "base64": "iVBORw0KGgo=",
@@ -778,6 +809,12 @@
     {
       "type": "terminal_output",
       "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "text"
+      ],
       "event": {
         "type": "terminal_output",
         "text": "$ ls\nnotes.md\n"
@@ -786,6 +823,14 @@
     {
       "type": "tool_result",
       "ios": "decoded",
+      "mirrored": [
+        "isError",
+        "messageId",
+        "result",
+        "toolName",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "tool_result",
         "messageId": "m2",
@@ -797,6 +842,15 @@
     {
       "type": "tool_ui",
       "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "html",
+        "messageId",
+        "requestId",
+        "toolName"
+      ],
       "event": {
         "type": "tool_ui",
         "messageId": "m2",
@@ -808,6 +862,13 @@
     {
       "type": "tool_ui_done",
       "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "messageId",
+        "requestId"
+      ],
       "event": {
         "type": "tool_ui_done",
         "messageId": "m2",
@@ -817,6 +878,13 @@
     {
       "type": "tool_use_start",
       "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "toolInput",
+        "toolName",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "tool_use_start",
         "messageId": "m2",
@@ -829,6 +897,11 @@
     {
       "type": "turn_end",
       "ios": "decoded",
+      "mirrored": [
+        "messageId",
+        "type"
+      ],
+      "dropped": [],
       "event": {
         "type": "turn_end",
         "messageId": "m2"

@@ -74,9 +74,9 @@ export type IosFieldExpectation = 'mirrored' | 'dropped' | 'local';
 /**
  * Whether iOS mirrors a nested payload type at all.
  * - `mirrored`: a Swift struct exists; the Swift suite round-trips the sample.
- * - `absent`: no Swift type exists. The Swift suite asserts it stays absent,
- *   so adding the mirror forces this to flip and the per-field expectations
- *   below to be revisited.
+ * - `absent`: no Swift type exists, so there is nothing to round-trip. A Swift
+ *   test cannot assert the non-existence of a Swift type, so `absent` is held
+ *   honest from the TS side instead — see `carriedBy`.
  */
 export type IosPayloadExpectation = 'mirrored' | 'absent';
 
@@ -92,11 +92,27 @@ type NestedPayloadEntry<T> = {
   fields: FieldExpectations<T>;
   /** Must populate every non-`local` field; asserted by the vitest guard. */
   sample: T;
+  /**
+   * Required when `ios` is `absent`: every `Type.field` site that carries this
+   * payload. Each must stay classified `dropped` while no Swift mirror exists.
+   * This is what actually forces `absent` to be revisited — the moment Swift
+   * learns to keep `ChatMessage.attachments`, that field is promoted to
+   * `mirrored` and this cross-check fails until the payload is promoted too.
+   */
+  carriedBy?: string[];
 };
 
+/**
+ * Per-variant `AgentEvent` entry. `fields` pushes the same field-level
+ * enforcement one level BELOW the discriminator: without it, `content_done`
+ * could carry `model` and `usage` (it does) while the variant still reads as
+ * cleanly `decoded`, because Swift's `.contentDone(messageId:)` throws both
+ * away and the discriminator check cannot see it.
+ */
 type AgentEventCorpus = {
   [K in AgentEvent['type']]: {
     ios: IosAgentEventExpectation;
+    fields: FieldExpectations<Extract<AgentEvent, { type: K }>>;
     event: Extract<AgentEvent, { type: K }>;
   };
 };
@@ -570,14 +586,26 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
  * "the leader never sends this one" is not an available excuse for any entry.
  */
 export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
-  message_start: { ios: 'decoded', event: { type: 'message_start', messageId: 'm2' } },
+  message_start: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored' },
+    event: { type: 'message_start', messageId: 'm2' },
+  },
   content_delta: {
     ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored', text: 'mirrored' },
     event: { type: 'content_delta', messageId: 'm2', text: 'partial' },
   },
-  // `model` and `usage` have no Swift properties — see CONTENT_DONE_FIELDS.
+  // Decodes to a real case, yet `.contentDone(messageId:)` carries neither
+  // `model` nor `usage` — the cost attribution for the turn is thrown away.
   content_done: {
     ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      model: 'dropped',
+      usage: 'dropped',
+    },
     event: {
       type: 'content_done',
       messageId: 'm2',
@@ -599,6 +627,12 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   },
   tool_use_start: {
     ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      toolInput: 'mirrored',
+    },
     event: {
       type: 'tool_use_start',
       messageId: 'm2',
@@ -608,6 +642,13 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   },
   tool_result: {
     ios: 'decoded',
+    fields: {
+      type: 'mirrored',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      result: 'mirrored',
+      isError: 'mirrored',
+    },
     event: {
       type: 'tool_result',
       messageId: 'm2',
@@ -617,9 +658,17 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     },
   },
   // Tool-UI cards render as interactive HTML on the leader. iOS has no case,
-  // so an approval card silently never appears.
+  // so an approval card silently never appears. `.unknown` re-encodes the type
+  // tag and nothing else, which is why every payload field below is `dropped`.
   tool_ui: {
     ios: 'unknown',
+    fields: {
+      type: 'mirrored',
+      messageId: 'dropped',
+      toolName: 'dropped',
+      requestId: 'dropped',
+      html: 'dropped',
+    },
     event: {
       type: 'tool_ui',
       messageId: 'm2',
@@ -630,17 +679,31 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   },
   tool_ui_done: {
     ios: 'unknown',
+    fields: { type: 'mirrored', messageId: 'dropped', requestId: 'dropped' },
     event: { type: 'tool_ui_done', messageId: 'm2', requestId: 'ui-1' },
   },
-  turn_end: { ios: 'decoded', event: { type: 'turn_end', messageId: 'm2' } },
-  error: { ios: 'decoded', event: { type: 'error', error: 'boom' } },
+  turn_end: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', messageId: 'mirrored' },
+    event: { type: 'turn_end', messageId: 'm2' },
+  },
+  error: {
+    ios: 'decoded',
+    fields: { type: 'mirrored', error: 'mirrored' },
+    event: { type: 'error', error: 'boom' },
+  },
   // `degradeOversizeAgentEvent` in broadcast.ts explicitly handles screenshots,
   // so they are expected on the wire; iOS still has no case for them.
   screenshot: {
     ios: 'unknown',
+    fields: { type: 'mirrored', base64: 'dropped', url: 'dropped' },
     event: { type: 'screenshot', base64: 'iVBORw0KGgo=', url: 'https://example.com' },
   },
-  terminal_output: { ios: 'unknown', event: { type: 'terminal_output', text: '$ ls\nnotes.md\n' } },
+  terminal_output: {
+    ios: 'unknown',
+    fields: { type: 'mirrored', text: 'dropped' },
+    event: { type: 'terminal_output', text: '$ ls\nnotes.md\n' },
+  },
 };
 
 const CHAT_MESSAGE: NestedPayloadEntry<ChatMessage> = {
@@ -733,6 +796,7 @@ const MESSAGE_ATTACHMENT: NestedPayloadEntry<MessageAttachment> = {
   // No Swift type exists at all, so every field is lost wherever attachments
   // ride along (`ChatMessage.attachments`, `user_message_echo.attachments`).
   ios: 'absent',
+  carriedBy: ['ChatMessage.attachments'],
   fields: {
     id: 'dropped',
     name: 'dropped',
@@ -881,7 +945,13 @@ export function buildCorpusDocument(): {
   agentEventVariantCount: number;
   leaderToFollower: Array<{ type: string; ios: string; message: unknown }>;
   followerToLeader: Array<{ type: string; ios: string; message: unknown }>;
-  agentEvents: Array<{ type: string; ios: string; event: unknown }>;
+  agentEvents: Array<{
+    type: string;
+    ios: string;
+    mirrored: string[];
+    dropped: string[];
+    event: unknown;
+  }>;
   nestedPayloads: Array<{
     name: string;
     ios: string;
@@ -907,7 +977,13 @@ export function buildCorpusDocument(): {
     leaderToFollower: flatten(LEADER_TO_FOLLOWER_CORPUS),
     followerToLeader: flatten(FOLLOWER_TO_LEADER_CORPUS),
     agentEvents: Object.values(AGENT_EVENT_CORPUS)
-      .map(({ ios, event }) => ({ type: event.type, ios, event: event as unknown }))
+      .map((entry) => ({
+        type: entry.event.type,
+        ios: entry.ios,
+        mirrored: fieldsWith(entry, 'mirrored'),
+        dropped: fieldsWith(entry, 'dropped'),
+        event: entry.event as unknown,
+      }))
       .sort((a, b) => a.type.localeCompare(b.type)),
     nestedPayloads: Object.entries(NESTED_PAYLOAD_CORPUS)
       .map(([name, entry]) => ({

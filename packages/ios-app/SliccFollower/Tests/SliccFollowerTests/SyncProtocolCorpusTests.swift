@@ -37,8 +37,19 @@ final class SyncProtocolCorpusTests: XCTestCase {
         let declaredAgentEventVariantCount: Int
         let leaderToFollower: [(type: String, ios: String, messageData: Data)]
         let followerToLeader: [(type: String, ios: String, messageData: Data)]
-        let agentEvents: [(type: String, ios: String, eventData: Data)]
+        let agentEvents: [AgentEventFixture]
         let nestedPayloads: [NestedPayload]
+    }
+
+    /// One `AgentEvent` variant plus the per-field expectations for its
+    /// payload. The discriminator check alone cannot see that `.contentDone`
+    /// decodes to a real case while discarding `model` and `usage`.
+    private struct AgentEventFixture {
+        let type: String
+        let ios: String
+        let mirrored: [String]
+        let dropped: [String]
+        let eventData: Data
     }
 
     /// One nested payload type carried INSIDE a message variant, with the
@@ -90,7 +101,15 @@ final class SyncProtocolCorpusTests: XCTestCase {
             declaredAgentEventVariantCount: agentEventCount,
             leaderToFollower: try entries(leader, payloadKey: "message"),
             followerToLeader: try entries(follower, payloadKey: "message"),
-            agentEvents: try entries(events, payloadKey: "event"),
+            agentEvents: try events.map { item in
+                AgentEventFixture(
+                    type: item["type"] as? String ?? "<missing>",
+                    ios: item["ios"] as? String ?? "<missing>",
+                    mirrored: item["mirrored"] as? [String] ?? [],
+                    dropped: item["dropped"] as? [String] ?? [],
+                    eventData: try JSONSerialization.data(withJSONObject: item["event"] ?? [:])
+                )
+            },
             nestedPayloads: try payloads.map { item in
                 NestedPayload(
                     name: item["name"] as? String ?? "<missing>",
@@ -161,27 +180,55 @@ final class SyncProtocolCorpusTests: XCTestCase {
     func testAgentEventCorpusDecodesPerExpectation() throws {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
-        for (type, ios, eventData) in corpus.agentEvents {
+        for fixture in corpus.agentEvents {
             let decoded: AgentEvent
             do {
-                decoded = try decoder.decode(AgentEvent.self, from: eventData)
+                decoded = try decoder.decode(AgentEvent.self, from: fixture.eventData)
             } catch {
-                XCTFail("agentEvent '\(type)' failed to decode entirely: \(error)")
+                XCTFail("agentEvent '\(fixture.type)' failed to decode entirely: \(error)")
                 continue
             }
             let isUnknown: Bool
             if case .unknown = decoded { isUnknown = true } else { isUnknown = false }
-            switch ios {
+            switch fixture.ios {
             case "decoded":
                 XCTAssertFalse(
                     isUnknown,
-                    "agent event '\(type)' decoded to .unknown but the corpus expects a real case — AgentEvent in SyncProtocol.swift is missing it")
+                    "agent event '\(fixture.type)' decoded to .unknown but the corpus expects a real case — AgentEvent in SyncProtocol.swift is missing it")
             case "unknown":
                 XCTAssertTrue(
                     isUnknown,
-                    "agent event '\(type)' now decodes to a real case — flip its expectation to 'decoded' in tray-sync-protocol-corpus.ts")
+                    "agent event '\(fixture.type)' now decodes to a real case — flip its expectation to 'decoded' in tray-sync-protocol-corpus.ts")
             default:
-                XCTFail("agent event '\(type)' has unexpected ios expectation '\(ios)'")
+                XCTFail("agent event '\(fixture.type)' has unexpected ios expectation '\(fixture.ios)'")
+            }
+        }
+    }
+
+    /// Reaching a real case is not the same as keeping the payload.
+    /// `.contentDone(messageId:)` decodes cleanly and silently discards the
+    /// `model` and `usage` that price the turn, and every `.unknown` variant
+    /// re-encodes its type tag alone. Round-trip each event so the surviving
+    /// fields are proven rather than inferred from the discriminator.
+    func testAgentEventPayloadFieldsSurviveTheSwiftMirror() throws {
+        let corpus = try loadCorpus()
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+        for fixture in corpus.agentEvents {
+            guard let decoded = try? decoder.decode(AgentEvent.self, from: fixture.eventData) else {
+                continue  // already reported by testAgentEventCorpusDecodesPerExpectation
+            }
+            let survived =
+                try JSONSerialization.jsonObject(with: try encoder.encode(decoded)) as? [String: Any] ?? [:]
+            for field in fixture.mirrored {
+                XCTAssertNotNil(
+                    survived[field],
+                    "agent event '\(fixture.type).\(field)' is expected to survive but the Swift mirror dropped it")
+            }
+            for field in fixture.dropped {
+                XCTAssertNil(
+                    survived[field],
+                    "agent event '\(fixture.type).\(field)' now survives — promote it to 'mirrored' in tray-sync-protocol-corpus.ts")
             }
         }
     }
