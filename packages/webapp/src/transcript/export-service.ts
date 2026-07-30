@@ -27,10 +27,10 @@ import {
 } from '@slicc/shared-ts';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
-import { parseFrozenArchive, readSessionsIndex } from '../ui/session-freezer.js';
 import { processTranscriptAttachments } from './attachments.js';
 import type { TranscriptCollectionDeps } from './collect.js';
 import { collectActiveTranscriptSources } from './collect.js';
+import { parseFrozenArchive, readSessionsIndex } from './frozen-archive-format.js';
 import { type NormalizedTranscript, normalizeConversations } from './normalize.js';
 import { type KnownSecretBatchRedactor, redactTranscript } from './redact.js';
 import type { SanitizedTranscriptSnapshot } from './snapshot-store.js';
