@@ -2,7 +2,6 @@ import SwiftUI
 
 // MARK: - MessageListView
 
-/// Native SwiftUI replacement for MessageWebView.
 /// Renders chat messages as a scrollable list with auto-scroll to bottom.
 struct MessageListView: View {
     let messages: [ChatMessage]

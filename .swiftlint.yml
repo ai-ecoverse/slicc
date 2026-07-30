@@ -33,6 +33,12 @@ disabled_rules:
   - trailing_comma
   # TODO/FIXME markers are tracked via issues, not the linter.
   - todo
+  # Brace placement belongs to `swift format`, which puts `{` on its own line
+  # after a multi-line condition. SwiftLint's autofix collapses it back onto the
+  # condition, and `lint-staged` runs `swiftlint --fix` on every commit, so the
+  # two never converge: the hook rewrites the file and the CI `swift format
+  # lint --strict` gate then rejects it.
+  - opening_brace
 
 # Allow short identifiers (e.g. test locals like `a`, `fd`, `n1`) while still
 # catching overly long names and type-name style issues.
