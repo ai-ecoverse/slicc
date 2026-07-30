@@ -770,6 +770,13 @@ async function teardownVm(record: VmRecord, pm: ProcessManager | null): Promise<
   unregisterVm(record.name);
   try {
     if (record.emulator.is_running()) await record.emulator.stop();
+  } catch {
+    // Best-effort — a wedged guest may refuse to stop.
+  }
+  try {
+    // Always attempt destroy, even when stop() rejected: skipping it
+    // would leak the live wasm instance (and its guest RAM) after the
+    // record has already been unregistered.
     await record.emulator.destroy();
   } catch {
     // Best-effort — the emulator may already be gone.

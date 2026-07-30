@@ -509,6 +509,19 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(getVm('vm0')).toBeUndefined();
   });
 
+  it('still destroys the emulator when stop() rejects', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    emulator.stop = vi.fn(async () => {
+      throw new Error('wedged guest');
+    });
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const stopped = await cmd.execute(['stop'], makeCtx().ctx);
+    expect(stopped.exitCode).toBe(0);
+    expect(emulator.destroy).toHaveBeenCalled();
+    expect(getVm('vm0')).toBeUndefined();
+  });
+
   it('errors cleanly on subcommands against a missing VM', async () => {
     const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
     const result = await cmd.execute(['type', 'hello'], makeCtx().ctx);
