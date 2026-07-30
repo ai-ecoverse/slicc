@@ -739,12 +739,11 @@
       "ios": "decoded",
       "mirrored": [
         "messageId",
-        "type"
-      ],
-      "dropped": [
         "model",
+        "type",
         "usage"
       ],
+      "dropped": [],
       "event": {
         "type": "content_done",
         "messageId": "m2",
@@ -792,14 +791,13 @@
     },
     {
       "type": "screenshot",
-      "ios": "unknown",
+      "ios": "decoded",
       "mirrored": [
-        "type"
-      ],
-      "dropped": [
         "base64",
+        "type",
         "url"
       ],
+      "dropped": [],
       "event": {
         "type": "screenshot",
         "base64": "iVBORw0KGgo=",
@@ -808,13 +806,12 @@
     },
     {
       "type": "terminal_output",
-      "ios": "unknown",
+      "ios": "decoded",
       "mirrored": [
+        "text",
         "type"
       ],
-      "dropped": [
-        "text"
-      ],
+      "dropped": [],
       "event": {
         "type": "terminal_output",
         "text": "$ ls\nnotes.md\n"
@@ -841,16 +838,15 @@
     },
     {
       "type": "tool_ui",
-      "ios": "unknown",
+      "ios": "decoded",
       "mirrored": [
-        "type"
-      ],
-      "dropped": [
         "html",
         "messageId",
         "requestId",
-        "toolName"
+        "toolName",
+        "type"
       ],
+      "dropped": [],
       "event": {
         "type": "tool_ui",
         "messageId": "m2",
@@ -861,14 +857,13 @@
     },
     {
       "type": "tool_ui_done",
-      "ios": "unknown",
+      "ios": "decoded",
       "mirrored": [
+        "messageId",
+        "requestId",
         "type"
       ],
-      "dropped": [
-        "messageId",
-        "requestId"
-      ],
+      "dropped": [],
       "event": {
         "type": "tool_ui_done",
         "messageId": "m2",
@@ -913,26 +908,25 @@
       "name": "ChatMessage",
       "ios": "mirrored",
       "mirrored": [
+        "attachments",
         "channel",
         "content",
+        "error",
         "id",
         "isStreaming",
-        "queued",
-        "role",
-        "source",
-        "timestamp",
-        "toolCalls"
-      ],
-      "dropped": [
-        "attachments",
-        "error",
         "lickCount",
         "lickId",
         "lickParts",
         "lickState",
         "model",
+        "queued",
+        "role",
+        "source",
+        "timestamp",
+        "toolCalls",
         "usage"
       ],
+      "dropped": [],
       "sample": {
         "id": "m-full",
         "role": "assistant",
@@ -990,9 +984,8 @@
     },
     {
       "name": "MessageAttachment",
-      "ios": "absent",
-      "mirrored": [],
-      "dropped": [
+      "ios": "mirrored",
+      "mirrored": [
         "data",
         "error",
         "id",
@@ -1003,6 +996,7 @@
         "size",
         "text"
       ],
+      "dropped": [],
       "sample": {
         "id": "a1",
         "name": "shot.png",
@@ -1105,17 +1099,16 @@
       "name": "TrayTargetEntry",
       "ios": "mirrored",
       "mirrored": [
+        "capabilities",
         "isLocal",
+        "kind",
         "localTargetId",
         "runtimeId",
         "targetId",
         "title",
         "url"
       ],
-      "dropped": [
-        "capabilities",
-        "kind"
-      ],
+      "dropped": [],
       "sample": {
         "targetId": "leader:tab1",
         "localTargetId": "tab1",

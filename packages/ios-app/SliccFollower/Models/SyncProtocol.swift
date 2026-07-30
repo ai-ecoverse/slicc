@@ -11,15 +11,20 @@ let traySyncProtocolVersion = 4
 enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
-    case contentDone(messageId: String)
+    case contentDone(messageId: String, model: String?, usage: ChatMessageUsage?)
     case toolUseStart(messageId: String, toolName: String, toolInput: AnyCodable?)
     case toolResult(messageId: String, toolName: String, result: String, isError: Bool?)
+    case toolUI(messageId: String, toolName: String, requestId: String, html: String)
+    case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
     case error(error: String)
+    case screenshot(base64: String, url: String?)
+    case terminalOutput(text: String)
     case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
         case type, messageId, text, toolName, toolInput, result, isError, error
+        case model, usage, requestId, html, base64, url
     }
 
     init(from decoder: Decoder) throws {
@@ -33,7 +38,10 @@ enum AgentEvent: Codable {
                 messageId: try container.decode(String.self, forKey: .messageId),
                 text: try container.decode(String.self, forKey: .text))
         case "content_done":
-            self = .contentDone(messageId: try container.decode(String.self, forKey: .messageId))
+            self = .contentDone(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                model: try container.decodeIfPresent(String.self, forKey: .model),
+                usage: try container.decodeIfPresent(ChatMessageUsage.self, forKey: .usage))
         case "tool_use_start":
             self = .toolUseStart(
                 messageId: try container.decode(String.self, forKey: .messageId),
@@ -45,10 +53,26 @@ enum AgentEvent: Codable {
                 toolName: try container.decode(String.self, forKey: .toolName),
                 result: try container.decode(String.self, forKey: .result),
                 isError: try container.decodeIfPresent(Bool.self, forKey: .isError))
+        case "tool_ui":
+            self = .toolUI(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                toolName: try container.decode(String.self, forKey: .toolName),
+                requestId: try container.decode(String.self, forKey: .requestId),
+                html: try container.decode(String.self, forKey: .html))
+        case "tool_ui_done":
+            self = .toolUIDone(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                requestId: try container.decode(String.self, forKey: .requestId))
         case "turn_end":
             self = .turnEnd(messageId: try container.decode(String.self, forKey: .messageId))
         case "error":
             self = .error(error: try container.decode(String.self, forKey: .error))
+        case "screenshot":
+            self = .screenshot(
+                base64: try container.decode(String.self, forKey: .base64),
+                url: try container.decodeIfPresent(String.self, forKey: .url))
+        case "terminal_output":
+            self = .terminalOutput(text: try container.decode(String.self, forKey: .text))
         default:
             self = .unknown(type: type)
         }
@@ -64,9 +88,11 @@ enum AgentEvent: Codable {
             try container.encode("content_delta", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(text, forKey: .text)
-        case .contentDone(let messageId):
+        case .contentDone(let messageId, let model, let usage):
             try container.encode("content_done", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
+            try container.encodeIfPresent(model, forKey: .model)
+            try container.encodeIfPresent(usage, forKey: .usage)
         case .toolUseStart(let messageId, let toolName, let toolInput):
             try container.encode("tool_use_start", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
@@ -78,12 +104,29 @@ enum AgentEvent: Codable {
             try container.encode(toolName, forKey: .toolName)
             try container.encode(result, forKey: .result)
             try container.encodeIfPresent(isError, forKey: .isError)
+        case .toolUI(let messageId, let toolName, let requestId, let html):
+            try container.encode("tool_ui", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(toolName, forKey: .toolName)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(html, forKey: .html)
+        case .toolUIDone(let messageId, let requestId):
+            try container.encode("tool_ui_done", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(requestId, forKey: .requestId)
         case .turnEnd(let messageId):
             try container.encode("turn_end", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
         case .error(let error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)
+        case .screenshot(let base64, let url):
+            try container.encode("screenshot", forKey: .type)
+            try container.encode(base64, forKey: .base64)
+            try container.encodeIfPresent(url, forKey: .url)
+        case .terminalOutput(let text):
+            try container.encode("terminal_output", forKey: .type)
+            try container.encode(text, forKey: .text)
         case .unknown(let type):
             try container.encode(type, forKey: .type)
         }
@@ -157,6 +200,11 @@ struct TrayTargetEntry: Codable, Hashable {
     let title: String
     let url: String
     let isLocal: Bool
+    /// Distinguishes a real browser page from a cooperative cherry host page.
+    var kind: String?
+    /// Only present for `kind == "cherry"`: what the host page lends to the
+    /// leader. Same shape as `RemoteTargetInfo.capabilities`.
+    var capabilities: CherryCapabilities?
 }
 
 // MARK: - TrayChunkFrame
@@ -206,7 +254,8 @@ enum LeaderToFollowerMessage: Codable {
     case snapshot(messages: [ChatMessage], scoopJid: String)
     case snapshotChunk(chunkData: String, chunkIndex: Int, totalChunks: Int, scoopJid: String)
     case agentEvent(event: AgentEvent, scoopJid: String)
-    case userMessageEcho(text: String, messageId: String, scoopJid: String)
+    case userMessageEcho(
+        text: String, messageId: String, scoopJid: String, attachments: [MessageAttachment]?)
     case status(scoopStatus: String)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
@@ -244,7 +293,7 @@ enum LeaderToFollowerMessage: Codable {
         case type, messages, scoopJid, chunkData, chunkIndex, totalChunks
         case event, text, messageId, scoopStatus, error
         case scoops, activeScoopJid, sprinkles
-        case requestId, sprinkleName, content, data
+        case requestId, sprinkleName, content, data, attachments
         case localTargetId, method, params, sessionId, targets, url
         case targetId, name, detail
         case themeJson, protocolVersion, runtime
@@ -272,7 +321,9 @@ enum LeaderToFollowerMessage: Codable {
             self = .userMessageEcho(
                 text: try container.decode(String.self, forKey: .text),
                 messageId: try container.decode(String.self, forKey: .messageId),
-                scoopJid: try container.decode(String.self, forKey: .scoopJid))
+                scoopJid: try container.decode(String.self, forKey: .scoopJid),
+                attachments: try container.decodeIfPresent(
+                    [MessageAttachment].self, forKey: .attachments))
         case "status":
             self = .status(scoopStatus: try container.decode(String.self, forKey: .scoopStatus))
         case "error":
@@ -376,11 +427,12 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("agent_event", forKey: .type)
             try container.encode(event, forKey: .event)
             try container.encode(scoopJid, forKey: .scoopJid)
-        case .userMessageEcho(let text, let messageId, let scoopJid):
+        case .userMessageEcho(let text, let messageId, let scoopJid, let attachments):
             try container.encode("user_message_echo", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(scoopJid, forKey: .scoopJid)
+            try container.encodeIfPresent(attachments, forKey: .attachments)
         case .status(let scoopStatus):
             try container.encode("status", forKey: .type)
             try container.encode(scoopStatus, forKey: .scoopStatus)

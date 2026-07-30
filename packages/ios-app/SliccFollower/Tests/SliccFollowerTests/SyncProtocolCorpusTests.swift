@@ -134,6 +134,8 @@ final class SyncProtocolCorpusTests: XCTestCase {
             reencoded = try encoder.encode(try decoder.decode(ChatMessage.self, from: sample))
         case "ToolCall":
             reencoded = try encoder.encode(try decoder.decode(ToolCall.self, from: sample))
+        case "MessageAttachment":
+            reencoded = try encoder.encode(try decoder.decode(MessageAttachment.self, from: sample))
         case "ScoopSummary":
             reencoded = try encoder.encode(try decoder.decode(ScoopSummary.self, from: sample))
         case "SprinkleSummary":
