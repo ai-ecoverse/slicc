@@ -47,6 +47,14 @@ func run(args []string) int {
 		defer stop()
 		defer initTelemetry("update")()
 		return cmdUpdate(ctx, args[1:])
+	case "list-sessions":
+		return cmdListSessions(args[1:])
+	case "follow-cloud", "prompt-cloud", "exec-cloud", "watch-cloud":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		defer initTelemetry(args[0])()
+		defer startUpdateNotice()()
+		return cmdCloud(ctx, args[0], args[1:])
 	}
 
 	joinURL := args[0]
@@ -74,6 +82,11 @@ func run(args []string) int {
 	// the deferred flush lets a short-lived verb persist the refresh result.
 	defer startUpdateNotice()()
 
+	return dispatchJoinVerb(ctx, joinURL, sub, rest)
+}
+
+// dispatchJoinVerb runs a subcommand against an explicit join URL.
+func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) int {
 	switch sub {
 	case "prompt":
 		if len(rest) == 0 {
@@ -153,6 +166,23 @@ Usage:
   slicc update [--check]              Self-update to the newest released CLI binary
                                       (--check only reports; SLICC_NO_UPDATE_CHECK=1
                                       disables the once-a-day launch check)
+
+iCloud tray sessions (macOS only — read from the signed Sliccstart launcher):
+  slicc list-sessions [--json]        List active tray sessions synced from your
+                                      other devices (metadata only; no join URLs)
+  slicc <verb>-cloud [--index N | --session <id-prefix>] [args...]
+                                      Resolve a session's join URL from iCloud
+                                      (newest by default) and run <verb>, where
+                                      <verb> is follow | prompt | exec | watch.
+                                      Revealing the URL prompts for approval on
+                                      the Mac; over SSH it is denied until you
+                                      grant it once from the screen.
+                                        slicc follow-cloud bash -c
+                                        slicc prompt-cloud "summarize the diff"
+                                        slicc exec-cloud "git status"
+                                        slicc watch-cloud
+                                        slicc follow-cloud --index 1 sh -c
+
   slicc --version
   slicc --help
 

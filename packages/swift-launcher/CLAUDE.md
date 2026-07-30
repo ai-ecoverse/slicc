@@ -98,35 +98,44 @@ joined from another without hand-copying. The model is Foundation-only so the
 iOS follower (`packages/ios-app`) can reuse it.
 
 - `Models/SyncedTraySession.swift` — one session: `id` (**SHA-256 of the join
-  URL** — stable for upsert/dedup but opaque, so it is safe in accessibility
-  identifiers / telemetry; the raw `joinUrl` carries the secret and is never
-  surfaced), `joinUrl`, `label`, `deviceId` (per-device UUID for ownership),
-  `deviceName` (display), `createdAt`, `lastSeenAt`, `isStale(ttl:now:)`.
-  `CryptoKit` + Foundation only. Legacy payloads without `deviceId` decode empty.
+  URL**: opaque, so safe in accessibility ids / telemetry; the raw `joinUrl`
+  carries the secret and is never surfaced), `joinUrl`, `label`, `deviceId`
+  (per-device UUID for ownership), `deviceName`, `createdAt`, `lastSeenAt`,
+  `isStale(ttl:now:)`. `CryptoKit` + Foundation only; legacy payloads without
+  `deviceId` decode empty.
 - `Models/TraySessionSyncStore.swift` — `@Observable` store over a
   `KeyValueSyncBackend` (default `UbiquitousKeyValueBackend`; tests inject
-  `InMemoryKeyValueBackend`). **Each device writes its own sessions under a
-  per-device key `storageKeyPrefix + deviceId` and reads the union**, so
-  concurrent publishes never clobber and same-host-name Macs stay distinct;
-  ownership keys on `deviceId`, and `withdrawLocalSessions()` clears only this
-  device's key. Prunes stale by `defaultTTL` (12h) on load,
-  caps the merged view at `maxSessions` (64), and observes
-  `didChangeExternallyNotification`. Pure `active(from:)`/`upsert(_:into:)` are
-  static and unit-tested.
+  `InMemoryKeyValueBackend`). **Each device writes its own key
+  `storageKeyPrefix + deviceId` and reads the union**, so concurrent publishes
+  never clobber and same-host-name Macs stay distinct; `withdrawLocalSessions()`
+  clears only this device's key. Prunes stale by `defaultTTL` (12h), caps the
+  view at `maxSessions` (64), observes `didChangeExternallyNotification`. Pure
+  `active(from:)`/`upsert(_:into:)` are static and unit-tested.
 - **Producer** — `SliccstartApp` publishes when `leaderJoinUrl` becomes non-nil
-  (label = `leaderTargetName`) and withdraws when it clears; a 4-hour timer
-  re-publishes a live leader so it never ages out of the TTL.
-  `applicationWillTerminate` withdraws on clean quit but **not** on
-  update/detach (the browser survives; the relaunched app republishes).
+  and withdraws when it clears; a 4-hour timer re-publishes a live leader so it
+  never ages out of the TTL. `applicationWillTerminate` withdraws on clean quit
+  but **not** on update/detach (the browser survives; the relaunch republishes).
 - **Consumer** — `AppListView`'s "iCloud Sessions" section lists remote sessions
-  (device + age) with Copy, Attach-browser, Follow-in-Terminal; own sessions are
-  copy-only. A row's icon overlays the matching local browser icon on an
-  `icloud` badge. Follow reuses `launchTerminalFollower(_:joinURLOverride:)`
-  (override skips the local-leader gate → attaches to a **remote** leader);
-  Attach-browser launches the **top** browser via `launchBrowserFollower`.
+  with Copy, Attach-browser, Follow-in-Terminal (own sessions are copy-only).
+  Follow reuses `launchTerminalFollower(_:joinURLOverride:)` (override attaches
+  to a **remote** leader); Attach-browser uses `launchBrowserFollower`.
 - **Security** — join URLs carry the session secret and sync only through the
-  user's own (encrypted, same-Apple-ID) iCloud KVS. Tests:
-  `TraySessionSyncTests`.
+  user's own (encrypted, same-Apple-ID) iCloud KVS. Tests: `TraySessionSyncTests`.
+
+### Headless CLI (`Sliccstart --list-sessions`)
+
+The iCloud store is readable only by this signed, iCloud-entitled binary, so the
+Go `slicc` CLI shells out to a subcommand parsed in `main.swift` **before** the
+SwiftUI app boots (`TraySessionCLI.parse` returns `nil` for a normal launch).
+`--list-sessions` prints active sessions as JSON, **metadata only** (`joinUrl`
+redacted). `--reveal-urls` adds `joinUrl` behind a **consent gate**: a remembered
+"Always" (`UserDefaults`, keyed by caller code-signing id / path) wins; else an
+`NSAlert` (Deny / Allow Once / Always Allow / Always Deny) shows in a GUI session
+and a headless/SSH caller is **denied** (exit 3). Pure logic in
+`Models/TraySessionCLI.swift` is unit-tested (`TraySessionCLITests`); untestable
+glue (NSAlert, `getppid`/`proc_pidpath`/`SecCode`, store read) sits in
+`TraySessionCLIRunner`. Caller identity is spoofable, so redaction-by-default is
+the real control and the dialog a speed bump.
 
 ## App Ordering, Browser Followers, and Startup
 
@@ -150,28 +159,15 @@ iOS follower (`packages/ios-app`) can reuse it.
 
 ### iCloud provisioning (Developer ID app)
 
-Sync stays dark until the app is signed with an iCloud KVS entitlement backed
-by an _embedded_ provisioning profile (Developer ID signing alone does not
-authorize iCloud). `sign-and-package.sh` gates this on optional
-**`PROVISION_PROFILE`**: **unset** (default, incl. CI) signs against
+Sync needs an iCloud KVS entitlement backed by an _embedded_ provisioning
+profile (Developer ID signing alone does not authorize iCloud).
+`sign-and-package.sh` gates on optional **`PROVISION_PROFILE`**: **unset** signs
 `Sliccstart.entitlements` only and `NSUbiquitousKeyValueStore` degrades to a
-local cache; **set** embeds the profile at `Contents/embedded.provisionprofile`
-and signs against a merged entitlements file (base + `ubiquity-kvstore-identifier`,
-base never mutated).
-
-The KVS bucket (`ubiquity-kvstore-identifier`) defaults to
-`${APPLE_TEAM_ID}.com.slicc.sliccstart`, overridable via **`KVSTORE_IDENTIFIER`**
-(the iOS follower must match it; a brand-neutral `S8LB56P782.ai.sliccy.trays` is
-preferable, but a custom value fails the outer `codesign` unless the embedded
-profile authorizes it). The iCloud **container** is separate (CloudKit-only,
-unused), so any `iCloud.<reverse-dns>` you own works.
-
-One-time portal setup: enable iCloud on the `com.slicc.sliccstart` App ID
-(attach a container; KVS rides along), then create a Developer ID **provisioning
-profile** (App variant) for it. Local signed build passes `PROVISION_PROFILE=...`
-to `./sign-and-package.sh` with the usual `APPLE_*` env. For CI, add the profile
-as a base64 secret and decode it before exporting `PROVISION_PROFILE`. Signing
-contract: `macos-permissions.test.mjs`.
+local cache; **set** embeds the profile and signs a merged file (base +
+`ubiquity-kvstore-identifier`). CI decodes `APPLE_MACOS_PROVISIONING_PROFILE_BASE64`
+and exports `PROVISION_PROFILE` and `KVSTORE_IDENTIFIER` (default
+`${APPLE_TEAM_ID}.com.slicc.sliccstart`; releases ship `S8LB56P782.ai.sliccy.trays`,
+which the iOS follower must match). Signing contract: `macos-permissions.test.mjs`.
 
 ## Debug Build Creation
 
