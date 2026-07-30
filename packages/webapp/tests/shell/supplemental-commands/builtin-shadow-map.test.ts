@@ -8,6 +8,7 @@ import {
 import { ESBUILD_VERSION } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
 import { BUNDLED_FFMPEG_CORE_VERSION } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-wasm.js';
+import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
 
 describe('built-in shadow map', () => {
   it('looks up unscoped and scoped package names', () => {
@@ -35,6 +36,7 @@ describe('built-in shadow map', () => {
     expect(BUILTIN_SHADOW_MAP.imagemagick.bootstrap).toBe(
       `ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}`
     );
+    expect(BUILTIN_SHADOW_MAP.v86.bootstrap).toBe(`ipk add v86@${V86_PINNED_VERSION}`);
   });
 });
 
