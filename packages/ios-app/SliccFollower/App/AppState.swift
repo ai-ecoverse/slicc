@@ -557,7 +557,8 @@ class AppState: ObservableObject {
     /// `routeLeaderMessage` and its switch never see framing (#1700).
     func handleDataChannelMessage(_ data: Data) {
         if let frame = try? JSONDecoder().decode(TrayChunkFrame.self, from: data),
-            frame.type == TrayChunkFrame.typeTag {
+            frame.type == TrayChunkFrame.typeTag
+        {
             acceptChunkFrame(frame)
             return
         }
@@ -903,7 +904,8 @@ class AppState: ObservableObject {
         case .error(let error):
             logger.error("Agent event: error — \(error)")
             if isVisible { lastError = error }
-            case .unknown:
+
+        case .unknown:
             logger.debug("Agent event: unknown type")
         }
     }
@@ -975,7 +977,8 @@ class AppState: ObservableObject {
             // Only publish if the user is still viewing the same scoop and the
             // buffer still exists — drop stale flushes after a scoop switch.
             if self.selectedScoopJid == scoopJid,
-                let buffer = self.messagesByScoop[scoopJid] {
+                let buffer = self.messagesByScoop[scoopJid]
+            {
                 self.messages = buffer
             }
         }
