@@ -46,17 +46,17 @@ This file covers the repo's developer-tooling surface.
 
 ### Fresh Dev Harnesses
 
-Five harness scripts bring up isolated dev environments on distinct ports so they can run concurrently. Each harness reaps stale processes **strictly port-scoped** (never blanket-kills by name) and uses a labeled Chrome bundle clone (`clone-labeled-chrome.sh`) for distinct ⌘-Tab entries.
+Five harness scripts bring up isolated dev environments on distinct ports so they can run concurrently. The standalone harness fails if its selected bridge is occupied unless `SLICC_FRESH_REAP=1` explicitly opts into reaping a confirmed stale harness; forced reaping of the documented production bridge `:5710` is refused, and it never reaps Chrome CDP. Other harness cleanup remains strictly port-scoped, never by process name. Labeled Chrome bundle clones (`clone-labeled-chrome.sh`) provide distinct ⌘-Tab entries.
 
-| Harness        | Script                        | Bridge  | CDP     | Chrome Label  | Notes                                                                          |
-| -------------- | ----------------------------- | ------- | ------- | ------------- | ------------------------------------------------------------------------------ |
-| Standalone     | `dev-standalone-fresh.sh`     | `:5710` | `:9222` | `SLICC-Node`  | Primary node-server harness; self-builds leader UI                             |
-| Swift          | `dev-swift-fresh.sh`          | `:5720` | `:9224` | `SLICC-Swift` | Native `swift-server` bridge; auto-signs with stable dev cert                  |
-| Extension      | `dev-extension-fresh.sh`      | (SW)    | `:9333` | `SLICC-Ext`   | MV3 extension IS the bridge; self-builds leader UI; uses LaunchServices launch |
-| Electron-Node  | `dev-electron-node-fresh.sh`  | `:5730` | `:9225` | —             | Attaches to external Electron app (default: Slack)                             |
-| Electron-Swift | `dev-electron-swift-fresh.sh` | `:5740` | `:9226` | —             | Swift backend attaching to external Electron app                               |
+| Harness        | Script                        | Bridge                 | CDP     | Chrome Label  | Notes                                                                          |
+| -------------- | ----------------------------- | ---------------------- | ------- | ------------- | ------------------------------------------------------------------------------ |
+| Standalone     | `dev-standalone-fresh.sh`     | `:$PORT` (use `:5715`) | auto    | `SLICC-Node`  | Fails on occupied bridge by default; self-builds leader UI                     |
+| Swift          | `dev-swift-fresh.sh`          | `:5720`                | `:9224` | `SLICC-Swift` | Native `swift-server` bridge; auto-signs with stable dev cert                  |
+| Extension      | `dev-extension-fresh.sh`      | (SW)                   | `:9333` | `SLICC-Ext`   | MV3 extension IS the bridge; self-builds leader UI; uses LaunchServices launch |
+| Electron-Node  | `dev-electron-node-fresh.sh`  | `:5730`                | `:9225` | —             | Attaches to external Electron app (default: Slack)                             |
+| Electron-Swift | `dev-electron-swift-fresh.sh` | `:5740`                | `:9226` | —             | Swift backend attaching to external Electron app                               |
 
-Run via `npm run dev:standalone:fresh`, `npm run dev:swift:fresh`, `npm run dev:extension:fresh`, `npm run dev:electron:node:fresh`, `npm run dev:electron:swift:fresh`. Override bridge port with `PORT=…`, target app with positional arg or `ELECTRON_APP=…`. All pair with `slicc-debug.mjs` for verification. For detailed lifecycle, port resolution, reaping, LaunchServices, and wrangler reuse behavior, see [`docs/development.md`](../../docs/development.md) § "Fresh Dev Harness Details".
+Run standalone in an isolated lane with `PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh`; never use or clear production bridge `:5710` or Chrome CDP `:9222`. Other entry points are `npm run dev:swift:fresh`, `npm run dev:extension:fresh`, `npm run dev:electron:node:fresh`, and `npm run dev:electron:swift:fresh`. Override bridge port with `PORT=…`, target app with positional arg or `ELECTRON_APP=…`. All pair with `slicc-debug.mjs` for verification. For detailed lifecycle, port resolution, reaping, LaunchServices, and wrangler reuse behavior, see [`docs/development.md`](../../docs/development.md) § "Fresh Dev Harness Details".
 
 ### Supporting Utilities
 

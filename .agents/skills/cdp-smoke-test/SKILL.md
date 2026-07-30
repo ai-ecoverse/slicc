@@ -19,20 +19,38 @@ and work through the two test tiers. All driving goes through
 
 ## Setup
 
+**Production safety boundary:** `:5710` (bridge) and `:9222` (Chrome CDP)
+belong to the developer's production SLICC. Never bind, reap, or kill either
+port. The smoke-test lane uses bridge `:5715`; its Chrome CDP port is
+auto-resolved.
+
 ```bash
-# 1. Build the latest code (cherry regenerates worker bridge assets)
+# 1. Record production listeners before doing anything else.
+PROD_BRIDGE_PIDS=$(lsof -nP -tiTCP:5710 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
+PROD_CDP_PIDS=$(lsof -nP -tiTCP:9222 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
+printf 'production preflight: :5710=%s :9222=%s\n' "${PROD_BRIDGE_PIDS:-none}" "${PROD_CDP_PIDS:-none}"
+
+# 2. Build the latest code (cherry regenerates worker bridge assets).
 npm install
 npm run build -w @ai-ecoverse/cherry -w @slicc/webapp -w @slicc/node-server
 
-# 2. Launch — local wrangler UI on :8787, bridge on :5710, ephemeral profile.
+# 3. Launch — wrangler :8787, isolated bridge :5715, ephemeral profile.
 #    CHROME_PATH is optional; default is a labeled Chrome for Testing clone.
+export SLICC_HARNESS_LOG=/tmp/slicc-dev-harness-5715.log
 CHROME_PATH="/Applications/Google Chrome Canary.app" \
-  nohup npm run dev:standalone:fresh > /tmp/slicc-dev-harness.log 2>&1 &
+  PORT=5715 WRANGLER_PORT=8787 \
+  nohup npm run dev:standalone:fresh > "$SLICC_HARNESS_LOG" 2>&1 &
 
-# 3. Wait for boot, then confirm CDP is reachable (port is auto-resolved,
-#    NOT 9222 — slicc-cdp greps it from the harness log automatically)
-sleep 20 && grep "Chrome CDP listening" /tmp/slicc-dev-harness.log
+# 4. Wait for boot and export the auto-resolved CDP port from this lane's log.
+sleep 20 && grep "Chrome CDP listening" "$SLICC_HARNESS_LOG"
+export SLICC_CDP_PORT=$(sed -nE 's/.*Chrome CDP listening on port ([0-9]+).*/\1/p' "$SLICC_HARNESS_LOG" | tail -1)
+test -n "$SLICC_CDP_PORT"
 .agents/skills/cdp-smoke-test/scripts/slicc-cdp targets
+
+# 5. Pass criterion: production listeners are exactly the preflight PIDs.
+POST_BRIDGE_PIDS=$(lsof -nP -tiTCP:5710 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
+POST_CDP_PIDS=$(lsof -nP -tiTCP:9222 -sTCP:LISTEN 2>/dev/null | sort -n | paste -sd, -)
+test "$POST_BRIDGE_PIDS" = "$PROD_BRIDGE_PIDS" && test "$POST_CDP_PIDS" = "$PROD_CDP_PIDS"
 ```
 
 Attach the console watcher before testing — a clean log at the end is part
@@ -66,6 +84,14 @@ anomalies, and the total session cost from the header counter.
 
 ## Pitfalls
 
+- Never use `pkill` or `killall` on Chrome, node, or wrangler. Never `kill` a
+  PID resolved from `:5710` or `:9222`. If any chosen harness port is
+  occupied, select another isolated port instead of clearing it.
+- The standalone guard fails fast, exits non-zero, and reports the PID and
+  command holding the selected bridge port. `SLICC_FRESH_REAP=1` opts into
+  reaping only a stale harness on a non-production bridge port that you have
+  verified you own. Forced reaping of `:5710` is refused; choose another port
+  or stop your own `:5710` process manually. Chrome CDP is never reaped.
 - **Closed the leader tab?** The harness survives. **Diagnostic-only, do
   not automate**: the harness log redacts `bridgeToken` deliberately — the
   token is a capability. As a manual last resort during an interactive
@@ -74,5 +100,6 @@ anomalies, and the total session cost from the header counter.
 url like '%bridgeToken%'"`) and the URL reopened via `location.href` or
   `/json/new`; prefer restarting the harness when nothing valuable would be
   lost. Never print the token into transcripts or scripts.
-- Second instance alongside: `PORT=5720 npm run dev:standalone:fresh`
-  (ports and profile auto-isolate).
+- Additional instance alongside: choose another unused bridge port, for
+  example `PORT=5716 WRANGLER_PORT=8787 npm run dev:standalone:fresh`.
+  Profiles and Chrome CDP ports auto-isolate; an occupied bridge fails fast.
