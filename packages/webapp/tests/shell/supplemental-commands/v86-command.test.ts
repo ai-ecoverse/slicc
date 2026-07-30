@@ -102,6 +102,18 @@ describe('parseStartArgs', () => {
     expect(parseStartArgs(['-state', 's.bin', '-net', 'e1000']).ok).toBe(false);
   });
 
+  it('parses -net <model>,relay=fetch and rejects unknown relay options', () => {
+    const relayed = parseStartArgs(['-hda', 'x.img', '-net', 'ne2k,relay=fetch']);
+    expect(relayed.ok).toBe(true);
+    if (relayed.ok) expect(relayed.parsed).toMatchObject({ net: 'ne2k', netRelay: 'fetch' });
+
+    const plain = parseStartArgs(['-hda', 'x.img', '-net', 'virtio']);
+    expect(plain.ok && plain.parsed.netRelay).toBeUndefined();
+
+    expect(parseStartArgs(['-hda', 'x.img', '-net', 'ne2k,relay=ws']).ok).toBe(false);
+    expect(parseStartArgs(['-hda', 'x.img', '-net', 'e1000,relay=fetch']).ok).toBe(false);
+  });
+
   it('parses -vga and enforces the video-memory cap', () => {
     const dflt = parseStartArgs(['-hda', 'x.img']);
     expect(dflt.ok && dflt.parsed.vgaMemoryMib).toBe(DEFAULT_VGA_MEMORY_MIB);
@@ -283,6 +295,91 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(emulator.run).toHaveBeenCalled();
     // Instrumentation happened post-load: serial listener is attached.
     expect(emulator.listeners.has('serial0-output-byte')).toBe(true);
+  });
+
+  it('threads relay=fetch into net_device and reroutes the relay fetch through the proxy', async () => {
+    const emulator = makeFakeEmulator();
+    const originalFetch = vi.fn();
+    emulator.network_adapter = { fetch: originalFetch };
+    const proxied = vi.fn(async () => ({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/html' },
+      body: new Uint8Array([104, 105]),
+      url: 'https://github.com/',
+    }));
+    const capture: { options?: Record<string, unknown> } = {};
+    const cmd = createV86Command({
+      loadEngine: async () => makeEngine(emulator, capture),
+      proxiedFetch: proxied,
+    });
+    const { ctx } = makeCtx(BIOS_FILES);
+    const result = await cmd.execute(
+      ['start', '-cdrom', 'alpine.iso', '-net', 'ne2k,relay=fetch'],
+      ctx
+    );
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    expect(capture.options?.net_device).toEqual({ type: 'ne2k', relay_url: 'fetch' });
+    // The adapter's own fetch prop was replaced with the proxied shim.
+    expect(emulator.network_adapter.fetch).not.toBe(originalFetch);
+
+    const resp = await emulator.network_adapter.fetch!('http://github.com/', {
+      method: 'GET',
+      headers: new Headers({ accept: 'text/html' }),
+    });
+    // Guest plain-http upgraded to https before hitting the proxy.
+    expect(proxied).toHaveBeenCalledWith('https://github.com/', {
+      method: 'GET',
+      headers: { accept: 'text/html' },
+      body: undefined,
+    });
+    expect(resp.status).toBe(200);
+    expect(new Uint8Array(await resp.arrayBuffer())).toEqual(new Uint8Array([104, 105]));
+  });
+
+  it('keeps relay localhost targets on http and latin1-encodes POST bodies', async () => {
+    const emulator = makeFakeEmulator();
+    emulator.network_adapter = { fetch: vi.fn() };
+    const proxied = vi.fn(async () => ({
+      status: 204,
+      statusText: 'No Content',
+      headers: {},
+      body: new Uint8Array(),
+      url: 'http://localhost:8080/upload',
+    }));
+    const cmd = createV86Command({
+      loadEngine: async () => makeEngine(emulator),
+      proxiedFetch: proxied,
+    });
+    const { ctx } = makeCtx(BIOS_FILES);
+    await cmd.execute(['start', '-cdrom', 'alpine.iso', '-net', 'virtio,relay=fetch'], ctx);
+
+    await emulator.network_adapter.fetch!('http://localhost:8080/upload', {
+      method: 'POST',
+      body: new Uint8Array([0x00, 0x80, 0xff]),
+    });
+    expect(proxied).toHaveBeenCalledWith('http://localhost:8080/upload', {
+      method: 'POST',
+      headers: {},
+      body: '\u0000\u0080\u00ff',
+    });
+  });
+
+  it('fails the boot when relay=fetch finds no network adapter', async () => {
+    const emulator = makeFakeEmulator();
+    const cmd = createV86Command({
+      loadEngine: async () => makeEngine(emulator),
+      proxiedFetch: vi.fn(),
+    });
+    const { ctx } = makeCtx(BIOS_FILES);
+    const result = await cmd.execute(
+      ['start', '-cdrom', 'alpine.iso', '-net', 'ne2k,relay=fetch'],
+      ctx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('relay=fetch');
+    expect(getVm('vm0')).toBeUndefined();
   });
 
   it('threads -state / -fs9p / -net into the emulator options (copy.sh Arch boot)', async () => {

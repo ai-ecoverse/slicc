@@ -19,9 +19,10 @@
  * are VFS files too.
  */
 
-import type { Command, CommandContext } from 'just-bash';
+import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager } from '../../kernel/process-manager.js';
+import { createProxiedFetch } from '../proxied-fetch.js';
 import {
   captureFrame,
   DEFAULT_MEMORY_MIB,
@@ -89,7 +90,10 @@ Boot options (QEMU-flavored):
   -kernel <path> -initrd <path> -append <cmdline>          Direct Linux boot
   -state <vfs-path>   Resume from a saved state snapshot (.zst ok)
   -fs9p <url>         Attach a 9p network filesystem (guest root=host9p)
-  -net <ne2k|virtio>  Guest NIC model (must match a -state snapshot's NIC)
+  -net <ne2k|virtio>[,relay=fetch]  Guest NIC model (must match a -state
+                      snapshot's NIC); relay=fetch answers guest DNS in-engine
+                      and routes guest HTTP (port 80) through the SLICC fetch
+                      proxy — no gateway needed, https upstream via the proxy
   -vga <MiB>          SVGA/VBE video memory (default ${DEFAULT_VGA_MEMORY_MIB}, max ${MAX_VGA_MEMORY_MIB}) —
                       raise for high-res VESA modes (1080p32 needs ~9)
   -bios <path> -vgabios <path>  BIOS blobs (default ${DEFAULT_BIOS_DIR}/{seabios,vgabios}.bin)
@@ -126,6 +130,7 @@ export interface ParsedStartArgs {
   state?: string;
   fs9p?: string;
   net?: 'ne2k' | 'virtio';
+  netRelay?: 'fetch';
   bios?: string;
   vgabios?: string;
   nographic: boolean;
@@ -167,8 +172,13 @@ const START_FLAG_SETTERS: Record<string, (parsed: ParsedStartArgs, v: string) =>
     return null;
   },
   '-net': (parsed, v) => {
-    if (v !== 'ne2k' && v !== 'virtio') return '-net requires ne2k or virtio';
-    parsed.net = v;
+    const [model, ...opts] = v.split(',');
+    if (model !== 'ne2k' && model !== 'virtio') return '-net requires ne2k or virtio';
+    for (const opt of opts) {
+      if (opt !== 'relay=fetch') return `-net: unknown option '${opt}' (only relay=fetch)`;
+      parsed.netRelay = 'fetch';
+    }
+    parsed.net = model;
     return null;
   },
   '-boot': (parsed, v) => {
@@ -435,6 +445,11 @@ export interface V86CommandDeps {
    * `globalThis.__slicc_pm` at exec time (same fallback as `ps`/`kill`).
    */
   processManager?: ProcessManager;
+  /**
+   * Inject the `SecureFetch` backing `-net ...,relay=fetch`. When
+   * omitted, `createProxiedFetch()` (CORS-bypassing fetch proxy).
+   */
+  proxiedFetch?: SecureFetch;
 }
 
 function lookupGlobalPm(): ProcessManager | null {
@@ -577,7 +592,13 @@ async function stageBootImages(
   if (parsed.fs9p) options.filesystem = { baseurl: parsed.fs9p };
   // `-net`: NIC model. A `-state` snapshot only resumes cleanly with
   // the same device set it was saved with (copy.sh Arch uses virtio).
-  if (parsed.net) options.net_device = { type: parsed.net };
+  // `relay=fetch` picks v86's fetch-based network relay: DNS is answered
+  // in-engine (dns_method: static) and guest HTTP becomes host fetch()
+  // calls, which v86Start reroutes through the SLICC fetch proxy.
+  if (parsed.net) {
+    options.net_device =
+      parsed.netRelay === 'fetch' ? { type: parsed.net, relay_url: 'fetch' } : { type: parsed.net };
+  }
   return null;
 }
 
@@ -603,6 +624,57 @@ function waitForEmulatorLoaded(emulator: V86Emulator): Promise<void> {
       resolve();
     });
   });
+}
+
+/**
+ * Reroute the fetch-relay network adapter's host fetch through the
+ * SLICC fetch proxy. The relay's HTTP handler calls the adapter's
+ * per-instance `fetch` own property — set to the global `fetch` by the
+ * adapter constructor (a plain own prop, NOT a get/set-asymmetric
+ * proxy) — and consumes a Response-shaped result. The kernel worker's
+ * direct `fetch` would fail CORS on almost every guest target, so
+ * replace it with a `SecureFetch`-backed shim (same proxy `curl` uses).
+ */
+function patchRelayFetch(emulator: V86Emulator, deps: V86CommandDeps): CmdResult | null {
+  const adapter = emulator.network_adapter;
+  if (!adapter || typeof adapter.fetch !== 'function') {
+    return fail('relay=fetch: engine exposed no fetch-relay network adapter');
+  }
+  const proxied = deps.proxiedFetch ?? createProxiedFetch();
+  adapter.fetch = async (url, init) => {
+    // The guest only speaks plain HTTP to the relay; upgrade external
+    // hosts to https (the rewrite v86 itself applies under a secure
+    // page origin) so github.com & co. don't need a redirect hop.
+    // localhost stays http — that's the relay's `<port>.external` path.
+    const target = url.replace(/^http:\/\/(?!localhost[:/]|127\.0\.0\.1[:/])/u, 'https://');
+    const headers: Record<string, string> = {};
+    init?.headers?.forEach((value, key) => {
+      headers[key] = value;
+    });
+    let body: string | undefined;
+    if (init?.body) {
+      // Latin1-encode: the SecureFetch `body: string` contract
+      // (`prepareRequestBody` recovers the raw bytes downstream).
+      let latin1 = '';
+      for (const byte of init.body) latin1 += String.fromCharCode(byte);
+      body = latin1;
+    }
+    const resp = await proxied(target, { method: init?.method, headers, body });
+    const bytes = resp.body;
+    const buffer = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength
+    ) as ArrayBuffer;
+    return {
+      status: resp.status,
+      statusText: resp.statusText,
+      headers: resp.headers,
+      redirected: false,
+      url: resp.url,
+      arrayBuffer: async () => buffer,
+    };
+  };
+  return null;
 }
 
 async function v86Start(
@@ -669,6 +741,13 @@ async function v86Start(
     // engine fires `emulator-loaded`. Wait for it before instrumenting
     // (the DummyScreenAdapter is also created during init) and booting.
     await waitForEmulatorLoaded(emulator);
+    if (parsed.netRelay === 'fetch') {
+      const relayError = patchRelayFetch(emulator, deps);
+      if (relayError) {
+        await teardownVm(record, pm);
+        return relayError;
+      }
+    }
     instrumentVm(record);
     await emulator.run();
   } catch (err) {

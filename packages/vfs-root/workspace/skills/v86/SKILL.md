@@ -47,6 +47,16 @@ v86 text -n arch
 
 `-state` resumes a snapshot (`.zst` decompresses inside the engine), `-fs9p` attaches the network-backed 9p root the guest's files live on (fetched on demand, host must send CORS headers), and `-net virtio` matches the NIC the snapshot was saved with.
 
+## Guest networking (fetch relay)
+
+`-net <model>,relay=fetch` gives the guest outbound HTTP without a gateway: v86's fetch relay answers guest DNS in-engine and turns guest port-80 connections into host fetches, which SLICC reroutes through its CORS-bypassing fetch proxy. Plain-http requests to external hosts are upgraded to https before hitting the proxy (`http://localhost` stays local).
+
+```bash
+v86 start -n kolibri -fda kolibri.img -net ne2k,relay=fetch -m 128
+```
+
+Inside the guest, configure a static IP on the relay's subnet (VM `192.168.86.100`, router/DNS `192.168.86.1`) — e.g. KolibriOS NETCFG or `ip addr add` in Linux. The guest can then browse `http://<host>/...`; https-only sites work because of the upgrade rewrite, but the guest itself only ever speaks plain HTTP on port 80.
+
 VMs run in the background as ProcessManager-tracked units — `ps` shows them and `kill <pid>` powers them off. Default VM name is `vm0`; every subcommand accepts `-n <name>`. RAM defaults to 128 MiB, capped at 512.
 
 ## Interaction loop

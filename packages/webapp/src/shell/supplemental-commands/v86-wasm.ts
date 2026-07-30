@@ -63,6 +63,34 @@ export interface V86ScreenAdapter {
   get_text_screen?: () => string[];
 }
 
+/**
+ * Response shape the fetch-relay network adapter's HTTP handler
+ * consumes — the Response-compatible subset it reads before writing
+ * the reply back onto the guest's TCP stream.
+ */
+export interface V86RelayFetchResponse {
+  status: number;
+  statusText: string;
+  headers: Headers | Record<string, string>;
+  redirected: boolean;
+  url: string;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+/**
+ * The fetch-relay network adapter (`net_device.relay_url: "fetch"`).
+ * `fetch` is a per-instance own property the constructor sets to the
+ * global `fetch` — safe to replace post-construction (NOT a
+ * get/set-asymmetric proxy), which is how the `v86` command reroutes
+ * guest HTTP through the SLICC fetch proxy.
+ */
+export interface V86NetworkAdapter {
+  fetch?: (
+    url: string,
+    init?: { method?: string; headers?: Headers; body?: Uint8Array }
+  ) => Promise<V86RelayFetchResponse>;
+}
+
 /** The subset of the v86 emulator API the command drives. */
 export interface V86Emulator {
   run(): Promise<void>;
@@ -77,6 +105,7 @@ export interface V86Emulator {
   serial0_send(data: string): void;
   bus: { send(name: string, data?: unknown): void };
   screen_adapter?: V86ScreenAdapter;
+  network_adapter?: V86NetworkAdapter;
   v86?: {
     cpu?: {
       devices?: { vga?: { screen_fill_buffer(): void; graphical_mode?: boolean } };
