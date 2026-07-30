@@ -335,6 +335,10 @@ describe('v86 command lifecycle (mocked engine)', () => {
       body: undefined,
     });
     expect(resp.status).toBe(200);
+    // The shim returns a real Headers (Response-compatible iteration API),
+    // not the proxy's plain record.
+    expect(resp.headers).toBeInstanceOf(Headers);
+    expect((resp.headers as Headers).get('content-type')).toBe('text/html');
     expect(new Uint8Array(await resp.arrayBuffer())).toEqual(new Uint8Array([104, 105]));
   });
 

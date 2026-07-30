@@ -668,7 +668,10 @@ function patchRelayFetch(emulator: V86Emulator, deps: V86CommandDeps): CmdResult
     return {
       status: resp.status,
       statusText: resp.statusText,
-      headers: resp.headers,
+      // Wrap the proxy's plain record in a real Headers: today the relay
+      // does `new Headers(resp.headers)` itself (HeadersInit accepts a
+      // record), but a genuine Headers also survives direct iteration.
+      headers: new Headers(resp.headers),
       redirected: false,
       url: resp.url,
       arrayBuffer: async () => buffer,
