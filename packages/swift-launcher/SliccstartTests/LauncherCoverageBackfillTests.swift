@@ -477,4 +477,37 @@ final class LauncherBootstrapperCoverageTests: XCTestCase {
         XCTAssertNotNil(SliccBootstrapper.BootstrapError.nodeNotFound.errorDescription)
         XCTAssertNotNil(SliccBootstrapper.BootstrapError.commandFailed("x").errorDescription)
     }
+
+    func testCliDownloadProgressHasADistinctStatusForEveryStage() {
+        let texts = [
+            SliccCliDownloadProgress.preparing,
+            .downloading(attempt: 2, totalAttempts: 3),
+            .validating,
+            .installing,
+            .finished(URL(fileURLWithPath: "/tmp/slicc")),
+        ].map(\.statusText)
+
+        XCTAssertEqual(texts.count, Set(texts).count)
+        XCTAssertTrue(texts.contains { $0.contains("2 of 3") })
+    }
+
+    func testAppOrderStoreRoundTripsThroughUserDefaults() {
+        let suiteName = "slicc.test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AppOrderStore(defaults: defaults)
+
+        XCTAssertEqual(store.load(AppOrderStore.browserKey), [])
+        store.save(["com.brave.Browser", "com.google.Chrome"], forKey: AppOrderStore.browserKey)
+
+        XCTAssertEqual(store.load(AppOrderStore.browserKey), ["com.brave.Browser", "com.google.Chrome"])
+        XCTAssertEqual(store.load(AppOrderStore.terminalKey), [])
+    }
+
+    func testDefaultBrowserProbeReadsTheRealLaunchServicesHandler() {
+        // Read-only: asks LaunchServices who handles web links. The xctest
+        // runner is not a registered handler, so it can never hold the role.
+        XCTAssertFalse(DefaultBrowserRegistration.isDefault())
+        _ = DefaultBrowserRegistration.isRegistrable
+    }
 }

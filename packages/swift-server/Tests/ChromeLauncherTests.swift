@@ -484,6 +484,26 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertNil(browser)
     }
 
+    func testEveryLaunchFailureExplainsItselfToTheUser() {
+        // These strings are what the launcher surfaces in its error report,
+        // so an empty or duplicated one leaves the user with no next step.
+        let descriptions: [String] = [
+            ChromeLauncherError.chromeExecutableNotFound,
+            .invalidChromeExecutable("/no/such/chrome"),
+            .chromeExitedBeforeReportingPort(9),
+            .timedOutWaitingForPort(2.5),
+            .cdpUnavailable(9222),
+            .openLaunchFailed(exitCode: 1, executable: "/Applications/Google Chrome.app"),
+            .chromeAlreadyRunning(port: 9222, browser: "Chrome/147"),
+            .chromeAlreadyRunning(port: 9222, browser: nil),
+        ].map(\.localizedDescription)
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+        XCTAssertTrue(descriptions.contains { $0.contains("2500ms") })
+        XCTAssertTrue(descriptions.contains { $0.contains("(Chrome/147)") })
+    }
+
     func testLaunchFailsFastWhenCdpPortIsAlreadyServingChrome() async throws {
         let chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         let cdpResponse = Data(#"{"Browser":"Chrome/147.0.7727.101","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/test"}"#.utf8)

@@ -25,6 +25,37 @@ enum CDPBrowserSessionError: LocalizedError {
     }
 }
 
+/// The socket operations the session needs. `URLSessionWebSocketTask` supplies
+/// them in production; tests supply a double, which is the only way to drive
+/// the frame-matching loop without a live browser.
+protocol CDPWebSocketTransport: Sendable {
+    func sendFrame(_ payload: Data) async throws
+    func receiveFrame() async throws -> URLSessionWebSocketTask.Message
+    func cancelSocket() async
+}
+
+/// `URLSessionWebSocketTask` is documented as safe to use from any thread.
+private final class URLSessionCDPWebSocket: CDPWebSocketTransport, @unchecked Sendable {
+    private let task: URLSessionWebSocketTask
+
+    init(url: URL, session: URLSession) {
+        task = session.webSocketTask(with: url)
+        task.resume()
+    }
+
+    func sendFrame(_ payload: Data) async throws {
+        try await task.send(.data(payload))
+    }
+
+    func receiveFrame() async throws -> URLSessionWebSocketTask.Message {
+        try await task.receive()
+    }
+
+    func cancelSocket() {
+        task.cancel(with: .goingAway, reason: nil)
+    }
+}
+
 /// `URLSessionWebSocketTask`-backed `CDPBrowserSession`. One instance is one
 /// short-lived connection: callers open it, make their reads, and close it,
 /// so there is no reconnect state to manage and a dropped connection simply
@@ -35,22 +66,25 @@ actor WebSocketCDPBrowserSession: CDPBrowserSession {
     /// Bounded so a chatty browser cannot pin the caller forever.
     private static let maxFramesPerCall = 64
 
-    private let socket: URLSessionWebSocketTask
+    private let socket: any CDPWebSocketTransport
     private var nextId = 0
 
     init(url: URL, session: URLSession = .shared) {
-        socket = session.webSocketTask(with: url)
-        socket.resume()
+        socket = URLSessionCDPWebSocket(url: url, session: session)
+    }
+
+    init(socket: any CDPWebSocketTransport) {
+        self.socket = socket
     }
 
     func call(method: String) async throws -> Data {
         nextId += 1
         let id = nextId
         let payload = try JSONSerialization.data(withJSONObject: ["id": id, "method": method])
-        try await socket.send(.data(payload))
+        try await socket.sendFrame(payload)
 
         for _ in 0..<Self.maxFramesPerCall {
-            guard let frame = Self.payload(of: try await socket.receive()),
+            guard let frame = Self.payload(of: try await socket.receiveFrame()),
                 let result = Self.result(fromFrame: frame, id: id)
             else { continue }
             return result
@@ -58,8 +92,8 @@ actor WebSocketCDPBrowserSession: CDPBrowserSession {
         throw CDPBrowserSessionError.noReply(method: method)
     }
 
-    func close() {
-        socket.cancel(with: .goingAway, reason: nil)
+    func close() async {
+        await socket.cancelSocket()
     }
 
     /// The `result` object of `frame` when it is the reply to `id`, else `nil`

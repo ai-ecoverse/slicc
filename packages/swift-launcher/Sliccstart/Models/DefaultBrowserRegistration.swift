@@ -12,6 +12,34 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "DefaultBr
 /// the SLICC-controlled leader browser (`IncomingURLRouter`). The role is
 /// therefore only offered alongside "launch browser at startup" — without a
 /// leader to hand links to, becoming the default browser would swallow them.
+/// The LaunchServices operations the registration needs. `NSWorkspace` supplies
+/// them in production; tests supply a double, because the real calls rewrite
+/// the user's system-wide handler and raise a modal confirmation panel.
+protocol DefaultBrowserSystem {
+    func handlerURL(toOpen url: URL) -> URL?
+    func setDefaultApplication(at bundleURL: URL, toOpenURLsWithScheme scheme: String) async -> Error?
+}
+
+struct WorkspaceDefaultBrowserSystem: DefaultBrowserSystem {
+    let workspace: NSWorkspace
+
+    init(workspace: NSWorkspace = .shared) {
+        self.workspace = workspace
+    }
+
+    func handlerURL(toOpen url: URL) -> URL? {
+        workspace.urlForApplication(toOpen: url)
+    }
+
+    func setDefaultApplication(at bundleURL: URL, toOpenURLsWithScheme scheme: String) async -> Error? {
+        await withCheckedContinuation { continuation in
+            workspace.setDefaultApplication(at: bundleURL, toOpenURLsWithScheme: scheme) { error in
+                continuation.resume(returning: error)
+            }
+        }
+    }
+}
+
 enum DefaultBrowserRegistration {
     /// Schemes a default browser has to claim. `assemble-app.mjs` declares the
     /// same pair in `CFBundleURLTypes`; LaunchServices refuses a handler change
@@ -24,9 +52,9 @@ enum DefaultBrowserRegistration {
 
     static func isDefault(
         bundleURL: URL = Bundle.main.bundleURL,
-        workspace: NSWorkspace = .shared
+        system: any DefaultBrowserSystem = WorkspaceDefaultBrowserSystem()
     ) -> Bool {
-        matches(handlerURL: workspace.urlForApplication(toOpen: probeURL), bundleURL: bundleURL)
+        matches(handlerURL: system.handlerURL(toOpen: probeURL), bundleURL: bundleURL)
     }
 
     /// LaunchServices answers with a canonical, symlink-resolved URL that may
@@ -48,30 +76,19 @@ enum DefaultBrowserRegistration {
     /// absence of an error.
     static func makeDefault(
         bundleURL: URL = Bundle.main.bundleURL,
-        workspace: NSWorkspace = .shared
+        system: any DefaultBrowserSystem = WorkspaceDefaultBrowserSystem(),
+        report: (Error) -> Void = { LauncherErrorReport.report(.defaultBrowser, $0) }
     ) async -> Bool {
         for scheme in handledSchemes {
-            if let error = await setDefaultApplication(bundleURL: bundleURL, scheme: scheme, workspace: workspace) {
+            if let error = await system.setDefaultApplication(at: bundleURL, toOpenURLsWithScheme: scheme) {
                 log.error("makeDefault: \(scheme, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-                LauncherErrorReport.report(.defaultBrowser, error)
-                return isDefault(bundleURL: bundleURL, workspace: workspace)
+                report(error)
+                return isDefault(bundleURL: bundleURL, system: system)
             }
         }
-        let succeeded = isDefault(bundleURL: bundleURL, workspace: workspace)
+        let succeeded = isDefault(bundleURL: bundleURL, system: system)
         log.info("makeDefault: isDefault = \(succeeded, privacy: .public)")
         return succeeded
-    }
-
-    private static func setDefaultApplication(
-        bundleURL: URL,
-        scheme: String,
-        workspace: NSWorkspace
-    ) async -> Error? {
-        await withCheckedContinuation { continuation in
-            workspace.setDefaultApplication(at: bundleURL, toOpenURLsWithScheme: scheme) { error in
-                continuation.resume(returning: error)
-            }
-        }
     }
 
     private static func canonicalPath(_ url: URL) -> String {

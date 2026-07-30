@@ -338,6 +338,18 @@ final class GracefulShutdownHandlerTests: XCTestCase {
         XCTAssertEqual(killTargets.snapshot(), [chromePid])
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
     }
+
+    func testEveryShutdownFailureExplainsWhichStepGaveUp() {
+        let descriptions: [String] = [
+            GracefulShutdownError.cdpUnavailable(9222),
+            .invalidBrowserWebSocketURL("not a url"),
+            .missingBrowserWebSocketURL,
+        ].map(\.localizedDescription)
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+        XCTAssertTrue(descriptions.contains { $0.contains("9222") })
+    }
 }
 
 private final class OverlayControllerSpy: @unchecked Sendable, GracefulShutdownOverlayControlling {

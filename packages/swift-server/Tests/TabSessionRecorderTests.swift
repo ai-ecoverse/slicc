@@ -174,6 +174,23 @@ final class TabSessionRecorderTests: XCTestCase {
         XCTAssertEqual(settled, afterStop)
     }
 
+    func testSnapshotKeepsTheLastGoodFileWhenNothingIsListeningOnTheCdpPort() async {
+        // Exercises the production HTTP probe: after the browser is gone the
+        // discovery request fails, and a failed poll must not erase the
+        // snapshot the next launch restores from.
+        let store = TabSessionStore(fileURL: makeTemporaryFileURL())
+        store.save(urls: ["https://example.com/keep"], hostedOrigins: sliccOrigins)
+        let recorder = TabSessionRecorder(
+            store: store,
+            cdpPort: 1,
+            hostedOrigins: sliccOrigins
+        )
+
+        await recorder.snapshotNow()
+
+        XCTAssertEqual(store.load(hostedOrigins: sliccOrigins), ["https://example.com/keep"])
+    }
+
     private func makeRecorder(
         store: TabSessionStore,
         targets: [(context: String, type: String, url: String)],

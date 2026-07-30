@@ -163,6 +163,75 @@ final class IncomingURLRouterTests: XCTestCase {
         )
     }
 
+    func testReportsWhenTheBrowserRejectsTheNewTab() async {
+        let process = LeaderStub(leader: Self.chromeLeader)
+        let transport = TransportSpy(newTabStatus: 500)
+        let reported = ErrorSpy()
+        let router = makeRouter(process: process, transport: transport, report: reported.record)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(reported.errors as? [IncomingURLRouterError], [.newTabRejected(status: 500)])
+    }
+
+    func testReportsWhenNoBrowserIsInstalledAtAll() async {
+        let process = LeaderStub(leader: nil)
+        let reported = ErrorSpy()
+        let router = makeRouter(
+            process: process,
+            transport: TransportSpy(),
+            browsers: [],
+            report: reported.record
+        )
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(process.launchedTargets, [])
+        XCTAssertEqual(reported.errors as? [IncomingURLRouterError], [.leaderUnavailable])
+    }
+
+    func testKeepsWaitingWhenALaunchAttemptThrows() async {
+        // A launch racing startup's own auto-launch surfaces as "port in use";
+        // the wait loop, not the launch call, decides whether a leader arrived.
+        let process = LeaderStub(
+            leader: nil,
+            endpointAfterPolls: 3,
+            endpointWhenReady: Self.chromeLeader,
+            launchError: LaunchStubError.portInUse
+        )
+        let transport = TransportSpy()
+        let router = makeRouter(process: process, transport: transport)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(
+            transport.requests.first?.url?.absoluteString,
+            "http://127.0.0.1:9222/json/new?https%3A%2F%2Fexample.com%2Fa"
+        )
+    }
+
+    func testEveryFailureCarriesAUserReadableDescription() {
+        let descriptions: [String] = [
+            IncomingURLRouterError.leaderUnavailable,
+            .newTabRejected(status: 500),
+            .newTabResponseUnreadable,
+            .activateRejected(status: 404),
+        ].map { $0.localizedDescription }
+
+        XCTAssertEqual(descriptions.count, Set(descriptions).count)
+        XCTAssertFalse(descriptions.contains { $0.isEmpty })
+    }
+
+    func testProductionDefaultsResolveTheInstalledBrowsers() {
+        // The defaults are what the app delegate uses; exercising them keeps
+        // the wiring from silently pointing at nothing.
+        let router = IncomingURLRouter(process: LeaderStub(leader: nil))
+        XCTAssertNotNil(router)
+        for browser in IncomingURLRouter.defaultOrderedBrowsers() {
+            XCTAssertEqual(browser.type, .chromiumBrowser)
+        }
+    }
+
     func testDroppedLinksAreReported() async {
         let process = LeaderStub(leader: nil)
         let reported = ErrorSpy()
@@ -249,17 +318,20 @@ private final class LeaderStub: LeaderBrowserLaunching {
 
     /// Browser names Sliccstart already has attached to a remote tray.
     private let followerNames: Set<String>
+    private let launchError: Error?
 
     init(
         leader: LeaderBrowserEndpoint?,
         endpointAfterPolls: Int? = nil,
         endpointWhenReady: LeaderBrowserEndpoint? = nil,
-        followerNames: Set<String> = []
+        followerNames: Set<String> = [],
+        launchError: Error? = nil
     ) {
         self.endpoint = leader
         self.endpointAfterPolls = endpointAfterPolls
         self.endpointWhenReady = endpointWhenReady
         self.followerNames = followerNames
+        self.launchError = launchError
     }
 
     var leaderBrowserEndpoint: LeaderBrowserEndpoint? { endpoint }
@@ -270,6 +342,7 @@ private final class LeaderStub: LeaderBrowserLaunching {
 
     func launchStandalone(_ target: AppTarget) throws {
         launchedTargets.append(target.name)
+        if let launchError { throw launchError }
     }
 
     func tick() {
@@ -285,10 +358,16 @@ private final class TransportSpy {
     private(set) var requests: [URLRequest] = []
     private(set) var activatedApps: [String] = []
     private let activateStatus: Int
+    private let newTabStatus: Int
     private let newTabBody: Data
 
-    init(activateStatus: Int = 200, newTabBody: Data = Data(#"{"id":"tab-1"}"#.utf8)) {
+    init(
+        activateStatus: Int = 200,
+        newTabStatus: Int = 200,
+        newTabBody: Data = Data(#"{"id":"tab-1"}"#.utf8)
+    ) {
         self.activateStatus = activateStatus
+        self.newTabStatus = newTabStatus
         self.newTabBody = newTabBody
     }
 
@@ -297,12 +376,16 @@ private final class TransportSpy {
         if request.url?.path.hasPrefix("/json/activate") == true {
             return (activateStatus, Data())
         }
-        return (200, newTabBody)
+        return (newTabStatus, newTabBody)
     }
 
     func recordActivation(_ appPath: String) {
         activatedApps.append(appPath)
     }
+}
+
+private enum LaunchStubError: Error {
+    case portInUse
 }
 
 @MainActor
