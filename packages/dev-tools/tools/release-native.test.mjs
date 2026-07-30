@@ -488,6 +488,39 @@ describe('decideBiomeJshGating', () => {
       })
     ).toEqual({ biomeJsh: false, firstRelease: false });
   });
+
+  it('skips a test-only change inside the package (not in the tarball)', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: [
+          'packages/dev-tools/biome-jsh/lib.test.mjs',
+          'packages/dev-tools/biome-jsh/biome-jsh.test.mjs',
+        ],
+      })
+    ).toEqual({ biomeJsh: false, firstRelease: false });
+  });
+
+  it('publishes when a shipped file changes alongside its test', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: [
+          'packages/dev-tools/biome-jsh/lib.test.mjs',
+          'packages/dev-tools/biome-jsh/lib.mjs',
+        ],
+      })
+    ).toEqual({ biomeJsh: true, firstRelease: false });
+  });
+
+  it('publishes for a README change (README.md ships in the tarball)', () => {
+    expect(
+      decideBiomeJshGating({
+        lastTag: 'v5.91.1',
+        changedFiles: ['packages/dev-tools/biome-jsh/README.md'],
+      })
+    ).toEqual({ biomeJsh: true, firstRelease: false });
+  });
 });
 
 describe('buildBiomeJshManifest', () => {

@@ -82,6 +82,11 @@ export const WORKER_PATH_PREFIXES = [
 // under a new version number.
 export const BIOME_JSH_PATH_PREFIXES = ['packages/dev-tools/biome-jsh/'];
 
+// Files inside the package that never reach the tarball (the `files` array ships
+// only biome-jsh.mjs, lib.mjs, jsh-biome-source.mjs and README.md), so a change
+// confined to them would publish a byte-identical tarball.
+export const BIOME_JSH_IGNORED_PATTERN = /\.test\.mjs$/;
+
 // Command strings preserve the current .releaserc.json fail-fast behavior
 // (chmod then run; a non-zero exit throws out of execSync).
 export const MACOS_SCRIPT_CMD =
@@ -181,7 +186,9 @@ export function decideBiomeJshGating({ lastTag, changedFiles = [] } = {}) {
     return { biomeJsh: true, firstRelease: true };
   }
   return {
-    biomeJsh: changedFiles.some((f) => matchesAnyPrefix(f, BIOME_JSH_PATH_PREFIXES)),
+    biomeJsh: changedFiles
+      .filter((f) => !BIOME_JSH_IGNORED_PATTERN.test(f))
+      .some((f) => matchesAnyPrefix(f, BIOME_JSH_PATH_PREFIXES)),
     firstRelease: false,
   };
 }
