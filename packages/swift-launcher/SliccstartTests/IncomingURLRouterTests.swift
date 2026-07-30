@@ -53,7 +53,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testDeliversToARunningLeaderWithoutLaunchingABrowser() async {
-        let process = LeaderStub(leaderCdpPort: 9222)
+        let process = LeaderStub(leader: Self.chromeLeader)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
 
@@ -67,13 +67,31 @@ final class IncomingURLRouterTests: XCTestCase {
                 "http://127.0.0.1:9222/json/activate/tab-1",
             ]
         )
-        XCTAssertEqual(transport.activatedApps, ["Google Chrome"])
+        XCTAssertEqual(transport.activatedApps, ["/Applications/Google Chrome.app"])
+    }
+
+    func testActivatesTheBrowserThatOwnsTheLeaderPortNotTheTopBrowser() async {
+        // The user can start any browser by hand, so the leader is not
+        // necessarily the head of the Browsers list. Talking to one browser
+        // while bringing another forward would leave the link hidden.
+        let leader = LeaderBrowserEndpoint(cdpPort: 9333, appPath: "/Applications/Brave Browser.app")
+        let process = LeaderStub(leader: leader)
+        let transport = TransportSpy()
+        let router = makeRouter(process: process, transport: transport)
+
+        await router.handle([URL(string: "https://example.com/a")!])
+
+        XCTAssertEqual(
+            transport.requests.first?.url?.absoluteString,
+            "http://127.0.0.1:9333/json/new?https%3A%2F%2Fexample.com%2Fa"
+        )
+        XCTAssertEqual(transport.activatedApps, ["/Applications/Brave Browser.app"])
     }
 
     func testLaunchesTheTopBrowserAndWaitsForItsCdpPort() async {
         // The cold "click a link while no leader runs" path: the browser has
         // to be started first, and the link delivered once CDP answers.
-        let process = LeaderStub(leaderCdpPort: nil, portAfterPolls: 3, portWhenReady: 9222)
+        let process = LeaderStub(leader: nil, endpointAfterPolls: 3, endpointWhenReady: Self.chromeLeader)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
 
@@ -87,7 +105,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testDropsLinksWhenNoLeaderEverBecomesAvailable() async {
-        let process = LeaderStub(leaderCdpPort: nil)
+        let process = LeaderStub(leader: nil)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
 
@@ -100,7 +118,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testIgnoresLinksWithNoOpenableScheme() async {
-        let process = LeaderStub(leaderCdpPort: 9222)
+        let process = LeaderStub(leader: Self.chromeLeader)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
 
@@ -111,7 +129,7 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 
     func testOpensEveryQueuedLinkInOneDrain() async {
-        let process = LeaderStub(leaderCdpPort: 9222)
+        let process = LeaderStub(leader: Self.chromeLeader)
         let transport = TransportSpy()
         let router = makeRouter(process: process, transport: transport)
 
@@ -124,6 +142,11 @@ final class IncomingURLRouterTests: XCTestCase {
         XCTAssertEqual(created.count, 2)
     }
 
+    private static let chromeLeader = LeaderBrowserEndpoint(
+        cdpPort: 9222,
+        appPath: "/Applications/Google Chrome.app"
+    )
+
     private func makeRouter(process: LeaderStub, transport: TransportSpy) -> IncomingURLRouter {
         let chrome = browserTarget()
         return IncomingURLRouter(
@@ -131,7 +154,7 @@ final class IncomingURLRouterTests: XCTestCase {
             topBrowser: { chrome },
             send: { request in try await transport.send(request) },
             sleep: { _ in await process.tick() },
-            activateBrowser: { target in transport.recordActivation(target.name) }
+            activateBrowser: { appPath in transport.recordActivation(appPath) }
         )
     }
 
@@ -152,23 +175,27 @@ final class IncomingURLRouterTests: XCTestCase {
     }
 }
 
-/// Stands in for `SliccProcess`: reports a leader CDP port, optionally only
+/// Stands in for `SliccProcess`: reports a leader endpoint, optionally only
 /// after a number of wait ticks, and records launch attempts.
 @MainActor
 private final class LeaderStub: LeaderBrowserLaunching {
-    private var port: UInt16?
-    private let portAfterPolls: Int?
-    private let portWhenReady: UInt16?
+    private var endpoint: LeaderBrowserEndpoint?
+    private let endpointAfterPolls: Int?
+    private let endpointWhenReady: LeaderBrowserEndpoint?
     private var ticks = 0
     private(set) var launchedTargets: [String] = []
 
-    init(leaderCdpPort: UInt16?, portAfterPolls: Int? = nil, portWhenReady: UInt16? = nil) {
-        self.port = leaderCdpPort
-        self.portAfterPolls = portAfterPolls
-        self.portWhenReady = portWhenReady
+    init(
+        leader: LeaderBrowserEndpoint?,
+        endpointAfterPolls: Int? = nil,
+        endpointWhenReady: LeaderBrowserEndpoint? = nil
+    ) {
+        self.endpoint = leader
+        self.endpointAfterPolls = endpointAfterPolls
+        self.endpointWhenReady = endpointWhenReady
     }
 
-    var leaderCdpPort: UInt16? { port }
+    var leaderBrowserEndpoint: LeaderBrowserEndpoint? { endpoint }
 
     func launchStandalone(_ target: AppTarget) throws {
         launchedTargets.append(target.name)
@@ -176,8 +203,8 @@ private final class LeaderStub: LeaderBrowserLaunching {
 
     func tick() {
         ticks += 1
-        if let portAfterPolls, ticks >= portAfterPolls {
-            port = portWhenReady
+        if let endpointAfterPolls, ticks >= endpointAfterPolls {
+            endpoint = endpointWhenReady
         }
     }
 }
@@ -192,7 +219,7 @@ private final class TransportSpy {
         return (200, Data(#"{"id":"tab-1"}"#.utf8))
     }
 
-    func recordActivation(_ appName: String) {
-        activatedApps.append(appName)
+    func recordActivation(_ appPath: String) {
+        activatedApps.append(appPath)
     }
 }

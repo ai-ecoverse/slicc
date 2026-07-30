@@ -55,17 +55,23 @@ Contract test: `packages/swift-launcher/macos-permissions.test.mjs`.
    rejects GET on that endpoint since Chrome 111.
 3. `/json/new` creates the tab in the **background**, so the router follows up
    with `/json/activate/<targetId>` (id read from the `/json/new` response) and
-   activates the browser application.
+   activates the browser application. The app brought forward is the one that
+   owns the CDP port just written to (`LeaderBrowserEndpoint.appPath`), **not**
+   `topBrowser()`: the user can start any browser by hand, so the leader is not
+   necessarily the head of the Browsers list, and re-deriving the pick here
+   would foreground the wrong app and leave the link hidden.
 4. With no leader, the router starts the top ordered browser
    (`AppOrdering.topBrowser(in:savedOrder:)` — the same pick startup auto-launch
-   uses) and waits up to ~45s for `SliccProcess.leaderCdpPort`, re-attempting the
-   launch every ~10s. A single attempt is not enough: it can lose the race
-   against startup's own auto-launch, or run while the app is still
-   bootstrapping. Links that never find a leader are reported through
+   uses) and waits up to ~45s for `SliccProcess.leaderBrowserEndpoint`,
+   re-attempting the launch every ~10s. A single attempt is not enough: it can
+   lose the race against startup's own auto-launch, or run while the app is
+   still bootstrapping. Links that never find a leader are reported through
    `LauncherErrorReport.report(.openIncomingUrl, …)`.
 
-`leaderCdpPort` gates on a listening CDP port only. Unlike `isLeaderReady()` it
-does not wait for a tray join URL, because opening a plain tab does not need one.
+`leaderBrowserEndpoint` pairs the CDP port with the launch record's key (the
+browser's bundle path) so callers cannot address one browser while activating
+another. It gates on a listening CDP port only: unlike `isLeaderReady()` it does
+not wait for a tray join URL, because opening a plain tab does not need one.
 
 `NSWorkspace.open(_:withApplicationAt:)` is deliberately **not** used for
 delivery: the SLICC browser runs on its own `--user-data-dir`, so when the user

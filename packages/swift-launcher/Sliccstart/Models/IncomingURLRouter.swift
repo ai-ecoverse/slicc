@@ -8,8 +8,8 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "IncomingU
 /// production implementation; the protocol keeps the routing logic testable
 /// without spawning a browser.
 protocol LeaderBrowserLaunching: AnyObject {
-    /// CDP port of the running local leader, or `nil` when none is up.
-    var leaderCdpPort: UInt16? { get }
+    /// CDP endpoint of the running local leader, or `nil` when none is up.
+    var leaderBrowserEndpoint: LeaderBrowserEndpoint? { get }
     func launchStandalone(_ target: AppTarget) throws
 }
 
@@ -61,7 +61,7 @@ final class IncomingURLRouter {
     private let topBrowser: () -> AppTarget?
     private let send: (URLRequest) async throws -> (Int, Data)
     private let sleep: (TimeInterval) async -> Void
-    private let activateBrowser: (AppTarget) -> Void
+    private let activateBrowser: (String) -> Void
 
     private var pending: [URL] = []
     private var isDraining = false
@@ -76,8 +76,8 @@ final class IncomingURLRouter {
         sleep: @escaping (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
-        activateBrowser: @escaping (AppTarget) -> Void = { target in
-            let bundleURL = URL(fileURLWithPath: target.path).standardizedFileURL
+        activateBrowser: @escaping (String) -> Void = { appPath in
+            let bundleURL = URL(fileURLWithPath: appPath).standardizedFileURL
             NSWorkspace.shared.runningApplications
                 .first { $0.bundleURL?.standardizedFileURL == bundleURL }?
                 .activate()
@@ -111,7 +111,7 @@ final class IncomingURLRouter {
         isDraining = true
         defer { isDraining = false }
 
-        guard let cdpPort = await resolveLeaderCdpPort() else {
+        guard let leader = await resolveLeader() else {
             log.error("handle: no leader browser available; dropping \(self.pending.count, privacy: .public) link(s)")
             LauncherErrorReport.report(.openIncomingUrl, IncomingURLRouterError.leaderUnavailable)
             pending.removeAll()
@@ -119,11 +119,12 @@ final class IncomingURLRouter {
         }
 
         while !pending.isEmpty {
-            await open(pending.removeFirst(), cdpPort: cdpPort)
+            await open(pending.removeFirst(), cdpPort: leader.cdpPort)
         }
-        if let target = topBrowser() {
-            activateBrowser(target)
-        }
+        // Bring forward the browser that actually owns the CDP port we just
+        // wrote to — which is not necessarily `topBrowser()`, since the user
+        // may have started a different browser by hand.
+        activateBrowser(leader.appPath)
     }
 
     static func openableURLs(from urls: [URL]) -> [URL] {
@@ -189,15 +190,15 @@ final class IncomingURLRouter {
         }
     }
 
-    private func resolveLeaderCdpPort() async -> UInt16? {
+    private func resolveLeader() async -> LeaderBrowserEndpoint? {
         for attempt in 0..<Self.maxLeaderWaitPolls {
-            if let port = process.leaderCdpPort { return port }
+            if let leader = process.leaderBrowserEndpoint { return leader }
             if attempt % Self.launchRetryEveryPolls == 0 {
                 launchLeader()
             }
             await sleep(Self.leaderWaitPollInterval)
         }
-        return process.leaderCdpPort
+        return process.leaderBrowserEndpoint
     }
 
     private func launchLeader() {
