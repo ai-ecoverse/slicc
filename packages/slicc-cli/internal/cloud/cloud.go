@@ -85,6 +85,10 @@ func ParseSelector(args []string) (Selector, []string, error) {
 		case strings.HasPrefix(args[0], "--session="):
 			sel.IDPrefix = strings.TrimPrefix(args[0], "--session=")
 			args = args[1:]
+		case args[0] == "--index" || args[0] == "--session":
+			// A bare selector flag with no value must not be silently treated
+			// as verb argument (e.g. runner argv or prompt text).
+			return sel, nil, fmt.Errorf("missing value for %s", args[0])
 		default:
 			return sel, args, nil
 		}
@@ -157,14 +161,17 @@ func shortID(id string) string {
 	return id[:12]
 }
 
+// truncate shortens s to at most width runes (not bytes), so multibyte labels
+// and device names are never cut mid-UTF-8-sequence.
 func truncate(s string, width int) string {
-	if len(s) <= width {
+	runes := []rune(s)
+	if len(runes) <= width {
 		return s
 	}
 	if width <= 1 {
-		return s[:width]
+		return string(runes[:width])
 	}
-	return s[:width-1] + "…"
+	return string(runes[:width-1]) + "…"
 }
 
 // formatAge renders a coarse "time since last seen" label.

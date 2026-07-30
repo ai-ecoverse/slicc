@@ -149,10 +149,14 @@ enum TraySessionCLI {
         if guiAvailable {
             return "Revealing session join URLs was denied.\n"
         }
+        // The remembered "Always Allow" is keyed to the requesting caller, so the
+        // grant must be made by re-running the SAME command from the Mac's screen
+        // (not by launching Sliccstart directly, which is a different caller and
+        // would not authorize this one).
         return """
             Revealing session join URLs requires approval, which cannot be shown over \
-            a headless/SSH session. Run `Sliccstart --list-sessions --reveal-urls` once \
-            from the Mac's screen and choose "Always Allow" to grant access.
+            a headless/SSH session. Re-run this same command from the Mac's screen \
+            (e.g. in Terminal.app on the Mac itself) and choose "Always Allow".
 
             """
     }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func mustTime(t *testing.T, rfc string) time.Time {
@@ -83,6 +84,17 @@ func TestParseSelectorErrors(t *testing.T) {
 	}
 	if _, _, err := ParseSelector([]string{"--index=xyz"}); err == nil {
 		t.Error("expected error for non-numeric --index=")
+	}
+}
+
+func TestParseSelectorMissingValue(t *testing.T) {
+	// A bare selector flag as the final arg must error, not fall through as a
+	// verb argument (else `prompt-cloud --index` would send "--index" verbatim).
+	if _, _, err := ParseSelector([]string{"--index"}); err == nil {
+		t.Error("expected error for --index with no value")
+	}
+	if _, _, err := ParseSelector([]string{"--session"}); err == nil {
+		t.Error("expected error for --session with no value")
 	}
 }
 
@@ -206,5 +218,14 @@ func TestTruncateAndShortID(t *testing.T) {
 	}
 	if got := truncate("abcdefghij", 5); got != "abcd…" {
 		t.Errorf("truncate = %q", got)
+	}
+	// Multibyte input must be cut on rune boundaries, never mid-UTF-8, and the
+	// result must stay valid UTF-8.
+	got := truncate("日本語のデバイス名", 4)
+	if got != "日本語…" {
+		t.Errorf("multibyte truncate = %q, want 日本語…", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("truncate produced invalid UTF-8: %q", got)
 	}
 }

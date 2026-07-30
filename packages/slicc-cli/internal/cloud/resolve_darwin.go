@@ -4,11 +4,13 @@ package cloud
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // bundleID is Sliccstart's macOS bundle identifier, used to locate the app.
@@ -73,23 +75,42 @@ func mdfindApp() string {
 	return ""
 }
 
+// listTimeout / revealTimeout bound the launcher subprocess so a Sliccstart
+// too old to recognize --list-sessions (which would boot its GUI and never
+// exit) cannot hang the CLI forever. The reveal path waits longer because it
+// blocks on the user's consent dialog.
+const (
+	listTimeout   = 20 * time.Second
+	revealTimeout = 2 * time.Minute
+)
+
 // List runs `Sliccstart --list-sessions [--reveal-urls]` and parses the JSON it
 // prints. A non-zero exit (e.g. reveal consent denied) surfaces the launcher's
-// stderr guidance verbatim.
+// stderr guidance verbatim; a timeout means the launcher is too old to support
+// the flag.
 func List(reveal bool) ([]Session, error) {
 	exe, err := LocateExecutable()
 	if err != nil {
 		return nil, err
 	}
 	args := []string{"--list-sessions"}
+	timeout := listTimeout
 	if reveal {
 		args = append(args, "--reveal-urls")
+		timeout = revealTimeout
 	}
-	cmd := exec.Command(exe, args...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("timed out after %s waiting for Sliccstart --list-sessions; update Sliccstart to a version that supports it", timeout)
+		}
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return nil, fmt.Errorf("%s", msg)
 		}
