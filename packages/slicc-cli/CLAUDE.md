@@ -12,6 +12,8 @@ slicc <join-url> watch [scoop]                  Tail the leader's live agent out
 slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
 slicc <join-url> follow --eval [repl]           Same, into ONE persistent REPL (state persists; see README)
 slicc update [--check]                          Self-update to the newest released CLI binary
+slicc list-sessions [--json]                    List iCloud-synced tray sessions (macOS only; no join URLs)
+slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL from iCloud, then run <verb>
 ```
 
 `watch` is a passive `tail -f` on the agent that mirrors the browser thread: it
@@ -34,6 +36,31 @@ to (command appended as the final arg): `follow bash -c`, `follow sh -c`,
 `follow docker exec -i sandbox sh -c`, a multiplexer, `flatpak-spawn --host …`, etc.
 With no runner, `follow` connects as a plain follower and refuses every command.
 
+## iCloud tray sessions (`list-sessions`, `<verb>-cloud`)
+
+macOS only. iCloud key-value storage is an Apple API readable only by the signed,
+iCloud-entitled `Sliccstart` launcher, so `internal/cloud` **shells out** to
+`Sliccstart --list-sessions` rather than reading iCloud from Go (which would need
+cgo + entitlement/profile signing and break the `CGO_ENABLED=0` cross-compile).
+`LocateExecutable` finds the app via `$SLICCSTART_APP` → `mdfind` (bundle id
+`com.slicc.sliccstart`) → `/Applications` → `~/Applications`. Off macOS the reader
+returns `ErrUnsupported` and every verb reports it.
+
+- `list-sessions [--json]` prints **metadata only** (opaque id, label, device,
+  age) — never a join URL — so it is safe to pipe and log.
+- `<verb>-cloud` (`follow`/`prompt`/`exec`/`watch`) resolves a session's **join
+  URL** with `--reveal-urls`, which prompts for consent on the Mac (denied over
+  SSH until granted once from the screen), then dispatches to the plain verb. The
+  URL is never printed. Selection defaults to the newest session; `--index N` /
+  `--session <id-prefix>` (leading options, consumed by `ParseSelector`) pick
+  another, and the remaining argv passes through verbatim (runner argv / text).
+
+Pure logic (`ParseSessions`, `ParseSelector`, `Select`, `FormatTable`) is
+platform-independent and unit-tested; the exec/locate glue lives in the
+darwin-only `resolve_darwin.go` (not counted by the Linux coverage gate). The
+`cloudList` seam in `cloud.go` is overridden in tests so dispatch is exercised
+without a real launcher.
+
 ## Why Go + pion
 
 The follower must speak real WebRTC (SCTP data channel) and interoperate with
@@ -50,6 +77,8 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 | `internal/protocol/`  | Wire structs mirroring `packages/shared-ts/src/tray-sync-protocol.ts` (the subset the CLI uses)                                             |
 | `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry), ported from the iOS connector                                |
 | `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                                               |
+| `internal/cloud/`     | iCloud tray-session discovery: parse/select/format (pure) + a darwin-only reader that shells out to `Sliccstart --list-sessions`            |
+| `cloud.go`            | `list-sessions` + the `<verb>-cloud` family (resolve a session's join URL from iCloud, then hand off to the plain verb)                     |
 | `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals) + `EvalSession` (persistent-REPL `--eval` mode) |
 | `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                                                   |
 | `telemetry.go`        | `initTelemetry`/`reportRuntimeError` — launch + error RUM beacons via `@ai-ecoverse/go-optel`                                               |

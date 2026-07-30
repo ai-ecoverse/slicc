@@ -34,7 +34,6 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
 struct SliccstartApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SliccstartAppDelegate
     @State private var bootstrapper = SliccBootstrapper()
