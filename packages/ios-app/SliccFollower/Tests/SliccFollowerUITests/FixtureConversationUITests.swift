@@ -90,19 +90,30 @@ final class FixtureConversationUITests: XCTestCase {
 
         var seenIds = visibleMessageIds(in: app)
         var seenLabels = visibleLabels(in: app)
-        var barrenScrolls = 0
+        var previousScreen = seenIds.union(seenLabels)
+        var unchangedScrolls = 0
 
         // Bounded so a layout regression that stops the list scrolling fails
         // here instead of hanging until the suite times out.
         for _ in 0..<40 where !isComplete(ids: seenIds, labels: seenLabels) {
-            let before = seenIds.count + seenLabels.count
             app.swipeDown()
-            seenIds.formUnion(visibleMessageIds(in: app))
-            seenLabels.formUnion(visibleLabels(in: app))
-            // One dry pass is normal at the top of the list; three in a row
-            // means scrolling has stopped making progress.
-            barrenScrolls = seenIds.count + seenLabels.count == before ? barrenScrolls + 1 : 0
-            if barrenScrolls >= 3 { break }
+            let ids = visibleMessageIds(in: app)
+            let labels = visibleLabels(in: app)
+            seenIds.formUnion(ids)
+            seenLabels.formUnion(labels)
+
+            // Progress means *the screen changed*, not that the cumulative set
+            // grew. Scrolling across rows already recorded adds nothing new
+            // while still making progress, so counting that as a dry pass ends
+            // the walk early — which is exactly how this went flaky on CI,
+            // where the slower list renders fewer fresh rows per swipe.
+            let screen = ids.union(labels)
+            unchangedScrolls = screen == previousScreen ? unchangedScrolls + 1 : 0
+            previousScreen = screen
+            // The top of the list is stable forever, so waiting several rounds
+            // costs a few swipes there and tolerates a swipe whose animation
+            // had not settled when the tree was read.
+            if unchangedScrolls >= 4 { break }
         }
 
         XCTAssertEqual(
