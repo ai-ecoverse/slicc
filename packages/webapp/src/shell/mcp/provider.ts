@@ -172,6 +172,7 @@ function buildProviderConfig(opts: RegisterMcpProviderOptions): ProviderConfig {
         accessToken: token.accessToken,
         refreshToken: token.refreshToken,
         tokenExpiresAt: token.expiresAt,
+        scopes: token.scope,
       });
       onSuccess();
     },
@@ -208,6 +209,7 @@ function buildProviderConfig(opts: RegisterMcpProviderOptions): ProviderConfig {
           accessToken: rotated.accessToken,
           refreshToken: rotated.refreshToken ?? refreshToken,
           tokenExpiresAt: rotated.expiresAt,
+          scopes: rotated.scope ?? account.scopes,
         });
         return rotated.accessToken;
       } catch (err) {
