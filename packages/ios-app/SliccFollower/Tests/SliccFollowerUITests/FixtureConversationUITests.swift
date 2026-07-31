@@ -35,6 +35,25 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-assistant-streaming",
     ]
 
+    /// Substrings that only a variant-specific renderer can produce.
+    ///
+    /// Row ids alone are not enough: SwiftUI propagates `message-<id>` to every
+    /// leaf in the row, so a row still matches while its specialized subview is
+    /// gone — delete the tool cluster and the plain bubble text keeps carrying
+    /// the id. Each marker below is emitted by exactly one renderer, so losing
+    /// that renderer fails the walk.
+    private static let variantMarkers = [
+        "Working",  // collapsed tool-call cluster header
+        "edit: error",  // per-call status dot, error state
+        "bash: running",  // per-call status dot, running state
+        "list scoops",  // ungrouped tool row (fewer than 3 calls)
+        "github-push",  // lick pill, webhook channel
+        "src-watch",  // lick pill, fswatch channel relabelled "files"
+        "0.4.1→0.5.0",  // lick pill, upgrade channel
+        "Instructions from sliccy",  // delegation-sourced user message
+        "npm run test",  // running tool under the streaming message
+    ]
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
@@ -56,7 +75,8 @@ final class FixtureConversationUITests: XCTestCase {
             "The fixture route should not show a connection pill")
     }
 
-    /// Walks the whole transcript and asserts every fixture variant rendered.
+    /// Walks the whole transcript and asserts every fixture variant rendered —
+    /// both that each row exists and that its specialized renderer ran.
     ///
     /// The list is a `LazyVStack` pinned to the newest message, so offscreen
     /// rows are absent from the accessibility tree and the walk has to run
@@ -68,25 +88,31 @@ final class FixtureConversationUITests: XCTestCase {
             app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
             "The fixture route should render before scrolling")
 
-        var seen = visibleMessageIds(in: app)
+        var seenIds = visibleMessageIds(in: app)
+        var seenLabels = visibleLabels(in: app)
         var barrenScrolls = 0
 
         // Bounded so a layout regression that stops the list scrolling fails
         // here instead of hanging until the suite times out.
-        for _ in 0..<40 where seen != Self.expectedMessageIds {
-            let before = seen.count
+        for _ in 0..<40 where !isComplete(ids: seenIds, labels: seenLabels) {
+            let before = seenIds.count + seenLabels.count
             app.swipeDown()
-            seen.formUnion(visibleMessageIds(in: app))
+            seenIds.formUnion(visibleMessageIds(in: app))
+            seenLabels.formUnion(visibleLabels(in: app))
             // One dry pass is normal at the top of the list; three in a row
             // means scrolling has stopped making progress.
-            barrenScrolls = seen.count == before ? barrenScrolls + 1 : 0
+            barrenScrolls = seenIds.count + seenLabels.count == before ? barrenScrolls + 1 : 0
             if barrenScrolls >= 3 { break }
         }
 
         XCTAssertEqual(
-            seen, Self.expectedMessageIds,
-            "Fixture variants never rendered: "
-                + "\(Self.expectedMessageIds.subtracting(seen).sorted())")
+            seenIds, Self.expectedMessageIds,
+            "Fixture rows never rendered: "
+                + "\(Self.expectedMessageIds.subtracting(seenIds).sorted())")
+        XCTAssertEqual(
+            missingMarkers(in: seenLabels), [],
+            "Variant renderers produced no output; the row can still carry its "
+                + "id while its specialized subview is gone")
     }
 
     func testReloadRebuildsTheTranscript() {
@@ -137,5 +163,25 @@ final class FixtureConversationUITests: XCTestCase {
         return Set(
             rows.allElementsBoundByAccessibilityElement
                 .map { String($0.identifier.dropFirst(prefix.count)) })
+    }
+
+    /// Accessibility labels currently on screen. Text and buttons are where the
+    /// variant-specific renderers put their output — tool rows and lick pills
+    /// are buttons, bubbles are text.
+    private func visibleLabels(in app: XCUIApplication) -> Set<String> {
+        var labels = Set<String>()
+        labels.formUnion(app.staticTexts.allElementsBoundByAccessibilityElement.map(\.label))
+        labels.formUnion(app.buttons.allElementsBoundByAccessibilityElement.map(\.label))
+        return labels
+    }
+
+    private func missingMarkers(in labels: Set<String>) -> [String] {
+        Self.variantMarkers.filter { marker in
+            !labels.contains { $0.contains(marker) }
+        }
+    }
+
+    private func isComplete(ids: Set<String>, labels: Set<String>) -> Bool {
+        ids == Self.expectedMessageIds && missingMarkers(in: labels).isEmpty
     }
 }
