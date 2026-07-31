@@ -66,7 +66,7 @@ final class FixtureConversationUITests: XCTestCase {
             app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
             "The fixture route should render without a leader attached")
         XCTAssertTrue(
-            app.buttons["Reload"].exists,
+            app.buttons["Reload"].waitForExistence(timeout: 30),
             "The fixture chrome should offer a reload control")
         // No leader means no connection. The status pill belongs to
         // ConversationView and must not bleed into the fixture route.
@@ -87,6 +87,9 @@ final class FixtureConversationUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
             "The fixture route should render before scrolling")
+        XCTAssertTrue(
+            waitForAnyMessageRow(in: app),
+            "Rows should be on screen before the walk starts")
 
         var seenIds = visibleMessageIds(in: app)
         var seenLabels = visibleLabels(in: app)
@@ -131,8 +134,8 @@ final class FixtureConversationUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
             "The fixture route should render before reloading")
-        XCTAssertFalse(
-            visibleMessageIds(in: app).isEmpty,
+        XCTAssertTrue(
+            waitForAnyMessageRow(in: app),
             "The transcript should be populated before reloading")
 
         app.buttons["Reload"].tap()
@@ -140,8 +143,8 @@ final class FixtureConversationUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["fixture-header"].waitForExistence(timeout: 30),
             "Reload should leave the header on its default copy")
-        XCTAssertFalse(
-            visibleMessageIds(in: app).isEmpty,
+        XCTAssertTrue(
+            waitForAnyMessageRow(in: app),
             "Reload should rebuild the fixture transcript")
     }
 
@@ -160,6 +163,20 @@ final class FixtureConversationUITests: XCTestCase {
         ]
         app.launch()
         return app
+    }
+
+    /// Block until at least one message row is in the accessibility tree.
+    ///
+    /// A single-shot query straight after a transition is a race: the header
+    /// can already be up while the `LazyVStack` is still materializing rows.
+    /// That window is invisible locally and wide enough on a loaded CI
+    /// simulator to fail the assertion outright, so every row read that
+    /// follows a launch or a rebuild waits here first.
+    private func waitForAnyMessageRow(in app: XCUIApplication, timeout: TimeInterval = 30) -> Bool {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-"))
+            .firstMatch
+            .waitForExistence(timeout: timeout)
     }
 
     /// Message ids currently present in the accessibility tree.

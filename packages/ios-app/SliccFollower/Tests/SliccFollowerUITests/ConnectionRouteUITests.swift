@@ -23,8 +23,10 @@ final class ConnectionRouteUITests: XCTestCase {
         XCTAssertTrue(
             app.navigationBars["Settings"].waitForExistence(timeout: 60),
             "An empty join URL should open the Settings sheet on launch")
+        // The sheet's chrome can lag its navigation bar on a loaded simulator,
+        // so this waits rather than sampling once.
         XCTAssertTrue(
-            app.buttons["Done"].exists,
+            app.buttons["Done"].waitForExistence(timeout: 30),
             "The Settings sheet should offer its dismiss control")
     }
 
