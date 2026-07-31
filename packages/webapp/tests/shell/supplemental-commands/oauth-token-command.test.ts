@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock modules before importing the command
-vi.mock('../../../src/ui/provider-settings.js', () => ({
+vi.mock('../../../src/providers/account-store.js', () => ({
   getOAuthAccountInfo: vi.fn(),
   getSelectedProvider: vi.fn(),
   getAccounts: vi.fn(() => []),
@@ -19,6 +19,12 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
 }));
 
 import {
+  getAccounts,
+  getOAuthAccountInfo,
+  getSelectedProvider,
+  saveOAuthAccount,
+} from '../../../src/providers/account-store.js';
+import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
 } from '../../../src/providers/index.js';
@@ -27,12 +33,6 @@ import {
   createOAuthLauncher,
 } from '../../../src/providers/oauth-service.js';
 import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
-import {
-  getAccounts,
-  getOAuthAccountInfo,
-  getSelectedProvider,
-  saveOAuthAccount,
-} from '../../../src/ui/provider-settings.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
@@ -66,6 +66,7 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('Usage:');
     expect(result.stdout).toContain('Testing:');
     expect(result.stdout).toContain('--expire');
+    expect(result.stdout).toContain('--force-login');
     expect(result.stdout).toContain('Does not revoke anything upstream');
   });
 
@@ -325,6 +326,7 @@ describe('oauth-token command', () => {
           token: 'tok',
           expiresAt: Date.now() + 3600000 * 23,
           userName: 'karl@example.com',
+          scopes: 'repo,read:user',
           expired: false,
         };
       return null;
@@ -335,6 +337,7 @@ describe('oauth-token command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('adobe');
     expect(result.stdout).toContain('karl@example.com');
+    expect(result.stdout).toContain('scopes: repo,read:user');
     expect(result.stdout).toContain('my-corp (no token)');
   });
 
@@ -462,7 +465,7 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('No OAuth providers');
   });
 
-  it('--scope bypasses valid token cache and triggers login with scopes', async () => {
+  it('--scope triggers login when the granted scopes are unknown', async () => {
     const onSilentRenew = vi.fn(async () => 'silently-renewed-token');
     const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
       mockGetOAuthAccountInfo.mockReturnValue({
@@ -482,7 +485,7 @@ describe('oauth-token command', () => {
       onOAuthLogin: mockOnOAuthLogin,
       onSilentRenew,
     });
-    // Valid token exists — normally would return immediately
+    // Valid token exists, but it predates scope recording — fail safe.
     mockGetOAuthAccountInfo.mockReturnValue({
       token: 'existing-token',
       expired: false,
@@ -500,6 +503,175 @@ describe('oauth-token command', () => {
     expect(mockOnOAuthLogin).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), {
       scopes: 'repo,models:read',
     });
+  });
+
+  it('--scope reuses the cached token when the granted scopes cover it', async () => {
+    const onOAuthLogin = vi.fn();
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      scopes: 'repo,read:user,user:email',
+      expired: false,
+    });
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--scope', 'repo'],
+      createMockCtx()
+    );
+
+    expect(result).toEqual({ stdout: 'masked-existing-token\n', stderr: '', exitCode: 0 });
+    expect(onOAuthLogin).not.toHaveBeenCalled();
+    expect(mockCreateOAuthLauncher).not.toHaveBeenCalled();
+  });
+
+  it('--scope triggers login when the granted scopes fall short', async () => {
+    const onOAuthLogin = vi.fn(async () => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'widened-token',
+        maskedValue: 'masked-widened-token',
+        scopes: 'repo,admin:org',
+        expired: false,
+      });
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      scopes: 'repo,read:user',
+      expired: false,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--scope', 'repo,admin:org'],
+      createMockCtx()
+    );
+
+    expect(result.stdout).toBe('masked-widened-token\n');
+    expect(onOAuthLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('--scope re-checks the scopes recorded by a silent renewal', async () => {
+    const onSilentRenew = vi.fn(async () => 'renewed-token');
+    const onOAuthLogin = vi.fn();
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+      onSilentRenew,
+    });
+    mockGetOAuthAccountInfo
+      .mockReturnValueOnce({ token: 'expired-token', scopes: 'repo', expired: true })
+      .mockReturnValueOnce({
+        token: 'renewed-token',
+        maskedValue: 'masked-renewed-token',
+        scopes: 'repo,read:user',
+        expired: false,
+      });
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--scope', 'read:user'],
+      createMockCtx()
+    );
+
+    expect(result).toEqual({ stdout: 'masked-renewed-token\n', stderr: '', exitCode: 0 });
+    expect(onSilentRenew).toHaveBeenCalledTimes(1);
+    expect(onOAuthLogin).not.toHaveBeenCalled();
+  });
+
+  it('--force-login logs in even when the cached scopes are satisfied', async () => {
+    const onOAuthLogin = vi.fn(async () => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'forced-token',
+        maskedValue: 'masked-forced-token',
+        scopes: 'repo',
+        expired: false,
+      });
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      scopes: 'repo',
+      expired: false,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--scope', 'repo', '--force-login'],
+      createMockCtx()
+    );
+
+    expect(result.stdout).toBe('masked-forced-token\n');
+    expect(onOAuthLogin).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), {
+      scopes: 'repo',
+    });
+  });
+
+  it('--force-login without --scope skips a valid cached token', async () => {
+    const onOAuthLogin = vi.fn(async () => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'forced-token',
+        maskedValue: 'masked-forced-token',
+        expired: false,
+      });
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      maskedValue: 'masked-existing-token',
+      expired: false,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--force-login'],
+      createMockCtx()
+    );
+
+    expect(result.stdout).toBe('masked-forced-token\n');
+    expect(onOAuthLogin).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(Function),
+      undefined
+    );
   });
 
   it('--scope without value returns error', async () => {

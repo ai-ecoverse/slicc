@@ -110,6 +110,51 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('persists granted scopes and surfaces them via getOAuthAccountInfo', async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
+
+    const { saveOAuthAccount, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_scoped',
+      scopes: 'repo,read:user,workflow',
+    });
+
+    expect(getOAuthAccountInfo('github')?.scopes).toBe('repo,read:user,workflow');
+  });
+
+  it('preserves the stored scopes when a silent renewal omits them', async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
+
+    const { saveOAuthAccount, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_first',
+      scopes: 'repo,read:user',
+    });
+    await saveOAuthAccount({ providerId: 'github', accessToken: 'ghp_renewed' });
+
+    expect(getOAuthAccountInfo('github')?.scopes).toBe('repo,read:user');
+  });
+
+  it('clears scopes on the logout write (accessToken: "")', async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
+
+    const { saveOAuthAccount, getAccounts } = await import('../../src/ui/provider-settings.js');
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_first',
+      scopes: 'repo,read:user',
+    });
+    await saveOAuthAccount({ providerId: 'github', accessToken: '' });
+
+    expect(getAccounts().find((a) => a.providerId === 'github')?.scopes).toBeUndefined();
+  });
+
   it('logoutOAuthAccount DELETEs the CLI replica at /api/secrets/oauth/<id>', async () => {
     const calls: { url: string; method?: string }[] = [];
     globalThis.fetch = vi.fn(async (url: any, init: any) => {
@@ -461,6 +506,7 @@ describe('Bootstrap-on-init re-push', () => {
         apiKey: '',
         accessToken: 'ghp_token1',
         userName: 'user1',
+        scopes: 'repo,read:user',
       },
       {
         providerId: 'expired',
@@ -498,6 +544,10 @@ describe('Bootstrap-on-init re-push', () => {
 
     // Should have called saveOAuthAccount for github, but NOT expired
     expect(postCallCount).toBe(1);
+    const bootstrapped = JSON.parse(lsData['slicc_accounts']);
+    expect(
+      bootstrapped.find((a: { providerId: string }) => a.providerId === 'github')?.scopes
+    ).toBe('repo,read:user');
   });
 
   it('bootstrap invokes onSilentRenew for expired account when hook is defined', async () => {

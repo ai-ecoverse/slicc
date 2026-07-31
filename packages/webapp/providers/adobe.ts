@@ -238,15 +238,18 @@ async function fetchUserProfile(
   return {};
 }
 
-/** Extract token from a URL fragment (#access_token=...&expires_in=...) */
-function extractTokenFromUrl(url: string): { accessToken: string; expiresIn: number } | null {
+/** Extract token details exactly as reported in the OAuth URL fragment. */
+function extractTokenFromUrl(
+  url: string
+): { accessToken: string; expiresIn: number; scope?: string } | null {
   const hashIdx = url.indexOf('#');
   if (hashIdx < 0) return null;
   const fragment = new URLSearchParams(url.slice(hashIdx + 1));
   const accessToken = fragment.get('access_token');
   if (!accessToken) return null;
   const expiresIn = parseInt(fragment.get('expires_in') ?? '86400', 10);
-  return { accessToken, expiresIn };
+  const scope = fragment.get('scope') ?? undefined;
+  return { accessToken, expiresIn, scope };
 }
 
 // ── Provider config ─────────────────────────────────────────────────
@@ -405,6 +408,7 @@ export const config: ProviderConfig = {
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
+      scopes: tokenInfo.scope,
       // Only pin baseUrl when there is no bundled adobe-config.json (npm
       // distribution). When the config is bundled, getProxyEndpoint() can
       // always read it fresh, so persisting the URL would block deploy-time
@@ -640,7 +644,7 @@ function verifySilentRenewNonce(redirectUrl: string, expectedNonce: string | nul
 }
 
 async function persistRenewedToken(
-  tokenInfo: { accessToken: string; expiresIn: number },
+  tokenInfo: { accessToken: string; expiresIn: number; scope?: string },
   proxyEndpoint: string
 ): Promise<void> {
   // Save the renewed token. Preserve the baseUrl so getProxyEndpoint()
@@ -653,6 +657,7 @@ async function persistRenewedToken(
     tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
     userName: account?.userName,
     userAvatar: account?.userAvatar,
+    scopes: tokenInfo.scope,
     baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
   });
 }
@@ -1105,4 +1110,4 @@ export function register(): void {
   });
 }
 
-export { getValidAccessToken, isTokenExpired };
+export { extractTokenFromUrl, getValidAccessToken, isTokenExpired };

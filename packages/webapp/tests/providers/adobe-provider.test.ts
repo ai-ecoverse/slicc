@@ -82,33 +82,34 @@ describe('Adobe model persistence', () => {
 });
 
 describe('Token extraction from URL', () => {
-  // Mirrors extractTokenFromUrl logic
-  function extractTokenFromUrl(url: string): { accessToken: string; expiresIn: number } | null {
-    const hashIdx = url.indexOf('#');
-    if (hashIdx < 0) return null;
-    const fragment = new URLSearchParams(url.slice(hashIdx + 1));
-    const accessToken = fragment.get('access_token');
-    if (!accessToken) return null;
-    const expiresIn = parseInt(fragment.get('expires_in') ?? '86400', 10);
-    return { accessToken, expiresIn };
-  }
-
-  it('extracts token from redirect URL fragment', () => {
+  it('extracts the provider-reported scope from the redirect fragment', async () => {
+    const { extractTokenFromUrl } = await import('../../providers/adobe.js');
     const url =
-      'https://example.com/callback#access_token=abc123&expires_in=3600&token_type=bearer';
+      'https://example.com/callback#access_token=abc123&expires_in=3600&scope=openid%2Cemail';
     const result = extractTokenFromUrl(url);
-    expect(result).toEqual({ accessToken: 'abc123', expiresIn: 3600 });
+    expect(result).toEqual({ accessToken: 'abc123', expiresIn: 3600, scope: 'openid,email' });
   });
 
-  it('returns null when no fragment', () => {
+  it('leaves scope unknown when the redirect fragment omits it', async () => {
+    const { extractTokenFromUrl } = await import('../../providers/adobe.js');
+    const result = extractTokenFromUrl(
+      'https://example.com/callback#access_token=abc123&expires_in=3600'
+    );
+    expect(result).toEqual({ accessToken: 'abc123', expiresIn: 3600, scope: undefined });
+  });
+
+  it('returns null when no fragment', async () => {
+    const { extractTokenFromUrl } = await import('../../providers/adobe.js');
     expect(extractTokenFromUrl('https://example.com/callback')).toBeNull();
   });
 
-  it('returns null when no access_token in fragment', () => {
+  it('returns null when no access_token in fragment', async () => {
+    const { extractTokenFromUrl } = await import('../../providers/adobe.js');
     expect(extractTokenFromUrl('https://example.com/callback#error=access_denied')).toBeNull();
   });
 
-  it('defaults expiresIn to 86400 when not specified', () => {
+  it('defaults expiresIn to 86400 when not specified', async () => {
+    const { extractTokenFromUrl } = await import('../../providers/adobe.js');
     const url = 'https://example.com/callback#access_token=xyz';
     const result = extractTokenFromUrl(url);
     expect(result?.expiresIn).toBe(86400);

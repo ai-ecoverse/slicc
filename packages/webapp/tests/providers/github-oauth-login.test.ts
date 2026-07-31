@@ -242,6 +242,61 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
     expect(vfsToken).toBe('ghp_masked_xyz');
     expect(vfsToken).not.toContain('ghp_REAL_token_123');
   });
+
+  it('records no scopes when the token response omits `scope`, so --scope falls back to login', async () => {
+    globalThis.fetch = vi.fn(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/runtime-config')) {
+        return {
+          ok: true,
+          json: async () => ({ oauth: { github: 'test-client-id-3' } }),
+        } as any;
+      }
+      // GitHub omits `scope` — the grant is unknown, not "whatever we asked for".
+      if (urlStr.includes('/oauth/token')) {
+        return {
+          ok: true,
+          json: async () => ({ access_token: 'ghp_no_scope_token', token_type: 'Bearer' }),
+        } as any;
+      }
+      if (urlStr.includes('api.github.com/user')) {
+        return { ok: true, json: async () => ({ login: 'bob', id: 1001 }) } as any;
+      }
+      if (urlStr.includes('/api/secrets/oauth-update')) {
+        return {
+          ok: true,
+          json: async () => ({
+            providerId: 'github',
+            name: 'oauth.github.token',
+            maskedValue: 'ghp_masked_no_scope',
+            domains: ['github.com'],
+          }),
+        } as any;
+      }
+      return { ok: false, status: 404 } as any;
+    });
+
+    const { config } = await import('../../providers/github.js');
+    const { getOAuthAccountInfo } = await import('../../src/ui/provider-settings.js');
+    const { scopesSatisfied } = await import('../../src/providers/oauth-scopes.js');
+
+    const fakeLauncher = vi.fn(async (url: string) => {
+      const authUrl = new URL(url);
+      const state = authUrl.searchParams.get('state');
+      const stateData = state ? JSON.parse(atob(state)) : null;
+      return `https://x.com/callback?code=c&nonce=${stateData?.nonce ?? ''}`;
+    });
+
+    await config.onOAuthLogin!(fakeLauncher, () => {}, { scopes: 'repo,read:user' });
+
+    // The requested scopes must NOT be echoed onto the account.
+    const info = getOAuthAccountInfo('github');
+    expect(info?.token).toBe('ghp_no_scope_token');
+    expect(info?.scopes).toBeUndefined();
+    // Which is exactly what makes a later `oauth-token github --scope repo`
+    // take the login path instead of reusing an unverified grant.
+    expect(scopesSatisfied(info?.scopes, 'repo')).toBe(false);
+  });
 });
 
 describe('github.ts onOAuthLogin in worker context (no window)', () => {

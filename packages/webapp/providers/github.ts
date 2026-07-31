@@ -414,6 +414,7 @@ async function renewGitHubToken(): Promise<string | null> {
         : undefined,
       userName: account.userName,
       userAvatar: account.userAvatar,
+      scopes: tokenResult.scope ?? account.scopes,
     });
 
     const masked = getOAuthAccountInfo('github')?.maskedValue;
@@ -563,6 +564,12 @@ export const config: ProviderConfig = {
         : undefined,
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
+      // Record only what GitHub actually reported, never the requested
+      // `scopes`. Leaving this undefined is deliberate: an unknown grant must
+      // fail safe toward an interactive login (`scopesSatisfied` returns false
+      // for unknown grants) rather than pass a later `--scope` check against a
+      // grant the token may not hold.
+      scopes: tokenResult.scope,
     });
 
     // Bridge token to isomorphic-git — use the masked value, not the real token
