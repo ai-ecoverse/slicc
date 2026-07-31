@@ -39,7 +39,6 @@ describe('mcp store', () => {
   it('round-trips writeServersFile → readServersFile', async () => {
     const entry: McpServerEntry = {
       url: 'https://mcp.example.com',
-      sessionId: 'sess-1',
       tools: [{ name: 'echo', description: 'Echo a string' }],
       apps: [{ name: 'demo', title: 'Demo' }],
       addedAt: '2026-05-20T00:00:00.000Z',
@@ -103,11 +102,51 @@ describe('mcp store', () => {
   it('setServer + getServer + deleteServer behave as expected', async () => {
     await setServer('demo', { url: 'https://a.example' });
     expect((await getServer('demo'))?.url).toBe('https://a.example');
-    await setServer('demo', { url: 'https://a.example', sessionId: 'sid-1' });
-    expect((await getServer('demo'))?.sessionId).toBe('sid-1');
+    await setServer('demo', { url: 'https://a.example', tools: [{ name: 'echo' }] });
+    expect((await getServer('demo'))?.tools).toEqual([{ name: 'echo' }]);
     expect(await deleteServer('demo')).toBe(true);
     expect(await deleteServer('demo')).toBe(false);
     expect(await getServer('demo')).toBeNull();
+  });
+
+  it('tolerates legacy sessionId fields but scrubs them from reads and writes', async () => {
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.mkdir('/workspace/.mcp', { recursive: true });
+    const legacyEntry = {
+      url: 'https://mcp.example.com',
+      sessionId: 'stale-session',
+      unknownField: 'preserved',
+    };
+    await fs.writeFile(
+      MCP_STORE_PATH,
+      JSON.stringify({ version: 1, servers: { demo: legacyEntry } })
+    );
+
+    const loaded = await readServersFile();
+    expect((loaded.servers.demo as unknown as Record<string, unknown>).sessionId).toBeUndefined();
+    expect((loaded.servers.demo as unknown as Record<string, unknown>).unknownField).toBe(
+      'preserved'
+    );
+
+    await writeServersFile({
+      version: 1,
+      servers: { demo: legacyEntry as unknown as McpServerEntry },
+    });
+    let raw = JSON.parse((await fs.readFile(MCP_STORE_PATH, { encoding: 'utf-8' })) as string) as {
+      servers: Record<string, Record<string, unknown>>;
+    };
+    expect(raw.servers.demo.sessionId).toBeUndefined();
+
+    await fs.writeFile(
+      MCP_STORE_PATH,
+      JSON.stringify({ version: 1, servers: { demo: legacyEntry } })
+    );
+    await setServer('demo', { url: legacyEntry.url, tools: [{ name: 'echo' }] });
+    raw = JSON.parse((await fs.readFile(MCP_STORE_PATH, { encoding: 'utf-8' })) as string) as {
+      servers: Record<string, Record<string, unknown>>;
+    };
+    expect(raw.servers.demo.sessionId).toBeUndefined();
+    expect(raw.servers.demo.unknownField).toBe('preserved');
   });
 
   it('listServers returns every entry', async () => {

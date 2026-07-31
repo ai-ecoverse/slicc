@@ -58,6 +58,14 @@ function emptyFile(): McpServersFile {
   return { version: CURRENT_VERSION, servers: {} };
 }
 
+function normalizeEntry(raw: unknown): McpServerEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const entry = { ...(raw as Record<string, unknown>) };
+  if (typeof entry.url !== 'string') return null;
+  delete entry.sessionId;
+  return entry as unknown as McpServerEntry;
+}
+
 function normalize(raw: unknown): McpServersFile {
   if (!raw || typeof raw !== 'object') return emptyFile();
   const obj = raw as Partial<McpServersFile> & { servers?: unknown };
@@ -65,10 +73,8 @@ function normalize(raw: unknown): McpServersFile {
   const servers: Record<string, McpServerEntry> = {};
   if (obj.servers && typeof obj.servers === 'object') {
     for (const [name, entry] of Object.entries(obj.servers as Record<string, unknown>)) {
-      if (!entry || typeof entry !== 'object') continue;
-      const e = entry as McpServerEntry & Record<string, unknown>;
-      if (typeof e.url !== 'string') continue;
-      servers[name] = e;
+      const normalized = normalizeEntry(entry);
+      if (normalized) servers[name] = normalized;
     }
   }
   return { version, servers };
@@ -103,10 +109,10 @@ export async function writeServersFile(
 ): Promise<void> {
   const fs = await openFs(injectedFs);
   await fs.mkdir(MCP_DIR, { recursive: true });
-  const payload: McpServersFile = {
+  const payload = normalize({
     version: file.version || CURRENT_VERSION,
     servers: file.servers ?? {},
-  };
+  });
   await fs.writeFile(MCP_STORE_PATH, JSON.stringify(payload, null, 2));
 }
 
@@ -126,7 +132,8 @@ export async function setServer(
   injectedFs?: MinimalFs | null
 ): Promise<McpServerEntry> {
   const file = await readServersFile(injectedFs);
-  const merged: McpServerEntry = { ...file.servers[name], ...entry };
+  const merged = normalizeEntry({ ...file.servers[name], ...entry });
+  if (!merged) throw new Error('MCP server entry requires a URL');
   file.servers[name] = merged;
   await writeServersFile(file, injectedFs);
   return merged;

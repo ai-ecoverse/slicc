@@ -45,6 +45,7 @@ import {
 } from '../../../src/shell/mcp/provider.js';
 import {
   testOnlyResetStoreCache as _testOnly_resetStoreCache,
+  MCP_STORE_PATH,
   readServersFile,
   setServer,
 } from '../../../src/shell/mcp/store.js';
@@ -84,9 +85,21 @@ interface MockServerOptions {
 
 function makeMockMcpFetch(opts: MockServerOptions): {
   fetch: McpFetchLike;
-  calls: Array<{ url: string; method: string; body?: RpcBody; auth?: string }>;
+  calls: Array<{
+    url: string;
+    method: string;
+    body?: RpcBody;
+    auth?: string;
+    sessionId?: string;
+  }>;
 } {
-  const calls: Array<{ url: string; method: string; body?: RpcBody; auth?: string }> = [];
+  const calls: Array<{
+    url: string;
+    method: string;
+    body?: RpcBody;
+    auth?: string;
+    sessionId?: string;
+  }> = [];
   const encode = (obj: unknown): Uint8Array =>
     new TextEncoder().encode(typeof obj === 'string' ? obj : JSON.stringify(obj));
 
@@ -100,11 +113,13 @@ function makeMockMcpFetch(opts: MockServerOptions): {
         /* ignore non-JSON */
       }
     }
-    const auth =
+    const requestHeaders =
       init?.headers && typeof init.headers === 'object'
-        ? (init.headers as Record<string, string>)['Authorization']
-        : undefined;
-    calls.push({ url, method, body, auth });
+        ? (init.headers as Record<string, string>)
+        : {};
+    const auth = requestHeaders['Authorization'];
+    const sessionId = requestHeaders['Mcp-Session-Id'];
+    calls.push({ url, method, body, auth, sessionId });
 
     const id = body?.id ?? 1;
     if (opts.authRequired) {
@@ -121,6 +136,24 @@ function makeMockMcpFetch(opts: MockServerOptions): {
       }
     }
 
+    if (
+      opts.sessionId &&
+      body?.method !== 'server/discover' &&
+      body?.method !== 'initialize' &&
+      sessionId !== opts.sessionId
+    ) {
+      return {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: { 'content-type': 'application/json' },
+        body: encode({
+          jsonrpc: '2.0',
+          id: body?.id ?? 1,
+          error: { code: -32000, message: 'Bad Request: Mcp-Session-Id header is required' },
+        }),
+      };
+    }
+
     const respond = (result: unknown): MockResponse => ({
       status: 200,
       statusText: 'OK',
@@ -133,6 +166,18 @@ function makeMockMcpFetch(opts: MockServerOptions): {
 
     let resp: MockResponse;
     switch (body?.method) {
+      case 'server/discover':
+        resp = {
+          status: 400,
+          statusText: 'Bad Request',
+          headers: { 'content-type': 'application/json' },
+          body: {
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32601, message: 'Method not found' },
+          },
+        };
+        break;
       case 'initialize':
         resp = respond({ protocolVersion: '2025-06-18', capabilities: {} });
         break;
@@ -413,10 +458,11 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
 
     const file = await readServersFile();
     expect(file.servers.demo.url).toBe('https://server.test/sse');
+    expect(file.servers.demo.protocolVersion).toBe('2025-06-18');
     // `sessionId` MUST NOT be persisted — sessions are per-process on the
     // server and re-sending one on the next `initialize` is a protocol
     // violation (MCP Streamable-HTTP).
-    expect(file.servers.demo.sessionId).toBeUndefined();
+    expect((file.servers.demo as unknown as Record<string, unknown>).sessionId).toBeUndefined();
     expect(file.servers.demo.tools).toEqual([
       {
         name: 'echo',
@@ -742,24 +788,34 @@ describe('mcp invoke / delete / refresh', () => {
     expect(r.stderr).toContain('unknown server "ghost"');
   });
 
-  it('invoke does NOT pass a stale persisted sessionId to McpClient (initialize must be Mcp-Session-Id-free)', async () => {
-    // Seed an entry with a stale sessionId — historically `cmdInvoke` would
-    // thread this into the McpClient constructor, which then sent it on the
-    // `initialize` request and triggered a protocol violation.
-    await setServer('demo', {
-      url: 'https://server.test/sse',
-      sessionId: 'stale-from-old-version',
-      tools: [
-        {
-          name: 'echo',
-          inputSchema: {
-            type: 'object',
-            properties: { msg: { type: 'string' } },
-            required: ['msg'],
+  it('invoke re-negotiates stale persisted protocol/session state', async () => {
+    // Persisted protocol/session state is informational and may be stale.
+    // Invocation must probe again rather than seed the client from either.
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.mkdir('/workspace/.mcp', { recursive: true });
+    await fs.writeFile(
+      MCP_STORE_PATH,
+      JSON.stringify({
+        version: 1,
+        servers: {
+          demo: {
+            url: 'https://server.test/sse',
+            protocolVersion: '2025-06-18',
+            sessionId: 'stale-from-old-version',
+            tools: [
+              {
+                name: 'echo',
+                inputSchema: {
+                  type: 'object',
+                  properties: { msg: { type: 'string' } },
+                  required: ['msg'],
+                },
+              },
+            ],
           },
         },
-      ],
-    });
+      })
+    );
 
     const calls: Array<{
       method?: string;
@@ -775,6 +831,20 @@ describe('mcp invoke / delete / refresh', () => {
       const headers = (init?.headers ?? {}) as Record<string, string>;
       calls.push({ method: body?.method, mcpSessionId: headers['Mcp-Session-Id'] });
       const id = body?.id ?? 1;
+      if (body?.method === 'server/discover') {
+        return {
+          status: 400,
+          statusText: 'Bad Request',
+          headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32601, message: 'Method not found' },
+            })
+          ),
+        };
+      }
       const result =
         body?.method === 'tools/call'
           ? { content: [{ type: 'text', text: 'pong' }] }
@@ -796,6 +866,7 @@ describe('mcp invoke / delete / refresh', () => {
     const r = await runCmd(['invoke', 'demo', 'echo', '--msg', 'hi'], { fetchImpl });
     expect(r.exitCode).toBe(0);
 
+    expect(calls[0]?.method).toBe('server/discover');
     const initCall = calls.find((c) => c.method === 'initialize');
     const toolCall = calls.find((c) => c.method === 'tools/call');
     expect(initCall?.mcpSessionId).toBeUndefined();
@@ -825,12 +896,23 @@ describe('mcp invoke / delete / refresh', () => {
   });
 
   it('refresh re-fetches tools/apps and updates lastRefreshedAt', async () => {
-    await setServer('demo', {
-      url: 'https://server.test/sse',
-      tools: [],
-      apps: [],
-      lastRefreshedAt: '2020-01-01T00:00:00.000Z',
-    });
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.mkdir('/workspace/.mcp', { recursive: true });
+    await fs.writeFile(
+      MCP_STORE_PATH,
+      JSON.stringify({
+        version: 1,
+        servers: {
+          demo: {
+            url: 'https://server.test/sse',
+            sessionId: 'legacy-session-must-be-removed',
+            tools: [],
+            apps: [],
+            lastRefreshedAt: '2020-01-01T00:00:00.000Z',
+          },
+        },
+      })
+    );
     const { fetch } = makeMockMcpFetch({
       tools: [{ name: 'a' }, { name: 'b' }],
       apps: [{ name: 'x' }],
@@ -841,7 +923,12 @@ describe('mcp invoke / delete / refresh', () => {
     expect(r.stdout).toContain('apps: 1');
     const file = await readServersFile();
     expect(file.servers.demo.tools?.length).toBe(2);
+    expect(file.servers.demo.protocolVersion).toBe('2025-06-18');
     expect(file.servers.demo.lastRefreshedAt).not.toBe('2020-01-01T00:00:00.000Z');
+    const persisted = JSON.parse(
+      (await fs.readFile(MCP_STORE_PATH, { encoding: 'utf-8' })) as string
+    ) as { servers: Record<string, Record<string, unknown>> };
+    expect(persisted.servers.demo.sessionId).toBeUndefined();
   });
 
   it('delete: cleans server, alias, sprinkles, account, provider', async () => {
@@ -1400,10 +1487,26 @@ describe('mcp invoke --timeout flag (integration)', () => {
     // Fetch that never resolves — the only way the call returns is via the
     // McpClient timeout firing. If --timeout 1 wasn't threaded through, the
     // default (60s) would prevent the abort from firing within 1500ms.
-    const fetchImpl: McpFetchLike = (_url, init) =>
-      new Promise((_resolve, reject) => {
+    const fetchImpl: McpFetchLike = (_url, init) => {
+      const body = JSON.parse(init?.body ?? '{}') as RpcBody;
+      if (body.method === 'server/discover') {
+        return Promise.resolve({
+          status: 200,
+          statusText: 'OK',
+          headers: { 'content-type': 'application/json' },
+          body: new TextEncoder().encode(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: body.id,
+              result: { supportedVersions: ['2026-07-28', '2025-06-18'] },
+            })
+          ),
+        });
+      }
+      return new Promise((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       });
+    };
 
     vi.useFakeTimers();
     try {
@@ -1454,6 +1557,18 @@ describe('mcp invoke --timeout flag (integration)', () => {
         ? (JSON.parse(init.body as string) as { id: number; method: string })
         : { id: 1, method: 'initialize' };
       const encode = (obj: unknown) => new TextEncoder().encode(JSON.stringify(obj));
+      if (body.method === 'server/discover') {
+        return {
+          status: 400,
+          statusText: 'Bad Request',
+          headers: { 'content-type': 'application/json' },
+          body: encode({
+            jsonrpc: '2.0',
+            id: body.id,
+            error: { code: -32601, message: 'Method not found' },
+          }),
+        };
+      }
       if (body.method === 'tools/call') {
         return {
           status: 200,

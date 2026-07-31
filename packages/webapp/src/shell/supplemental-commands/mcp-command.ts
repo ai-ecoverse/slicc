@@ -199,6 +199,7 @@ short name resolves on the PATH.
   // id on the next `initialize` is a Streamable-HTTP protocol violation.
   const entry: McpServerEntry = {
     url,
+    protocolVersion: client.getNegotiatedProtocolVersion(),
     tools,
     apps,
     addedAt: now,
@@ -842,13 +843,9 @@ OAuth tokens — for OAuth token refresh use \`mcp auth <name>\`.
   }
   const tools = await client.toolsList();
   const apps = await client.appsList();
-  // Drop any previously persisted `sessionId` — it's per-process state on
-  // the server and unsafe to re-send on the next `initialize`. Setting it
-  // to `undefined` ensures JSON.stringify in `writeServersFile` drops it
-  // even though `setServer` shallow-merges with the existing record.
   const merged: McpServerEntry = {
     ...entry,
-    sessionId: undefined,
+    protocolVersion: client.getNegotiatedProtocolVersion(),
     tools,
     apps,
     lastRefreshedAt: new Date().toISOString(),

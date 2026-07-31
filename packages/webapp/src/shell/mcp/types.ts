@@ -44,8 +44,8 @@ export interface McpServerAuthRecord {
 /** Full persisted entry for one server in `servers.json`. */
 export interface McpServerEntry {
   url: string;
+  protocolVersion?: string;
   headers?: Record<string, string>;
-  sessionId?: string;
   tools?: McpToolDef[];
   apps?: McpAppDef[];
   addedAt?: string;
