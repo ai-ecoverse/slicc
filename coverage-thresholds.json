@@ -70,8 +70,8 @@
     "webapp": {
       "lines": 80,
       "statements": 78,
-      "functions": 78,
-      "branches": 68,
+      "functions": 79,
+      "branches": 69,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -130,14 +130,14 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 60,
-      "functions": 58,
-      "regions": 57
+      "lines": 62,
+      "functions": 60,
+      "regions": 59
     },
     "swift-launcher": {
-      "lines": 39,
-      "functions": 43,
-      "regions": 50
+      "lines": 40,
+      "functions": 44,
+      "regions": 51
     },
     "swift-optel": {
       "lines": 75,
@@ -145,9 +145,9 @@
       "regions": 79
     },
     "ios-app": {
-      "lines": 18,
-      "functions": 15,
-      "regions": 16
+      "lines": 19,
+      "functions": 16,
+      "regions": 18
     }
   }
 }
