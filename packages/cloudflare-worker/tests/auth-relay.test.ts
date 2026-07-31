@@ -15,6 +15,10 @@ function relayRequest(query: string): Request {
   return new Request(`https://www.sliccy.ai/auth/callback${query}`);
 }
 
+function mcpCallbackRequest(query: string): Request {
+  return new Request(`https://www.sliccy.ai/auth/mcp-callback${query}`);
+}
+
 async function fetchRelayBody(query: string): Promise<string> {
   const res = await handleWorkerRequest(relayRequest(query), env);
   return res.text();
@@ -30,7 +34,7 @@ function runRelay(
   html: string,
   search: string,
   hash = '',
-  opts: { origin?: string; hasOpener?: boolean } = {}
+  opts: { origin?: string; hasOpener?: boolean; path?: string } = {}
 ): { replaced?: string; error?: string; postedMessage?: any; postedTarget?: string } {
   const match = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!match) throw new Error('No <script> in relay HTML');
@@ -43,7 +47,7 @@ function runRelay(
     search,
     hash,
     origin,
-    href: `${origin}/auth/callback${search}${hash}`,
+    href: `${origin}${opts.path ?? '/auth/callback'}${search}${hash}`,
     replace: (url: string) => {
       replaced = url;
     },
@@ -131,6 +135,29 @@ describe('OAuth callback relay — page response', () => {
     const res = await handleWorkerRequest(trayReq, env);
     const body = await res.text();
     expect(body).not.toContain('Redirecting to SLICC');
+  });
+});
+
+describe('MCP OAuth callback — opaque state', () => {
+  it('posts the callback to the opener without decoding opaque state', async () => {
+    const opaqueState = 'mcp-state_opaque~value-123';
+    const search = `?code=abc&state=${encodeURIComponent(opaqueState)}`;
+    const res = await handleWorkerRequest(mcpCallbackRequest(search), env);
+
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).not.toContain('atob(');
+    const { postedMessage, postedTarget, error } = runRelay(html, search, '', {
+      path: '/auth/mcp-callback',
+    });
+
+    expect(error).toBeUndefined();
+    expect(postedTarget).toBe('https://www.sliccy.ai');
+    expect(postedMessage?.type).toBe('oauth-callback');
+    const redirect = new URL(postedMessage?.redirectUrl);
+    expect(redirect.pathname).toBe('/auth/mcp-callback');
+    expect(redirect.searchParams.get('code')).toBe('abc');
+    expect(redirect.searchParams.get('state')).toBe(opaqueState);
   });
 });
 
