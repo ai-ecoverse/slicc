@@ -11,6 +11,26 @@ enum ConnectionState: String {
     case connected
     case reconnecting
     case failed
+    /// Bounded reconnect ran out of attempts. Terminal and actionable — unlike
+    /// `reconnecting`, nothing further happens without the user, and unlike
+    /// `failed`, we know the leader was unreachable across the whole backoff.
+    case gaveUp
+}
+
+/// Bounded exponential backoff for reconnects, mirroring the TS defaults in
+/// `startFollowerWithAutoReconnect` (`packages/webapp/src/scoops/tray-webrtc.ts`).
+enum ReconnectBackoff {
+    static let baseDelay: TimeInterval = 1
+    static let multiplier: Double = 2
+    static let maxDelay: TimeInterval = 30
+    static let maxAttempts = 10
+
+    /// Delay before attempt `attempt` (1-based), capped at `maxDelay`.
+    static func delay(forAttempt attempt: Int) -> TimeInterval {
+        guard attempt > 1 else { return baseDelay }
+        let grown = baseDelay * pow(multiplier, Double(attempt - 1))
+        return min(grown, maxDelay)
+    }
 }
 
 // ChatMessage is defined in Models/ChatMessage.swift
@@ -80,8 +100,23 @@ class AppState: ObservableObject {
     // Join URL history (last 5)
     @Published var joinUrlHistory: [String] = []
 
-    /// Last connection error, surfaced to the UI.
+    /// Last *transport* error, surfaced to the UI. A dropped channel, a refused
+    /// signaling attempt, an exhausted reconnect. Kept apart from `leaderError`
+    /// so a network blip and a cone failure do not read identically.
     @Published var lastError: String?
+
+    /// Last error reported *by the leader's agent*. A cone problem, not a
+    /// transport problem: reconnecting cannot fix it and the UI must not offer
+    /// that as the remedy.
+    @Published var leaderError: String?
+
+    /// The leader stopped answering pings while its channel stayed open. The
+    /// connection is intact and probing continues; the peer is just busy. The
+    /// composer disables itself so a message typed now cannot be lost.
+    @Published var isLeaderStalled: Bool = false
+
+    /// Which reconnect attempt is in flight, 1-based. Zero when not reconnecting.
+    @Published var reconnectAttempt: Int = 0
 
     /// Buffer for chunked sprinkle.content responses.
     private struct SprinkleFetchBuffer {
@@ -106,6 +141,10 @@ class AppState: ObservableObject {
     private var webRTCDelegate: WebRTCBridge?
     private var keepalive: DataChannelKeepalive?
     private var connectTask: Task<Void, Never>?
+    /// Owns the bounded reconnect budget. Separate from `connectTask`, which
+    /// `tearDown()` cancels on every attempt — cancelling the loop from inside
+    /// its own retry would end the budget after one try.
+    private var reconnectTask: Task<Void, Never>?
     fileprivate var controllerId: String = UUID().uuidString
     fileprivate var currentBootstrapId: String?
 
@@ -167,6 +206,12 @@ class AppState: ObservableObject {
     /// Disconnect from the current tray session. Unlike a transient WebRTC
     /// drop this is user-initiated, so we also drop any open CDP tabs.
     func disconnect() {
+        // A user-initiated disconnect ends the reconnect budget; otherwise the
+        // loop would keep dialing a leader the user just walked away from.
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+        isLeaderStalled = false
         tearDown()
         resetCDPState()
         connectionState = .disconnected
@@ -543,6 +588,16 @@ class AppState: ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.handleDisconnect(reason: "Keepalive timeout")
                 }
+            },
+            // A leader that stops answering but keeps its channel open is busy,
+            // not gone. Without this gate the follower tore down a healthy
+            // transport after ~30s and forced a full renegotiation.
+            isTransportOpen: { [weak rtc] in rtc?.isConnected ?? false },
+            onStalled: { [weak self] in
+                Task { @MainActor [weak self] in self?.isLeaderStalled = true }
+            },
+            onRecovered: { [weak self] in
+                Task { @MainActor [weak self] in self?.isLeaderStalled = false }
             }
         )
         Task { await keepalive?.start() }
@@ -640,7 +695,7 @@ class AppState: ObservableObject {
 
         case .error(let error):
             logger.error("Leader error: \(error)")
-            lastError = error
+            leaderError = error
 
         case .scoopsList(let scoops, let activeScoopJid):
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
@@ -917,7 +972,7 @@ class AppState: ObservableObject {
 
         case .error(let error):
             logger.error("Agent event: error — \(error)")
-            if isVisible { lastError = error }
+            if isVisible { leaderError = error }
 
         // Events that mutate no transcript state. Kept as a single arm so the
         // switch stays exhaustive — a new protocol case is then a compile error
@@ -996,6 +1051,13 @@ class AppState: ObservableObject {
             logger.error("Refusing to send oversize message (\(data.count) bytes)")
             return false
         }
+        // Only chunked sends are gated: a congested channel must still carry
+        // keepalive ping/pong, or a busy peer reads as a dead one.
+        let queued = webRTCManager?.bufferedAmount ?? 0
+        guard queued < UInt64(TrayChunkLimits.sendHighWaterBytes) else {
+            logger.error("Refusing chunked send — channel congested (\(queued) bytes queued)")
+            return false
+        }
         let frames = TrayChunkFraming.frameChunks(text)
         for frame in frames {
             guard let encoded = try? JSONEncoder().encode(frame),
@@ -1047,20 +1109,60 @@ class AppState: ObservableObject {
     func handleDisconnect(reason: String) {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
-        if autoReconnect {
-            connectionState = .reconnecting
-            streamingMessageId = nil
-            // TODO: Implement reconnect with exponential backoff.
-            // For now, attempt a fresh connect after a delay.
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                guard let self, self.connectionState == .reconnecting else { return }
-                self.connect()
-            }
-        } else {
+        // A stall that ends in a real disconnect must not leave the composer
+        // wedged: the stall is over, the connection is what is broken now.
+        isLeaderStalled = false
+
+        guard autoReconnect else {
             connectionState = .failed
             lastError = reason
+            return
         }
+
+        connectionState = .reconnecting
+        streamingMessageId = nil
+        reconnectTask?.cancel()
+        reconnectTask = Task { @MainActor [weak self] in
+            await self?.runReconnectLoop(initialReason: reason)
+        }
+    }
+
+    /// Bounded exponential backoff, mirroring `startFollowerWithAutoReconnect`.
+    ///
+    /// A transient drop deliberately does not render as a permanent error: the
+    /// state stays `.reconnecting` with a visible attempt count, and only an
+    /// exhausted budget reaches the terminal `.gaveUp`.
+    private func runReconnectLoop(initialReason: String) async {
+        for attempt in 1...ReconnectBackoff.maxAttempts {
+            reconnectAttempt = attempt
+            connectionState = .reconnecting
+
+            let delay = ReconnectBackoff.delay(forAttempt: attempt)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if Task.isCancelled { return }
+            // A user-initiated disconnect (or a connect that already landed)
+            // moves us out of `.reconnecting`; abandon the budget silently.
+            guard connectionState == .reconnecting else { return }
+
+            connect()
+
+            // `connect()` drives its own async signaling; wait for it to settle
+            // before deciding whether this attempt earned another.
+            await connectTask?.value
+            if Task.isCancelled { return }
+            if connectionState == .connected {
+                reconnectAttempt = 0
+                lastError = nil
+                return
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        connectionState = .gaveUp
+        lastError =
+            "Couldn't reach the leader after \(ReconnectBackoff.maxAttempts) attempts "
+            + "(\(initialReason)). Reload to retry."
+        reconnectAttempt = 0
     }
 
     // MARK: - Private: Teardown

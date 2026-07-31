@@ -157,7 +157,7 @@ struct SettingsView: View {
 
     private var connectionDotColor: Color {
         switch appState.connectionState {
-        case .disconnected, .failed: .red
+        case .disconnected, .failed, .gaveUp: .red
         case .connecting: .yellow
         case .connected: .green
         case .reconnecting: .orange
@@ -171,6 +171,7 @@ struct SettingsView: View {
         case .connected: "Connected"
         case .reconnecting: "Reconnecting…"
         case .failed: "Failed"
+        case .gaveUp: "Gave up"
         }
     }
 
