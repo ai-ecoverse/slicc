@@ -21,9 +21,19 @@ function mount(setup?: (el: SliccScoopOverflow) => void): SliccScoopOverflow {
   return el;
 }
 
-/** The "⋯" trigger button inside the shadow root. */
+/** The status-grid trigger button inside the shadow root. */
 function moreBtn(el: SliccScoopOverflow): HTMLButtonElement {
   return el.shadowRoot?.querySelector('.morebtn') as HTMLButtonElement;
+}
+
+/** The fixed overflow glyph grid inside the trigger. */
+function grid(el: SliccScoopOverflow): HTMLElement {
+  return el.shadowRoot?.querySelector('.overflow-grid') as HTMLElement;
+}
+
+/** The nine stable wells inside the overflow glyph. */
+function gridCells(el: SliccScoopOverflow): HTMLElement[] {
+  return Array.from(el.shadowRoot?.querySelectorAll('.overflow-grid-cell') ?? []) as HTMLElement[];
 }
 
 /** The `.switcher-more` wrap inside the shadow root. */
@@ -59,9 +69,11 @@ describe('slicc-scoop-overflow', () => {
     expect(el.shadowRoot?.querySelector('[part="pop"]')).toBeTruthy();
   });
 
-  it('exposes a slotted "⋯" trigger glyph and an empty slot', () => {
+  it('exposes a slotted status-grid trigger glyph and an empty slot', () => {
     const el = mount();
     expect(el.shadowRoot?.querySelector('slot[name="more"]')).toBeTruthy();
+    expect(gridCells(el)).toHaveLength(9);
+    expect(moreBtn(el).textContent).not.toContain('⋯');
     // With no items the popup hosts the empty slot.
     expect(el.shadowRoot?.querySelector('.pop slot[name="empty"]')).toBeTruthy();
   });
@@ -134,6 +146,125 @@ describe('slicc-scoop-overflow', () => {
         e.items = [{ id: 'solo' }];
       });
       expect(pills(el)[0].getAttribute('label')).toBe('solo');
+    });
+  });
+
+  describe('status-coded overflow grid', () => {
+    it('severity-sorts states into the settled centre-out fill order', () => {
+      const el = mount((e) => {
+        e.items = [
+          { id: 'idle', state: 'idle', fill: 10 },
+          { id: 'working', state: 'working', fill: 40 },
+          { id: 'near', state: 'initializing', fill: 75 },
+          { id: 'broken', state: 'broken', fill: 90 },
+        ];
+      });
+      expect(gridCells(el).map((cell) => cell.dataset.dotState ?? null)).toEqual([
+        null,
+        null,
+        null,
+        'working',
+        'broken',
+        'near-limit',
+        null,
+        'idle',
+        null,
+      ]);
+    });
+
+    it('maps each state to its settled design token', () => {
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      const adopted = el.shadowRoot?.adoptedStyleSheets[0] as CSSStyleSheet;
+      const tokenByState = new Map([
+        ['idle', 'var(--txt-3)'],
+        ['broken', 'var(--red)'],
+        ['working', 'var(--green)'],
+        ['near-limit', 'var(--amber)'],
+      ]);
+      for (const [state, token] of tokenByState) {
+        const rule = Array.from(adopted.cssRules).find(
+          (entry): entry is CSSStyleRule =>
+            entry instanceof CSSStyleRule &&
+            entry.selectorText.includes(`data-dot-state="${state}"`)
+        );
+        expect(rule?.style.background).toBe(token);
+      }
+    });
+
+    it('keeps broken ahead of near-limit when states collide with high fill', () => {
+      const el = mount((e) => {
+        e.items = [
+          { id: 'working-near', state: 'working', fill: 95 },
+          { id: 'broken-near', state: 'broken', fill: 90 },
+        ];
+      });
+      const cells = gridCells(el);
+      expect(cells[4].dataset.dotState).toBe('broken');
+      expect(cells[5].dataset.dotState).toBe('near-limit');
+    });
+
+    it('renders faint empty wells so all nine cells remain mounted', () => {
+      const el = mount((e) => {
+        e.items = [{ id: 'solo' }];
+      });
+      const cells = gridCells(el);
+      expect(cells).toHaveLength(9);
+      expect(cells.filter((cell) => cell.hasAttribute('data-dot-state'))).toHaveLength(1);
+      const emptyWell = cells.find((cell) => !cell.hasAttribute('data-dot-state')) as HTMLElement;
+      expect(getComputedStyle(emptyWell).boxShadow).not.toBe('none');
+    });
+
+    it('uses dots through nine hidden items and a geometric plus above nine', () => {
+      const el = mount((e) => {
+        e.items = Array.from({ length: 9 }, (_, i) => ({ id: `scoop-${i}` }));
+      });
+      expect(el.shadowRoot?.querySelector('.overflow-grid-cell--plus')).toBeNull();
+
+      el.items = Array.from({ length: 10 }, (_, i) => ({
+        id: `scoop-${i}`,
+        state: i === 9 ? ('broken' as const) : ('idle' as const),
+      }));
+      const cells = gridCells(el);
+      expect(cells[4].dataset.dotState).toBe('broken');
+      expect(cells[8].classList.contains('overflow-grid-cell--plus')).toBe(true);
+      expect(cells[8].textContent).toBe('');
+      const horizontal = cells[8].querySelector('.overflow-plus-bar--horizontal') as HTMLElement;
+      const vertical = cells[8].querySelector('.overflow-plus-bar--vertical') as HTMLElement;
+      expect(horizontal).toBeTruthy();
+      expect(vertical).toBeTruthy();
+      expect(getComputedStyle(horizontal).position).toBe('absolute');
+      expect(horizontal.getBoundingClientRect().width).toBe(4);
+      expect(horizontal.getBoundingClientRect().height).toBe(1);
+      expect(vertical.getBoundingClientRect().width).toBe(1);
+      expect(vertical.getBoundingClientRect().height).toBe(4);
+    });
+
+    it('keeps the glyph at 13×13px for one and nine hidden items', () => {
+      const one = mount((e) => {
+        e.items = [{ id: 'solo' }];
+      });
+      const nine = mount((e) => {
+        e.items = Array.from({ length: 9 }, (_, i) => ({ id: `scoop-${i}` }));
+      });
+      const oneRect = grid(one).getBoundingClientRect();
+      const nineRect = grid(nine).getBoundingClientRect();
+      expect([oneRect.width, oneRect.height]).toEqual([13, 13]);
+      expect([nineRect.width, nineRect.height]).toEqual([13, 13]);
+    });
+
+    it('names the hidden count and worst represented state accessibly', () => {
+      const el = mount((e) => {
+        e.items = [
+          { id: 'working', state: 'working' },
+          { id: 'broken', state: 'broken', fill: 99 },
+        ];
+      });
+      expect(grid(el).getAttribute('aria-label')).toBe('2 hidden scoops; worst state broken');
+      expect(moreBtn(el).getAttribute('aria-label')).toBe(
+        '2 hidden scoops; worst state broken. Show hidden scoops'
+      );
     });
   });
 

@@ -12,15 +12,15 @@ interface OverflowArgs {
 
 /** A realistic set of overflowed scoops, colored by the prototype's hues. */
 const SCOOPS: SliccScoopOverflowItem[] = [
-  { id: 'researcher', label: 'researcher', color: '#06b6d4' },
-  { id: 'designer', label: 'designer', color: '#8b5cf6' },
-  { id: 'tester', label: 'tester', color: '#f59e0b' },
-  { id: 'triage', label: 'triage', color: '#168a35' },
+  { id: 'researcher', label: 'researcher', color: '#06b6d4', state: 'working', fill: 42 },
+  { id: 'designer', label: 'designer', color: '#8b5cf6', state: 'idle', fill: 18 },
+  { id: 'tester', label: 'tester', color: '#f59e0b', state: 'broken', fill: 90 },
+  { id: 'triage', label: 'triage', color: '#168a35', state: 'initializing', fill: 78 },
 ];
 
 /**
  * Mount inside a faux nav band with a couple of visible header chips to the
- * left, so the "⋯" trigger + dropdown read in their real context (matching the
+ * left, so the status-grid trigger + dropdown read in their real context (matching the
  * prototype's `.switcher` / `.switcher-more` layout).
  */
 function buildOverflow({ items = SCOOPS, open }: OverflowArgs): HTMLElement {
@@ -65,7 +65,7 @@ const meta: Meta<OverflowArgs> = {
 export default meta;
 type Story = StoryObj<OverflowArgs>;
 
-/** Has overflow, closed — only the pill-shaped "⋯" trigger is visible. */
+/** Has overflow, closed — the fixed status-coded 3×3 trigger is visible. */
 export const HasOverflowClosed: Story = { args: {} };
 
 /**
@@ -89,8 +89,30 @@ export const ManyItems: Story = {
     open: true,
     items: [
       ...SCOOPS,
-      { id: 'writer', label: 'writer', color: '#f43f5e' },
-      { id: 'reviewer', label: 'reviewer', color: '#06b6d4', eyes: 'dead' },
+      { id: 'writer', label: 'writer', color: '#f43f5e', state: 'working', fill: 25 },
+      {
+        id: 'reviewer',
+        label: 'reviewer',
+        color: '#06b6d4',
+        eyes: 'dead',
+        state: 'broken',
+        fill: 66,
+      },
+    ],
+  },
+};
+
+/** Above nine hidden scoops, severity sorting preserves eight dots and reserves cell 9 for +. */
+export const MoreThanNine: Story = {
+  args: {
+    items: [
+      ...SCOOPS,
+      { id: 'writer', state: 'working', fill: 34 },
+      { id: 'reviewer', state: 'idle', fill: 12 },
+      { id: 'planner', state: 'initializing', fill: 2 },
+      { id: 'builder', state: 'working', fill: 81 },
+      { id: 'analyst', state: 'idle', fill: 9 },
+      { id: 'editor', state: 'broken', fill: 88 },
     ],
   },
 };

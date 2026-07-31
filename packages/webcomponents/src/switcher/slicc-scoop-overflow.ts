@@ -7,7 +7,7 @@ import '../pill/slicc-pill.js';
 // Lifted from proto/StellarRubySwift.html: the switcher overflow popup
 // (.switcher-more / .morebtn / .pop / .has-overflow / .open, CSS ~L68-76, the
 // reflow IIFE ~L937-1007). The prototype's reflow logic measures the live
-// header and moves chips that don't fit into a "⋯" dropdown that stacks them
+// header and moves chips that don't fit into an overflow dropdown that stacks them
 // column-wise; this lift keeps the *popup* half of that contract — the trigger
 // button + the dropdown of full-width <slicc-pill> clones — and exposes the set
 // of overflowed scoops as a declarative `items` property. Geometry measurement
@@ -31,6 +31,16 @@ const STYLE = `
 .morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
 .morebtn:hover{background:var(--ghost);color:var(--ink);}
 :host([count]:not([count="0"])) .morebtn,.switcher-more.has-overflow .morebtn{display:inline-flex;}
+.overflow-grid{display:grid;grid-template:repeat(3,3px)/repeat(3,3px);gap:2px;width:13px;height:13px;flex:0 0 13px;}
+.overflow-grid-cell{display:grid;width:3px;height:3px;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--txt-3) 12%,transparent);box-shadow:inset 0 0 0 .75px color-mix(in srgb,var(--txt-3) 28%,transparent);}
+.overflow-grid-cell[data-dot-state="idle"]{background:var(--txt-3);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="broken"]{background:var(--red);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="working"]{background:var(--green);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="near-limit"]{background:var(--amber);box-shadow:none;}
+.overflow-grid-cell--plus{position:relative;overflow:visible;color:var(--txt-2);background:transparent;box-shadow:none;}
+.overflow-plus-bar{position:absolute;top:50%;left:50%;background:currentColor;transform:translate(-50%,-50%);}
+.overflow-plus-bar--horizontal{width:4px;height:1px;}
+.overflow-plus-bar--vertical{width:1px;height:4px;}
 .pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:180px;z-index:20;flex-direction:column;gap:4px;}
 .switcher-more.open .pop{display:flex;}
 .pop slicc-pill{display:block;width:100%;--pill-w:100%;animation:scoopReveal .24s ease both;animation-delay:calc(var(--i,0) * 45ms);}
@@ -50,6 +60,72 @@ const STYLE = `
 `;
 const SHEET = sheet(STYLE);
 
+type OverflowDotState = 'broken' | 'near-limit' | 'working' | 'idle';
+
+const GRID_FILL_ORDER = [4, 5, 3, 7, 1, 6, 2, 0, 8] as const;
+
+function dotState(item: SliccScoopOverflowItem): OverflowDotState {
+  if (item.state === 'broken') return 'broken';
+  if ((item.fill ?? 0) >= 75) return 'near-limit';
+  if (item.state === 'working') return 'working';
+  return 'idle';
+}
+
+function dotSeverity(state: OverflowDotState): number {
+  if (state === 'broken') return 3;
+  if (state === 'near-limit') return 2;
+  if (state === 'working') return 1;
+  return 0;
+}
+
+function hiddenSummary(items: SliccScoopOverflowItem[]): string {
+  const worst = items.reduce<OverflowDotState>((current, item) => {
+    const state = dotState(item);
+    return dotSeverity(state) > dotSeverity(current) ? state : current;
+  }, 'idle');
+  const stateLabel = worst === 'near-limit' ? 'near context limit' : worst;
+  return `${items.length} hidden scoop${items.length === 1 ? '' : 's'}; worst state ${stateLabel}`;
+}
+
+function gridCell(state?: OverflowDotState, plus = false): HTMLElement {
+  if (plus) {
+    return h(
+      'span',
+      { class: 'overflow-grid-cell overflow-grid-cell--plus', 'aria-hidden': 'true' },
+      h('span', { class: 'overflow-plus-bar overflow-plus-bar--horizontal' }),
+      h('span', { class: 'overflow-plus-bar overflow-plus-bar--vertical' })
+    );
+  }
+  const attributes: Record<string, string> = {
+    class: 'overflow-grid-cell',
+    'aria-hidden': 'true',
+  };
+  if (state) attributes['data-dot-state'] = state;
+  return h('span', attributes);
+}
+
+function overflowGrid(items: SliccScoopOverflowItem[]): HTMLElement {
+  const represented = items
+    .map((item, order) => ({ order, state: dotState(item) }))
+    .sort((a, b) => dotSeverity(b.state) - dotSeverity(a.state) || a.order - b.order)
+    .slice(0, items.length > 9 ? 8 : 9);
+  const cells = Array.from({ length: GRID_FILL_ORDER.length }, () => gridCell());
+  represented.forEach((entry, position) => {
+    cells[GRID_FILL_ORDER[position]] = gridCell(entry.state);
+  });
+  if (items.length > 9) cells[GRID_FILL_ORDER.at(-1)!] = gridCell(undefined, true);
+  return h(
+    'span',
+    {
+      class: 'overflow-grid',
+      role: 'img',
+      'aria-label': hiddenSummary(items),
+      'data-hidden-count': String(items.length),
+    },
+    ...cells
+  );
+}
+
 /**
  * A descriptor for one overflowed scoop chip rendered as a `<slicc-pill>` clone
  * inside the popup. Mirrors the attributes the prototype copies off the hidden
@@ -67,6 +143,10 @@ export interface SliccScoopOverflowItem {
   color?: string;
   /** Eye state forwarded to the pill (`open` | `none` | `dead`, default `none`). */
   eyes?: 'open' | 'none' | 'dead';
+  /** Runtime state used by the status-coded overflow grid. */
+  state?: 'working' | 'broken' | 'initializing' | 'idle';
+  /** Context-window fullness from 0–100; 75+ is represented as near-limit. */
+  fill?: number;
 }
 
 /** The `detail` payload of the `slicc-scoop-select` event. */
@@ -79,7 +159,7 @@ export interface SliccScoopSelectDetail {
 
 /**
  * `<slicc-scoop-overflow>` — the prototype's switcher overflow popup
- * (`.switcher-more`). A pill-shaped "⋯" trigger (`.morebtn`) that stays hidden
+ * (`.switcher-more`). A pill-shaped status-grid trigger (`.morebtn`) that stays hidden
  * until there is overflow, plus an absolutely-positioned, *frameless* dropdown
  * (`.pop`) that stacks the overflowed scoop chips column-wise as full-width
  * `<slicc-pill>` clones — the chips simply appear underneath the trigger with no
@@ -108,10 +188,10 @@ export interface SliccScoopSelectDetail {
  *
  * @attr open - boolean; reflects whether the popup is shown
  * @attr count - reflected number of overflow items (the trigger shows when > 0)
- * @csspart more - the "⋯" trigger button
+ * @csspart more - the status-grid trigger button
  * @csspart pop - the dropdown popup panel
  * @csspart pill - each cloned overflow `<slicc-pill>` chip
- * @slot more - replaces the default "⋯" trigger glyph
+ * @slot more - replaces the default status-grid trigger glyph
  * @slot empty - shown inside the popup when there are no items
  * @fires slicc-scoop-select - composed + bubbling
  *   `CustomEvent<SliccScoopSelectDetail>` emitted when an overflow chip is clicked
@@ -127,6 +207,7 @@ export class SliccScoopOverflow extends HTMLElement {
   // Element refs, populated by #render.
   #wrap!: HTMLDivElement;
   #moreBtn!: HTMLButtonElement;
+  #moreSlot!: HTMLSlotElement;
   #pop!: HTMLDivElement;
 
   /** Document-level outside-click closer; bound once, attached only while open. */
@@ -208,7 +289,7 @@ export class SliccScoopOverflow extends HTMLElement {
   // ----- Render --------------------------------------------------------------
 
   #render(): void {
-    const moreSlot = h('slot', { name: 'more' }, '⋯');
+    this.#moreSlot = h('slot', { name: 'more' }, overflowGrid(this.#items)) as HTMLSlotElement;
     this.#moreBtn = h(
       'button',
       {
@@ -219,7 +300,7 @@ export class SliccScoopOverflow extends HTMLElement {
         'aria-haspopup': 'true',
         'aria-expanded': 'false',
       },
-      moreSlot
+      this.#moreSlot
     ) as HTMLButtonElement;
     this.#pop = h('div', { class: 'pop', part: 'pop' }) as HTMLDivElement;
     this.#wrap = h(
@@ -248,6 +329,9 @@ export class SliccScoopOverflow extends HTMLElement {
     else this.removeAttribute('count');
     this.#wrap.classList.toggle('has-overflow', n > 0);
     this.#moreBtn.setAttribute('aria-haspopup', 'true');
+    const summary = hiddenSummary(this.#items);
+    this.#moreBtn.setAttribute('aria-label', `${summary}. Show hidden scoops`);
+    this.#moreSlot.replaceChildren(overflowGrid(this.#items));
 
     if (n === 0) {
       // No chips left — surface an optional `empty` slot and force the popup shut.

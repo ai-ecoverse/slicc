@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SliccPill } from '../../src/pill/slicc-pill.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
@@ -18,6 +18,10 @@ describe('slicc-pill', () => {
   beforeEach(() => {
     ensureGlobalTokens();
     document.body.replaceChildren();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('registers the custom element', () => {
@@ -64,6 +68,17 @@ describe('slicc-pill', () => {
       expect(el.eyeState).toBe('none');
       el.eyeState = 'dead';
       expect(el.eyeState).toBe('dead');
+    });
+
+    it('reflects track', () => {
+      const el = mount();
+      expect(el.track).toBe(false);
+      el.track = true;
+      expect(el.hasAttribute('track')).toBe(true);
+      el.track = false;
+      expect(el.hasAttribute('track')).toBe(false);
+      el.setAttribute('track', '');
+      expect(el.track).toBe(true);
     });
 
     it('reflects active', () => {
@@ -253,8 +268,8 @@ describe('slicc-pill', () => {
   });
 
   describe('cursor-tracking listener lifecycle', () => {
-    // Only the cone tracks the cursor; scoop chips render open eyes statically.
-    it('moves both pupils toward the cursor on mousemove (cone only)', () => {
+    // By default only the cone tracks; scoop chips require the explicit opt-in.
+    it('moves both pupils toward the cursor on mousemove (cone default)', () => {
       const el = mount((e) => {
         e.type = 'cone';
         e.label = 'x';
@@ -273,17 +288,71 @@ describe('slicc-pill', () => {
       expect(right.getAttribute('transform')).toMatch(/^translate\(/);
     });
 
-    it('does not track the cursor for a scoop chip (only the cone tracks)', () => {
+    it('does not track the cursor for a plain scoop chip', () => {
+      const add = vi.spyOn(document, 'addEventListener');
       const el = mount((e) => {
         e.type = 'scoop';
         e.label = 'researcher';
       });
+      expect(add.mock.calls.some(([type]) => type === 'mousemove')).toBe(false);
       // Sanity: an open scoop chip still renders live pupils, just static ones.
       const left = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
       expect(left).toBeTruthy();
       document.dispatchEvent(new MouseEvent('mousemove', { clientX: 800, clientY: 800 }));
       // No listener was attached, so the pupil transform is never written.
       expect(left.getAttribute('transform')).toBeNull();
+    });
+
+    it('adds and removes the same listener when track toggles', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const remove = vi.spyOn(document, 'removeEventListener');
+      const el = mount((e) => {
+        e.type = 'scoop';
+      });
+
+      el.setAttribute('track', '');
+      const onMove = add.mock.calls.find(([type]) => type === 'mousemove')?.[1];
+      expect(onMove).toEqual(expect.any(Function));
+      const trackedPupil = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 800, clientY: 800 }));
+      expect(trackedPupil.getAttribute('transform')).toMatch(/^translate\(/);
+
+      el.removeAttribute('track');
+      expect(remove).toHaveBeenCalledWith('mousemove', onMove);
+      const staticPupil = el.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 10, clientY: 10 }));
+      expect(staticPupil.getAttribute('transform')).toBeNull();
+    });
+
+    it('unbinds and rebinds tracking when eyes change with track set', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const remove = vi.spyOn(document, 'removeEventListener');
+      const el = mount((e) => {
+        e.type = 'scoop';
+        e.track = true;
+      });
+      const firstOnMove = add.mock.calls.find(([type]) => type === 'mousemove')?.[1];
+
+      el.eyeState = 'none';
+      expect(remove).toHaveBeenCalledWith('mousemove', firstOnMove);
+
+      el.eyeState = 'open';
+      const moveListeners = add.mock.calls.filter(([type]) => type === 'mousemove');
+      expect(moveListeners).toHaveLength(2);
+      expect(moveListeners[1]?.[1]).toEqual(expect.any(Function));
+    });
+
+    it('removes opt-in tracking on disconnect', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const remove = vi.spyOn(document, 'removeEventListener');
+      const el = mount((e) => {
+        e.type = 'scoop';
+        e.track = true;
+      });
+      const onMove = add.mock.calls.find(([type]) => type === 'mousemove')?.[1];
+
+      el.remove();
+      expect(remove).toHaveBeenCalledWith('mousemove', onMove);
     });
 
     it('removes the document listener on disconnect', () => {
