@@ -71,6 +71,7 @@ cloud-core.
 | `WS __slicc/bridge`                   | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit` between tabs and leader; hibernated via `setWebSocketAutoResponse` |
 | `POST __slicc/emit`                   | Fallback beacon relay for `window.slicc.emit` on page unload                                                                                              |
 | `GET /auth/callback`                  | OAuth callback relay; also a capture hop for the cloud dashboard (no `state` → `postMessage` to `window.opener`)                                          |
+| `GET /api/flags`                      | Resolve string flags for `?float=<float>`                                                                                                                 |
 
 **Routes-mirror rule:** every new route must appear in three places:
 
@@ -79,6 +80,12 @@ cloud-core.
 3. `tests/deployed.test.ts` routes-list assertion
 
 Missing any of these causes CI failures.
+
+### Feature Flag Configuration
+
+`FEATURE_FLAGS` is a JSON Wrangler var shaped as `{ base: string map, floats: per-float
+string maps }`. Float maps overlay `base`; invalid profiles use base.
+Deploy required; KV/R2 hot reload is future work.
 
 ### Signaling Model
 
