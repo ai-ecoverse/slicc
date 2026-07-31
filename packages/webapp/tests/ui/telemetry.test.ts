@@ -276,6 +276,19 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
   });
 
+  it('trackLickBackpressure emits a dedicated non-error checkpoint', async () => {
+    const { initTelemetry, trackLickBackpressure } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackLickBackpressure('researcher', 300_000);
+    expect(mockSampleRUM).toHaveBeenCalledWith('lick-backpressure', {
+      source: 'researcher',
+      target: '300000',
+    });
+    expect(mockSampleRUM.mock.calls.some(([checkpoint]) => checkpoint === 'error')).toBe(false);
+  });
+
   it('trackImageView emits viewmedia', async () => {
     const { initTelemetry, trackImageView } = await import('../../src/ui/telemetry.js');
     await initTelemetry();

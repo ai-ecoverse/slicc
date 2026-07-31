@@ -14,6 +14,7 @@ import {
   createWcLiveCallbacks,
   metaThinkingForScoop,
   parseProcStatLine,
+  prepareWcShell,
   scoopColor,
   thinkingLevelForAgent,
   toSwitcherScoops,
@@ -59,6 +60,7 @@ describe('scoopColor / toSwitcherScoops', () => {
 interface FakeWiring extends WcLiveWiring {
   controller: {
     setProcessing: ReturnType<typeof vi.fn>;
+    setLickBackpressure: ReturnType<typeof vi.fn>;
     addLickMessage: ReturnType<typeof vi.fn>;
     updateLickState: ReturnType<typeof vi.fn>;
     loadMessages: ReturnType<typeof vi.fn>;
@@ -71,6 +73,7 @@ function makeWiring(options: {
 }): FakeWiring {
   const controller = {
     setProcessing: vi.fn(),
+    setLickBackpressure: vi.fn(),
     addLickMessage: vi.fn(),
     updateLickState: vi.fn(),
     loadMessages: vi.fn(),
@@ -142,6 +145,16 @@ describe('createWcLiveCallbacks', () => {
     const chips = wiring.refs.switcher.scoops;
     expect(chips.find((c) => c.key === 'scoop-err')?.eyes).toBe('dead');
     expect(chips.find((c) => c.key === 'cone-1')?.eyes).toBe('open');
+  });
+
+  it('routes lick backpressure for the selected scoop only', () => {
+    const researcher = scoop({ jid: 'scoop-r', name: 'researcher' });
+    const wiring = makeWiring({ selected: researcher });
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onLickBackpressure?.(researcher.jid, { count: 3, waitingMs: 300_000 });
+    callbacks.onLickBackpressure?.('other-jid', { count: 2, waitingMs: 300_000 });
+    expect(wiring.controller.setLickBackpressure).toHaveBeenCalledOnce();
+    expect(wiring.controller.setLickBackpressure).toHaveBeenCalledWith(3, 300_000, 'researcher');
   });
 
   it('selects the first created scoop when nothing is selected', () => {
@@ -243,6 +256,50 @@ describe('createWcLiveCallbacks', () => {
     const wiring = makeWiring({ selected: null, scoops: [scoop({}), cone] });
     createWcLiveCallbacks(wiring).onReady?.();
     expect(wiring.selectScoop).toHaveBeenCalledWith(cone);
+  });
+});
+
+describe('prepareWcShell scoop selection', () => {
+  it('clears lick backpressure synchronously when switching scoops', () => {
+    const app = document.createElement('div');
+    const boot = prepareWcShell(app, 'test');
+    let noticeCount = 0;
+    const controller = {
+      getQueuedMessages: () => [],
+      setLickBackpressure: vi.fn((count: number) => {
+        noticeCount = count;
+      }),
+      setProcessing: vi.fn(),
+    };
+    let selectedScoopJid: string | null = null;
+    const unresolvedMessageLoad = new Promise<never>(() => undefined);
+    const client = {
+      get selectedScoopJid() {
+        return selectedScoopJid;
+      },
+      setSelectedScoopJid: vi.fn((jid: string) => {
+        selectedScoopJid = jid;
+      }),
+      requestScoopMessages: vi.fn(() => unresolvedMessageLoad),
+      isProcessing: vi.fn(() => false),
+      deleteQueuedMessage: vi.fn(async () => undefined),
+    };
+    const first = scoop({ jid: 'scoop-a', name: 'first' });
+    const second = scoop({ jid: 'scoop-b', name: 'second' });
+    boot.setController(controller as never);
+    boot.setClient(client as never);
+    boot.selectScoop(first);
+    createWcLiveCallbacks(boot.wiring).onLickBackpressure?.(first.jid, {
+      count: 3,
+      waitingMs: 300_000,
+    });
+    expect(noticeCount).toBe(3);
+
+    boot.selectScoop(second);
+
+    expect(noticeCount).toBe(0);
+    expect(controller.setLickBackpressure).toHaveBeenLastCalledWith(0, 0, 'second');
+    expect(client.requestScoopMessages).toHaveBeenLastCalledWith(second.jid);
   });
 });
 

@@ -14,7 +14,7 @@ import {
 import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
 import { consumeStaleAssetReplayPending } from '../boot/setup-preload-error-reload.js';
 import { type DipInstance, mountDip } from '../dip.js';
-import { trackChatSend, trackError } from '../telemetry.js';
+import { trackChatSend, trackError, trackLickBackpressure } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {
@@ -48,6 +48,8 @@ export interface QueuedMessageView {
   /** Optional attachment count — shown as a small `+N` hint on the front card. */
   attachments?: number;
 }
+
+const LICK_BACKPRESSURE_NOTICE_ID = 'lick-backpressure-notice';
 
 export interface WcChatControllerOptions {
   /** The `<slicc-chat-thread>` element messages render into. */
@@ -220,6 +222,8 @@ export class WcChatController {
    * synchronously in `sendUserMessage` (delivery cancel is a separate task).
    */
   #queued: ChatMessage[] = [];
+  /** Non-submission notice projected through the existing queued-stack surface. */
+  #lickBackpressureNotice: QueuedMessageView | null = null;
   /** Rendered thread elements per message id (a message can span several). */
   readonly #els = new Map<string, HTMLElement[]>();
   #currentStreamId: string | null = null;
@@ -348,6 +352,11 @@ export class WcChatController {
    * dequeue is tracked separately. No-op for unknown ids.
    */
   removeQueuedMessage(id: string): void {
+    if (id === LICK_BACKPRESSURE_NOTICE_ID && this.#lickBackpressureNotice) {
+      this.#lickBackpressureNotice = null;
+      this.#fireQueuedChange();
+      return;
+    }
     const next = this.#queued.filter((m) => m.id !== id);
     if (next.length === this.#queued.length) return;
     this.#queued = next;
@@ -369,7 +378,29 @@ export class WcChatController {
   }
 
   #fireQueuedChange(): void {
-    this.#onQueuedChange?.(this.#queued.map(toQueuedView));
+    const items = this.#queued.map(toQueuedView);
+    if (this.#lickBackpressureNotice) items.push(this.#lickBackpressureNotice);
+    this.#onQueuedChange?.(items);
+  }
+
+  /** Show or retract sustained lick backpressure without changing turn state. */
+  setLickBackpressure(count: number, waitingMs: number, scoopName: string): void {
+    if (count <= 0) {
+      if (!this.#lickBackpressureNotice) return;
+      this.#lickBackpressureNotice = null;
+      this.#fireQueuedChange();
+      return;
+    }
+    this.#lickBackpressureNotice = {
+      id: LICK_BACKPRESSURE_NOTICE_ID,
+      text: `${count} events waiting for the current turn`,
+    };
+    this.#fireQueuedChange();
+    try {
+      trackLickBackpressure(scoopName, waitingMs);
+    } catch {
+      // Telemetry must never block the notice render.
+    }
   }
 
   /**
@@ -399,6 +430,7 @@ export class WcChatController {
     // `×` dismiss uses so the orchestrator never delivers a prompt the user
     // implicitly dropped by switching away. The hook is fired BEFORE we clear
     // the local queue so a throwing host can't strand entries half-dropped.
+    const hadQueuedSurface = this.#queued.length > 0 || this.#lickBackpressureNotice !== null;
     if (this.#queued.length > 0) {
       if (this.#onQueuedCancel) {
         for (const message of this.#queued) {
@@ -410,8 +442,9 @@ export class WcChatController {
         }
       }
       this.#queued = [];
-      this.#fireQueuedChange();
     }
+    this.#lickBackpressureNotice = null;
+    if (hadQueuedSurface) this.#fireQueuedChange();
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
     this.#messages = collateLickMessages(messages);
     // A canonical replay can land mid-turn (rehydrate after a scoop switch /
@@ -682,7 +715,13 @@ export class WcChatController {
     // no double flush, so items queued mid-turn keep waiting for the NEXT
     // turn's rising edge.
     if (processing) this.#flushQueued();
-    if (!processing) this.#syncCopyRow();
+    if (!processing) {
+      if (this.#lickBackpressureNotice) {
+        this.#lickBackpressureNotice = null;
+        this.#fireQueuedChange();
+      }
+      this.#syncCopyRow();
+    }
     this.#onProcessingChange?.(processing);
     // Mirror the local turn lifecycle to tray followers (leader only — the
     // hook is set by `wireLeaderHooks`). The live float never emits a

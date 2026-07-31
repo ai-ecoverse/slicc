@@ -45,6 +45,7 @@ describe('OffscreenClient', () => {
     onScoopListUpdate: vi.fn(),
     onIncomingMessage: vi.fn(),
     onMessageUpdate: vi.fn(),
+    onLickBackpressure: vi.fn(),
     onScoopActivity: vi.fn(),
   };
 
@@ -295,6 +296,20 @@ describe('OffscreenClient', () => {
     });
 
     expect(events).toEqual([{ type: 'error', error: 'Something went wrong' }]);
+  });
+
+  it('routes lick backpressure through its dedicated callback', () => {
+    simulateMessage('offscreen', {
+      type: 'lick-backpressure',
+      scoopJid: 'cone_123',
+      count: 4,
+      waitingMs: 300_000,
+    });
+
+    expect(callbacks.onLickBackpressure).toHaveBeenCalledWith('cone_123', {
+      count: 4,
+      waitingMs: 300_000,
+    });
   });
 
   it('sends request-state', () => {
