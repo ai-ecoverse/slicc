@@ -187,7 +187,9 @@ function rpcErrorFromFrame(
   frame: JsonRpcResponseFrame,
   expectedId: number
 ): McpRpcError | undefined {
-  if (frame.jsonrpc !== '2.0' || frame.id !== expectedId) return undefined;
+  if (frame.jsonrpc !== '2.0' || frame.id !== expectedId || Object.hasOwn(frame, 'result')) {
+    return undefined;
+  }
   const error = frame.error;
   return error && typeof error.code === 'number' && typeof error.message === 'string'
     ? error

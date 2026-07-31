@@ -339,6 +339,16 @@ describe('McpClient: protocol negotiation', () => {
   it.each([
     ['mismatched request id', (id: number) => jsonRpcError(id + 1, -32601, 'Method not found')],
     [
+      'result and error fields',
+      (id: number) =>
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          result: {},
+          error: { code: -32601, message: 'Method not found' },
+        }),
+    ],
+    [
       'invalid JSON-RPC envelope',
       (id: number) =>
         JSON.stringify({
