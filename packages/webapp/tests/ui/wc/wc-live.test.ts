@@ -87,6 +87,7 @@ function makeWiring(options: {
     controller,
     statuses: new Map(),
     fills: new Map(),
+    lickBackpressure: new Map(),
     lastActivity: new Map(),
     pendingUrlContext: null,
     getController: () => controller as never,
@@ -147,7 +148,7 @@ describe('createWcLiveCallbacks', () => {
     expect(chips.find((c) => c.key === 'cone-1')?.eyes).toBe('open');
   });
 
-  it('routes lick backpressure for the selected scoop only', () => {
+  it('caches lick backpressure for every scoop and renders only the selected scoop', () => {
     const researcher = scoop({ jid: 'scoop-r', name: 'researcher' });
     const wiring = makeWiring({ selected: researcher });
     const callbacks = createWcLiveCallbacks(wiring);
@@ -155,6 +156,7 @@ describe('createWcLiveCallbacks', () => {
     callbacks.onLickBackpressure?.('other-jid', { count: 2, waitingMs: 300_000 });
     expect(wiring.controller.setLickBackpressure).toHaveBeenCalledOnce();
     expect(wiring.controller.setLickBackpressure).toHaveBeenCalledWith(3, 300_000, 'researcher');
+    expect(wiring.lickBackpressure.get('other-jid')).toEqual({ count: 2, waitingMs: 300_000 });
   });
 
   it('selects the first created scoop when nothing is selected', () => {
@@ -260,7 +262,7 @@ describe('createWcLiveCallbacks', () => {
 });
 
 describe('prepareWcShell scoop selection', () => {
-  it('clears lick backpressure synchronously when switching scoops', () => {
+  it('shows cached backpressure when its scoop is selected and honors an unselected retraction', () => {
     const app = document.createElement('div');
     const boot = prepareWcShell(app, 'test');
     let noticeCount = 0;
@@ -273,6 +275,8 @@ describe('prepareWcShell scoop selection', () => {
     };
     let selectedScoopJid: string | null = null;
     const unresolvedMessageLoad = new Promise<never>(() => undefined);
+    const first = scoop({ jid: 'scoop-a', name: 'first' });
+    const second = scoop({ jid: 'scoop-b', name: 'second' });
     const client = {
       get selectedScoopJid() {
         return selectedScoopJid;
@@ -283,23 +287,38 @@ describe('prepareWcShell scoop selection', () => {
       requestScoopMessages: vi.fn(() => unresolvedMessageLoad),
       isProcessing: vi.fn(() => false),
       deleteQueuedMessage: vi.fn(async () => undefined),
+      getScoops: vi.fn(() => [first, second]),
     };
-    const first = scoop({ jid: 'scoop-a', name: 'first' });
-    const second = scoop({ jid: 'scoop-b', name: 'second' });
     boot.setController(controller as never);
     boot.setClient(client as never);
-    boot.selectScoop(first);
-    createWcLiveCallbacks(boot.wiring).onLickBackpressure?.(first.jid, {
+    boot.selectScoop(second);
+    const callbacks = createWcLiveCallbacks(boot.wiring);
+    callbacks.onLickBackpressure?.(first.jid, {
       count: 3,
       waitingMs: 300_000,
     });
+    expect(noticeCount).toBe(0);
+
+    boot.selectScoop(first);
     expect(noticeCount).toBe(3);
+    expect(controller.setLickBackpressure).toHaveBeenLastCalledWith(3, 300_000, 'first');
 
     boot.selectScoop(second);
-
+    callbacks.onLickBackpressure?.(first.jid, { count: 0, waitingMs: 0 });
+    boot.selectScoop(first);
     expect(noticeCount).toBe(0);
-    expect(controller.setLickBackpressure).toHaveBeenLastCalledWith(0, 0, 'second');
-    expect(client.requestScoopMessages).toHaveBeenLastCalledWith(second.jid);
+    expect(controller.setLickBackpressure).toHaveBeenLastCalledWith(0, 0, 'first');
+    expect(client.requestScoopMessages).toHaveBeenLastCalledWith(first.jid);
+  });
+
+  it('evicts cached backpressure when a scoop disappears from the registered list', () => {
+    const wiring = makeWiring({ selected: cone, scoops: [cone] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onLickBackpressure?.('removed-scoop', { count: 4, waitingMs: 300_000 });
+    expect(wiring.lickBackpressure.has('removed-scoop')).toBe(true);
+
+    callbacks.onScoopListUpdate([] as never);
+    expect(wiring.lickBackpressure.has('removed-scoop')).toBe(false);
   });
 });
 
