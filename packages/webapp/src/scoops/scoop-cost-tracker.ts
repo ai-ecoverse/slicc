@@ -17,7 +17,14 @@ import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-const BURN_RATE_WINDOW_HOURS = 0.25;
+const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
+
+export const BURN_RATE_RECENT_WINDOW_MS = FIFTEEN_MINUTES_MS;
+export const BURN_RATE_MEDIUM_WINDOW_MS = 60 * 60 * 1000;
+export const BURN_RATE_MIN_SESSION_DURATION_MS = 60 * 1000;
+export const BURN_RATE_RECENT_WEIGHT = 0.5;
+export const BURN_RATE_MEDIUM_WEIGHT = 0.3;
+export const BURN_RATE_SESSION_WEIGHT = 0.2;
 
 export interface ModelCostData {
   model: string;
@@ -155,18 +162,47 @@ export class ScoopCostTracker {
     return results;
   }
 
-  /** Active-session cost in the trailing 15-minute window, extrapolated to dollars per hour. */
+  /**
+   * Weighted USD/hour blend of trailing 15-minute, trailing 60-minute, and
+   * full-session spend, floored at the full-session average.
+   */
   getBurnRate(nowMs = Date.now()): number {
-    const cutoff = nowMs - FIFTEEN_MINUTES_MS;
-    let windowCost = 0;
+    const assistantMessages = this.droppedMessages.flat();
     for (const context of this.deps.getContexts().values()) {
       for (const message of context.getAgentMessages()) {
-        if (message.role === 'assistant' && message.timestamp >= cutoff) {
-          windowCost += message.usage.cost.total;
-        }
+        if (message.role === 'assistant') assistantMessages.push(message);
       }
     }
-    return windowCost / BURN_RATE_WINDOW_HOURS;
+    if (assistantMessages.length === 0) return 0;
+
+    let sessionStartMs = assistantMessages[0].timestamp;
+    for (const message of assistantMessages) {
+      sessionStartMs = Math.min(sessionStartMs, message.timestamp);
+    }
+    const sessionDurationMs = Math.max(nowMs - sessionStartMs, BURN_RATE_MIN_SESSION_DURATION_MS);
+    const recentDurationMs = Math.min(BURN_RATE_RECENT_WINDOW_MS, sessionDurationMs);
+    const mediumDurationMs = Math.min(BURN_RATE_MEDIUM_WINDOW_MS, sessionDurationMs);
+    const recentCutoffMs = nowMs - recentDurationMs;
+    const mediumCutoffMs = nowMs - mediumDurationMs;
+
+    let recentCost = 0;
+    let mediumCost = 0;
+    let sessionCost = 0;
+    for (const message of assistantMessages) {
+      const cost = message.usage.cost.total;
+      sessionCost += cost;
+      if (message.timestamp >= recentCutoffMs) recentCost += cost;
+      if (message.timestamp >= mediumCutoffMs) mediumCost += cost;
+    }
+
+    const recentRate = (recentCost * MILLISECONDS_PER_HOUR) / recentDurationMs;
+    const mediumRate = (mediumCost * MILLISECONDS_PER_HOUR) / mediumDurationMs;
+    const sessionRate = (sessionCost * MILLISECONDS_PER_HOUR) / sessionDurationMs;
+    const blendedRate =
+      recentRate * BURN_RATE_RECENT_WEIGHT +
+      mediumRate * BURN_RATE_MEDIUM_WEIGHT +
+      sessionRate * BURN_RATE_SESSION_WEIGHT;
+    return Math.max(blendedRate, sessionRate);
   }
 
   /**

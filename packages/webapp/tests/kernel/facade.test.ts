@@ -81,7 +81,7 @@ const { mockSessionStore, mockHandleAction, mockHandleSprinkleOpResponse } = vi.
   mockHandleSprinkleOpResponse: vi.fn(),
 }));
 
-vi.mock('../../src/ui/session-store.js', () => ({
+vi.mock('../../src/scoops/chat-session-store.js', () => ({
   SessionStore: mockSessionStore,
 }));
 

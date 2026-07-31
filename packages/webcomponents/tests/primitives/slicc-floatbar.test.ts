@@ -321,7 +321,7 @@ describe('slicc-floatbar', () => {
           dispatchEvent: () => false,
         }) as unknown as MediaQueryList;
 
-    it('renders a decorative tip part derived from the label, spend, and state', () => {
+    it('renders a decorative tip part derived from the label, rate context, and state', () => {
       const el = document.createElement('slicc-floatbar');
       el.label = 'CLI · tray · 1 follower';
       el.online = true;
@@ -333,14 +333,16 @@ describe('slicc-floatbar', () => {
       expect(tip.getAttribute('part')).toBe('tip');
       // decorative — the accessible name rides the host title, not the tip node
       expect(tip.getAttribute('aria-hidden')).toBe('true');
-      expect(tip.textContent).toBe('CLI · tray · 1 follower · $2.41/h · online');
+      expect(tip.textContent).toBe(
+        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+      );
     });
 
     it('reflects the offline state and the zero rate when unset', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
       expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe(
-        'CLI float · $0.00/h · offline'
+        'CLI float · $0.00/h · recency-weighted session avg · offline'
       );
     });
 
@@ -374,7 +376,9 @@ describe('slicc-floatbar', () => {
         el.online = true;
         el.rate = '2.41';
         document.body.appendChild(el);
-        expect(el.getAttribute('title')).toBe('CLI float · $2.41/h · online');
+        expect(el.getAttribute('title')).toBe(
+          'CLI float · $2.41/h · recency-weighted session avg · online'
+        );
       } finally {
         window.matchMedia = original;
       }

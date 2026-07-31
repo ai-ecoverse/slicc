@@ -32,6 +32,7 @@ import { createLogger } from '../core/logger.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import type { SessionStore } from '../scoops/chat-session-store.js';
 import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
@@ -47,7 +48,6 @@ import {
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import { formatChatForClipboard } from './chat-clipboard.js';
-import type { SessionStore } from './session-store.js';
 import type { ChatMessage, Session } from './types.js';
 
 export type {

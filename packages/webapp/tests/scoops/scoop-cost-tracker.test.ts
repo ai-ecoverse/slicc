@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssistantMessage } from '../../src/core/types.js';
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
-import { ScoopCostTracker } from '../../src/scoops/scoop-cost-tracker.js';
+import {
+  BURN_RATE_MEDIUM_WEIGHT,
+  BURN_RATE_MEDIUM_WINDOW_MS,
+  BURN_RATE_MIN_SESSION_DURATION_MS,
+  BURN_RATE_RECENT_WEIGHT,
+  BURN_RATE_RECENT_WINDOW_MS,
+  BURN_RATE_SESSION_WEIGHT,
+  ScoopCostTracker,
+} from '../../src/scoops/scoop-cost-tracker.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
+
+const MINUTE_MS = 60 * 1000;
+const NOW_MS = 2_000_000_000_000;
 
 describe('ScoopCostTracker', () => {
   function createMockScoop(jid: string, label: string, isCone = false): RegisteredScoop {
@@ -30,7 +41,7 @@ describe('ScoopCostTracker', () => {
     outputCost = 0,
     cacheReadCost = 0,
     cacheWriteCost = 0,
-    timestamp = Date.now()
+    timestamp = NOW_MS
   ): AssistantMessage {
     const totalCost = inputCost + outputCost + cacheReadCost + cacheWriteCost;
     return {
@@ -66,6 +77,15 @@ describe('ScoopCostTracker', () => {
       getContexts: () => contextsMap,
     });
   });
+
+  function createCostMessage(cost: number, timestamp: number): AssistantMessage {
+    return createAssistantMessage('model', 100, 50, 0, 0, cost, 0, 0, 0, timestamp);
+  }
+
+  function addLiveMessages(jid: string, messages: AssistantMessage[]): void {
+    scoopsMap.set(jid, createMockScoop(jid, jid));
+    contextsMap.set(jid, createMockContext(messages));
+  }
 
   it('returns live session costs by default and includes dropped costs on request', () => {
     const liveScoop = createMockScoop('live', 'Live Scoop');
@@ -112,43 +132,78 @@ describe('ScoopCostTracker', () => {
     expect(cost.models).toEqual(['model-expensive', 'model-frequent']);
   });
 
-  it('returns zero burn rate when the trailing window is empty', () => {
-    const nowMs = 2_000_000_000_000;
-    const scoop = createMockScoop('idle', 'Idle Scoop');
-    scoopsMap.set('idle', scoop);
-    contextsMap.set(
-      'idle',
-      createMockContext([
-        createAssistantMessage('model', 100, 50, 0, 0, 0.1, 0, 0, 0, nowMs - 15 * 60 * 1000 - 1),
-      ])
-    );
+  describe('burn rate', () => {
+    it('exports the configured windows, floor, and weights', () => {
+      expect(BURN_RATE_RECENT_WINDOW_MS).toBe(15 * MINUTE_MS);
+      expect(BURN_RATE_MEDIUM_WINDOW_MS).toBe(60 * MINUTE_MS);
+      expect(BURN_RATE_MIN_SESSION_DURATION_MS).toBe(MINUTE_MS);
+      expect(BURN_RATE_RECENT_WEIGHT).toBe(0.5);
+      expect(BURN_RATE_MEDIUM_WEIGHT).toBe(0.3);
+      expect(BURN_RATE_SESSION_WEIGHT).toBe(0.2);
+    });
 
-    expect(tracker.getBurnRate(nowMs)).toBe(0);
-  });
+    it('returns zero for an empty session', () => {
+      addLiveMessages('empty', []);
 
-  it('computes burn rate from live messages inside the deterministic trailing window', () => {
-    const nowMs = 2_000_000_000_000;
-    const liveScoop = createMockScoop('live', 'Live Scoop');
-    const droppedScoop = createMockScoop('dropped', 'Dropped Scoop');
-    scoopsMap.set('live', liveScoop);
-    scoopsMap.set('dropped', droppedScoop);
-    contextsMap.set(
-      'live',
-      createMockContext([
-        createAssistantMessage('model', 100, 50, 0, 0, 0.1, 0, 0, 0, nowMs - 5 * 60 * 1000),
-        createAssistantMessage('model', 100, 50, 0, 0, 0.2, 0, 0, 0, nowMs - 15 * 60 * 1000),
-        createAssistantMessage('model', 100, 50, 0, 0, 0.3, 0, 0, 0, nowMs - 15 * 60 * 1000 - 1),
-      ])
-    );
-    contextsMap.set(
-      'dropped',
-      createMockContext([createAssistantMessage('model', 100, 50, 0, 0, 0.5, 0, 0, 0, nowMs - 1)])
-    );
-    tracker.snapshot('dropped');
-    scoopsMap.delete('dropped');
-    contextsMap.delete('dropped');
+      expect(tracker.getBurnRate(NOW_MS)).toBe(0);
+    });
 
-    expect(tracker.getBurnRate(nowMs)).toBeCloseTo(1.2, 10);
+    it('reports the true hourly average for steady spend', () => {
+      const messages = Array.from({ length: 120 }, (_, index) =>
+        createCostMessage(0.01, NOW_MS - (120 - index) * MINUTE_MS)
+      );
+      addLiveMessages('steady', messages);
+
+      expect(tracker.getBurnRate(NOW_MS)).toBeCloseTo(0.6, 10);
+    });
+
+    it('uses the one-minute floor for a single early turn', () => {
+      addLiveMessages('early', [createCostMessage(0.01, NOW_MS)]);
+
+      expect(tracker.getBurnRate(NOW_MS)).toBeCloseTo(0.6, 10);
+    });
+
+    it('stops at the session average after 20 minutes idle', () => {
+      addLiveMessages('idle', [
+        createCostMessage(1, NOW_MS - 40 * MINUTE_MS),
+        createCostMessage(1, NOW_MS - 20 * MINUTE_MS),
+      ]);
+
+      expect(tracker.getBurnRate(NOW_MS)).toBeCloseTo(3, 10);
+    });
+
+    it('never drops below the session average after a burst then idle period', () => {
+      addLiveMessages('burst', [
+        createCostMessage(0.1, NOW_MS - 120 * MINUTE_MS),
+        createCostMessage(10, NOW_MS - 16 * MINUTE_MS),
+      ]);
+      const sessionRate = 10.1 / 2;
+      const rate = tracker.getBurnRate(NOW_MS);
+
+      expect(rate).toBeGreaterThanOrEqual(sessionRate);
+      expect(rate).toBeCloseTo(sessionRate, 10);
+    });
+
+    it('includes dropped-scoop messages in every component', () => {
+      addLiveMessages('dropped', [
+        createCostMessage(1, NOW_MS - 120 * MINUTE_MS),
+        createCostMessage(1, NOW_MS - 5 * MINUTE_MS),
+      ]);
+      tracker.snapshot('dropped');
+      scoopsMap.delete('dropped');
+      contextsMap.delete('dropped');
+
+      expect(tracker.getBurnRate(NOW_MS)).toBeCloseTo(2.5, 10);
+    });
+
+    it('clamps trailing windows to the elapsed session duration', () => {
+      addLiveMessages('clamped', [
+        createCostMessage(0.05, NOW_MS - 5 * MINUTE_MS),
+        createCostMessage(0.05, NOW_MS - MINUTE_MS),
+      ]);
+
+      expect(tracker.getBurnRate(NOW_MS)).toBeCloseTo(1.2, 10);
+    });
   });
 
   it('aggregates costs by model across all live scoops', () => {

@@ -36,7 +36,7 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
-import { SessionStore as UiSessionStore } from '../ui/session-store.js';
+import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
@@ -1006,7 +1006,7 @@ export class Orchestrator implements ConeApprovalRouter {
   async getSessionCostsForCommand(scope: SessionCostScope): Promise<ScoopCostData[]> {
     const costs = this.getSessionCosts({ includeDropped: scope === 'all' });
     if (scope === 'live' || !this.sharedFs) return costs;
-    const { readSessionsIndex } = await import('../ui/session-freezer.js');
+    const { readSessionsIndex } = await import('../transcript/frozen-archive-format.js');
     const frozenSessions = await readSessionsIndex(this.sharedFs);
     return [...costs, ...frozenSessions.map(frozenSessionToCostData)];
   }
@@ -1018,7 +1018,7 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.costTracker.getModelCosts(options);
   }
 
-  /** Active-session spend over the trailing window, extrapolated to dollars per hour. */
+  /** Recency-weighted active-session USD/hour blend, floored at the full-session average. */
   getBurnRate(nowMs?: number): ReturnType<ScoopCostTracker['getBurnRate']> {
     return this.costTracker.getBurnRate(nowMs);
   }

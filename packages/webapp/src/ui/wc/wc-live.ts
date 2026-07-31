@@ -25,6 +25,7 @@ import {
   resolveCurrentModel,
   resolveModelById,
 } from '../../providers/account-store.js';
+import { SessionStore as UiSessionStore } from '../../scoops/chat-session-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
@@ -42,7 +43,6 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
-import { SessionStore as UiSessionStore } from '../session-store.js';
 import type { ChatMessage } from '../types.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
@@ -1031,7 +1031,7 @@ function wireWcComposer(deps: {
   void (async () => {
     try {
       if (shouldSkipSessionHydration(boot.wiring.pendingUrlContext, window)) return;
-      const { SessionStore } = await import('../session-store.js');
+      const { SessionStore } = await import('../../scoops/chat-session-store.js');
       const store = new SessionStore();
       await store.init();
       const session = await store.load('session-cone');

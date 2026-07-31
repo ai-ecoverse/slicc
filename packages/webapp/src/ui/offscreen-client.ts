@@ -59,7 +59,7 @@ void _assertLickWireCarrier;
 export interface SessionStats {
   /** Total session cost (USD) across all scoops, dropped ones included. */
   totalCost: number;
-  /** Active-session spend over the trailing window, extrapolated to USD/hour. */
+  /** Blended 15-minute, 60-minute, and full-session spend rate in USD/hour. */
   burnRate: number;
   /** Per-scoop context-window fill, 0..1 (last assistant turn's usage). */
   fills: Array<{ jid: string; fill: number }>;

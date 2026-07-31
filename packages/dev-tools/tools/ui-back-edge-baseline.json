@@ -1,5 +1,4 @@
 {
-  "packages/webapp/src/kernel/facade.ts": 1,
   "packages/webapp/src/kernel/host.ts": 1,
   "packages/webapp/src/kernel/kernel-worker.ts": 1,
   "packages/webapp/src/kernel/remote-terminal-view.ts": 2,
@@ -9,7 +8,6 @@
   "packages/webapp/src/providers/oauth-service.ts": 1,
   "packages/webapp/src/scoops/agent-message-to-chat.ts": 1,
   "packages/webapp/src/scoops/lick-ws-bridge.ts": 1,
-  "packages/webapp/src/scoops/orchestrator.ts": 2,
   "packages/webapp/src/scoops/sprinkle-bridge-channel.ts": 2,
   "packages/webapp/src/scoops/sprinkle-manager-proxy.ts": 1,
   "packages/webapp/src/scoops/tray-follower-sync.ts": 1,

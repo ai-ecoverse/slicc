@@ -91,7 +91,7 @@ const STYLE = `
   height: 12px;
 }
 
-/* Hover/focus tip surfacing the collapsed label + spend + connection state.
+/* Hover/focus tip surfacing the collapsed label + rate + connection state.
    Hidden in the wide pill (the full label already shows everything); only the
    narrow square badge reveals it, mirroring slicc-pill's dark .tip convention.
    Decorative (aria-hidden); the accessible name rides the host title attribute. */
@@ -272,12 +272,14 @@ export class SliccFloatbar extends HTMLElement {
 
   /**
    * The tooltip text for the narrow square badge — the label, the formatted
-   * hourly rate and connection state, joined with the same ` · `
+   * hourly rate, its recency-weighted session context, and connection state,
+   * joined with the same ` · `
    * separator the verbose label uses, so the collapsed badge stays legible.
    */
   #tipText(): string {
     const parts: string[] = [this.label];
     parts.push(formatRate(this.rate));
+    parts.push('recency-weighted session avg');
     parts.push(this.online ? 'online' : 'offline');
     return parts.join(' · ');
   }

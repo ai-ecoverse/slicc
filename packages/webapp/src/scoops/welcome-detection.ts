@@ -29,7 +29,7 @@ const WELCOMED_MARKER_PATH = '/shared/.welcomed';
 
 /**
  * IndexedDB layer that holds the chat-panel's persisted conversations.
- * Mirrors `ui/session-store.ts` literally — DB name + store + the
+ * Mirrors `scoops/chat-session-store.ts` literally — DB name + store + the
  * `session-cone` key the chat panel uses for the cone scoop. We avoid
  * importing the UI `SessionStore` so this module stays inside the
  * scoops layer (which `main.ts` imports from both CLI and extension
