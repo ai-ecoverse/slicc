@@ -145,9 +145,9 @@
       "regions": 79
     },
     "ios-app": {
-      "lines": 19,
-      "functions": 16,
-      "regions": 18
+      "lines": 47,
+      "functions": 32,
+      "regions": 37
     }
   }
 }

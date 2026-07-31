@@ -35,6 +35,20 @@
                ReferencedContainer = "container:SliccFollower.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "FF48252A89FE80B2D64FDC90"
+               BuildableName = "SliccFollowerUITests.xctest"
+               BlueprintName = "SliccFollowerUITests"
+               ReferencedContainer = "container:SliccFollower.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -63,6 +77,18 @@
                BlueprintIdentifier = "EF35FD5A64E737F1EEFDEDE2"
                BuildableName = "SliccFollowerTests.xctest"
                BlueprintName = "SliccFollowerTests"
+               ReferencedContainer = "container:SliccFollower.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO"
+            testExecutionOrdering = "random">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "FF48252A89FE80B2D64FDC90"
+               BuildableName = "SliccFollowerUITests.xctest"
+               BlueprintName = "SliccFollowerUITests"
                ReferencedContainer = "container:SliccFollower.xcodeproj">
             </BuildableReference>
          </TestableReference>

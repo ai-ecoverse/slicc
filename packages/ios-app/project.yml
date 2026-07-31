@@ -47,12 +47,24 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
+  SliccFollowerUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFollower/Tests/SliccFollowerUITests
+    dependencies:
+      - target: SliccFollower
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.uitests
+        TEST_TARGET_NAME: SliccFollower
 schemes:
   SliccFollower:
     build:
       targets:
         SliccFollower: all
         SliccFollowerTests: [test]
+        SliccFollowerUITests: [test]
     test:
       gatherCoverageData: true
       coverageTargets:
@@ -60,6 +72,14 @@ schemes:
       targets:
         - name: SliccFollowerTests
           parallelizable: true
+          randomExecutionOrder: true
+        # Serial on purpose. Each UI test is independent — it launches its own
+        # app process with its own launch arguments — but cloning simulators
+        # for a UI bundle races the runner install, and the clone that loses
+        # fails preflight with "Busy" before any test runs. Random order still
+        # holds, so the independence these tests are written for stays enforced.
+        - name: SliccFollowerUITests
+          parallelizable: false
           randomExecutionOrder: true
 packages:
   WebRTC:

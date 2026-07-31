@@ -71,6 +71,16 @@ if [[ -n "$XCODE_SCHEME" ]]; then
     echo "::error::No available iPhone simulator (install one via 'xcodebuild -downloadPlatform iOS')"
     exit 1
   fi
+  # Boot the simulator and block until it reports ready, instead of letting
+  # `xcodebuild test` boot it lazily. A UI-test runner attaching to a
+  # still-booting device dies with "Timed out while loading Accessibility",
+  # which aborts the whole session before a single test runs — so
+  # `-retry-tests-on-failure` cannot rescue it, as that retries failed tests,
+  # not a runner that never initialized.
+  echo "==> waiting for simulator $UDID to finish booting"
+  xcrun simctl bootstatus "$UDID" -b ||
+    echo "::warning::simctl bootstatus did not report a clean boot; continuing"
+
   echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
   # xcodebuild refuses to overwrite an existing result bundle, so a second local
   # run would fail before ever reaching the tests.

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434BBAD25E91BD0B7D626821 /* AppState.swift */; };
+		09FE7E5B6F63D6850F2EBFBE /* UITestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1308398CD972FF297E2C75 /* UITestHooks.swift */; };
 		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
 		15CF4C85551B4FE239D55E94 /* SliccIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438577405ABBCA33F117862C /* SliccIcons.swift */; };
 		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
@@ -18,11 +19,13 @@
 		472BB1BEB4E248916156C9EE /* tray-sync-corpus.json in Resources */ = {isa = PBXBuildFile; fileRef = FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */; };
 		4874F8858460397F336DE469 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = CEF104FB1C3EDA0B98BC5FFF /* WebRTC */; };
 		487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */; };
+		4A9B912F64233A5C73E57DB4 /* FixtureConversationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */; };
 		532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E99369A8A6B1A9B8EBE996E /* WebKit.framework */; };
 		541C36C1FB80D6EDBA337FE6 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */; };
 		58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */; };
 		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
 		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
+		67EC4D5BDDC4014A965FF5B4 /* ConnectionRouteUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */; };
 		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
 		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
 		7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */; };
@@ -52,6 +55,13 @@
 			remoteGlobalIDString = DF5C349429D85D6ADB077CD0;
 			remoteInfo = SliccFollower;
 		};
+		3D924F53B6D8324A7CF26640 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 54B6C2249B6DB4AE685DD53E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DF5C349429D85D6ADB077CD0;
+			remoteInfo = SliccFollower;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -73,9 +83,11 @@
 		618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocol.swift; sourceTree = "<group>"; };
 		639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChunkFramingTests.swift; sourceTree = "<group>"; };
 		7E727142147B0FB449F418D1 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
+		88219CD0B963530C38CE40FB /* SliccFollowerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SliccFollowerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
 		9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocolCorpusTests.swift; sourceTree = "<group>"; };
+		A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureConversationUITests.swift; sourceTree = "<group>"; };
 		A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AF78C09597C5D63A373EB126 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
 		B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -88,8 +100,10 @@
 		C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SprinkleWebView.swift; sourceTree = "<group>"; };
 		CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBar.swift; sourceTree = "<group>"; };
 		CFEC70BAB27CC325BCD99C01 /* SliccFollowerTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SliccFollowerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD1308398CD972FF297E2C75 /* UITestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestHooks.swift; sourceTree = "<group>"; };
 		F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F0A069AA812629AC5FE70AC9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRouteUITests.swift; sourceTree = "<group>"; };
 		FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tray-sync-corpus.json"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -124,6 +138,7 @@
 			children = (
 				434BBAD25E91BD0B7D626821 /* AppState.swift */,
 				C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */,
+				DD1308398CD972FF297E2C75 /* UITestHooks.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -133,6 +148,7 @@
 			children = (
 				C00DD8A5F90DA65983AA6601 /* SliccFollower.app */,
 				CFEC70BAB27CC325BCD99C01 /* SliccFollowerTests.xctest */,
+				88219CD0B963530C38CE40FB /* SliccFollowerUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -161,9 +177,20 @@
 			children = (
 				BB5014359700AC04F578180A /* SliccFollower */,
 				32BEF7BC73FC1288DC470211 /* SliccFollowerTests */,
+				7F41C1476E661236B93AE3D7 /* SliccFollowerUITests */,
 				B2AAEACBF84A968A5C6054DD /* Frameworks */,
 				4F9716065FA89F76CAF30D9E /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		7F41C1476E661236B93AE3D7 /* SliccFollowerUITests */ = {
+			isa = PBXGroup;
+			children = (
+				FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */,
+				A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */,
+			);
+			name = SliccFollowerUITests;
+			path = SliccFollower/Tests/SliccFollowerUITests;
 			sourceTree = "<group>";
 		};
 		8004F77F534D7D3B9F54E8C3 /* Views */ = {
@@ -288,6 +315,24 @@
 			productReference = CFEC70BAB27CC325BCD99C01 /* SliccFollowerTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		FF48252A89FE80B2D64FDC90 /* SliccFollowerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 24D3619F007563D9014EB45D /* Build configuration list for PBXNativeTarget "SliccFollowerUITests" */;
+			buildPhases = (
+				8FA602BBB356290A90DFBA7B /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7595BF89A13B56013568F142 /* PBXTargetDependency */,
+			);
+			name = SliccFollowerUITests;
+			packageProductDependencies = (
+			);
+			productName = SliccFollowerUITests;
+			productReference = 88219CD0B963530C38CE40FB /* SliccFollowerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -297,6 +342,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					FF48252A89FE80B2D64FDC90 = {
+						TestTargetID = DF5C349429D85D6ADB077CD0;
+					};
 				};
 			};
 			buildConfigurationList = 72096B669C8B76EFAEF1AC1F /* Build configuration list for PBXProject "SliccFollower" */;
@@ -318,6 +366,7 @@
 			targets = (
 				DF5C349429D85D6ADB077CD0 /* SliccFollower */,
 				EF35FD5A64E737F1EEFDEDE2 /* SliccFollowerTests */,
+				FF48252A89FE80B2D64FDC90 /* SliccFollowerUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -372,7 +421,17 @@
 				487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */,
 				D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */,
 				8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */,
+				09FE7E5B6F63D6850F2EBFBE /* UITestHooks.swift in Sources */,
 				238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8FA602BBB356290A90DFBA7B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				67EC4D5BDDC4014A965FF5B4 /* ConnectionRouteUITests.swift in Sources */,
+				4A9B912F64233A5C73E57DB4 /* FixtureConversationUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -389,6 +448,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		7595BF89A13B56013568F142 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DF5C349429D85D6ADB077CD0 /* SliccFollower */;
+			targetProxy = 3D924F53B6D8324A7CF26640 /* PBXContainerItemProxy */;
+		};
 		848263A7AC089AF8851BD101 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = DF5C349429D85D6ADB077CD0 /* SliccFollower */;
@@ -418,6 +482,26 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		09725B910ED157E57DE3096A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sliccy.follower.uitests;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SliccFollower;
 			};
 			name = Release;
 		};
@@ -594,6 +678,26 @@
 			};
 			name = Debug;
 		};
+		CAE235A54EA0A4097FC7179B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sliccy.follower.uitests;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SliccFollower;
+			};
+			name = Debug;
+		};
 		D32C961F5ABE2A1D6FF64AAB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -617,6 +721,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		24D3619F007563D9014EB45D /* Build configuration list for PBXNativeTarget "SliccFollowerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CAE235A54EA0A4097FC7179B /* Debug */,
+				09725B910ED157E57DE3096A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		5BB123793342DC590D40B995 /* Build configuration list for PBXNativeTarget "SliccFollower" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
