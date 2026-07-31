@@ -70,6 +70,26 @@ describe('feature flag registry', () => {
     ).toBe('off');
   });
 
+  it('ignores a local override for a flag that is not user-toggleable', async () => {
+    vi.resetModules();
+    const freeze = vi
+      .spyOn(Object, 'freeze')
+      .mockImplementation(<T>(value: T): Readonly<T> => value);
+    const fixture = await import('../../src/core/feature-flags.js').finally(() => {
+      freeze.mockRestore();
+    });
+    const definition = fixture.listFlags()[0] as { userToggleable: boolean };
+    definition.userToggleable = false;
+    localStorage.setItem(
+      fixture.FEATURE_FLAG_STORAGE_KEY,
+      JSON.stringify({ 'experimental-settings': 'on' })
+    );
+
+    fixture.initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+
+    expect(fixture.getFeatureValue('experimental-settings')).toBe('off');
+  });
+
   it('resolves local override before central value before bundled default', () => {
     expect(resolveFlags('standalone', { 'experimental-settings': 'off' })).toEqual({
       'experimental-settings': 'off',

@@ -7,6 +7,7 @@
  * (tray-join, auto-join) stay on the legacy dialog via the connect surface.
  */
 
+import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
 import { getDiscoveryEnabled, setDiscoveryEnabled } from '../discovery-preference.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
@@ -356,6 +357,31 @@ function buildBrowsingPreferencesSection(): HTMLElement {
   row.append(label, check);
   section.append(row);
   return section;
+}
+
+function buildExperimentalSection(): HTMLElement[] {
+  if (!isFeatureEnabled('experimental-settings')) return [];
+  const section = div('wcset__add');
+  section.append(div('wcset__section-label', 'Experimental'));
+  for (const flag of listFlags().filter((candidate) => candidate.userToggleable)) {
+    const row = div('wcset__toggle-row');
+    const info = div('wcset__info');
+    const label = document.createElement('label');
+    const check = document.createElement('input');
+    check.id = `wcset-feature-${flag.id}`;
+    check.type = 'checkbox';
+    check.checked = isFeatureEnabled(flag.id);
+    label.htmlFor = check.id;
+    label.textContent = flag.label;
+    info.append(label, div('wcset__detail', flag.description));
+    check.addEventListener('change', () => {
+      setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
+      check.checked = isFeatureEnabled(flag.id);
+    });
+    row.append(info, check);
+    section.append(row);
+  }
+  return [section];
 }
 
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
@@ -887,7 +913,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    body.append(list, addSectionSlot, status);
+    body.append(list, addSectionSlot, ...buildExperimentalSection(), status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
