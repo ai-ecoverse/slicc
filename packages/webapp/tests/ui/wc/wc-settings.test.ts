@@ -11,6 +11,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
+import { FEATURE_FLAG_STORAGE_KEY, initFeatureFlags } from '../../../src/core/feature-flags.js';
 import {
   accountDetail,
   maskKey,
@@ -35,6 +36,10 @@ function findTimestampToggle(dialog: HTMLElement): HTMLInputElement | null {
   );
   const row = label?.parentElement;
   return (row?.querySelector('input[type="checkbox"]') as HTMLInputElement | null) ?? null;
+}
+
+function findExperimentalToggle(dialog: HTMLElement): HTMLInputElement | null {
+  return dialog.querySelector('#wcset-feature-experimental-settings');
 }
 
 const log = { error: vi.fn() };
@@ -64,6 +69,8 @@ function clickDone(dialog: HTMLElement): void {
 afterEach(() => {
   localStorage.removeItem('slicc_accounts');
   localStorage.removeItem('slicc_show_timestamps');
+  localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+  initFeatureFlags('standalone');
   document.body.replaceChildren();
 });
 
@@ -94,6 +101,95 @@ describe('accountDetail', () => {
 });
 
 describe('showWcSettings', () => {
+  it('shows user-toggleable experimental flags in a web UI float', async () => {
+    initFeatureFlags('standalone');
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.textContent).toContain('Experimental');
+    expect(dialog.textContent).toContain('Show controls for experimental features.');
+    expect(findExperimentalToggle(dialog)?.checked).toBe(true);
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('omits the experimental section entirely in Cherry', async () => {
+    initFeatureFlags('cherry');
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.textContent).not.toContain('Experimental');
+    expect(findExperimentalToggle(dialog)).toBeNull();
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('round-trips experimental toggle changes as string overrides', async () => {
+    initFeatureFlags('standalone');
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+    const toggle = findExperimentalToggle(dialog);
+    expect(toggle).toBeTruthy();
+
+    toggle!.checked = false;
+    toggle!.dispatchEvent(new Event('change'));
+    expect(toggle!.checked).toBe(false);
+    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toEqual({
+      'experimental-settings': 'off',
+    });
+
+    toggle!.checked = true;
+    toggle!.dispatchEvent(new Event('change'));
+    expect(toggle!.checked).toBe(true);
+    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toEqual({
+      'experimental-settings': 'on',
+    });
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('persists the experimental override across dialog close and reopen', async () => {
+    initFeatureFlags('standalone');
+    const firstResult = showWcSettings(log);
+    const firstDialog = await openDialog();
+    const toggle = findExperimentalToggle(firstDialog);
+    expect(toggle).toBeTruthy();
+    toggle!.checked = false;
+    toggle!.dispatchEvent(new Event('change'));
+    clickDone(firstDialog);
+    await firstResult;
+
+    const reopenedResult = showWcSettings(log);
+    const reopenedDialog = await openDialog();
+    expect(reopenedDialog.textContent).not.toContain('Experimental');
+    expect(findExperimentalToggle(reopenedDialog)).toBeNull();
+    clickDone(reopenedDialog);
+    await reopenedResult;
+  });
+
+  it('restores the persisted override after reload-equivalent initialization', async () => {
+    initFeatureFlags('standalone');
+    const firstResult = showWcSettings(log);
+    const firstDialog = await openDialog();
+    const toggle = findExperimentalToggle(firstDialog);
+    expect(toggle).toBeTruthy();
+    toggle!.checked = false;
+    toggle!.dispatchEvent(new Event('change'));
+    clickDone(firstDialog);
+    await firstResult;
+
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const reloadedResult = showWcSettings(log);
+    const reloadedDialog = await openDialog();
+    expect(reloadedDialog.textContent).not.toContain('Experimental');
+    expect(findExperimentalToggle(reloadedDialog)).toBeNull();
+    clickDone(reloadedDialog);
+    await reloadedResult;
+  });
+
   it('lists connected accounts and resolves false when nothing changed', async () => {
     seedAccounts([{ providerId: 'mystery-llm', apiKey: 'sk-abcdefghijklmnop' }]);
     const result = showWcSettings(log);
