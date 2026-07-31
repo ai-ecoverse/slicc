@@ -42,6 +42,7 @@ vi.mock('../../src/ui/chat-panel.js', () => ({
       .join(''),
 }));
 
+import type { SessionStore } from '../../src/scoops/chat-session-store.js';
 import { applyDictationMarkers } from '../../src/speech/dictation-priming.js';
 import {
   enrichPendingSession,
@@ -51,7 +52,6 @@ import {
   parseFrozenArchive,
   readSessionsIndex,
 } from '../../src/ui/session-freezer.js';
-import type { SessionStore } from '../../src/ui/session-store.js';
 
 /**
  * Minimal VirtualFS double — just the subset the freezer touches. Backed by

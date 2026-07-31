@@ -11,6 +11,7 @@ import type { Api, Model } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
 import type { DirEntry } from '../fs/types.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import { SessionStore } from '../scoops/chat-session-store.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
@@ -20,7 +21,6 @@ import {
   freezeConeSession,
   markSnapshotUnavailable,
 } from './session-freezer.js';
-import { SessionStore } from './session-store.js';
 
 const log = createLogger('new-session');
 

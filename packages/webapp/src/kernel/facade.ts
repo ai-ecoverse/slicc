@@ -12,6 +12,7 @@ import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
+import { SessionStore } from '../scoops/chat-session-store.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
@@ -27,7 +28,6 @@ import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
-import { SessionStore } from '../ui/session-store.js';
 import type {
   AgentEventMsg,
   ErrorMsg,

@@ -46,7 +46,7 @@ const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockHandleAction: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../src/ui/session-store.js', () => ({
+vi.mock('../../src/scoops/chat-session-store.js', () => ({
   SessionStore: mockSessionStore,
 }));
 
@@ -60,7 +60,7 @@ vi.mock('../../src/tools/tool-ui.js', () => ({
 }));
 
 const { Bridge } = await import('../../src/kernel/facade.js');
-const { SessionStore } = await import('../../src/ui/session-store.js');
+const { SessionStore } = await import('../../src/scoops/chat-session-store.js');
 
 describe('Bridge createCallbacks', () => {
   let bridge: InstanceType<typeof Bridge>;

@@ -860,7 +860,7 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | Change preview service worker          | `packages/webapp/src/ui/preview-sw.ts`                                                       |
 | Change provider/model selection        | `packages/webapp/src/ui/provider-settings.ts`                                                |
 | Change theme handling                  | `packages/webapp/src/ui/theme.ts`                                                            |
-| Change session storage                 | `packages/webapp/src/ui/session-store.ts`                                                    |
+| Change session storage                 | `packages/webapp/src/scoops/chat-session-store.ts`                                           |
 
 ### CLI Server
 

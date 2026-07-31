@@ -17,7 +17,7 @@ vi.mock('../../src/ui/provider-settings.js', () => ({
 vi.mock('../../src/scoops/llm-session-id.js', () => ({ getDailyAdobeUuid: () => 'uuid-x' }));
 
 const mockInit = vi.fn(async () => {});
-vi.mock('../../src/ui/session-store.js', () => ({
+vi.mock('../../src/scoops/chat-session-store.js', () => ({
   SessionStore: class {
     init = mockInit;
   },
