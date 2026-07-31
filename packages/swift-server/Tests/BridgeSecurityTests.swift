@@ -163,13 +163,12 @@ final class BridgeSecurityTests: XCTestCase {
     }
 
     func testBuildCorsHeadersExposesProxyResponseMarkers() {
-        // Clients read X-Proxy-Error (isProxyError) and X-Proxy-Set-Cookie
-        // (decodeForbiddenResponseHeaders) from the response, so both must be
-        // listed in Access-Control-Expose-Headers.
+        // Clients read proxy markers and MCP negotiation/session headers from
+        // the response, so all must be listed in Access-Control-Expose-Headers.
         let headers = BridgeSecurity.buildCorsHeaders(origin: "https://www.sliccy.ai")
         XCTAssertEqual(
             headers?[HTTPField.Name("Access-Control-Expose-Headers")!],
-            "Link, X-Proxy-Error, X-Proxy-Set-Cookie"
+            "Link, X-Proxy-Error, X-Proxy-Set-Cookie, Mcp-Session-Id, MCP-Protocol-Version"
         )
     }
 
