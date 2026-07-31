@@ -1,8 +1,37 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockGetAccounts, mockGetOAuthAccountInfo, mockSaveOAuthAccount } = vi.hoisted(() => ({
+  mockGetAccounts: vi.fn(),
+  mockGetOAuthAccountInfo: vi.fn(),
+  mockSaveOAuthAccount: vi.fn(),
+}));
+
+vi.mock('../../../src/providers/account-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/providers/account-store.js')>();
+  return {
+    ...actual,
+    getAccounts: mockGetAccounts,
+    getOAuthAccountInfo: mockGetOAuthAccountInfo,
+    saveOAuthAccount: mockSaveOAuthAccount,
+  };
+});
+
+vi.mock('../../../src/providers/oauth-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/providers/oauth-service.js')>();
+  return {
+    ...actual,
+    getOAuthPageOrigin: async () => ({
+      origin: 'http://localhost:5710',
+      href: 'http://localhost:5710/',
+    }),
+  };
+});
+
 import {
   getRegisteredProviderConfig,
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
+import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
 import {
   ensureMcpProviderRegistered,
   mcpProviderId,
@@ -52,6 +81,46 @@ const SERVERS_JSON = JSON.stringify({
     },
   },
 });
+
+function makeOAuthFetch(scopes: { login?: string; refresh?: string } = {}): FetchLike {
+  return async (url, init) => {
+    const json = (body: unknown) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify(body),
+      json: async () => body,
+      headers: { get: () => null },
+    });
+    if (url.includes('/.well-known/oauth-protected-resource')) {
+      return json({ authorization_servers: ['https://auth.synth.example.com'] });
+    }
+    if (url.includes('/.well-known/oauth-authorization-server')) {
+      return json({
+        issuer: 'https://auth.synth.example.com',
+        authorization_endpoint: 'https://auth.synth.example.com/authorize',
+        token_endpoint: 'https://auth.synth.example.com/token',
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+      });
+    }
+    if (url === 'https://auth.synth.example.com/token') {
+      const grantType = new URLSearchParams(init?.body ?? '').get('grant_type');
+      const scope = grantType === 'refresh_token' ? scopes.refresh : scopes.login;
+      return json({
+        access_token: grantType === 'refresh_token' ? 'rotated-token' : 'login-token',
+        refresh_token: grantType === 'refresh_token' ? 'rotated-refresh' : 'login-refresh',
+        expires_in: 3600,
+        ...(scope === undefined ? {} : { scope }),
+      });
+    }
+    throw new Error(`Unexpected OAuth request: ${url}`);
+  };
+}
+
+const oauthLauncher = async (authorizeUrl: string): Promise<string> => {
+  const url = new URL(authorizeUrl);
+  return `http://localhost:5710/auth/callback?code=test-code&state=${url.searchParams.get('state')}`;
+};
 
 describe('ensureMcpProviderRegistered', () => {
   let hadIndexedDB = false;
@@ -127,6 +196,9 @@ describe('registerMcpProvider', () => {
   beforeEach(() => {
     testOnlyResetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('synthetic'));
+    mockGetAccounts.mockReset().mockReturnValue([]);
+    mockGetOAuthAccountInfo.mockReset().mockReturnValue(null);
+    mockSaveOAuthAccount.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -158,5 +230,85 @@ describe('registerMcpProvider', () => {
     });
     const second = getRegisteredProviderConfig(mcpProviderId('synthetic'));
     expect(second).toBe(first);
+  });
+
+  it('persists only the scope reported by the token endpoint on login', async () => {
+    registerMcpProvider({
+      name: 'synthetic',
+      serverUrl: 'https://mcp.synth.example.com',
+      auth: {
+        providerId: 'mcp:synthetic',
+        authorizationServer: 'https://auth.synth.example.com',
+        clientId: 'c1',
+        scope: 'requested:wide',
+      },
+      fetchImpl: makeOAuthFetch({ login: 'granted:read' }),
+      launcher: oauthLauncher,
+    });
+
+    const config = getRegisteredProviderConfig(mcpProviderId('synthetic'));
+    await config?.onOAuthLogin?.(oauthLauncher, vi.fn());
+
+    expect(mockSaveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'mcp:synthetic',
+        accessToken: 'login-token',
+        scopes: 'granted:read',
+      })
+    );
+  });
+
+  it('persists an unknown scope when the token endpoint omits it', async () => {
+    registerMcpProvider({
+      name: 'synthetic',
+      serverUrl: 'https://mcp.synth.example.com',
+      auth: {
+        providerId: 'mcp:synthetic',
+        authorizationServer: 'https://auth.synth.example.com',
+        clientId: 'c1',
+        scope: 'requested:wide',
+      },
+      fetchImpl: makeOAuthFetch(),
+      launcher: oauthLauncher,
+    });
+
+    const config = getRegisteredProviderConfig(mcpProviderId('synthetic'));
+    await config?.onOAuthLogin?.(oauthLauncher, vi.fn());
+
+    const saved = mockSaveOAuthAccount.mock.calls[0]?.[0];
+    expect(saved).toHaveProperty('scopes', undefined);
+  });
+
+  it.each([
+    ['uses the refreshed grant when reported', 'rotated:read', 'rotated:read'],
+    ['preserves the stored grant when refresh omits scope', undefined, 'stored:read'],
+  ])('%s', async (_label, refreshScope, expectedScope) => {
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'old-token', expired: true });
+    mockGetAccounts.mockReturnValue([
+      {
+        providerId: 'mcp:synthetic',
+        apiKey: '',
+        accessToken: 'old-token',
+        refreshToken: 'old-refresh',
+        scopes: 'stored:read',
+      },
+    ]);
+    registerMcpProvider({
+      name: 'synthetic',
+      serverUrl: 'https://mcp.synth.example.com',
+      auth: {
+        providerId: 'mcp:synthetic',
+        authorizationServer: 'https://auth.synth.example.com',
+        clientId: 'c1',
+        scope: 'requested:wide',
+      },
+      fetchImpl: makeOAuthFetch({ refresh: refreshScope }),
+    });
+
+    const config = getRegisteredProviderConfig(mcpProviderId('synthetic'));
+    await expect(config?.onSilentRenew?.()).resolves.toBe('rotated-token');
+    expect(mockSaveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: expectedScope })
+    );
   });
 });

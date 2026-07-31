@@ -1,9 +1,10 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { scopesSatisfied } from '../../providers/oauth-scopes.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 type ProviderRegistry = typeof import('../../providers/index.js');
-type ProviderSettings = typeof import('../../ui/provider-settings.js');
+type ProviderSettings = typeof import('../../providers/account-store.js');
 type ProviderConfig = NonNullable<ReturnType<ProviderRegistry['getRegisteredProviderConfig']>>;
 type ValueResult<T> = { ok: true; value: T } | { ok: false; result: CommandResult };
 
@@ -20,6 +21,8 @@ Provider mode:
   oauth-token                     Get token for the currently selected provider
   oauth-token --list              List OAuth providers with status
   oauth-token --scope <scopes>    Request specific OAuth scopes (comma-separated)
+  oauth-token --force-login       Always run the OAuth login flow, ignoring any
+                                  cached token
   oauth-token --renew [<id>]      Force a silent token renewal now (onSilentRenew),
                                   bypassing the expiry gate. Reports success and
                                   the new expiry.
@@ -53,12 +56,18 @@ OAuth login flow is triggered automatically. The raw access token is
 printed to stdout on success.
 
 The --scope flag overrides the provider's default scopes for this login.
-This forces a new login even if a valid token exists, since the existing
-token may not have the requested scopes.
+The cached token is reused when the scopes it was granted already cover
+the requested ones (GitHub's implied scopes are understood, so a token
+granted "repo" satisfies "public_repo"). A login is triggered when they
+do not, or when the granted scopes are unknown — which is the case for
+tokens obtained before scopes were recorded.
+
+Use --force-login to always log in, with or without --scope.
 
 Examples:
   oauth-token adobe
   oauth-token github --scope "repo,models:read"
+  oauth-token github --scope repo --force-login
   oauth-token --from-file /workspace/.slicc/oauth/xai.json
   oauth-token --intercept \\
     --authorize-url 'https://auth.x.ai/oauth2/auth?...' \\
@@ -75,7 +84,7 @@ async function executeOAuthTokenCommand(
   args: string[],
   ctx: CommandContext
 ): Promise<CommandResult> {
-  const settings = await import('../../ui/provider-settings.js');
+  const settings = await import('../../providers/account-store.js');
   const registry = await import('../../providers/index.js');
   if (args.includes('--help') || args.includes('-h')) {
     return { stdout: helpText(), stderr: '', exitCode: 0 };
@@ -96,16 +105,18 @@ async function executeOAuthTokenCommand(
 
   const scope = parseScopeOverride(args);
   if (!scope.ok) return scope.result;
+  const forceLogin = parseForceLogin(args);
   const provider = resolveProviderId(args, settings, registry);
   if (!provider.ok) return provider.result;
   const config = resolveOAuthProviderConfig(provider.value, registry.getRegisteredProviderConfig);
   if (!config.ok) return config.result;
 
-  if (!scope.value) {
+  if (!forceLogin) {
     const cached = await readCachedProviderToken(
       provider.value,
       config.value,
-      settings.getOAuthAccountInfo
+      settings.getOAuthAccountInfo,
+      scope.value
     );
     if (cached) return cached;
   }
@@ -126,6 +137,13 @@ function parseScopeOverride(args: string[]): ValueResult<string | undefined> {
   }
   args.splice(index, 2);
   return { ok: true, value: scope };
+}
+
+function parseForceLogin(args: string[]): boolean {
+  const index = args.indexOf('--force-login');
+  if (index < 0) return false;
+  args.splice(index, 1);
+  return true;
 }
 
 function resolveProviderId(
@@ -176,12 +194,29 @@ function resolveOAuthProviderConfig(
 async function readCachedProviderToken(
   providerId: string,
   config: ProviderConfig,
-  getInfo: ProviderSettings['getOAuthAccountInfo']
+  getInfo: ProviderSettings['getOAuthAccountInfo'],
+  requestedScope: string | undefined
 ): Promise<CommandResult | null> {
   const info = getInfo(providerId);
-  if (info && !info.expired) return maskedTokenResult(providerId, info.maskedValue);
+  if (info && !info.expired) return cachedTokenResult(providerId, info, requestedScope);
   if (!info?.expired || !config.onSilentRenew) return null;
-  return tryExpiredTokenSilentRenew(providerId, config.onSilentRenew, getInfo);
+  const renewed = await trySilentRenew(config.onSilentRenew);
+  if (!renewed) return null;
+  // Re-read so the freshest recorded scopes drive the coverage check.
+  return cachedTokenResult(providerId, getInfo(providerId), requestedScope);
+}
+
+/**
+ * A cached token only answers a `--scope` request when the scopes it was
+ * granted cover it; otherwise the caller falls through to interactive login.
+ */
+function cachedTokenResult(
+  providerId: string,
+  info: { maskedValue?: string; scopes?: string } | null | undefined,
+  requestedScope: string | undefined
+): CommandResult | null {
+  if (requestedScope && !scopesSatisfied(info?.scopes, requestedScope)) return null;
+  return maskedTokenResult(providerId, info?.maskedValue);
 }
 
 function maskedTokenResult(providerId: string, masked: string | undefined): CommandResult {
@@ -245,19 +280,12 @@ function readSavedProviderToken(
   return errResult('oauth-token: login completed but no token was saved');
 }
 
-async function tryExpiredTokenSilentRenew(
-  providerId: string,
-  onSilentRenew: () => Promise<string | null>,
-  getOAuthAccountInfo: ProviderSettings['getOAuthAccountInfo']
-): Promise<CommandResult | null> {
+async function trySilentRenew(onSilentRenew: () => Promise<string | null>): Promise<boolean> {
   try {
-    const renewedToken = await onSilentRenew();
-    if (renewedToken === null) return null;
-
-    return maskedTokenResult(providerId, getOAuthAccountInfo(providerId)?.maskedValue);
+    return (await onSilentRenew()) !== null;
   } catch {
     // Silent renewal is best-effort; fall back to interactive login.
-    return null;
+    return false;
   }
 }
 
@@ -279,7 +307,7 @@ function resolveSilentRenewProviderId(
 /** Debug aid: back-date only the locally stored expiry so the next network op renews. */
 async function runExpire(args: string[]): Promise<CommandResult> {
   const { getAccounts, getSelectedProvider, saveOAuthAccount } = await import(
-    '../../ui/provider-settings.js'
+    '../../providers/account-store.js'
   );
   const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
     '../../providers/index.js'
@@ -331,7 +359,7 @@ async function runSilentRenew(
   args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const { getSelectedProvider, getOAuthAccountInfo } = await import(
-    '../../ui/provider-settings.js'
+    '../../providers/account-store.js'
   );
   const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
     '../../providers/index.js'
@@ -528,9 +556,13 @@ function listProviders(
   _getAccounts: () => { providerId: string }[],
   getRegisteredProviderIds: () => string[],
   getRegisteredProviderConfig: (id: string) => { isOAuth?: boolean; name: string } | undefined,
-  getOAuthAccountInfo: (
-    id: string
-  ) => { token: string; expiresAt?: number; userName?: string; expired: boolean } | null
+  getOAuthAccountInfo: (id: string) => {
+    token: string;
+    expiresAt?: number;
+    userName?: string;
+    scopes?: string;
+    expired: boolean;
+  } | null
 ): { stdout: string; stderr: string; exitCode: number } {
   const allIds = getRegisteredProviderIds();
   const oauthIds = allIds.filter((id) => {
@@ -562,6 +594,7 @@ function listProviders(
           else parts.push(`expires in ${minutes}m`);
         }
       }
+      if (info.scopes) parts.push(`scopes: ${info.scopes}`);
       lines.push(`${id} (${parts.join(', ')})`);
     }
   }

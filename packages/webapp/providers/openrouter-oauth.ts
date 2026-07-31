@@ -101,6 +101,8 @@ export async function loginIntercepted(
   const code = parseCallbackCode(captured);
   const key = await exchangeCodeForKey(code, codeVerifier);
 
+  // OpenRouter exchanges the OAuth code for a permanent API key, which has no
+  // OAuth scope concept, so scopes intentionally remain unknown.
   await saveOAuthAccount({
     providerId: 'openrouter',
     accessToken: key,

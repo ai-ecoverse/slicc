@@ -1,5 +1,5 @@
 import type { Api, Model } from '@earendil-works/pi-ai';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getModels: vi.fn(),
@@ -9,20 +9,19 @@ const mocks = vi.hoisted(() => ({
   streamSimpleOpenAIResponses: vi.fn(),
 }));
 
+const providerSettingsMocks = vi.hoisted(() => ({
+  accounts: [] as Array<Record<string, unknown>>,
+  saveOAuthAccount: vi.fn(),
+}));
+
 vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
   return { ...actual, ...mocks };
 });
 
 vi.mock('../../src/ui/provider-settings.js', () => ({
-  getAccounts: () => [
-    {
-      providerId: 'xai-grok',
-      accessToken: 'oauth-token',
-      tokenExpiresAt: Date.now() + 3_600_000,
-    },
-  ],
-  saveOAuthAccount: vi.fn(),
+  getAccounts: () => providerSettingsMocks.accounts,
+  saveOAuthAccount: providerSettingsMocks.saveOAuthAccount,
 }));
 
 import {
@@ -106,10 +105,139 @@ beforeEach(() => {
   mocks.streamOpenAIResponses.mockImplementation(endedStream);
   mocks.streamSimpleOpenAICompletions.mockImplementation(endedStream);
   mocks.streamSimpleOpenAIResponses.mockImplementation(endedStream);
+  providerSettingsMocks.accounts = [
+    {
+      providerId: 'xai-grok',
+      accessToken: 'oauth-token',
+      tokenExpiresAt: Date.now() + 3_600_000,
+    },
+  ];
   register();
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('xai-grok provider', () => {
+  it('records the provider-reported login scope rather than the requested scope', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: 'new-access',
+              refresh_token: 'new-refresh',
+              expires_in: 3600,
+              scope: 'reported:scope',
+            }),
+            { status: 200 }
+          )
+      )
+    );
+    const launcher = vi.fn(async ({ authorizeUrl }: { authorizeUrl: string }) => {
+      const state = new URL(authorizeUrl).searchParams.get('state');
+      return `http://127.0.0.1:56121/callback?code=test-code&state=${state}`;
+    });
+
+    await config.onOAuthLoginIntercepted!(launcher, () => {}, { scopes: 'requested:scope' });
+
+    expect(providerSettingsMocks.saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: 'reported:scope' })
+    );
+  });
+
+  it('leaves login scopes unknown when the token response omits scope', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(JSON.stringify({ access_token: 'new-access' }), { status: 200 })
+      )
+    );
+    const launcher = vi.fn(async ({ authorizeUrl }: { authorizeUrl: string }) => {
+      const state = new URL(authorizeUrl).searchParams.get('state');
+      return `http://127.0.0.1:56121/callback?code=test-code&state=${state}`;
+    });
+
+    await config.onOAuthLoginIntercepted!(launcher, () => {}, { scopes: 'requested:scope' });
+
+    expect(providerSettingsMocks.saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: undefined })
+    );
+  });
+
+  it.each([
+    ['records a refreshed scope', 'refreshed:scope', 'refreshed:scope'],
+    ['preserves the prior scope when refresh omits scope', undefined, 'prior:scope'],
+  ])('%s', async (_label, responseScope, expectedScope) => {
+    providerSettingsMocks.accounts = [
+      {
+        providerId: 'xai-grok',
+        accessToken: 'old-access',
+        refreshToken: 'old-refresh',
+        scopes: 'prior:scope',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: 'refreshed-access',
+              ...(responseScope ? { scope: responseScope } : {}),
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    await expect(config.onSilentRenew!()).resolves.toBe('refreshed-access');
+
+    expect(providerSettingsMocks.saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: expectedScope })
+    );
+  });
+
+  it('persists scope when getValidAccessToken refreshes during a stream', async () => {
+    providerSettingsMocks.accounts = [
+      {
+        providerId: 'xai-grok',
+        accessToken: 'expired-access',
+        refreshToken: 'old-refresh',
+        tokenExpiresAt: Date.now() - 1,
+        scopes: 'prior:scope',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: 'stream-refreshed-access',
+              scope: 'stream:scope',
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    const provider = getApiProvider(XAI_API)!;
+    await drain(provider.stream(routedModel('grok-4.5'), context, {}));
+
+    expect(providerSettingsMocks.saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: 'stream-refreshed-access',
+        scopes: 'stream:scope',
+      })
+    );
+    expect(mocks.streamOpenAIResponses.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ apiKey: 'stream-refreshed-access' })
+    );
+  });
+
   it('sources its catalog and metadata from pi-ai xai models', () => {
     const models = config.getModelIds!();
 

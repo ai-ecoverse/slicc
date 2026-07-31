@@ -128,6 +128,7 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   token_type?: string;
+  scope?: string;
 }
 
 async function exchangeCode(code: string, codeVerifier: string): Promise<TokenResponse> {
@@ -210,6 +211,7 @@ async function getValidAccessToken(): Promise<string> {
         accessToken: refreshed.access_token,
         refreshToken: refreshed.refresh_token ?? account.refreshToken,
         tokenExpiresAt: Date.now() + (refreshed.expires_in ?? 21_600) * 1000,
+        scopes: refreshed.scope ?? account.scopes,
       });
       return refreshed.access_token;
     }
@@ -390,6 +392,8 @@ export const config: ProviderConfig = {
       refreshToken: tokens.refresh_token,
       tokenExpiresAt: Date.now() + (tokens.expires_in ?? 21_600) * 1000,
       baseUrl: XAI_API_BASE_URL,
+      // Record only the provider-reported grant, never the requested scopes.
+      scopes: tokens.scope,
     });
     onSuccess();
   },
@@ -408,6 +412,7 @@ export const config: ProviderConfig = {
       accessToken: refreshed.access_token,
       refreshToken: refreshed.refresh_token ?? account.refreshToken,
       tokenExpiresAt: Date.now() + (refreshed.expires_in ?? 21_600) * 1000,
+      scopes: refreshed.scope ?? account.scopes,
     });
     return refreshed.access_token;
   },

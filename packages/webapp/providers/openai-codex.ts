@@ -107,6 +107,7 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   token_type?: string;
+  scope?: string;
 }
 
 async function exchangeCode(code: string, codeVerifier: string): Promise<TokenResponse> {
@@ -257,6 +258,7 @@ async function getValidAccessToken(): Promise<string> {
         baseUrl: CODEX_BASE_URL,
         userName: getDisplayName(refreshed.access_token),
         userAvatar: await getUserAvatar(refreshed.access_token),
+        scopes: refreshed.scope ?? account.scopes,
       });
       return refreshed.access_token;
     }
@@ -417,6 +419,8 @@ export const config: ProviderConfig = {
       baseUrl: CODEX_BASE_URL,
       userName: getDisplayName(tokens.access_token),
       userAvatar: await getUserAvatar(tokens.access_token),
+      // Record only the provider-reported grant, never the requested scopes.
+      scopes: tokens.scope,
     });
     onSuccess();
   },
@@ -438,6 +442,7 @@ export const config: ProviderConfig = {
       baseUrl: CODEX_BASE_URL,
       userName: getDisplayName(refreshed.access_token),
       userAvatar: await getUserAvatar(refreshed.access_token),
+      scopes: refreshed.scope ?? account.scopes,
     });
     return refreshed.access_token;
   },

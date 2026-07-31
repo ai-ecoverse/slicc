@@ -472,6 +472,9 @@ async function refreshCopilotCatalogAndPolicies(creds: PersistedCopilot): Promis
 }
 
 async function persistCopilot(creds: PersistedCopilot, userName?: string): Promise<void> {
+  // The device-flow read:user grant belongs to the GitHub token retained as
+  // refreshToken, not the Copilot token stored as accessToken. Copilot's token
+  // exchange reports no reliable grant, so its scopes intentionally stay unknown.
   await saveOAuthAccount({
     providerId: PROVIDER_ID,
     accessToken: creds.copilotToken,

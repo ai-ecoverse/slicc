@@ -296,6 +296,8 @@ Provider credentials (OAuth tokens, API keys stored in `slicc_accounts` localSto
 
 The OAuth login popup flow is the user-approval gate. Once a token is cached, subsequent `oauth-token <provider>` calls return the masked token immediately (no additional approval required, but the masked value is benign — the agent never sees the real token).
 
+`oauth-token <provider> --scope <scopes>` reuses that cached token too, as long as the scopes it was granted (recorded on the account and shown by `oauth-token --list`) already cover the request. GitHub's implied-scope hierarchy is understood, so a token granted `repo` satisfies `public_repo` and `admin:org` satisfies `read:org`. GitHub, xAI Grok, OpenAI Codex, and MCP record the scope reported by their token endpoint; Adobe records the scope only when IMS includes it in the redirect fragment. GitHub Copilot and OpenRouter do not receive a reliable granted-scope value from their exchanges, so their grants remain unknown. A login popup appears only when the requested scopes are not covered, or when the granted scopes are unknown — the fail-safe case for tokens stored before scopes were recorded. Pass `--force-login` to skip the cache and always re-run the approval gate.
+
 ## Extension mode
 
 In Chrome extension mode, agent-initiated HTTP requests now route through the `fetch-proxy.fetch` SW Port handler, providing full secret-injection coverage equivalent to CLI mode.
