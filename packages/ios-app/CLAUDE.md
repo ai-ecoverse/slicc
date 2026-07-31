@@ -160,33 +160,20 @@ conversation and auto-connects.
 
 **Driving an interaction without tapping.** `simctl` cannot synthesize taps, but
 `UserDefaults` reads the argument domain, so launch arguments seed
-`@AppStorage`-backed state. A Join URL skips the Settings sheet and drives the
-real connect path:
-
-```bash
-xcrun simctl terminate "$UDID" com.sliccy.follower
-xcrun simctl launch "$UDID" com.sliccy.follower \
-  -joinUrl "https://www.sliccy.ai/join/<token>"
-sleep 10
-xcrun simctl io "$UDID" screenshot /tmp/slicc-ios-connect.png
-```
-
-The conversation view replaces the Settings sheet and the status pill under the
-`SLICC` title reports the outcome — `Connected` against a live leader,
-`Connection Failed` against a synthetic token. `SettingsView` persists the seeded
-value, so later plain launches reuse it. That pill is the only signal: the
-pre-connect path emits no `os_log`, so
-`simctl spawn "$UDID" log stream --predicate 'subsystem == "com.slicc.follower"'`
-stays silent until a data channel opens.
+`@AppStorage`-backed state — relaunch with
+`-joinUrl "https://www.sliccy.ai/join/<token>"` to skip the Settings sheet and
+drive the real connect path. The pill under the `SLICC` title is the only
+signal: the pre-connect path emits no `os_log`, so a `log stream` on
+`subsystem == "com.slicc.follower"` stays silent until a data channel opens.
+`SliccFollowerUITests` already covers the sheet and the failure pill, so reach
+for this only against a real leader — a synthetic token reaches the failure
+state and no further, leaving chat, sprinkles, and the CDP carousel untested.
 
 **Getting a real Join URL.** Start a local leader
 (`npm run dev:standalone:fresh`, see [`docs/development.md`](../../docs/development.md)),
-then use the avatar menu's **Enable multi-browser sync** (copies it) or ask the
-agent to run `host` and report its `join_url` — the same URL the CLI follower
-takes, see [`packages/slicc-cli/README.md`](../slicc-cli/README.md).
-
-**Known limitation.** A synthetic token only reaches the failure state. The
-connected surfaces — chat, sprinkles, the CDP carousel — need a real peer.
+then use the avatar menu's **Enable multi-browser sync**, or ask the agent to run
+`host` and report its `join_url` — the URL the CLI follower takes too, see
+[`packages/slicc-cli/README.md`](../slicc-cli/README.md).
 
 ## UI tests (`SliccFollowerUITests`)
 
@@ -211,6 +198,11 @@ dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
   variant scrolls bottom-to-top and must be bounded.
 - **The bundle is `parallelizable: false`** — cloning simulators for a UI bundle
   races the runner install and the loser fails preflight with `Busy`.
+- **A red CI job names the test, not the reason.** The XCTAssert text lives only
+  in the `test-timings-ios-app` xcresult the job uploads — read it with
+  `xcrun xcresulttool get test-results tests` before theorizing. These failures
+  are load-dependent races, so reproduce them locally under CPU contention with
+  `-test-iterations N -run-tests-until-failure`.
 
 ## Linting
 
