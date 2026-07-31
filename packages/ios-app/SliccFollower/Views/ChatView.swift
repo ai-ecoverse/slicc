@@ -39,6 +39,12 @@ struct ChatView: View {
         .onAppear {
             guard !hasAppeared else { return }
             hasAppeared = true
+            #if DEBUG
+                if UITestHooks.routesToFixture {
+                    route = .fixture
+                    return
+                }
+            #endif
             let stored = UserDefaults.standard.string(forKey: "joinUrl") ?? ""
             if stored.isEmpty {
                 showSettings = true
@@ -159,6 +165,7 @@ struct FixtureConversationView: View {
                     Text("UI Fixture — synthetic session")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityIdentifier("fixture-header")
                 }
                 Spacer()
                 Button("Reload") {

@@ -38,6 +38,7 @@ struct ConnectionStatusView: View {
                     Text(text)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85))
+                        .accessibilityIdentifier("connection-status")
                 }
 
                 if state == .connecting {

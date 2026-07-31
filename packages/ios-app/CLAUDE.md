@@ -177,12 +177,29 @@ then use the avatar menu's **Enable multi-browser sync** (copies it) or ask the
 agent to run `host` and report its `join_url` — the same URL the CLI follower
 takes, see [`packages/slicc-cli/README.md`](../slicc-cli/README.md).
 
-**Known limitation.** A synthetic token verifies boot → install → launch → Join
-URL read → connect → failure state, but not the connected surfaces. Chat,
-sprinkles, and the CDP carousel need a real WebRTC peer. The sidebar's **UI
-Fixture** route (`FixtureConversationView`) renders every chat variant
-leaderless, but reaching it needs a tap — a human, or an XCUITest target that
-does not exist yet.
+**Known limitation.** A synthetic token only reaches the failure state. The
+connected surfaces — chat, sprinkles, the CDP carousel — need a real peer.
+
+## UI tests (`SliccFollowerUITests`)
+
+A `bundle.ui-testing` target runs alongside the unit bundle in the `SliccFollower`
+scheme, so `swift-coverage-check.sh --xcodebuild` picks up both. No test needs a
+leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
+**UI Fixture** route (`FixtureConversationView`) without a tap. `UITestHooks`
+(`App/UITestHooks.swift`) reads it and is `#if DEBUG` only — a shipped binary
+must not carry a flag that skips the connection path. The failure-state test
+dials `http://127.0.0.1:1/…`, refused without DNS or egress, so
+`Connection Failed` arrives in seconds instead of depending on CI networking.
+
+- **Put accessibility identifiers on leaves.** SwiftUI pushes one onto a
+  container's leaves instead of minting a container, so an identifier on a
+  `VStack` yields tagged leaves and no `otherElements` match — and
+  `.accessibilityElement(children: .contain)` suppresses that propagation rather
+  than fixing it. Every leaf in a message row carries `message-<id>`.
+- **The transcript is pinned to the newest message**, so a walk over every
+  variant scrolls bottom-to-top and must be bounded.
+- **The bundle is `parallelizable: false`** — cloning simulators for a UI bundle
+  races the runner install and the loser fails preflight with `Busy`.
 
 ## Linting
 

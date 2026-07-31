@@ -57,6 +57,13 @@ struct MessageListView: View {
                             )
                             .id(message.id)
                             .padding(.horizontal, 12)
+                            // SwiftUI pushes an identifier down onto the row's
+                            // leaf elements rather than minting a container,
+                            // so every bubble, pill and tool button inside a
+                            // message carries this id. That is what lets UI
+                            // tests ask which messages are on screen without
+                            // matching on user-visible copy.
+                            .accessibilityIdentifier("message-\(message.id)")
                         }
                     }
 
