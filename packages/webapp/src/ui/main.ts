@@ -25,6 +25,7 @@ import { registerProviders } from '../providers/index.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
 import { renderBootRecoveryScreen } from './boot/recovery-screen.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
+import { setupFeatureFlags } from './boot/setup-feature-flags.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
@@ -59,6 +60,12 @@ async function main(): Promise<void> {
   // window.localStorage when it's undefined (main.ts always runs in the page),
   // so a stored follower join URL is still detected here.
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
+  setupFeatureFlags(runtimeMode, {
+    locationHref: window.location.href,
+    storage: window.localStorage,
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+    isDev: __DEV__,
+  });
 
   // Design-time fixture: the WC shell over the synthetic chat session,
   // no kernel, no providers — exits before any heavy boot work.
