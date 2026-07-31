@@ -214,6 +214,28 @@ describe('McpClient: protocol negotiation', () => {
     expect(c.getSessionId()).toBe('legacy-session');
   });
 
+  it('falls back on a validated HTTP 200 method-not-found response', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? { body: jsonRpcError(sent.id, -32601, 'Method not found') }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'legacy-session' },
+            body: jsonRpc(sent.id, { protocolVersion: '2025-06-18' }),
+          };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await c.initialize();
+
+    expect(calls.map((call) => JSON.parse(call.init!.body!).method)).toEqual([
+      'server/discover',
+      'initialize',
+    ]);
+    expect(c.getNegotiatedProtocolVersion()).toBe('2025-06-18');
+    expect(c.getSessionId()).toBe('legacy-session');
+  });
+
   it('retries a mutually supported modern version when discovery returns -32022', async () => {
     const { fetchImpl, calls } = stubFetch((_url, init) => {
       const sent = JSON.parse(init?.body ?? '{}') as {
@@ -311,6 +333,28 @@ describe('McpClient: protocol negotiation', () => {
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
 
     await expect(c.initialize()).rejects.toThrow(/MCP HTTP 400/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    ['mismatched request id', (id: number) => jsonRpcError(id + 1, -32601, 'Method not found')],
+    [
+      'invalid JSON-RPC envelope',
+      (id: number) =>
+        JSON.stringify({
+          jsonrpc: '1.0',
+          id,
+          error: { code: -32601, message: 'Method not found' },
+        }),
+    ],
+  ])('does not fall back on an HTTP 200 %s', async (_label, responseBody) => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number };
+      return { body: responseBody(sent.id) };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/invalid JSON-RPC error response/);
     expect(calls).toHaveLength(1);
   });
 

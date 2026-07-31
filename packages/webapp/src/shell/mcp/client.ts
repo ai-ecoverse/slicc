@@ -43,6 +43,16 @@ export class McpAuthRequiredError extends Error {
   }
 }
 
+class McpRpcFailure extends Error {
+  readonly rpcError: McpRpcError;
+
+  constructor(error: McpRpcError) {
+    super(`MCP RPC error ${error.code}: ${error.message}`);
+    this.name = 'McpRpcFailure';
+    this.rpcError = error;
+  }
+}
+
 /**
  * Thrown when a JSON-RPC request exceeds its per-request timeout. The
  * `mcp` shell command maps this to exit code 124 (matching GNU
@@ -165,26 +175,29 @@ function headerLookup(headers: Record<string, string>, name: string): string | u
 
 function rpcErrorFrom(error: unknown): McpRpcError | undefined {
   if (error instanceof McpHttpError) return error.rpcError;
-  if (!(error instanceof Error)) return undefined;
-  return (error as Error & { rpcError?: McpRpcError }).rpcError;
+  if (error instanceof McpRpcFailure) return error.rpcError;
+  return undefined;
 }
 
 function rpcFailure(error: McpRpcError): Error {
-  const failure = new Error(`MCP RPC error ${error.code}: ${error.message}`) as Error & {
-    rpcError: McpRpcError;
-  };
-  failure.rpcError = error;
-  return failure;
+  return new McpRpcFailure(error);
+}
+
+function rpcErrorFromFrame(
+  frame: JsonRpcResponseFrame,
+  expectedId: number
+): McpRpcError | undefined {
+  if (frame.jsonrpc !== '2.0' || frame.id !== expectedId) return undefined;
+  const error = frame.error;
+  return error && typeof error.code === 'number' && typeof error.message === 'string'
+    ? error
+    : undefined;
 }
 
 function parseRpcError(text: string, expectedId: number): McpRpcError | undefined {
   try {
     const frame = JSON.parse(text) as JsonRpcResponseFrame;
-    if (frame.jsonrpc !== '2.0' || frame.id !== expectedId) return undefined;
-    const error = frame.error;
-    return error && typeof error.code === 'number' && typeof error.message === 'string'
-      ? error
-      : undefined;
+    return rpcErrorFromFrame(frame, expectedId);
   } catch {
     return undefined;
   }
@@ -272,7 +285,10 @@ export class McpClient {
         }
         return this.discoverModern(retryVersion);
       }
-      if (err instanceof McpHttpError && err.status === 400 && rpcError?.code === -32601) {
+      const isValidatedLegacySignal =
+        rpcError?.code === -32601 &&
+        ((err instanceof McpHttpError && err.status === 400) || err instanceof McpRpcFailure);
+      if (isValidatedLegacySignal) {
         log.debug('server/discover identified a legacy server; using initialize', {
           error: err.message,
         });
@@ -416,7 +432,11 @@ export class McpClient {
       : (JSON.parse(new TextDecoder('utf-8').decode(res.body)) as JsonRpcResponseFrame);
 
     if (frame.error) {
-      throw rpcFailure(frame.error);
+      const rpcError = rpcErrorFromFrame(frame, id);
+      if (!rpcError) {
+        throw new Error(`MCP invalid JSON-RPC error response for request id ${String(id)}`);
+      }
+      throw rpcFailure(rpcError);
     }
     return frame.result;
   }
