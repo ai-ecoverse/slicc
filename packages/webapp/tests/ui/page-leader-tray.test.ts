@@ -206,6 +206,25 @@ describe('startPageLeaderTray', () => {
     handle.stop();
   });
 
+  it('coalesces state-driven scoop broadcasts without waiting for the refresh interval', async () => {
+    const { fetchImpl, webSocketFactory } = makeLeaderFetch();
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      _scoopBroadcastCoalesceMs: 10,
+    });
+    const broadcast = vi.spyOn(handle.sync, 'broadcastScoopsList');
+
+    handle.scheduleScoopsListBroadcast();
+    handle.scheduleScoopsListBroadcast();
+    expect(broadcast).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledOnce(), { timeout: 250 });
+
+    handle.scheduleScoopsListBroadcast();
+    handle.scheduleScoopsListBroadcast();
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledTimes(2), { timeout: 250 });
+    handle.stop();
+  });
+
   it('uses slicc-standalone as the runtime identifier (matches pre-regression value)', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
     const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, webSocketFactory, store }));

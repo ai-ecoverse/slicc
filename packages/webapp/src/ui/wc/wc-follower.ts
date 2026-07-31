@@ -19,7 +19,6 @@ import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { prepareWcShell } from './wc-live.js';
-import { scoopColor } from './wc-scoop-color.js';
 import { submittedSteer, submittedText } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
@@ -27,6 +26,7 @@ import {
   showSignInRedirect,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
+import { toFollowerSwitcherScoops } from './wc-tray-scoops.js';
 
 const log = createLogger('wc-follower');
 
@@ -612,13 +612,7 @@ export async function mountWcUiFollower(
       else log.warn('follower sprinkle open() of a local path is unavailable', { path });
     },
     onScoopsList: (scoops, activeScoopJid) => {
-      boot.refs.switcher.scoops = scoops.map((s) => ({
-        key: s.jid,
-        type: s.isCone ? 'cone' : 'scoop',
-        color: scoopColor(s),
-        label: s.isCone ? 'sliccy' : s.name,
-        eyes: 'open',
-      }));
+      boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
     ...(isCherry

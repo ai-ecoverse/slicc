@@ -139,11 +139,15 @@ export interface StartPageLeaderTrayOptions {
   };
   /** @internal Override the periodic-refresh interval in ms (default 5000). */
   _refreshIntervalMs?: number;
+  /** @internal Override the state-driven scoop-list coalescing delay in ms (default 50). */
+  _scoopBroadcastCoalesceMs?: number;
 }
 
 export interface PageLeaderTrayHandle {
   /** Stop the tray, peer manager, sync manager, and all periodic refreshes. */
   stop(): void;
+  /** Coalesce a state-driven scoop-list broadcast against the latest rendered descriptors. */
+  scheduleScoopsListBroadcast(): void;
   /**
    * Resolves with the {@link LeaderTraySession} once the leader has
    * connected to the tray worker. Rejects when `leader.start()` fails
@@ -457,6 +461,7 @@ function createUpdateUrlBar(
  */
 export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLeaderTrayHandle {
   const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
+  const scoopBroadcastCoalesceMs = options._scoopBroadcastCoalesceMs ?? 50;
   const fetchImpl = options._fetchImpl ?? ((url, init) => fetch(url, init));
 
   // Forward declaration so the peer manager can call `leader.sendControlMessage`
@@ -500,10 +505,21 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   });
 
   let stopped = false;
+  let scoopBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleScoopsListBroadcast = (): void => {
+    if (stopped || scoopBroadcastTimer !== null) return;
+    scoopBroadcastTimer = setTimeout(() => {
+      scoopBroadcastTimer = null;
+      if (!stopped) sync.broadcastScoopsList();
+    }, scoopBroadcastCoalesceMs);
+  };
   return {
     ready: startResult,
+    scheduleScoopsListBroadcast,
     stop() {
       stopped = true;
+      if (scoopBroadcastTimer !== null) clearTimeout(scoopBroadcastTimer);
+      scoopBroadcastTimer = null;
       unsubscribeAgent();
       for (const id of intervals) clearInterval(id);
       sync.stop();

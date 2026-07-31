@@ -52,9 +52,15 @@ describe('mountWcUiPreview', () => {
     const root = mount();
     const nav = root.querySelector('slicc-nav');
     expect(nav).toBeTruthy();
-    for (const tag of ['slicc-logo', 'slicc-scoop-switcher', 'slicc-floatbar', 'slicc-avatar']) {
+    for (const tag of ['slicc-logo', 'slicc-agent-tabs', 'slicc-floatbar', 'slicc-avatar']) {
       expect(nav?.querySelector(tag), tag).toBeTruthy();
     }
+    const states = (
+      nav?.querySelector('slicc-agent-tabs') as HTMLElement & {
+        scoops: Array<{ state?: string }>;
+      }
+    ).scoops.map((scoop) => scoop.state);
+    expect(states).toEqual(['working', 'broken']);
     // No theme toggle: the shell follows the OS color scheme instead.
     expect(nav?.querySelector('slicc-theme-toggle')).toBeNull();
     expect(root.querySelector('slicc-shader')).toBeTruthy();

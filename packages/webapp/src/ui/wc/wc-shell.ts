@@ -14,6 +14,7 @@
 import {
   ensureGlobalTokens,
   followSystemTheme,
+  type SliccAgentTabs,
   type SliccAvatarMenu,
   type SliccFileTree,
   type SliccMemoryPanel,
@@ -33,13 +34,14 @@ import '@slicc/webcomponents';
 /** The prototype's ice-blue `_ctxAccent` for `freezer:` contexts. */
 export const FREEZER_TINT = '#3b6cb2';
 
-/** Scoop chip descriptors consumed by `<slicc-scoop-switcher>`. */
+/** Agent tab descriptors consumed by `<slicc-agent-tabs>`. */
 export interface SwitcherScoop {
   key: string;
   type: 'cone' | 'scoop';
   color: string;
   label: string;
   eyes: 'open' | 'dead' | 'none';
+  state?: 'working' | 'broken' | 'initializing' | 'idle';
   ephemeral?: boolean;
   /** 0-100 context-window fullness forwarded to the pill (pupils dilate). */
   fill?: number;
@@ -89,7 +91,7 @@ export interface WcShellRefs {
   queuedStack: SliccQueuedStack;
   /** Non-error sustained-event notice, kept outside the queued submission stack. */
   lickBackpressureNotice: HTMLElement;
-  switcher: HTMLElement & { scoops: SwitcherScoop[] };
+  switcher: SliccAgentTabs;
   floatbar: HTMLElement;
   shell: HTMLElement;
   workbenchBody: HTMLElement;
@@ -198,7 +200,7 @@ function buildNav(options: WcShellOptions): {
   avatarMenu: SliccAvatarMenu;
 } {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
-  const switcher = el('slicc-scoop-switcher') as WcShellRefs['switcher'];
+  const switcher = el('slicc-agent-tabs') as WcShellRefs['switcher'];
   switcher.scoops = [...options.scoops];
   const floatbar = el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' });
   const avatarMenu = document.createElement('slicc-avatar-menu');
@@ -515,13 +517,21 @@ export function mountWcUiPreview(root: HTMLElement): void {
   const refs = mountWcShell(root, {
     messages: createChatFixture(),
     scoops: [
-      { key: 'cone', type: 'cone', color: '#b07823', label: 'sliccy', eyes: 'open' },
+      {
+        key: 'cone',
+        type: 'cone',
+        color: '#b07823',
+        label: 'sliccy',
+        eyes: 'open',
+        state: 'working',
+      },
       {
         key: FIXTURE_SCOOP_NAME,
         type: 'scoop',
         color: '#06b6d4',
         label: FIXTURE_SCOOP_NAME,
         eyes: 'open',
+        state: 'broken',
       },
     ],
     floatLabel: 'standalone · preview',
@@ -546,8 +556,7 @@ export function mountWcUiPreview(root: HTMLElement): void {
     },
   ];
 
-  // Eyes show one-pair-at-a-time (hover > attention); give the fixture's cone
-  // the blinking pair so the preview demos the resting state.
+  // Keep attention on the working cone so the focused avatar and its live state agree.
   refs.switcher.setAttribute('attention', 'cone');
 
   refs.inputCard.addEventListener('submit', (event) => {

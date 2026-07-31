@@ -60,8 +60,8 @@ import {
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
-import { scoopColor } from './wc-scoop-color.js';
 import type { WcShellRefs } from './wc-shell.js';
+import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
 
 export interface WcTrayDeps {
   refs: WcShellRefs;
@@ -87,6 +87,8 @@ export interface WcTrayDeps {
 export interface WcTrayHandle {
   getLeader(): PageLeaderTrayHandle | null;
   getFollower(): PageFollowerTrayHandle | null;
+  /** Notify the active leader that rendered scoop state changed. */
+  scheduleScoopsListBroadcast(): void;
   performTrayLeaveLocally(opts: {
     workerBaseUrl: string | null;
     requestId?: string;
@@ -117,13 +119,7 @@ function buildFollowerOptions(
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
     onScoopsList: (scoops, activeScoopJid) => {
-      deps.refs.switcher.scoops = scoops.map((s) => ({
-        key: s.jid,
-        type: s.isCone ? 'cone' : 'scoop',
-        color: scoopColor(s),
-        label: s.isCone ? 'sliccy' : s.name,
-        eyes: 'open',
-      }));
+      deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       deps.refs.switcher.setAttribute('active', activeScoopJid);
     },
   };
@@ -141,15 +137,7 @@ function createLeaderOptionsFactory(
     getMessages: () => deps.getController()?.getMessages() ?? [],
     getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
-    getScoops: () =>
-      client.getScoops().map((s) => ({
-        jid: s.jid,
-        name: s.name,
-        folder: s.folder,
-        isCone: s.isCone,
-        assistantLabel: s.assistantLabel,
-        trigger: s.trigger,
-      })),
+    getScoops: () => toScoopSummaries(client.getScoops(), refs.switcher.scoops),
     getSprinkles: () => {
       const opened = new Set(deps.sprinkleManager.opened());
       return deps.sprinkleManager.available().map((p) => ({
@@ -611,6 +599,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   return {
     getLeader: () => state.leader,
     getFollower: () => state.follower,
+    scheduleScoopsListBroadcast: () => state.leader?.scheduleScoopsListBroadcast(),
     performTrayLeaveLocally,
   };
 }
