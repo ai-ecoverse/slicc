@@ -86,6 +86,7 @@ struct ConversationView: View {
             MessageListView(
                 messages: appState.messages,
                 isStreaming: appState.isStreaming,
+                toolUICards: appState.toolUICards,
                 onInlineSprinkleLick: { body, target in
                     appState.sendSprinkleLick("inline", body: body, targetScoop: target)
                 }
@@ -183,6 +184,9 @@ struct FixtureConversationView: View {
             MessageListView(
                 messages: messages,
                 isStreaming: messages.last?.isStreaming == true,
+                toolUICards: [
+                    ToolUIPlaceholder(requestId: "fx-tool-ui-1", html: ChatFixture.toolUIHtml)
+                ],
                 onInlineSprinkleLick: { body, target in
                     let summary = describeLick(body: body, target: target)
                     Self.log.info("sprinkle lick: \(summary)")

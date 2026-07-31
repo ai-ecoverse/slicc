@@ -32,7 +32,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 - Federated `fs.request` / `fs.response` in both directions.
 - Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates). The same applies to the unified preview's `preview.open` leader→follower message: iOS decodes it in `LeaderToFollowerMessage` and routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview URL minted by the leader's `serve`), then acks with `tab.opened`.
-- The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
+- The leader→follower reply path for those requests — iOS never originates, so it never consumes a reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
 - Transcript export in both directions, including the v4 delegated-approval pair
   (`transcript.export.approve.request` / `transcript.export.approve.response`). iOS never
@@ -43,8 +43,8 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 iOS mirrors the cherry-target wire surface even though it cannot _host_ a cherry page:
 
-- `Models/SyncProtocol.swift` defines `CherryCapabilities { navigate, network, screenshot }` and `RemoteTargetInfo.kind` / `.capabilities`, mirroring `RemoteTargetInfo` from `tray-sync-protocol.ts`. The `network` capability gates whether the leader may drive `Network.*` against the target (distinct from the host-page `openUrl` capability); for a cherry target it is always `false`. A target advertised with `"kind":"cherry"` decodes into these fields (see `Tests/SliccFollowerTests/SyncProtocolTests.swift`).
-- `LeaderToFollowerMessage` includes `cherry.slicc_event` (decoded as `.cherrySliccEvent(targetId, name, detail)`). iOS has **no cherry page surface**, so `AppState.handleDataChannelMessage` handles it as a **documented no-op**: it logs and ignores the event. The case exists to keep the decode switch exhaustive and to leave a seam for a future cherry-on-iOS path.
+- `Models/SyncProtocol.swift` defines `CherryCapabilities { navigate, network, screenshot }` and `RemoteTargetInfo.kind` / `.capabilities`, mirroring `RemoteTargetInfo` from `tray-sync-protocol.ts`. The `network` capability gates whether the leader may drive `Network.*` against the target; for a cherry target it is always `false`. A `"kind":"cherry"` target decodes into these fields (see `Tests/SliccFollowerTests/SyncProtocolTests.swift`).
+- `cherry.slicc_event` decodes to `.cherrySliccEvent(targetId, name, detail)`. iOS has **no cherry page surface**, so `AppState.handleDataChannelMessage` logs and ignores it — a **documented no-op** that keeps the decode switch exhaustive.
 
 The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` enum declarations in `SyncProtocol.swift` declare the omission explicitly — `// MARK: -` boundaries are the stable anchors; line numbers shift whenever the headers expand.
 
@@ -74,7 +74,7 @@ Skipping the iOS update now fails `SyncProtocolCorpusTests` in CI instead of qui
 
 ## What this app supports vs the browser follower
 
-Both followers now implement sprinkle rendering (the TS implementation landed in this branch and matches the iOS surface). iOS remains the longer-deployed reference; when adding a follower-side feature on the TS side, model the behavior on `AppState`:
+Both followers implement sprinkle rendering. iOS is the longer-deployed reference; when adding a follower-side feature on the TS side, model it on `AppState`:
 
 - Connection lifecycle: `connect()` / `disconnect()` / `dataChannelOpened()` / `handleDisconnect(reason:)`
 - Message dispatch: `handleDataChannelMessage(_ data: Data)` switch
@@ -84,7 +84,15 @@ Both followers now implement sprinkle rendering (the TS implementation landed in
 
 ### Lick Forwarding (leader-side origin stamping)
 
-The native iOS follower's sprinkle licks now display their origin label in the leader's cone via leader-side origin stamping (no iOS change was required). The leader's `onSprinkleLick` callback gained a 4th `originLabel` parameter and routes sprinkle lick content through the shared `formatLickEventForCone`, so follower sprinkle licks (including from iOS) display their origin. Migrating iOS from the legacy `sprinkle.lick` envelope to the generic `lick` follower→leader message (for `navigate` / handoff licks) remains a documented follow-up.
+iOS sprinkle licks show their origin label in the leader's cone via leader-side stamping — no iOS change was needed. Migrating iOS from the legacy `sprinkle.lick` envelope to the generic `lick` message remains a follow-up.
+
+### Message rendering parity
+
+Payload fields decode _and_ render. Deliberate divergences from the web:
+
+- Attachment chips: thumbnail (inline base64) or kind glyph plus filename, user messages only. No size/MIME line — the web's chat mapper drops those too. A content-less attachment message renders no bubble.
+- The error card omits the web's CTAs (`Try again`, `Open Settings`): each acts on leader state with no follower→leader equivalent, so the button would silently no-op.
+- `tool_ui` renders a read-only card keyed by `requestId`, title extracted from the leader's HTML minus badge and meta (the meta carries the mount path). `tool_ui_done` removes it; a `snapshot` clears all cards.
 
 ## Build
 
@@ -99,9 +107,9 @@ swiftlint lint                                   # SwiftLint (config inherits re
 ## Test + coverage
 
 Plain `swift test` cannot run on a macOS host (iOS-only WebRTC binary), so the
-suite runs through `xcodebuild test` on a simulator. Use the shared coverage
-gate: it picks a simulator, enables coverage + parallel testing + on-failure
-retries, and enforces the `ios-app` floors in `coverage-thresholds.json`.
+suite runs through `xcodebuild test` on a simulator. The shared coverage gate
+picks a simulator, enables coverage and on-failure retries, and enforces the
+`ios-app` floors in `coverage-thresholds.json`.
 
 ```bash
 ./packages/dev-tools/tools/swift-coverage-check.sh \
@@ -112,18 +120,18 @@ Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`,
 `ios-app.xcresult` with per-test durations). Tests run `parallelizable` with
 `randomExecutionOrder`, so a new test must not depend on another test's side
 effects. Coverage is measured against
-`SliccFollower.app/SliccFollower.debug.dylib`, not the same-named launcher stub
-beside it — debug builds put the code, and the coverage mapping, in the dylib.
+`SliccFollower.app/SliccFollower.debug.dylib`, not the launcher stub beside it —
+debug builds put the code and the coverage mapping in the dylib.
 
 ## Simulator QA path
 
-Running the app by hand — the only way to check the SwiftUI surfaces, which the
-unit tests (protocol decoder only) do not touch.
+Running the app by hand, for exploratory checks the UI tests do not cover.
 
 **Prerequisites.** `brew install xcodegen`, plus a simulator runtime matching the
-Xcode SDK. If `xcodebuild -showdestinations …` lists no `platform:iOS Simulator`
-entries and only `iOS <x> is not installed` errors, install the platform with
-`xcodebuild -downloadPlatform iOS` (~8.5 GB, tens of minutes).
+Xcode SDK. If `xcodebuild -showdestinations …` lists only `iOS <x> is not
+installed`, run `xcodebuild -downloadPlatform iOS` (~8.5 GB, tens of minutes).
+Pick the newest installed iPhone runtime: an older one can fail at launch with a
+missing `libswiftWebKit.dylib`.
 
 **Boot, build, install, launch.**
 
@@ -188,14 +196,17 @@ leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
 **UI Fixture** route (`FixtureConversationView`) without a tap. `UITestHooks`
 (`App/UITestHooks.swift`) reads it and is `#if DEBUG` only — a shipped binary
 must not carry a flag that skips the connection path. The failure-state test
-dials `http://127.0.0.1:1/…`, refused without DNS or egress, so
-`Connection Failed` arrives in seconds instead of depending on CI networking.
+dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
+`Connection Failed` arrives in seconds.
 
 - **Put accessibility identifiers on leaves.** SwiftUI pushes one onto a
   container's leaves instead of minting a container, so an identifier on a
   `VStack` yields tagged leaves and no `otherElements` match — and
   `.accessibilityElement(children: .contain)` suppresses that propagation rather
   than fixing it. Every leaf in a message row carries `message-<id>`.
+- **Row ids alone are blind.** Because every leaf carries `message-<id>`, a row
+  still matches when its specialized renderer is gone. A new fixture variant
+  also needs a `variantMarkers` string only that renderer can emit.
 - **The transcript is pinned to the newest message**, so a walk over every
   variant scrolls bottom-to-top and must be bounded.
 - **The bundle is `parallelizable: false`** — cloning simulators for a UI bundle
@@ -203,25 +214,24 @@ dials `http://127.0.0.1:1/…`, refused without DNS or egress, so
 
 ## Linting
 
-`packages/ios-app/.swiftlint.yml` inherits the shared rule set from the
-repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
-`.build`/`SliccFollower.xcodeproj`. Warnings surface code-quality issues; only
-`error`-severity violations fail CI. Use `swiftlint --fix` to auto-correct
-fixable violations.
+`packages/ios-app/.swiftlint.yml` inherits the repo-root rule set via
+`parent_config` and excludes `.build`/`SliccFollower.xcodeproj`. Only
+`error`-severity violations fail CI. `swiftlint --fix` auto-corrects, but
+rewrites every file it scans — run it on a clean tree.
 
 ## Formatting
 
-SwiftLint lints; `swift format` (Swift 6+ toolchain) formats, against the single
-repo-root `.swift-format` it finds by walking up from each input file. No
+SwiftLint lints; `swift format` (Swift 6+ toolchain) formats, against the
+repo-root `.swift-format` found by walking up from each input file. No
 `package.json` here, so invoke it directly — or use the repo-root
-`npm run lint:swift:format` / `npm run format:swift`, which include this package:
+`npm run lint:swift:format` / `npm run format:swift`, which cover this package:
 
 ```bash
 swift format lint --strict --parallel --recursive SliccFollower Package.swift   # CI gate
 swift format --in-place --parallel --recursive SliccFollower Package.swift
 ```
 
-TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consumes secrets via `setup-testflight-secrets.sh`).
+TestFlight automation: `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`).
 
 ## Related Guides
 
