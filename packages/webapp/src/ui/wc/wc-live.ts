@@ -326,6 +326,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
           );
       }
     },
+    onLickBackpressure: (jid, info) => {
+      const selected = wiring.getSelected();
+      if (selected?.jid !== jid) return;
+      const scoopName = selected.isCone ? 'cone' : selected.name;
+      wiring.getController()?.setLickBackpressure(info.count, info.waitingMs, scoopName);
+    },
     onMessageUpdate: (jid, update) => {
       // Live flip of an actionable lick card's state (sudo-request settled).
       // Only the selected scoop's thread is mounted, so a non-selected update
@@ -694,6 +700,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       for (const m of queued) {
         void client.deleteQueuedMessage(previousJid, m.id).catch(() => undefined);
       }
+      controller?.setLickBackpressure(0, 0, scoop.isCone ? 'cone' : scoop.name);
     }
     client.setSelectedScoopJid(scoop.jid);
     refs.inputCard.removeAttribute('disabled');
