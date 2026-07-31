@@ -65,6 +65,17 @@ describe('parseToolResultContentRaw', () => {
     expect(blocks).toEqual([{ type: 'text', text: '' }]);
   });
 
+  it('leaves malformed image markers unchanged', () => {
+    const values = [
+      '<img:data:image/png,AAAA>',
+      '<img:data:image/;base64,AAAA>',
+      '<img:data:image/png;other;base64,AAAA>',
+    ];
+    for (const text of values) {
+      expect(parseToolResultContentRaw(text)).toEqual([{ type: 'text', text }]);
+    }
+  });
+
   it('preserves text with no img tags unchanged', () => {
     const text = 'exit code: 0\nsome output\nmore output';
     const blocks = parseToolResultContentRaw(text);
