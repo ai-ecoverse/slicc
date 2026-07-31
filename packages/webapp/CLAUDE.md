@@ -62,9 +62,9 @@ Deep reference: `docs/kernel/process-model.md`.
   pre-removal `onScoopUnregistered` snapshots.
 - `scoop-message-router.ts`: licks use `SCOOP_QUEUE_DEBOUNCE_MS` (1 s), bounded by
   `SCOOP_QUEUE_MAX_COALESCE_MS` (3 s). Pure-lick batches defer while `ScoopContext.isBusy`
-  without queue or watermark loss; `SCOOP_DEFERRAL_STARVATION_MS` warns once at 60 s. User
-  `web` bypasses the window, stays immediate/awaited, and prevents deferral. The 2 s safety
-  poll skips active windows.
+  without queue or watermark loss; `SCOOP_DEFERRAL_STARVATION_MS` reports backpressure once
+  after 5 minutes on a dedicated non-error channel. User `web` bypasses the window, stays
+  immediate/awaited, and prevents deferral. The 2 s safety poll skips active windows.
 - `scoop-context.ts` owns per-scoop prompt execution and filesystem/tool isolation.
 - `agent-bridge.ts` exposes `globalThis.__slicc_agent`. Defaults: writable
   `[cwd, /shared/, <scratch>/, /tmp/]`, visible `[/workspace/, invokingCwd]`; `--read-only`
