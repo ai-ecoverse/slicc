@@ -23,16 +23,6 @@ export interface FeatureFlagDefinition {
 
 export const FEATURE_FLAG_STORAGE_KEY = 'slicc_feature_flags';
 
-const WEB_UI_FLOATS: readonly FeatureFlagFloat[] = [
-  'standalone',
-  'extension',
-  'electron-overlay',
-  'extension-detached',
-  'hosted-leader',
-  'connect',
-  'follower',
-];
-
 const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
   Object.freeze({
     id: 'experimental-settings',
@@ -40,8 +30,7 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     description: 'Show controls for experimental features.',
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
-    userToggleable: true,
-    overridableFloats: WEB_UI_FLOATS,
+    userToggleable: false,
   }),
 ]);
 

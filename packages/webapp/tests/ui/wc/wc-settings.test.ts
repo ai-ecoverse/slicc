@@ -11,10 +11,15 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { FEATURE_FLAG_STORAGE_KEY, initFeatureFlags } from '../../../src/core/feature-flags.js';
+import {
+  FEATURE_FLAG_STORAGE_KEY,
+  initFeatureFlags,
+  setFeatureFlagOverride,
+} from '../../../src/core/feature-flags.js';
 import {
   accountDetail,
   maskKey,
+  showExperimentalSettings,
   showThemeSettings,
   showWcSettings,
 } from '../../../src/ui/wc/wc-settings.js';
@@ -101,21 +106,8 @@ describe('accountDetail', () => {
 });
 
 describe('showWcSettings', () => {
-  it('shows user-toggleable experimental flags in a web UI float', async () => {
+  it('does not render experimental UI', async () => {
     initFeatureFlags('standalone');
-    const result = showWcSettings(log);
-    const dialog = await openDialog();
-
-    expect(dialog.textContent).toContain('Experimental');
-    expect(dialog.textContent).toContain('Show controls for experimental features.');
-    expect(findExperimentalToggle(dialog)?.checked).toBe(true);
-
-    clickDone(dialog);
-    await result;
-  });
-
-  it('omits the experimental section entirely in Cherry', async () => {
-    initFeatureFlags('cherry');
     const result = showWcSettings(log);
     const dialog = await openDialog();
 
@@ -124,70 +116,6 @@ describe('showWcSettings', () => {
 
     clickDone(dialog);
     await result;
-  });
-
-  it('round-trips experimental toggle changes as string overrides', async () => {
-    initFeatureFlags('standalone');
-    const result = showWcSettings(log);
-    const dialog = await openDialog();
-    const toggle = findExperimentalToggle(dialog);
-    expect(toggle).toBeTruthy();
-
-    toggle!.checked = false;
-    toggle!.dispatchEvent(new Event('change'));
-    expect(toggle!.checked).toBe(false);
-    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toEqual({
-      'experimental-settings': 'off',
-    });
-
-    toggle!.checked = true;
-    toggle!.dispatchEvent(new Event('change'));
-    expect(toggle!.checked).toBe(true);
-    expect(JSON.parse(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY) ?? '{}')).toEqual({
-      'experimental-settings': 'on',
-    });
-
-    clickDone(dialog);
-    await result;
-  });
-
-  it('persists the experimental override across dialog close and reopen', async () => {
-    initFeatureFlags('standalone');
-    const firstResult = showWcSettings(log);
-    const firstDialog = await openDialog();
-    const toggle = findExperimentalToggle(firstDialog);
-    expect(toggle).toBeTruthy();
-    toggle!.checked = false;
-    toggle!.dispatchEvent(new Event('change'));
-    clickDone(firstDialog);
-    await firstResult;
-
-    const reopenedResult = showWcSettings(log);
-    const reopenedDialog = await openDialog();
-    expect(reopenedDialog.textContent).not.toContain('Experimental');
-    expect(findExperimentalToggle(reopenedDialog)).toBeNull();
-    clickDone(reopenedDialog);
-    await reopenedResult;
-  });
-
-  it('restores the persisted override after reload-equivalent initialization', async () => {
-    initFeatureFlags('standalone');
-    const firstResult = showWcSettings(log);
-    const firstDialog = await openDialog();
-    const toggle = findExperimentalToggle(firstDialog);
-    expect(toggle).toBeTruthy();
-    toggle!.checked = false;
-    toggle!.dispatchEvent(new Event('change'));
-    clickDone(firstDialog);
-    await firstResult;
-
-    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
-    const reloadedResult = showWcSettings(log);
-    const reloadedDialog = await openDialog();
-    expect(reloadedDialog.textContent).not.toContain('Experimental');
-    expect(findExperimentalToggle(reloadedDialog)).toBeNull();
-    clickDone(reloadedDialog);
-    await reloadedResult;
   });
 
   it('lists connected accounts and resolves false when nothing changed', async () => {
@@ -321,6 +249,69 @@ describe('showWcSettings', () => {
     } finally {
       window.removeEventListener('slicc:accounts-changed', onChange);
     }
+  });
+});
+
+describe('showExperimentalSettings', () => {
+  it('shows an honest empty state when no user-toggleable flags exist', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.getAttribute('heading')).toBe('Experimental');
+    expect(dialog.textContent).toContain('No experimental features are available right now.');
+    expect(findExperimentalToggle(dialog)).toBeNull();
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('does not mount when called directly while the central flag is off', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+
+    await expect(showExperimentalSettings(log)).resolves.toBeUndefined();
+    expect(document.querySelector('slicc-dialog')).toBeNull();
+  });
+
+  it('ignores a local attempt to turn on a worker-disabled dialog', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+    setFeatureFlagOverride('experimental-settings', 'on');
+
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
+    await showExperimentalSettings(log);
+    expect(document.querySelector('slicc-dialog')).toBeNull();
+  });
+
+  it('cannot be hidden locally and remains available after reopening', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    setFeatureFlagOverride('experimental-settings', 'off');
+
+    const firstResult = showExperimentalSettings(log);
+    const firstDialog = await openDialog();
+    clickDone(firstDialog);
+    await firstResult;
+
+    const reopenedResult = showExperimentalSettings(log);
+    const reopenedDialog = await openDialog();
+    expect(reopenedDialog.textContent).toContain(
+      'No experimental features are available right now.'
+    );
+    clickDone(reopenedDialog);
+    await reopenedResult;
+  });
+
+  it('ignores a stale persisted override after worker initialization', async () => {
+    localStorage.setItem(
+      FEATURE_FLAG_STORAGE_KEY,
+      JSON.stringify({ 'experimental-settings': 'off' })
+    );
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+    expect(dialog.getAttribute('heading')).toBe('Experimental');
+    clickDone(dialog);
+    await result;
   });
 });
 

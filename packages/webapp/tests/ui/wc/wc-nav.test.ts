@@ -4,7 +4,8 @@
  * and the live wiring against a fake client.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { hasIcon } from '@slicc/webcomponents';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -13,7 +14,11 @@ installWcDomStubs();
 // `slicc-error-open-settings` event routes the user into the same surface
 // as the composer-meta `add-ai` action — without booting the real dialog.
 const showWcSettingsSpy = vi.fn(async () => undefined);
-vi.mock('../../../src/ui/wc/wc-settings.js', () => ({ showWcSettings: showWcSettingsSpy }));
+const showExperimentalSettingsSpy = vi.fn(async () => undefined);
+vi.mock('../../../src/ui/wc/wc-settings.js', () => ({
+  showExperimentalSettings: showExperimentalSettingsSpy,
+  showWcSettings: showWcSettingsSpy,
+}));
 
 // Stub the OAuth transport leaf so the real `reloginOAuthAccount` runs end to
 // end without booting the popup/CDP module graph: `createOAuthLauncher`
@@ -24,11 +29,22 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
   createInterceptingOAuthLauncherForCurrentRuntime: async () => null,
 }));
 
+import {
+  FEATURE_FLAG_STORAGE_KEY,
+  initFeatureFlags,
+  setFeatureFlagOverride,
+} from '../../../src/core/feature-flags.js';
 import { registerProviderConfig, unregisterProviderConfig } from '../../../src/providers/index.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
+
+afterEach(() => {
+  localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+  initFeatureFlags('standalone');
+  document.body.replaceChildren();
+});
 
 describe('modelListForMeta', () => {
   it('flattens provider groups into picker rows with provider-qualified ids', () => {
@@ -104,6 +120,54 @@ describe('wireWcNav', () => {
     // unchanged so `getSelectedProvider()` recovers the correct provider.
     expect(localStorage.getItem('selected-model')).toBe('adobe:claude-opus-4-8');
     expect(client.updateModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows Experimental features immediately after Export transcript with a real icon', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    const exportIndex = refs.avatarMenu.items.findIndex((item) => item.id === 'export-transcript');
+    const experimental = refs.avatarMenu.items[exportIndex + 1];
+    expect(experimental).toEqual({
+      id: 'experimental-settings',
+      label: 'Experimental features…',
+      icon: 'flask-conical',
+    });
+    expect(hasIcon(experimental?.icon ?? '')).toBe(true);
+  });
+
+  it('removes Experimental features on the next menu open when the worker turns it off', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+    expect(refs.avatarMenu.items.some((item) => item.id === 'experimental-settings')).toBe(true);
+
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+    setFeatureFlagOverride('experimental-settings', 'on');
+    refs.avatarMenu.dispatchEvent(
+      new CustomEvent('slicc-avatar-menu-toggle', { detail: { open: true } })
+    );
+
+    expect(refs.avatarMenu.items.some((item) => item.id === 'experimental-settings')).toBe(false);
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
+  });
+
+  it('opens the standalone Experimental dialog from its avatar action', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const refs = makeRefs();
+    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
+
+    showExperimentalSettingsSpy.mockClear();
+    refs.avatarMenu.dispatchEvent(
+      new CustomEvent('slicc-avatar-action', { detail: { id: 'experimental-settings' } })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(showExperimentalSettingsSpy).toHaveBeenCalledTimes(1);
   });
 
   it('clears the avatar identity when signed out (so the component shows ?)', async () => {

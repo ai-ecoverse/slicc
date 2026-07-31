@@ -199,10 +199,14 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 ### Feature Flags
 
 - Add: extend `FeatureFlagId` + `FEATURE_FLAGS` in `core/feature-flags.ts`, then add the same
-  string values to production and staging `wrangler.jsonc` `FEATURE_FLAGS`; `listFlags()` drives UI.
+  string values to production and staging `wrangler.jsonc` `FEATURE_FLAGS`. User-toggleable flags
+  appear in the standalone **Experimental features…** avatar-menu dialog driven by `listFlags()`;
+  they do not belong in Account settings.
 - Boolean consumers use `isFeatureEnabled`/`coerceFeatureFlagValue` (`on`/`true`/`1`, trimmed and
-  case-insensitive). Precedence where `overridableFloats` permits: local → remote → bundled
-  `floatDefaults`/`defaultValue`.
+  case-insensitive). For user-toggleable flags, precedence where `overridableFloats` permits is
+  local → remote → bundled `floatDefaults`/`defaultValue`.
+- `experimental-settings` is worker-controlled (`userToggleable: false`): it independently gates
+  both the avatar-menu item and exported dialog, and local override attempts are ignored.
 - `setupFeatureFlagsForPage` selects the float, loads its isolated cache, then refreshes
   `/api/flags?float=<float>` once. There is no live refresh; later config requires reload.
 

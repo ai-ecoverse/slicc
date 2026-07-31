@@ -43,9 +43,10 @@ describe('feature flag registry', () => {
         id: 'experimental-settings',
         label: 'Experimental settings',
         defaultValue: 'on',
-        userToggleable: true,
+        userToggleable: false,
       }),
     ]);
+    expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
   });
 
   it('uses float-aware bundled defaults', () => {
@@ -54,12 +55,12 @@ describe('feature flag registry', () => {
     expect(resolveFlagValue('experimental-settings', 'cherry')).toBe('off');
   });
 
-  it('applies a permitted string override', () => {
+  it('ignores a string override for the central-only flag', () => {
     expect(
       resolveFlagValue('experimental-settings', 'standalone', {
         'experimental-settings': 'variant-a',
       })
-    ).toBe('variant-a');
+    ).toBe('on');
   });
 
   it('ignores an override on a float where overrides are not permitted', () => {
@@ -70,27 +71,18 @@ describe('feature flag registry', () => {
     ).toBe('off');
   });
 
-  it('ignores a local override for a flag that is not user-toggleable', async () => {
-    vi.resetModules();
-    const freeze = vi
-      .spyOn(Object, 'freeze')
-      .mockImplementation(<T>(value: T): Readonly<T> => value);
-    const fixture = await import('../../src/core/feature-flags.js').finally(() => {
-      freeze.mockRestore();
-    });
-    const definition = fixture.listFlags()[0] as { userToggleable: boolean };
-    definition.userToggleable = false;
+  it('ignores a stored local override for the central-only flag', () => {
     localStorage.setItem(
-      fixture.FEATURE_FLAG_STORAGE_KEY,
+      FEATURE_FLAG_STORAGE_KEY,
       JSON.stringify({ 'experimental-settings': 'on' })
     );
 
-    fixture.initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
 
-    expect(fixture.getFeatureValue('experimental-settings')).toBe('off');
+    expect(getFeatureValue('experimental-settings')).toBe('off');
   });
 
-  it('resolves local override before central value before bundled default', () => {
+  it('resolves central value before the bundled default', () => {
     expect(resolveFlags('standalone', { 'experimental-settings': 'off' })).toEqual({
       'experimental-settings': 'off',
     });
@@ -100,7 +92,7 @@ describe('feature flag registry', () => {
         { 'experimental-settings': 'off' },
         { 'experimental-settings': 'on' }
       )
-    ).toEqual({ 'experimental-settings': 'on' });
+    ).toEqual({ 'experimental-settings': 'off' });
   });
 
   it('round-trips string overrides through one localStorage key', () => {
@@ -111,10 +103,9 @@ describe('feature flag registry', () => {
     expect(readFeatureFlagOverrides()).toEqual({ 'experimental-settings': 'variant-b' });
   });
 
-  it('updates and clears the active float override', () => {
+  it('refuses to persist an override for the central-only flag', () => {
     setFeatureFlagOverride('experimental-settings', 'off');
-    expect(getFeatureValue('experimental-settings')).toBe('off');
-    setFeatureFlagOverride('experimental-settings', undefined);
+    expect(readFeatureFlagOverrides()).toEqual({});
     expect(getFeatureValue('experimental-settings')).toBe('on');
   });
 

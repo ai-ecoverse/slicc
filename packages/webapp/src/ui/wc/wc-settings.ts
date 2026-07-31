@@ -359,11 +359,16 @@ function buildBrowsingPreferencesSection(): HTMLElement {
   return section;
 }
 
-function buildExperimentalSection(): HTMLElement[] {
-  if (!isFeatureEnabled('experimental-settings')) return [];
-  const section = div('wcset__add');
-  section.append(div('wcset__section-label', 'Experimental'));
-  for (const flag of listFlags().filter((candidate) => candidate.userToggleable)) {
+function buildExperimentalSection(deps: {
+  log: SettingsLogger;
+  setStatus(text: string, isError?: boolean): void;
+}): HTMLElement {
+  const section = div('wcset__list');
+  const flags = listFlags().filter((candidate) => candidate.userToggleable);
+  if (flags.length === 0) {
+    section.append(div('wcset__empty', 'No experimental features are available right now.'));
+  }
+  for (const flag of flags) {
     const row = div('wcset__toggle-row');
     const info = div('wcset__info');
     const label = document.createElement('label');
@@ -375,13 +380,19 @@ function buildExperimentalSection(): HTMLElement[] {
     label.textContent = flag.label;
     info.append(label, div('wcset__detail', flag.description));
     check.addEventListener('change', () => {
-      setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
-      check.checked = isFeatureEnabled(flag.id);
+      try {
+        setFeatureFlagOverride(flag.id, check.checked ? 'on' : 'off');
+        check.checked = isFeatureEnabled(flag.id);
+        deps.setStatus('Saved.');
+      } catch (err) {
+        deps.log.error('Experimental settings update failed', { flagId: flag.id, err });
+        deps.setStatus('Unable to save this feature setting.', true);
+      }
     });
     row.append(info, check);
     section.append(row);
   }
-  return [section];
+  return section;
 }
 
 function buildAppearanceSection(deps: ViewDeps): HTMLElement {
@@ -913,7 +924,7 @@ export async function showWcSettings(log: SettingsLogger): Promise<boolean> {
     };
     deps.renderList();
 
-    body.append(list, addSectionSlot, ...buildExperimentalSection(), status);
+    body.append(list, addSectionSlot, status);
     dialog.append(body);
 
     const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
@@ -982,6 +993,41 @@ export async function showThemeSettings(log: SettingsLogger): Promise<void> {
         }
         applyTheme();
       }
+      dialog.remove();
+      resolve();
+    });
+
+    document.body.append(dialog);
+    (dialog as HTMLElement & { show?: () => void }).show?.();
+  });
+}
+
+/** Open the centrally gated standalone experimental-features dialog. */
+export async function showExperimentalSettings(log: SettingsLogger): Promise<void> {
+  if (!isFeatureEnabled('experimental-settings')) return;
+  ensureSettingsStyle(document);
+
+  return new Promise((resolve) => {
+    const dialog = document.createElement('slicc-dialog');
+    dialog.classList.add('wcset-dialog');
+    dialog.setAttribute('heading', 'Experimental');
+
+    const body = div('wcset');
+    const status = div('wcset__status');
+    const setStatus = (text: string, isError = false): void => {
+      status.textContent = text;
+      status.toggleAttribute('data-error', isError);
+    };
+    body.append(buildExperimentalSection({ log, setStatus }), status);
+    dialog.append(body);
+
+    const done = button('wcset__btn wcset__btn--primary', 'Done', () => {
+      (dialog as HTMLElement & { hide?: () => void }).hide?.();
+    });
+    done.setAttribute('slot', 'footer');
+    dialog.append(done);
+
+    dialog.addEventListener('slicc-dialog-close', () => {
       dialog.remove();
       resolve();
     });

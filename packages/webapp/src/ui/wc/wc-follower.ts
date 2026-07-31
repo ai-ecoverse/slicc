@@ -684,6 +684,8 @@ export async function mountWcUiFollower(
   // (wireWcNav needs a worker client; a follower has none, so we set the
   // menu items directly.)
   // Task 8: add "Export transcript" to the follower avatar menu.
+  // Experimental features are deliberately excluded: the centrally gated
+  // dialog currently has no user-toggleable flags, so this menu stays minimal.
   let exportInFlight = false;
   const syncFollowerMenuItems = (): void => {
     boot.refs.avatarMenu.items = [
