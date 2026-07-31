@@ -40,6 +40,10 @@ class AppState: ObservableObject {
     @Published var joinUrl: String = ""
     @Published var trayId: String?
     @Published var messages: [ChatMessage] = []
+    /// Pending `tool_ui` approvals, oldest first. These live outside the
+    /// transcript because the leader mounts them outside the message list too,
+    /// so a streaming re-render cannot wipe them.
+    @Published var toolUICards: [ToolUIPlaceholder] = []
     @Published var isStreaming: Bool = false
 
     // Multi-scoop awareness
@@ -808,6 +812,11 @@ class AppState: ObservableObject {
     /// refresh `messages` if it matches the currently-viewed scoop.
     private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
         messagesByScoop[scoopJid] = chatMessages
+        // A snapshot is the leader re-describing the world. Any approval
+        // placeholder we are still holding predates it and can no longer be
+        // confirmed, so it would otherwise hang around forever — the leader
+        // only ever clears one via the matching `tool_ui_done`.
+        toolUICards.removeAll()
         if selectedScoopJid == nil { selectedScoopJid = scoopJid }
         if scoopJid == selectedScoopJid {
             messages = chatMessages
@@ -910,31 +919,39 @@ class AppState: ObservableObject {
             logger.error("Agent event: error — \(error)")
             if isVisible { lastError = error }
 
-        // Events that decode but mutate no transcript state. Kept as a single
-        // arm so the switch stays exhaustive — a new protocol case is then a
-        // compile error rather than a silent drop — without charging this
-        // dispatcher's complexity budget once per case.
+        // Events that mutate no transcript state. Kept as a single arm so the
+        // switch stays exhaustive — a new protocol case is then a compile error
+        // rather than a silent drop — without charging this dispatcher's
+        // complexity budget once per case.
         case .toolUI, .toolUIDone, .screenshot, .terminalOutput, .unknown:
-            logNonRenderingAgentEvent(event)
+            handleNonTranscriptAgentEvent(event)
         }
     }
 
-    /// Agent events the follower decodes but does not render.
+    /// Agent events that never touch `messages`.
     ///
-    /// `tool_ui` / `tool_ui_done` are approval cards the leader owns; a
-    /// follower has no permissions surface, so the browser follower degrades
-    /// them to a read-only placeholder (`buildReadOnlyToolUiHtml` in
-    /// `wc-chat-controller.ts`) and iOS shows nothing yet. `screenshot` and
+    /// `tool_ui` / `tool_ui_done` drive the read-only approval placeholder,
+    /// which lives beside the transcript rather than in it. `screenshot` and
     /// `terminal_output` are deliberate no-ops on every follower — the webapp
     /// chat thread names both explicitly for the same reason.
-    private func logNonRenderingAgentEvent(_ event: AgentEvent) {
+    private func handleNonTranscriptAgentEvent(_ event: AgentEvent) {
         switch event {
-        case .toolUI(let messageId, let toolName, let requestId, _):
+        case .toolUI(let messageId, let toolName, let requestId, let html):
             logger.debug(
-                "Agent event: tool_ui id=\(messageId) tool=\(toolName) request=\(requestId) — not rendered"
+                "Agent event: tool_ui id=\(messageId) tool=\(toolName) request=\(requestId)"
             )
+            let card = ToolUIPlaceholder(requestId: requestId, html: html)
+            // A re-broadcast of the same request must not stack a duplicate.
+            if let existing = toolUICards.firstIndex(where: { $0.id == requestId }) {
+                toolUICards[existing] = card
+            } else {
+                toolUICards.append(card)
+            }
         case .toolUIDone(let messageId, let requestId):
             logger.debug("Agent event: tool_ui_done id=\(messageId) request=\(requestId)")
+            // The leader removes the card outright — there is no terminal
+            // "approved"/"denied" state to show.
+            toolUICards.removeAll { $0.id == requestId }
         case .screenshot, .terminalOutput:
             break
         default:

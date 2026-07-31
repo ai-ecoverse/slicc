@@ -21,19 +21,31 @@ struct MessageBubble: View {
     }
 
     var body: some View {
+        // Precedence mirrors `messageEls` in wc-message-view.ts: a lick wins
+        // over everything, then delegation, then `error`, then role.
         if isLick {
             LickRow(message: message)
                 .padding(.horizontal, 4)
+        } else if message.error == true {
+            ErrorCard(message: message)
         } else if message.role == .user {
-            HStack {
-                Spacer(minLength: UIScreen.main.bounds.width * 0.2)
-                userBubbleText
-                    .font(.system(size: 15))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(userBubbleColor)
-                    .cornerRadius(18)
+            VStack(alignment: .trailing, spacing: 6) {
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    AttachmentChips(attachments: attachments)
+                }
+                // A pure-attachment message has no bubble on the web either.
+                if !message.content.isEmpty {
+                    HStack {
+                        Spacer(minLength: UIScreen.main.bounds.width * 0.2)
+                        userBubbleText
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(userBubbleColor)
+                            .cornerRadius(18)
+                    }
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -465,6 +477,39 @@ struct LickRow: View {
         LickRow.parseLickContent(message.content)
     }
 
+    /// Event label with the collation multiplicity appended, matching the
+    /// web pill's `"<event-label> ×<count>"`.
+    private var previewLabel: String {
+        let count = message.lickCount ?? 1
+        guard count > 1 else { return parsed.preview }
+        return parsed.preview.isEmpty ? "×\(count)" : "\(parsed.preview) ×\(count)"
+    }
+
+    /// Bodies of the licks folded into this row, each with its own `[...]`
+    /// header stripped. Without `lickParts` the collapsed bodies are
+    /// unrecoverable, which is what made a collated row lossy on iOS.
+    private var bodies: [String] {
+        guard let parts = message.lickParts, parts.count > 1 else {
+            return parsed.body.isEmpty ? [] : [parsed.body]
+        }
+        return parts.map { LickRow.parseLickContent($0).body }
+            .filter { !$0.isEmpty }
+    }
+
+    /// A dismissed card mutes on the web (`opacity: .62`); confirmed keeps
+    /// full strength.
+    private var contentOpacity: Double {
+        message.lickState == .dismissed ? 0.62 : 1
+    }
+
+    private func stateColor(_ state: LickState) -> Color {
+        switch state {
+        case .confirmed: return Color(red: 0x4A / 255, green: 0xDE / 255, blue: 0x80 / 255)
+        case .dismissed: return Color(red: 0xF8 / 255, green: 0x71 / 255, blue: 0x71 / 255)
+        case .pending: return .white.opacity(0.5)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -474,14 +519,22 @@ struct LickRow: View {
                     Text(label)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                    if !parsed.preview.isEmpty {
-                        Text(parsed.preview)
+                    if !previewLabel.isEmpty {
+                        Text(previewLabel)
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.55))
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
                     Spacer(minLength: 6)
+                    if let state = message.lickState,
+                        let glyph = SliccIcons.lickState(state)
+                    {
+                        Image(systemName: glyph)
+                            .font(.system(size: 13))
+                            .foregroundStyle(stateColor(state))
+                            .accessibilityIdentifier("lick-state-\(state.rawValue)")
+                    }
                     Image(systemName: iconName)
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(0.5))
@@ -498,24 +551,30 @@ struct LickRow: View {
             }
             .buttonStyle(.plain)
 
-            if isExpanded, !parsed.body.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(parsed.body)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .textSelection(.enabled)
-                        .padding(12)
+            if isExpanded, !bodies.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(bodies.enumerated()), id: \.offset) { index, body in
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Text(body)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.75))
+                                .textSelection(.enabled)
+                                .padding(12)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(bodyBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(borderColor, lineWidth: 0.5)
+                        )
+                        .accessibilityIdentifier("lick-part-\(index)")
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(bodyBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(borderColor, lineWidth: 0.5)
-                )
                 .padding(.top, 4)
             }
         }
+        .opacity(contentOpacity)
     }
 
     // MARK: Header parsing — mirrors lick-view.ts parseLickContent

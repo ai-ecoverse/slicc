@@ -123,6 +123,29 @@ enum SliccIcons {
         return "circle.grid.2x2"
     }
 
+    // MARK: - Attachments (mirror ATTACHMENT_ICON in slicc-user-message.ts)
+
+    /// SF Symbol for an attachment chip that has no inline image to show.
+    static func attachment(_ kind: MessageAttachmentKind) -> String {
+        switch kind {
+        case .image: return "photo"  // lucide image
+        case .text: return "doc.text"  // lucide file-text
+        case .file: return "doc"  // lucide file
+        }
+    }
+
+    // MARK: - Lick State (mirror STATE_ICON in slicc-lick-card.ts)
+
+    /// SF Symbol for a settled lick decision. `pending` has no glyph on the
+    /// web either — the card simply stays in its default form.
+    static func lickState(_ state: LickState) -> String? {
+        switch state {
+        case .pending: return nil
+        case .confirmed: return "checkmark.circle"  // lucide circle-check
+        case .dismissed: return "xmark.circle"  // lucide circle-x
+        }
+    }
+
     /// Color for tool status (mirrors the web UI's running/success/error tinting).
     static func toolStatusColor(_ tc: ToolCall) -> Color {
         if tc.result == nil { return .yellow.opacity(0.8) }

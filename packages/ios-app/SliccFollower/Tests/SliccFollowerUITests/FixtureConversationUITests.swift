@@ -31,6 +31,12 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-lick-fswatch",
         "fx-lick-navigate",
         "fx-lick-upgrade",
+        "fx-lick-collated",
+        "fx-lick-confirmed",
+        "fx-lick-dismissed",
+        "fx-user-attachments",
+        "fx-user-attachment-only",
+        "fx-assistant-error",
         "fx-queued-1",
         "fx-assistant-streaming",
     ]
@@ -57,6 +63,12 @@ final class FixtureConversationUITests: XCTestCase {
         "0.4.1→0.5.0",  // lick pill, upgrade channel
         "Instructions from sliccy",  // delegation-sourced user message
         "npm run test",  // running tool under the streaming message
+        "deploy-status \u{00D7}3",  // collated lick pill, count suffix
+        "SOMETHING WENT WRONG",  // error card header, uppercased
+        "screenshot.png",  // attachment chip beside a user bubble
+        "diagram.png",  // attachment chip on a bubble-less message
+        "Allow npm publish?",  // tool_ui title, badge and meta stripped
+        "Waiting for approval on the leader",  // tool_ui read-only body
     ]
 
     override func setUp() {
@@ -132,6 +144,39 @@ final class FixtureConversationUITests: XCTestCase {
             missingMarkers(in: seenLabels), [],
             "Variant renderers produced no output; the row can still carry its "
                 + "id while its specialized subview is gone")
+    }
+
+    /// A settled lick shows its decision glyph. This is asserted by identifier
+    /// because the glyph is an SF Symbol with no text of its own, so the
+    /// variant-marker walk above cannot see it.
+    func testSettledLicksShowTheirDecisionGlyph() {
+        let app = launchFixtureApp()
+        XCTAssertTrue(
+            app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
+            "The fixture route should render before scrolling")
+        XCTAssertTrue(
+            waitForAnyMessageRow(in: app),
+            "Rows should be on screen before the walk starts")
+
+        var seen = visibleStateIdentifiers(in: app)
+        for _ in 0..<40 where !seen.isSuperset(of: ["lick-state-confirmed", "lick-state-dismissed"]) {
+            app.swipeDown()
+            let before = seen.count
+            seen.formUnion(visibleStateIdentifiers(in: app))
+            if seen.count == before && seen.count > 0 { break }
+        }
+
+        XCTAssertTrue(
+            seen.contains("lick-state-confirmed"),
+            "A confirmed lick should render its decision glyph")
+        XCTAssertTrue(
+            seen.contains("lick-state-dismissed"),
+            "A dismissed lick should render its decision glyph")
+        // `pending` is the default state and deliberately has no glyph on the
+        // web either, so a stray one here would be a divergence.
+        XCTAssertFalse(
+            seen.contains("lick-state-pending"),
+            "A pending lick should render no decision glyph")
     }
 
     func testReloadRebuildsTheTranscript() {
@@ -225,6 +270,13 @@ final class FixtureConversationUITests: XCTestCase {
         labels.formUnion(app.staticTexts.allElementsBoundByAccessibilityElement.map(\.label))
         labels.formUnion(app.buttons.allElementsBoundByAccessibilityElement.map(\.label))
         return labels
+    }
+
+    /// Lick decision-glyph identifiers currently in the tree.
+    private func visibleStateIdentifiers(in app: XCUIApplication) -> Set<String> {
+        let rows = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "lick-state-"))
+        return Set(rows.allElementsBoundByAccessibilityElement.map(\.identifier))
     }
 
     private func missingMarkers(in labels: Set<String>) -> [String] {

@@ -256,6 +256,85 @@ enum ChatFixture {
                 at: 17
             ))
 
+        // 6b. Collated and settled licks — count pill, folded parts, decisions
+        out.append(
+            lick(
+                id: "fx-lick-collated",
+                channel: "webhook",
+                header: "[Webhook Event: deploy-status]",
+                json: ["run": 1],
+                at: 17.2,
+                count: 3,
+                parts: (1...3).map {
+                    lickContent(header: "[Webhook Event: deploy-status]", json: ["run": $0])
+                }
+            ))
+        out.append(
+            lick(
+                id: "fx-lick-confirmed",
+                channel: "sudo-request",
+                header: "[Sudo Request: npm publish]",
+                json: ["command": "npm publish --access public"],
+                at: 17.4,
+                state: .confirmed
+            ))
+        out.append(
+            lick(
+                id: "fx-lick-dismissed",
+                channel: "sudo-request",
+                header: "[Sudo Request: rm -rf node_modules]",
+                json: ["command": "rm -rf node_modules"],
+                at: 17.6,
+                state: .dismissed
+            ))
+
+        // 6c. Attachments and a cone error
+        out.append(
+            ChatMessage(
+                id: "fx-user-attachments", role: .user,
+                content: "Here's the failing screen and the log.",
+                timestamp: ts(17.7),
+                attachments: [
+                    MessageAttachment(
+                        id: "fx-att-image", name: "screenshot.png",
+                        mimeType: "image/png", size: 2048, kind: .image,
+                        data: onePixelPNG
+                    ),
+                    MessageAttachment(
+                        id: "fx-att-text", name: "build.log",
+                        mimeType: "text/plain", size: 812, kind: .text,
+                        text: "error TS2345: Argument of type 'string'…"
+                    ),
+                    MessageAttachment(
+                        id: "fx-att-file", name: "heap-profile.cpuprofile",
+                        mimeType: "application/octet-stream", size: 9_400_000, kind: .file,
+                        path: "/workspace/uploads/heap-profile.cpuprofile",
+                        error: "File too large to inline"
+                    ),
+                ]
+            ))
+        // A pure-attachment message renders no bubble at all.
+        out.append(
+            ChatMessage(
+                id: "fx-user-attachment-only", role: .user,
+                content: "",
+                timestamp: ts(17.8),
+                attachments: [
+                    MessageAttachment(
+                        id: "fx-att-solo", name: "diagram.png",
+                        mimeType: "image/png", size: 1024, kind: .image,
+                        data: onePixelPNG
+                    )
+                ]
+            ))
+        out.append(
+            ChatMessage(
+                id: "fx-assistant-error", role: .assistant,
+                content: "Provider returned 429: rate limit exceeded. Retry after 30s.",
+                timestamp: ts(17.9),
+                error: true
+            ))
+
         // 7. Queued messages + streaming tail
         out.append(
             ChatMessage(
@@ -288,21 +367,50 @@ enum ChatFixture {
         channel: String,
         header: String,
         json: Any,
-        at minutes: Double
+        at minutes: Double,
+        count: Int? = nil,
+        parts: [String]? = nil,
+        state: LickState? = nil
     ) -> ChatMessage {
+        let content = lickContent(header: header, json: json)
+        return ChatMessage(
+            id: id, role: .user,
+            content: content,
+            timestamp: ts(minutes),
+            source: "lick",
+            channel: channel,
+            lickCount: count,
+            lickParts: parts,
+            lickState: state
+        )
+    }
+
+    /// Smallest valid PNG, so an attachment chip can exercise the real
+    /// base64 → `UIImage` thumbnail path without carrying a binary asset.
+    private static let onePixelPNG =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+    /// A leader-shaped `tool_ui` payload: the header carries a badge and a meta
+    /// line that the follower must strip before showing the title.
+    static let toolUIHtml = """
+        <div class="sprinkle-action-card">
+          <div class="sprinkle-action-card__header">
+            <span class="sprinkle-badge">sudo</span>
+            Allow <code>npm publish</code>?
+            <div class="sprinkle-action-card__meta">/workspace/package.json</div>
+          </div>
+          <button>Approve</button>
+        </div>
+        """
+
+    /// `[Header]\n```json …``` ` — the shape the leader sends for a lick body.
+    private static func lickContent(header: String, json: Any) -> String {
         let bodyData =
             (try? JSONSerialization.data(
                 withJSONObject: json,
                 options: [.prettyPrinted, .sortedKeys]
             )) ?? Data()
         let body = String(data: bodyData, encoding: .utf8) ?? "{}"
-        let content = "\(header)\n```json\n\(body)\n```"
-        return ChatMessage(
-            id: id, role: .user,
-            content: content,
-            timestamp: ts(minutes),
-            source: "lick",
-            channel: channel
-        )
+        return "\(header)\n```json\n\(body)\n```"
     }
 }

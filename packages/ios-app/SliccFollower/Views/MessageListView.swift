@@ -6,6 +6,8 @@ import SwiftUI
 struct MessageListView: View {
     let messages: [ChatMessage]
     let isStreaming: Bool
+    /// Pending read-only approval placeholders, pinned below the transcript.
+    var toolUICards: [ToolUIPlaceholder] = []
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
 
@@ -13,7 +15,7 @@ struct MessageListView: View {
 
     var body: some View {
         Group {
-            if messages.isEmpty {
+            if messages.isEmpty && toolUICards.isEmpty {
                 emptyState
             } else {
                 messageList
@@ -67,6 +69,13 @@ struct MessageListView: View {
                         }
                     }
 
+                    // Approval placeholders sit after the transcript, matching
+                    // the leader mounting them outside the message list.
+                    ForEach(toolUICards) { card in
+                        ToolUICardView(card: card)
+                            .padding(.horizontal, 12)
+                    }
+
                     // Invisible anchor at bottom
                     Color.clear
                         .frame(height: 1)
@@ -75,6 +84,9 @@ struct MessageListView: View {
                 .padding(.vertical, 8)
             }
             .onChange(of: messages.count) { _ in
+                scrollToBottom(proxy: proxy)
+            }
+            .onChange(of: toolUICards.count) { _ in
                 scrollToBottom(proxy: proxy)
             }
             .onChange(of: messages.last?.content) { _ in
