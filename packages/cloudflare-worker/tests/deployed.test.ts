@@ -48,6 +48,7 @@ describeIfConfigured('deployed tray worker', () => {
         'POST /oauth/token',
         'POST /oauth/revoke',
         'GET /api/runtime-config',
+        'GET /api/flags',
         'ANY /api/fetch-proxy',
         'GET /api/cloud/config',
         'POST /api/cloud/start',

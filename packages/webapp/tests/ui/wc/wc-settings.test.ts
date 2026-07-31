@@ -12,8 +12,14 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import {
+  FEATURE_FLAG_STORAGE_KEY,
+  initFeatureFlags,
+  setFeatureFlagOverride,
+} from '../../../src/core/feature-flags.js';
+import {
   accountDetail,
   maskKey,
+  showExperimentalSettings,
   showThemeSettings,
   showWcSettings,
 } from '../../../src/ui/wc/wc-settings.js';
@@ -35,6 +41,10 @@ function findTimestampToggle(dialog: HTMLElement): HTMLInputElement | null {
   );
   const row = label?.parentElement;
   return (row?.querySelector('input[type="checkbox"]') as HTMLInputElement | null) ?? null;
+}
+
+function findExperimentalToggle(dialog: HTMLElement): HTMLInputElement | null {
+  return dialog.querySelector('#wcset-feature-experimental-settings');
 }
 
 const log = { error: vi.fn() };
@@ -64,6 +74,8 @@ function clickDone(dialog: HTMLElement): void {
 afterEach(() => {
   localStorage.removeItem('slicc_accounts');
   localStorage.removeItem('slicc_show_timestamps');
+  localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+  initFeatureFlags('standalone');
   document.body.replaceChildren();
 });
 
@@ -94,6 +106,18 @@ describe('accountDetail', () => {
 });
 
 describe('showWcSettings', () => {
+  it('does not render experimental UI', async () => {
+    initFeatureFlags('standalone');
+    const result = showWcSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.textContent).not.toContain('Experimental');
+    expect(findExperimentalToggle(dialog)).toBeNull();
+
+    clickDone(dialog);
+    await result;
+  });
+
   it('lists connected accounts and resolves false when nothing changed', async () => {
     seedAccounts([{ providerId: 'mystery-llm', apiKey: 'sk-abcdefghijklmnop' }]);
     const result = showWcSettings(log);
@@ -225,6 +249,69 @@ describe('showWcSettings', () => {
     } finally {
       window.removeEventListener('slicc:accounts-changed', onChange);
     }
+  });
+});
+
+describe('showExperimentalSettings', () => {
+  it('shows an honest empty state when no user-toggleable flags exist', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+
+    expect(dialog.getAttribute('heading')).toBe('Experimental');
+    expect(dialog.textContent).toContain('No experimental features are available right now.');
+    expect(findExperimentalToggle(dialog)).toBeNull();
+
+    clickDone(dialog);
+    await result;
+  });
+
+  it('does not mount when called directly while the central flag is off', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+
+    await expect(showExperimentalSettings(log)).resolves.toBeUndefined();
+    expect(document.querySelector('slicc-dialog')).toBeNull();
+  });
+
+  it('ignores a local attempt to turn on a worker-disabled dialog', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'off' });
+    setFeatureFlagOverride('experimental-settings', 'on');
+
+    expect(localStorage.getItem(FEATURE_FLAG_STORAGE_KEY)).toBeNull();
+    await showExperimentalSettings(log);
+    expect(document.querySelector('slicc-dialog')).toBeNull();
+  });
+
+  it('cannot be hidden locally and remains available after reopening', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    setFeatureFlagOverride('experimental-settings', 'off');
+
+    const firstResult = showExperimentalSettings(log);
+    const firstDialog = await openDialog();
+    clickDone(firstDialog);
+    await firstResult;
+
+    const reopenedResult = showExperimentalSettings(log);
+    const reopenedDialog = await openDialog();
+    expect(reopenedDialog.textContent).toContain(
+      'No experimental features are available right now.'
+    );
+    clickDone(reopenedDialog);
+    await reopenedResult;
+  });
+
+  it('ignores a stale persisted override after worker initialization', async () => {
+    localStorage.setItem(
+      FEATURE_FLAG_STORAGE_KEY,
+      JSON.stringify({ 'experimental-settings': 'off' })
+    );
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+    expect(dialog.getAttribute('heading')).toBe('Experimental');
+    clickDone(dialog);
+    await result;
   });
 });
 

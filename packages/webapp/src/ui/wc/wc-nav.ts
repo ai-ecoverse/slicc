@@ -6,6 +6,7 @@
  * section (enable / copy join URL / stop / disconnect).
  */
 
+import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import { getFollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
 import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
@@ -91,6 +92,29 @@ export interface WcNavDeps {
    * the export is in-flight and restore it once the export completes.
    */
   onExportTranscript?: () => Promise<void>;
+}
+
+function standardMenuItems(
+  exportInFlight: boolean
+): NonNullable<WcShellRefs['avatarMenu']['items']> {
+  const items: NonNullable<WcShellRefs['avatarMenu']['items']> = [
+    { id: 'settings', label: 'Account settings…', icon: 'settings' },
+    { id: 'theme', label: 'Theme settings…', icon: 'palette' },
+    {
+      id: 'export-transcript',
+      label: 'Export transcript',
+      icon: 'download',
+      disabled: exportInFlight || undefined,
+    },
+  ];
+  if (isFeatureEnabled('experimental-settings')) {
+    items.push({
+      id: 'experimental-settings',
+      label: 'Experimental features…',
+      icon: 'flask-conical',
+    });
+  }
+  return items;
 }
 
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
@@ -205,14 +229,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   let exportInFlight = false;
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
-      { id: 'settings', label: 'Account settings…', icon: 'settings' },
-      { id: 'theme', label: 'Theme settings…', icon: 'palette' },
-      {
-        id: 'export-transcript',
-        label: 'Export transcript',
-        icon: 'download',
-        disabled: exportInFlight || undefined,
-      },
+      ...standardMenuItems(exportInFlight),
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -226,6 +243,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     client.updateModel()
   );
   const openTheme = buildOpenTheme(log);
+  const openExperimental = buildOpenExperimental(log);
 
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
@@ -241,6 +259,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
     }
     if (id === 'settings') openSettings();
     if (id === 'theme') openTheme();
+    if (id === 'experimental-settings') openExperimental();
     if (id === 'export-transcript' && onExportTranscript) {
       exportInFlight = true;
       syncMenuItems();
@@ -298,6 +317,14 @@ function buildOpenTheme(log: BootStageLogger): () => void {
     import('./wc-settings.js')
       .then(({ showThemeSettings }) => showThemeSettings(log))
       .catch((err) => log.error('Theme settings dialog failed', err));
+  };
+}
+
+function buildOpenExperimental(log: BootStageLogger): () => void {
+  return () => {
+    import('./wc-settings.js')
+      .then(({ showExperimentalSettings }) => showExperimentalSettings(log))
+      .catch((err) => log.error('Experimental settings dialog failed', err));
   };
 }
 

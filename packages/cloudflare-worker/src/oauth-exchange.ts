@@ -19,7 +19,7 @@ const ALLOWED_ORIGINS = [
   /^http:\/\/localhost:\d+$/,
 ];
 
-function isAllowedOrigin(origin: string): boolean {
+export function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.some((allowed) =>
     typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
   );

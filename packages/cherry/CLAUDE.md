@@ -87,6 +87,11 @@ mountSlicc({
   at mount time and sent in `handshake.welcome`; there is no runtime toggle.
   Separate from `capabilities` (which gates agent _powers_ over the host page);
   features gate _UI surfaces_ shown to the user.
+- **Feature flags are separate:** the `?cherry=1` webapp boot uses the shared registry in
+  `packages/webapp/src/core/feature-flags.ts` with Cherry defaults (`experimental-settings`
+  is off). This is not `SIDE_PANEL_FEATURES` in
+  `packages/chrome-extension/src/cherry-panel-protocol.ts`: that constant is host-provided,
+  mount-time `CherryFeatures` panel visibility sent in `handshake.welcome`, not remote flag config.
 - `theme` accepts a `SliccTheme` object (`{ id, name, base, tokens, css?,
 disableShader?, components? }`) that the SDK serializes as JSON in the
   handshake welcome. The follower applies it on boot via `applyCherryTheme`,
