@@ -14,10 +14,15 @@ vi.mock('../../../src/ui/telemetry.js', async () => {
   const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
     '../../../src/ui/telemetry.js'
   );
-  return { ...actual, trackChatSend: vi.fn(), trackError: vi.fn() };
+  return {
+    ...actual,
+    trackChatSend: vi.fn(),
+    trackError: vi.fn(),
+    trackLickBackpressure: vi.fn(),
+  };
 });
 
-import { trackChatSend, trackError } from '../../../src/ui/telemetry.js';
+import { trackChatSend, trackError, trackLickBackpressure } from '../../../src/ui/telemetry.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
@@ -69,6 +74,7 @@ describe('WcChatController', () => {
     busyPhases = [];
     vi.mocked(trackChatSend).mockClear();
     vi.mocked(trackError).mockClear();
+    vi.mocked(trackLickBackpressure).mockClear();
     controller = new WcChatController({
       thread,
       agent,
@@ -325,6 +331,51 @@ describe('WcChatController', () => {
     const card = thread.querySelector('slicc-error-card');
     expect(card).not.toBeNull();
     expect(card?.getAttribute('message')).toBe('rate limited');
+  });
+
+  describe('lick backpressure notice', () => {
+    function makeBackpressureController() {
+      const queuedChanges: Array<readonly { id: string; text: string }[]> = [];
+      const states: boolean[] = [];
+      const ctl = new WcChatController({
+        thread,
+        agent: new FakeAgent(),
+        onProcessingChange: (processing) => states.push(processing),
+        onQueuedChange: (items) => queuedChanges.push(items.slice()),
+      });
+      ctl.setProcessing(true);
+      states.length = 0;
+      return { ctl, queuedChanges, states };
+    }
+
+    it('shows a non-error notice without changing processing or exposing an error card', () => {
+      const { ctl, queuedChanges, states } = makeBackpressureController();
+      ctl.setLickBackpressure(3, 300_000, 'cone');
+
+      expect(queuedChanges.at(-1)?.map((item) => item.text)).toEqual([
+        '3 events waiting for the current turn',
+      ]);
+      expect(ctl.processing).toBe(true);
+      expect(states).toEqual([]);
+      expect(thread.querySelector('slicc-error-card')).toBeNull();
+      expect(trackError).not.toHaveBeenCalled();
+      expect(trackLickBackpressure).toHaveBeenCalledWith('cone', 300_000);
+    });
+
+    it('retracts the notice on count zero', () => {
+      const { ctl, queuedChanges } = makeBackpressureController();
+      ctl.setLickBackpressure(2, 300_000, 'cone');
+      ctl.setLickBackpressure(0, 0, 'cone');
+      expect(queuedChanges.at(-1)).toEqual([]);
+      expect(trackLickBackpressure).toHaveBeenCalledTimes(1);
+    });
+
+    it('retracts the notice when the current turn completes', () => {
+      const { ctl, queuedChanges } = makeBackpressureController();
+      ctl.setLickBackpressure(1, 300_000, 'researcher');
+      ctl.setProcessing(false);
+      expect(queuedChanges.at(-1)).toEqual([]);
+    });
   });
 
   describe('no-handler error-card RUM beacon (trackError)', () => {

@@ -8,6 +8,7 @@
  * - viewblock: sprinkle displayed
  * - viewmedia: image preview (in chat or via open --view)
  * - error: JS errors or LLM errors
+ * - lick-backpressure: sustained lick deferral while a scoop is busy
  * - signup: settings dialog opened
  * - navigate: page load with deployment mode
  */
@@ -238,6 +239,11 @@ export function trackError(errorType: string, details?: string): void {
     target = sanitized;
   }
   sampleRUM?.('error', { source: errorType, target });
+}
+
+/** Sustained lick deferral. source=scoop name, target=wait duration in milliseconds. */
+export function trackLickBackpressure(scoopName: string, waitingMs: number): void {
+  sampleRUM?.('lick-backpressure', { source: scoopName, target: String(waitingMs) });
 }
 
 /** Settings dialog opened. source=trigger (button/shortcut) */
