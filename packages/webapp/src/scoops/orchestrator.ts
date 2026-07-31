@@ -97,6 +97,8 @@ export interface OrchestratorCallbacks {
   ) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;
+  /** Called when sustained lick backpressure is reported or cleared. */
+  onLickBackpressure?: (scoopJid: string, info: { count: number; waitingMs: number }) => void;
   /** Get the BrowserAPI used by browser automation commands */
   getBrowserAPI: () => BrowserAPI;
   /** Called when a tool starts executing */
@@ -258,6 +260,7 @@ export class Orchestrator implements ConeApprovalRouter {
       this.sendPrompt(jid, text, senderId, senderName, images ?? [], options),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
     onError: (jid, error) => this.callbacks.onError(jid, error),
+    onLickBackpressure: (jid, info) => this.callbacks.onLickBackpressure?.(jid, info),
     getSessionStore: () => this.sessionStore,
     resetCostTracker: () => this.costTracker.reset(),
     db: {
