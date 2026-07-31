@@ -988,15 +988,17 @@ export async function persistOAuthMaskViaServiceWorker(
 /**
  * Resolve the scopes to store for an OAuth write. An empty accessToken is the
  * logout path — carrying the previous grant forward would let a later scope
- * check pass against a token that's gone.
+ * check pass against a token that's gone. Login/refresh callers include the
+ * `scopes` key even when the provider omitted scope, so explicit `undefined`
+ * records an unknown grant; bootstrap replica writes omit the key and preserve
+ * the existing grant.
  */
 function resolveStoredScopes(
-  accessToken: string,
-  scopes: string | undefined,
+  opts: { accessToken: string; scopes?: string },
   existing: Account | undefined
 ): string | undefined {
-  if (!accessToken) return undefined;
-  return scopes ?? existing?.scopes;
+  if (!opts.accessToken) return undefined;
+  return 'scopes' in opts ? opts.scopes : existing?.scopes;
 }
 
 /** Save an OAuth account (used by external providers after token exchange). */
@@ -1008,7 +1010,7 @@ export async function saveOAuthAccount(opts: {
   userName?: string;
   userAvatar?: string;
   baseUrl?: string;
-  /** Granted scopes from the token endpoint; omit to keep the stored value. */
+  /** Granted scopes from the token endpoint; omit to keep the stored value, or pass undefined to record an unknown grant. */
   scopes?: string;
 }): Promise<void> {
   const existing = getAccounts().find((a) => a.providerId === opts.providerId);
@@ -1022,7 +1024,7 @@ export async function saveOAuthAccount(opts: {
     userName: opts.userName,
     userAvatar: opts.userAvatar,
     baseUrl: opts.baseUrl ?? existing?.baseUrl,
-    scopes: resolveStoredScopes(opts.accessToken, opts.scopes, existing),
+    scopes: resolveStoredScopes(opts, existing),
   });
   // Worker-safe save: `mcp add` and MCP `onSilentRenew` run in the
   // kernel worker where a direct `saveAccounts` would land in the

@@ -1,6 +1,37 @@
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { config } from '../../providers/openai-codex.js';
+
+const codexStreamMocks = vi.hoisted(() => ({
+  streamOpenAICodexResponses: vi.fn(),
+  streamSimpleOpenAICodexResponses: vi.fn(),
+}));
+
+vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
+  return { ...actual, ...codexStreamMocks };
+});
+
+import {
+  createAssistantMessageEventStream,
+  getApiProvider,
+  resetApiProviders,
+} from '@earendil-works/pi-ai/compat';
+import { config, register } from '../../providers/openai-codex.js';
+
+const CODEX_API = 'openai-codex-openai' as Api;
+
+function endedStream() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => stream.end());
+  return stream;
+}
+
+async function drain(stream: ReturnType<typeof endedStream>): Promise<void> {
+  for await (const _event of stream) {
+    // The mocked native stream intentionally emits no events.
+  }
+}
 
 describe('openai-codex provider config', () => {
   it('is an OAuth provider with codex token domains', () => {
@@ -205,6 +236,54 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
 
     const account = getAccounts().find((candidate) => candidate.providerId === 'openai-codex');
     expect(account?.scopes).toBe(expectedScope);
+  });
+
+  it('persists scope when getValidAccessToken refreshes during a stream', async () => {
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'openai-codex',
+          apiKey: '',
+          accessToken: 'expired-access',
+          refreshToken: 'old-refresh',
+          tokenExpiresAt: Date.now() - 1,
+          scopes: 'prior:scope',
+        },
+      ])
+    );
+    globalThis.fetch = vi.fn(async (url: unknown) => {
+      if (String(url) === 'https://auth.openai.com/oauth/token') {
+        return new Response(
+          JSON.stringify({
+            access_token: 'header.e30.sig',
+            scope: 'stream:scope',
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('', { status: 503 });
+    }) as typeof globalThis.fetch;
+    codexStreamMocks.streamOpenAICodexResponses.mockImplementation(endedStream);
+    resetApiProviders();
+    register();
+
+    const provider = getApiProvider(CODEX_API)!;
+    const model = {
+      id: 'gpt-5.5',
+      name: 'GPT-5.5',
+      api: CODEX_API,
+      provider: 'openai-codex',
+    } as Model<Api>;
+    await drain(provider.stream(model, { systemPrompt: '', messages: [], tools: [] }, {}));
+
+    const { getAccounts } = await import('../../src/ui/provider-settings.js');
+    const account = getAccounts().find((candidate) => candidate.providerId === 'openai-codex');
+    expect(account?.accessToken).toBe('header.e30.sig');
+    expect(account?.scopes).toBe('stream:scope');
+    expect(codexStreamMocks.streamOpenAICodexResponses.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ apiKey: 'header.e30.sig' })
+    );
   });
 
   it('throws on OAuth state mismatch', async () => {

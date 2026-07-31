@@ -5,7 +5,17 @@
  * the exported pure-logic functions and mock the rest.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const oauthServiceMocks = vi.hoisted(() => ({
+  createOAuthLauncher: vi.fn(),
+  getOAuthPageOrigin: vi.fn(),
+}));
+
+vi.mock('../../src/providers/oauth-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/providers/oauth-service.js')>();
+  return { ...actual, ...oauthServiceMocks };
+});
 
 // Mock localStorage
 const storage = new Map<string, string>();
@@ -113,6 +123,103 @@ describe('Token extraction from URL', () => {
     const url = 'https://example.com/callback#access_token=xyz';
     const result = extractTokenFromUrl(url);
     expect(result?.expiresIn).toBe(86400);
+  });
+});
+
+describe('Adobe scope persistence', () => {
+  const proxyEndpoint = 'https://adobe-proxy.scope.test';
+  let originalFetch: typeof globalThis.fetch;
+  let originalWindow: unknown;
+  let originalDocument: unknown;
+
+  function redirectWithScope(authorizeUrl: string, accessToken: string, scope: string): string {
+    const authorize = new URL(authorizeUrl);
+    const state = JSON.parse(atob(authorize.searchParams.get('state')!)) as { nonce: string };
+    const redirectUri = authorize.searchParams.get('redirect_uri')!;
+    return `${redirectUri}?nonce=${state.nonce}#access_token=${accessToken}&expires_in=3600&scope=${encodeURIComponent(scope)}`;
+  }
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    originalFetch = globalThis.fetch;
+    originalWindow = (globalThis as { window?: unknown }).window;
+    originalDocument = (globalThis as { document?: unknown }).document;
+    (globalThis as { window?: unknown }).window = {
+      location: { origin: 'http://localhost:5710', href: 'http://localhost:5710/' },
+    };
+    (globalThis as { document?: unknown }).document = {};
+    oauthServiceMocks.getOAuthPageOrigin.mockResolvedValue({
+      origin: 'http://localhost:5710',
+      href: 'http://localhost:5710/',
+    });
+    globalThis.fetch = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value === `${proxyEndpoint}/v1/config`) {
+        return new Response(JSON.stringify({ clientId: 'adobe-client', scopes: 'openid' }), {
+          status: 200,
+        });
+      }
+      if (value.endsWith('/ims/userinfo/v2')) {
+        return new Response(JSON.stringify({ displayName: 'Adobe User' }), { status: 200 });
+      }
+      if (value === `${proxyEndpoint}/v1/models`) {
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+      return new Response('', { status: 503 });
+    }) as typeof globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window;
+    else (globalThis as { window?: unknown }).window = originalWindow;
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  });
+
+  it('persists the provider-reported scope from interactive login', async () => {
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'adobe', apiKey: '', baseUrl: proxyEndpoint }])
+    );
+    const launcher = vi.fn(async (authorizeUrl: string) =>
+      redirectWithScope(authorizeUrl, 'adobe-login-token', 'openid,email')
+    );
+    const { config } = await import('../../providers/adobe.js');
+
+    await config.onOAuthLogin!(launcher, () => {});
+
+    const { getAccounts } = await import('../../src/ui/provider-settings.js');
+    const account = getAccounts().find((candidate) => candidate.providerId === 'adobe');
+    expect(account?.accessToken).toBe('adobe-login-token');
+    expect(account?.scopes).toBe('openid,email');
+  });
+
+  it('persists the provider-reported scope from silent renewal', async () => {
+    localStorage.setItem(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'adobe',
+          apiKey: '',
+          baseUrl: proxyEndpoint,
+          accessToken: 'adobe-old-token',
+          scopes: 'openid',
+        },
+      ])
+    );
+    oauthServiceMocks.createOAuthLauncher.mockReturnValue(async (authorizeUrl: string) =>
+      redirectWithScope(authorizeUrl, 'adobe-renewed-token', 'openid,email')
+    );
+    const { config } = await import('../../providers/adobe.js');
+
+    await expect(config.onSilentRenew!()).resolves.toBe('adobe-renewed-token');
+
+    const { getAccounts } = await import('../../src/ui/provider-settings.js');
+    const account = getAccounts().find((candidate) => candidate.providerId === 'adobe');
+    expect(account?.accessToken).toBe('adobe-renewed-token');
+    expect(account?.scopes).toBe('openid,email');
   });
 });
 

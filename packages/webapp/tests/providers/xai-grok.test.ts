@@ -200,6 +200,44 @@ describe('xai-grok provider', () => {
     );
   });
 
+  it('persists scope when getValidAccessToken refreshes during a stream', async () => {
+    providerSettingsMocks.accounts = [
+      {
+        providerId: 'xai-grok',
+        accessToken: 'expired-access',
+        refreshToken: 'old-refresh',
+        tokenExpiresAt: Date.now() - 1,
+        scopes: 'prior:scope',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: 'stream-refreshed-access',
+              scope: 'stream:scope',
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    const provider = getApiProvider(XAI_API)!;
+    await drain(provider.stream(routedModel('grok-4.5'), context, {}));
+
+    expect(providerSettingsMocks.saveOAuthAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accessToken: 'stream-refreshed-access',
+        scopes: 'stream:scope',
+      })
+    );
+    expect(mocks.streamOpenAIResponses.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ apiKey: 'stream-refreshed-access' })
+    );
+  });
+
   it('sources its catalog and metadata from pi-ai xai models', () => {
     const models = config.getModelIds!();
 

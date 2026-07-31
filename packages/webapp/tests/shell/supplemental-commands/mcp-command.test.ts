@@ -458,7 +458,7 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     expect(badName.stderr).toContain('invalid name');
   });
 
-  it('add: runs OAuth flow on 401 and persists auth block', async () => {
+  it('add: runs DCR OAuth on 401 and persists the provider-reported scope', async () => {
     const { fetch } = makeMockMcpFetch({
       authRequired: true,
       expectedToken: 'mcp-access-token',
@@ -478,6 +478,7 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     expect(file.servers.demo.auth?.clientId).toBe('test-client-abc');
     expect(file.servers.demo.auth?.providerId).toBe('mcp:demo');
     expect(file.servers.demo.auth?.authorizationServer).toBe('https://auth.test');
+    expect(file.servers.demo.auth?.scope).toBe('mcp:tools');
 
     // Provider was registered immediately
     expect(getRegisteredProviderConfig(mcpProviderId('demo'))).toBeDefined();
@@ -488,6 +489,7 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     const acct = accounts.find((a: { providerId: string }) => a.providerId === 'mcp:demo');
     expect(acct.accessToken).toBe('mcp-access-token');
     expect(acct.refreshToken).toBe('mcp-refresh-token');
+    expect(acct.scopes).toBe('mcp:tools');
   });
 
   it('add: uses page-origin redirect URI when not running as a Chrome extension', async () => {

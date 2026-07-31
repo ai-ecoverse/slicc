@@ -141,6 +141,26 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
     expect(getOAuthAccountInfo('github')?.scopes).toBe('repo,read:user');
   });
 
+  it('stores unknown scopes when a fresh login explicitly reports no scope', async () => {
+    globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
+
+    const { saveOAuthAccount, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_stale',
+      scopes: 'repo,read:user',
+    });
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_fresh',
+      scopes: undefined,
+    });
+
+    expect(getOAuthAccountInfo('github')?.scopes).toBeUndefined();
+  });
+
   it('clears scopes on the logout write (accessToken: "")', async () => {
     globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
 
