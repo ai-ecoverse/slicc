@@ -35,6 +35,11 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-assistant-streaming",
     ]
 
+    /// Last message in `ChatFixture.makeMessages()`, and therefore the row the
+    /// list auto-scrolls to. The bottom-to-top walk uses it as its start
+    /// signal, so it must stay in step with the fixture's tail.
+    private static let newestFixtureMessageId = "fx-assistant-streaming"
+
     /// Substrings that only a variant-specific renderer can produce.
     ///
     /// Row ids alone are not enough: SwiftUI propagates `message-<id>` to every
@@ -88,8 +93,8 @@ final class FixtureConversationUITests: XCTestCase {
             app.staticTexts["fixture-header"].waitForExistence(timeout: 60),
             "The fixture route should render before scrolling")
         XCTAssertTrue(
-            waitForAnyMessageRow(in: app),
-            "Rows should be on screen before the walk starts")
+            waitForListToSettleAtBottom(in: app),
+            "The list should settle on its newest message before the walk starts")
 
         var seenIds = visibleMessageIds(in: app)
         var seenLabels = visibleLabels(in: app)
@@ -163,6 +168,25 @@ final class FixtureConversationUITests: XCTestCase {
         ]
         app.launch()
         return app
+    }
+
+    /// Block until the list has settled on its newest message.
+    ///
+    /// The walk starts at the bottom and only ever scrolls up, so a row the
+    /// first sample misses is never seen again. Waiting for *any* row is not
+    /// enough — rows materialize while the auto-scroll to the bottom is still
+    /// in flight, and sampling then drops the newest message from the set
+    /// permanently. That is precisely how CI collected seventeen of the
+    /// eighteen fixture rows and lost `fx-assistant-streaming` every time.
+    private func waitForListToSettleAtBottom(in app: XCUIApplication, timeout: TimeInterval = 30)
+        -> Bool
+    {
+        app.descendants(matching: .any)
+            .matching(
+                NSPredicate(format: "identifier == %@", "message-\(Self.newestFixtureMessageId)")
+            )
+            .firstMatch
+            .waitForExistence(timeout: timeout)
     }
 
     /// Block until at least one message row is in the accessibility tree.
