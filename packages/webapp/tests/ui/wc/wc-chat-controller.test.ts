@@ -336,25 +336,26 @@ describe('WcChatController', () => {
   describe('lick backpressure notice', () => {
     function makeBackpressureController() {
       const queuedChanges: Array<readonly { id: string; text: string }[]> = [];
+      const noticeChanges: Array<{ text: string } | null> = [];
       const states: boolean[] = [];
       const ctl = new WcChatController({
         thread,
         agent: new FakeAgent(),
         onProcessingChange: (processing) => states.push(processing),
         onQueuedChange: (items) => queuedChanges.push(items.slice()),
+        onLickBackpressureChange: (notice) => noticeChanges.push(notice),
       });
       ctl.setProcessing(true);
       states.length = 0;
-      return { ctl, queuedChanges, states };
+      return { ctl, queuedChanges, noticeChanges, states };
     }
 
     it('shows a non-error notice without changing processing or exposing an error card', () => {
-      const { ctl, queuedChanges, states } = makeBackpressureController();
+      const { ctl, queuedChanges, noticeChanges, states } = makeBackpressureController();
       ctl.setLickBackpressure(3, 300_000, 'cone');
 
-      expect(queuedChanges.at(-1)?.map((item) => item.text)).toEqual([
-        '3 events waiting for the current turn',
-      ]);
+      expect(queuedChanges).toEqual([]);
+      expect(noticeChanges.at(-1)?.text).toBe('3 events waiting for the current turn');
       expect(ctl.processing).toBe(true);
       expect(states).toEqual([]);
       expect(thread.querySelector('slicc-error-card')).toBeNull();
@@ -363,18 +364,43 @@ describe('WcChatController', () => {
     });
 
     it('retracts the notice on count zero', () => {
-      const { ctl, queuedChanges } = makeBackpressureController();
+      const { ctl, noticeChanges } = makeBackpressureController();
       ctl.setLickBackpressure(2, 300_000, 'cone');
       ctl.setLickBackpressure(0, 0, 'cone');
-      expect(queuedChanges.at(-1)).toEqual([]);
+      expect(noticeChanges.at(-1)).toBeNull();
       expect(trackLickBackpressure).toHaveBeenCalledTimes(1);
     });
 
     it('retracts the notice when the current turn completes', () => {
-      const { ctl, queuedChanges } = makeBackpressureController();
+      const { ctl, noticeChanges } = makeBackpressureController();
       ctl.setLickBackpressure(1, 300_000, 'researcher');
       ctl.setProcessing(false);
-      expect(queuedChanges.at(-1)).toEqual([]);
+      expect(noticeChanges.at(-1)).toBeNull();
+    });
+
+    it('keeps the notice out of the queued badge total', () => {
+      const badge = document.createElement('span');
+      const noticeChip = document.createElement('div');
+      const ctl = new WcChatController({
+        thread,
+        agent: new FakeAgent(),
+        onQueuedChange: (items) => {
+          badge.textContent = items.length > 0 ? `${items.length} queued` : '';
+        },
+        onLickBackpressureChange: (notice) => {
+          noticeChip.textContent = notice?.text ?? '';
+        },
+      });
+      ctl.setProcessing(true);
+      ctl.setLickBackpressure(3, 300_000, 'cone');
+
+      expect(noticeChip.textContent).toBe('3 events waiting for the current turn');
+      expect(badge.textContent).toBe('');
+      expect(noticeChip.textContent).not.toContain('1 queued');
+
+      ctl.sendUserMessage('one real queued submission');
+      expect(badge.textContent).toBe('1 queued');
+      expect(noticeChip.textContent).toBe('3 events waiting for the current turn');
     });
   });
 
