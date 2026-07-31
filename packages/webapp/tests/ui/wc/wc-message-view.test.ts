@@ -491,6 +491,58 @@ describe('tool presentation', () => {
     expect(spans[1].style.color).toBeTruthy();
   });
 
+  it('renders ordered inline images in bash output without exposing raw markers', () => {
+    const marker = '<img:data:image/png;base64,AAAA>';
+    const [, row] = messageEls(
+      call('bash', { command: 'open --view image.png' }, `image.png (1x1)\n${marker}\ndone`)
+    );
+    const out = row.querySelector('.wcmsg-out') as HTMLElement;
+    const image = out.querySelector('img.wcmsg-tool-image') as HTMLImageElement;
+    expect(image.src).toBe('data:image/png;base64,AAAA');
+    expect(image.loading).toBe('lazy');
+    expect(image.alt).toBe('image.png (1x1)');
+    expect(out.textContent).toBe('image.png (1x1)\n\ndone');
+    expect(out.textContent).not.toContain('<img:data:');
+  });
+
+  it('caps inline images per tool body and reports overflow', () => {
+    const result = Array.from(
+      { length: 6 },
+      (_, index) => `image-${index}\n<img:data:image/png;base64,AAAA>`
+    ).join('\n');
+    const [, row] = messageEls(call('bash', { command: 'for image in *' }, result));
+    expect(row.querySelectorAll('img.wcmsg-tool-image')).toHaveLength(4);
+    expect(row.querySelector('.wcmsg-image-overflow')?.textContent).toBe('+2 more images');
+  });
+
+  it('splits generic tool results before capping text around images', () => {
+    const base64 = 'A'.repeat(8000);
+    const marker = `<img:data:image/jpeg;base64,${base64}>`;
+    const [, row] = messageEls(
+      call('web_search', { query: 'images' }, `${'x'.repeat(5000)}${marker}tail`)
+    );
+    const body = row.querySelector('[slot="body"]') as HTMLElement;
+    const image = body.querySelector('img.wcmsg-tool-image') as HTMLImageElement;
+    expect(image.src).toBe(`data:image/jpeg;base64,${base64}`);
+    expect(body.textContent).toBe(`${'x'.repeat(4000)}…tail`);
+    expect(body.textContent).not.toContain('base64');
+  });
+
+  it('renders malformed and unsupported markers as capped text instead of images', () => {
+    const malformed = `<img:data:image/png;base64,${'A'.repeat(5000)}…>`;
+    const [, malformedRow] = messageEls(
+      call('bash', { command: 'open --view bad.png' }, malformed)
+    );
+    const malformedOut = malformedRow.querySelector('.wcmsg-out') as HTMLElement;
+    expect(malformedOut.querySelector('img')).toBeNull();
+    expect(malformedOut.textContent).toBe(`${malformed.slice(0, 4000)}…`);
+
+    const unsupported = '<img:data:image/svg+xml;base64,PHN2Zz4=>';
+    const [, unsupportedRow] = messageEls(call('other_tool', {}, unsupported));
+    expect(unsupportedRow.querySelector('img')).toBeNull();
+    expect(unsupportedRow.textContent).toContain(unsupported);
+  });
+
   it('a registered slicc-bash-renderer-<cmd> takes over the bash body', () => {
     class GitRenderer extends HTMLElement {}
     if (!customElements.get('slicc-bash-renderer-git')) {

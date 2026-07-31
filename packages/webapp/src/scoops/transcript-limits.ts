@@ -16,6 +16,8 @@
  * MUST NOT be routed through these helpers.
  */
 
+import { createImageMarkerRegex } from '../core/tool-result-images.js';
+
 /** Per tool-result / per input-string-field transcript budget. */
 export const MAX_TRANSCRIPT_TOOL_TEXT_CHARS = 64 * 1024;
 
@@ -88,15 +90,13 @@ export function capTranscriptToolInput(
  * a transient `_screenshotDataUrl` and strips it from the stored
  * result; it is never useful — and very expensive — to persist.
  *
- * Exposed as a factory, NOT a shared module-level regex: `/g` regexes
+ * Imported as a factory, NOT a shared module-level regex: `/g` regexes
  * are stateful (`.test()` advances `lastIndex`), and a shared instance
  * used across the test/replace/matchAll call sites below is one
  * refactor away from returning wrong answers when two transcript ops
  * land in the same tick. A fresh instance per call is stateless by
  * construction and costs nothing at per-tool-call frequency.
  */
-const imgMarkerRe = (): RegExp => /<img:data:image\/[^>]+>/g;
-
 /**
  * Cap a tool result for the BUFFERED transcript (kernel-bridge
  * `messageBuffers` → `browser-coding-agent` UI store). Image markers
@@ -112,8 +112,8 @@ export function capTranscriptToolResultForBuffer(
   max = MAX_TRANSCRIPT_TOOL_TEXT_CHARS
 ): string {
   if (!result) return result;
-  if (!imgMarkerRe().test(result)) return capTranscriptText(result, max);
-  const stripped = result.replace(imgMarkerRe(), '').trim();
+  if (!createImageMarkerRegex().test(result)) return capTranscriptText(result, max);
+  const stripped = result.replace(createImageMarkerRegex(), '').trim();
   const capped = capTranscriptText(stripped, max);
   return capped.length > 0 ? `${capped}\n[screenshot omitted from transcript]` : '[screenshot]';
 }
@@ -130,11 +130,11 @@ export function capTranscriptToolResultForEvent(
 ): string {
   if (result.length <= max) return result;
   // Fast path: no images — plain text cap.
-  if (!imgMarkerRe().test(result)) return capTranscriptText(result, max);
+  if (!createImageMarkerRegex().test(result)) return capTranscriptText(result, max);
   // Keep markers intact; cap each text segment between them.
   const parts: string[] = [];
   let last = 0;
-  for (const m of result.matchAll(imgMarkerRe())) {
+  for (const m of result.matchAll(createImageMarkerRegex())) {
     parts.push(capTranscriptText(result.slice(last, m.index), max));
     parts.push(m[0]);
     last = (m.index ?? 0) + m[0].length;

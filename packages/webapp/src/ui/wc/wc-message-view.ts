@@ -8,6 +8,7 @@
 
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import type { MessageAttachment } from '../../core/attachments.js';
+import { splitToolResultImages } from '../../core/tool-result-images.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { ansiToDom } from '../ansi-to-dom.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
@@ -340,6 +341,7 @@ export function toolTitle(call: Pick<ToolCall, 'name' | 'input'>): string {
 }
 
 const BODY_CAP = 4000;
+const TOOL_BODY_IMAGE_CAP = 4;
 
 function cap(text: string): string {
   return text.length > BODY_CAP ? `${text.slice(0, BODY_CAP)}…` : text;
@@ -354,6 +356,9 @@ const WCMSG_CSS = [
   '.wcmsg-bash{white-space:pre-wrap;}',
   '.wcmsg-bash .wcmsg-cmd{color:#9ad17e;}',
   '.wcmsg-bash .wcmsg-out{color:#f2f2f2;}',
+  '.wcmsg-tool-image{display:block;max-width:100%;max-height:480px;width:auto;height:auto;',
+  'object-fit:contain;margin:8px 0;border-radius:6px;}',
+  '.wcmsg-image-overflow{margin-top:6px;opacity:.7;}',
   '.wcmsg-path{color:var(--txt-3);margin-bottom:4px;}',
 ].join('');
 
@@ -363,6 +368,49 @@ function ensureWcmsgStyle(): void {
   style.id = WCMSG_STYLE_ID;
   style.textContent = WCMSG_CSS;
   document.head.appendChild(style);
+}
+
+function precedingTextLine(text: string): string | null {
+  const visibleText = ansiToDom(text).textContent ?? '';
+  const line = visibleText
+    .split(/\r?\n/)
+    .reverse()
+    .find((part) => part.trim().length > 0)
+    ?.trim();
+  return line ? firstLine(line) : null;
+}
+
+function appendToolResult(container: HTMLElement, result: string): void {
+  const segments = splitToolResultImages(result);
+  const imageCount = segments.reduce(
+    (count, segment) => count + Number(segment.type === 'image'),
+    0
+  );
+  let renderedImages = 0;
+  let altLine: string | null = null;
+  for (const segment of segments) {
+    if (segment.type === 'text') {
+      container.append(ansiToDom(cap(segment.text)));
+      altLine = precedingTextLine(segment.text) ?? altLine;
+      continue;
+    }
+    if (renderedImages >= TOOL_BODY_IMAGE_CAP) continue;
+    const image = document.createElement('img');
+    image.className = 'wcmsg-tool-image';
+    image.src = segment.dataUrl;
+    image.alt = altLine ?? 'Tool result image';
+    image.loading = 'lazy';
+    image.addEventListener('error', () => image.replaceWith(ansiToDom(cap(segment.marker))), {
+      once: true,
+    });
+    container.append(image);
+    renderedImages++;
+  }
+  if (imageCount > renderedImages) {
+    const overflow = el('div', { class: 'wcmsg-image-overflow' });
+    overflow.textContent = `+${imageCount - renderedImages} more images`;
+    container.append(overflow);
+  }
 }
 
 /**
@@ -392,7 +440,7 @@ function bashBody(call: ToolCall): HTMLElement {
   body.append(cmd);
   if (call.result) {
     const out = el('div', { class: 'wcmsg-out' });
-    out.append(ansiToDom(cap(call.result)));
+    appendToolResult(out, call.result);
     body.append(out);
   }
   return body;
@@ -438,7 +486,7 @@ function toolBody(call: ToolCall): HTMLElement | null {
   }
   if (call.result !== undefined) {
     const result = el('div');
-    result.textContent = cap(call.result);
+    appendToolResult(result, call.result);
     body.append(result);
     return body;
   }

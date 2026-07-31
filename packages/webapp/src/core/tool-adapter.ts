@@ -16,12 +16,10 @@ import {
 } from '../tools/tool-ui.js';
 import { processImageContent } from './image-processor.js';
 import { createLogger } from './logger.js';
+import { createImageMarkerRegex, parseImageMarker } from './tool-result-images.js';
 import type { ImageContent, TextContent, ToolDefinition } from './types.js';
 
 const log = createLogger('tool-adapter');
-
-/** Regex to match `<img:data:image/TYPE;base64,DATA>` tags in tool result text. */
-const IMG_TAG_RE = /<img:(data:(image\/[^;]+);base64,([^>]+))>/g;
 
 /**
  * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks.
@@ -31,7 +29,9 @@ export function parseToolResultContentRaw(text: string): (TextContent | ImageCon
   const blocks: (TextContent | ImageContent)[] = [];
   let lastIndex = 0;
 
-  for (const match of text.matchAll(IMG_TAG_RE)) {
+  for (const match of text.matchAll(createImageMarkerRegex())) {
+    const image = parseImageMarker(match[0]);
+    if (!image) continue;
     // Add any text before this match
     const before = text.slice(lastIndex, match.index);
     if (before.trim()) {
@@ -40,8 +40,8 @@ export function parseToolResultContentRaw(text: string): (TextContent | ImageCon
     // Add the image as a proper content block
     blocks.push({
       type: 'image',
-      mimeType: match[2],
-      data: match[3],
+      mimeType: image.mimeType,
+      data: image.data,
     });
     lastIndex = match.index! + match[0].length;
   }
@@ -116,6 +116,78 @@ export interface ToolAdapterSecretsConfig {
   scrubToolResult: (text: string) => Promise<string>;
 }
 
+type TrackedToolProcess = {
+  record: ReturnType<ProcessManager['spawn']>;
+  manager: ProcessManager;
+  unsubscribeKill: () => void;
+};
+
+function startToolProcess(
+  tool: ToolDefinition,
+  params: unknown,
+  signal: AbortSignal | undefined,
+  config: ToolAdapterProcessConfig | undefined
+): { tracked: TrackedToolProcess | null; effectiveSignal: AbortSignal | undefined } {
+  if (!config) return { tracked: null, effectiveSignal: signal };
+  const record = config.processManager.spawn({
+    kind: 'tool',
+    argv: [tool.name, ...extractToolArg(params)],
+    owner: config.owner,
+    ppid: config.getParentPid?.(),
+  });
+  if (signal?.aborted) {
+    config.processManager.signal(record.pid, 'SIGINT');
+  } else if (signal) {
+    signal.addEventListener('abort', () => config.processManager.signal(record.pid, 'SIGINT'), {
+      once: true,
+    });
+  }
+  const unsubscribeKill = config.processManager.onSignal((signaled, sig) => {
+    if (signaled.pid !== record.pid || sig !== 'SIGKILL') return;
+    config.processManager.exit(record.pid, null);
+  });
+  return {
+    tracked: { record, manager: config.processManager, unsubscribeKill },
+    effectiveSignal: record.abort.signal,
+  };
+}
+
+function exitToolProcess(tracked: TrackedToolProcess | null, code: number | null): void {
+  if (tracked) tracked.manager.exit(tracked.record.pid, code);
+}
+
+async function scrubToolResult(
+  content: string,
+  toolName: string,
+  config: ToolAdapterSecretsConfig | undefined
+): Promise<string> {
+  if (!config || typeof content !== 'string' || content.length === 0) return content;
+  try {
+    return await config.scrubToolResult(content);
+  } catch (err) {
+    log.warn('Tool-result scrub failed, falling back to unscrubbed content', {
+      tool: toolName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return content;
+  }
+}
+
+async function parseToolResult(
+  content: string,
+  toolName: string
+): Promise<(TextContent | ImageContent)[]> {
+  try {
+    return await parseToolResultContent(content);
+  } catch (err) {
+    log.warn('Image processing failed, falling back to raw content', {
+      tool: toolName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return parseToolResultContentRaw(content);
+  }
+}
+
 /**
  * Wrap a legacy ToolDefinition as a pi-compatible AgentTool.
  */
@@ -141,120 +213,30 @@ export function adaptTool(
         ctx = pushToolExecutionContext({ onUpdate, toolName: tool.name, toolCallId });
       }
 
-      // Spawn a `kind:'tool'` process. The agent's `signal` is the
-      // source of truth for cancellation; we mirror it onto the
-      // process via `pm.signal(pid, 'SIGINT')` so the recorded
-      // `terminatedBy` and the conventional 130 exit code flow
-      // back into the table when the tool throws.
-      //
-      // The tool's principal string param (the bash command, the
-      // file path, …) is appended to argv so `ps` surfaces a
-      // meaningful command line: `bash "date && sleep 90 && date"`
-      // instead of just `bash`. See `extractToolArg` for the
-      // ordered candidate list.
-      const proc = pmConfig
-        ? pmConfig.processManager.spawn({
-            kind: 'tool',
-            argv: [tool.name, ...extractToolArg(params)],
-            owner: pmConfig.owner,
-            ppid: pmConfig.getParentPid?.(),
-          })
-        : null;
-      let unsubKill: (() => void) | null = null;
-      if (proc && pmConfig && signal) {
-        // Mirror the agent-loop's signal onto our process: route
-        // through `pm.signal` so `terminatedBy` is recorded.
-        if (signal.aborted) {
-          pmConfig.processManager.signal(proc.pid, 'SIGINT');
-        } else {
-          signal.addEventListener(
-            'abort',
-            () => pmConfig.processManager.signal(proc.pid, 'SIGINT'),
-            { once: true }
-          );
-        }
-      }
-      if (proc && pmConfig) {
-        // SIGKILL force-exit. Tools that hang on UI gestures
-        // (mount waiting for a folder picker) or any
-        // non-cooperatively-cancellable async step keep the proc
-        // record stuck in `running` until the underlying promise
-        // settles — which can be never. Subscribing to
-        // `pm.onSignal` lets `kill -KILL <pid>` flip the table
-        // entry to `killed` / 137 immediately. The hung promise
-        // still leaks (we have no way to forcibly cancel an
-        // arbitrary tool's awaits), but at least `ps` reflects
-        // reality and the agent's tool-call view sees an exit.
-        // Follow-up candidate: thread the signal through showToolUI
-        // so the leak goes away too.
-        unsubKill = pmConfig.processManager.onSignal((signaled, sig) => {
-          if (signaled.pid !== proc.pid || sig !== 'SIGKILL') return;
-          pmConfig.processManager.exit(proc.pid, null);
-        });
-      }
-      // The signal we hand to the tool's execute is the LARGER
-      // union: aborts when either the agent loop or the process
-      // manager signals. `proc.abort.signal` covers both because
-      // the listener above forwards the upstream abort.
-      const effectiveSignal = proc ? proc.abort.signal : signal;
+      const process = startToolProcess(tool, params, signal, pmConfig);
 
       try {
         const result = await tool.execute(
           (params ?? {}) as Record<string, unknown>,
-          effectiveSignal
+          process.effectiveSignal
         );
-        // Defense-in-depth real→masked scrub at the tool-result
-        // boundary — one pass over the completed buffer before any
-        // parsing. Idempotent: already-masked tokens have no real
-        // value to find, and secret-free output round-trips
-        // unchanged. Scrub failures degrade to the original text
-        // (the scrubber implementation owns its own error logging).
-        let scrubbedText = result.content;
-        if (secretsConfig && typeof scrubbedText === 'string' && scrubbedText.length > 0) {
-          try {
-            scrubbedText = await secretsConfig.scrubToolResult(scrubbedText);
-          } catch (err) {
-            log.warn('Tool-result scrub failed, falling back to unscrubbed content', {
-              tool: tool.name,
-              error: err instanceof Error ? err.message : String(err),
-            });
-            scrubbedText = result.content;
-          }
-        }
-        let content: (TextContent | ImageContent)[];
-        try {
-          content = await parseToolResultContent(scrubbedText);
-        } catch (err) {
-          log.warn('Image processing failed, falling back to raw content', {
-            tool: tool.name,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          content = parseToolResultContentRaw(scrubbedText);
-        }
-        if (proc && pmConfig) {
-          pmConfig.processManager.exit(proc.pid, result.isError ? 1 : 0);
-        }
+        const scrubbedText = await scrubToolResult(result.content, tool.name, secretsConfig);
+        const content = await parseToolResult(scrubbedText, tool.name);
+        exitToolProcess(process.tracked, result.isError ? 1 : 0);
         return {
           content,
           details: { isError: result.isError },
         };
       } catch (err) {
-        if (proc && pmConfig) {
-          // Aborted → derive 130/143/137 from terminatedBy.
-          // Otherwise generic error → 1.
-          pmConfig.processManager.exit(proc.pid, proc.abort.signal.aborted ? null : 1);
-        }
+        // Aborted → derive 130/143/137 from terminatedBy. Otherwise generic error → 1.
+        exitToolProcess(process.tracked, process.tracked?.record.abort.signal.aborted ? null : 1);
         throw err;
       } finally {
         // Pop execution context
         if (ctx) {
           popToolExecutionContext(ctx);
         }
-        // Drop the SIGKILL force-exit subscription. `pm.exit` is
-        // idempotent so the subscription firing AFTER our explicit
-        // exit() above is a harmless no-op, but the unsubscribe
-        // keeps the listener set tidy.
-        unsubKill?.();
+        process.tracked?.unsubscribeKill();
       }
     },
   };
