@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_TIMEOUT_MS,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
   McpAuthRequiredError,
   McpClient,
   McpTimeoutError,
@@ -44,6 +45,14 @@ function stubFetch(responder: (url: string, init: Parameters<McpFetchLike>[1]) =
 
 function jsonRpc(id: number, result: unknown): string {
   return JSON.stringify({ jsonrpc: '2.0', id, result });
+}
+
+function jsonRpcError(id: number, code: number, message: string, data?: unknown): string {
+  return JSON.stringify({
+    jsonrpc: '2.0',
+    id,
+    error: { code, message, ...(data === undefined ? {} : { data }) },
+  });
 }
 
 function sseFrames(frames: string[]): string {
@@ -94,15 +103,23 @@ describe('selectSseResponseFrame', () => {
 
 describe('McpClient: JSON response path', () => {
   it('POSTs JSON-RPC and returns the result on a plain JSON response', async () => {
-    const { fetchImpl, calls } = stubFetch(() => ({
-      headers: { 'content-type': 'application/json' },
-      body: jsonRpc(1, { protocolVersion: '2025-06-18' }),
-    }));
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return {
+        status: sent.method === 'server/discover' ? 400 : 200,
+        statusText: sent.method === 'server/discover' ? 'Bad Request' : 'OK',
+        headers: { 'content-type': 'application/json' },
+        body:
+          sent.method === 'server/discover'
+            ? jsonRpcError(sent.id, -32601, 'Method not found')
+            : jsonRpc(sent.id, { protocolVersion: '2025-06-18' }),
+      };
+    });
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     const result = await c.initialize();
     expect(result).toEqual({ protocolVersion: '2025-06-18' });
-    expect(calls).toHaveLength(1);
-    const init = calls[0].init!;
+    expect(calls).toHaveLength(2);
+    const init = calls[1].init!;
     expect(init.method).toBe('POST');
     expect(init.headers!['Content-Type']).toBe('application/json');
     expect(init.headers!['Accept']).toContain('application/json');
@@ -110,11 +127,13 @@ describe('McpClient: JSON response path', () => {
     const sent = JSON.parse(init.body!);
     expect(sent.jsonrpc).toBe('2.0');
     expect(sent.method).toBe('initialize');
-    expect(sent.id).toBe(1);
+    expect(sent.id).toBe(2);
   });
 
   it('threads getAuthHeader into the Authorization header', async () => {
-    const { fetchImpl, calls } = stubFetch(() => ({ body: jsonRpc(1, {}) }));
+    const { fetchImpl, calls } = stubFetch(() => ({
+      body: jsonRpc(1, { supportedVersions: ['2026-07-28'] }),
+    }));
     const c = new McpClient({
       url: 'https://mcp.example/rpc',
       fetchImpl,
@@ -134,6 +153,256 @@ describe('McpClient: JSON response path', () => {
     }));
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     await expect(c.toolsList()).rejects.toThrow(/-32601/);
+  });
+});
+
+describe('McpClient: protocol negotiation', () => {
+  it('exports supported revisions in preference order', () => {
+    expect(MCP_SUPPORTED_PROTOCOL_VERSIONS).toEqual(['2026-07-28', '2025-06-18']);
+  });
+
+  it('selects 2026-07-28 from server/discover without a legacy initialize', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'must-ignore' },
+            body: jsonRpc(sent.id, { supportedVersions: ['2026-07-28', '2025-06-18'] }),
+          }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'also-ignore' },
+            body: jsonRpc(sent.id, { tools: [] }),
+          };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await c.initialize();
+
+    await c.toolsList();
+
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0].init!.body!).method).toBe('server/discover');
+    expect(calls[1].init!.headers!['Mcp-Session-Id']).toBeUndefined();
+    expect(c.getNegotiatedProtocolVersion()).toBe('2026-07-28');
+    expect(c.getSessionId()).toBeUndefined();
+  });
+
+  it('falls back to the legacy initialize handshake when discovery is unsupported', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? {
+            status: 400,
+            statusText: 'Bad Request',
+            body: jsonRpcError(sent.id, -32601, 'Method not found'),
+          }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'legacy-session' },
+            body: jsonRpc(sent.id, { protocolVersion: '2025-06-18' }),
+          };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await c.initialize();
+
+    expect(calls.map((call) => JSON.parse(call.init!.body!).method)).toEqual([
+      'server/discover',
+      'initialize',
+    ]);
+    expect(JSON.parse(calls[1].init!.body!).params.protocolVersion).toBe('2025-06-18');
+    expect(c.getNegotiatedProtocolVersion()).toBe('2025-06-18');
+    expect(c.getSessionId()).toBe('legacy-session');
+  });
+
+  it('falls back on a validated HTTP 200 method-not-found response', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? { body: jsonRpcError(sent.id, -32601, 'Method not found') }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'legacy-session' },
+            body: jsonRpc(sent.id, { protocolVersion: '2025-06-18' }),
+          };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await c.initialize();
+
+    expect(calls.map((call) => JSON.parse(call.init!.body!).method)).toEqual([
+      'server/discover',
+      'initialize',
+    ]);
+    expect(c.getNegotiatedProtocolVersion()).toBe('2025-06-18');
+    expect(c.getSessionId()).toBe('legacy-session');
+  });
+
+  it('retries a mutually supported modern version when discovery returns -32022', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as {
+        id: number;
+        params: { protocolVersion: string };
+      };
+      return sent.params.protocolVersion === '2099-01-01'
+        ? {
+            status: 400,
+            statusText: 'Bad Request',
+            body: jsonRpcError(sent.id, -32022, 'Unsupported protocol version', {
+              supported: ['2026-07-28', '2025-06-18'],
+              requested: '2099-01-01',
+            }),
+          }
+        : { body: jsonRpc(sent.id, { supportedVersions: ['2026-07-28'] }) };
+    });
+    const c = new McpClient({
+      url: 'https://mcp.example/rpc',
+      fetchImpl,
+      protocolVersion: '2099-01-01',
+    });
+
+    await c.initialize();
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => JSON.parse(call.init!.body!).method)).toEqual([
+      'server/discover',
+      'server/discover',
+    ]);
+    expect(JSON.parse(calls[1].init!.body!).params.protocolVersion).toBe('2026-07-28');
+    expect(c.getNegotiatedProtocolVersion()).toBe('2026-07-28');
+  });
+
+  it('does not fall back when -32022 advertises no compatible modern version', async () => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number };
+      return {
+        status: 400,
+        statusText: 'Bad Request',
+        body: jsonRpcError(sent.id, -32022, 'Unsupported protocol version', {
+          supported: ['2025-06-18'],
+        }),
+      };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/compatible modern protocol version/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not fall back on transport or HTTP 5xx failures', async () => {
+    const network = stubFetch(() => {
+      throw new TypeError('network unavailable');
+    });
+    await expect(
+      new McpClient({ url: 'https://mcp.example/rpc', fetchImpl: network.fetchImpl }).initialize()
+    ).rejects.toThrow('network unavailable');
+    expect(network.calls).toHaveLength(1);
+
+    const unavailable = stubFetch(() => ({
+      status: 503,
+      statusText: 'Service Unavailable',
+      body: 'temporarily unavailable',
+    }));
+    await expect(
+      new McpClient({
+        url: 'https://mcp.example/rpc',
+        fetchImpl: unavailable.fetchImpl,
+      }).initialize()
+    ).rejects.toThrow(/MCP HTTP 503/);
+    expect(unavailable.calls).toHaveLength(1);
+  });
+
+  it('does not fall back on a malformed successful discovery response', async () => {
+    const { fetchImpl, calls } = stubFetch(() => ({ body: 'not-json' }));
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow();
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    ['unparseable', 'not-json'],
+    [
+      'invalid JSON-RPC envelope',
+      JSON.stringify({ error: { code: -32601, message: 'Method not found' } }),
+    ],
+  ])('does not fall back on an %s HTTP 400 response', async (_label, body) => {
+    const { fetchImpl, calls } = stubFetch(() => ({
+      status: 400,
+      statusText: 'Bad Request',
+      body,
+    }));
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/MCP HTTP 400/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    ['mismatched request id', (id: number) => jsonRpcError(id + 1, -32601, 'Method not found')],
+    [
+      'result and error fields',
+      (id: number) =>
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          result: {},
+          error: { code: -32601, message: 'Method not found' },
+        }),
+    ],
+    [
+      'invalid JSON-RPC envelope',
+      (id: number) =>
+        JSON.stringify({
+          jsonrpc: '1.0',
+          id,
+          error: { code: -32601, message: 'Method not found' },
+        }),
+    ],
+  ])('does not fall back on an HTTP 200 %s', async (_label, responseBody) => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number };
+      return { body: responseBody(sent.id) };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/invalid JSON-RPC error response/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([-32020, -32021, -32602])('does not fall back on JSON-RPC error %i', async (code) => {
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number };
+      return {
+        status: 400,
+        statusText: 'Bad Request',
+        body: jsonRpcError(sent.id, code, 'Not a legacy-era signal'),
+      };
+    });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
+
+    await expect(c.initialize()).rejects.toThrow(/MCP HTTP 400/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does not fall back when discovery times out', async () => {
+    vi.useFakeTimers();
+    try {
+      let callCount = 0;
+      const fetchImpl: McpFetchLike = (_url, init) => {
+        callCount++;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      };
+      const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl, timeoutMs: 50 });
+      const pending = c.initialize();
+      const assertion = expect(pending).rejects.toBeInstanceOf(McpTimeoutError);
+
+      await vi.advanceTimersByTimeAsync(60);
+      await assertion;
+      expect(callCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -163,32 +432,48 @@ describe('McpClient: Mcp-Session-Id round-trip', () => {
       callCount++;
       if (callCount === 1) {
         return {
-          headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'sess-1' },
-          body: jsonRpc(1, {}),
+          status: 400,
+          statusText: 'Bad Request',
+          body: jsonRpcError(1, -32601, 'Method not found'),
         };
       }
-      return { body: jsonRpc(2, { tools: [] }) };
+      if (callCount === 2) {
+        return {
+          headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'sess-1' },
+          body: jsonRpc(2, {}),
+        };
+      }
+      return { body: jsonRpc(3, { tools: [] }) };
     });
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     await c.initialize();
     expect(c.getSessionId()).toBe('sess-1');
     await c.toolsList();
-    expect(calls[1].init!.headers!['Mcp-Session-Id']).toBe('sess-1');
+    expect(calls[2].init!.headers!['Mcp-Session-Id']).toBe('sess-1');
   });
 
   it('does NOT attach Mcp-Session-Id on the initialize request even when constructor was given a stale id', async () => {
-    const { fetchImpl, calls } = stubFetch(() => ({
-      headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'srv-fresh' },
-      body: jsonRpc(1, {}),
-    }));
+    const { fetchImpl, calls } = stubFetch((_url, init) => {
+      const sent = JSON.parse(init?.body ?? '{}') as { id: number; method: string };
+      return sent.method === 'server/discover'
+        ? {
+            status: 400,
+            statusText: 'Bad Request',
+            body: jsonRpcError(sent.id, -32601, 'Method not found'),
+          }
+        : {
+            headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'srv-fresh' },
+            body: jsonRpc(sent.id, {}),
+          };
+    });
     const c = new McpClient({
       url: 'https://mcp.example/rpc',
       fetchImpl,
       sessionId: 'stale-123',
     });
     await c.initialize();
-    expect(calls).toHaveLength(1);
-    expect(calls[0].init!.headers!['Mcp-Session-Id']).toBeUndefined();
+    expect(calls).toHaveLength(2);
+    expect(calls[1].init!.headers!['Mcp-Session-Id']).toBeUndefined();
     // The response-provided session id wins over the stale constructor value.
     expect(c.getSessionId()).toBe('srv-fresh');
   });
@@ -199,20 +484,27 @@ describe('McpClient: Mcp-Session-Id round-trip', () => {
       callCount++;
       if (callCount === 1) {
         return {
+          status: 400,
+          statusText: 'Bad Request',
+          body: jsonRpcError(1, -32601, 'Method not found'),
+        };
+      }
+      if (callCount === 2) {
+        return {
           headers: { 'content-type': 'application/json', 'Mcp-Session-Id': 'srv-abc' },
-          body: jsonRpc(1, {}),
+          body: jsonRpc(2, {}),
         };
       }
       return {
-        body: jsonRpc(2, { content: [{ type: 'text', text: 'ok' }] }),
+        body: jsonRpc(3, { content: [{ type: 'text', text: 'ok' }] }),
       };
     });
     const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl });
     await c.initialize();
     await c.toolsCall('echo', { msg: 'hi' });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0].init!.headers!['Mcp-Session-Id']).toBeUndefined();
-    expect(calls[1].init!.headers!['Mcp-Session-Id']).toBe('srv-abc');
+    expect(calls[2].init!.headers!['Mcp-Session-Id']).toBe('srv-abc');
   });
 });
 

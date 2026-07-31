@@ -10,7 +10,6 @@
  */
 
 import { createLogger } from '../../core/logger.js';
-import { isExtensionRealm } from '../../core/runtime-env.js';
 import {
   getAccounts,
   getOAuthAccountInfo,
@@ -30,6 +29,7 @@ import {
   runAuthFlow,
 } from './oauth.js';
 import { type McpAuthEntry, readMcpAuthEntry } from './provider-store-access.js';
+import { resolveMcpRedirectUri } from './redirect-uri.js';
 
 const log = createLogger('mcp-provider');
 
@@ -78,27 +78,6 @@ const discoveryCache = new Map<string, DiscoveredAuth>();
 
 /** Track which providers we've already registered in this page session. */
 const registeredInSession = new Set<string>();
-
-async function defaultRedirectUri(): Promise<string> {
-  // Extension offscreen runtime: chrome.identity.launchWebAuthFlow only
-  // completes against the deterministic `<extension-id>.chromiumapp.org`
-  // redirect, so the URI registered at DCR time must match.
-  if (isExtensionRealm()) {
-    const chromeApi = chrome as unknown as {
-      identity?: { getRedirectURL?: (path?: string) => string };
-      runtime?: { id?: string };
-    };
-    return (
-      chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
-      `https://${chromeApi.runtime?.id ?? ''}.chromiumapp.org/mcp-callback`
-    );
-  }
-  // CLI / standalone: the popup→postMessage + /api/oauth-result polling
-  // path captures the redirect on the page origin.
-  const { getOAuthPageOrigin } = await import('../../providers/oauth-service.js');
-  const { origin } = await getOAuthPageOrigin();
-  return `${origin}/auth/callback`;
-}
 
 async function resolveFetchImpl(override?: FetchLike): Promise<FetchLike> {
   if (override) return override;
@@ -163,7 +142,7 @@ function buildProviderConfig(opts: RegisterMcpProviderOptions): ProviderConfig {
         asMetadata,
         clientId: opts.auth.clientId,
         scope: opts.auth.scope,
-        redirectUri: await defaultRedirectUri(),
+        redirectUri: opts.auth.redirectUri ?? (await resolveMcpRedirectUri()),
         launcher: effectiveLauncher,
         fetchImpl,
       });
@@ -244,13 +223,16 @@ export function registerMcpProvider(opts: RegisterMcpProviderOptions): void {
  * (now) registered, false if there is no matching server entry or it has
  * no `auth` block yet (e.g. `mcp add` failed before persisting auth).
  */
-export async function ensureMcpProviderRegistered(name: string): Promise<boolean> {
+export async function ensureMcpProviderRegistered(
+  name: string,
+  overrides: Pick<RegisterMcpProviderOptions, 'fetchImpl' | 'launcher'> = {}
+): Promise<boolean> {
   const id = mcpProviderId(name);
   if (registeredInSession.has(id) && getRegisteredProviderConfig(id)) return true;
   if (!hasIndexedDB()) return false;
   const entry = await readMcpAuthEntry(name);
   if (!entry) return false;
-  registerMcpProvider({ name, serverUrl: entry.serverUrl, auth: entry.auth });
+  registerMcpProvider({ name, serverUrl: entry.serverUrl, auth: entry.auth, ...overrides });
   return true;
 }
 

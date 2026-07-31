@@ -1223,6 +1223,7 @@ describe('tray worker skeleton', () => {
         'GET /api/tray/:trayId/previews',
         'POST /api/tray/:trayId/supersede',
         'GET /auth/callback',
+        'GET /auth/mcp-callback',
         'POST /oauth/token',
         'POST /oauth/revoke',
         'GET /api/runtime-config',

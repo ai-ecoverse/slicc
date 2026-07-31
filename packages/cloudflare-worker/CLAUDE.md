@@ -68,6 +68,7 @@ Sandbox lifecycle logic lives in `@slicc/cloud-core`; worker `src/cloud/` is ada
 | `WS __slicc/bridge`                   | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit` between tabs and leader; hibernated via `setWebSocketAutoResponse` |
 | `POST __slicc/emit`                   | Fallback beacon relay for `window.slicc.emit` on page unload                                                                                              |
 | `GET /auth/callback`                  | OAuth callback relay; also a capture hop for the cloud dashboard (no `state` → `postMessage` to `window.opener`)                                          |
+| `GET /auth/mcp-callback`              | MCP OAuth capture hop; preserves opaque `state` and posts the untouched callback URL to the same-origin opener                                            |
 | `GET /api/flags`                      | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                               |
 
 **Routes-mirror rule:** every new route must appear in three places:

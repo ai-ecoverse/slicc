@@ -54,6 +54,11 @@ const ENTRIES: CatalogEntry[] = [
     description: 'OAuth callback relay; redirects to the localhost runtime.',
   },
   {
+    anchor: '/auth/mcp-callback',
+    methods: ['GET'],
+    description: 'MCP OAuth callback capture; preserves opaque state for the opener.',
+  },
+  {
     anchor: '/oauth/token',
     methods: ['POST', 'OPTIONS'],
     description: 'Generic OAuth authorization-code grant exchange.',

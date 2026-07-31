@@ -30,6 +30,8 @@ export interface McpAuthEntry {
   providerId: string;
   authorizationServer: string;
   clientId: string;
+  /** Exact redirect URI registered with the authorization server. */
+  redirectUri?: string;
   scope?: string;
   registrationClientUri?: string;
 }
@@ -44,8 +46,8 @@ export interface McpServerAuthRecord {
 /** Full persisted entry for one server in `servers.json`. */
 export interface McpServerEntry {
   url: string;
+  protocolVersion?: string;
   headers?: Record<string, string>;
-  sessionId?: string;
   tools?: McpToolDef[];
   apps?: McpAppDef[];
   addedAt?: string;

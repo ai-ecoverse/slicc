@@ -374,15 +374,13 @@ try {
     )
   );
 
-// Capture page for the OAuth relay's final hop. After the relay bounces a
-// provider response back to the dashboard's own origin (code present, state
-// consumed), this page hands the full URL (which carries the OAuth `code`) to
-// the opener via postMessage — the signal the webapp's `launchOAuthCli` waits
-// for — then closes. Used by the webapp-served-by-worker (connect/cloud)
-// context, where there's no node-server callback page.
+// Capture page for OAuth callbacks that must be handed to the opener without
+// interpreting their parameters. This serves both the structured relay's final
+// hop (where state was consumed) and the dedicated MCP callback (where opaque
+// state must be preserved).
 //
-// The relay only ever bounces back to the dashboard's OWN origin, so the
-// legitimate opener is same-origin: scope the postMessage `targetOrigin` to
+// Both capture paths run on the dashboard's OWN origin, so the legitimate
+// opener is same-origin: scope the postMessage `targetOrigin` to
 // `location.origin` (NOT '*') so the code can't be delivered to a cross-origin
 // window that managed to become our opener. The receiver also re-checks
 // `event.origin`, but the sender must scope delivery too.
@@ -573,6 +571,7 @@ const ROUTES_INDEX_BODY = {
     'GET /api/tray/:trayId/previews',
     'POST /api/tray/:trayId/supersede',
     'GET /auth/callback',
+    'GET /auth/mcp-callback',
     'POST /oauth/token',
     'POST /oauth/revoke',
     'GET /api/runtime-config',
@@ -676,6 +675,15 @@ async function tryHandleOAuthRoutes(
   env: WorkerEnv,
   fetchImpl: typeof fetch
 ): Promise<Response | null> {
+  // MCP authorization servers return an opaque CSRF state. Keep this path
+  // separate from the structured SLICC relay so the value survives unchanged.
+  if (url.pathname === '/auth/mcp-callback') {
+    return new Response(OAUTH_CAPTURE_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
   // OAuth callback relay — serves a static HTML page that reads the OAuth state
   // parameter and redirects to the correct localhost port. Provider-agnostic.
   if (url.pathname === '/auth/callback') {

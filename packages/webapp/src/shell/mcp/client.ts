@@ -19,8 +19,11 @@ const log = createLogger('mcp-client');
 /** Default per-request timeout (ms). */
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
-/** Streamable-HTTP spec version negotiated on `initialize`. */
-const MCP_PROTOCOL_VERSION = '2025-06-18';
+/** Protocol revisions supported by this client, in preference order. */
+export const MCP_SUPPORTED_PROTOCOL_VERSIONS = ['2026-07-28', '2025-06-18'] as const;
+
+const MODERN_PROTOCOL_VERSION = MCP_SUPPORTED_PROTOCOL_VERSIONS[0];
+const LEGACY_PROTOCOL_VERSION = MCP_SUPPORTED_PROTOCOL_VERSIONS[1];
 
 /**
  * Thrown when the server returns HTTP 401. Carries the parsed
@@ -40,6 +43,16 @@ export class McpAuthRequiredError extends Error {
   }
 }
 
+class McpRpcFailure extends Error {
+  readonly rpcError: McpRpcError;
+
+  constructor(error: McpRpcError) {
+    super(`MCP RPC error ${error.code}: ${error.message}`);
+    this.name = 'McpRpcFailure';
+    this.rpcError = error;
+  }
+}
+
 /**
  * Thrown when a JSON-RPC request exceeds its per-request timeout. The
  * `mcp` shell command maps this to exit code 124 (matching GNU
@@ -56,13 +69,33 @@ export class McpTimeoutError extends Error {
   }
 }
 
+class McpHttpError extends Error {
+  readonly status: number;
+  readonly rpcError: McpRpcError | undefined;
+
+  constructor(opts: {
+    status: number;
+    statusText: string;
+    method: string;
+    snippet: string;
+    rpcError?: McpRpcError;
+  }) {
+    super(
+      `MCP HTTP ${opts.status} ${opts.statusText} for ${opts.method}: ${opts.snippet || '(empty body)'}`
+    );
+    this.name = 'McpHttpError';
+    this.status = opts.status;
+    this.rpcError = opts.rpcError;
+  }
+}
+
 /** Constructor options for {@link McpClient}. */
 export interface McpClientOptions {
   /** Full server endpoint URL. */
   url: string;
   /** Static headers merged into every request (lowest precedence). */
   headers?: Record<string, string>;
-  /** Pre-existing session id to echo on the first request. */
+  /** Pre-existing session id to echo after a legacy handshake. */
   sessionId?: string;
   /** Per-request timeout in milliseconds (default 60s). */
   timeoutMs?: number;
@@ -74,7 +107,7 @@ export interface McpClientOptions {
    * sends the request without an `Authorization` header.
    */
   getAuthHeader?: () => Promise<string | null>;
-  /** Override the protocol version sent on `initialize`. */
+  /** Override the preferred protocol version used by the discovery probe. */
   protocolVersion?: string;
   /** Client identity sent on `initialize`. */
   clientInfo?: { name: string; version: string };
@@ -140,6 +173,46 @@ function headerLookup(headers: Record<string, string>, name: string): string | u
   return undefined;
 }
 
+function rpcErrorFrom(error: unknown): McpRpcError | undefined {
+  if (error instanceof McpHttpError) return error.rpcError;
+  if (error instanceof McpRpcFailure) return error.rpcError;
+  return undefined;
+}
+
+function rpcFailure(error: McpRpcError): Error {
+  return new McpRpcFailure(error);
+}
+
+function rpcErrorFromFrame(
+  frame: JsonRpcResponseFrame,
+  expectedId: number
+): McpRpcError | undefined {
+  if (frame.jsonrpc !== '2.0' || frame.id !== expectedId || Object.hasOwn(frame, 'result')) {
+    return undefined;
+  }
+  const error = frame.error;
+  return error && typeof error.code === 'number' && typeof error.message === 'string'
+    ? error
+    : undefined;
+}
+
+function parseRpcError(text: string, expectedId: number): McpRpcError | undefined {
+  try {
+    const frame = JSON.parse(text) as JsonRpcResponseFrame;
+    return rpcErrorFromFrame(frame, expectedId);
+  } catch {
+    return undefined;
+  }
+}
+
+function advertisedVersions(error: McpRpcError): string[] {
+  if (!error.data || typeof error.data !== 'object') return [];
+  const supported = (error.data as { supported?: unknown }).supported;
+  return Array.isArray(supported)
+    ? supported.filter((version): version is string => typeof version === 'string')
+    : [];
+}
+
 async function defaultFetchImpl(): Promise<McpFetchLike> {
   const { createProxiedFetch } = await import('../proxied-fetch.js');
   const fn = createProxiedFetch();
@@ -164,11 +237,12 @@ export class McpClient {
   private readonly staticHeaders: Record<string, string>;
   private readonly timeoutMs: number;
   private readonly getAuthHeader?: () => Promise<string | null>;
-  private readonly protocolVersion: string;
+  private readonly preferredProtocolVersion: string;
   private readonly clientInfo: { name: string; version: string };
   private fetchImpl: McpFetchLike | null;
   private fetchImplLoader: Promise<McpFetchLike> | null = null;
   private sessionId: string | undefined;
+  private negotiatedProtocolVersion: string | undefined;
   private nextId = 1;
 
   constructor(opts: McpClientOptions) {
@@ -176,7 +250,7 @@ export class McpClient {
     this.staticHeaders = opts.headers ?? {};
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.getAuthHeader = opts.getAuthHeader;
-    this.protocolVersion = opts.protocolVersion ?? MCP_PROTOCOL_VERSION;
+    this.preferredProtocolVersion = opts.protocolVersion ?? MODERN_PROTOCOL_VERSION;
     this.clientInfo = opts.clientInfo ?? { name: 'SLICC', version: '0.0.0' };
     this.fetchImpl = opts.fetchImpl ?? null;
     this.sessionId = opts.sessionId;
@@ -187,13 +261,63 @@ export class McpClient {
     return this.sessionId;
   }
 
-  /** MCP `initialize` — also captures the session id from the response. */
+  /** The protocol revision selected by the discovery/initialize negotiation. */
+  getNegotiatedProtocolVersion(): string | undefined {
+    return this.negotiatedProtocolVersion;
+  }
+
+  /** Prefer stateless discovery, falling back to the legacy initialize handshake. */
   async initialize(): Promise<unknown> {
-    return this.request('initialize', {
-      protocolVersion: this.protocolVersion,
-      capabilities: {},
-      clientInfo: this.clientInfo,
-    });
+    if (this.preferredProtocolVersion === LEGACY_PROTOCOL_VERSION) {
+      return this.initializeLegacy();
+    }
+    try {
+      return await this.discoverModern(this.preferredProtocolVersion);
+    } catch (err) {
+      const rpcError = rpcErrorFrom(err);
+      if (rpcError?.code === -32022) {
+        const supported = advertisedVersions(rpcError);
+        const retryVersion = MCP_SUPPORTED_PROTOCOL_VERSIONS.find(
+          (version) => version !== LEGACY_PROTOCOL_VERSION && supported.includes(version)
+        );
+        if (!retryVersion) {
+          throw new Error(
+            `MCP server does not support a compatible modern protocol version (supported: ${supported.join(', ') || 'none'})`
+          );
+        }
+        return this.discoverModern(retryVersion);
+      }
+      const isValidatedLegacySignal =
+        rpcError?.code === -32601 &&
+        ((err instanceof McpHttpError && err.status === 400) || err instanceof McpRpcFailure);
+      if (isValidatedLegacySignal) {
+        log.debug('server/discover identified a legacy server; using initialize', {
+          error: err.message,
+        });
+        return this.initializeLegacy();
+      }
+      throw err;
+    }
+  }
+
+  private async discoverModern(protocolVersion: string): Promise<unknown> {
+    const result = (await this.request('server/discover', { protocolVersion })) as {
+      supportedVersions?: unknown;
+    } | null;
+    const supportedVersions = Array.isArray(result?.supportedVersions)
+      ? result.supportedVersions.filter((version): version is string => typeof version === 'string')
+      : [];
+    const selected = MCP_SUPPORTED_PROTOCOL_VERSIONS.find(
+      (version) => version !== LEGACY_PROTOCOL_VERSION && supportedVersions.includes(version)
+    );
+    if (!selected) {
+      throw new Error(
+        `MCP server discovery did not advertise a compatible modern protocol version (advertised: ${supportedVersions.join(', ') || 'none'})`
+      );
+    }
+    this.negotiatedProtocolVersion = selected;
+    this.sessionId = undefined;
+    return result;
   }
 
   /** MCP `tools/list` — returns the `tools` array (empty if absent). */
@@ -233,7 +357,11 @@ export class McpClient {
     // Per the MCP Streamable-HTTP spec the session id is established BY the
     // server's response to `initialize`; sending one in is a protocol
     // violation. All subsequent methods echo the captured id.
-    if (this.sessionId && method !== 'initialize') {
+    if (
+      this.negotiatedProtocolVersion === LEGACY_PROTOCOL_VERSION &&
+      this.sessionId &&
+      method !== 'initialize'
+    ) {
       headers['Mcp-Session-Id'] = this.sessionId;
     }
     if (this.getAuthHeader) {
@@ -284,14 +412,20 @@ export class McpClient {
       });
     }
 
-    const sid = headerLookup(res.headers, 'mcp-session-id');
-    if (sid) this.sessionId = sid;
+    if (this.negotiatedProtocolVersion === LEGACY_PROTOCOL_VERSION) {
+      const sid = headerLookup(res.headers, 'mcp-session-id');
+      if (sid) this.sessionId = sid;
+    }
 
     if (res.status >= 400) {
-      const snippet = new TextDecoder('utf-8').decode(res.body).slice(0, 512);
-      throw new Error(
-        `MCP HTTP ${res.status} ${res.statusText} for ${method}: ${snippet || '(empty body)'}`
-      );
+      const text = new TextDecoder('utf-8').decode(res.body);
+      throw new McpHttpError({
+        status: res.status,
+        statusText: res.statusText,
+        method,
+        snippet: text.slice(0, 512),
+        rpcError: parseRpcError(text, id),
+      });
     }
 
     const ct = headerLookup(res.headers, 'content-type') ?? '';
@@ -300,12 +434,11 @@ export class McpClient {
       : (JSON.parse(new TextDecoder('utf-8').decode(res.body)) as JsonRpcResponseFrame);
 
     if (frame.error) {
-      const err = frame.error;
-      const e = new Error(`MCP RPC error ${err.code}: ${err.message}`) as Error & {
-        rpcError: McpRpcError;
-      };
-      e.rpcError = err;
-      throw e;
+      const rpcError = rpcErrorFromFrame(frame, id);
+      if (!rpcError) {
+        throw new Error(`MCP invalid JSON-RPC error response for request id ${String(id)}`);
+      }
+      throw rpcFailure(rpcError);
     }
     return frame.result;
   }
@@ -319,5 +452,14 @@ export class McpClient {
       });
     }
     return this.fetchImplLoader;
+  }
+
+  private async initializeLegacy(): Promise<unknown> {
+    this.negotiatedProtocolVersion = LEGACY_PROTOCOL_VERSION;
+    return this.request('initialize', {
+      protocolVersion: LEGACY_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: this.clientInfo,
+    });
   }
 }
