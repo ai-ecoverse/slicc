@@ -9,7 +9,7 @@ import {
   hydrateFeatureFlagsFromRemote,
 } from '../../src/core/feature-flags-remote.js';
 import { TRAY_WORKER_STORAGE_KEY } from '../../src/scoops/tray-runtime-config.js';
-import { resolveFeatureFlagsWorkerBaseUrl } from '../../src/ui/boot/setup-feature-flags.js';
+import { resolveFeatureFlagsWorkerBaseUrl } from '../../src/ui/boot/setup-feature-flags-remote.js';
 
 function makeMemoryStorage(): Storage {
   const values = new Map<string, string>();

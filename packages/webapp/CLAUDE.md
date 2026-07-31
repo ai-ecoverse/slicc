@@ -207,8 +207,9 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
   local → remote → bundled `floatDefaults`/`defaultValue`.
 - `experimental-settings` is worker-controlled (`userToggleable: false`): it independently gates
   both the avatar-menu item and exported dialog, and local override attempts are ignored.
-- `setupFeatureFlagsForPage` selects the float, loads its isolated cache, then refreshes
-  `/api/flags?float=<float>` once. There is no live refresh; later config requires reload.
+- `setupFeatureFlagsForPage` selects the float and loads its isolated cache synchronously, then
+  lazy-loads a non-blocking `/api/flags?float=<float>` refresh. There is no live refresh; later
+  config requires reload.
 
 ### Context Compaction
 

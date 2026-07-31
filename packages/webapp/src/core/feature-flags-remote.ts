@@ -3,24 +3,25 @@ import {
   type FeatureFlagValues,
   initFeatureFlags,
 } from './feature-flags.js';
+import {
+  type FeatureFlagsRemoteStorage,
+  initFeatureFlagsFromRemoteCache,
+  resolveFeatureFlagsRemoteStorage,
+  writeFeatureFlagsRemoteCache,
+} from './feature-flags-cache.js';
 
-export const FEATURE_FLAGS_REMOTE_STORAGE_KEY = 'slicc_feature_flags_remote';
+export {
+  FEATURE_FLAGS_REMOTE_STORAGE_KEY,
+  featureFlagsRemoteCacheKey,
+} from './feature-flags-cache.js';
+
 const DEFAULT_FETCH_TIMEOUT_MS = 3_000;
-
-interface FeatureFlagsRemoteStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
 
 export interface FeatureFlagsRemoteOptions {
   workerBaseUrl: string;
   fetchImpl?: typeof fetch;
   storage?: FeatureFlagsRemoteStorage | null;
   timeoutMs?: number;
-}
-
-export function featureFlagsRemoteCacheKey(float: FeatureFlagFloat): string {
-  return `${FEATURE_FLAGS_REMOTE_STORAGE_KEY}:${float}`;
 }
 
 /**
@@ -32,16 +33,15 @@ export function hydrateFeatureFlagsFromRemote(
   float: FeatureFlagFloat,
   options: FeatureFlagsRemoteOptions
 ): Promise<void> {
-  const storage = options.storage === undefined ? getStorage() : options.storage;
-  initFeatureFlags(float, readCachedFlags(storage, float) ?? {});
-  return refreshFeatureFlags(float, options, storage);
+  initFeatureFlagsFromRemoteCache(float, options.storage);
+  return refreshFeatureFlagsFromRemote(float, options);
 }
 
-async function refreshFeatureFlags(
+export async function refreshFeatureFlagsFromRemote(
   float: FeatureFlagFloat,
-  options: FeatureFlagsRemoteOptions,
-  storage: FeatureFlagsRemoteStorage | null | undefined
+  options: FeatureFlagsRemoteOptions
 ): Promise<void> {
+  const storage = resolveFeatureFlagsRemoteStorage(options.storage);
   try {
     const url = new URL('/api/flags', `${options.workerBaseUrl.replace(/\/+$/, '')}/`);
     url.searchParams.set('float', float);
@@ -51,7 +51,7 @@ async function refreshFeatureFlags(
       options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
     );
     if (!flags) return;
-    writeCachedFlags(storage, float, flags);
+    writeFeatureFlagsRemoteCache(storage, float, flags);
     // The response is an envelope. Its echoed `float` is informational and may
     // be "default"; the page's resolveUiRuntimeMode() result remains authoritative.
     initFeatureFlags(float, flags);
@@ -98,47 +98,6 @@ function readFlagsPayload(value: unknown): FeatureFlagValues | null {
   return value.flags as FeatureFlagValues;
 }
 
-function readCachedFlags(
-  storage: FeatureFlagsRemoteStorage | null | undefined,
-  float: FeatureFlagFloat
-): FeatureFlagValues | null {
-  try {
-    const raw = storage?.getItem(featureFlagsRemoteCacheKey(float));
-    return raw ? readFlagsRecord(JSON.parse(raw)) : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedFlags(
-  storage: FeatureFlagsRemoteStorage | null | undefined,
-  float: FeatureFlagFloat,
-  flags: FeatureFlagValues
-): void {
-  try {
-    storage?.setItem(featureFlagsRemoteCacheKey(float), JSON.stringify(flags));
-  } catch {
-    // Storage is best-effort; the fetched values remain active in memory.
-  }
-}
-
-function readFlagsRecord(value: unknown): FeatureFlagValues | null {
-  if (!isRecord(value)) return null;
-  if (Object.values(value).some((flagValue) => typeof flagValue !== 'string')) return null;
-  return value as FeatureFlagValues;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getStorage(): FeatureFlagsRemoteStorage | undefined {
-  try {
-    const storage = (globalThis as { localStorage?: Partial<FeatureFlagsRemoteStorage> })
-      .localStorage;
-    if (typeof storage?.getItem !== 'function' || typeof storage.setItem !== 'function') return;
-    return storage as FeatureFlagsRemoteStorage;
-  } catch {
-    return undefined;
-  }
 }

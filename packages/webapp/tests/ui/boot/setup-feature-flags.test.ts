@@ -23,7 +23,29 @@ function memoryStorage(): Storage {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('feature flag page boot', () => {
-  it('boots ?cherry=1 with Cherry defaults and a float-isolated request/cache', () => {
+  it('applies the last-known-good cache before the lazy refresh starts', async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      featureFlagsRemoteCacheKey('cherry'),
+      JSON.stringify({ 'experimental-settings': 'on' })
+    );
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response(null, { status: 503 })));
+    vi.stubGlobal('fetch', fetchImpl);
+
+    setupFeatureFlagsForPage({
+      locationHref: 'https://app.example/?cherry=1',
+      storage,
+      envBaseUrl: null,
+      isDev: false,
+      isExtension: false,
+    });
+
+    expect(isFeatureEnabled('experimental-settings')).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+  });
+
+  it('boots ?cherry=1 synchronously and refreshes its float-isolated cache lazily', async () => {
     const storage = memoryStorage();
     const enabled = JSON.stringify({ 'experimental-settings': 'on' });
     storage.setItem(FEATURE_FLAG_STORAGE_KEY, enabled);
@@ -42,6 +64,8 @@ describe('feature flag page boot', () => {
 
     expect(runtimeMode).toBe('cherry');
     expect(isFeatureEnabled('experimental-settings')).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://app.example/api/flags?float=cherry',
       expect.objectContaining({ cache: 'no-store' })
