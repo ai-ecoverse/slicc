@@ -30,6 +30,8 @@ export interface McpAuthEntry {
   providerId: string;
   authorizationServer: string;
   clientId: string;
+  /** Exact redirect URI registered with the authorization server. */
+  redirectUri?: string;
   scope?: string;
   registrationClientUri?: string;
 }

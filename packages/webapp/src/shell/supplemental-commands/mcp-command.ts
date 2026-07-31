@@ -19,11 +19,11 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
-import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { OAuthLauncher } from '../../providers/types.js';
 import { McpTimeoutError } from '../mcp/client.js';
 import type { FetchLike } from '../mcp/oauth.js';
+import { resolveMcpRedirectUri } from '../mcp/redirect-uri.js';
 import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 
@@ -247,7 +247,7 @@ async function runOAuthForAdd(
     discoveryPath: asMetadata.discoveryPath,
     issuer: asMetadata.issuer,
   });
-  const redirectUri = await defaultRedirectUri();
+  const redirectUri = await resolveMcpRedirectUri();
   const dcr = await dynamicRegister(asMetadata, redirectUri, fetchImpl);
   const scope =
     asMetadata.supportedScopes && asMetadata.supportedScopes.length > 0
@@ -276,6 +276,7 @@ async function runOAuthForAdd(
     providerId,
     authorizationServer: asMetadata.issuer,
     clientId: dcr.clientId,
+    redirectUri,
     scope: token.scope ?? scope,
     registrationClientUri: dcr.registrationClientUri,
   };
@@ -887,7 +888,10 @@ Options:
   }
 
   const { ensureMcpProviderRegistered } = await import('../mcp/provider.js');
-  const registered = await ensureMcpProviderRegistered(name);
+  const registered = await ensureMcpProviderRegistered(name, {
+    fetchImpl: deps.oauthFetchImpl,
+    launcher: deps.oauthLauncher,
+  });
 
   const { getServer } = await import('../mcp/store.js');
   const entry = await getServer(name, deps.fs);
@@ -996,36 +1000,6 @@ async function getMcpBearerHeader(name: string): Promise<string | null> {
 async function defaultLauncher(): Promise<OAuthLauncher> {
   const { createOAuthLauncher } = await import('../../providers/oauth-service.js');
   return createOAuthLauncher();
-}
-
-async function defaultRedirectUri(): Promise<string> {
-  // Extension offscreen runtime: the OAuth launcher routes through
-  // `chrome.identity.launchWebAuthFlow`, which only captures redirects
-  // matching the deterministic `<extension-id>.chromiumapp.org` URL.
-  // Both the authorize URL and the token-exchange redirect_uri must use
-  // the same value (RFC 6749 §10.6).
-  if (isExtensionRealm()) {
-    const chromeApi = chrome as unknown as {
-      identity?: { getRedirectURL?: (path?: string) => string };
-      runtime?: { id?: string };
-    };
-    return (
-      chromeApi.identity?.getRedirectURL?.('mcp-callback') ??
-      `https://${chromeApi.runtime?.id ?? ''}.chromiumapp.org/mcp-callback`
-    );
-  }
-  // Thin-bridge standalone: register the local node-server callback, not the
-  // hosted UI origin. The worker's /auth/callback route consumes a structured
-  // relay state, while MCP OAuth uses its own opaque CSRF state.
-  const { getLocalApiBaseUrl } = await import('../proxied-fetch.js');
-  const localApiOrigin = getLocalApiBaseUrl();
-  if (localApiOrigin) return `${localApiOrigin}/auth/callback`;
-
-  // Same-origin webapp: the popup→postMessage path captures the redirect on
-  // the page origin.
-  const { getOAuthPageOrigin } = await import('../../providers/oauth-service.js');
-  const { origin } = await getOAuthPageOrigin();
-  return `${origin}/auth/callback`;
 }
 
 async function resolveOAuthFetchImpl(override?: FetchLike): Promise<FetchLike> {

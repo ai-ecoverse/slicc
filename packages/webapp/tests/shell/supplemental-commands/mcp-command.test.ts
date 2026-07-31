@@ -50,7 +50,7 @@ import {
   setServer,
 } from '../../../src/shell/mcp/store.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
-import { setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
+import { setExtensionDelegateId, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import {
   aliasContent,
   coerceArgsBySchema,
@@ -210,7 +210,12 @@ function makeMockMcpFetch(opts: MockServerOptions): {
   return { fetch, calls };
 }
 
-function makeMockOAuthFetch(): FetchLike {
+interface OAuthRequestCapture {
+  registrationRedirectUris: string[];
+  tokenRedirectUris: string[];
+}
+
+function makeMockOAuthFetch(capture?: OAuthRequestCapture): FetchLike {
   return async (url, init) => {
     const json = (payload: unknown) => ({
       ok: true,
@@ -237,10 +242,14 @@ function makeMockOAuthFetch(): FetchLike {
       });
     }
     if (url === 'https://auth.test/register') {
+      const body = JSON.parse(init?.body ?? '{}') as { redirect_uris?: string[] };
+      capture?.registrationRedirectUris.push(...(body.redirect_uris ?? []));
       return json({ client_id: 'test-client-abc' });
     }
     if (url === 'https://auth.test/token') {
       const params = new URLSearchParams(init?.body ?? '');
+      const redirectUri = params.get('redirect_uri');
+      if (redirectUri) capture?.tokenRedirectUris.push(redirectUri);
       if (params.get('grant_type') === 'refresh_token') {
         return json({
           access_token: 'rotated-token',
@@ -416,6 +425,8 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     unregisterProviderConfig(mcpProviderId('demo'));
     await wipeGlobalFs();
     localStorage.clear();
+    setExtensionDelegateId(null);
+    setLocalApiBaseUrl(null);
     // Default: mimic the in-page path so the OAuth-required tests keep
     // resolving a valid redirect URI without needing a panel-RPC bridge.
     mockGetOAuthPageOrigin.mockReset();
@@ -428,6 +439,8 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
   afterEach(async () => {
     _testOnly_resetMcpProviderState();
     unregisterProviderConfig(mcpProviderId('demo'));
+    setExtensionDelegateId(null);
+    setLocalApiBaseUrl(null);
     // Let LightningFS finish its debounced superblock write.
     await new Promise((r) => setTimeout(r, 600));
     _testOnly_resetStoreCache();
@@ -523,6 +536,7 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
 
     const file = await readServersFile();
     expect(file.servers.demo.auth?.clientId).toBe('test-client-abc');
+    expect(file.servers.demo.auth?.redirectUri).toBe(`${window.location.origin}/auth/callback`);
     expect(file.servers.demo.auth?.providerId).toBe('mcp:demo');
     expect(file.servers.demo.auth?.authorizationServer).toBe('https://auth.test');
     expect(file.servers.demo.auth?.scope).toBe('mcp:tools');
@@ -591,6 +605,89 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
       const redirect = new URL(capturedAuthorizeUrl).searchParams.get('redirect_uri');
       expect(redirect).toBe('http://localhost:63905/auth/callback');
       expect(mockGetOAuthPageOrigin).not.toHaveBeenCalled();
+    } finally {
+      setLocalApiBaseUrl(null);
+    }
+  });
+
+  it('add: uses the opaque-state callback for an extension-delegate leader', async () => {
+    setExtensionDelegateId('abcdefghijklmnopabcdefghijklmnop');
+    try {
+      const { fetch } = makeMockMcpFetch({
+        authRequired: true,
+        expectedToken: 'mcp-access-token',
+        tools: [{ name: 'foo' }],
+      });
+      let capturedAuthorizeUrl = '';
+      const captureLauncher = async (authorizeUrl: string): Promise<string | null> => {
+        capturedAuthorizeUrl = authorizeUrl;
+        const u = new URL(authorizeUrl);
+        return `${u.searchParams.get('redirect_uri')}?code=test-code&state=${u.searchParams.get('state')}`;
+      };
+
+      const r = await runCmd(['add', 'https://server.test/sse', 'demo'], {
+        fetchImpl: fetch,
+        oauthFetchImpl: makeMockOAuthFetch(),
+        oauthLauncher: captureLauncher,
+      });
+
+      expect(r.exitCode).toBe(0);
+      const redirect = new URL(capturedAuthorizeUrl).searchParams.get('redirect_uri');
+      expect(redirect).toBe(`${window.location.origin}/auth/mcp-callback`);
+      expect(mockGetOAuthPageOrigin).toHaveBeenCalledOnce();
+    } finally {
+      setExtensionDelegateId(null);
+    }
+  });
+
+  it('reuses the registered thin-node redirect URI after reload', async () => {
+    setLocalApiBaseUrl('http://localhost:63905');
+    const capture: OAuthRequestCapture = {
+      registrationRedirectUris: [],
+      tokenRedirectUris: [],
+    };
+    const authorizeRedirectUris: string[] = [];
+    const oauthFetch = makeMockOAuthFetch(capture);
+    const captureLauncher = async (authorizeUrl: string): Promise<string | null> => {
+      const url = new URL(authorizeUrl);
+      const redirectUri = url.searchParams.get('redirect_uri') ?? '';
+      authorizeRedirectUris.push(redirectUri);
+      return `${redirectUri}?code=test-code&state=${url.searchParams.get('state')}`;
+    };
+    const { fetch } = makeMockMcpFetch({
+      authRequired: true,
+      expectedToken: 'mcp-access-token',
+      tools: [{ name: 'foo' }],
+    });
+
+    try {
+      const added = await runCmd(['add', 'https://server.test/sse', 'demo'], {
+        fetchImpl: fetch,
+        oauthFetchImpl: oauthFetch,
+        oauthLauncher: captureLauncher,
+      });
+      expect(added.exitCode).toBe(0);
+      expect((await readServersFile()).servers.demo.auth?.redirectUri).toBe(
+        'http://localhost:63905/auth/callback'
+      );
+
+      _testOnly_resetMcpProviderState();
+      unregisterProviderConfig(mcpProviderId('demo'));
+
+      const authenticated = await runCmd(['auth', 'demo', '--interactive'], {
+        oauthFetchImpl: oauthFetch,
+        oauthLauncher: captureLauncher,
+      });
+      expect(authenticated.exitCode).toBe(0);
+      expect(capture.registrationRedirectUris).toEqual(['http://localhost:63905/auth/callback']);
+      expect(authorizeRedirectUris).toEqual([
+        'http://localhost:63905/auth/callback',
+        'http://localhost:63905/auth/callback',
+      ]);
+      expect(capture.tokenRedirectUris).toEqual([
+        'http://localhost:63905/auth/callback',
+        'http://localhost:63905/auth/callback',
+      ]);
     } finally {
       setLocalApiBaseUrl(null);
     }
