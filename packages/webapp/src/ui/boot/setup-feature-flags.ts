@@ -7,12 +7,17 @@ import {
   type RuntimeConfigStorage,
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
+import { resolveUiRuntimeMode, type UiRuntimeMode } from '../runtime-mode.js';
 
 interface FeatureFlagsBootOptions {
   locationHref: string;
   storage?: RuntimeConfigStorage | null;
   envBaseUrl?: string | null;
   isDev: boolean;
+}
+
+interface FeatureFlagsPageBootOptions extends FeatureFlagsBootOptions {
+  isExtension: boolean;
 }
 
 /**
@@ -49,6 +54,16 @@ export function setupFeatureFlags(float: FeatureFlagFloat, options: FeatureFlags
     workerBaseUrl,
     storage: options.storage,
   });
+}
+
+export function setupFeatureFlagsForPage(options: FeatureFlagsPageBootOptions): UiRuntimeMode {
+  const runtimeMode = resolveUiRuntimeMode(
+    options.locationHref,
+    options.isExtension,
+    options.storage
+  );
+  setupFeatureFlags(runtimeMode, options);
+  return runtimeMode;
 }
 
 function readStoredWorkerBaseUrl(storage: RuntimeConfigStorage | null | undefined): string | null {

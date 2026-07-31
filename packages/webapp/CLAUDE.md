@@ -196,32 +196,33 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 - `tool-adapter.ts` bridges legacy tool definitions into the pi-compatible tool layer.
 - `session.ts` and UI session storage keep the browser runtime restorable.
 
+### Feature Flags
+
+- Add: extend `FeatureFlagId` + `FEATURE_FLAGS` in `core/feature-flags.ts`, then add the same
+  string values to production and staging `wrangler.jsonc` `FEATURE_FLAGS`; `listFlags()` drives UI.
+- Boolean consumers use `isFeatureEnabled`/`coerceFeatureFlagValue` (`on`/`true`/`1`, trimmed and
+  case-insensitive). Precedence where `overridableFloats` permits: local → remote → bundled
+  `floatDefaults`/`defaultValue`.
+- `setupFeatureFlagsForPage` selects the float, loads its isolated cache, then refreshes
+  `/api/flags?float=<float>` once. There is no live refresh; later config requires reload.
+
 ### Context Compaction
 
 - Path: `packages/webapp/src/core/context-compaction.ts`
-- **GC threshold is model-sized**: `scoop-context.ts` forwards `model.contextWindow` into
-  `createCompactContext`; fires at `contextWindow - reserveTokens`, not a hardcoded value.
-  A `0`/missing window falls back to 200K default.
-- **Memory extraction** (cone only): when `onMemoryUpdates` is wired, compaction makes a
-  second LLM call sharing the same system prompt (prompt-cache hit) and appends bullets to
-  `/workspace/CLAUDE.md` via `orchestrator.appendConeMemory`. Best-effort; never blocks
-  compaction.
-- `appendConeMemory` is size-bounded by `cone-memory-budget.ts` (log2-scaled per-session
-  budget). When an append exceeds budget × 1.25, an LLM restructure runs over only the
-  `## Auto-extracted` tail; the user-authored header is preserved verbatim.
+- `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus reserve,
+  falling back to 200K when absent/zero.
+- Cone memory extraction is best-effort and appends to `/workspace/CLAUDE.md`.
+  `cone-memory-budget.ts` bounds it; overflow restructures only `## Auto-extracted`.
 
 ### Frozen Sessions ("New session" flow)
 
 - Path: `ui/session-freezer.ts`, `ui/new-session.ts`.
-- Three explicit actions from the avatar popover: **Save & start new** (enrichment + memory
-  extraction), **New chat — skip memory** (quick archive), **Erase & start new** (no
-  archive). All reset VFS `/tmp` (preserving active mount roots) and clear the cone chat;
-  scoops survive. Page reload, app restart, and scoop creation do NOT clear `/tmp`.
+- Actions: **Save & start new** (enriched archive), **New chat — skip memory** (quick archive),
+  and **Erase & start new** (none). Each clears cone chat and `/tmp` except mount roots; scoops
+  survive, and reload/restart/scoop creation do not clear `/tmp`.
 - Archive format: `/sessions/<timestamp>-<slug>.md` (YAML frontmatter +
-  `slicc:session-data` HTML-comment block + human-readable body). Index at
-  `/sessions/index.json` (prepended).
-- `OffscreenClient.clearAllMessages()` is cone-only; awaits `clear-chat-ack` before
-  resolving to avoid racing the panel reload.
+  `slicc:session-data` + body); prepended index: `/sessions/index.json`.
+- Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ### UI
 
@@ -270,15 +271,9 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
 ### Stale-asset recovery (post-deploy)
 
-- Four triggers → one shared, `instanceId`-scoped, fail-closed, 60 s reload
-  (`ui/boot/setup-preload-error-reload.ts` + `core/stale-asset-channel.ts`): page
-  `vite:preloadError`; page `Worker` error (`spawn.ts`); worker `boot()` try/catch; worker
-  scoop-context classifier. Worker triggers broadcast over `BroadcastChannel` stamped with
-  `instanceId`; only the owning page reloads.
-- A dropped cone turn is auto-resubmitted once after recovery: the broadcast stamps
-  `replayTurn` (cone only), the page sets `sessionStorage slicc:stale-asset-replay`, and
-  `wc-chat-controller.loadMessages` replays the last unanswered user turn once via
-  `#handleErrorRetry`.
+- `setup-preload-error-reload.ts` + `stale-asset-channel.ts` funnel preload, page Worker,
+  worker boot, and scoop-classifier failures into an `instanceId`-scoped 60 s reload; only
+  the owning page reacts. A cone `replayTurn` marker replays one unanswered turn after recovery.
 
 ## Key Conventions
 
