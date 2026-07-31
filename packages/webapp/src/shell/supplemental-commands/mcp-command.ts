@@ -1017,8 +1017,15 @@ async function defaultRedirectUri(): Promise<string> {
       `https://${chromeApi.runtime?.id ?? ''}.chromiumapp.org/mcp-callback`
     );
   }
-  // CLI / standalone webapp: the popup→postMessage + /api/oauth-result
-  // polling path captures the redirect on the page origin.
+  // Thin-bridge standalone: register the local node-server callback, not the
+  // hosted UI origin. The worker's /auth/callback route consumes a structured
+  // relay state, while MCP OAuth uses its own opaque CSRF state.
+  const { getLocalApiBaseUrl } = await import('../proxied-fetch.js');
+  const localApiOrigin = getLocalApiBaseUrl();
+  if (localApiOrigin) return `${localApiOrigin}/auth/callback`;
+
+  // Same-origin webapp: the popup→postMessage path captures the redirect on
+  // the page origin.
   const { getOAuthPageOrigin } = await import('../../providers/oauth-service.js');
   const { origin } = await getOAuthPageOrigin();
   return `${origin}/auth/callback`;

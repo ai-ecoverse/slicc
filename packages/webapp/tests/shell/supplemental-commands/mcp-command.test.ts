@@ -49,6 +49,7 @@ import {
   setServer,
 } from '../../../src/shell/mcp/store.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
+import { setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import {
   aliasContent,
   coerceArgsBySchema,
@@ -492,10 +493,9 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     expect(acct.scopes).toBe('mcp:tools');
   });
 
-  it('add: uses page-origin redirect URI when not running as a Chrome extension', async () => {
-    // CLI / standalone webapp path — the launcher captures the redirect
-    // on the page origin, so the URI registered with the AS must be
-    // `<origin>/auth/callback`.
+  it('add: uses page-origin redirect URI without a thin-bridge API base', async () => {
+    // Same-origin webapp path — the launcher captures the redirect on the page
+    // origin, so the URI registered with the AS must be `<origin>/auth/callback`.
     const { fetch } = makeMockMcpFetch({
       authRequired: true,
       expectedToken: 'mcp-access-token',
@@ -518,6 +518,36 @@ describe('mcp add / list / delete / invoke / refresh (integration)', () => {
     const redirect = new URL(capturedAuthorizeUrl).searchParams.get('redirect_uri');
     expect(redirect).toBe(`${window.location.origin}/auth/callback`);
     expect(redirect).not.toMatch(/chromiumapp\.org/);
+  });
+
+  it('add: uses the local API callback in thin-bridge mode', async () => {
+    setLocalApiBaseUrl('http://localhost:63905');
+    try {
+      const { fetch } = makeMockMcpFetch({
+        authRequired: true,
+        expectedToken: 'mcp-access-token',
+        tools: [{ name: 'foo' }],
+      });
+      let capturedAuthorizeUrl = '';
+      const captureLauncher = async (authorizeUrl: string): Promise<string | null> => {
+        capturedAuthorizeUrl = authorizeUrl;
+        const u = new URL(authorizeUrl);
+        return `${u.searchParams.get('redirect_uri')}?code=test-code&state=${u.searchParams.get('state')}`;
+      };
+
+      const r = await runCmd(['add', 'https://server.test/sse', 'demo'], {
+        fetchImpl: fetch,
+        oauthFetchImpl: makeMockOAuthFetch(),
+        oauthLauncher: captureLauncher,
+      });
+
+      expect(r.exitCode).toBe(0);
+      const redirect = new URL(capturedAuthorizeUrl).searchParams.get('redirect_uri');
+      expect(redirect).toBe('http://localhost:63905/auth/callback');
+      expect(mockGetOAuthPageOrigin).not.toHaveBeenCalled();
+    } finally {
+      setLocalApiBaseUrl(null);
+    }
   });
 
   it('add: uses chromiumapp.org redirect URI when running as a Chrome extension', async () => {
