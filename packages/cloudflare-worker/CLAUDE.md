@@ -22,6 +22,7 @@ the built SLICC webapp as static assets to browser visitors.
 | `src/install-cli.ts`                                                                   | `/install-cli` POSIX installer script + `/download/slicc-cli/:target` release-asset resolver                        |
 | `src/llms-txt.ts`                                                                      | `/llms.txt` builder                                                                                                 |
 | `src/rel-docs.ts`                                                                      | `/rel/:name` — dereferenceable docs for SLICC custom rels                                                           |
+| `src/flags.ts`                                                                         | `/api/flags` string-map resolution, CORS, and per-float edge caching                                                |
 | `src/oauth-exchange.ts`, `src/oauth-registry.ts`                                       | OAuth callback relay (`/auth/callback`)                                                                             |
 | `src/auth/cloud-callback.ts`                                                           | `/auth/cloud-callback` IMS popup callback for the cloud dashboard                                                   |
 | `src/cloud/cloud-sessions-do.ts`                                                       | `CloudSessionsDurableObject` — per-user state for `/api/cloud/*`                                                    |
@@ -34,18 +35,14 @@ the built SLICC webapp as static assets to browser visitors.
 | `src/cloud/rate-limit.ts`                                                              | Per-user rate limiting on cloud endpoints                                                                           |
 | `wrangler.jsonc`                                                                       | Wrangler config, DO bindings (`TRAY_HUB`, `CLOUD_SESSIONS`), staging env, asset binding                             |
 
-This package depends on `@slicc/cloud-core` (see
-[`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md)) for sandbox lifecycle logic.
-The worker-local `src/cloud/` files are adapter glue — operation logic lives in
-cloud-core.
+Sandbox lifecycle logic lives in `@slicc/cloud-core`; worker `src/cloud/` is adapter glue.
 
 ## Tray Hub Architecture
 
 ### Durable Objects
 
-- Each tray maps to one `SessionTrayDurableObject` instance via the `TRAY_HUB` binding.
-- Tray state tracks issued capability tokens, leader attachment state, follower bootstrap
-  state, reconnect windows, and cached ICE servers.
+- `TRAY_HUB` maps each tray to one `SessionTrayDurableObject`, tracking capabilities,
+  leader/follower state, reconnect windows, and cached ICE servers.
 
 ### Public Routes
 
@@ -71,7 +68,7 @@ cloud-core.
 | `WS __slicc/bridge`                   | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit` between tabs and leader; hibernated via `setWebSocketAutoResponse` |
 | `POST __slicc/emit`                   | Fallback beacon relay for `window.slicc.emit` on page unload                                                                                              |
 | `GET /auth/callback`                  | OAuth callback relay; also a capture hop for the cloud dashboard (no `state` → `postMessage` to `window.opener`)                                          |
-| `GET /api/flags`                      | Resolve string flags for `?float=<float>`                                                                                                                 |
+| `GET /api/flags`                      | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                               |
 
 **Routes-mirror rule:** every new route must appear in three places:
 
@@ -83,9 +80,11 @@ Missing any of these causes CI failures.
 
 ### Feature Flag Configuration
 
-`FEATURE_FLAGS` is a JSON Wrangler var shaped as `{ base: string map, floats: per-float
-string maps }`. Float maps overlay `base`; invalid profiles use base.
-Deploy required; KV/R2 hot reload is future work.
+`FEATURE_FLAGS` in `wrangler.jsonc` is a JSON var shaped as
+`{ base: Record<string, string>, floats: Record<string, Record<string, string>> }`.
+Float maps overlay `base`; invalid profiles return `{ float: "default", flags: base }`.
+Keep production and `env.staging` aligned. Values cache for five minutes; config needs deploy.
+Keep `/api/flags` in the routes array and both routes-list assertions per the rule above.
 
 ### Signaling Model
 
@@ -134,15 +133,10 @@ for desktop trays — branched through `reclaimMsForTray(tray)` in `shared.ts`.
 
 ### R2 Asset Archive
 
-The `ASSET_ARCHIVE` R2 binding keeps content-hashed `/assets/*` chunks available across
-deploys so long-lived tabs don't 404 on lazy-loaded chunks from older builds.
-`serveAssetWithArchiveFallback` in `src/index.ts` serves from `ASSETS`; falls back to
-R2; degrades to the stale-asset reload if R2 also misses. 14-day bucket lifecycle GC.
-
-See the
-[`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md)
-for the full ops runbook: bucket creation, lifecycle rules, API token required
-permissions, upload gate mechanics, and the 2026-07-13 incident.
+`ASSET_ARCHIVE` retains hashed `/assets/*` across deploys. `serveAssetWithArchiveFallback`
+tries `ASSETS`, then R2, then stale-asset reload; bucket GC is 14 days. The
+[`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md) is the
+ops runbook for bucket setup, permissions, uploads, and the 2026-07-13 incident.
 
 ## Commands
 
@@ -166,12 +160,9 @@ npm run start:extension
 
 ## CI and Deployment
 
-The automated release gates production deployment with `release-native.mjs --gate=worker`.
-The hub (`wrangler.jsonc`) and preview worker (`wrangler-preview.jsonc`) **must deploy as
-a pair** — they share the same DO and preview URL token format. The R2 archive upload
-runs unconditionally before every deploy. Routes-only failures are non-fatal (script
-already live). Required secrets: `CLOUDFLARE_API_TOKEN` (Workers Edit + R2 R/W + Zone
-Routes Edit) and `CLOUDFLARE_ACCOUNT_ID`.
+`release-native.mjs --gate=worker` gates production. Hub and preview configs deploy as a pair
+(shared DO/token format); R2 uploads always precede deploy. Routes-only failures are non-fatal.
+Required: `CLOUDFLARE_API_TOKEN` (Workers Edit, R2 R/W, Zone Routes Edit) and account ID.
 
 See the
 [`deploying-tray-worker` skill](../../.agents/skills/deploying-tray-worker/SKILL.md)
