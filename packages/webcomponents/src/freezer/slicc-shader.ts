@@ -15,7 +15,7 @@ import { h, sheet } from '../internal/dom.js';
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
  * @attr coverage - 0..1 freezer frost growth / cone glass density and geometry
- * @attr speed - 0..2 cone glass animation rate multiplier (default 0.25)
+ * @attr speed - 0..2 cone glass animation rate multiplier (default 0.0625)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -206,7 +206,7 @@ export const SUGAR_GLASS_PRESETS = {
     noise: 0.025,
     blur: 0.14,
     coverage: 0.28,
-    speed: 0.25,
+    speed: 0.0625,
   },
   'caramel-soft': {
     mode: 'cone',
@@ -525,7 +525,7 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('blur', String(value));
   }
 
-  /** Cone glass animation rate multiplier (0 = paused, Caramel default = 0.25). */
+  /** Cone glass animation rate multiplier (0 = paused, Caramel default = 0.0625). */
   get speed(): number {
     return clampNum(
       Number.parseFloat(this.getAttribute('speed') ?? ''),

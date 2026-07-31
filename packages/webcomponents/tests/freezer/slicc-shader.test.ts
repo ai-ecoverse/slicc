@@ -118,18 +118,18 @@ describe('slicc-shader', () => {
     expect(el.blurAmount).toBeCloseTo(0.14, 5);
   });
 
-  it('reflects and clamps the cone glass animation speed (Caramel default 0.25)', () => {
+  it('reflects and clamps the cone glass animation speed (Caramel default 0.0625)', () => {
     const el = mount();
-    expect(el.speed).toBe(0.25);
-    el.speed = 0.25;
-    expect(el.getAttribute('speed')).toBe('0.25');
-    expect(el.speed).toBe(0.25);
+    expect(el.speed).toBe(0.0625);
+    el.speed = 0.0625;
+    expect(el.getAttribute('speed')).toBe('0.0625');
+    expect(el.speed).toBe(0.0625);
     el.setAttribute('speed', '-1');
     expect(el.speed).toBe(0);
     el.setAttribute('speed', '99');
     expect(el.speed).toBe(2);
     el.setAttribute('speed', 'nope');
-    expect(el.speed).toBe(0.25);
+    expect(el.speed).toBe(0.0625);
   });
 
   it('keeps the cone glass render loop healthy when speed is zero', async () => {
@@ -444,7 +444,7 @@ describe('cone Sugar Glass field colors', () => {
         noise: 0.025,
         blur: 0.14,
         coverage: 0.28,
-        speed: 0.25,
+        speed: 0.0625,
       },
       'caramel-soft': {
         mode: 'cone',
