@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SliccPill } from '../../src/pill/slicc-pill.js';
 // The full-app showcase story assembles the whole surface; importing it
-// registers every element it composes (cone chip included).
+// registers every element it composes (agent tabs included).
 import { Collapsed, FreezerPreview, ScoopPreview } from '../../src/showcase/app.stories.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
@@ -20,14 +20,14 @@ function renderStory(story: { render?: unknown }): HTMLElement {
   return frame;
 }
 
-/** The cone chip rendered by the nav scoop switcher. */
-function coneChip(frame: HTMLElement): SliccPill {
-  return frame.querySelector('slicc-pill.scoop[data-k="cone"]') as SliccPill;
+/** An agent tab resolved by its accessible label rather than its styling classes. */
+function agentTab(frame: HTMLElement, label: string): HTMLButtonElement {
+  return frame.querySelector(`[role="tab"][aria-label^="${label}:"]`) as HTMLButtonElement;
 }
 
-/** The cone chip's inner pill button (shadow DOM). */
-function conePill(frame: HTMLElement): HTMLElement {
-  return coneChip(frame).shadowRoot?.querySelector('.pill') as HTMLElement;
+/** The focused-agent avatar exposed by the tabs' public `avatar` part. */
+function focusedAvatar(frame: HTMLElement): SliccPill {
+  return frame.querySelector('slicc-agent-tabs > slicc-pill[part="avatar"]') as SliccPill;
 }
 
 /** Resolve a CSS color (e.g. a hex token) to its computed `rgb(...)` form. */
@@ -43,7 +43,7 @@ function resolveColor(css: string): string {
 const FREEZER_TINT = '#3b6cb2';
 const RESEARCHER = '#06b6d4';
 
-describe('showcase full-app cone chip', () => {
+describe('showcase full-app agent tabs', () => {
   let frame: HTMLElement | null = null;
 
   beforeEach(() => {
@@ -57,42 +57,37 @@ describe('showcase full-app cone chip', () => {
     frame = null;
   });
 
-  it('renders the cone chip in the nav switcher', () => {
+  it('renders the cone tab and focused cone avatar in the nav', () => {
     frame = renderShowcase();
-    const cone = coneChip(frame);
-    expect(cone).toBeTruthy();
-    expect(cone.getAttribute('type')).toBe('cone');
+    expect(agentTab(frame, 'Sliccy')).toBeTruthy();
+    expect(focusedAvatar(frame).getAttribute('type')).toBe('cone');
   });
 
-  it('uses the open-idle configuration (not active) for the cone', () => {
+  it('selects the cone as the fallback without setting an explicit active tab', () => {
     frame = renderShowcase();
-    const cone = coneChip(frame);
-    // The "open idle" look is the non-active pill: no active attribute/class, so
-    // the accent never fills the chip.
-    expect(cone.hasAttribute('active')).toBe(false);
-    expect(cone.classList.contains('active')).toBe(false);
-    expect(conePill(frame).classList.contains('active')).toBe(false);
+    const tabs = frame.querySelector('slicc-agent-tabs') as HTMLElement;
+    expect(tabs.hasAttribute('active')).toBe(false);
+    expect(agentTab(frame, 'Sliccy').getAttribute('aria-selected')).toBe('true');
   });
 
-  it('shows a white (transparent) background instead of the accent color fill', () => {
+  it('shows a neutral selected background instead of the cone accent fill', () => {
     frame = renderShowcase();
-    const cs = getComputedStyle(conePill(frame));
-    // Idle pill background is transparent, so the light surface (white) shows
-    // through — the accent fill would resolve to an opaque rgb() instead.
-    expect(cs.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    const cs = getComputedStyle(agentTab(frame, 'Sliccy'));
+    // The selected segment sits on the canvas surface rather than taking the
+    // scoop accent as a fill.
+    const canvas = cs.getPropertyValue('--canvas').trim();
+    expect(canvas === '' || resolveColor(canvas) === 'rgba(0, 0, 0, 0)').toBe(false);
+    expect(cs.backgroundColor).toBe(resolveColor(canvas));
   });
 
   it('keeps dark (non-inverted) label text rather than the white-on-fill label', () => {
     frame = renderShowcase();
-    const label = coneChip(frame).shadowRoot?.querySelector('.label') as HTMLElement;
-    // The active color-fill chip inverts the label to pure white (#fff); the
-    // open-idle chip keeps its own dark/contrast label token.
-    expect(getComputedStyle(label).color).not.toBe('rgb(255, 255, 255)');
+    expect(getComputedStyle(agentTab(frame, 'Sliccy')).color).not.toBe('rgb(255, 255, 255)');
   });
 
   it('keeps the cone eye-tracking intact (cone, eyes open, pupils follow the cursor)', () => {
     frame = renderShowcase();
-    const cone = coneChip(frame);
+    const cone = focusedAvatar(frame);
     expect(cone.getAttribute('eyes')).toBe('open');
     const svg = cone.shadowRoot?.querySelector('.eyes-svg') as SVGElement;
     expect(svg).toBeTruthy();
@@ -128,13 +123,11 @@ describe('showcase full-app preview states', () => {
   const composerOf = (f: HTMLElement) => f.querySelector('slicc-composer') as HTMLElement;
   const tintOf = (f: HTMLElement) => f.querySelector('.sc-tint') as HTMLElement;
   const freezerOf = (f: HTMLElement) => f.querySelector('slicc-freezer') as HTMLElement;
-  const scoopChip = (f: HTMLElement, key: string) =>
-    f.querySelector(`slicc-pill.scoop[data-k="${key}"]`) as HTMLElement;
   const click = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
-  it('enters scoop-preview when a scoop chip is clicked', () => {
+  it('enters scoop-preview when a scoop tab is clicked', () => {
     frame = renderShowcase();
-    click(scoopChip(frame, 'researcher'));
+    click(agentTab(frame, 'researcher'));
 
     // Swirl ("scoop") shader, tinted to the scoop's primary color.
     expect(shaderOf(frame).getAttribute('mode')).toBe('scoop');
@@ -146,8 +139,8 @@ describe('showcase full-app preview states', () => {
     expect(getComputedStyle(composerOf(frame)).display).toBe('none');
     // The scoop's own history thread replaced the cone thread.
     expect(frame.querySelector('slicc-chat-thread[data-scoop="researcher"]')).toBeTruthy();
-    // The scoop chip reads as active.
-    expect(scoopChip(frame, 'researcher').hasAttribute('active')).toBe(true);
+    // The scoop tab reads as selected.
+    expect(agentTab(frame, 'researcher').getAttribute('aria-selected')).toBe('true');
   });
 
   it('enters freezer-preview when a frozen session card is clicked', () => {
@@ -163,18 +156,18 @@ describe('showcase full-app preview states', () => {
     expect(freezerOf(frame).hasAttribute('ctx')).toBe(true);
     // The composer is hidden — the session is frozen.
     expect(getComputedStyle(composerOf(frame)).display).toBe('none');
-    // The frozen conversation loaded; no scoop chip is active.
+    // The frozen conversation loaded; no scoop tab is selected.
     expect(frame.querySelector('slicc-chat-thread[data-frozen="hero"]')).toBeTruthy();
-    expect(scoopChip(frame, 'researcher').hasAttribute('active')).toBe(false);
+    expect(agentTab(frame, 'researcher').getAttribute('aria-selected')).toBe('false');
   });
 
-  it('returns to the live state when the cone chip is clicked', () => {
+  it('returns to the live state when the cone tab is clicked', () => {
     frame = renderShowcase();
-    click(scoopChip(frame, 'researcher'));
+    click(agentTab(frame, 'researcher'));
     // Sanity: we are in a preview before returning.
     expect(frame.getAttribute('data-preview')).toBe('scoop');
 
-    click(coneChip(frame));
+    click(agentTab(frame, 'Sliccy'));
 
     expect(frame.hasAttribute('data-preview')).toBe(false);
     expect(shaderOf(frame).getAttribute('mode')).toBe('cone');
@@ -187,8 +180,9 @@ describe('showcase full-app preview states', () => {
     expect(thread.getAttribute('context')).toBe('cone');
     expect(thread.hasAttribute('data-scoop')).toBe(false);
     expect(thread.hasAttribute('data-frozen')).toBe(false);
-    // The cone chip stays open-idle (not active) in the live state.
-    expect(coneChip(frame).hasAttribute('active')).toBe(false);
+    // The cone is the selected fallback without an explicit active tab.
+    expect(frame.querySelector('slicc-agent-tabs')?.hasAttribute('active')).toBe(false);
+    expect(agentTab(frame, 'Sliccy').getAttribute('aria-selected')).toBe('true');
   });
 
   it('renders the edit action-row icon as the pencil glyph, not the literal name', () => {

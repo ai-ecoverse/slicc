@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccNav } from '../../src/nav/slicc-nav.js';
 // Siblings from earlier waves — already registered; safe to import so the
-// populated bar mirrors the prototype's header (logo + switcher + controls).
+// populated bar mirrors the prototype's header (logo + agent tabs + controls).
 import '../../src/primitives/slicc-avatar.js';
 import '../../src/primitives/slicc-floatbar.js';
 import '../../src/primitives/slicc-logo.js';
-import '../../src/switcher/slicc-scoop-switcher.js';
+import '../../src/switcher/slicc-agent-tabs.js';
 import '../../src/theme/slicc-theme-toggle.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
@@ -15,7 +15,7 @@ function spacerOf(el: SliccNav): HTMLElement | null {
 }
 
 /**
- * Build a realistic, populated nav: logo → scoop switcher → floatbar → theme
+ * Build a realistic, populated nav: logo → agent tabs → floatbar → theme
  * toggle → avatar, in DOM (== layout) order, matching the prototype header. The
  * nav auto-inserts the flexible spacer before the floatbar.
  */
@@ -26,10 +26,7 @@ function makeNav(accent?: string): SliccNav {
   if (accent) el.setAttribute('accent', accent);
   el.innerHTML = `
     <slicc-logo></slicc-logo>
-    <slicc-scoop-switcher active="cone">
-      <slicc-pill class="scoop" data-k="cone" type="cone" color="#b07823" eyes="open" label="Sliccy" active></slicc-pill>
-      <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4" eyes="none" label="researcher"></slicc-pill>
-    </slicc-scoop-switcher>
+    <slicc-agent-tabs active="cone"></slicc-agent-tabs>
     <slicc-floatbar label="CLI · tray · 1 follower" linked online></slicc-floatbar>
     <slicc-theme-toggle></slicc-theme-toggle>
     <slicc-avatar initials="PM"></slicc-avatar>`;
@@ -78,9 +75,9 @@ describe('slicc-nav', () => {
     const tags = [...el.children]
       .filter((c) => c.tagName.startsWith('SLICC-') || c.classList.contains('slicc-nav__spacer'))
       .map((c) => (c.classList.contains('slicc-nav__spacer') ? 'spacer' : c.tagName.toLowerCase()));
-    // logo, switcher, [auto spacer], floatbar, theme toggle, avatar.
+    // logo, agent tabs, [auto spacer], floatbar, theme toggle, avatar.
     expect(tags[0]).toBe('slicc-logo');
-    expect(tags[1]).toBe('slicc-scoop-switcher');
+    expect(tags[1]).toBe('slicc-agent-tabs');
     expect(tags).toContain('spacer');
     expect(tags).toContain('slicc-floatbar');
     expect(tags).toContain('slicc-theme-toggle');
