@@ -70,8 +70,13 @@ schemes:
       coverageTargets:
         - SliccFollower
       targets:
+        # Also serial, for the UI bundle's sake rather than its own. The 47
+        # unit tests total ~7s, so parallelizing them saves seconds, while the
+        # simulator clones it spawns compete with the UI runner's startup and
+        # leave it dying on "Timed out while loading Accessibility". Random
+        # order still holds, so test independence stays enforced.
         - name: SliccFollowerTests
-          parallelizable: true
+          parallelizable: false
           randomExecutionOrder: true
         # Serial on purpose. Each UI test is independent — it launches its own
         # app process with its own launch arguments — but cloning simulators

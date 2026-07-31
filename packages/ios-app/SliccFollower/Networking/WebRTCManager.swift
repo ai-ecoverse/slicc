@@ -26,6 +26,12 @@ class WebRTCManager: NSObject {
         dataChannel?.readyState == .open
     }
 
+    /// Bytes queued on the data channel but not yet sent. Zero when there is no
+    /// channel, so a caller with nothing to send never reads as congested.
+    var bufferedAmount: UInt64 {
+        dataChannel?.bufferedAmount ?? 0
+    }
+
     override init() {
         RTCInitializeSSL()
         let encoderFactory = RTCDefaultVideoEncoderFactory()

@@ -40,6 +40,10 @@ struct ChatView: View {
             guard !hasAppeared else { return }
             hasAppeared = true
             #if DEBUG
+                if let forced = UITestHooks.forcedConnectionState {
+                    applyForcedConnectionState(forced)
+                    return
+                }
                 if UITestHooks.routesToFixture {
                     route = .fixture
                     return
@@ -54,6 +58,23 @@ struct ChatView: View {
             }
         }
     }
+
+    #if DEBUG
+        /// Pin the banner to one state for a UI test. `stalled` is a connected
+        /// leader that stopped answering, so it sets both fields.
+        private func applyForcedConnectionState(_ raw: String) {
+            if raw == "stalled" {
+                appState.connectionState = .connected
+                appState.isLeaderStalled = true
+                return
+            }
+            guard let state = ConnectionState(rawValue: raw) else { return }
+            appState.connectionState = state
+            if state == .reconnecting {
+                appState.reconnectAttempt = 3
+            }
+        }
+    #endif
 }
 
 // MARK: - ConversationView
@@ -72,9 +93,12 @@ struct ConversationView: View {
             // Connection status bar
             ConnectionStatusView(
                 state: appState.connectionState,
+                reconnectAttempt: appState.reconnectAttempt,
+                isStalled: appState.isLeaderStalled,
                 onTapDisconnected: { showSettings = true }
             )
             .animation(.easeInOut(duration: 0.3), value: appState.connectionState)
+            .animation(.easeInOut(duration: 0.3), value: appState.isLeaderStalled)
 
             // Scoop indicator + tap-to-cycle.
             if appState.scoops.count > 1 {
@@ -99,6 +123,10 @@ struct ConversationView: View {
                 text: $inputText,
                 isStreaming: appState.isStreaming,
                 isConnected: appState.connectionState == .connected,
+                // A message typed during a stall would be accepted into the
+                // composer and lost, so block sending — but say why, rather
+                // than claiming the follower is disconnected.
+                isStalled: appState.isLeaderStalled,
                 onSend: { text in
                     appState.sendMessage(text)
                     inputText = ""

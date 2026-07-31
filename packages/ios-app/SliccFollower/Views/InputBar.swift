@@ -4,6 +4,9 @@ struct InputBar: View {
     @Binding var text: String
     let isStreaming: Bool
     let isConnected: Bool
+    /// Leader stopped answering pings while its channel stayed open. Sending is
+    /// blocked, but this is not a disconnect and must not read as one.
+    var isStalled: Bool = false
     let onSend: (String) -> Void
     let onAbort: () -> Void
 
@@ -15,11 +18,16 @@ struct InputBar: View {
     private let separatorColor = Color(white: 1, opacity: 0.1)
 
     private var canSend: Bool {
-        isConnected && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming
+        isComposable && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !isStreaming
     }
 
+    /// Whether a message can be handed to the leader at all.
+    private var isComposable: Bool { isConnected && !isStalled }
+
     private var placeholderText: String {
-        isConnected ? "Message..." : "Disconnected"
+        if isStalled { return "The leader is busy — hang on…" }
+        return isConnected ? "Message..." : "Disconnected"
     }
 
     var body: some View {
@@ -39,8 +47,8 @@ struct InputBar: View {
             .padding(.vertical, 8)
         }
         .background(barBackground)
-        .opacity(isConnected ? 1.0 : 0.5)
-        .disabled(!isConnected)
+        .opacity(isComposable ? 1.0 : 0.5)
+        .disabled(!isComposable)
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
     }
 
@@ -57,6 +65,7 @@ struct InputBar: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .allowsHitTesting(false)
+                    .accessibilityIdentifier("composer-placeholder")
             }
 
             TextEditor(text: $text)
@@ -108,7 +117,7 @@ struct InputBar: View {
 
     private func sendIfPossible() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, isConnected, !isStreaming else { return }
+        guard !trimmed.isEmpty, isComposable, !isStreaming else { return }
         onSend(trimmed)
         text = ""
     }

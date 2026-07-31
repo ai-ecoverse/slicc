@@ -28,6 +28,14 @@ enum TrayChunkLimits {
     static let maxChunkBytes = 32 * 1024
     /// Hard ceiling on one reassembled message.
     static let maxTotalBytes = 8 * 1024 * 1024
+    /// Queued-bytes ceiling above which a *chunked* send is refused: the next
+    /// write is heading for a full send queue, and hundreds of frames would
+    /// wedge the channel for everything behind them.
+    ///
+    /// Deliberately not applied to small messages, so a congested channel still
+    /// passes keepalive ping/pong and a merely busy peer is not mistaken for a
+    /// dead one. Mirrors `TRAY_SEND_HIGH_WATER_BYTES`.
+    static let sendHighWaterBytes = 8 * 1024 * 1024
     /// Concurrent in-flight reassemblies before the oldest is evicted.
     static let maxPending = 8
     /// Max frames one message may claim. Bounds the buffer allocated from a
