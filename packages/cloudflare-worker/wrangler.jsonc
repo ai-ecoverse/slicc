@@ -33,6 +33,14 @@
     // Cloud cone concurrency caps
     "CONE_CAP_RUNNING": "1",
     "CONE_CAP_PAUSED": "5",
+    // Feature flag config: base string map plus per-float string-map overlays.
+    "FEATURE_FLAGS": {
+      "base": { "experimental-settings": "on" },
+      "floats": {
+        "standalone": {},
+        "cherry": { "experimental-settings": "off" }
+      }
+    },
     // OAuth relay allowlist for remote origins (staging/preview deploys)
     "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev",
     // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)
@@ -92,6 +100,14 @@
         // Cloud cone concurrency caps
         "CONE_CAP_RUNNING": "1",
         "CONE_CAP_PAUSED": "5",
+        // Feature flag config: base string map plus per-float string-map overlays.
+        "FEATURE_FLAGS": {
+          "base": { "experimental-settings": "on" },
+          "floats": {
+            "standalone": {},
+            "cherry": { "experimental-settings": "off" }
+          }
+        },
         // OAuth relay allowlist for remote origins (staging/preview deploys)
         "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai",
         // Space-separated origins permitted to frame the ?cherry=1 SPA (empty = deny, "*" = any origin)

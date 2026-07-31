@@ -15,6 +15,7 @@ import {
   handleStart,
 } from './cloud/handlers.js';
 import { getProxyEndpoint } from './cloud/proxy-config.js';
+import { handleFlagsRequest } from './flags.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import {
   buildInstallCliPowershellResponse,
@@ -68,6 +69,7 @@ export interface WorkerEnv {
   CONE_CAP_RUNNING?: string;
   CONE_CAP_PAUSED?: string;
   ALLOWED_CLOUD_DASHBOARD_ORIGINS?: string;
+  FEATURE_FLAGS?: unknown;
   /**
    * Space-separated origins permitted to frame the `?cherry=1` SPA. Empty/unset = deny.
    * A bare `*` token (alone or among origins) opens framing to arbitrary
@@ -574,6 +576,7 @@ const ROUTES_INDEX_BODY = {
     'POST /oauth/token',
     'POST /oauth/revoke',
     'GET /api/runtime-config',
+    'GET /api/flags',
     'ANY /api/fetch-proxy',
     'GET /api/cloud/config',
     'POST /api/cloud/start',
@@ -768,6 +771,10 @@ async function tryHandleInfoRoutes(
 ): Promise<Response | null> {
   if (url.pathname === '/api/runtime-config') {
     return handleRuntimeConfig(url, request, env);
+  }
+
+  if (url.pathname === '/api/flags') {
+    return handleFlagsRequest(request, env.FEATURE_FLAGS);
   }
 
   if (url.pathname === '/api/fetch-proxy') {
