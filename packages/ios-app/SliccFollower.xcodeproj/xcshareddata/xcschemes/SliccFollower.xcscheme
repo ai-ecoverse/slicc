@@ -70,7 +70,7 @@
       <Testables>
          <TestableReference
             skipped = "NO"
-            parallelizable = "YES"
+            parallelizable = "NO"
             testExecutionOrdering = "random">
             <BuildableReference
                BuildableIdentifier = "primary"

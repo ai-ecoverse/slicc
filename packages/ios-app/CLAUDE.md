@@ -94,8 +94,8 @@ iOS sprinkle licks show their origin label in the leader's cone via leader-side 
 Payload fields decode _and_ render. Deliberate divergences from the web:
 
 - Attachment chips: thumbnail (inline base64) or kind glyph plus filename, user messages only. No size/MIME line — the web's chat mapper drops those too. A content-less attachment message renders no bubble.
-- The error card omits the web's CTAs (`Try again`, `Open Settings`): each acts on leader state with no follower→leader equivalent, so the button would silently no-op.
-- `tool_ui` renders a read-only card keyed by `requestId`, title extracted from the leader's HTML minus badge and meta (the meta carries the mount path). `tool_ui_done` removes it; a `snapshot` clears all cards.
+- The error card omits the web's CTAs (`Try again`, `Open Settings`): each acts on leader state with no follower→leader equivalent, so it would silently no-op.
+- `tool_ui` renders a read-only card keyed by `requestId`, title extracted from the leader's HTML minus badge and meta (which carries the mount path). `tool_ui_done` removes it; a `snapshot` clears all cards.
 
 ## Build
 
@@ -120,8 +120,10 @@ picks a simulator, enables coverage and on-failure retries, and enforces the
 ```
 
 Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`,
-`ios-app.xcresult` with per-test durations). Tests run `parallelizable` with
-`randomExecutionOrder`, so a new test must not depend on another test's side
+`ios-app.xcresult` with per-test durations). Neither bundle is `parallelizable`: the unit tests total
+~7s, so cloning simulators only raced the UI runner, which then fails preflight
+with `Busy` or dies on `Timed out while loading Accessibility`.
+`randomExecutionOrder` still holds, so no test may depend on another's side
 effects. Coverage is measured against
 `SliccFollower.app/SliccFollower.debug.dylib`, not the launcher stub beside it —
 debug builds put the code and the coverage mapping in the dylib.
@@ -198,8 +200,6 @@ dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
   also needs a `variantMarkers` string only that renderer can emit.
 - **The transcript is pinned to the newest message**, so a variant walk scrolls
   bottom-to-top and must be bounded.
-- **The bundle is `parallelizable: false`** — cloning simulators for a UI bundle
-  races the runner install and the loser fails preflight with `Busy`.
 - **A red CI job names the test, not the reason.** The XCTAssert text lives only
   in the `test-timings-ios-app` xcresult the job uploads — read it with
   `xcrun xcresulttool get test-results tests` before theorizing. These failures
