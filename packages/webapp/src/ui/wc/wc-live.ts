@@ -176,6 +176,11 @@ export function shouldSkipSessionHydration(
 /** Scoop runtime status, as broadcast by `onStatusChange`. */
 export type ScoopStatus = 'initializing' | 'ready' | 'processing' | 'error';
 
+export interface LickBackpressureState {
+  count: number;
+  waitingMs: number;
+}
+
 /** Chip eye state for a scoop status: errored scoops get the dead look. */
 function eyesFor(status: ScoopStatus | undefined): SwitcherScoop['eyes'] {
   if (status === 'error') return 'dead';
@@ -211,6 +216,8 @@ export interface WcLiveWiring {
   statuses: Map<string, ScoopStatus>;
   /** Per-scoop context-window fill (0..1), refreshed by the stats poller. */
   fills: Map<string, number>;
+  /** Latest sustained lick-deferral state for each still-registered scoop. */
+  lickBackpressure: Map<string, LickBackpressureState>;
   /**
    * URL-restored boot context (the thread's `ctx` param) still awaiting
    * routing. While set, the boot auto-select targets it instead of the cone
@@ -297,7 +304,11 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         wiring.selectScoop(scoop);
       }
     },
-    onScoopListUpdate: () => {
+    onScoopListUpdate: (scoops) => {
+      const registered = new Set(scoops.map((scoop) => scoop.jid));
+      for (const jid of wiring.lickBackpressure.keys()) {
+        if (!registered.has(jid)) wiring.lickBackpressure.delete(jid);
+      }
       refreshScoops();
       ensureSelection();
     },
@@ -325,6 +336,14 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
             message.lickId
           );
       }
+    },
+    onLickBackpressure: (jid, info) => {
+      if (info.count <= 0) wiring.lickBackpressure.delete(jid);
+      else wiring.lickBackpressure.set(jid, info);
+      const selected = wiring.getSelected();
+      if (selected?.jid !== jid) return;
+      const scoopName = selected.isCone ? 'cone' : selected.name;
+      wiring.getController()?.setLickBackpressure(info.count, info.waitingMs, scoopName);
     },
     onMessageUpdate: (jid, update) => {
       // Live flip of an actionable lick card's state (sudo-request settled).
@@ -675,6 +694,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let controller: WcChatController | null = null;
   let client: OffscreenClient | null = null;
   let selected: RegisteredScoop | null = null;
+  const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
   const readyListeners = new Set<() => void>();
 
@@ -695,6 +715,12 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
         void client.deleteQueuedMessage(previousJid, m.id).catch(() => undefined);
       }
     }
+    const cachedBackpressure = lickBackpressure.get(scoop.jid);
+    controller?.setLickBackpressure(
+      cachedBackpressure?.count ?? 0,
+      cachedBackpressure?.waitingMs ?? 0,
+      scoop.isCone ? 'cone' : scoop.name
+    );
     client.setSelectedScoopJid(scoop.jid);
     refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop);
@@ -713,6 +739,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       refs,
       statuses: new Map(),
       fills: new Map(),
+      lickBackpressure,
       lastActivity: new Map(),
       // The thread component owns the `ctx` param — the host only routes it.
       pendingUrlContext:
@@ -939,6 +966,10 @@ function createWcController(
     // list); the controller owns enqueue / dismiss / flush-on-consume.
     onQueuedChange: (items) => {
       refs.queuedStack.setMessages(items);
+    },
+    onLickBackpressureChange: (notice) => {
+      refs.lickBackpressureNotice.textContent = notice?.text ?? '';
+      refs.lickBackpressureNotice.toggleAttribute('hidden', notice === null);
     },
     // Agent-driven `tool_ui` dips (mount approval, USB/serial/HID
     // pickers) fire their `data-action` clicks through this hook —

@@ -859,6 +859,14 @@ export interface ErrorMsg {
   error: string;
 }
 
+/** Sustained lick queue backpressure; `count: 0` retracts the signal. */
+export interface LickBackpressureMsg {
+  type: 'lick-backpressure';
+  scoopJid: string;
+  count: number;
+  waitingMs: number;
+}
+
 export interface ScoopCreatedMsg {
   type: 'scoop-created';
   scoop: ScoopListMsg['scoops'][number];
@@ -1083,6 +1091,7 @@ export type OffscreenToPanelMessage =
   | ScoopListMsg
   | StateSnapshotMsg
   | ErrorMsg
+  | LickBackpressureMsg
   | ScoopCreatedMsg
   | IncomingMessageMsg
   | MessageUpdatedMsg

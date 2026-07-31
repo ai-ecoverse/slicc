@@ -87,6 +87,8 @@ export interface WcShellRefs {
    * agent; the fixture/preview keeps it empty.
    */
   queuedStack: SliccQueuedStack;
+  /** Non-error sustained-event notice, kept outside the queued submission stack. */
+  lickBackpressureNotice: HTMLElement;
   switcher: HTMLElement & { scoops: SwitcherScoop[] };
   floatbar: HTMLElement;
   shell: HTMLElement;
@@ -157,6 +159,10 @@ const CSS = [
   '.wcui-monitor{flex:1;min-height:0;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',
   'padding:24px;color:var(--txt-2);font-size:13px;text-align:center;}',
+  '.wcui-backpressure{align-self:flex-end;max-width:80%;box-sizing:border-box;',
+  'padding:8px 12px;border:1px solid var(--line);border-radius:14px;',
+  'background:var(--canvas);color:var(--txt-2);font-size:12px;line-height:1.4;}',
+  '.wcui-backpressure[hidden]{display:none;}',
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -214,8 +220,15 @@ function buildComposer(options: WcShellOptions): {
   inputCard: HTMLElement;
   composerMeta: HTMLElement;
   queuedStack: SliccQueuedStack;
+  lickBackpressureNotice: HTMLElement;
 } {
   const composer = el('slicc-composer');
+  const lickBackpressureNotice = el('div', {
+    class: 'wcui-backpressure',
+    role: 'status',
+    'aria-live': 'polite',
+    hidden: '',
+  });
   // The queued pile sits ABOVE the input card inside the composer. Placement
   // matches the Storybook `InComposer` story: the stack's `.stack` grid is
   // positioned (so its cards can grid-overlap), which would paint atop a
@@ -237,8 +250,8 @@ function buildComposer(options: WcShellOptions): {
   inputCard.style.position = 'relative';
   inputCard.style.zIndex = '1';
   const composerMeta = el('slicc-composer-meta', { model: 'Preview', thinking: 'off' });
-  composer.append(queuedStack, inputCard, composerMeta);
-  return { composer, inputCard, composerMeta, queuedStack };
+  composer.append(lickBackpressureNotice, queuedStack, inputCard, composerMeta);
+  return { composer, inputCard, composerMeta, queuedStack, lickBackpressureNotice };
 }
 
 function buildWorkbench(): {
@@ -381,7 +394,8 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     ...urlState,
   });
   thread.append(...buildThreadChildren(options.messages));
-  const { composer, inputCard, composerMeta, queuedStack } = buildComposer(options);
+  const { composer, inputCard, composerMeta, queuedStack, lickBackpressureNotice } =
+    buildComposer(options);
   pane.append(thread, composer);
 
   const { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar } =
@@ -428,6 +442,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     inputCard,
     composerMeta,
     queuedStack,
+    lickBackpressureNotice,
     switcher,
     floatbar,
     shell,

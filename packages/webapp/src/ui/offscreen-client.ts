@@ -17,6 +17,7 @@ import type {
   ExtensionMessage,
   ForwardedLickEvent,
   IncomingMessageMsg,
+  LickBackpressureMsg,
   MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
@@ -80,6 +81,11 @@ export interface OffscreenClientCallbacks {
   onScoopCreated: (scoop: RegisteredScoop) => void;
   onScoopListUpdate: (scoops: ScoopListMsg['scoops']) => void;
   onIncomingMessage: (scoopJid: string, message: IncomingMessageMsg['message']) => void;
+  /** Sustained lick deferral; `count: 0` retracts the selected scoop's notice. */
+  onLickBackpressure?: (
+    scoopJid: string,
+    info: Pick<LickBackpressureMsg, 'count' | 'waitingMs'>
+  ) => void;
   /**
    * In-place state update for an already-delivered message (currently a
    * settled actionable lick): the panel flips the rendered card located by
@@ -714,6 +720,13 @@ export class OffscreenClient implements KernelClientFacade {
 
       case 'error':
         this.handleError(msg as ErrorMsg);
+        break;
+
+      case 'lick-backpressure':
+        this.callbacks.onLickBackpressure?.(msg.scoopJid, {
+          count: msg.count,
+          waitingMs: msg.waitingMs,
+        });
         break;
 
       case 'incoming-message':

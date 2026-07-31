@@ -14,7 +14,7 @@ import {
 import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
 import { consumeStaleAssetReplayPending } from '../boot/setup-preload-error-reload.js';
 import { type DipInstance, mountDip } from '../dip.js';
-import { trackChatSend, trackError } from '../telemetry.js';
+import { trackChatSend, trackError, trackLickBackpressure } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {
@@ -47,6 +47,10 @@ export interface QueuedMessageView {
   text: string;
   /** Optional attachment count — shown as a small `+N` hint on the front card. */
   attachments?: number;
+}
+
+export interface LickBackpressureNoticeView {
+  text: string;
 }
 
 export interface WcChatControllerOptions {
@@ -92,6 +96,12 @@ export interface WcChatControllerOptions {
    * touches the component directly.
    */
   onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  /**
+   * Invoked when sustained lick backpressure appears or retracts. This notice
+   * is deliberately separate from queued submissions so it cannot affect the
+   * queued badge total or queue-processing state.
+   */
+  onLickBackpressureChange?: (notice: LickBackpressureNoticeView | null) => void;
   /**
    * Invoked once per dropped queued message id when the live-only stack
    * is discarded by a scoop switch / session reload (`loadMessages` with
@@ -198,6 +208,7 @@ export class WcChatController {
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
   readonly #resolveTelemetryContext?: () => { scoopName: string; model: string } | null;
   readonly #onQueuedChange?: (items: readonly QueuedMessageView[]) => void;
+  readonly #onLickBackpressureChange?: (notice: LickBackpressureNoticeView | null) => void;
   readonly #onQueuedCancel?: (messageId: string) => void;
   readonly #onToolUiAction?: (requestId: string, action: string, data?: unknown) => void;
   readonly #readOnlyToolUi: boolean;
@@ -220,6 +231,8 @@ export class WcChatController {
    * synchronously in `sendUserMessage` (delivery cancel is a separate task).
    */
   #queued: ChatMessage[] = [];
+  /** Non-submission notice rendered through its own host callback. */
+  #lickBackpressureNotice: LickBackpressureNoticeView | null = null;
   /** Rendered thread elements per message id (a message can span several). */
   readonly #els = new Map<string, HTMLElement[]>();
   #currentStreamId: string | null = null;
@@ -267,6 +280,7 @@ export class WcChatController {
     this.#onTurnComplete = options.onTurnComplete;
     this.#resolveTelemetryContext = options.resolveTelemetryContext;
     this.#onQueuedChange = options.onQueuedChange;
+    this.#onLickBackpressureChange = options.onLickBackpressureChange;
     this.#onQueuedCancel = options.onQueuedCancel;
     this.#onToolUiAction = options.onToolUiAction;
     this.#readOnlyToolUi = options.readOnlyToolUi ?? false;
@@ -372,6 +386,29 @@ export class WcChatController {
     this.#onQueuedChange?.(this.#queued.map(toQueuedView));
   }
 
+  #fireLickBackpressureChange(): void {
+    this.#onLickBackpressureChange?.(this.#lickBackpressureNotice);
+  }
+
+  /** Show or retract sustained lick backpressure without changing turn state. */
+  setLickBackpressure(count: number, waitingMs: number, scoopName: string): void {
+    if (count <= 0) {
+      if (!this.#lickBackpressureNotice) return;
+      this.#lickBackpressureNotice = null;
+      this.#fireLickBackpressureChange();
+      return;
+    }
+    this.#lickBackpressureNotice = {
+      text: `${count} events waiting for the current turn`,
+    };
+    this.#fireLickBackpressureChange();
+    try {
+      trackLickBackpressure(scoopName, waitingMs);
+    } catch {
+      // Telemetry must never block the notice render.
+    }
+  }
+
   /**
    * Append a synthetic assistant message that never touched the agent —
    * deterministic onboarding lines and dip references (`![…](…shtml)`,
@@ -399,6 +436,7 @@ export class WcChatController {
     // `×` dismiss uses so the orchestrator never delivers a prompt the user
     // implicitly dropped by switching away. The hook is fired BEFORE we clear
     // the local queue so a throwing host can't strand entries half-dropped.
+    const hadQueued = this.#queued.length > 0;
     if (this.#queued.length > 0) {
       if (this.#onQueuedCancel) {
         for (const message of this.#queued) {
@@ -410,8 +448,8 @@ export class WcChatController {
         }
       }
       this.#queued = [];
-      this.#fireQueuedChange();
     }
+    if (hadQueued) this.#fireQueuedChange();
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
     this.#messages = collateLickMessages(messages);
     // A canonical replay can land mid-turn (rehydrate after a scoop switch /
@@ -682,7 +720,13 @@ export class WcChatController {
     // no double flush, so items queued mid-turn keep waiting for the NEXT
     // turn's rising edge.
     if (processing) this.#flushQueued();
-    if (!processing) this.#syncCopyRow();
+    if (!processing) {
+      if (this.#lickBackpressureNotice) {
+        this.#lickBackpressureNotice = null;
+        this.#fireLickBackpressureChange();
+      }
+      this.#syncCopyRow();
+    }
     this.#onProcessingChange?.(processing);
     // Mirror the local turn lifecycle to tray followers (leader only — the
     // hook is set by `wireLeaderHooks`). The live float never emits a

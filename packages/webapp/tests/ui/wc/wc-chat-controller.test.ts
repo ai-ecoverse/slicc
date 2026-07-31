@@ -14,10 +14,15 @@ vi.mock('../../../src/ui/telemetry.js', async () => {
   const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
     '../../../src/ui/telemetry.js'
   );
-  return { ...actual, trackChatSend: vi.fn(), trackError: vi.fn() };
+  return {
+    ...actual,
+    trackChatSend: vi.fn(),
+    trackError: vi.fn(),
+    trackLickBackpressure: vi.fn(),
+  };
 });
 
-import { trackChatSend, trackError } from '../../../src/ui/telemetry.js';
+import { trackChatSend, trackError, trackLickBackpressure } from '../../../src/ui/telemetry.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 
@@ -69,6 +74,7 @@ describe('WcChatController', () => {
     busyPhases = [];
     vi.mocked(trackChatSend).mockClear();
     vi.mocked(trackError).mockClear();
+    vi.mocked(trackLickBackpressure).mockClear();
     controller = new WcChatController({
       thread,
       agent,
@@ -325,6 +331,77 @@ describe('WcChatController', () => {
     const card = thread.querySelector('slicc-error-card');
     expect(card).not.toBeNull();
     expect(card?.getAttribute('message')).toBe('rate limited');
+  });
+
+  describe('lick backpressure notice', () => {
+    function makeBackpressureController() {
+      const queuedChanges: Array<readonly { id: string; text: string }[]> = [];
+      const noticeChanges: Array<{ text: string } | null> = [];
+      const states: boolean[] = [];
+      const ctl = new WcChatController({
+        thread,
+        agent: new FakeAgent(),
+        onProcessingChange: (processing) => states.push(processing),
+        onQueuedChange: (items) => queuedChanges.push(items.slice()),
+        onLickBackpressureChange: (notice) => noticeChanges.push(notice),
+      });
+      ctl.setProcessing(true);
+      states.length = 0;
+      return { ctl, queuedChanges, noticeChanges, states };
+    }
+
+    it('shows a non-error notice without changing processing or exposing an error card', () => {
+      const { ctl, queuedChanges, noticeChanges, states } = makeBackpressureController();
+      ctl.setLickBackpressure(3, 300_000, 'cone');
+
+      expect(queuedChanges).toEqual([]);
+      expect(noticeChanges.at(-1)?.text).toBe('3 events waiting for the current turn');
+      expect(ctl.processing).toBe(true);
+      expect(states).toEqual([]);
+      expect(thread.querySelector('slicc-error-card')).toBeNull();
+      expect(trackError).not.toHaveBeenCalled();
+      expect(trackLickBackpressure).toHaveBeenCalledWith('cone', 300_000);
+    });
+
+    it('retracts the notice on count zero', () => {
+      const { ctl, noticeChanges } = makeBackpressureController();
+      ctl.setLickBackpressure(2, 300_000, 'cone');
+      ctl.setLickBackpressure(0, 0, 'cone');
+      expect(noticeChanges.at(-1)).toBeNull();
+      expect(trackLickBackpressure).toHaveBeenCalledTimes(1);
+    });
+
+    it('retracts the notice when the current turn completes', () => {
+      const { ctl, noticeChanges } = makeBackpressureController();
+      ctl.setLickBackpressure(1, 300_000, 'researcher');
+      ctl.setProcessing(false);
+      expect(noticeChanges.at(-1)).toBeNull();
+    });
+
+    it('keeps the notice out of the queued badge total', () => {
+      const badge = document.createElement('span');
+      const noticeChip = document.createElement('div');
+      const ctl = new WcChatController({
+        thread,
+        agent: new FakeAgent(),
+        onQueuedChange: (items) => {
+          badge.textContent = items.length > 0 ? `${items.length} queued` : '';
+        },
+        onLickBackpressureChange: (notice) => {
+          noticeChip.textContent = notice?.text ?? '';
+        },
+      });
+      ctl.setProcessing(true);
+      ctl.setLickBackpressure(3, 300_000, 'cone');
+
+      expect(noticeChip.textContent).toBe('3 events waiting for the current turn');
+      expect(badge.textContent).toBe('');
+      expect(noticeChip.textContent).not.toContain('1 queued');
+
+      ctl.sendUserMessage('one real queued submission');
+      expect(badge.textContent).toBe('1 queued');
+      expect(noticeChip.textContent).toBe('3 events waiting for the current turn');
+    });
   });
 
   describe('no-handler error-card RUM beacon (trackError)', () => {

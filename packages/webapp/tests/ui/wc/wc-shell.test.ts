@@ -380,8 +380,12 @@ describe('mountWcUiPreview', () => {
       placeholder: 'p',
     });
     const composer = host.querySelector('slicc-composer');
+    const backpressure = composer?.querySelector('.wcui-backpressure');
     const stack = composer?.querySelector('slicc-queued-stack');
     const inputCard = composer?.querySelector('slicc-input-card');
+    expect(backpressure).toBeTruthy();
+    expect(backpressure?.getAttribute('role')).toBe('status');
+    expect(backpressure?.hasAttribute('hidden')).toBe(true);
     expect(stack).toBeTruthy();
     expect(inputCard).toBeTruthy();
     // The stack must sit ABOVE the input card inside the composer so its pile
@@ -404,6 +408,7 @@ describe('mountWcUiPreview', () => {
     expect((inputCard as HTMLElement).style.zIndex).toBe('1');
     // The ref handle is the same node — controllers drive it via setMessages.
     expect(refs.queuedStack).toBe(stack);
+    expect(refs.lickBackpressureNotice).toBe(backpressure);
   });
 
   it('echoes composer submissions into the thread', () => {

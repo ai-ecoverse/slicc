@@ -34,6 +34,7 @@ import type {
   ExtensionMessage,
   ForwardedLickEvent,
   IncomingMessageMsg,
+  LickBackpressureMsg,
   MessageUpdatedMsg,
   OffscreenToPanelMessage,
   PanelCdpResponseMsg,
@@ -300,6 +301,15 @@ export class Bridge implements KernelFacade {
           scoopJid,
           error,
         } satisfies ErrorMsg);
+      },
+
+      onLickBackpressure: (scoopJid, info) => {
+        // Tray/follower broadcast is an explicit v1 exclusion; this signal stays local to the panel.
+        bridge.emit({
+          type: 'lick-backpressure',
+          scoopJid,
+          ...info,
+        } satisfies LickBackpressureMsg);
       },
 
       onToolStart: (scoopJid, toolName, toolInput) => {

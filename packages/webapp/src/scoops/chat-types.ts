@@ -13,12 +13,8 @@ import type { ChatMessage } from '@slicc/shared-ts';
 
 // Transcript wire types moved to @slicc/shared-ts (tray sync protocol
 // payloads); re-exported here so scoops/-layer importers keep their local
-// import site. `Session` below is session-store persistence, not wire.
+// import site. `Session` is session-store persistence, not wire.
 export type { ChatMessage, LickState, MessageRole, ToolCall } from '@slicc/shared-ts';
-
-// ---------------------------------------------------------------------------
-// Session persistence
-// ---------------------------------------------------------------------------
 
 export interface Session {
   id: string;

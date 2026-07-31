@@ -47,6 +47,7 @@ interface Harness {
   stateWrites: string[];
   store: ChannelMessage[];
   errors: string[];
+  backpressure: Array<{ jid: string; count: number; waitingMs: number }>;
 }
 
 function makeHarness(opts?: {
@@ -59,6 +60,7 @@ function makeHarness(opts?: {
   store?: ChannelMessage[];
   lastAgentTimestamp?: string;
   onError?: (jid: string, error: string) => void;
+  onLickBackpressure?: (jid: string, info: { count: number; waitingMs: number }) => void;
   scoop?: Partial<RegisteredScoop>;
 }): Harness {
   const jids = opts?.jids ?? ['cone'];
@@ -74,6 +76,7 @@ function makeHarness(opts?: {
   const senders: string[] = [];
   const stateWrites: string[] = [];
   const errors: string[] = [];
+  const backpressure: Array<{ jid: string; count: number; waitingMs: number }> = [];
   const probe = { max: 0 };
   let active = 0;
   let sendCount = 0;
@@ -106,6 +109,10 @@ function makeHarness(opts?: {
     onError: (jid, error) => {
       errors.push(error);
       opts?.onError?.(jid, error);
+    },
+    onLickBackpressure: (jid, info) => {
+      backpressure.push({ jid, ...info });
+      opts?.onLickBackpressure?.(jid, info);
     },
     getSessionStore: () => null,
     resetCostTracker: () => {},
@@ -157,7 +164,7 @@ function makeHarness(opts?: {
   const router = new ScoopMessageRouter(deps);
   for (const jid of jids) router.ensureQueue(jid);
   if (opts?.lastAgentTimestamp) router.setLastAgentTimestamp(jids[0], opts.lastAgentTimestamp);
-  return { router, sends, senders, probe, stateWrites, store, errors };
+  return { router, sends, senders, probe, stateWrites, store, errors, backpressure };
 }
 
 describe('ScoopMessageRouter re-entrancy guard', () => {
@@ -607,7 +614,7 @@ describe('ScoopMessageRouter debounce', () => {
     expect(sends[1]).toContain('MSG_001');
   });
 
-  it('settles a starved lick waiter when the error callback throws during an active drain', async () => {
+  it('settles a starved lick waiter when the backpressure callback throws during an active drain', async () => {
     const busy = { value: false };
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -617,11 +624,11 @@ describe('ScoopMessageRouter debounce', () => {
     const turnDone = new Promise<void>((resolve) => {
       releaseTurn = resolve;
     });
-    const { router, errors } = makeHarness({
+    const { router, errors, backpressure } = makeHarness({
       immediateIO: true,
       busy,
-      onError: () => {
-        throw new Error('error callback failed');
+      onLickBackpressure: () => {
+        throw new Error('backpressure callback failed');
       },
       onSend: async () => {
         busy.value = true;
@@ -640,7 +647,8 @@ describe('ScoopMessageRouter debounce', () => {
 
     await flushDebounce();
     await expect(starved.done).resolves.toEqual([undefined]);
-    expect(errors).toHaveLength(1);
+    expect(backpressure).toHaveLength(1);
+    expect(errors).toEqual([]);
 
     releaseTurn();
     await activeTurn;
@@ -743,7 +751,7 @@ describe('ScoopMessageRouter debounce', () => {
 
   it('reports a permanently busy deferred queue once without dispatching it', async () => {
     const busy = { value: true };
-    const { router, sends, errors } = makeHarness({
+    const { router, sends, errors, backpressure } = makeHarness({
       immediateIO: true,
       busy,
       tabStatus: 'processing',
@@ -756,11 +764,66 @@ describe('ScoopMessageRouter debounce', () => {
     await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS + 2000);
 
     expect(sends).toEqual([]);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('remained deferred');
+    expect(errors).toEqual([]);
+    expect(backpressure).toEqual([
+      {
+        jid: 'cone',
+        count: 1,
+        waitingMs: expect.any(Number),
+      },
+    ]);
+    expect(backpressure[0].waitingMs).toBeGreaterThanOrEqual(SCOOP_DEFERRAL_STARVATION_MS);
     await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS);
-    expect(errors).toHaveLength(1);
+    expect(backpressure).toHaveLength(1);
     router.stopMessageLoop();
+  });
+
+  it('raises backpressure at the five-minute boundary but not one millisecond before', async () => {
+    expect(SCOOP_DEFERRAL_STARVATION_MS).toBe(300_000);
+    const busy = { value: true };
+    const { router, backpressure } = makeHarness({
+      immediateIO: true,
+      busy,
+      tabStatus: 'processing',
+    });
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+
+    await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS - 1);
+    await router.processScoopQueue('cone');
+    expect(backpressure).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await router.processScoopQueue('cone');
+    expect(backpressure).toEqual([
+      { jid: 'cone', count: 1, waitingMs: SCOOP_DEFERRAL_STARVATION_MS },
+    ]);
+  });
+
+  it('retracts reported backpressure when the deferred queue drains', async () => {
+    const busy = { value: true };
+    const { router, sends, backpressure } = makeHarness({
+      immediateIO: true,
+      busy,
+      tabStatus: 'processing',
+    });
+    const lick = await queueLicks(router, [makeMessage('cone', 0, 'webhook')]);
+    await flushDebounce();
+    await lick.done;
+    await vi.advanceTimersByTimeAsync(SCOOP_DEFERRAL_STARVATION_MS);
+    await router.processScoopQueue('cone');
+
+    busy.value = false;
+    await router.flushOnIdle('cone');
+
+    expect(sends).toHaveLength(1);
+    expect(backpressure.map(({ count }) => count)).toEqual([1, 0]);
+    expect(backpressure[1]).toEqual({
+      jid: 'cone',
+      count: 0,
+      waitingMs: SCOOP_DEFERRAL_STARVATION_MS,
+    });
   });
 
   const cleanupCases: Array<[string, (router: ScoopMessageRouter) => void | Promise<void>]> = [
