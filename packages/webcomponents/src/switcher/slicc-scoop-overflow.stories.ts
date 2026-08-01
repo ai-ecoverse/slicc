@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import '../pill/slicc-pill.js';
+import { h } from '../internal/dom.js';
 import type { SliccScoopOverflow, SliccScoopOverflowItem } from './slicc-scoop-overflow.js';
 import './slicc-scoop-overflow.js';
 
@@ -19,7 +19,7 @@ const SCOOPS: SliccScoopOverflowItem[] = [
 ];
 
 /**
- * Mount inside a faux nav band with a couple of visible header chips to the
+ * Mount inside a faux nav band with a couple of visible header segments to the
  * left, so the status-grid trigger + dropdown read in their real context (matching the
  * prototype's `.switcher` / `.switcher-more` layout).
  */
@@ -30,18 +30,30 @@ function buildOverflow({ items = SCOOPS, open }: OverflowArgs): HTMLElement {
     'background:var(--canvas);border:1px solid var(--line);border-radius:12px;' +
     'font-family:var(--ui);width:min-content;';
 
-  // Two visible header chips to anchor the overflow trigger beside them.
+  // Two visible segments anchor the overflow trigger beside the popup's vertical rows.
   for (const s of [
-    { id: 'cone', label: 'sliccy', type: 'cone' as const, color: '#b07823', active: true },
+    { id: 'cone', label: 'sliccy', color: '#b07823', active: true },
     { id: 'researcher', label: 'researcher', color: '#06b6d4' },
   ]) {
-    const pill = document.createElement('slicc-pill');
-    pill.setAttribute('type', s.type ?? 'scoop');
-    pill.setAttribute('label', s.label);
-    pill.setAttribute('eyes', 'none');
-    if (s.color) pill.setAttribute('color', s.color);
-    if (s.active) pill.setAttribute('active', '');
-    nav.appendChild(pill);
+    nav.append(
+      h(
+        'button',
+        {
+          type: 'button',
+          role: 'tab',
+          'aria-selected': String(Boolean(s.active)),
+          style:
+            'display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;' +
+            'color:var(--txt-2);font:500 11px/1 var(--ui);border:0;border-radius:6px;' +
+            `background:${s.active ? 'var(--ghost)' : 'transparent'}`,
+        },
+        h('span', {
+          'aria-hidden': 'true',
+          style: `width:7px;height:7px;border-radius:50%;background:${s.color}`,
+        }),
+        s.label
+      )
+    );
   }
 
   const el = document.createElement('slicc-scoop-overflow') as SliccScoopOverflow;
@@ -80,7 +92,10 @@ export const Hidden: Story = { args: { items: [] } };
 
 /** A single overflowed scoop. */
 export const SingleItem: Story = {
-  args: { open: true, items: [{ id: 'designer', label: 'designer', color: '#8b5cf6' }] },
+  args: {
+    open: true,
+    items: [{ id: 'designer', label: 'designer', color: '#8b5cf6', state: 'idle', fill: 18 }],
+  },
 };
 
 /** A long overflow list demonstrating the vertical stacking. */
@@ -105,6 +120,7 @@ export const ManyItems: Story = {
 /** Above nine hidden scoops, severity sorting preserves eight dots and reserves cell 9 for +. */
 export const MoreThanNine: Story = {
   args: {
+    open: true,
     items: [
       ...SCOOPS,
       { id: 'writer', state: 'working', fill: 34 },
@@ -124,10 +140,8 @@ export const Dark: Story = {
 };
 
 /**
- * Narrow / mobile viewport — pick the mobile viewport from the toolbar. A
- * `<slicc-pill>` compacts to icon-only at ≤560px by default, but the overflow
- * dropdown stacks the chips column-wise with ample horizontal room, so it keeps
- * them in their WIDE, labeled form here (the redundant hover tip is suppressed).
+ * Narrow / mobile viewport — the popup keeps the same full-width vertical rows,
+ * including each status glyph, label, and state/fullness readout.
  */
 export const Narrow: Story = {
   args: { open: true },
