@@ -218,6 +218,10 @@ jobs:
           APPLE_DISTRIBUTION_CERT_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
           APPLE_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
           APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          # Repo variable, not a secret: set to 1 to archive the iOS build
+          # WITHOUT the iCloud KVS entitlement while the App Store profile
+          # lacks the iCloud capability (see package-and-upload-testflight.sh).
+          SLICC_IOS_NO_ICLOUD: ${{ vars.SLICC_IOS_NO_ICLOUD }}
         run: npx semantic-release
 
       - name: Cleanup keychain

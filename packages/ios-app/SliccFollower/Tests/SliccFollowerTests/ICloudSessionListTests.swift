@@ -88,6 +88,25 @@ final class ICloudSessionListTests: XCTestCase {
         XCTAssertNil(UITestHooks.sessionsFixtureBackend())
     }
 
+    // MARK: - Discovered-session connect path
+
+    /// The security contract of tap-to-join: the secret-bearing URL must not
+    /// surface in the Join URL field or the visible Recent URLs history.
+    @MainActor
+    func testDiscoveredSessionConnectLeavesManualSurfacesUntouched() {
+        let state = AppState()
+        defer { state.disconnect() }
+        let secret = "http://127.0.0.1:1/join/discovered.secret"
+
+        state.connectToDiscoveredSession(joinUrl: secret)
+
+        XCTAssertEqual(state.connectionState, .connecting)
+        XCTAssertEqual(state.joinUrl, "", "The Join URL field must stay empty")
+        XCTAssertFalse(
+            state.joinUrlHistory.contains(secret),
+            "A discovered URL must not enter the visible history")
+    }
+
     // MARK: - Helpers
 
     private func makeSession(

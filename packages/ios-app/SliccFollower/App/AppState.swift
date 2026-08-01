@@ -209,15 +209,34 @@ class AppState: ObservableObject {
 
     // MARK: - Connection Lifecycle
 
+    /// The URL of the session currently being dialed. Manual connects copy it
+    /// from the Join URL field; discovered sessions set it directly so the
+    /// secret-bearing URL never surfaces in the field, the persisted setting,
+    /// or the visible history. Reconnects reuse it.
+    private var activeJoinUrl: String = ""
+
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
-        let trimmed = joinUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        connect(to: joinUrl, rememberInHistory: true)
+    }
+
+    /// Join an iCloud-discovered session. The URL stays out of the Join URL
+    /// field, the `joinUrl` setting, and the Recent URLs list — a discovered
+    /// session is rediscoverable from iCloud, so nothing needs to remember
+    /// (or display) its secret.
+    func connectToDiscoveredSession(joinUrl url: String) {
+        connect(to: url, rememberInHistory: false)
+    }
+
+    private func connect(to rawUrl: String, rememberInHistory: Bool) {
+        let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
         guard connectionState != .connecting else { return }
 
         connectionState = .connecting
         lastError = nil
-        addToHistory(joinUrl)
+        if rememberInHistory { addToHistory(trimmed) }
+        activeJoinUrl = trimmed
 
         // Tear down any previous connection first.
         tearDown()
@@ -1250,9 +1269,9 @@ class AppState: ObservableObject {
             // moves us out of `.reconnecting`; abandon the budget silently.
             guard connectionState == .reconnecting else { return }
 
-            connect()
+            connect(to: activeJoinUrl, rememberInHistory: false)
 
-            // `connect()` drives its own async signaling; wait for it to settle
+            // `connect(to:)` drives its own async signaling; wait for it to settle
             // before deciding whether this attempt earned another.
             await connectTask?.value
             if Task.isCancelled { return }

@@ -95,7 +95,8 @@ Payload fields decode _and_ render. Deliberate divergences from the web:
 `AppState.sessionStore` is a read-only `TraySessionSyncStore` from
 **`packages/swift-traysession`** (the launcher publishes; the phone only
 joins). `SettingsView` lists sessions grouped by device (`ICloudSessionList`);
-a tap threads `joinUrl` into `connect()`; the empty state distinguishes
+a tap joins via `connectToDiscoveredSession` — never the Join URL field or
+visible history; the empty state distinguishes
 signed-out from no-published-sessions. The entitlement's KVS id
 (`S8LB56P782.ai.sliccy.trays`) MUST match macOS releases. Unprovisioned builds
 degrade to an empty local cache; `SLICC_IOS_NO_ICLOUD=1` archives TestFlight
