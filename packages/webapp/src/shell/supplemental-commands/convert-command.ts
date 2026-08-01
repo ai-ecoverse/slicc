@@ -87,6 +87,7 @@ interface AppendExpression extends ExpressionBase {
   kind: 'append';
   direction: 'horizontal' | 'vertical';
   children: ImageExpression[];
+  appendSettings: { background?: string; gravity?: string };
 }
 
 type ImageExpression = InputExpression | AppendExpression;
@@ -212,10 +213,12 @@ class ConvertArgParser {
 
   private append(expressions: ImageExpression[], token: '+append' | '-append'): void {
     if (expressions.length < 2) throw new Error(`${token} requires at least two images`);
+    const children = [...expressions];
     expressions.splice(0, expressions.length, {
       kind: 'append',
       direction: token === '+append' ? 'horizontal' : 'vertical',
-      children: [...expressions],
+      children,
+      appendSettings: collectAppendSettings(children),
       operations: [],
     });
     this.index++;
@@ -261,6 +264,17 @@ class ConvertArgParser {
     if (expressions.length > 1) throw new Error('multiple input files require +append or -append');
     return expressions[0];
   }
+}
+
+function collectAppendSettings(expressions: ImageExpression[]): AppendExpression['appendSettings'] {
+  const settings: AppendExpression['appendSettings'] = {};
+  for (const expression of expressions) {
+    for (const operation of expression.operations) {
+      if (operation.type === 'background') settings.background = operation.value;
+      if (operation.type === 'gravity') settings.gravity = operation.value;
+    }
+  }
+  return settings;
 }
 
 /**
@@ -353,6 +367,13 @@ const GRAVITY_NAMES: Record<string, string> = {
   south: 'South',
   southeast: 'Southeast',
 };
+
+function resolveGravity(magick: MagickModule, value: string): number {
+  const gravityName = GRAVITY_NAMES[value.toLowerCase()];
+  const gravity = gravityName ? magick.Gravity[gravityName] : undefined;
+  if (gravity === undefined) throw new Error(`Invalid gravity: ${value}`);
+  return gravity;
+}
 
 const SIMPLE_OPERATIONS: Partial<Record<OperationType, (image: MagickImage) => void>> = {
   'auto-orient': (image) => image.autoOrient(),
@@ -487,10 +508,7 @@ function applyOperation(
       image.sharpen(...parseRadiusSigma(op.value, 'sharpen'));
       return;
     case 'gravity': {
-      const gravityName = GRAVITY_NAMES[op.value.toLowerCase()];
-      const gravity = gravityName ? magick.Gravity[gravityName] : undefined;
-      if (gravity === undefined) throw new Error(`Invalid gravity: ${op.value}`);
-      state.gravity = gravity;
+      state.gravity = resolveGravity(magick, op.value);
       return;
     }
     case 'fill':
@@ -510,6 +528,28 @@ function applyOperation(
     case 'annotate':
       applyAnnotation(magick, image, op, state);
       return;
+  }
+}
+
+function prepareAppendImages(
+  magick: MagickModule,
+  expression: AppendExpression,
+  images: MagickImage[]
+): void {
+  const { background, gravity: gravityName } = expression.appendSettings;
+  if (background === undefined && gravityName === undefined) return;
+  const gravity = gravityName === undefined ? undefined : resolveGravity(magick, gravityName);
+  const backgroundColor = background === undefined ? undefined : new magick.MagickColor(background);
+  const maxWidth = Math.max(...images.map((image) => image.width));
+  const maxHeight = Math.max(...images.map((image) => image.height));
+  for (const image of images) {
+    const width = expression.direction === 'vertical' ? maxWidth : image.width;
+    const height = expression.direction === 'horizontal' ? maxHeight : image.height;
+    if (width === image.width && height === image.height) continue;
+    const geometry = new magick.MagickGeometry(width, height);
+    if (gravity !== undefined && backgroundColor) image.extent(geometry, gravity, backgroundColor);
+    else if (gravity !== undefined) image.extent(geometry, gravity);
+    else if (backgroundColor) image.extent(geometry, backgroundColor);
   }
 }
 
@@ -573,6 +613,7 @@ async function renderExpression(
   }
 
   await renderChildren(magick, expression, inputData, async (images) => {
+    prepareAppendImages(magick, expression, images);
     const collection = magick.MagickImageCollection.create();
     collection.push(...images);
     const append =

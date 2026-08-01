@@ -220,7 +220,7 @@ describe('convert image composition', () => {
     vi.unstubAllGlobals();
   });
 
-  function installCompositionMock() {
+  function installCompositionMock(imageSizes: Array<{ width: number; height: number }> = []) {
     const appendDirections: string[] = [];
     const drawCalls: Array<{ image: string; steps: string[] }> = [];
     const operationCalls: string[] = [];
@@ -232,43 +232,53 @@ describe('convert image composition', () => {
         readonly height?: number
       ) {}
     }
-    const createImage = (name: string) => ({
-      name,
-      width: 160,
-      height: 284,
-      quality: 0,
-      set backgroundColor(color: { value: string }) {
-        operationCalls.push(`background:${color.value}`);
-      },
-      set colorSpace(value: number) {
-        operationCalls.push(`colorspace:${value}`);
-      },
-      alpha: (value: number) => operationCalls.push(`alpha:${value}`),
-      autoGamma: () => operationCalls.push('auto-gamma'),
-      autoLevel: () => operationCalls.push('auto-level'),
-      autoOrient: () => operationCalls.push('auto-orient'),
-      blur: (radius: number, sigma: number) => operationCalls.push(`blur:${radius}x${sigma}`),
-      resize: (geometry: MockGeometry) => operationCalls.push(`resize:${geometry.value}`),
-      rotate: vi.fn(),
-      crop: (geometry: MockGeometry, gravity?: number) =>
-        operationCalls.push(`crop:${geometry.value}:${gravity ?? 'none'}`),
-      extent: (geometry: MockGeometry, ...args: Array<number | { value: string }>) =>
-        operationCalls.push(
-          `extent:${geometry.value}:${args.map((arg) => (typeof arg === 'number' ? arg : arg.value)).join(':')}`
-        ),
-      flip: () => operationCalls.push('flip'),
-      flop: () => operationCalls.push('flop'),
-      negate: () => operationCalls.push('negate'),
-      normalize: () => operationCalls.push('normalize'),
-      sharpen: (radius: number, sigma: number) => operationCalls.push(`sharpen:${radius}x${sigma}`),
-      strip: () => operationCalls.push('strip'),
-      thumbnail: (geometry: MockGeometry) => operationCalls.push(`thumbnail:${geometry.value}`),
-      transparent: (color: { value: string }) => operationCalls.push(`transparent:${color.value}`),
-      trim: () => operationCalls.push('trim'),
-      write: vi.fn((_format: string, callback: (data: Uint8Array) => void) => {
-        callback(new Uint8Array([1, 2, 3]));
-      }),
-    });
+    const createImage = (name: string, width = 160, height = 284) => {
+      const image = {
+        name,
+        width,
+        height,
+        quality: 0,
+        set backgroundColor(color: { value: string }) {
+          operationCalls.push(`background:${color.value}`);
+        },
+        set colorSpace(value: number) {
+          operationCalls.push(`colorspace:${value}`);
+        },
+        alpha: (value: number) => operationCalls.push(`alpha:${value}`),
+        autoGamma: () => operationCalls.push('auto-gamma'),
+        autoLevel: () => operationCalls.push('auto-level'),
+        autoOrient: () => operationCalls.push('auto-orient'),
+        blur: (radius: number, sigma: number) => operationCalls.push(`blur:${radius}x${sigma}`),
+        resize: (geometry: MockGeometry) => operationCalls.push(`resize:${geometry.value}`),
+        rotate: vi.fn(),
+        crop: (geometry: MockGeometry, gravity?: number) =>
+          operationCalls.push(`crop:${geometry.value}:${gravity ?? 'none'}`),
+        extent: (geometry: MockGeometry, ...args: Array<number | { value: string }>) => {
+          if (typeof geometry.value === 'number' && geometry.height !== undefined) {
+            image.width = geometry.value;
+            image.height = geometry.height;
+          }
+          operationCalls.push(
+            `extent:${geometry.value}:${args.map((arg) => (typeof arg === 'number' ? arg : arg.value)).join(':')}`
+          );
+        },
+        flip: () => operationCalls.push('flip'),
+        flop: () => operationCalls.push('flop'),
+        negate: () => operationCalls.push('negate'),
+        normalize: () => operationCalls.push('normalize'),
+        sharpen: (radius: number, sigma: number) =>
+          operationCalls.push(`sharpen:${radius}x${sigma}`),
+        strip: () => operationCalls.push('strip'),
+        thumbnail: (geometry: MockGeometry) => operationCalls.push(`thumbnail:${geometry.value}`),
+        transparent: (color: { value: string }) =>
+          operationCalls.push(`transparent:${color.value}`),
+        trim: () => operationCalls.push('trim'),
+        write: vi.fn((_format: string, callback: (data: Uint8Array) => void) => {
+          callback(new Uint8Array([1, 2, 3]));
+        }),
+      };
+      return image;
+    };
     class MockDrawables {
       steps: string[] = [];
       gravity(value: number) {
@@ -301,7 +311,9 @@ describe('convert image composition', () => {
       }
     }
     const read = vi.fn(async (_bytes: Uint8Array, callback: (image: unknown) => Promise<void>) => {
-      await callback(createImage(`input-${imageNumber++}`));
+      const index = imageNumber++;
+      const size = imageSizes[index];
+      await callback(createImage(`input-${index}`, size?.width, size?.height));
     });
     vi.spyOn(magickWasm, 'getMagick').mockResolvedValue({
       ImageMagick: { read },
@@ -379,6 +391,20 @@ describe('convert image composition', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(appendDirections).toEqual(['horizontal', 'horizontal', 'vertical']);
+  });
+
+  it('uses background and gravity when padding mixed-size append inputs', async () => {
+    const { operationCalls } = installCompositionMock([
+      { width: 100, height: 50 },
+      { width: 80, height: 100 },
+    ]);
+    const result = await createConvertCommand().execute(
+      ['a.png', 'b.png', '-background', 'white', '-gravity', 'center', '+append', 'output.png'],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(operationCalls).toContain('extent:100:5:white');
   });
 
   it('retries annotation font loading after a transient failure', async () => {
