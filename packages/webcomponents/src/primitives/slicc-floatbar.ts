@@ -28,7 +28,7 @@ function formatRate(raw: string | null): string {
   return `${formatSpent(raw) ?? '$0.00'}/h`;
 }
 
-const NARROW_QUERY = '(max-width: 560px)';
+const DETAIL_CUTOFF = 720;
 
 const STYLE = `
 :host {
@@ -66,6 +66,7 @@ const STYLE = `
 }
 
 .label { white-space: nowrap; }
+.detail { white-space: nowrap; }
 
 /* thin divider between the label and the cost segment */
 .sep {
@@ -92,8 +93,8 @@ const STYLE = `
 }
 
 /* Hover/focus tip surfacing the collapsed label + rate + connection state.
-   Hidden in the wide pill (the full label already shows everything); only the
-   narrow square badge reveals it, mirroring slicc-pill's dark .tip convention.
+   Hidden in the wide pill (the full label already shows everything); each
+   progressively collapsed form reveals it with a dark tooltip surface.
    Decorative (aria-hidden); the accessible name rides the host title attribute. */
 .tip {
   position: absolute;
@@ -116,12 +117,23 @@ const STYLE = `
   display: none;
 }
 
-/* Narrow / extension-sidebar: collapse to just the connection status light —
-   the runtime label, its divider, and the cost segment all drop, and the host
-   shrinks to a square (width == height == --ctl-h) so it reads as a compact
-   round badge instead of an elongated upright pill, never crowding the
-   switcher / avatar / theme toggle. */
-@media (max-width: 560px) {
+/* Yield to the tabs in three stages, based on the nav's actual inline size:
+   auxiliary tray/follower detail, then spend, then the runtime name. */
+@container slicc-nav (max-width: 720px) {
+  .detail { display: none; }
+  :host(:hover) .tip,
+  :host(:focus-within) .tip {
+    display: block;
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@container slicc-nav (max-width: 560px) {
+  .sep, .spent { display: none; }
+}
+
+@container slicc-nav (max-width: 420px) {
   :host {
     width: var(--ctl-h, 30px);
     aspect-ratio: 1 / 1;
@@ -129,13 +141,7 @@ const STYLE = `
     gap: 0;
     justify-content: center;
   }
-  .label, .sep, .spent { display: none; }
-  .tip { display: block; }
-  :host(:hover) .tip,
-  :host(:focus-within) .tip {
-    opacity: 1;
-    transform: translateX(-50%);
-  }
+  .label { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -170,10 +176,7 @@ export class SliccFloatbar extends HTMLElement {
   static readonly observedAttributes = ['label', 'linked', 'online', 'rate', 'spent'];
 
   readonly #root: ShadowRoot;
-  readonly #narrow: MediaQueryList | null;
-  readonly #onNarrowChange = (): void => {
-    if (this.isConnected) this.#syncTitle();
-  };
+  #resizeObserver: ResizeObserver | null = null;
   #overlay: SliccCostOverlay | null = null;
   #costModels: CostOverlayModel[] = [];
   #costScoops: CostOverlayScoop[] = [];
@@ -183,19 +186,20 @@ export class SliccFloatbar extends HTMLElement {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
     this.#root.adoptedStyleSheets = [SHEET];
-    this.#narrow =
-      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-        ? window.matchMedia(NARROW_QUERY)
-        : null;
   }
 
   connectedCallback(): void {
-    this.#narrow?.addEventListener('change', this.#onNarrowChange);
     this.#render();
+    const nav = this.closest('slicc-nav');
+    if (nav && typeof ResizeObserver !== 'undefined') {
+      this.#resizeObserver = new ResizeObserver(() => this.#syncTitle());
+      this.#resizeObserver.observe(nav);
+    }
   }
 
   disconnectedCallback(): void {
-    this.#narrow?.removeEventListener('change', this.#onNarrowChange);
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = null;
     clearTimeout(this.#hideTimer);
   }
 
@@ -284,13 +288,16 @@ export class SliccFloatbar extends HTMLElement {
     return parts.join(' · ');
   }
 
-  /**
-   * Mirror the tip text onto the host `title` only while collapsed, giving the
-   * narrow badge an accessible (keyboard / AT) tooltip without duplicating the
-   * already-visible text in the wide pill.
-   */
+  /** Mirror the full tip onto `title` whenever any detail has been collapsed. */
   #syncTitle(): void {
-    if (this.#narrow?.matches) this.setAttribute('title', this.#tipText());
+    const nav = this.closest('slicc-nav');
+    const style = nav ? getComputedStyle(nav) : null;
+    const inlineSize = nav
+      ? nav.clientWidth -
+        Number.parseFloat(style?.paddingLeft ?? '0') -
+        Number.parseFloat(style?.paddingRight ?? '0')
+      : Infinity;
+    if (inlineSize <= DETAIL_CUTOFF) this.setAttribute('title', this.#tipText());
     else this.removeAttribute('title');
   }
 
@@ -299,7 +306,12 @@ export class SliccFloatbar extends HTMLElement {
 
     if (this.online) nodes.push(h('span', { class: 'fdot', part: 'dot' }));
 
-    nodes.push(h('span', { class: 'label', part: 'label' }, h('slot', null, this.label)));
+    const [runtime, ...detail] = this.label.split(' · ');
+    const fallback = [h('span', { class: 'runtime' }, runtime)];
+    if (detail.length > 0) {
+      fallback.push(h('span', { class: 'detail' }, ` · ${detail.join(' · ')}`));
+    }
+    nodes.push(h('span', { class: 'label', part: 'label' }, h('slot', null, ...fallback)));
 
     nodes.push(h('span', { class: 'sep', part: 'sep' }));
     const spentEl = h(

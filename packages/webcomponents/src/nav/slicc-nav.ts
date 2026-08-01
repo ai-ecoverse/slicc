@@ -28,6 +28,7 @@ const STYLE = `
 .slicc-nav {
   display: flex;
   align-items: center;
+  container: slicc-nav / inline-size;
   gap: 14px;
   box-sizing: border-box;
   padding: 0 9px 0 24px;
@@ -49,11 +50,10 @@ const STYLE = `
 /* The tabs yield before the fixed controls, but never below the focused avatar
    + gap + 39px overflow trigger footprint. */
 .slicc-nav > slicc-agent-tabs { flex: 1 1 auto; min-width: 73px; }
-/* Narrow / extension-sidebar: tighten the bar's padding + gap so the
-   overflowing agent tabs and the right-side controls all still fit. */
-@media (max-width: 560px) {
-  .slicc-nav { gap: 8px; padding: 0 10px; }
-}
+/* Narrow / extension-sidebar: key layout tightening to the nav's available
+   width, not the viewport, so embedded and Storybook frames behave like the
+   real sidebar. */
+.slicc-nav[data-narrow] { gap: 8px; padding: 0 10px; }
 `;
 
 const STYLE_ID = 'slicc-nav-style';
@@ -104,6 +104,7 @@ export class SliccNav extends HTMLElement {
   static readonly observedAttributes = ['accent'];
 
   #built = false;
+  #resizeObserver: ResizeObserver | null = null;
 
   connectedCallback(): void {
     ensureNavStyle(this.ownerDocument);
@@ -111,6 +112,16 @@ export class SliccNav extends HTMLElement {
     this.setAttribute('part', 'bar');
     this.#build();
     this.#applyAccent(this.getAttribute('accent'));
+    if (typeof ResizeObserver !== 'undefined') {
+      this.#resizeObserver = new ResizeObserver(() => this.#syncNarrow());
+      this.#resizeObserver.observe(this);
+    }
+    this.#syncNarrow();
+  }
+
+  disconnectedCallback(): void {
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = null;
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -176,6 +187,11 @@ export class SliccNav extends HTMLElement {
   #applyAccent(value: string | null): void {
     if (value == null || value.trim() === '') this.style.removeProperty('--ctx');
     else this.style.setProperty('--ctx', value);
+  }
+
+  /** Reflect the host's actual available width for self-targeting narrow CSS. */
+  #syncNarrow(): void {
+    this.toggleAttribute('data-narrow', this.getBoundingClientRect().width <= 560);
   }
 }
 

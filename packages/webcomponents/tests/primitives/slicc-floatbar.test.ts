@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import '../../src/nav/slicc-nav.js';
 import { SliccFloatbar } from '../../src/primitives/slicc-floatbar.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
@@ -248,85 +249,76 @@ describe('slicc-floatbar', () => {
     });
   });
 
-  describe('narrow / extension-sidebar', () => {
-    const narrowMedia = (el: SliccFloatbar): CSSMediaRule => {
-      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
-      const media = Array.from(sheet.cssRules).find(
-        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
-      );
-      expect(media).toBeDefined();
-      return media as CSSMediaRule;
-    };
-
-    it('collapses to just the status light below 560px (label, divider + cost all hidden)', () => {
-      const el = document.createElement('slicc-floatbar');
-      document.body.appendChild(el);
-      const hideRule = Array.from(narrowMedia(el).cssRules).find(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.spent')
-      );
-      // One rule hides .label, .sep AND .spent — leaving only the .fdot dot.
-      expect(hideRule?.style.display).toBe('none');
-      expect(hideRule?.selectorText).toContain('.label');
-      expect(hideRule?.selectorText).toContain('.spent');
-    });
-
-    it('shrinks the host to a square badge below 560px (width == height, not a tall pill)', () => {
-      const el = document.createElement('slicc-floatbar');
-      document.body.appendChild(el);
-      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
-
-      // The wide-view :host carries the control height but no explicit width, so
-      // it grows to fit its content (an elongated pill in the dot-only state).
-      const baseHost = Array.from(sheet.cssRules).find(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ':host'
-      );
-      const baseHeight = baseHost?.style.getPropertyValue('height').trim();
-      expect(baseHeight).toBe('var(--ctl-h, 30px)');
-      expect(baseHost?.style.getPropertyValue('width').trim()).toBe('');
-
-      // The narrow :host pins width to that same height token (and reinforces it
-      // with aspect-ratio), so the rendered box is square — a round badge.
-      const narrowHost = Array.from(narrowMedia(el).cssRules).find(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === ':host'
-      );
-      const narrowWidth = narrowHost?.style.getPropertyValue('width').trim();
-      expect(narrowWidth).toBe('var(--ctl-h, 30px)');
-      // width longhand matches the base height longhand → square (1:1) box.
-      expect(narrowWidth).toBe(baseHeight);
-      expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
-    });
-  });
-
-  describe('the narrow-view tooltip', () => {
-    const narrowMedia = (el: SliccFloatbar): CSSMediaRule => {
-      const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
-      const media = Array.from(sheet.cssRules).find(
-        (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
-      );
-      expect(media).toBeDefined();
-      return media as CSSMediaRule;
-    };
-
-    const fakeMatchMedia =
-      (matches: boolean) =>
-      (query: string): MediaQueryList =>
-        ({
-          matches,
-          media: query,
-          onchange: null,
-          addEventListener: () => undefined,
-          removeEventListener: () => undefined,
-          addListener: () => undefined,
-          removeListener: () => undefined,
-          dispatchEvent: () => false,
-        }) as unknown as MediaQueryList;
-
-    it('renders a decorative tip part derived from the label, rate context, and state', () => {
-      const el = document.createElement('slicc-floatbar');
+  describe('progressive available-space collapse', () => {
+    const mountAt = (width: number): SliccFloatbar => {
+      const nav = document.createElement('slicc-nav');
+      nav.style.width = `${width}px`;
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
       el.label = 'CLI · tray · 1 follower';
       el.online = true;
       el.rate = '2.41';
-      document.body.appendChild(el);
+      nav.appendChild(el);
+      document.body.appendChild(nav);
+      return el;
+    };
+
+    it('shows every segment in a wide nav', () => {
+      const el = mountAt(980);
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.detail') as Element).display).not.toBe(
+        'none'
+      );
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.spent') as Element).display).not.toBe(
+        'none'
+      );
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.tip') as Element).display).toBe(
+        'none'
+      );
+      expect(el.hasAttribute('title')).toBe(false);
+    });
+
+    it('drops tray and follower before cost and runtime at mid width', () => {
+      const el = mountAt(640);
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.detail') as Element).display).toBe(
+        'none'
+      );
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.spent') as Element).display).not.toBe(
+        'none'
+      );
+      expect(
+        getComputedStyle(el.shadowRoot?.querySelector('.runtime') as Element).display
+      ).not.toBe('none');
+    });
+
+    it('drops cost before the runtime name when space tightens further', () => {
+      const el = mountAt(500);
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.detail') as Element).display).toBe(
+        'none'
+      );
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.spent') as Element).display).toBe(
+        'none'
+      );
+      expect(
+        getComputedStyle(el.shadowRoot?.querySelector('.runtime') as Element).display
+      ).not.toBe('none');
+    });
+
+    it('keeps only the status light in a square badge at 360px', () => {
+      const el = mountAt(360);
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.label') as Element).display).toBe(
+        'none'
+      );
+      expect(el.getBoundingClientRect().width).toBeCloseTo(30, 1);
+      expect(el.getBoundingClientRect().height).toBeCloseTo(30, 1);
+    });
+
+    it('parses the label into a persistent runtime and droppable detail', () => {
+      const el = mountAt(980);
+      expect(el.shadowRoot?.querySelector('.runtime')?.textContent).toBe('CLI');
+      expect(el.shadowRoot?.querySelector('.detail')?.textContent).toBe(' · tray · 1 follower');
+    });
+
+    it('renders a decorative tip part derived from the label, rate context, and state', () => {
+      const el = mountAt(640);
 
       const tip = el.shadowRoot?.querySelector('.tip') as HTMLElement;
       expect(tip).not.toBeNull();
@@ -338,6 +330,20 @@ describe('slicc-floatbar', () => {
       );
     });
 
+    it('keeps the title threshold aligned with the container content box', () => {
+      const collapsed = mountAt(750);
+      expect(
+        getComputedStyle(collapsed.shadowRoot?.querySelector('.detail') as Element).display
+      ).toBe('none');
+      expect(collapsed.hasAttribute('title')).toBe(true);
+
+      const wide = mountAt(760);
+      expect(
+        getComputedStyle(wide.shadowRoot?.querySelector('.detail') as Element).display
+      ).not.toBe('none');
+      expect(wide.hasAttribute('title')).toBe(false);
+    });
+
     it('reflects the offline state and the zero rate when unset', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
@@ -346,55 +352,40 @@ describe('slicc-floatbar', () => {
       );
     });
 
-    it('hides the tip in the wide pill and reveals it only below 560px', () => {
-      const el = document.createElement('slicc-floatbar');
-      document.body.appendChild(el);
+    it('keeps the tooltip out of layout until hover or focus', () => {
+      const el = mountAt(640);
+      expect(getComputedStyle(el.shadowRoot?.querySelector('.tip') as Element).display).toBe(
+        'none'
+      );
+      expect(el.shadowRoot?.querySelector('.tip')?.textContent).toContain('tray · 1 follower');
       const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
-
-      // Wide view: the base .tip rule keeps it out of the layout (display longhand).
-      const baseTip = Array.from(sheet.cssRules).find(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText === '.tip'
-      );
-      expect(baseTip?.style.getPropertyValue('display').trim()).toBe('none');
-
-      // Narrow view: a .tip rule flips display to block while the square form holds.
-      const narrowRules = Array.from(narrowMedia(el).cssRules).filter(
-        (r): r is CSSStyleRule => r instanceof CSSStyleRule
-      );
-      const tipShow = narrowRules.find((r) => r.selectorText === '.tip');
-      expect(tipShow?.style.getPropertyValue('display').trim()).toBe('block');
-      const narrowHost = narrowRules.find((r) => r.selectorText === ':host');
-      expect(narrowHost?.style.getPropertyValue('width').trim()).toBe('var(--ctl-h, 30px)');
-      expect(narrowHost?.style.getPropertyValue('aspect-ratio').trim()).toBe('1 / 1');
+      expect(
+        Array.from(sheet.cssRules).some(
+          (rule) =>
+            rule.cssText.includes(':host(:hover) .tip') && rule.cssText.includes('display: block')
+        )
+      ).toBe(true);
     });
 
     it('exposes the tip text as an accessible host title only when collapsed', () => {
-      const original = window.matchMedia;
-      try {
-        window.matchMedia = fakeMatchMedia(true) as typeof window.matchMedia;
-        const el = document.createElement('slicc-floatbar');
-        el.online = true;
-        el.rate = '2.41';
-        document.body.appendChild(el);
-        expect(el.getAttribute('title')).toBe(
-          'CLI float · $2.41/h · recency-weighted session avg · online'
-        );
-      } finally {
-        window.matchMedia = original;
-      }
+      const el = mountAt(640);
+      expect(el.getAttribute('title')).toBe(
+        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+      );
     });
 
     it('omits the host title in the wide pill (no redundant tooltip)', () => {
-      const original = window.matchMedia;
-      try {
-        window.matchMedia = fakeMatchMedia(false) as typeof window.matchMedia;
-        const el = document.createElement('slicc-floatbar');
-        el.online = true;
-        document.body.appendChild(el);
-        expect(el.hasAttribute('title')).toBe(false);
-      } finally {
-        window.matchMedia = original;
-      }
+      expect(mountAt(980).hasAttribute('title')).toBe(false);
+    });
+
+    it('updates the accessible title when available nav width changes', async () => {
+      const el = mountAt(980);
+      const nav = el.closest('slicc-nav') as HTMLElement;
+      nav.style.width = '640px';
+      await vi.waitFor(() => expect(el.getAttribute('title')).toContain('tray · 1 follower'));
+
+      nav.style.width = '980px';
+      await vi.waitFor(() => expect(el.hasAttribute('title')).toBe(false));
     });
   });
 
