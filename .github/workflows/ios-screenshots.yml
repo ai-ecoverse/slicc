@@ -1,0 +1,359 @@
+name: iOS Screenshots
+
+# On PRs touching the iOS follower, capture a simulator screenshot of every
+# screen in packages/ios-app/screenshot-screens.json (deterministic leaderless
+# states reached via UITestHooks launch arguments — no taps, no leader),
+# upload them to the same Cloudflare R2 bucket the Storybook screenshots job
+# uses (or to a workflow artifact on fork PRs where secrets are unavailable),
+# and post/update a single sticky PR comment with the images inline.
+#
+# Unlike Storybook there is no per-screen diff mapping: the app is one
+# connected surface and the full set costs under two simulator-minutes, so
+# every registered screen runs on every ios-app PR.
+#
+# Required repository secrets (host PRs only — fork PRs gracefully degrade):
+#   CLOUDFLARE_API_TOKEN  R2 token with Object Read+Write on `slicc-pr-screenshots`.
+# Required repository variables (with sensible defaults if unset):
+#   CLOUDFLARE_ACCOUNT_ID  defaults to 155ec15a52a18a14801e04b019da5e5a (AEM Demo).
+#   R2_PUBLIC_BASE_URL     defaults to https://pub-e4170b327f03406f9831a6f393b96e05.r2.dev
+#   R2_BUCKET              defaults to slicc-pr-screenshots
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ios-screenshots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        with:
+          filters: |
+            ios:
+              - 'packages/ios-app/**'
+              - 'packages/swift-traysession/**'
+              - 'packages/dev-tools/tools/ios-screenshots*'
+              - '.github/workflows/ios-screenshots.yml'
+
+  screenshots:
+    needs: changes
+    if: needs.changes.outputs.ios == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || 'slicc-pr-screenshots' }}
+      R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://pub-e4170b327f03406f9831a6f393b96e05.r2.dev' }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # node_modules only for the pinned wrangler the R2 upload shells out to;
+      # the capture script itself is stdlib-only.
+      - run: npm ci
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+
+      - name: Build (Debug, simulator)
+        # Debug on purpose: the screen registry drives DEBUG-only UITestHooks
+        # launch arguments; a Release build would ignore them all.
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          xcodebuild build \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Capture screenshots
+        id: capture
+        run: |
+          set -euo pipefail
+          mkdir -p .ios-screenshots
+          node packages/dev-tools/tools/ios-screenshots.mjs \
+            --app=packages/ios-app/.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app \
+            --out=.ios-screenshots/out
+
+      - name: Check upload mode
+        id: mode
+        env:
+          R2_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "${R2_TOKEN:-}" ]; then
+            echo "mode=r2" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=artifact" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN not available (likely a fork PR); falling back to artifact upload."
+          fi
+
+      - name: Upload screenshots to Cloudflare R2
+        id: r2_upload
+        if: steps.mode.outputs.mode == 'r2'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          MANIFEST=.ios-screenshots/out/manifest.json
+          if [ ! -s "$MANIFEST" ]; then
+            echo "::warning::No manifest produced by capture script; skipping upload."
+            exit 0
+          fi
+          export PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
+          export R2_BUCKET
+
+          # Content-hash dedup, same scheme as storybook-screenshots: a hash
+          # already present in R2 skips the upload and only refreshes the
+          # per-PR reference.
+          node -e '
+            const fs = require("fs");
+            const { execSync } = require("child_process");
+            const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const shots = m.shots || [];
+
+            if (shots.length === 0) {
+              console.log("No screenshots to upload.");
+              fs.writeFileSync(".ios-screenshots/new-uploads.json", "[]");
+              process.exit(0);
+            }
+
+            const prefix = process.env.PREFIX;
+            const bucket = process.env.R2_BUCKET;
+            let newCount = 0;
+            let cachedCount = 0;
+            const newUploads = [];
+
+            for (const item of shots) {
+              const src = `.ios-screenshots/out/${item.file}`;
+              const key = `${prefix}/${item.file}`;
+              const hashKey = `hashes/${item.contentHash}`;
+
+              let exists = false;
+              try {
+                execSync(
+                  `npx wrangler r2 object get "${bucket}/${hashKey}" --remote > /dev/null 2>&1`,
+                  { stdio: "ignore" }
+                );
+                exists = true;
+              } catch (err) {
+                exists = false;
+              }
+
+              if (exists) {
+                console.log(`  ⊙ ${item.file} (cached, hash ${item.contentHash.slice(0, 8)}…)`);
+                execSync(
+                  `echo "${item.contentHash}" | npx wrangler r2 object put "${bucket}/${key}.ref" --pipe --content-type text/plain --remote`,
+                  { stdio: "inherit" }
+                );
+                cachedCount++;
+              } else {
+                console.log(`  ↑ ${item.file} -> r2://${bucket}/${key} (new, hash ${item.contentHash.slice(0, 8)}…)`);
+                execSync(
+                  `npx wrangler r2 object put "${bucket}/${key}" --file "${src}" --content-type image/png --remote`,
+                  { stdio: "inherit" }
+                );
+                execSync(
+                  `npx wrangler r2 object put "${bucket}/${hashKey}" --file "${src}" --content-type image/png --remote`,
+                  { stdio: "inherit" }
+                );
+                newCount++;
+                newUploads.push(item.file);
+              }
+            }
+
+            console.log(`\nSummary: ${newCount} new, ${cachedCount} cached (total ${shots.length})`);
+            fs.writeFileSync(".ios-screenshots/new-uploads.json", JSON.stringify(newUploads));
+          ' "$MANIFEST" || exit 1
+
+      - name: Upload screenshots as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-screenshots-${{ env.HEAD_SHA }}
+          path: .ios-screenshots/out/
+          if-no-files-found: ignore
+
+      - name: Post or update sticky PR comment
+        # Skip on fork PRs: GITHUB_TOKEN is read-only there and
+        # `issues.createComment` would 403. Fork PRs still get the
+        # workflow-artifact upload above.
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          UPLOAD_MODE: ${{ steps.mode.outputs.mode }}
+          R2_UPLOAD_OUTCOME: ${{ steps.r2_upload.outcome }}
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const MARKER = '<!-- ios-screenshots-comment -->';
+            const prNumber = Number(process.env.PR_NUMBER);
+            const sha = process.env.HEAD_SHA;
+            const shortSha = sha.slice(0, 7);
+            const initialMode = process.env.UPLOAD_MODE || 'artifact';
+            const r2Outcome = process.env.R2_UPLOAD_OUTCOME || '';
+            const r2Failed = initialMode === 'r2' && r2Outcome !== 'success';
+            const mode = r2Failed ? 'artifact' : initialMode;
+            const baseUrl = (process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            let manifest = null;
+            try {
+              manifest = JSON.parse(fs.readFileSync('.ios-screenshots/out/manifest.json', 'utf8'));
+            } catch (err) {
+              core.warning(`Could not read manifest: ${err.message}`);
+            }
+            const shots = manifest && Array.isArray(manifest.shots) ? manifest.shots : [];
+
+            let newUploads = [];
+            try {
+              if (fs.existsSync('.ios-screenshots/new-uploads.json')) {
+                newUploads = JSON.parse(fs.readFileSync('.ios-screenshots/new-uploads.json', 'utf8'));
+              } else if (mode === 'artifact') {
+                newUploads = shots.map((s) => s.file);
+              }
+            } catch (err) {
+              core.warning(`Could not read new uploads list: ${err.message}`);
+              newUploads = shots.map((s) => s.file);
+            }
+
+            const newShots = shots.filter((s) => newUploads.includes(s.file));
+            const cachedCount = shots.length - newShots.length;
+
+            const findPrior = async () => {
+              const { data: existing } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                per_page: 100,
+              });
+              return existing.find((c) => c.body && c.body.includes(MARKER));
+            };
+
+            // Capture (or a step before it) failed: say so explicitly rather
+            // than letting the zero-shot branch overwrite a prior comment
+            // with a misleading "no changed screenshots".
+            const captureOutcome = process.env.CAPTURE_OUTCOME || '';
+            if (captureOutcome !== 'success') {
+              const body = `${MARKER}\n> ⚠️ iOS screenshot capture did not run for \`${shortSha}\``
+                + ` (\`${captureOutcome || 'unknown'}\`) — see the [workflow run](${runUrl}).`
+                + ` Any screenshots below a previous push are stale.\n`;
+              const prior = await findPrior();
+              if (prior) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: prior.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body,
+                });
+              }
+              return;
+            }
+
+            // Zero NEW screenshots: shrink a prior comment to a one-line note
+            // so stale images don't linger; otherwise skip entirely.
+            if (newShots.length === 0) {
+              const prior = await findPrior();
+              if (!prior) {
+                core.info('No new screenshots and no prior sticky comment — skipping.');
+                return;
+              }
+              let body = `${MARKER}\n`;
+              body += `_All ${cachedCount} iOS screenshots for \`${shortSha}\` matched the previous upload byte-for-byte._\n`;
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prior.id,
+                body,
+              });
+              return;
+            }
+
+            const lines = [];
+            lines.push(MARKER);
+            lines.push('## 📱 iOS screenshots');
+            lines.push('');
+            const device = manifest && manifest.device ? ` · ${manifest.device}` : '';
+            const totalNote = cachedCount > 0 ? ` (${cachedCount} matched the previous upload, ${newShots.length} uploaded)` : '';
+            lines.push(`Commit \`${shortSha}\`${device} · ${newShots.length} ${newShots.length === 1 ? 'screen' : 'screens'}${totalNote}`);
+            lines.push('');
+
+            if (mode !== 'r2') {
+              if (r2Failed) {
+                lines.push(`> ⚠️ R2 upload did not succeed (\`${r2Outcome}\`); using artifact fallback.`);
+              } else {
+                lines.push(`> ℹ️ R2 upload skipped (no \`CLOUDFLARE_API_TOKEN\` available — typical for fork PRs).`);
+              }
+              lines.push(`> Download the PNGs from the [workflow run artifacts](${runUrl}).`);
+              lines.push('');
+            }
+
+            if (mode === 'r2') {
+              // Two screens per row; phone screenshots are tall.
+              for (let i = 0; i < newShots.length; i += 2) {
+                const pair = newShots.slice(i, i + 2);
+                lines.push(`| ${pair.map((s) => `\`${s.storyId}\``).join(' | ')} |`);
+                lines.push(`| ${pair.map(() => '---').join(' | ')} |`);
+                lines.push(
+                  `| ${pair
+                    .map((s) => `<img src="${baseUrl}/pr-${prNumber}/${sha}/${s.file}" alt="${s.storyId}" width="300">`)
+                    .join(' | ')} |`
+                );
+                lines.push('');
+              }
+            } else {
+              lines.push(newShots.map((s) => `\`${s.file}\``).join(', '));
+              lines.push('');
+            }
+
+            lines.push('---');
+            lines.push(`<sub>Generated by [\`ios-screenshots\`](${runUrl}) · updates in place on every push.</sub>`);
+
+            const body = lines.join('\n');
+            const prior = await findPrior();
+            if (prior) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prior.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
