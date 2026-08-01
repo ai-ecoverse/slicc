@@ -222,6 +222,7 @@ describe('convert image composition', () => {
 
   function installCompositionMock(imageSizes: Array<{ width: number; height: number }> = []) {
     const appendDirections: string[] = [];
+    const appendChildCounts: number[] = [];
     const drawCalls: Array<{ image: string; steps: string[] }> = [];
     const operationCalls: string[] = [];
     const addFont = vi.fn();
@@ -326,10 +327,12 @@ describe('convert image composition', () => {
           };
           collection.appendHorizontally = async (callback) => {
             appendDirections.push('horizontal');
+            appendChildCounts.push(collection.length);
             await callback(createImage('horizontal'));
           };
           collection.appendVertically = async (callback) => {
             appendDirections.push('vertical');
+            appendChildCounts.push(collection.length);
             await callback(createImage('vertical'));
           };
           collection.dispose = vi.fn();
@@ -353,7 +356,7 @@ describe('convert image composition', () => {
       Percentage: class {},
       initializeImageMagick: vi.fn(),
     } as unknown as Awaited<ReturnType<typeof magickWasm.getMagick>>);
-    return { addFont, appendDirections, drawCalls, operationCalls, read };
+    return { addFont, appendChildCounts, appendDirections, drawCalls, operationCalls, read };
   }
 
   it('joins multiple inputs horizontally with +append', async () => {
@@ -404,6 +407,17 @@ describe('convert image composition', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(appendDirections).toEqual(['horizontal', 'horizontal', 'vertical']);
+  });
+
+  it('appends every image in the current ungrouped sequence', async () => {
+    const { appendChildCounts } = installCompositionMock();
+    const result = await createConvertCommand().execute(
+      ['a.jpg', 'b.jpg', '+append', 'c.jpg', 'd.jpg', '+append', 'output.jpg'],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(appendChildCounts).toEqual([2, 3]);
   });
 
   it('uses background and gravity when padding mixed-size append inputs', async () => {

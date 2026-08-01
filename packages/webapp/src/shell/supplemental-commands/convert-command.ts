@@ -119,8 +119,8 @@ Operations:
   -transparent COLOR make matching pixels transparent
   -blur / -sharpen R[xS] apply a Gaussian effect
   -auto-gamma / -auto-level / -normalize / -negate
-  +append            join images horizontally
-  -append            join images vertically
+  +append            join all images in the current sequence horizontally
+  -append            join all images in the current sequence vertically
   -gravity POSITION  set annotation anchor
   -fill COLOR        set annotation text color
   -undercolor COLOR  set annotation background color
