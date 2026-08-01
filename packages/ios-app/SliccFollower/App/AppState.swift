@@ -1128,9 +1128,13 @@ class AppState: ObservableObject {
     /// Apply a snapshot payload for `scoopJid` to the per-scoop buffer, and
     /// refresh `messages` if it matches the currently-viewed scoop.
     private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
-        // The reply to a `new_session` request is the leader's cleared
-        // snapshot; any snapshot settles the in-flight guard.
-        if newSessionInFlight {
+        // The reply to a `new_session` request is the leader's CLEARED
+        // snapshot. An unrelated snapshot (a scoop switch calls
+        // `request_snapshot`) must not settle the guard — the leader
+        // single-flights and would silently drop a second request the
+        // re-enabled button could send. Only an empty snapshot counts; the
+        // 120s backstop covers a leader whose reset broadcast is nonempty.
+        if newSessionInFlight && chatMessages.isEmpty {
             newSessionInFlight = false
             newSessionTimeout?.cancel()
         }
