@@ -111,8 +111,13 @@ describe('PreviewBridgeManager', () => {
     expect(unknownDisconnect).not.toHaveProperty('previewToken');
   });
 
-  it('resyncs replayed connections without recording, announcing, or touching the latch', async () => {
+  it('resyncs replayed connections without recording or announcing and preserves mint metadata', async () => {
     const { bridge, options } = createHarness();
+    bridge.registerMintedPreview('token', {
+      url: 'https://example.com/page',
+      title: 'Existing preview',
+      quiet: false,
+    });
     const replay = (connId: string) =>
       bridge.onBridgeConnected({
         type: 'bridge.connected',
@@ -130,7 +135,12 @@ describe('PreviewBridgeManager', () => {
     expect(bridge.getTargetEntries()).toHaveLength(2);
     expect(bridge.getPreviewLifecycleRecords()).toEqual([]);
     expect(options.onPreviewLick).not.toHaveBeenCalled();
-    expect(bridge.mintMap.has('token')).toBe(false);
+    expect(bridge.mintMap.get('token')).toEqual({
+      url: 'https://example.com/page',
+      title: 'Existing preview',
+      quiet: false,
+      announced: true,
+    });
 
     const transport = bridge.getBridgeTransport('first');
     const response = transport!.send('Runtime.evaluate', { expression: '1 + 1' });
@@ -147,6 +157,54 @@ describe('PreviewBridgeManager', () => {
       result: { value: 2 },
     });
     await expect(response).resolves.toEqual({ value: 2 });
+  });
+
+  it.each([
+    { quiet: false, initialLicks: 1 },
+    { quiet: true, initialLicks: 0 },
+  ])('keeps a $quiet preview silent after a leader restart replay', ({ quiet, initialLicks }) => {
+    const initial = createHarness();
+    initial.bridge.registerMintedPreview('token', {
+      url: 'https://example.com/page',
+      title: 'Example preview',
+      quiet,
+    });
+    initial.bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'before-restart',
+      previewToken: 'token',
+      origin: 'https://example.com',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+    });
+    expect(initial.options.onPreviewLick).toHaveBeenCalledTimes(initialLicks);
+
+    const restarted = createHarness();
+    restarted.bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'replayed',
+      previewToken: 'token',
+      origin: 'https://example.com',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+      replay: true,
+    });
+    restarted.bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'after-restart',
+      previewToken: 'token',
+      origin: 'https://example.com',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:01:00.000Z',
+    });
+
+    expect(restarted.options.onPreviewLick).not.toHaveBeenCalled();
+    expect(restarted.bridge.mintMap.get('token')).toEqual(
+      expect.objectContaining({ quiet: true, announced: true })
+    );
+    expect(restarted.bridge.getPreviewLifecycleRecords()).toEqual([
+      expect.objectContaining({ connId: 'after-restart', announced: false }),
+    ]);
   });
 
   it('re-arms one preview and never announces a quiet preview', () => {
