@@ -115,7 +115,7 @@
     },
     {
       "type": "fs.request",
-      "ios": "unknown",
+      "ios": "decoded",
       "message": {
         "type": "fs.request",
         "requestId": "fs-1",
@@ -128,7 +128,7 @@
     },
     {
       "type": "fs.response",
-      "ios": "unknown",
+      "ios": "decoded",
       "message": {
         "type": "fs.response",
         "requestId": "fs-2",
@@ -515,7 +515,7 @@
     },
     {
       "type": "fs.request",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "fs.request",
         "requestId": "fs-3",
@@ -528,7 +528,7 @@
     },
     {
       "type": "fs.response",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "fs.response",
         "requestId": "fs-4",
@@ -1093,6 +1093,44 @@
         },
         "result": "file contents",
         "isError": false
+      }
+    },
+    {
+      "name": "TrayFsRequest",
+      "ios": "mirrored",
+      "mirrored": [
+        "content",
+        "encoding",
+        "op",
+        "path"
+      ],
+      "dropped": [],
+      "sample": {
+        "op": "writeFile",
+        "path": "/tmp/upload/clip.mp4",
+        "content": "AAECAwQ=",
+        "encoding": "base64"
+      }
+    },
+    {
+      "name": "TrayFsResponse",
+      "ios": "mirrored",
+      "mirrored": [
+        "chunkIndex",
+        "data",
+        "ok",
+        "totalChunks"
+      ],
+      "dropped": [],
+      "sample": {
+        "ok": true,
+        "data": {
+          "type": "file",
+          "content": "hello",
+          "encoding": "utf-8"
+        },
+        "chunkIndex": 0,
+        "totalChunks": 2
       }
     },
     {

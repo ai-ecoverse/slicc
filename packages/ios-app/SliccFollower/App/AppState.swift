@@ -86,6 +86,11 @@ class AppState: ObservableObject {
     private var inflightSprinkleNameToRequest: [String: String] = [:]
     /// Continuations awaiting sprinkle content (sprinkleName -> [continuations]).
     private var sprinkleContentWaiters: [String: [CheckedContinuation<String, Error>]] = [:]
+    /// Requester for `fs.*` ops against the **leader's** VFS. Lazy so the send
+    /// closure can reference `self` after initialization completes.
+    private(set) lazy var fsClient = FsClient { [weak self] message in
+        self?.sendToLeader(message) ?? false
+    }
     /// Most recent sprinkle update payloads keyed by sprinkle name. Drained by views.
     @Published var sprinkleUpdates: [String: AnyCodable] = [:]
     /// Monotonic reload generation per sprinkle; bumped on `sprinkle.reloaded`.
@@ -238,6 +243,9 @@ class AppState: ObservableObject {
                 waiter.resume(throwing: SprinkleFetchError.fetchFailed("Disconnected"))
             }
         }
+        // Same contract for fs waiters: fail them rather than let the deadline
+        // run out on a channel that is already gone.
+        fsClient.cancelAll()
     }
 
     /// Drop all hosted CDP tabs (called on user-initiated disconnect).
@@ -781,6 +789,16 @@ class AppState: ObservableObject {
             // cherry page surface). Documented no-op: log and ignore. Present so the
             // switch stays exhaustive and a future cherry-on-iOS path has a seam.
             logger.debug("Ignoring cherry.slicc_event for target=\(targetId) name=\(name) (cherry pages not hosted on iOS)")
+
+        case .fsRequest(let requestId, let request):
+            // iOS federates no filesystem. Answer rather than drop: the
+            // leader's `fs-router.ts` sets no timeout, so silence would leave
+            // its promise pending for the life of the session.
+            _ = sendToLeader(
+                .fsResponse(requestId: requestId, response: FsClient.refusal(for: request)))
+
+        case .fsResponse(let requestId, let response):
+            fsClient.handleResponse(requestId: requestId, response: response)
 
         case .themeApply:
             // Documented no-op: iOS themes natively via SwiftUI and does not

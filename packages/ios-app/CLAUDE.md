@@ -28,15 +28,10 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 ## Protocol Mirror Invariant
 
-`Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts` (unions + payload types; the webapp re-exports them from `packages/webapp/src/scoops/tray-sync-protocol.ts`) — see the matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". What's TS-only today:
+`Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts` (unions + payload types; the webapp re-exports them from `packages/webapp/src/scoops/tray-sync-protocol.ts`). The per-message matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" is the source of truth for which side speaks what, including everything still TS-only — keep it there rather than duplicating it here. Two iOS-local facts it does not carry:
 
-- Federated `fs.request` / `fs.response` in both directions.
-- Follower-originated `cdp.request` and `tab.open` (iOS only _responds_ to leader-initiated requests — `CDPBridge.swift` sends `cdp.response` / `cdp.event` / `tab.opened` back, but never originates). The same applies to the unified preview's `preview.open` leader→follower message: iOS decodes it in `LeaderToFollowerMessage` and routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview URL minted by the leader's `serve`), then acks with `tab.opened`.
-- The leader→follower reply path for those requests — iOS never originates, so it never consumes a reply.
-- `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
-- Transcript export both ways, including the v4 delegated-approval pair. iOS never
-  originates an export, so it is never asked to approve one: the leader→follower
-  prompt decodes to `.unknown`, the reply is `undecodable` in the corpus.
+- `preview.open` routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview the leader's `serve` minted) and acks with `tab.opened`.
+- iOS never originates a transcript export, so it is never asked to approve one: the leader's prompt decodes to `.unknown` and the reply is `undecodable` in the corpus.
 
 ### Cherry (embedded follower) mirror
 
@@ -82,6 +77,13 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   transport-only, `leaderError` the cone's.
 - Message dispatch: `handleDataChannelMessage(_ data: Data)` switch
 - Sprinkles: `refreshSprinkles()`, `fetchSprinkleContent(_:)` (chunk reassembly + waiter dedup), `sendSprinkleLick(_:body:targetScoop:)`, `handleSprinkleContent(...)`
+- Leader VFS: `Sync/FsClient.swift`. iOS is the _requester_ — `fs.request` with
+  `targetRuntimeId: "leader"` reads the **leader's** files, and a
+  leader-originated request gets an `ENOTSUP` reply rather than silence
+  (`fs-router.ts` has no timeout, so a drop hangs its promise). The client owns
+  the deadline and all-or-nothing reassembly the leader lacks. Only
+  `readFile`/`stat` reach a live leader: the webapp hands `handleFsRequest` a
+  two-method proxy cast `as VirtualFS`, so the other six answer `ok: false`.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
 

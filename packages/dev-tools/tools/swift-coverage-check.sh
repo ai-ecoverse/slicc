@@ -99,7 +99,11 @@ if [[ -n "$XCODE_SCHEME" ]]; then
     -test-iterations 2 \
     CODE_SIGNING_ALLOWED=NO
 
-  PROFDATA=$(find "$DERIVED_DATA/Build/ProfileData" -name "Coverage.profdata" -type f 2>/dev/null | head -1)
+  # Newest wins. xcodebuild keys ProfileData by device UDID, so a machine that
+  # has run the suite against more than one simulator keeps several — and an
+  # arbitrary pick silently reports a stale run's numbers rather than this one's.
+  PROFDATA=$(find "$DERIVED_DATA/Build/ProfileData" -name "Coverage.profdata" -type f -exec stat -f '%m %N' {} + 2>/dev/null \
+    | sort -rn | head -1 | cut -d' ' -f2-)
   if [[ -z "$PROFDATA" ]]; then
     echo "::error::No Coverage.profdata produced by xcodebuild test"
     exit 1

@@ -242,10 +242,10 @@ struct TrayChunkFrame: Codable {
 
 /// Mirrors a **subset** of `LeaderToFollowerMessage` from tray-sync-protocol.ts.
 /// Implemented here: chat, scoops, sprinkles, control, leader-initiated CDP
-/// (`cdp.request`, `targets.registry`, `tab.open`), and the cherry host-page
-/// event fan-out (`cherry.slicc_event`). TS-only and omitted from
-/// this enum: federated `fs.request`/`fs.response`, plus the leader→follower
-/// reply path for follower-originated requests (`cdp.response`,
+/// (`cdp.request`, `targets.registry`, `tab.open`), the cherry host-page
+/// event fan-out (`cherry.slicc_event`), and the `fs.*` pair. TS-only and
+/// omitted from this enum: the leader→follower reply path for
+/// follower-originated requests (`cdp.response`,
 /// `cdp.event`, `tab.opened`, `tab.open.error`) — iOS never originates those
 /// so it has no need to consume the reply. See
 /// `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" for the
@@ -280,6 +280,12 @@ enum LeaderToFollowerMessage: Codable {
     case tabOpen(requestId: String, url: String)
     case previewOpen(requestId: String, url: String)
     case cherrySliccEvent(targetId: String, name: String, detail: AnyCodable?)
+    /// Leader-originated fs request. iOS federates no filesystem, so
+    /// `AppState` answers it with an error rather than dropping it — the
+    /// leader sets no timeout, so silence hangs its promise.
+    case fsRequest(requestId: String, request: TrayFsRequest)
+    /// Reply to a follower-originated `fs.request`, chunked for large reads.
+    case fsResponse(requestId: String, response: TrayFsResponse)
     /// Leader theme broadcast. iOS decodes it (protocol parity) but applies
     /// native SwiftUI theming instead of web theme JSON — see AppState.
     case themeApply(themeJson: String?)
@@ -297,6 +303,7 @@ enum LeaderToFollowerMessage: Codable {
         case localTargetId, method, params, sessionId, targets, url
         case targetId, name, detail
         case themeJson, protocolVersion, runtime
+        case request, response
     }
 
     init(from decoder: Decoder) throws {
@@ -382,6 +389,14 @@ enum LeaderToFollowerMessage: Codable {
                 targetId: try container.decode(String.self, forKey: .targetId),
                 name: try container.decode(String.self, forKey: .name),
                 detail: try container.decodeIfPresent(AnyCodable.self, forKey: .detail))
+        case "fs.request":
+            self = .fsRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                request: try container.decode(TrayFsRequest.self, forKey: .request))
+        case "fs.response":
+            self = .fsResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                response: try container.decode(TrayFsResponse.self, forKey: .response))
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
@@ -484,6 +499,14 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode(targetId, forKey: .targetId)
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(detail, forKey: .detail)
+        case .fsRequest(let requestId, let request):
+            try container.encode("fs.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(request, forKey: .request)
+        case .fsResponse(let requestId, let response):
+            try container.encode("fs.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(response, forKey: .response)
         case .themeApply(let themeJson):
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
@@ -506,9 +529,10 @@ enum LeaderToFollowerMessage: Codable {
 /// Mirrors a **subset** of `FollowerToLeaderMessage` from tray-sync-protocol.ts.
 /// Implemented here: chat, scoops/sprinkles, targets advertise, CDP/tab.open
 /// reply path back to the leader (`cdp.response`, `cdp.event`, `tab.opened`,
-/// `tab.openError`). TS-only and omitted: federated `fs.request`/`fs.response`,
-/// and follower-originated `cdp.request`/`tab.open` (iOS only responds to
-/// leader-initiated requests, never originates). The `tab.openError` case is
+/// `tab.openError`), and the `fs.*` pair — iOS originates `fs.request` against
+/// the leader's VFS and answers a leader-originated one with an error.
+/// TS-only and omitted: follower-originated `cdp.request`/`tab.open` (iOS only
+/// responds to leader-initiated requests, never originates). The `tab.openError` case is
 /// declared for protocol symmetry but `CDPBridge.handleTabOpen` always sends
 /// `.tabOpened` synchronously after the navigation kickoff — there is no
 /// runtime path that emits `tab.openError`. See `docs/architecture.md`
@@ -533,6 +557,11 @@ enum FollowerToLeaderMessage: Codable {
     case cdpEvent(method: String, params: AnyCodable, sessionId: String?)
     case tabOpened(requestId: String, targetId: String)
     case tabOpenError(requestId: String, error: String)
+    /// Ask the leader to run an fs op. `targetRuntimeId: "leader"` routes it to
+    /// the leader's own VFS; any other value forwards it to a peer follower.
+    case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
+    /// Answer to a leader-originated `fs.request`.
+    case fsResponse(requestId: String, response: TrayFsResponse)
     /// Additive version handshake (`hello`) — iOS sends it first on channel open.
     case hello(protocolVersion: Int, runtime: String?)
     case ping
@@ -544,6 +573,7 @@ enum FollowerToLeaderMessage: Codable {
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
         case method, params, sessionId, targetId, url
         case protocolVersion, runtime
+        case targetRuntimeId, request, response
     }
 
     init(from decoder: Decoder) throws {
@@ -597,6 +627,15 @@ enum FollowerToLeaderMessage: Codable {
             self = .tabOpenError(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 error: try container.decode(String.self, forKey: .error))
+        case "fs.request":
+            self = .fsRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                targetRuntimeId: try container.decode(String.self, forKey: .targetRuntimeId),
+                request: try container.decode(TrayFsRequest.self, forKey: .request))
+        case "fs.response":
+            self = .fsResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                response: try container.decode(TrayFsResponse.self, forKey: .response))
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
@@ -664,6 +703,15 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("tab.open.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
+        case .fsRequest(let requestId, let targetRuntimeId, let request):
+            try container.encode("fs.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(targetRuntimeId, forKey: .targetRuntimeId)
+            try container.encode(request, forKey: .request)
+        case .fsResponse(let requestId, let response):
+            try container.encode("fs.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(response, forKey: .response)
         case .hello(let protocolVersion, let runtime):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
