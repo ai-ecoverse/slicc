@@ -8,6 +8,10 @@ struct InputBar: View {
     /// Leader stopped answering pings while its channel stayed open. Sending is
     /// blocked, but this is not a disconnect and must not read as one.
     var isStalled: Bool = false
+    /// A scoop-less `user_message` routes to the leader's ACTIVE scoop;
+    /// when the follower is viewing a different one, the streaming-send /
+    /// steer affordance hides so an interrupt cannot hit the wrong turn.
+    var steersActiveScoop: Bool = true
     let onSend: (String) -> Void
     let onAbort: () -> Void
     /// Send interrupting the running turn (`user_message.steer`). Only
@@ -100,7 +104,7 @@ struct InputBar: View {
     private var actionButton: some View {
         if isStreaming {
             HStack(spacing: 6) {
-                if canSend {
+                if canSend && steersActiveScoop {
                     // Tap queues behind the running turn; the long-press menu
                     // offers the interrupt — a discoverable, standard iOS
                     // idiom for the desktop's Cmd+Enter steer.

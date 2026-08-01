@@ -222,6 +222,7 @@ struct ConversationView: View {
                 // composer and lost, so block sending — but say why, rather
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
+                steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
                 onSend: { text in
                     appState.sendMessage(text)
                     inputText = ""
