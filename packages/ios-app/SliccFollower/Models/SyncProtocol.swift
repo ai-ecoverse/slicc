@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
@@ -238,6 +239,31 @@ struct TrayChunkFrame: Codable {
     }
 }
 
+// MARK: - TraySyncCapabilities
+
+/// Mirrors `TraySyncCapabilities`. Advertised on `hello` so the leader can
+/// route capability-gated work.
+struct TraySyncCapabilities: Codable, Equatable {
+    /// This peer can run OS shell commands via `exec.request`.
+    ///
+    /// Always false here, stated rather than implied. iOS has no OS shell, and
+    /// the leader gates remote exec on `peerCapabilities?.exec`
+    /// (`remote-exec.ts`), so omitting the field produced the right behaviour
+    /// by accident. Sending it makes the contract explicit, and a future
+    /// capability added to this struct starts from a written-down baseline.
+    let exec: Bool
+}
+
+/// What this build tells the leader it can do.
+let trayFollowerCapabilities = TraySyncCapabilities(exec: false)
+
+/// One-line self-description surfaced by the leader's `ssh --list`, mirroring
+/// the `motd` the Go CLI sets. Identifies the phone among several followers.
+var trayFollowerMotd: String {
+    let device = UIDevice.current
+    return "SLICC iOS follower on \(device.name) (\(device.systemName) \(device.systemVersion)) — chat and CDP targets, no shell"
+}
+
 // MARK: - LeaderToFollowerMessage
 
 /// Mirrors a **subset** of `LeaderToFollowerMessage` from tray-sync-protocol.ts.
@@ -290,7 +316,11 @@ enum LeaderToFollowerMessage: Codable {
     /// native SwiftUI theming instead of web theme JSON — see AppState.
     case themeApply(themeJson: String?)
     /// Additive version handshake (`hello`) — both sides send it first.
-    case hello(protocolVersion: Int, runtime: String?)
+    /// `capabilities` and `motd` are decoded for parity; nothing on iOS
+    /// consumes them yet, but dropping them silently is the drift class that
+    /// `theme.apply` already demonstrated.
+    case hello(
+        protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
     case pong
     case unknown(type: String)
@@ -304,6 +334,7 @@ enum LeaderToFollowerMessage: Codable {
         case targetId, name, detail
         case themeJson, protocolVersion, runtime
         case request, response
+        case capabilities, motd
     }
 
     init(from decoder: Decoder) throws {
@@ -415,7 +446,10 @@ enum LeaderToFollowerMessage: Codable {
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
-                runtime: try container.decodeIfPresent(String.self, forKey: .runtime))
+                runtime: try container.decodeIfPresent(String.self, forKey: .runtime),
+                capabilities: try container.decodeIfPresent(
+                    TraySyncCapabilities.self, forKey: .capabilities),
+                motd: try container.decodeIfPresent(String.self, forKey: .motd))
         case "ping":
             self = .ping
         case "pong":
@@ -510,10 +544,12 @@ enum LeaderToFollowerMessage: Codable {
         case .themeApply(let themeJson):
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
-        case .hello(let protocolVersion, let runtime):
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
             try container.encodeIfPresent(runtime, forKey: .runtime)
+            try container.encodeIfPresent(capabilities, forKey: .capabilities)
+            try container.encodeIfPresent(motd, forKey: .motd)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:
@@ -562,13 +598,21 @@ enum FollowerToLeaderMessage: Codable {
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
     /// Answer to a leader-originated `fs.request`.
     case fsResponse(requestId: String, response: TrayFsResponse)
+    /// Generic lick envelope. The leader accepts only the types in
+    /// `FORWARDABLE_TO_LEADER` (`navigate`, `discovery`) and rejects the rest,
+    /// so `FollowerLickType` is narrowed to match. `sprinkle.lick` stays on its
+    /// own message: `sprinkle` is NOT forwardable, and routing it through here
+    /// would get it dropped with a warning.
+    case lick(event: LickEvent)
     /// Additive version handshake (`hello`) — iOS sends it first on channel open.
-    case hello(protocolVersion: Int, runtime: String?)
+    case hello(
+        protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping
     case pong
 
     private enum CodingKeys: String, CodingKey {
         case type, text, messageId, scoopJid
+        case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
         case method, params, sessionId, targetId, url
@@ -636,10 +680,15 @@ enum FollowerToLeaderMessage: Codable {
             self = .fsResponse(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 response: try container.decode(TrayFsResponse.self, forKey: .response))
+        case "lick":
+            self = .lick(event: try container.decode(LickEvent.self, forKey: .event))
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
-                runtime: try container.decodeIfPresent(String.self, forKey: .runtime))
+                runtime: try container.decodeIfPresent(String.self, forKey: .runtime),
+                capabilities: try container.decodeIfPresent(
+                    TraySyncCapabilities.self, forKey: .capabilities),
+                motd: try container.decodeIfPresent(String.self, forKey: .motd))
         case "ping":
             self = .ping
         case "pong":
@@ -712,10 +761,15 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("fs.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
-        case .hello(let protocolVersion, let runtime):
+        case .lick(let event):
+            try container.encode("lick", forKey: .type)
+            try container.encode(event, forKey: .event)
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
             try container.encodeIfPresent(runtime, forKey: .runtime)
+            try container.encodeIfPresent(capabilities, forKey: .capabilities)
+            try container.encodeIfPresent(motd, forKey: .motd)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:

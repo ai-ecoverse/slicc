@@ -33,25 +33,12 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 - `preview.open` routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview the leader's `serve` minted) and acks with `tab.opened`.
 - iOS never originates a transcript export, so it is never asked to approve one: the leader's prompt decodes to `.unknown` and the reply is `undecodable` in the corpus.
 
-### Cherry (embedded follower) mirror
+Both union doc-comments state the omissions explicitly; `// MARK: -` boundaries are the stable anchors, not line numbers.
 
-iOS mirrors the cherry-target wire surface even though it cannot _host_ a cherry page:
-
-- `Models/SyncProtocol.swift` defines `CherryCapabilities { navigate, network, screenshot }` and `RemoteTargetInfo.kind` / `.capabilities`, mirroring `RemoteTargetInfo` from `tray-sync-protocol.ts`. `network` gates whether the leader may drive `Network.*`; for a cherry target it is always `false`. A `"kind":"cherry"` target decodes into these fields (see `Tests/SliccFollowerTests/SyncProtocolTests.swift`).
-- `cherry.slicc_event` decodes to `.cherrySliccEvent(targetId, name, detail)`. iOS has **no cherry page surface**, so `AppState.handleDataChannelMessage` logs and ignores it — a **documented no-op** that keeps the decode switch exhaustive.
-
-The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` declarations in `SyncProtocol.swift` state the omission explicitly; `// MARK: -` boundaries are the stable anchors, line numbers are not.
-
-**Mechanical enforcement (golden-fixture corpus):** every variant of both TS
-unions has a fixture and an explicit iOS expectation in
-`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` (mapped types — a
-new variant fails typecheck until it gets both). The derived JSON at
-`SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json` is
-decoded by BOTH suites: the webapp vitest test
-(`tray-sync-corpus.test.ts`, guards JSON ↔ TS module) and
-`SyncProtocolCorpusTests.swift` (guards JSON ↔ this decoder, run in CI via
-`xcodebuild test` on a simulator). Regenerate the JSON with
-`npx tsx packages/dev-tools/tools/generate-tray-sync-corpus.ts`.
+**Mechanical enforcement:** every variant of both unions needs a fixture and an
+explicit iOS expectation in `tray-sync-protocol-corpus.ts`, decoded by both the
+vitest and Swift suites. That section of `docs/architecture.md` also covers the
+cherry-target surface iOS mirrors but cannot host.
 
 When you change the protocol:
 
@@ -62,7 +49,7 @@ When you change the protocol:
    - **Browser follower (TS)**: extend the `handleLeaderMessage` switch in `tray-follower-sync.ts`, plus the page-side controller wiring if the change is user-visible.
    - **iOS follower (Swift)**: edit `AppState.handleDataChannelMessage`. That's the only dispatch point — every message (including chat events like `agent_event`, `snapshot`, `user_message_echo`) flows through it.
 5. Add the variant's fixture + iOS expectation to `tray-sync-protocol-corpus.ts`, regenerate the corpus JSON, and bump tests on both sides. The `SliccFollowerTests` bundle runs in CI via `xcodebuild test` on an iOS Simulator (plain `swift test` still cannot run on a macOS host — the package depends on an iOS-only WebRTC binary).
-6. Add a row to the tray message matrix in `docs/architecture.md` (between the `<!-- tray-sync-matrix:start/end -->` markers). CI checks this via `tray-sync-doc-matrix.test.ts`.
+6. Add a row to the tray message matrix in `docs/architecture.md` (between the `<!-- tray-sync-matrix:start/end -->` markers). `tray-sync-doc-matrix.test.ts` checks the row exists **and** that its Followers column agrees with the corpus.
 
 Skipping the iOS update now fails `SyncProtocolCorpusTests` in CI instead of quietly dropping the new message via the `.unknown` case (the pre-corpus era's most common form of protocol drift — `theme.apply` shipped exactly that way). Unknown leader message types are also logged at warning now.
 
@@ -84,12 +71,15 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   the deadline and all-or-nothing reassembly the leader lacks. Only
   `readFile`/`stat` reach a live leader: the webapp hands `handleFsRequest` a
   two-method proxy cast `as VirtualFS`, so the other six answer `ok: false`.
+- `hello`: sends `capabilities: { exec: false }` explicitly plus a device-derived `motd` for the leader's `ssh --list`. The leader's gate reads `peerCapabilities?.exec`, so absent and false behave alike — only one of them is a stated contract.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
 
-### Lick Forwarding (leader-side origin stamping)
+### Licks (two envelopes, deliberately)
 
-iOS sprinkle licks show their origin label in the leader's cone via leader-side stamping — no iOS change was needed. Migrating iOS from the legacy `sprinkle.lick` envelope to the generic `lick` message remains a follow-up.
+`sprinkle.lick` keeps its own message: `sprinkle` is **not** in `FORWARDABLE_TO_LEADER`, so routing it through the generic `lick` would get it dropped with a warning. `Models/LickEvent.swift` therefore mirrors only the two types the leader accepts (`navigate`, `discovery`). Origin labels are stamped leader-side — `runtime: "slicc-ios"` already maps to "iOS follower".
+
+`navigate` licks carry handoff `Link` headers. With no CDP `Network` domain here, `CDPTarget.handoff` reads them off `WKNavigationResponse` (main frame only — an iframe must not instruct the cone). `Net/LinkHeader.swift` + `Net/HandoffLink.swift` mirror the TS parser and its branch/path allowlists against a shared corpus; a divergence is a shell-injection bug, not a formatting nit.
 
 ### Message rendering parity
 

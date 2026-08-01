@@ -91,6 +91,14 @@ class AppState: ObservableObject {
     private(set) lazy var fsClient = FsClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
+    /// What the leader advertised on `hello`. Decoded and kept so the field is
+    /// inspectable rather than dropped; nothing gates on it yet.
+    private(set) var leaderCapabilities: TraySyncCapabilities?
+    private(set) var leaderMotd: String?
+    /// Payload identities of handoffs already forwarded this session, so a
+    /// site emitting the same `Link` on every page produces one lick rather
+    /// than one per navigation. Mirrors the web watcher's dedup.
+    private var seenHandoffFingerprints: Set<String> = []
     /// Most recent sprinkle update payloads keyed by sprinkle name. Drained by views.
     @Published var sprinkleUpdates: [String: AnyCodable] = [:]
     /// Monotonic reload generation per sprinkle; bumped on `sprinkle.reloaded`.
@@ -360,6 +368,45 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Forward a navigate lick for a handoff advertised by a page hosted in a
+    /// CDP target.
+    ///
+    /// This is the phone's half of the SLICC handoff flow: a page responds
+    /// with a `Link: <…>; rel="…/rel/handoff"` header, and the leader's cone
+    /// shows an approval prompt.
+    ///
+    /// The outcome is reported rather than reduced to a Bool so a suppressed
+    /// duplicate stays distinguishable from a send that simply had no leader
+    /// to reach — otherwise a broken dedup looks identical to a disconnect.
+    enum HandoffForwardResult: Equatable {
+        case sent
+        case duplicate
+        case notDelivered
+    }
+
+    @discardableResult
+    func forwardNavigateLick(pageURL: String, match: HandoffMatch, title: String?)
+        -> HandoffForwardResult
+    {
+        let fingerprint = Self.handoffFingerprint(match)
+        guard seenHandoffFingerprints.insert(fingerprint).inserted else {
+            logger.debug("Skipping duplicate handoff for \(match.verb.rawValue)")
+            return .duplicate
+        }
+        let event = LickEvent.navigate(pageURL: pageURL, match: match, title: title)
+        return sendToLeader(.lick(event: event)) ? .sent : .notDelivered
+    }
+
+    /// Stable identity for a handoff payload, independent of the page that
+    /// advertised it. Mirrors `handoffFingerprint` in `handoff-link.ts`: NUL
+    /// cannot appear in any part, so joining is collision-free without a hash.
+    nonisolated static func handoffFingerprint(_ match: HandoffMatch) -> String {
+        [
+            match.verb.rawValue, match.target, match.branch ?? "", match.path ?? "",
+            match.instruction ?? "",
+        ].joined(separator: "\0")
+    }
+
     /// Forward a sprinkle lick (from a panel or inline sprinkle) to the leader.
     func sendSprinkleLick(_ sprinkleName: String, body: AnyCodable?, targetScoop: String? = nil) {
         sendToLeader(
@@ -575,6 +622,11 @@ class AppState: ObservableObject {
             bridge.onTargetsChanged = { [weak self] in
                 Task { @MainActor in self?.refreshCDPTargets() }
             }
+            bridge.onHandoffDetected = { [weak self] pageURL, match, title in
+                Task { @MainActor in
+                    self?.forwardNavigateLick(pageURL: pageURL, match: match, title: title)
+                }
+            }
             cdpBridge = bridge
         }
         // Re-advertise existing targets so the (possibly new) leader knows
@@ -611,7 +663,12 @@ class AppState: ObservableObject {
         Task { await keepalive?.start() }
 
         // Version handshake first — additive; legacy leaders drop it harmlessly.
-        sendToLeader(.hello(protocolVersion: traySyncProtocolVersion, runtime: "slicc-ios"))
+        sendToLeader(
+            .hello(
+                protocolVersion: traySyncProtocolVersion,
+                runtime: "slicc-ios",
+                capabilities: trayFollowerCapabilities,
+                motd: trayFollowerMotd))
 
         // Request initial snapshot.
         sendToLeader(.requestSnapshot(scoopJid: nil))
@@ -806,8 +863,10 @@ class AppState: ObservableObject {
             // parity is explicit — this was the drift that shipped silently.
             logger.debug("Ignoring theme.apply (iOS uses native theming)")
 
-        case .hello(let protocolVersion, let runtime):
-            handleLeaderHello(protocolVersion: protocolVersion, runtime: runtime)
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
+            handleLeaderHello(
+                protocolVersion: protocolVersion, runtime: runtime, capabilities: capabilities,
+                motd: motd)
 
         case .unknown(let type):
             // Protocol drift safety net — mirror of the TS dispatchers' warn.
@@ -818,11 +877,17 @@ class AppState: ObservableObject {
     /// Record the leader's `hello` version handshake. Warn when the leader is
     /// newer than this build — the skew otherwise surfaces only as silently
     /// missing features.
-    private func handleLeaderHello(protocolVersion: Int, runtime: String?) {
+    private func handleLeaderHello(
+        protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?
+    ) {
+        // Kept rather than dropped. Nothing reads them yet, but a decoded
+        // field that goes nowhere is the drift `theme.apply` already shipped.
+        leaderCapabilities = capabilities
+        leaderMotd = motd
         if protocolVersion > traySyncProtocolVersion {
             logger.warning("Leader speaks a newer tray sync protocol (v\(protocolVersion) vs v\(traySyncProtocolVersion)) — update this app")
         } else {
-            logger.info("Leader hello: protocol v\(protocolVersion) runtime=\(runtime ?? "?")")
+            logger.info("Leader hello: protocol v\(protocolVersion) runtime=\(runtime ?? "?") exec=\(capabilities?.exec == true)")
         }
     }
 

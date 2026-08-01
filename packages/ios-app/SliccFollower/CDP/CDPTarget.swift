@@ -344,6 +344,50 @@ extension CDPTarget: WKNavigationDelegate {
         emitLifecycle("networkIdle")
     }
 
+    /// Inspect the response headers of a main-frame navigation for a SLICC
+    /// handoff `Link` rel.
+    ///
+    /// This is where iOS diverges from the web follower by necessity. That one
+    /// runs a CDP `Network.responseReceived` watcher, but this bridge
+    /// implements no `Network` domain at all — WKWebView exposes no such
+    /// stream. `WKNavigationResponse` does carry the real `HTTPURLResponse`,
+    /// which is the same header the watcher reads, one layer lower.
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+    ) {
+        defer { decisionHandler(.allow) }
+        guard
+            let handoff = Self.handoff(
+                isForMainFrame: navigationResponse.isForMainFrame,
+                response: navigationResponse.response,
+                fallbackURL: currentURL)
+        else { return }
+        bridge?.reportHandoff(
+            pageURL: handoff.pageURL, match: handoff.match, title: webView.title)
+    }
+
+    /// The decision behind `decidePolicyFor`, split out because
+    /// `WKNavigationResponse` has no public initializer — inline, the
+    /// main-frame gate below could not be tested at all.
+    nonisolated static func handoff(
+        isForMainFrame: Bool, response: URLResponse?, fallbackURL: String
+    ) -> (pageURL: String, match: HandoffMatch)? {
+        // A third-party iframe must not be able to hand the user's cone an
+        // instruction, so only the main frame is trusted.
+        guard isForMainFrame,
+            let http = response as? HTTPURLResponse,
+            let header = http.value(forHTTPHeaderField: "Link"),
+            !header.isEmpty
+        else { return nil }
+
+        let pageURL = http.url?.absoluteString ?? fallbackURL
+        let links = LinkHeader.parse(header, baseURL: pageURL)
+        guard let match = HandoffLink.extract(from: links) else { return nil }
+        return (pageURL, match)
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard pageEnabled else { return }
         emit(

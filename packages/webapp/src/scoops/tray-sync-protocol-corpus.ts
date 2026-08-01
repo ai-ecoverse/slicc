@@ -400,7 +400,13 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
   },
   hello: {
     ios: 'decoded',
-    message: { type: 'hello', protocolVersion: 1, runtime: 'slicc-standalone' },
+    message: {
+      type: 'hello',
+      protocolVersion: 1,
+      runtime: 'slicc-standalone',
+      capabilities: { exec: true },
+      motd: 'macOS 15 via node-server',
+    },
   },
   ping: { ios: 'decoded', message: { type: 'ping' } },
   pong: { ios: 'decoded', message: { type: 'pong' } },
@@ -460,9 +466,11 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       targetScoop: 'cone',
     },
   },
-  // TS-only: iOS has no lick sources; its decoder throws on these.
+  // iOS sends navigate licks for handoffs advertised by pages in its hosted
+  // CDP targets. Only the `FORWARDABLE_TO_LEADER` types (`navigate`,
+  // `discovery`) are modelled — the leader rejects the rest.
   lick: {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: {
       type: 'lick',
       event: {
@@ -575,7 +583,13 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   hello: {
     ios: 'decoded',
-    message: { type: 'hello', protocolVersion: 1, runtime: 'slicc-ios' },
+    message: {
+      type: 'hello',
+      protocolVersion: 1,
+      runtime: 'slicc-ios',
+      capabilities: { exec: false },
+      motd: 'SLICC iOS follower on iPhone (iOS 26.0) — chat and CDP targets, no shell',
+    },
   },
   ping: { ios: 'decoded', message: { type: 'ping' } },
   pong: { ios: 'decoded', message: { type: 'pong' } },

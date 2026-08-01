@@ -53,9 +53,19 @@ function extractMatrix(md: string): string {
 function parseMatrixVariants(table: string): {
   leaderToFollower: Set<string>;
   followerToLeader: Set<string>;
+  /**
+   * Message name → that row's "Followers" cell, kept per direction. Several
+   * variants (`cdp.request`, `tab.open`, …) appear in both directions with
+   * different support, so a single name-keyed map would silently take
+   * whichever row came last.
+   */
+  l2fFollowers: Map<string, string>;
+  f2lFollowers: Map<string, string>;
 } {
   const leaderToFollower = new Set<string>();
   const followerToLeader = new Set<string>();
+  const l2fFollowers = new Map<string, string>();
+  const f2lFollowers = new Map<string, string>();
 
   for (const line of table.split('\n')) {
     // Skip non-table lines and the separator row
@@ -77,10 +87,12 @@ function parseMatrixVariants(table: string): {
     for (const name of names) {
       if (isL2F) leaderToFollower.add(name);
       if (isF2L) followerToLeader.add(name);
+      if (cols[3] && isL2F) l2fFollowers.set(name, cols[3]);
+      if (cols[3] && isF2L) f2lFollowers.set(name, cols[3]);
     }
   }
 
-  return { leaderToFollower, followerToLeader };
+  return { leaderToFollower, followerToLeader, l2fFollowers, f2lFollowers };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +144,50 @@ describe('tray sync doc matrix ↔ protocol unions', () => {
       `Follower→Leader doc rows that don't match any union variant: ` +
         `${extra.map((v) => `\`${v}\``).join(', ')}. ` +
         `Remove or rename them in docs/architecture.md.`
+    ).toEqual([]);
+  });
+
+  /**
+   * The fourth leg. Row *existence* was already enforced above, but the
+   * "Followers" column was not — so a variant could gain iOS support (or lose
+   * it) and the table would keep asserting the old answer indefinitely. The
+   * corpus is the ground truth: its `ios` field is what the Swift decoder is
+   * actually tested against.
+   */
+  it('the Followers column agrees with the corpus about iOS support', () => {
+    const mismatches: string[] = [];
+    const check = (
+      direction: string,
+      column: Map<string, string>,
+      variant: string,
+      iosSupported: boolean
+    ) => {
+      const cell = column.get(variant);
+      if (cell === undefined) return; // absence is the other tests' job
+      const claimsIos = /\biOS\b/i.test(cell);
+      if (claimsIos !== iosSupported) {
+        mismatches.push(
+          `\`${variant}\` (${direction}): docs say "${cell}" but the corpus says iOS ` +
+            `${iosSupported ? 'handles' : 'does not handle'} it`
+        );
+      }
+    };
+
+    // Leader→follower: `decoded` = iOS acts on it, `unknown` = iOS ignores it.
+    for (const [variant, entry] of Object.entries(LEADER_TO_FOLLOWER_CORPUS)) {
+      check('Leader→Follower', docVariants.l2fFollowers, variant, entry.ios === 'decoded');
+    }
+    // Follower→leader: `decoded` = iOS can originate it, `undecodable` = it is
+    // a TS-only variant iOS never sends.
+    for (const [variant, entry] of Object.entries(FOLLOWER_TO_LEADER_CORPUS)) {
+      check('Follower→Leader', docVariants.f2lFollowers, variant, entry.ios === 'decoded');
+    }
+
+    expect(
+      mismatches,
+      `docs/architecture.md "Followers" column is out of sync with the corpus:\n` +
+        `${mismatches.join('\n')}\n` +
+        `Update the column, or the corpus entry if support really changed.`
     ).toEqual([]);
   });
 });
