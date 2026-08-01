@@ -59,6 +59,17 @@ struct ChatView: View {
         }
     }
 
+    /// Composer text seeded from the `-uiTestComposerText` launch argument —
+    /// screenshots and UI tests need a non-empty composer without typing.
+    /// Empty (and compiled to a constant) outside DEBUG.
+    static func seededComposerText() -> String {
+        #if DEBUG
+            return UserDefaults.standard.string(forKey: "uiTestComposerText") ?? ""
+        #else
+            return ""
+        #endif
+    }
+
     #if DEBUG
         /// Pin the banner to one state for a UI test. `stalled` is a connected
         /// leader that stopped answering, so it sets both fields; `streaming`
@@ -91,7 +102,7 @@ struct ChatView: View {
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Binding var showSettings: Bool
-    @State private var inputText = ""
+    @State private var inputText = ChatView.seededComposerText()
 
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
 
