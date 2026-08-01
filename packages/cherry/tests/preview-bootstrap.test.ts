@@ -325,6 +325,70 @@ describe('preview bootstrap', () => {
     bridge.stop();
   });
 
+  it('escalates backoff when replacement sockets open and immediately close', async () => {
+    vi.useFakeTimers();
+    type Listener = (event: Event | MessageEvent) => void | Promise<void>;
+    const createSocket = () => {
+      let readyState: number = WebSocket.CONNECTING;
+      const listeners = new Map<string, Listener>();
+      const socket = {
+        get readyState() {
+          return readyState;
+        },
+        send: vi.fn(),
+        close: vi.fn(),
+        addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
+        removeEventListener: (type: string) => listeners.delete(type),
+      } as unknown as WebSocket;
+      return {
+        socket,
+        open() {
+          readyState = WebSocket.OPEN;
+          void listeners.get('open')?.(new Event('open'));
+        },
+        close() {
+          readyState = WebSocket.CLOSED;
+          void listeners.get('close')?.(new CloseEvent('close'));
+        },
+        async message(data: string) {
+          await listeners.get('message')?.(new MessageEvent('message', { data }));
+        },
+      };
+    };
+    let initialClose: ((event: Event) => void) | undefined;
+    const replacements = [createSocket(), createSocket(), createSocket()];
+    const createWebSocket = vi.fn(
+      () => replacements[createWebSocket.mock.calls.length - 1]!.socket
+    );
+    const bridge = createPreviewBridge({
+      ws: fakeWs({
+        readyState: WebSocket.OPEN,
+        addEventListener: (type: string, listener: (event: Event) => void) => {
+          if (type === 'close') initialClose = listener;
+        },
+      }),
+      createWebSocket,
+    });
+    bridge.start();
+    initialClose?.(new CloseEvent('close'));
+
+    vi.advanceTimersByTime(1_000);
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    replacements[0]!.open();
+    replacements[0]!.close();
+    vi.advanceTimersByTime(1_999);
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+
+    replacements[1]!.open();
+    await replacements[1]!.message('pong');
+    replacements[1]!.close();
+    vi.advanceTimersByTime(1_000);
+    expect(createWebSocket).toHaveBeenCalledTimes(3);
+    bridge.stop();
+  });
+
   it('does not reconnect after stop()', () => {
     vi.useFakeTimers();
     let closeHandler: ((event: Event) => void) | undefined;

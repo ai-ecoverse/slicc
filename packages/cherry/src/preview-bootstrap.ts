@@ -170,10 +170,16 @@ class PreviewSocketController {
     if (event.currentTarget != null && event.currentTarget !== this.ws) return;
     // The DO answers our literal 'ping' keepalive with a literal 'pong'
     // (setWebSocketAutoResponse). Skip non-JSON control frames before parsing.
-    if (event.data === 'pong') return;
+    if (event.data === 'pong') {
+      this.reconnectAttempt = 0;
+      return;
+    }
     try {
       const frame = JSON.parse(event.data);
-      if (frame.t === 'cdp.req') await this.opts.onFrame(frame);
+      if (frame.t === 'cdp.req') {
+        this.reconnectAttempt = 0;
+        await this.opts.onFrame(frame);
+      }
     } catch (err) {
       console.error('[preview-bridge] message handler failed:', err);
     }
@@ -186,7 +192,6 @@ class PreviewSocketController {
 
   private handleSocketOpen(socket: WebSocket): void {
     if (socket !== this.ws || this.stopped || this.suspended) return;
-    this.reconnectAttempt = 0;
     if (this.pingOnOpen) {
       this.pingOnOpen = false;
       this.sendPing();
@@ -248,7 +253,6 @@ class PreviewSocketController {
     this.resumePending = false;
     this.suspended = false;
     this.clearReconnectTimer();
-    this.reconnectAttempt = 0;
     if (this.socketIsOpen()) {
       this.sendPing();
       this.startKeepalive();
