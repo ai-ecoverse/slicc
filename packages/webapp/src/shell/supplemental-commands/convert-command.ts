@@ -637,14 +637,20 @@ async function renderExpression(
 async function loadInputData(
   expression: ImageExpression,
   ctx: CommandContext,
-  result = new Map<InputExpression, Uint8Array>()
+  result = new Map<InputExpression, Uint8Array>(),
+  pathCache = new Map<string, Uint8Array>()
 ): Promise<Map<InputExpression, Uint8Array>> {
   if (expression.kind === 'input') {
     const path = ctx.fs.resolvePath(ctx.cwd, expression.path);
-    result.set(expression, await ctx.fs.readFileBuffer(path));
+    let data = pathCache.get(path);
+    if (data === undefined) {
+      data = await ctx.fs.readFileBuffer(path);
+      pathCache.set(path, data);
+    }
+    result.set(expression, data);
     return result;
   }
-  for (const child of expression.children) await loadInputData(child, ctx, result);
+  for (const child of expression.children) await loadInputData(child, ctx, result, pathCache);
   return result;
 }
 

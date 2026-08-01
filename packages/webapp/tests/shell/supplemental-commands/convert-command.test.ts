@@ -370,6 +370,19 @@ describe('convert image composition', () => {
     expect(writeFile).toHaveBeenCalledWith('/tmp/filmstrip.jpg', new Uint8Array([1, 2, 3]));
   });
 
+  it('reads repeated input paths only once', async () => {
+    const { read } = installCompositionMock();
+    const readFileBuffer = vi.fn().mockResolvedValue(new Uint8Array([1]));
+    const result = await createConvertCommand().execute(
+      ['same.jpg', 'same.jpg', '+append', '/tmp/repeated.jpg'],
+      createMockCtx({ fs: { readFileBuffer } })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileBuffer).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('supports nested horizontal rows joined with -append', async () => {
     const { appendDirections } = installCompositionMock();
     const result = await createConvertCommand().execute(
