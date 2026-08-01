@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
-import '../primitives/slicc-googly-eyes.js';
+import '../primitives/slicc-agent-avatar.js';
 
 export type AgentState = 'working' | 'broken' | 'initializing' | 'idle';
 
@@ -42,10 +42,7 @@ const DATA_K_HUE: Record<string, string> = {
 const STYLE = `
 .slicc-agent-tabs{display:flex;align-items:center;gap:${HOST_GAP}px;min-width:0;overflow:visible;color:var(--ink);font-family:var(--ui);}
 .slicc-agent-tabs *{box-sizing:border-box;}
-.slicc-agent-tabs__focus-avatar{display:grid;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;place-items:center;overflow:hidden;color:var(--slicc-agent-tabs-hue);border:1px solid color-mix(in srgb,var(--slicc-agent-tabs-hue) 34%,var(--line));border-radius:7px;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,var(--canvas));pointer-events:none;}
-.slicc-agent-tabs__focus-avatar[data-type='scoop']{border-radius:50%;}
-.slicc-agent-tabs__focus-avatar-mark{font:700 11px/1 var(--ui);text-transform:uppercase;}
-.slicc-agent-tabs__focus-avatar slicc-googly-eyes{display:block;line-height:0;}
+.slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;pointer-events:none;}
 .slicc-agent-tabs__track-frame{position:relative;flex:1 1 auto;min-width:0;height:var(--ctl-h,30px);overflow:visible;border:1px solid var(--line);border-radius:9px;background:var(--ghost);}
 .slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px;overflow:hidden;}
 .slicc-agent-tabs.has-overflow .slicc-agent-tabs__track{padding-right:41px;}
@@ -465,40 +462,23 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   #avatar(scoop: ScoopDescriptor): HTMLElement {
-    const avatar = h(
-      'span',
-      { class: `${PREFIX}__focus-avatar`, part: 'avatar', role: 'img' },
-      h('span', { class: `${PREFIX}__focus-avatar-mark`, 'aria-hidden': 'true' })
-    );
+    const avatar = h('slicc-agent-avatar', {
+      class: `${PREFIX}__focus-avatar`,
+      part: 'avatar',
+    });
     this.#updateAvatar(avatar, scoop);
     return avatar;
   }
 
   #updateAvatar(avatar: HTMLElement, scoop: ScoopDescriptor): void {
     const state = stateFor(scoop, this.attention);
-    const eyeState = eyesFor(scoop);
     const label = scoop.label ?? scoop.key;
-    avatar.dataset.type = typeFor(scoop);
-    avatar.dataset.eyes = eyeState;
-    avatar.dataset.fill = String(Math.round(boundedFill(scoop.fill)));
-    avatar.setAttribute('aria-label', `${label} avatar`);
-    avatar.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
-    const mark = avatar.querySelector<HTMLElement>(`.${PREFIX}__focus-avatar-mark`);
-    if (mark) {
-      mark.textContent = label.slice(0, 1);
-      mark.hidden = eyeState !== 'none';
-    }
-    let eyes = avatar.querySelector<HTMLElement>('slicc-googly-eyes');
-    if (eyeState === 'none') {
-      eyes?.remove();
-      return;
-    }
-    if (!eyes) {
-      eyes = h('slicc-googly-eyes', { size: 6, tracking: 'on' });
-      avatar.append(eyes);
-    }
-    this.#setAttribute(eyes, 'eyes', eyeState);
-    this.#setAttribute(eyes, 'blink', state === 'working');
+    this.#setAttribute(avatar, 'type', typeFor(scoop));
+    this.#setAttribute(avatar, 'color', scoop.color ?? null);
+    this.#setAttribute(avatar, 'eyes', eyesFor(scoop));
+    this.#setAttribute(avatar, 'fill', String(Math.round(boundedFill(scoop.fill))));
+    this.#setAttribute(avatar, 'blink', state === 'working');
+    this.#setAttribute(avatar, 'label', label);
   }
 
   #reconcileAvatar(focused: ScoopDescriptor | null): void {

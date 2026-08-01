@@ -121,6 +121,7 @@ export {
   type UsbPermissionProvider,
 } from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
+export { SliccAgentAvatar } from './primitives/slicc-agent-avatar.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export {

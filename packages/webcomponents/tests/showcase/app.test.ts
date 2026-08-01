@@ -59,7 +59,8 @@ describe('showcase full-app agent tabs', () => {
   it('renders the cone tab and focused cone avatar in the nav', () => {
     frame = renderShowcase();
     expect(agentTab(frame, 'Sliccy')).toBeTruthy();
-    expect(focusedAvatar(frame).dataset.type).toBe('cone');
+    expect(focusedAvatar(frame).getAttribute('type')).toBe('cone');
+    expect(focusedAvatar(frame).shadowRoot?.querySelector('.glyph path')).toBeTruthy();
   });
 
   it('selects the cone as the fallback without setting an explicit active tab', () => {
@@ -84,11 +85,11 @@ describe('showcase full-app agent tabs', () => {
     expect(getComputedStyle(agentTab(frame, 'Sliccy')).color).not.toBe('rgb(255, 255, 255)');
   });
 
-  it('keeps the cone eye-tracking intact through the shared eyes primitive', () => {
+  it('keeps the restored cone avatar eye tracking intact', () => {
     frame = renderShowcase();
     const cone = focusedAvatar(frame);
-    expect(cone.dataset.eyes).toBe('open');
-    const eyes = cone.querySelector('slicc-googly-eyes') as HTMLElement;
+    expect(cone.getAttribute('eyes')).toBe('open');
+    const eyes = cone.shadowRoot?.querySelector('.eyes-svg') as SVGElement;
     expect(eyes).toBeTruthy();
     const r = eyes.getBoundingClientRect();
     document.dispatchEvent(
@@ -97,9 +98,9 @@ describe('showcase full-app agent tabs', () => {
         clientY: r.top + r.height + 500,
       })
     );
-    const pupils = [...(eyes.shadowRoot?.querySelectorAll<HTMLElement>('.eye') ?? [])];
+    const pupils = [...eyes.querySelectorAll<SVGGElement>('.pupil')];
     expect(pupils).toHaveLength(2);
-    expect(pupils.every((eye) => eye.style.getPropertyValue('--px') !== '')).toBe(true);
+    expect(pupils.every((pupil) => pupil.hasAttribute('transform'))).toBe(true);
   });
 });
 

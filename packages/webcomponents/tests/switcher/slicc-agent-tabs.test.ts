@@ -111,7 +111,7 @@ describe('slicc-agent-tabs', () => {
   it('renders avatar, segmented control, and its internal overflow controls', () => {
     const element = mount();
     expect([...element.children].map((child) => child.tagName.toLowerCase())).toEqual([
-      'span',
+      'slicc-agent-avatar',
       'div',
     ]);
     expect(
@@ -220,15 +220,17 @@ describe('slicc-agent-tabs', () => {
 
   it('focuses the first descriptor by default and updates avatar + selected segment', () => {
     const element = mount();
-    expect(avatar(element)?.dataset.type).toBe('cone');
-    expect(avatar(element)?.querySelector('slicc-googly-eyes')?.getAttribute('tracking')).toBe(
-      'on'
-    );
+    expect(avatar(element)?.getAttribute('type')).toBe('cone');
+    expect(avatar(element)?.shadowRoot?.querySelector('.glyph path')).toBeTruthy();
+    expect(avatar(element)?.shadowRoot?.querySelectorAll('.eyes-svg .pupil')).toHaveLength(2);
     expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     element.active = 'researcher';
-    expect(avatar(element)?.dataset.type).toBe('scoop');
-    expect(avatar(element)?.dataset.fill).toBe('62');
-    expect(avatar(element)?.querySelector('slicc-googly-eyes')?.hasAttribute('blink')).toBe(true);
+    expect(avatar(element)?.getAttribute('type')).toBe('scoop');
+    expect(avatar(element)?.getAttribute('fill')).toBe('62');
+    expect(avatar(element)?.hasAttribute('blink')).toBe(true);
+    expect(avatar(element)?.shadowRoot?.querySelector('.glyph')?.getAttribute('viewBox')).toBe(
+      '0 0 580 470'
+    );
     expect(segment(element, 'researcher').getAttribute('aria-selected')).toBe('true');
   });
 
@@ -372,7 +374,7 @@ describe('slicc-agent-tabs', () => {
       expect(arcDash(200)).toBeCloseTo(arcDash(100));
       expect(arcDash(Number.NaN)).toBeCloseTo(arcDash(0));
       const element = mount([{ key: 'cone', fill: 200 }]);
-      expect(avatar(element)?.dataset.fill).toBe('100');
+      expect(avatar(element)?.getAttribute('fill')).toBe('100');
     });
 
     it('writes the calculated dash length into the SVG arc', () => {
