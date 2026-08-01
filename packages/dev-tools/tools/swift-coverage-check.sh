@@ -82,22 +82,43 @@ if [[ -n "$XCODE_SCHEME" ]]; then
     echo "::warning::simctl bootstatus did not report a clean boot; continuing"
 
   echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
-  # xcodebuild refuses to overwrite an existing result bundle, so a second local
-  # run would fail before ever reaching the tests.
   mkdir -p .build/coverage
-  rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
   set -o pipefail
-  xcodebuild test \
-    -project "${XCODE_SCHEME}.xcodeproj" \
-    -scheme "$XCODE_SCHEME" \
-    -destination "platform=iOS Simulator,id=$UDID" \
-    -derivedDataPath "$DERIVED_DATA" \
-    -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
-    -enableCodeCoverage YES \
-    -parallel-testing-enabled YES \
-    -retry-tests-on-failure \
-    -test-iterations 2 \
-    CODE_SIGNING_ALLOWED=NO
+
+  # The pre-boot above shrinks but does not eliminate the window where the
+  # UI-test runner dies at initialization ("Timed out while loading
+  # Accessibility" / "failed to initialize for UI testing") on a loaded CI
+  # host. That failure aborts the session before a single test runs, so
+  # `-retry-tests-on-failure` never sees it — it retries failed tests, not a
+  # runner that never started. Guard exactly that signature with one full
+  # re-run; genuine test failures still fail on the first attempt.
+  XCODEBUILD_LOG=$(mktemp -t swift-coverage-xcodebuild)
+  RUNNER_INIT_RE='failed to initialize for UI testing|Timed out while loading Accessibility'
+  for XCB_ATTEMPT in 1 2; do
+    # xcodebuild refuses to overwrite an existing result bundle, so every
+    # attempt (and a second local run) must clear it first.
+    rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
+    XCB_RC=0
+    xcodebuild test \
+      -project "${XCODE_SCHEME}.xcodeproj" \
+      -scheme "$XCODE_SCHEME" \
+      -destination "platform=iOS Simulator,id=$UDID" \
+      -derivedDataPath "$DERIVED_DATA" \
+      -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
+      -enableCodeCoverage YES \
+      -parallel-testing-enabled YES \
+      -retry-tests-on-failure \
+      -test-iterations 2 \
+      CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$XCODEBUILD_LOG" || XCB_RC=$?
+    if [[ $XCB_RC -eq 0 ]]; then
+      break
+    fi
+    if [[ $XCB_ATTEMPT -eq 1 ]] && grep -qE "$RUNNER_INIT_RE" "$XCODEBUILD_LOG"; then
+      echo "::warning::UI-test runner failed to initialize (simulator infrastructure, not a test failure); re-running xcodebuild test once"
+      continue
+    fi
+    exit "$XCB_RC"
+  done
 
   # Newest wins. xcodebuild keys ProfileData by device UDID, so a machine that
   # has run the suite against more than one simulator keeps several — and an
