@@ -722,7 +722,8 @@
       "message": {
         "type": "user_message",
         "text": "hello from follower",
-        "messageId": "f-1"
+        "messageId": "f-1",
+        "steer": true
       }
     }
   ],

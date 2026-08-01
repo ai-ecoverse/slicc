@@ -454,7 +454,10 @@ class AppState: ObservableObject {
     // MARK: - UI Actions
 
     /// Send a user message to the agent via the data channel.
-    func sendMessage(_ text: String) {
+    /// `steer: true` interrupts the leader's running turn instead of
+    /// queueing behind it — the phone's equivalent of the desktop's
+    /// Cmd+Enter.
+    func sendMessage(_ text: String, steer: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -471,7 +474,8 @@ class AppState: ObservableObject {
             messagesByScoop[jid, default: []].append(message)
         }
 
-        let msg = FollowerToLeaderMessage.userMessage(text: trimmed, messageId: messageId)
+        let msg = FollowerToLeaderMessage.userMessage(
+            text: trimmed, messageId: messageId, steer: steer)
         sendToLeader(msg)
     }
 
