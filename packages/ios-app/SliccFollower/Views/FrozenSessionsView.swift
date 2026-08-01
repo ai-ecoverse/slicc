@@ -103,7 +103,9 @@ struct FrozenSessionsView: View {
 /// Banner + composer replacement while a frozen session is open. The webapp
 /// tints the shell ice-blue; the SwiftUI equivalent is this tinted banner
 /// bar in place of the input — read-only means the composer is gone, not
-/// merely disabled.
+/// merely disabled. No dismiss button of its own: the top-left Back returns
+/// to live and a right swipe on the transcript does the same, so the banner
+/// only states what you are looking at.
 struct FrozenSessionBanner: View {
     @EnvironmentObject var appState: AppState
 
@@ -121,18 +123,10 @@ struct FrozenSessionBanner: View {
                 }
             }
             Spacer()
-            Button("Back to live") {
-                appState.closeFrozenSession()
-            }
-            .font(.footnote.weight(.semibold))
-            .accessibilityIdentifier("frozen-close")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .foregroundStyle(.white)
         .background(Color(red: 0.23, green: 0.42, blue: 0.70))  // webapp's ice-blue #3b6cb2
-        // No container-level accessibility id: SwiftUI stamps a container's
-        // id onto its LEAVES, which would clobber `frozen-close` on the
-        // button (see "Put accessibility identifiers on leaves" in CLAUDE.md).
     }
 }

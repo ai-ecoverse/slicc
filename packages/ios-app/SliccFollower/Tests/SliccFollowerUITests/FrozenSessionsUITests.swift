@@ -45,9 +45,28 @@ final class FrozenSessionsUITests: XCTestCase {
         // The archived transcript renders through the normal message list.
         XCTAssertTrue(app.staticTexts["What did we ship?"].waitForExistence(timeout: 30))
 
-        // Back to live restores the composer surface.
-        app.buttons["frozen-close"].tap()
-        XCTAssertFalse(banner.waitForExistence(timeout: 3))
+        // The rail button hides while frozen — the snowflake would only
+        // offer more of what is already on screen.
+        XCTAssertFalse(app.buttons["frozen-rail-button"].exists)
+
+        // The top-left Back returns to live (the system back is hidden, so
+        // the one visible back affordance does what it looks like).
+        let back = app.buttons["frozen-back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        back.tap()
+        XCTAssertFalse(banner.waitForExistence(timeout: 5))
+        let rail = app.buttons["frozen-rail-button"]
+        XCTAssertTrue(rail.waitForExistence(timeout: 10))
+
+        // Reopen through the rail, then dismiss by swiping right.
+        rail.tap()
+        let cardAgain = app.buttons["frozen-card-fixture-frozen-1"]
+        XCTAssertTrue(cardAgain.waitForExistence(timeout: 30))
+        cardAgain.tap()
+        XCTAssertTrue(banner.waitForExistence(timeout: 30))
+        app.staticTexts["What did we ship?"].swipeRight()
+        XCTAssertFalse(banner.waitForExistence(timeout: 5))
+        XCTAssertTrue(rail.waitForExistence(timeout: 10))
     }
 
     func testEmptyFreezerNamesItself() {

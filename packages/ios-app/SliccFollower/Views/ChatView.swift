@@ -112,12 +112,14 @@ struct ConversationView: View {
                 // Read-only view of an archived session. The live transcript
                 // and composer are replaced wholesale — read-only means the
                 // composer does not exist, not that it is merely grayed out.
+                // A right swipe dismisses back to live, like the back gesture.
                 MessageListView(
                     messages: frozen.archive.messages,
                     isStreaming: false,
                     toolUICards: [],
                     onInlineSprinkleLick: { _, _ in }
                 )
+                .simultaneousGesture(frozenDismissGesture)
                 FrozenSessionBanner()
             } else {
                 liveConversation
@@ -129,14 +131,32 @@ struct ConversationView: View {
                 ?? appState.selectedScoop?.assistantLabel ?? "SLICC"
         )
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showFrozenSessions = true }) {
-                    Image(systemName: "snowflake")
-                        .foregroundStyle(.white.opacity(0.7))
+            // While frozen, the top-left Back returns to the LIVE session —
+            // the system back (which pops to the sidebar) is hidden so there
+            // is exactly one back affordance and it does what it looks like.
+            if appState.openFrozen != nil {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { appState.closeFrozenSession() }) {
+                        Image(systemName: "chevron.backward")
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .accessibilityLabel("Back to live session")
+                    .accessibilityIdentifier("frozen-back")
                 }
-                .accessibilityLabel("Past Sessions")
-                .accessibilityIdentifier("frozen-rail-button")
+            }
+            // The rail button hides while a frozen session is open — the
+            // snowflake would only offer more of what is already on screen.
+            if appState.openFrozen == nil {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showFrozenSessions = true }) {
+                        Image(systemName: "snowflake")
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .accessibilityLabel("Past Sessions")
+                    .accessibilityIdentifier("frozen-rail-button")
+                }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showSettings = true }) {
@@ -193,6 +213,21 @@ struct ConversationView: View {
                 }
             )
         }
+    }
+
+    /// Right swipe anywhere on a frozen transcript dismisses back to live —
+    /// the same filter as the scoop swipe (mostly-horizontal flicks only) so
+    /// vertical scrolling stays untouched.
+    private var frozenDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 40, coordinateSpace: .local)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical) * 1.5 else { return }
+                if horizontal > 60 {
+                    appState.closeFrozenSession()
+                }
+            }
     }
 
     /// Horizontal drag gesture that routes to AppState's swipe handlers.

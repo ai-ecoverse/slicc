@@ -135,8 +135,8 @@ import SliccTraySession
                 ---
 
                 <!-- slicc:session-data
-                [{"id":"m1","role":"user","content":"What did we ship?","timestamp":0},\
-                {"id":"m2","role":"assistant","content":"The freezer rail, read-only on your phone.","timestamp":1}]
+                [{"id":"m1","role":"user","content":"What did we ship?","timestamp":1753867200000},\
+                {"id":"m2","role":"assistant","content":"The freezer rail, read-only on your phone.","timestamp":1753867260000}]
                 -->
 
                 # \(entry.title)
