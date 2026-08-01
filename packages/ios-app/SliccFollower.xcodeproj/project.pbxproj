@@ -11,11 +11,14 @@
 		09FE7E5B6F63D6850F2EBFBE /* UITestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1308398CD972FF297E2C75 /* UITestHooks.swift */; };
 		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
 		15CF4C85551B4FE239D55E94 /* SliccIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438577405ABBCA33F117862C /* SliccIcons.swift */; };
+		1939D37EEDBD284DC9F6A9DC /* FrozenSessionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECF8476768958BC66533E58F /* FrozenSessionsUITests.swift */; };
 		21BD049697833AC4E3316A58 /* ToolUIPlaceholderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0425579D2C460F993D259DB /* ToolUIPlaceholderTests.swift */; };
 		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
 		2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB646EF0D0006D1A43F527D /* ChatMessage.swift */; };
 		2CE789AA836BB0713F1250D7 /* CDPBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBE0A7D88487F7712E451646 /* CDPBridge.swift */; };
 		306C9DAD5071D0E813194FC5 /* ICloudSessionListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55D53BAF8B8E31F0EC06B69E /* ICloudSessionListTests.swift */; };
+		319F6B893CA643B51BE218BB /* FrozenSessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */; };
+		372183DEB63D89EC6E10C140 /* FrozenSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9572AB87A7ACEC6740682685 /* FrozenSessionsTests.swift */; };
 		3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A069AA812629AC5FE70AC9 /* SettingsView.swift */; };
 		3EDEBD047CEC3F24BC3ED785 /* SliccFollowerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */; };
 		472BB1BEB4E248916156C9EE /* tray-sync-corpus.json in Resources */ = {isa = PBXBuildFile; fileRef = FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */; };
@@ -30,6 +33,7 @@
 		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
 		5B5741496E7C7EA37979CFF2 /* AttachmentChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31E089FCA5BF8861469F73C4 /* AttachmentChips.swift */; };
 		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
+		5E23C33D85A8DFC1772AD1FE /* FrozenSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 508DFA2D4CC9FD26DCC66AD4 /* FrozenSessions.swift */; };
 		67EC4D5BDDC4014A965FF5B4 /* ConnectionRouteUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */; };
 		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
 		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
@@ -91,6 +95,7 @@
 		224A81FCF4ECFA8EA4157E42 /* link-header-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "link-header-corpus.json"; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
 		31E089FCA5BF8861469F73C4 /* AttachmentChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChips.swift; sourceTree = "<group>"; };
+		3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsView.swift; sourceTree = "<group>"; };
 		356386D299A1933A39CB972B /* TrayChunkFraming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayChunkFraming.swift; sourceTree = "<group>"; };
 		37492C8E3201CB2A14C6BD12 /* ConnectionStateUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStateUITests.swift; sourceTree = "<group>"; };
 		39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsCarouselView.swift; sourceTree = "<group>"; };
@@ -103,6 +108,7 @@
 		4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUICard.swift; sourceTree = "<group>"; };
 		4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraySignaling.swift; sourceTree = "<group>"; };
 		4E99369A8A6B1A9B8EBE996E /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		508DFA2D4CC9FD26DCC66AD4 /* FrozenSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessions.swift; sourceTree = "<group>"; };
 		523A4A068180D7EE98435885 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		55D53BAF8B8E31F0EC06B69E /* ICloudSessionListTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSessionListTests.swift; sourceTree = "<group>"; };
 		5AF41895CF5F76A1CD2B671E /* LickEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LickEvent.swift; sourceTree = "<group>"; };
@@ -118,6 +124,7 @@
 		8D76B8F603084A6021B6DD6B /* KeepaliveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeepaliveTests.swift; sourceTree = "<group>"; };
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
+		9572AB87A7ACEC6740682685 /* FrozenSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsTests.swift; sourceTree = "<group>"; };
 		9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocolCorpusTests.swift; sourceTree = "<group>"; };
 		A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureConversationUITests.swift; sourceTree = "<group>"; };
 		A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -137,6 +144,7 @@
 		DD1308398CD972FF297E2C75 /* UITestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestHooks.swift; sourceTree = "<group>"; };
 		DFC4F75EC6A6C1D71314A24D /* TrayFs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFs.swift; sourceTree = "<group>"; };
 		E9FC22E5B3D4B0DA205C7F62 /* ICloudSessionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudSessionsUITests.swift; sourceTree = "<group>"; };
+		ECF8476768958BC66533E58F /* FrozenSessionsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsUITests.swift; sourceTree = "<group>"; };
 		F0425579D2C460F993D259DB /* ToolUIPlaceholderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUIPlaceholderTests.swift; sourceTree = "<group>"; };
 		F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F0A069AA812629AC5FE70AC9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -163,6 +171,7 @@
 			isa = PBXGroup;
 			children = (
 				639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */,
+				9572AB87A7ACEC6740682685 /* FrozenSessionsTests.swift */,
 				0835A30393CEF046BA90DB16 /* FsClientTests.swift */,
 				55D53BAF8B8E31F0EC06B69E /* ICloudSessionListTests.swift */,
 				8D76B8F603084A6021B6DD6B /* KeepaliveTests.swift */,
@@ -201,6 +210,7 @@
 			isa = PBXGroup;
 			children = (
 				BBB646EF0D0006D1A43F527D /* ChatMessage.swift */,
+				508DFA2D4CC9FD26DCC66AD4 /* FrozenSessions.swift */,
 				D158A5ACE0AC9C2CE6FEFCD3 /* ICloudSessionList.swift */,
 				5AF41895CF5F76A1CD2B671E /* LickEvent.swift */,
 				618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */,
@@ -238,6 +248,7 @@
 				FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */,
 				37492C8E3201CB2A14C6BD12 /* ConnectionStateUITests.swift */,
 				A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */,
+				ECF8476768958BC66533E58F /* FrozenSessionsUITests.swift */,
 				E9FC22E5B3D4B0DA205C7F62 /* ICloudSessionsUITests.swift */,
 			);
 			name = SliccFollowerUITests;
@@ -252,6 +263,7 @@
 				11B186EDFDE184DC8B3215C4 /* ChatView.swift */,
 				940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */,
 				1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */,
+				3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */,
 				1F2EECDCB4AF899D3071D13C /* InlineSprinkleView.swift */,
 				CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */,
 				523A4A068180D7EE98435885 /* MarkdownText.swift */,
@@ -481,6 +493,8 @@
 				73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */,
 				C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */,
 				B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */,
+				5E23C33D85A8DFC1772AD1FE /* FrozenSessions.swift in Sources */,
+				319F6B893CA643B51BE218BB /* FrozenSessionsView.swift in Sources */,
 				D493553CF88D9F88586D7E93 /* FsClient.swift in Sources */,
 				CCD45A2DC9CD2D58A5CBCA0F /* HandoffLink.swift in Sources */,
 				9AD8326007279D3F37D57C9C /* ICloudSessionList.swift in Sources */,
@@ -517,6 +531,7 @@
 				67EC4D5BDDC4014A965FF5B4 /* ConnectionRouteUITests.swift in Sources */,
 				BD662161506DEE603F8854EF /* ConnectionStateUITests.swift in Sources */,
 				4A9B912F64233A5C73E57DB4 /* FixtureConversationUITests.swift in Sources */,
+				1939D37EEDBD284DC9F6A9DC /* FrozenSessionsUITests.swift in Sources */,
 				A5A215E64B167C5F918EA6FA /* ICloudSessionsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -526,6 +541,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8017E9416AEB3D7756ADEB3A /* ChunkFramingTests.swift in Sources */,
+				372183DEB63D89EC6E10C140 /* FrozenSessionsTests.swift in Sources */,
 				B8033DFD106285BDC91FBEC4 /* FsClientTests.swift in Sources */,
 				306C9DAD5071D0E813194FC5 /* ICloudSessionListTests.swift in Sources */,
 				54B15E202D059EA1DBB4ED44 /* KeepaliveTests.swift in Sources */,

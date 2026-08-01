@@ -228,6 +228,106 @@ class AppState: ObservableObject {
         connect(to: url, rememberInHistory: false)
     }
 
+    // MARK: - Frozen sessions (freezer rail)
+
+    /// How the frozen-session list was (or failed to be) produced.
+    enum FrozenListState: Equatable {
+        case idle
+        case loading
+        /// `rebuilt` means /sessions/index.json was corrupt and the list came
+        /// from a /sessions directory scan instead.
+        case loaded(rebuilt: Bool)
+        case failed(String)
+    }
+
+    struct OpenFrozenSession {
+        let entry: FrozenSessionIndexEntry
+        let archive: ParsedFrozenArchive
+    }
+
+    @Published var frozenListState: FrozenListState = .idle
+    @Published var frozenSessions: [FrozenSessionIndexEntry] = []
+    /// Non-nil while a frozen session is open read-only; the composer is
+    /// replaced by the frozen banner for the duration.
+    @Published var openFrozen: OpenFrozenSession?
+    @Published var frozenOpenError: String?
+
+    /// Load `/sessions/index.json` from the leader's VFS. A corrupt index
+    /// self-heals from a `/sessions` directory scan; a missing sessions dir
+    /// is an empty rail, not an error.
+    func loadFrozenSessions() {
+        #if DEBUG
+            if let fixture = UITestHooks.frozenFixture() {
+                frozenSessions = fixture
+                frozenListState = .loaded(rebuilt: false)
+                return
+            }
+        #endif
+        guard connectionState == .connected else { return }
+        frozenListState = .loading
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let raw = try await self.fsClient.readFile(FrozenSessionIndex.indexPath)
+                if let entries = FrozenSessionIndex.parse(indexJson: raw) {
+                    self.frozenSessions = entries
+                    self.frozenListState = .loaded(rebuilt: false)
+                    return
+                }
+                // Corrupt or partially written index — rebuild from a scan.
+                try await self.rebuildFrozenList()
+            } catch {
+                // Missing index but present archives is the same self-heal
+                // path; a missing directory degrades to an empty rail.
+                do {
+                    try await self.rebuildFrozenList()
+                } catch {
+                    self.frozenSessions = []
+                    self.frozenListState = .loaded(rebuilt: false)
+                }
+            }
+        }
+    }
+
+    private func rebuildFrozenList() async throws {
+        let entries = try await fsClient.readDir(FrozenSessionIndex.sessionsDir)
+        frozenSessions = FrozenSessionIndex.rebuild(from: entries)
+        frozenListState = .loaded(rebuilt: true)
+    }
+
+    /// Open one archive read-only. Never logs the content; parse failures
+    /// surface on `frozenOpenError`.
+    func openFrozenSession(_ entry: FrozenSessionIndexEntry) {
+        frozenOpenError = nil
+        #if DEBUG
+            if let markdown = UITestHooks.frozenArchiveFixture(for: entry) {
+                openFrozen = OpenFrozenSession(
+                    entry: entry,
+                    archive: FrozenArchiveParser.withFallbackTimestamps(
+                        FrozenArchiveParser.parse(markdown: markdown),
+                        frozenAt: entry.frozenDate))
+                return
+            }
+        #endif
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let markdown = try await self.fsClient.readFile(entry.path)
+                self.openFrozen = OpenFrozenSession(
+                    entry: entry,
+                    archive: FrozenArchiveParser.withFallbackTimestamps(
+                        FrozenArchiveParser.parse(markdown: markdown),
+                        frozenAt: entry.frozenDate))
+            } catch {
+                self.frozenOpenError = "Could not read the archived session."
+            }
+        }
+    }
+
+    func closeFrozenSession() {
+        openFrozen = nil
+    }
+
     private func connect(to rawUrl: String, rememberInHistory: Bool) {
         let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
