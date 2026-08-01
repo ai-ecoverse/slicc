@@ -521,14 +521,18 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 // pending count is over budget. Caller must hold reassemblyMu.
 func (c *Conn) evictOldestReassemblyLocked() {
 	for len(c.reassembly) > maxPendingReassemblies {
+		// Selection is tracked with an explicit flag: the empty string is a
+		// syntactically valid chunkId, so it cannot double as "none selected".
 		var oldestID string
 		var oldest uint64
+		found := false
 		for id, entry := range c.reassembly {
-			if oldestID == "" || entry.seq < oldest {
+			if !found || entry.seq < oldest {
 				oldestID, oldest = id, entry.seq
+				found = true
 			}
 		}
-		if oldestID == "" {
+		if !found {
 			return
 		}
 		delete(c.reassembly, oldestID)
