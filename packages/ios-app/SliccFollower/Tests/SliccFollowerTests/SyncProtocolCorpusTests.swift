@@ -144,6 +144,10 @@ final class SyncProtocolCorpusTests: XCTestCase {
             reencoded = try encoder.encode(try decoder.decode(RemoteTargetInfo.self, from: sample))
         case "TrayTargetEntry":
             reencoded = try encoder.encode(try decoder.decode(TrayTargetEntry.self, from: sample))
+        case "TrayFsRequest":
+            reencoded = try encoder.encode(try decoder.decode(TrayFsRequest.self, from: sample))
+        case "TrayFsResponse":
+            reencoded = try encoder.encode(try decoder.decode(TrayFsResponse.self, from: sample))
         default:
             return nil
         }

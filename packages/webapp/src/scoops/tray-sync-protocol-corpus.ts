@@ -31,6 +31,8 @@ import type {
   ScoopSummary,
   SprinkleSummary,
   ToolCall,
+  TrayFsRequest,
+  TrayFsResponse,
   TrayTargetEntry,
 } from '@slicc/shared-ts';
 import { SLICC_HOSTED_ORIGIN, TRAY_SYNC_PROTOCOL_VERSION } from '@slicc/shared-ts';
@@ -341,9 +343,11 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     ios: 'decoded',
     message: { type: 'preview.open', requestId: 'prev-1', url: 'https://x.sliccy.now/' },
   },
-  // Federated FS is TS-only (no VFS on iOS).
+  // iOS is an fs *requester*: it asks the leader's VFS for content. It serves
+  // no filesystem of its own, so a leader-originated `fs.request` decodes only
+  // so `AppState` can answer it with an error (the leader has no timeout).
   'fs.request': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'fs.request',
       requestId: 'fs-1',
@@ -351,7 +355,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     },
   },
   'fs.response': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'fs.response',
       requestId: 'fs-2',
@@ -526,7 +530,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     message: { type: 'tab.open.error', requestId: 'tab-1', error: 'load failed' },
   },
   'fs.request': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: {
       type: 'fs.request',
       requestId: 'fs-3',
@@ -535,7 +539,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     },
   },
   'fs.response': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: {
       type: 'fs.response',
       requestId: 'fs-4',
@@ -876,6 +880,43 @@ const REMOTE_TARGET_INFO: NestedPayloadEntry<RemoteTargetInfo> = {
   },
 };
 
+// The write variant is the richest arm of the request union, so it is the one
+// that proves `content`/`encoding` survive alongside the common `op`/`path`.
+const TRAY_FS_REQUEST: NestedPayloadEntry<Extract<TrayFsRequest, { op: 'writeFile' }>> = {
+  ios: 'mirrored',
+  fields: {
+    op: 'mirrored',
+    path: 'mirrored',
+    content: 'mirrored',
+    encoding: 'mirrored',
+  },
+  sample: {
+    op: 'writeFile',
+    path: '/tmp/upload/clip.mp4',
+    content: 'AAECAwQ=',
+    encoding: 'base64',
+  },
+};
+
+// The chunked success arm: `chunkIndex`/`totalChunks` are what the client's
+// reassembly depends on, so a mirror that dropped them would strand every
+// large read on the timeout path instead of failing here.
+const TRAY_FS_RESPONSE: NestedPayloadEntry<Extract<TrayFsResponse, { ok: true }>> = {
+  ios: 'mirrored',
+  fields: {
+    ok: 'mirrored',
+    data: 'mirrored',
+    chunkIndex: 'mirrored',
+    totalChunks: 'mirrored',
+  },
+  sample: {
+    ok: true,
+    data: { type: 'file', content: 'hello', encoding: 'utf-8' },
+    chunkIndex: 0,
+    totalChunks: 2,
+  },
+};
+
 const TRAY_TARGET_ENTRY: NestedPayloadEntry<TrayTargetEntry> = {
   ios: 'mirrored',
   fields: {
@@ -919,6 +960,8 @@ export const NESTED_PAYLOAD_CORPUS = {
   SprinkleSummary: SPRINKLE_SUMMARY,
   RemoteTargetInfo: REMOTE_TARGET_INFO,
   TrayTargetEntry: TRAY_TARGET_ENTRY,
+  TrayFsRequest: TRAY_FS_REQUEST,
+  TrayFsResponse: TRAY_FS_RESPONSE,
 } as const;
 
 /** Field names of a nested payload entry carrying the given expectation. */
