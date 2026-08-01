@@ -37,6 +37,7 @@ interface CdpResponseEnvelope {
 
 const PING_INTERVAL_MS = 30_000;
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
+const TERMINAL_CLOSE_REASONS = new Set(['closed by leader', 'preview revoked']);
 
 export interface PreviewBridge {
   handleFrame(frame: CdpRequestEnvelope): Promise<void>;
@@ -58,6 +59,7 @@ class PreviewSocketController {
   private reconnectAttempt = 0;
   private started = false;
   private stopped = false;
+  private terminal = false;
   private suspended = false;
   private resumePending = false;
   private pingOnOpen = false;
@@ -78,7 +80,7 @@ class PreviewSocketController {
   }
 
   start(): void {
-    if (typeof window === 'undefined' || this.started || this.stopped) return;
+    if (typeof window === 'undefined' || this.started || this.stopped || this.terminal) return;
     this.started = true;
     this.wireSocket(this.ws);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
@@ -137,7 +139,7 @@ class PreviewSocketController {
   }
 
   private connectReplacement(): void {
-    if (this.stopped || this.suspended || !this.opts.createWebSocket) return;
+    if (this.stopped || this.terminal || this.suspended || !this.opts.createWebSocket) return;
     try {
       this.ws = this.opts.createWebSocket();
       this.wireSocket(this.ws);
@@ -152,14 +154,16 @@ class PreviewSocketController {
   private scheduleReconnect(): void {
     if (
       this.stopped ||
+      this.terminal ||
       this.suspended ||
       !this.opts.createWebSocket ||
-      this.reconnectTimer !== null ||
-      this.reconnectAttempt >= RECONNECT_DELAYS_MS.length
+      this.reconnectTimer !== null
     ) {
       return;
     }
-    const delay = RECONNECT_DELAYS_MS[this.reconnectAttempt++];
+    const delay =
+      RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+    this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connectReplacement();
@@ -191,7 +195,7 @@ class PreviewSocketController {
   };
 
   private handleSocketOpen(socket: WebSocket): void {
-    if (socket !== this.ws || this.stopped || this.suspended) return;
+    if (socket !== this.ws || this.stopped || this.terminal || this.suspended) return;
     if (this.pingOnOpen) {
       this.pingOnOpen = false;
       this.sendPing();
@@ -209,8 +213,23 @@ class PreviewSocketController {
     this.unwireSocket(socket);
     this.wiredSockets.delete(socket);
     this.clearPingInterval();
+    if (event?.code === 1000 && TERMINAL_CLOSE_REASONS.has(event.reason)) {
+      this.latchTerminalState();
+      return;
+    }
     this.scheduleReconnect();
   };
+
+  private latchTerminalState(): void {
+    this.terminal = true;
+    this.suspended = true;
+    this.resumePending = false;
+    this.pingOnOpen = false;
+    this.clearReconnectTimer();
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('pagehide', this.onPageHide);
+    window.removeEventListener('pageshow', this.onPageShow);
+  }
 
   private readonly onSocketError = (event: Event): void => {
     if (event.currentTarget == null || event.currentTarget === this.ws) {
@@ -235,7 +254,7 @@ class PreviewSocketController {
   }
 
   private readonly onVisibilityChange = (): void => {
-    if (this.stopped) return;
+    if (this.stopped || this.terminal) return;
     if (document.visibilityState !== 'visible') {
       this.resumePending = true;
       this.sendPing();
@@ -249,7 +268,7 @@ class PreviewSocketController {
   };
 
   private resume(): void {
-    if (this.stopped || !this.resumePending) return;
+    if (this.stopped || this.terminal || !this.resumePending) return;
     this.resumePending = false;
     this.suspended = false;
     this.clearReconnectTimer();
@@ -265,7 +284,7 @@ class PreviewSocketController {
   }
 
   private readonly onPageHide = (): void => {
-    if (this.stopped) return;
+    if (this.stopped || this.terminal) return;
     this.suspended = true;
     this.resumePending = true;
     this.clearPingInterval();

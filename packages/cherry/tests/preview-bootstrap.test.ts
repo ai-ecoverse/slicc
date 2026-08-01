@@ -287,7 +287,7 @@ describe('preview bootstrap', () => {
     expect(removeEventListener).toHaveBeenCalledWith('pageshow', pageshowListener);
   });
 
-  it('reconnects unexpected closes with bounded exponential backoff', () => {
+  it('retries unexpected closes indefinitely with exponential backoff capped at 16s', () => {
     vi.useFakeTimers();
     let closeHandler: ((event: Event) => void) | undefined;
     const reconnectError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -308,20 +308,82 @@ describe('preview bootstrap', () => {
     bridge.start();
     closeHandler?.(new Event('close'));
 
-    vi.advanceTimersByTime(999);
-    expect(createWebSocket).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(createWebSocket).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1_999);
-    expect(createWebSocket).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1);
-    expect(createWebSocket).toHaveBeenCalledTimes(2);
-    vi.runAllTimers();
-    expect(createWebSocket).toHaveBeenCalledTimes(5);
+    const delays = [1_000, 2_000, 4_000, 8_000, 16_000, 16_000, 16_000];
+    for (const [index, delay] of delays.entries()) {
+      vi.advanceTimersByTime(delay - 1);
+      expect(createWebSocket).toHaveBeenCalledTimes(index);
+      vi.advanceTimersByTime(1);
+      expect(createWebSocket).toHaveBeenCalledTimes(index + 1);
+    }
     expect(reconnectError).toHaveBeenCalledWith(
       '[preview-bridge] WebSocket reconnect failed:',
       expect.any(Error)
     );
+    bridge.stop();
+  });
+
+  it.each(['closed by leader', 'preview revoked'])(
+    'latches terminal close reason %s and cannot be resurrected by lifecycle events',
+    (reason) => {
+      vi.useFakeTimers();
+      let closeHandler: ((event: CloseEvent) => void) | undefined;
+      const addWindowListener = vi.spyOn(window, 'addEventListener');
+      const addDocumentListener = vi.spyOn(document, 'addEventListener');
+      const createWebSocket = vi.fn(() => fakeWs({ readyState: WebSocket.OPEN }));
+      const bridge = createPreviewBridge({
+        ws: fakeWs({
+          readyState: WebSocket.OPEN,
+          addEventListener: (type: string, callback: (event: CloseEvent) => void) => {
+            if (type === 'close') closeHandler = callback;
+          },
+        }),
+        createWebSocket,
+      });
+      bridge.start();
+      const pagehide = addWindowListener.mock.calls.find(([type]) => type === 'pagehide')?.[1] as
+        | EventListener
+        | undefined;
+      const pageshow = addWindowListener.mock.calls.find(([type]) => type === 'pageshow')?.[1] as
+        | EventListener
+        | undefined;
+      const visibility = addDocumentListener.mock.calls.find(
+        ([type]) => type === 'visibilitychange'
+      )?.[1] as EventListener | undefined;
+
+      closeHandler?.(new CloseEvent('close', { code: 1000, reason }));
+      vi.advanceTimersByTime(60_000);
+      pagehide?.(new PageTransitionEvent('pagehide', { persisted: true }));
+      pageshow?.(new PageTransitionEvent('pageshow', { persisted: true }));
+      visibility?.(new Event('visibilitychange'));
+      vi.advanceTimersByTime(60_000);
+
+      expect(createWebSocket).not.toHaveBeenCalled();
+      bridge.stop();
+    }
+  );
+
+  it.each([
+    { code: 1006, reason: '' },
+    { code: 1000, reason: 'other normal close' },
+  ])('retries an unrecognized close ($code, $reason)', ({ code, reason }) => {
+    vi.useFakeTimers();
+    let closeHandler: ((event: CloseEvent) => void) | undefined;
+    const createWebSocket = vi.fn(() => fakeWs({ readyState: WebSocket.OPEN }));
+    const bridge = createPreviewBridge({
+      ws: fakeWs({
+        readyState: WebSocket.OPEN,
+        addEventListener: (type: string, callback: (event: CloseEvent) => void) => {
+          if (type === 'close') closeHandler = callback;
+        },
+      }),
+      createWebSocket,
+    });
+    bridge.start();
+
+    closeHandler?.(new CloseEvent('close', { code, reason }));
+    vi.advanceTimersByTime(1_000);
+
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
     bridge.stop();
   });
 
