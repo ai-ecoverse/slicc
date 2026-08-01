@@ -27,7 +27,7 @@ export const MACOS_PATH_PREFIXES = [
   'packages/spoon/',
   'packages/assets/',
 ];
-export const IOS_PATH_PREFIXES = ['packages/ios-app/'];
+export const IOS_PATH_PREFIXES = ['packages/ios-app/', 'packages/swift-traysession/'];
 
 // APPROVED relevant path set for the `slicc` Go CLI binaries. The CLI vendors
 // its own copy of the wire protocol (internal/protocol), so that part of the

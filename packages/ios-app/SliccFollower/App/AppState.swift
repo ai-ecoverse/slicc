@@ -1,4 +1,5 @@
 import Foundation
+import SliccTraySession
 import SwiftUI
 import WebKit
 import WebRTC
@@ -140,10 +141,31 @@ class AppState: ObservableObject {
 
     // MARK: - Init
 
+    /// Tray sessions other devices published to iCloud KVS (the macOS
+    /// launcher is the producer). Read-only here: the phone joins sessions,
+    /// it never publishes one. `@Observable`, so SwiftUI views track it
+    /// directly; without iCloud provisioning it degrades to a local cache
+    /// and simply stays empty.
+    let sessionStore: TraySessionSyncStore
+
     init() {
+        sessionStore = AppState.makeSessionStore()
         if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
             joinUrlHistory = history
         }
+    }
+
+    private static func makeSessionStore() -> TraySessionSyncStore {
+        #if DEBUG
+            if let fixture = UITestHooks.sessionsFixtureBackend() {
+                return TraySessionSyncStore(
+                    backend: fixture,
+                    deviceId: "ios-under-test",
+                    deviceName: "iPhone Under Test"
+                )
+            }
+        #endif
+        return TraySessionSyncStore()
     }
 
     // MARK: - Private Networking / Sync

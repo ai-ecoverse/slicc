@@ -4,7 +4,7 @@ This file covers the shared tray-session sync library in `packages/swift-trayses
 
 ## Scope
 
-`SliccTraySession` is a Foundation-only SPM library for cross-device discovery of active tray join URLs over iCloud key-value sync. The macOS launcher (`packages/swift-launcher`) is the producer and today's only consumer; the iOS follower (`packages/ios-app`) is the intended second consumer for iCloud session discovery (#1791) and does not depend on it yet. Supports `.macOS(.v14)` and `.iOS(.v17)`; **nothing here may import AppKit or UIKit** — CI builds the package for the iOS Simulator to enforce that.
+`SliccTraySession` is a Foundation-only SPM library for cross-device discovery of active tray join URLs over iCloud key-value sync. The macOS launcher (`packages/swift-launcher`) is the producer; the iOS follower (`packages/ios-app`) consumes it read-only for iCloud session discovery (the phone joins sessions, it never publishes one). Supports `.macOS(.v14)` and `.iOS(.v17)`; **nothing here may import AppKit or UIKit** — CI builds the package for the iOS Simulator to enforce that.
 
 ## Contents
 

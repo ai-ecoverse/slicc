@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- iCloud key-value store for cross-device tray-session discovery.
+	     MUST match what macOS releases ship (packages/swift-launcher/CLAUDE.md
+	     "iCloud provisioning": S8LB56P782.ai.sliccy.trays) so both platforms
+	     read the same container. Unsigned/dev builds without a provisioning
+	     profile degrade to a local cache (UbiquitousKeyValueBackend). -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>S8LB56P782.ai.sliccy.trays</string>
+</dict>
+</plist>

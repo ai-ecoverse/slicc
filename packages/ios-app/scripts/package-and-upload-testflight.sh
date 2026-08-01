@@ -27,7 +27,22 @@
 #                                       created and torn down on exit
 #   SLICC_SKIP_TESTFLIGHT=1            no-op; useful when the secrets
 #                                       aren't available
+#   SLICC_IOS_NO_ICLOUD=1              archive WITHOUT the iCloud KVS
+#                                       entitlement (mirrors the macOS
+#                                       PROVISION_PROFILE gate): use when the
+#                                       App Store profile does not yet carry
+#                                       the iCloud capability, so the release
+#                                       ships without session sync instead of
+#                                       failing codesign
 set -euo pipefail
+
+# iCloud KVS entitlement gate — see SLICC_IOS_NO_ICLOUD above. An empty
+# CODE_SIGN_ENTITLEMENTS override drops the project.yml entitlements file.
+ENTITLEMENTS_OVERRIDE=()
+if [ "${SLICC_IOS_NO_ICLOUD:-}" = "1" ]; then
+  echo "SLICC_IOS_NO_ICLOUD=1 — archiving without the iCloud KVS entitlement"
+  ENTITLEMENTS_OVERRIDE=(CODE_SIGN_ENTITLEMENTS=)
+fi
 
 if [ "${SLICC_SKIP_TESTFLIGHT:-}" = "1" ]; then
   echo "SLICC_SKIP_TESTFLIGHT=1 — skipping TestFlight upload"
@@ -281,6 +296,7 @@ xcodebuild \
   PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  ${ENTITLEMENTS_OVERRIDE[@]+"${ENTITLEMENTS_OVERRIDE[@]}"} \
   archive >/tmp/slicc-archive.log 2>&1 \
   || { tail -50 /tmp/slicc-archive.log; exit 1; }
 echo "  archive ok"

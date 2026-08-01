@@ -1,3 +1,4 @@
+import SliccTraySession
 import SwiftUI
 
 struct SettingsView: View {
@@ -8,6 +9,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                iCloudSessionsSection
                 connectionSection
                 if appState.connectionState == .connected {
                     trayInfoSection
@@ -32,6 +34,78 @@ struct SettingsView: View {
                 storedJoinUrl = newValue
             }
         }
+    }
+
+    // MARK: - iCloud Sessions Section
+
+    /// Live leaders other devices on this Apple ID advertised to iCloud.
+    /// Tapping one threads its join URL into the normal connect path — the
+    /// URL carries the session secret, so it is never rendered, logged, or
+    /// used in an accessibility identifier (rows use the one-way session id).
+    private var iCloudSessionsSection: some View {
+        Section {
+            let groups = ICloudSessionList.groups(from: appState.sessionStore.sessions)
+            if groups.isEmpty {
+                sessionsEmptyState
+            } else {
+                ForEach(groups) { group in
+                    ForEach(group.sessions) { session in
+                        sessionRow(session, deviceName: group.deviceName)
+                    }
+                }
+            }
+        } header: {
+            Text("iCloud Sessions")
+        } footer: {
+            Text(
+                "Leaders started with Sliccstart on this Apple ID appear here automatically. Others (cloud, another Apple ID) still join via a pasted Join URL below."
+            )
+        }
+        .onAppear { appState.sessionStore.reload() }
+    }
+
+    private func sessionRow(_ session: SyncedTraySession, deviceName: String) -> some View {
+        Button {
+            appState.joinUrl = session.joinUrl
+            appState.connect()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.label.isEmpty ? "SLICC session" : session.label)
+                        .foregroundStyle(.primary)
+                    Text("\(deviceName) · \(ICloudSessionList.age(of: session.lastSeenAt, now: Date()))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle")
+                    .foregroundStyle(.tint)
+            }
+        }
+        // The one-way hash, deliberately — never the join URL.
+        .accessibilityIdentifier("icloud-session-\(session.id)")
+        .disabled(
+            session.isStale(ttl: TraySessionSyncStore.defaultTTL, now: Date())
+                || appState.connectionState == .connecting
+        )
+    }
+
+    private var sessionsEmptyState: some View {
+        let reason = ICloudSessionList.emptyReason(
+            hasICloudIdentity: FileManager.default.ubiquityIdentityToken != nil
+        )
+        return HStack(spacing: 10) {
+            Image(systemName: reason == .iCloudUnavailable ? "icloud.slash" : "icloud")
+                .foregroundStyle(.secondary)
+            Text(
+                reason == .iCloudUnavailable
+                    ? "iCloud is unavailable on this device. Sign in to iCloud, or paste a Join URL below."
+                    : "No active sessions. Start a leader with Sliccstart on a Mac using this Apple ID, or paste a Join URL below."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("icloud-sessions-empty")
     }
 
     // MARK: - Connection Section

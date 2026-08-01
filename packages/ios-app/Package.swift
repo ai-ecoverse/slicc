@@ -13,13 +13,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0"))
+        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0")),
+        .package(path: "../swift-traysession"),
     ],
     targets: [
         .target(
             name: "SliccFollower",
             dependencies: [
-                .product(name: "WebRTC", package: "WebRTC")
+                .product(name: "WebRTC", package: "WebRTC"),
+                .product(name: "SliccTraySession", package: "swift-traysession"),
             ],
             path: "SliccFollower",
             resources: [

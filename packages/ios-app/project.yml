@@ -33,8 +33,13 @@ targets:
         SUPPORTS_MACCATALYST: NO
         INFOPLIST_KEY_NSCameraUsageDescription: 'This app does not access the camera. This entry is required because the bundled WebRTC framework references camera APIs.'
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # iCloud KVS for tray-session discovery. The App Store provisioning
+        # profile must carry the iCloud capability; dev/simulator builds
+        # without it still run — the store degrades to a local cache.
+        CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
     dependencies:
       - package: WebRTC
+      - package: SliccTraySession
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
   SliccFollowerTests:
@@ -90,3 +95,5 @@ packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 150.0.0
+  SliccTraySession:
+    path: ../swift-traysession
