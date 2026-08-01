@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/core/logger.js';
 import type { LeaderSyncContext } from '../../../src/scoops/tray-leader/context.js';
 import { FollowerRegistry } from '../../../src/scoops/tray-leader/follower-registry.js';
-import { PreviewBridgeManager } from '../../../src/scoops/tray-leader/preview-bridge.js';
+import {
+  PREVIEW_LIFECYCLE_RECORD_CAP,
+  PreviewBridgeManager,
+} from '../../../src/scoops/tray-leader/preview-bridge.js';
 import type { LeaderSyncManagerOptions } from '../../../src/scoops/tray-leader-sync.js';
 
 function createHarness() {
@@ -57,5 +60,137 @@ describe('PreviewBridgeManager', () => {
     bridge.stop();
     expect(bridge.getBridgeTransport('conn')).toBeUndefined();
     expect(bridge.mintMap.size).toBe(0);
+    expect(bridge.getPreviewLifecycleRecords()).toEqual([]);
+  });
+
+  it('records announced and suppressed connects plus disconnects', () => {
+    const { bridge, options } = createHarness();
+    const base = {
+      type: 'bridge.connected' as const,
+      previewToken: 'token',
+      origin: 'https://example.com',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+    };
+
+    bridge.onBridgeConnected({ ...base, connId: 'first' });
+    bridge.onBridgeConnected({ ...base, connId: 'first' });
+    bridge.onBridgeConnected({ ...base, connId: 'second' });
+    bridge.onBridgeDisconnected({
+      type: 'bridge.disconnected',
+      connId: 'second',
+      reason: 'closed',
+    });
+
+    expect(options.onPreviewLick).toHaveBeenCalledTimes(1);
+    expect(bridge.getPreviewLifecycleRecords()).toEqual([
+      expect.objectContaining({ lifecycle: 'connected', connId: 'first', announced: true }),
+      expect.objectContaining({ lifecycle: 'connected', connId: 'first', announced: false }),
+      expect.objectContaining({ lifecycle: 'connected', connId: 'second', announced: false }),
+      expect.objectContaining({
+        lifecycle: 'disconnected',
+        connId: 'second',
+        reason: 'closed',
+        announced: false,
+      }),
+    ]);
+
+    bridge.onBridgeDisconnected({
+      type: 'bridge.disconnected',
+      connId: 'unknown',
+      reason: 'worker replay',
+    });
+    const unknownDisconnect = bridge.getPreviewLifecycleRecords().at(-1);
+    expect(unknownDisconnect).toEqual(
+      expect.objectContaining({
+        lifecycle: 'disconnected',
+        connId: 'unknown',
+        announced: false,
+      })
+    );
+    expect(unknownDisconnect).not.toHaveProperty('previewToken');
+  });
+
+  it('re-arms one preview and never announces a quiet preview', () => {
+    const { bridge, options } = createHarness();
+    bridge.registerMintedPreview('normal', {
+      url: 'https://normal.example',
+      title: 'Normal',
+      quiet: false,
+    });
+    bridge.registerMintedPreview('quiet', {
+      url: 'https://quiet.example',
+      title: 'Quiet',
+      quiet: true,
+    });
+    const connect = (previewToken: string, connId: string) =>
+      bridge.onBridgeConnected({
+        type: 'bridge.connected',
+        connId,
+        previewToken,
+        origin: `https://${previewToken}.example`,
+        userAgent: 'test',
+        connectedAt: '2026-07-27T00:00:00.000Z',
+      });
+
+    connect('normal', 'normal-1');
+    connect('normal', 'normal-2');
+    connect('quiet', 'quiet-1');
+    expect(options.onPreviewLick).toHaveBeenCalledTimes(1);
+
+    expect(bridge.rearmPreviewAnnouncements('normal')).toBe(1);
+    connect('normal', 'normal-3');
+    expect(options.onPreviewLick).toHaveBeenCalledTimes(2);
+    expect(bridge.getPreviewLifecycleRecords('quiet')).toEqual([
+      expect.objectContaining({ connId: 'quiet-1', announced: false }),
+    ]);
+  });
+
+  it('bounds records as an oldest-first ring buffer', () => {
+    const { bridge } = createHarness();
+    for (let index = 0; index <= PREVIEW_LIFECYCLE_RECORD_CAP; index += 1) {
+      bridge.onBridgeConnected({
+        type: 'bridge.connected',
+        connId: `conn-${index}`,
+        previewToken: 'token',
+        origin: 'https://example.com',
+        userAgent: 'test',
+        connectedAt: '2026-07-27T00:00:00.000Z',
+      });
+    }
+
+    const records = bridge.getPreviewLifecycleRecords();
+    expect(records).toHaveLength(PREVIEW_LIFECYCLE_RECORD_CAP);
+    expect(records[0]?.connId).toBe('conn-1');
+    expect(records.at(-1)?.connId).toBe(`conn-${PREVIEW_LIFECYCLE_RECORD_CAP}`);
+  });
+
+  it('clears only the dropped preview records and latch', () => {
+    const { bridge, options } = createHarness();
+    const connect = (previewToken: string, connId: string) =>
+      bridge.onBridgeConnected({
+        type: 'bridge.connected',
+        connId,
+        previewToken,
+        origin: `https://${previewToken}.example`,
+        userAgent: 'test',
+        connectedAt: '2026-07-27T00:00:00.000Z',
+      });
+    connect('drop', 'drop-1');
+    connect('keep', 'keep-1');
+
+    bridge.dropMintedPreview('drop');
+    expect(bridge.getPreviewLifecycleRecords().map((record) => record.previewToken)).toEqual([
+      'keep',
+    ]);
+    expect(bridge.rearmPreviewAnnouncements('drop')).toBe(0);
+
+    bridge.registerMintedPreview('drop', {
+      url: 'https://drop.example',
+      title: 'Drop',
+      quiet: false,
+    });
+    connect('drop', 'drop-2');
+    expect(options.onPreviewLick).toHaveBeenCalledTimes(3);
   });
 });

@@ -612,8 +612,8 @@ export class Orchestrator implements ConeApprovalRouter {
 
   /**
    * Relay a preview-bridge lifecycle lick into the LickManager as a `'preview'`
-   * lick. The page-side `LeaderSyncManager` builds the full event (rate-limited,
-   * `--quiet`-suppressed) and forwards it here — page-side via the `lick-preview`
+   * lick. The page-side `LeaderSyncManager` builds the first-connection event
+   * (per-preview latched and `--quiet`-suppressed) and forwards it here via the `lick-preview`
    * bridge, extension-side in-process — because the `LickManager` lives in the
    * kernel worker while the sync manager runs on the page. Accepts `unknown`
    * because the bridge carries the structural `ForwardedLickEvent` mirror.
