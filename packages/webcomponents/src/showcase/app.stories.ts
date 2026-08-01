@@ -24,7 +24,6 @@ import '../overlay/slicc-dialog.js';
 import '../primitives/slicc-avatar.js';
 import '../primitives/slicc-day-separator.js';
 import '../primitives/slicc-floatbar.js';
-import '../primitives/slicc-logo.js';
 import '../shell/slicc-chatpane.js';
 import '../shell/slicc-shell.js';
 import '../switcher/slicc-agent-tabs.js';
@@ -177,14 +176,13 @@ function frozenThread(slug: string, title: string, metaLine: string): HTMLElemen
 }
 
 /**
- * The full-width top bar (the prototype's `.nav`): logo + agent tabs
- * + a flexible spacer + floatbar + theme toggle + avatar. A SIBLING above the
+ * The full-width top bar (the prototype's `.nav`): agent tabs + a flexible
+ * spacer + floatbar + theme toggle + avatar. A SIBLING above the
  * shell — NOT inside the chat column — so the tabs get the whole row width and
  * never collapse into the chat pane when the workbench opens.
  */
 function topnav(): HTMLElement {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
-  const logo = el('slicc-logo', { badge: 'studio' });
   // No active chip: the cone renders in its "open idle" configuration (white
   // background, dark text) rather than the accent color-fill — the resting
   // leader look (matches the Pill/Pill ConeOpenIdle story).
@@ -214,7 +212,7 @@ function topnav(): HTMLElement {
     { kind: 'separator' },
     { id: 'signout', label: 'Sign out', icon: 'log-out', danger: true },
   ];
-  nav.append(logo, switcher, floatbar, toggle, menu);
+  nav.append(switcher, floatbar, toggle, menu);
   return nav;
 }
 

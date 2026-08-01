@@ -567,6 +567,24 @@ describe('slicc-agent-tabs', () => {
       return element;
     }
 
+    it('restores inferred scoop identity and returns cleanly to the cone', () => {
+      const element = mountFocused('designer');
+      const focused = avatar(element) as HTMLElement;
+
+      expect(focused.getAttribute('type')).toBe('scoop');
+      expect(focused.getAttribute('color')).toBe('#8b5cf6');
+      expect(focused.getAttribute('eyes')).toBe('open');
+      expect(focused.shadowRoot?.querySelector('.glyph path')?.getAttribute('fill')).toBe(
+        '#8b5cf6'
+      );
+
+      element.active = 'cone';
+      expect(avatar(element)).toBe(focused);
+      expect(focused.getAttribute('type')).toBe('cone');
+      expect(focused.getAttribute('color')).toBe('#b07823');
+      expect(focused.getAttribute('eyes')).toBe('open');
+    });
+
     it('tracks the focused scoop with one listener and fill-derived pupils', () => {
       const add = vi.spyOn(document, 'addEventListener');
       const element = mountFocused('researcher');

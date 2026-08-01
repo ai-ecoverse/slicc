@@ -56,8 +56,6 @@ export interface WcShellOptions {
   floatLabel: string;
   /** Composer input placeholder. */
   placeholder: string;
-  /** Logo badge text (fixture mode tags itself; live floats go bare). */
-  badge?: string;
   /** Invoked when dock/tab selection activates a workbench surface. */
   onSurfaceActivate?: (surfaceId: string) => void;
   /**
@@ -205,15 +203,9 @@ function buildNav(options: WcShellOptions): {
   const floatbar = el('slicc-floatbar', { label: options.floatLabel, spent: '0.00' });
   const avatarMenu = document.createElement('slicc-avatar-menu');
   avatarMenu.append(el('slicc-avatar', { name: 'SLICC' }));
-  // No logo: the cone chip in the switcher IS the brand mark. Fixture mode
-  // keeps its tag badge so screenshots stay distinguishable. No theme toggle
+  // Fixture and live modes both render the same bare nav. No theme toggle
   // either — the shell follows the OS color scheme (followSystemTheme).
-  nav.append(
-    ...(options.badge ? [el('slicc-logo', { badge: options.badge })] : []),
-    switcher,
-    floatbar,
-    avatarMenu
-  );
+  nav.append(switcher, floatbar, avatarMenu);
   return { nav, switcher, floatbar, avatarMenu };
 }
 
@@ -480,14 +472,14 @@ export function applyShellContext(refs: WcShellRefs, context: ShellContext): voi
   const { shader, frame, freezer } = refs;
   if (context.kind === 'cone') {
     shader.removeAttribute('tint');
-    shader.setAttribute('mode', 'cone');
     frame.style.removeProperty('--ctx');
     freezer.removeAttribute('ctx');
+    shader.setAttribute('mode', 'cone');
   } else if (context.kind === 'scoop') {
-    shader.setAttribute('mode', 'scoop');
     shader.setAttribute('tint', context.accent);
     frame.style.setProperty('--ctx', context.accent);
     freezer.removeAttribute('ctx');
+    shader.setAttribute('mode', 'scoop');
   } else {
     shader.setAttribute('mode', 'freezer');
     shader.setAttribute('tint', FREEZER_TINT);
@@ -536,7 +528,6 @@ export function mountWcUiPreview(root: HTMLElement): void {
     ],
     floatLabel: 'standalone · preview',
     placeholder: 'Preview harness — submissions echo into the thread…',
-    badge: 'fixture',
   });
 
   refs.fileTree.items = [

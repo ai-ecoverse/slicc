@@ -52,9 +52,10 @@ describe('mountWcUiPreview', () => {
     const root = mount();
     const nav = root.querySelector('slicc-nav');
     expect(nav).toBeTruthy();
-    for (const tag of ['slicc-logo', 'slicc-agent-tabs', 'slicc-floatbar', 'slicc-avatar']) {
+    for (const tag of ['slicc-agent-tabs', 'slicc-floatbar', 'slicc-avatar']) {
       expect(nav?.querySelector(tag), tag).toBeTruthy();
     }
+    expect(nav?.firstElementChild?.tagName).toBe('SLICC-AGENT-TABS');
     const states = (
       nav?.querySelector('slicc-agent-tabs') as HTMLElement & {
         scoops: Array<{ state?: string }>;
@@ -102,7 +103,7 @@ describe('mountWcUiPreview', () => {
     expect(shell.hasAttribute('open')).toBe(false);
   });
 
-  it('live floats carry no logo — the cone chip is the brand mark', async () => {
+  it('live floats also mount the bare nav', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -112,7 +113,7 @@ describe('mountWcUiPreview', () => {
       floatLabel: 'live',
       placeholder: 'p',
     });
-    expect(host.querySelector('slicc-logo')).toBeNull();
+    expect(host.querySelector('slicc-nav')?.firstElementChild).toBe(refs.switcher);
     expect(refs.switcher).toBeTruthy();
   });
 

@@ -137,7 +137,7 @@ function typeFor(scoop: ScoopDescriptor): 'cone' | 'scoop' {
 }
 
 function eyesFor(scoop: ScoopDescriptor): 'open' | 'none' | 'dead' {
-  return scoop.eyes ?? (typeFor(scoop) === 'cone' ? 'open' : 'none');
+  return scoop.eyes ?? 'open';
 }
 
 function hueFor(scoop: ScoopDescriptor): string {

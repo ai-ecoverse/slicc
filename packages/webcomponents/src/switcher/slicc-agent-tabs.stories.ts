@@ -135,6 +135,15 @@ export const ConeFocused: Story = {
 
 export const ScoopFocused: Story = {
   args: { scoops: BASE_ROSTER, active: 'researcher', width: 720 },
+  play: async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    document.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: Math.max(900, window.innerWidth - 40),
+        clientY: 40,
+      })
+    );
+  },
 };
 
 export const EveryStatus: Story = {

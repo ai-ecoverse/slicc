@@ -234,17 +234,18 @@ export const Wide: Story = {
 };
 
 /**
- * Narrow frame (560px): the tabs no longer fit, so the component collapses the
- * trailing scoops into its `<slicc-scoop-overflow>` more-popup (the cone tab is
- * never hidden). The floatbar, toggle, and avatar still hold the right edge —
- * the interesting overflow state to review.
+ * Mid-width frame (560px): auxiliary floatbar detail and spend have yielded,
+ * while the runtime name remains beside the overflowing tabs.
  */
-export const Narrow: Story = {
+export const Mid: Story = {
   render: ({ accent }) => appFrame(makeNav(accent, decisionRoster(), 'designer'), '560px'),
 };
 
-/** Phone-width regression case: labels yield while the 39×24px dot grid stays intact. */
-export const Narrow360: Story = {
+/**
+ * Real phone-width regression case: the floatbar is dot-only while one complete
+ * tab and the 39×24px overflow grid keep their floor.
+ */
+export const Narrow: Story = {
   render: ({ accent }) => appFrame(makeNav(accent, decisionRoster(), 'designer'), '360px'),
 };
 

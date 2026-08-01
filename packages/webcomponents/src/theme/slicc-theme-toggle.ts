@@ -54,8 +54,8 @@ const TITLE: Record<SliccTheme, string> = {
  * `setTheme`, swaps its lucide glyph (a `moon` in light, a `sun` in dark — the
  * icon names where the click will take you), updates `aria-pressed` + `title`,
  * and forwards the resolved theme as a `theme` attribute onto every
- * `<slicc-pill>` and `<slicc-add-menu>` in the document so those components do
- * not fall back to `prefers-color-scheme`. Defaults to light on connect and
+ * `<slicc-add-menu>` in the document so those components do not fall back to
+ * `prefers-color-scheme`. Defaults to light on connect and
  * emits a composed, bubbling `slicc-theme-change` event carrying the new theme.
  *
  * @attr theme - resolved theme (`light` | `dark`), reflected; settable to drive
@@ -155,7 +155,7 @@ export class SliccThemeToggle extends HTMLElement {
       // Forward the explicit theme to peer components so they don't fall back to
       // prefers-color-scheme. These elements may not exist yet — that is fine; we
       // only stamp those present now. Referenced by tag name only (no import).
-      for (const peer of document.querySelectorAll('slicc-pill, slicc-add-menu')) {
+      for (const peer of document.querySelectorAll('slicc-add-menu')) {
         peer.setAttribute('theme', theme);
       }
     } finally {
