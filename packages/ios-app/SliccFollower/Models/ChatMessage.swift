@@ -7,7 +7,16 @@ struct AnyCodable: Codable, Equatable {
     let value: Any?
 
     init(_ value: Any?) {
-        self.value = value
+        // Flatten an already-wrapped value. Nesting used to survive
+        // construction and then encode as `null`, because `encode(to:)`
+        // switches on concrete types and an `AnyCodable` payload falls to the
+        // `default:` branch — silent data loss at the wire boundary rather
+        // than a compile error.
+        if let wrapped = value as? AnyCodable {
+            self.value = wrapped.value
+        } else {
+            self.value = value
+        }
     }
 
     init(from decoder: Decoder) throws {

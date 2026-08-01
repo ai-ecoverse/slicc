@@ -48,6 +48,7 @@
       "ignore": [
         "src/types/**",
         "src/globals.d.ts",
+        "src/net/link-header-corpus.ts",
         "src/scoops/tray-sync-protocol-corpus.ts",
         "tests/e2e/**",
         "tests/integration/**",

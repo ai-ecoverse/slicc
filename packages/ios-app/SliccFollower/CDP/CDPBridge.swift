@@ -33,6 +33,10 @@ final class CDPBridge {
     /// list which feeds the tabs carousel.
     var onTargetsChanged: (() -> Void)?
 
+    /// Called when a hosted page advertises a SLICC handoff `Link` rel.
+    /// AppState turns it into a `lick` for the leader's cone.
+    var onHandoffDetected: ((_ pageURL: String, _ match: HandoffMatch, _ title: String?) -> Void)?
+
     // MARK: - Targets
 
     private var targets: [String: CDPTarget] = [:]
@@ -54,6 +58,12 @@ final class CDPBridge {
     /// hosted directly inside the SwiftUI carousel cells, so no off-screen
     /// host view is needed.
     func attach(to window: UIWindow) {}
+
+    /// Relay a handoff spotted by one of the hosted targets.
+    func reportHandoff(pageURL: String, match: HandoffMatch, title: String?) {
+        logger.info("Handoff \(match.verb.rawValue) advertised by a hosted page")
+        onHandoffDetected?(pageURL, match, title)
+    }
 
     // MARK: - Public lifecycle
 

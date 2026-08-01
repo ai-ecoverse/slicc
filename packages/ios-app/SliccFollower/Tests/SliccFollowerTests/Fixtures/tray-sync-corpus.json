@@ -146,7 +146,11 @@
       "message": {
         "type": "hello",
         "protocolVersion": 1,
-        "runtime": "slicc-standalone"
+        "runtime": "slicc-standalone",
+        "capabilities": {
+          "exec": true
+        },
+        "motd": "macOS 15 via node-server"
       }
     },
     {
@@ -545,12 +549,16 @@
       "message": {
         "type": "hello",
         "protocolVersion": 1,
-        "runtime": "slicc-ios"
+        "runtime": "slicc-ios",
+        "capabilities": {
+          "exec": false
+        },
+        "motd": "SLICC iOS follower on iPhone (iOS 26.0) — chat and CDP targets, no shell"
       }
     },
     {
       "type": "lick",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "lick",
         "event": {
