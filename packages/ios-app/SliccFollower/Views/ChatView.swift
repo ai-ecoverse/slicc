@@ -61,11 +61,18 @@ struct ChatView: View {
 
     #if DEBUG
         /// Pin the banner to one state for a UI test. `stalled` is a connected
-        /// leader that stopped answering, so it sets both fields.
+        /// leader that stopped answering, so it sets both fields; `streaming`
+        /// is a connected leader mid-turn, unlocking the send-while-streaming
+        /// affordance without a live peer.
         private func applyForcedConnectionState(_ raw: String) {
             if raw == "stalled" {
                 appState.connectionState = .connected
                 appState.isLeaderStalled = true
+                return
+            }
+            if raw == "streaming" {
+                appState.connectionState = .connected
+                appState.isStreaming = true
                 return
             }
             guard let state = ConnectionState(rawValue: raw) else { return }
