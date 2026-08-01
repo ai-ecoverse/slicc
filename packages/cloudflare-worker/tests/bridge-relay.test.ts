@@ -49,7 +49,11 @@ describe('bridge role routing and relay', () => {
     const replayed = await h.reconnectLeader();
 
     expect(replayed).toContainEqual(
-      expect.objectContaining({ type: 'bridge.connected', connId: bridgeWs.connId })
+      expect.objectContaining({
+        type: 'bridge.connected',
+        connId: bridgeWs.connId,
+        replay: true,
+      })
     );
   });
 

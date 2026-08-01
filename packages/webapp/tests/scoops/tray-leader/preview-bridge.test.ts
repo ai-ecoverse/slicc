@@ -111,6 +111,44 @@ describe('PreviewBridgeManager', () => {
     expect(unknownDisconnect).not.toHaveProperty('previewToken');
   });
 
+  it('resyncs replayed connections without recording, announcing, or touching the latch', async () => {
+    const { bridge, options } = createHarness();
+    const replay = (connId: string) =>
+      bridge.onBridgeConnected({
+        type: 'bridge.connected',
+        connId,
+        previewToken: 'token',
+        origin: 'https://example.com',
+        userAgent: 'test',
+        connectedAt: '2026-07-27T00:00:00.000Z',
+        replay: true,
+      });
+
+    replay('first');
+    replay('second');
+
+    expect(bridge.getTargetEntries()).toHaveLength(2);
+    expect(bridge.getPreviewLifecycleRecords()).toEqual([]);
+    expect(options.onPreviewLick).not.toHaveBeenCalled();
+    expect(bridge.mintMap.has('token')).toBe(false);
+
+    const transport = bridge.getBridgeTransport('first');
+    const response = transport!.send('Runtime.evaluate', { expression: '1 + 1' });
+    const request = options.sendControl.mock.calls.find(
+      ([message]) => message.type === 'bridge.cdp.request'
+    )?.[0];
+    if (request?.type !== 'bridge.cdp.request') {
+      throw new Error('Expected replayed transport to send a CDP request');
+    }
+    bridge.onBridgeCdpResponse({
+      type: 'bridge.cdp.response',
+      connId: 'first',
+      id: request.id,
+      result: { value: 2 },
+    });
+    await expect(response).resolves.toEqual({ value: 2 });
+  });
+
   it('re-arms one preview and never announces a quiet preview', () => {
     const { bridge, options } = createHarness();
     bridge.registerMintedPreview('normal', {
