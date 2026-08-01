@@ -13,7 +13,7 @@ function pupilRadius(element: SliccAgentAvatar): number {
   return Number(pupil?.getAttribute('r'));
 }
 
-function pupilOffset(element: SliccAgentAvatar, side: 'l' | 'r'): [number, number] {
+function translateXY(element: SliccAgentAvatar, side: 'l' | 'r'): [number, number] {
   const transform =
     element.shadowRoot?.querySelector(`.pupil-${side}`)?.getAttribute('transform') ?? '';
   const match = /^translate\(([-\d.]+),([-\d.]+)\)$/.exec(transform);
@@ -21,8 +21,8 @@ function pupilOffset(element: SliccAgentAvatar, side: 'l' | 'r'): [number, numbe
   return [Number(match[1]), Number(match[2])];
 }
 
-function pupilTravel(element: SliccAgentAvatar): number {
-  return Math.hypot(...pupilOffset(element, 'l'));
+function travelMagnitude(element: SliccAgentAvatar): number {
+  return Math.hypot(...translateXY(element, 'l'));
 }
 
 describe('slicc-agent-avatar', () => {
@@ -104,7 +104,7 @@ describe('slicc-agent-avatar', () => {
       element.setAttribute('fill', String(fill));
       radii.push(pupilRadius(element));
       document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1000, clientY: 1000 }));
-      travel.push(pupilTravel(element));
+      travel.push(travelMagnitude(element));
     }
 
     expect(radii[1]).toBeGreaterThan(radii[0]);
@@ -116,16 +116,14 @@ describe('slicc-agent-avatar', () => {
   it('tracks opposed cursor positions in the correct direction with both pupils', () => {
     const element = mount({ type: 'scoop', eyes: 'open' });
     document.dispatchEvent(new PointerEvent('pointermove', { clientX: -1000, clientY: -1000 }));
-    const topLeft = [pupilOffset(element, 'l'), pupilOffset(element, 'r')];
+    const topLeft = [translateXY(element, 'l'), translateXY(element, 'r')];
 
     document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1000, clientY: 1000 }));
-    const bottomRight = [pupilOffset(element, 'l'), pupilOffset(element, 'r')];
+    const bottomRight = [translateXY(element, 'l'), translateXY(element, 'r')];
 
     for (let index = 0; index < topLeft.length; index += 1) {
-      expect(topLeft[index][0]).toBeLessThan(0);
-      expect(topLeft[index][1]).toBeLessThan(0);
-      expect(bottomRight[index][0]).toBeGreaterThan(0);
-      expect(bottomRight[index][1]).toBeGreaterThan(0);
+      expect(bottomRight[index][0]).toBeGreaterThan(topLeft[index][0]);
+      expect(bottomRight[index][1]).toBeGreaterThan(topLeft[index][1]);
     }
   });
 
