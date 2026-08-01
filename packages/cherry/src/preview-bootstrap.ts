@@ -7,6 +7,7 @@ import { type CdpHostHandlerOptions, createCdpHostHandler } from './cdp-host-han
 
 interface PreviewBridgeOptions {
   ws: WebSocket;
+  createWebSocket?: () => WebSocket;
   capabilities?: CdpHostHandlerOptions['capabilities'];
 }
 interface BridgeWindowApi {
@@ -34,7 +35,8 @@ interface CdpResponseEnvelope {
   error?: { code: number; message: string };
 }
 
-type OutboundEnvelope = CdpResponseEnvelope;
+const PING_INTERVAL_MS = 30_000;
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 
 export interface PreviewBridge {
   handleFrame(frame: CdpRequestEnvelope): Promise<void>;
@@ -43,29 +45,226 @@ export interface PreviewBridge {
   stop(): void;
 }
 
-export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
-  const capabilities = opts.capabilities ?? {
-    navigate: false,
-    screenshot: 'none' as const,
-    openUrl: false,
-  };
+interface SocketControllerOptions {
+  ws: WebSocket;
+  createWebSocket?: () => WebSocket;
+  onFrame(frame: CdpRequestEnvelope): Promise<void>;
+}
 
-  const handler = createCdpHostHandler({ capabilities });
+class PreviewSocketController {
+  private ws: WebSocket;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private started = false;
+  private stopped = false;
+  private suspended = false;
+  private readonly wiredSockets = new Set<WebSocket>();
 
-  let pingInterval: ReturnType<typeof setInterval> | null = null;
+  constructor(private readonly opts: SocketControllerOptions) {
+    this.ws = opts.ws;
+  }
 
-  function send(envelope: OutboundEnvelope) {
-    // In tests, the fake WS may not have readyState; send unconditionally
-    if (opts.ws.readyState === undefined || opts.ws.readyState === WebSocket.OPEN) {
-      opts.ws.send(JSON.stringify(envelope));
+  send(data: string): boolean {
+    if (!this.socketIsOpen()) return false;
+    try {
+      this.ws.send(data);
+      return true;
+    } catch {
+      return false;
     }
   }
+
+  start(): void {
+    if (typeof window === 'undefined' || this.started || this.stopped) return;
+    this.started = true;
+    this.wireSocket(this.ws);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('pagehide', this.onPageHide);
+    if (this.socketIsOpen()) this.startKeepalive();
+    else if (this.ws.readyState === WebSocket.CLOSED) this.scheduleReconnect();
+  }
+
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.suspended = true;
+    this.clearPingInterval();
+    this.clearReconnectTimer();
+    if (typeof window !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      window.removeEventListener('pagehide', this.onPageHide);
+    }
+    for (const socket of this.wiredSockets) this.unwireSocket(socket);
+    this.wiredSockets.clear();
+    this.closeCurrentSocket();
+  }
+
+  private socketIsOpen(socket = this.ws): boolean {
+    return socket.readyState === undefined || socket.readyState === WebSocket.OPEN;
+  }
+
+  private clearPingInterval(): void {
+    if (this.pingInterval === null) return;
+    clearInterval(this.pingInterval);
+    this.pingInterval = null;
+  }
+
+  private readonly sendPing = (): void => {
+    this.send('ping');
+  };
+
+  private startKeepalive(): void {
+    this.clearPingInterval();
+    // Keepalive: send the LITERAL 'ping' string every 30s. The DO's
+    // setWebSocketAutoResponse('ping','pong') answers it WITHOUT waking the
+    // hibernated Durable Object, so idle bridged tabs stay cheap. (A JSON
+    // { t: 'ping' } would miss the literal auto-response match and wake the DO
+    // through webSocketMessage every 30s per tab.)
+    this.pingInterval = setInterval(this.sendPing, PING_INTERVAL_MS);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private connectReplacement(): void {
+    if (this.stopped || this.suspended || !this.opts.createWebSocket) return;
+    try {
+      this.ws = this.opts.createWebSocket();
+      this.wireSocket(this.ws);
+      if (this.socketIsOpen()) this.handleSocketOpen(this.ws);
+      else if (this.ws.readyState === WebSocket.CLOSED) this.scheduleReconnect();
+    } catch (err) {
+      console.error('[preview-bridge] WebSocket reconnect failed:', err);
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (
+      this.stopped ||
+      this.suspended ||
+      !this.opts.createWebSocket ||
+      this.reconnectTimer !== null ||
+      this.reconnectAttempt >= RECONNECT_DELAYS_MS.length
+    ) {
+      return;
+    }
+    const delay = RECONNECT_DELAYS_MS[this.reconnectAttempt++];
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectReplacement();
+    }, delay);
+  }
+
+  private readonly onSocketMessage = async (event: MessageEvent): Promise<void> => {
+    if (event.currentTarget != null && event.currentTarget !== this.ws) return;
+    // The DO answers our literal 'ping' keepalive with a literal 'pong'
+    // (setWebSocketAutoResponse). Skip non-JSON control frames before parsing.
+    if (event.data === 'pong') return;
+    try {
+      const frame = JSON.parse(event.data);
+      if (frame.t === 'cdp.req') await this.opts.onFrame(frame);
+    } catch (err) {
+      console.error('[preview-bridge] message handler failed:', err);
+    }
+  };
+
+  private readonly onSocketOpen = (event?: Event): void => {
+    if (event?.currentTarget != null && event.currentTarget !== this.ws) return;
+    this.handleSocketOpen(this.ws);
+  };
+
+  private handleSocketOpen(socket: WebSocket): void {
+    if (socket !== this.ws || this.stopped || this.suspended) return;
+    this.reconnectAttempt = 0;
+    this.startKeepalive();
+  }
+
+  private readonly onSocketClose = (event?: CloseEvent): void => {
+    const socket = (event?.currentTarget as WebSocket | null | undefined) ?? this.ws;
+    if (socket !== this.ws) {
+      this.unwireSocket(socket);
+      this.wiredSockets.delete(socket);
+      return;
+    }
+    this.unwireSocket(socket);
+    this.wiredSockets.delete(socket);
+    this.clearPingInterval();
+    this.scheduleReconnect();
+  };
+
+  private readonly onSocketError = (event: Event): void => {
+    if (event.currentTarget == null || event.currentTarget === this.ws) {
+      console.error('[preview-bridge] WebSocket error:', event);
+    }
+  };
+
+  private wireSocket(socket: WebSocket): void {
+    if (this.wiredSockets.has(socket)) return;
+    this.wiredSockets.add(socket);
+    socket.addEventListener('message', this.onSocketMessage);
+    socket.addEventListener('open', this.onSocketOpen);
+    socket.addEventListener('close', this.onSocketClose);
+    socket.addEventListener('error', this.onSocketError);
+  }
+
+  private unwireSocket(socket: WebSocket): void {
+    socket.removeEventListener('message', this.onSocketMessage);
+    socket.removeEventListener('open', this.onSocketOpen);
+    socket.removeEventListener('close', this.onSocketClose);
+    socket.removeEventListener('error', this.onSocketError);
+  }
+
+  private readonly onVisibilityChange = (): void => {
+    if (this.stopped) return;
+    if (document.visibilityState !== 'visible') {
+      this.sendPing();
+      return;
+    }
+    this.suspended = false;
+    if (this.socketIsOpen()) {
+      this.sendPing();
+      this.startKeepalive();
+    } else if (this.ws.readyState !== WebSocket.CONNECTING) {
+      this.clearReconnectTimer();
+      this.reconnectAttempt = 0;
+      this.connectReplacement();
+    }
+  };
+
+  private readonly onPageHide = (): void => {
+    if (this.stopped) return;
+    this.suspended = true;
+    this.clearPingInterval();
+    this.clearReconnectTimer();
+    this.closeCurrentSocket();
+  };
+
+  private closeCurrentSocket(): void {
+    if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+      this.ws.close();
+    }
+  }
+}
+
+export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
+  const handler = createCdpHostHandler({
+    capabilities: opts.capabilities ?? {
+      navigate: false,
+      screenshot: 'none' as const,
+      openUrl: false,
+    },
+  });
+  let socketController: PreviewSocketController;
 
   async function handleFrame(frame: CdpRequestEnvelope): Promise<void> {
     const response: CdpResponseEnvelope = { t: 'cdp.res', id: frame.id };
     try {
-      const result = await handler(frame.method, frame.params ?? {});
-      response.result = result;
+      response.result = await handler(frame.method, frame.params ?? {});
     } catch (err: unknown) {
       const error = err as { code?: number; message?: string };
       response.error = {
@@ -73,25 +272,16 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
         message: error.message ?? String(err),
       };
     }
-    send(response);
+    socketController.send(JSON.stringify(response));
   }
 
   function installWindowApi(): void {
     if (typeof window === 'undefined') return;
-
     const previewWindow = window as PreviewWindow;
     previewWindow.slicc = {
       emit(name: string, detail?: unknown) {
-        // Send over the bridge WS when open, so the Durable Object can attribute
-        // the event to THIS connection (connId + previewToken live on the socket
-        // attachment) — that's how the cone knows which preview tab fired it.
-        // Fall back to a same-origin beacon when the socket isn't open (e.g.
-        // during page unload); that path is unattributed but fire-and-forget-safe.
-        if (opts.ws.readyState === WebSocket.OPEN) {
-          opts.ws.send(JSON.stringify({ t: 'emit', name, detail }));
-        } else {
-          navigator.sendBeacon('/__slicc/emit', JSON.stringify({ name, detail }));
-        }
+        const frame = JSON.stringify({ t: 'emit', name, detail });
+        if (!socketController.send(frame)) navigator.sendBeacon('/__slicc/emit', frame);
       },
       on(name: string, callback: (detail: unknown) => void) {
         window.addEventListener(name, ((event: CustomEvent) => {
@@ -99,61 +289,20 @@ export function createPreviewBridge(opts: PreviewBridgeOptions): PreviewBridge {
         }) as EventListener);
       },
     };
-
-    // Also expose as __slicc to satisfy Task 8 test assertion
     previewWindow.__slicc = previewWindow.slicc;
   }
 
-  function start(): void {
-    if (typeof window === 'undefined') return;
-
-    opts.ws.addEventListener('message', async (event) => {
-      // The DO answers our literal 'ping' keepalive with a literal 'pong'
-      // (setWebSocketAutoResponse). Skip non-JSON control frames before parsing
-      // so the pong doesn't throw a SyntaxError and spam the visitor console
-      // every 30s. CDP frames are always JSON objects.
-      if (event.data === 'pong') return;
-      try {
-        const frame = JSON.parse(event.data);
-        if (frame.t === 'cdp.req') {
-          await handleFrame(frame);
-        }
-      } catch (err) {
-        console.error('[preview-bridge] message handler failed:', err);
-      }
-    });
-
-    // Keepalive: send the LITERAL 'ping' string every 30s. The DO's
-    // setWebSocketAutoResponse('ping','pong') answers it WITHOUT waking the
-    // hibernated Durable Object, so idle bridged tabs stay cheap. (A JSON
-    // { t: 'ping' } would miss the literal auto-response match and wake the DO
-    // through webSocketMessage every 30s per tab.)
-    pingInterval = setInterval(() => {
-      if (opts.ws.readyState === undefined || opts.ws.readyState === WebSocket.OPEN) {
-        try {
-          opts.ws.send('ping');
-        } catch {
-          // socket entered CLOSING between the readyState check and send; ignore
-        }
-      }
-    }, 30_000);
-  }
-
-  function stop(): void {
-    if (pingInterval !== null) {
-      clearInterval(pingInterval);
-      pingInterval = null;
-    }
-    if (opts.ws.readyState === WebSocket.OPEN) {
-      opts.ws.close();
-    }
-  }
+  socketController = new PreviewSocketController({
+    ws: opts.ws,
+    createWebSocket: opts.createWebSocket,
+    onFrame: handleFrame,
+  });
 
   return {
     handleFrame,
     installWindowApi,
-    start,
-    stop,
+    start: () => socketController.start(),
+    stop: () => socketController.stop(),
   };
 }
 
@@ -175,6 +324,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
         // screenshot / openUrl rejects with CherryUnsupportedError.
         const bridge = createPreviewBridge({
           ws,
+          createWebSocket: () => new WebSocket(wsUrl),
           capabilities: { navigate: true, screenshot: 'html2canvas', openUrl: true },
         });
 
@@ -183,18 +333,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
         // hit `undefined`, and an over-cap (429) / rejected upgrade still leaves
         // a working emit() (it beacons while the socket is not OPEN).
         bridge.installWindowApi();
-
-        ws.addEventListener('open', () => {
-          bridge.start();
-        });
-
-        ws.addEventListener('error', (err) => {
-          console.error('[preview-bridge] WebSocket error:', err);
-        });
-
-        ws.addEventListener('close', () => {
-          bridge.stop();
-        });
+        bridge.start();
       } catch (err) {
         console.error('[preview-bridge] bootstrap failed:', err);
       }

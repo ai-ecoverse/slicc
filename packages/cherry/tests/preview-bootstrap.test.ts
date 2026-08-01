@@ -5,6 +5,7 @@ function fakeWs(over: Partial<Record<string, unknown>> = {}) {
   return {
     send: () => {},
     addEventListener: () => {},
+    removeEventListener: () => {},
     close: () => {},
     ...over,
   } as never;
@@ -14,6 +15,7 @@ describe('preview bootstrap', () => {
   afterEach(() => {
     delete (window as any).slicc;
     delete (window as any).__slicc;
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -178,7 +180,99 @@ describe('preview bootstrap', () => {
     expect(sent.filter((m) => m === 'ping')).toHaveLength(1); // no pings after stop
   });
 
+  it('pings at visibility transitions and reconnects immediately when visible', () => {
+    vi.useFakeTimers();
+    const sent: string[] = [];
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const replacement = fakeWs({ readyState: 1 });
+    const createWebSocket = vi.fn(() => replacement);
+    const initial = fakeWs({ readyState: 1, send: (data: string) => sent.push(data) }) as {
+      readyState: number;
+      close(): void;
+    };
+    initial.close = () => {
+      initial.readyState = 3;
+    };
+    const bridge = createPreviewBridge({
+      ws: initial as never,
+      createWebSocket,
+    });
+    bridge.start();
+
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(sent).toContain('ping');
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide'));
+    vi.advanceTimersByTime(60_000);
+    expect(createWebSocket).not.toHaveBeenCalled();
+
+    visibility.mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(new Event('visibilitychange'));
+    bridge.stop();
+  });
+
+  it('reconnects unexpected closes with bounded exponential backoff', () => {
+    vi.useFakeTimers();
+    let closeHandler: ((event: Event) => void) | undefined;
+    const reconnectError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const createWebSocket = vi
+      .fn(() => fakeWs({ readyState: 3 }))
+      .mockImplementationOnce(() => {
+        throw new Error('constructor failed');
+      });
+    const bridge = createPreviewBridge({
+      ws: fakeWs({
+        readyState: 1,
+        addEventListener: (type: string, callback: (event: Event) => void) => {
+          if (type === 'close') closeHandler = callback;
+        },
+      }),
+      createWebSocket,
+    });
+    bridge.start();
+    closeHandler?.(new Event('close'));
+
+    vi.advanceTimersByTime(999);
+    expect(createWebSocket).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1_999);
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(createWebSocket).toHaveBeenCalledTimes(2);
+    vi.runAllTimers();
+    expect(createWebSocket).toHaveBeenCalledTimes(5);
+    expect(reconnectError).toHaveBeenCalledWith(
+      '[preview-bridge] WebSocket reconnect failed:',
+      expect.any(Error)
+    );
+    bridge.stop();
+  });
+
+  it('does not reconnect after stop()', () => {
+    vi.useFakeTimers();
+    let closeHandler: ((event: Event) => void) | undefined;
+    const createWebSocket = vi.fn(() => fakeWs({ readyState: 1 }));
+    const bridge = createPreviewBridge({
+      ws: fakeWs({
+        readyState: 1,
+        addEventListener: (type: string, callback: (event: Event) => void) => {
+          if (type === 'close') closeHandler = callback;
+        },
+      }),
+      createWebSocket,
+    });
+    bridge.start();
+    closeHandler?.(new Event('close'));
+    bridge.stop();
+    vi.runAllTimers();
+    expect(createWebSocket).not.toHaveBeenCalled();
+  });
+
   it('IIFE bootstrap opens a WebSocket from the script data attributes and wires open/error/close', async () => {
+    vi.useFakeTimers();
     const script = document.createElement('script');
     script.setAttribute('data-slicc-token', 'tok-1');
     script.setAttribute('data-slicc-ws', 'wss://x.sliccy.now/__slicc/bridge');
@@ -197,6 +291,9 @@ describe('preview bootstrap', () => {
       }
       addEventListener(type: string, cb: (arg?: unknown) => void) {
         listeners[type] = cb;
+      }
+      removeEventListener(type: string) {
+        delete listeners[type];
       }
       send(s: string) {
         sent.push(JSON.parse(s));
@@ -233,7 +330,10 @@ describe('preview bootstrap', () => {
 
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       listeners.error?.(new Event('error'));
-      listeners.close?.(); // → bridge.stop()
+      listeners.close?.();
+      vi.advanceTimersByTime(1_000);
+      expect(instances).toHaveLength(2);
+      window.dispatchEvent(new PageTransitionEvent('pagehide'));
       errSpy.mockRestore();
     } finally {
       (globalThis as any).WebSocket = origWS;
