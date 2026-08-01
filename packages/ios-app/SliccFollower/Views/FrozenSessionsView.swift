@@ -33,6 +33,9 @@ struct FrozenSessionsView: View {
             }
         }
         .onAppear { appState.loadFrozenSessions() }
+        .onChange(of: appState.openFrozen?.entry.id) { _, opened in
+            if opened != nil { dismiss() }
+        }
     }
 
     @ViewBuilder
@@ -65,12 +68,19 @@ struct FrozenSessionsView: View {
                 }
                 ForEach(filtered) { entry in
                     Button {
+                        // No dismiss here: the sheet closes via onChange only
+                        // when the open SUCCEEDS, so a failed archive read
+                        // shows its error in place instead of silently
+                        // returning to the live transcript.
                         appState.openFrozenSession(entry)
-                        dismiss()
                     } label: {
                         HStack {
-                            Image(systemName: "snowflake")
-                                .foregroundStyle(Color(red: 0.23, green: 0.42, blue: 0.70))
+                            if appState.frozenOpeningId == entry.id {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "snowflake")
+                                    .foregroundStyle(Color(red: 0.23, green: 0.42, blue: 0.70))
+                            }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.title)
                                     .foregroundStyle(.primary)
@@ -81,6 +91,7 @@ struct FrozenSessionsView: View {
                             }
                         }
                     }
+                    .disabled(appState.frozenOpeningId != nil)
                     .accessibilityIdentifier("frozen-card-\(entry.id)")
                 }
             }

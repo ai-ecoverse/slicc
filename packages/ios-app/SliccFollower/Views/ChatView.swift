@@ -135,6 +135,7 @@ struct ConversationView: View {
                     Image(systemName: "snowflake")
                         .foregroundStyle(.white.opacity(0.7))
                 }
+                .accessibilityLabel("Past Sessions")
                 .accessibilityIdentifier("frozen-rail-button")
             }
             ToolbarItem(placement: .navigationBarTrailing) {

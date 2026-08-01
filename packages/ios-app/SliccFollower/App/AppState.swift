@@ -247,6 +247,10 @@ class AppState: ObservableObject {
 
     @Published var frozenListState: FrozenListState = .idle
     @Published var frozenSessions: [FrozenSessionIndexEntry] = []
+    /// Entry id currently being fetched from the leader, nil when none. The
+    /// sheet stays open (showing progress) until the open settles, so a
+    /// failed read is seen rather than silently returning to live chat.
+    @Published var frozenOpeningId: String?
     /// Non-nil while a frozen session is open read-only; the composer is
     /// replaced by the frozen banner for the duration.
     @Published var openFrozen: OpenFrozenSession?
@@ -263,7 +267,13 @@ class AppState: ObservableObject {
                 return
             }
         #endif
-        guard connectionState == .connected else { return }
+        guard connectionState == .connected else {
+            // The snowflake is always reachable; a stale list from a previous
+            // leader — or an eternal spinner from `.idle` — must not be.
+            frozenSessions = []
+            frozenListState = .failed("Connect to a leader to browse its past sessions.")
+            return
+        }
         frozenListState = .loading
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -309,8 +319,10 @@ class AppState: ObservableObject {
                 return
             }
         #endif
+        frozenOpeningId = entry.id
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.frozenOpeningId = nil }
             do {
                 let markdown = try await self.fsClient.readFile(entry.path)
                 self.openFrozen = OpenFrozenSession(
@@ -319,7 +331,8 @@ class AppState: ObservableObject {
                         FrozenArchiveParser.parse(markdown: markdown),
                         frozenAt: entry.frozenDate))
             } catch {
-                self.frozenOpenError = "Could not read the archived session."
+                self.frozenOpenError =
+                    "Could not read “\(entry.title)” — it may have been removed on the leader."
             }
         }
     }

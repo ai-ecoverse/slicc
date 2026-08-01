@@ -40,7 +40,9 @@ final class FrozenSessionsTests: XCTestCase {
 
     func testRebuildRecoversTitleAndTimestampFromFilenames() {
         let entries = FrozenSessionIndex.rebuild(from: [
-            TrayFsDirEntry(name: "2026-05-13T19-30-00Z-fix-build.md", type: .file),
+            // The canonical writer shape: toISOString().replace(/[:.]/g, "-")
+            // dashes the milliseconds dot too.
+            TrayFsDirEntry(name: "2026-05-13T19-30-00-123Z-fix-build.md", type: .file),
             TrayFsDirEntry(name: "2026-06-01T08-00-00Z-plan-launch.md", type: .file),
             TrayFsDirEntry(name: "index.json", type: .file),
             TrayFsDirEntry(name: "attachments", type: .directory),
@@ -53,7 +55,7 @@ final class FrozenSessionsTests: XCTestCase {
         XCTAssertEqual(entries[0].title, "Pending session")
         XCTAssertEqual(entries[1].title, "Plan Launch")
         XCTAssertEqual(entries[2].title, "Fix Build")
-        XCTAssertEqual(entries[2].frozenAt, "2026-05-13T19:30:00Z")
+        XCTAssertEqual(entries[2].frozenAt, "2026-05-13T19:30:00.123Z")
         XCTAssertNotNil(entries[2].frozenDate)
     }
 
@@ -154,6 +156,22 @@ final class FrozenSessionsTests: XCTestCase {
         let parsed = FrozenArchiveParser.parse(markdown: markdown)
         XCTAssertEqual(parsed.messages.count, 1)
         XCTAssertEqual(parsed.messages[0].content, "still readable")
+    }
+
+    func testRemapNeverTouchesStructuredArchives() {
+        // A data-block message with timestamp 0 keeps the writer's value —
+        // and, by extension, every rich field a rebuild would drop.
+        let markdown = """
+            <!-- slicc:session-data
+            [{"id":"m1","role":"assistant","content":"x","timestamp":0,"model":"claude-opus-4-6"}]
+            -->
+            """
+        let parsed = FrozenArchiveParser.parse(markdown: markdown)
+        XCTAssertFalse(parsed.usedFallback)
+        let remapped = FrozenArchiveParser.withFallbackTimestamps(
+            parsed, frozenAt: Date(timeIntervalSince1970: 1000))
+        XCTAssertEqual(remapped.messages[0].timestamp, 0)
+        XCTAssertEqual(remapped.messages[0].model, "claude-opus-4-6")
     }
 
     func testZeroTimestampsRemapToTheFreezeDate() {

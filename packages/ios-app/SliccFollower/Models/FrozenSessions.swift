@@ -139,25 +139,27 @@ enum FrozenSessionIndex {
         return f
     }()
 
-    /// `2026-05-13T19-30-00Z-fix-build` → (ISO timestamp, "fix-build").
+    /// `2026-05-13T19-30-00-123Z-fix-build` → ("…T19:30:00.123Z", "fix-build").
+    /// The writer derives filenames via `toISOString().replace(/[:.]/g, '-')`,
+    /// so both the colons AND the milliseconds dot arrive as dashes; the
+    /// fractional component is optional for hand-made or older archives.
     private static func splitArchiveStem(_ stem: String) -> (timestamp: String?, slug: String) {
-        let pattern = #"^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2}(?:\.\d+)?Z)-?(.*)$"#
-        guard let match = stem.range(of: pattern, options: .regularExpression) else {
+        let pattern = #"^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-(\d{1,3}))?Z-?(.*)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+            let result = regex.firstMatch(
+                in: stem, range: NSRange(stem.startIndex..., in: stem))
+        else {
             return (nil, stem.hasPrefix("pending-") ? "Pending session" : stem)
         }
-        let matched = String(stem[match])
-        let regex = try? NSRegularExpression(pattern: pattern)
-        guard
-            let result = regex?.firstMatch(
-                in: matched, range: NSRange(matched.startIndex..., in: matched))
-        else { return (nil, stem) }
         func group(_ index: Int) -> String {
-            guard let range = Range(result.range(at: index), in: matched) else { return "" }
-            return String(matched[range])
+            guard let range = Range(result.range(at: index), in: stem) else { return "" }
+            return String(stem[range])
         }
-        // Restore the colons the writer dashed out of the time portion.
-        let timestamp = "\(group(1)):\(group(2)):\(group(3))"
-        return (timestamp, group(4))
+        // Restore the colons (and the milliseconds dot) the writer dashed out.
+        let millis = group(4)
+        let seconds = millis.isEmpty ? "\(group(3))Z" : "\(group(3)).\(millis)Z"
+        let timestamp = "\(group(1)):\(group(2)):\(seconds)"
+        return (timestamp, group(5))
     }
 
     private static func titleize(_ slug: String) -> String {
@@ -167,9 +169,12 @@ enum FrozenSessionIndex {
 
 /// Parsed frozen archive: the structured messages when the
 /// `slicc:session-data` block is intact, or the heading-parsed fallback.
+/// `usedFallback` records which path produced `messages` — fallback rows
+/// carry only id/role/content, which the timestamp remap relies on.
 struct ParsedFrozenArchive {
     let title: String
     let messages: [ChatMessage]
+    let usedFallback: Bool
 }
 
 enum FrozenArchiveParser {
@@ -179,7 +184,7 @@ enum FrozenArchiveParser {
     static func withFallbackTimestamps(
         _ archive: ParsedFrozenArchive, frozenAt: Date?
     ) -> ParsedFrozenArchive {
-        guard let frozenAt else { return archive }
+        guard archive.usedFallback, let frozenAt else { return archive }
         let ms = frozenAt.timeIntervalSince1970 * 1000
         let messages = archive.messages.map { message in
             message.timestamp == 0
@@ -187,7 +192,8 @@ enum FrozenArchiveParser {
                     id: message.id, role: message.role, content: message.content, timestamp: ms)
                 : message
         }
-        return ParsedFrozenArchive(title: archive.title, messages: messages)
+        return ParsedFrozenArchive(
+            title: archive.title, messages: messages, usedFallback: archive.usedFallback)
     }
 
     /// Port of `parseFrozenArchive` — frontmatter title (JSON-quoted values
@@ -237,7 +243,7 @@ enum FrozenArchiveParser {
             if let data = json.data(using: .utf8),
                 let messages = try? JSONDecoder().decode([ChatMessage].self, from: data)
             {
-                return ParsedFrozenArchive(title: title, messages: messages)
+                return ParsedFrozenArchive(title: title, messages: messages, usedFallback: false)
             }
             // Malformed block — strip it so the text parser never sees it.
             body.removeSubrange(dataRange)
@@ -245,7 +251,8 @@ enum FrozenArchiveParser {
 
         body = body.replacingOccurrences(
             of: #"^#\s+[^\n]*\n+"#, with: "", options: .regularExpression)
-        return ParsedFrozenArchive(title: title, messages: parseHeadingFallback(body))
+        return ParsedFrozenArchive(
+            title: title, messages: parseHeadingFallback(body), usedFallback: true)
     }
 
     /// Splits on `## User` / `## Assistant`; nested `### Tool:` blocks stay
