@@ -249,6 +249,8 @@ export interface SliccScoopOverflowItem {
 export interface SliccScoopSelectDetail {
   /** The selected scoop's stable id (the descriptor's `id`). */
   id: string;
+  /** Compatibility alias used by switcher consumers to select the scoop. */
+  key: string;
   /** The selected scoop's label (or `id` when no label was supplied). */
   label: string;
 }
@@ -303,6 +305,14 @@ export class SliccScoopOverflow extends HTMLElement {
     if (this.open && !this.contains(e.target as Node)) this.close();
   };
 
+  /** Document-level Escape closer; attached only while open. */
+  readonly #onKeyDown = (e: KeyboardEvent): void => {
+    if (!this.open || e.key !== 'Escape') return;
+    e.preventDefault();
+    this.close();
+    this.#moreBtn.focus();
+  };
+
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
@@ -316,6 +326,7 @@ export class SliccScoopOverflow extends HTMLElement {
 
   disconnectedCallback(): void {
     document.removeEventListener('click', this.#onDoc);
+    document.removeEventListener('keydown', this.#onKeyDown);
   }
 
   attributeChangedCallback(name: string): void {
@@ -468,14 +479,18 @@ export class SliccScoopOverflow extends HTMLElement {
     this.#moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     // Outside-click closer is attached only while open (cheap + leak-free).
     document.removeEventListener('click', this.#onDoc);
-    if (open) document.addEventListener('click', this.#onDoc);
+    document.removeEventListener('keydown', this.#onKeyDown);
+    if (open) {
+      document.addEventListener('click', this.#onDoc);
+      document.addEventListener('keydown', this.#onKeyDown);
+    }
   }
 
   /** Emit `slicc-scoop-select` for the chosen row and close the popup. */
   #select(id: string, label: string): void {
     this.dispatchEvent(
       new CustomEvent<SliccScoopSelectDetail>('slicc-scoop-select', {
-        detail: { id, label },
+        detail: { id, key: id, label },
         bubbles: true,
         composed: true,
       })

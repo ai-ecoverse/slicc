@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import {
   SliccScoopOverflow,
   type SliccScoopOverflowItem,
@@ -131,11 +132,11 @@ describe('slicc-scoop-overflow', () => {
       expect(menuRows[2].querySelectorAll('.broken-x')).toHaveLength(2);
     });
 
-    it('does not render a legacy pill element in the popup', () => {
+    it('renders the popup entries as native button rows', () => {
       const el = mount((e) => {
         e.items = ITEMS;
       });
-      expect(pop(el).querySelector('slicc-pill')).toBeNull();
+      expect(rows(el).every((row) => row instanceof HTMLButtonElement)).toBe(true);
     });
 
     it('renders the initializing status glyph variant', () => {
@@ -480,17 +481,17 @@ describe('slicc-scoop-overflow', () => {
       expect(el.open).toBe(true);
     });
 
-    it('emits slicc-scoop-select (composed, bubbling) and closes on row click', () => {
+    it('emits slicc-scoop-select with the selected key and closes on row click', () => {
       const el = mount((e) => {
         e.items = ITEMS;
       });
       el.show();
-      let detail: { id: string; label: string } | null = null;
+      let detail: { id: string; key: string; label: string } | null = null;
       el.addEventListener('slicc-scoop-select', (e) => {
         detail = (e as CustomEvent).detail;
       });
       rows(el)[1].dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
-      expect(detail).toEqual({ id: 'designer', label: 'designer' });
+      expect(detail).toEqual({ id: 'designer', key: 'designer', label: 'designer' });
       expect(el.open).toBe(false);
     });
 
@@ -498,12 +499,40 @@ describe('slicc-scoop-overflow', () => {
       const el = mount((e) => {
         e.items = [{ id: 'lonely' }];
       });
-      let detail: { id: string; label: string } | null = null;
+      let detail: { id: string; key: string; label: string } | null = null;
       el.addEventListener('slicc-scoop-select', (e) => {
         detail = (e as CustomEvent).detail;
       });
       rows(el)[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(detail).toEqual({ id: 'lonely', label: 'lonely' });
+      expect(detail).toEqual({ id: 'lonely', key: 'lonely', label: 'lonely' });
+    });
+
+    it('reaches every popup row by Tab in roster order', async () => {
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      await userEvent.click(moreBtn(el));
+
+      const reached: string[] = [];
+      for (const _item of ITEMS) {
+        await userEvent.tab();
+        reached.push((el.shadowRoot?.activeElement as HTMLButtonElement).dataset.k ?? '');
+      }
+      expect(reached).toEqual(ITEMS.map((item) => item.id));
+    });
+
+    it('closes on Escape and restores focus to the trigger', async () => {
+      const el = mount((e) => {
+        e.items = ITEMS;
+      });
+      await userEvent.click(moreBtn(el));
+      await userEvent.tab();
+      expect(el.shadowRoot?.activeElement).toBe(rows(el)[0]);
+
+      await userEvent.keyboard('{Escape}');
+      expect(el.open).toBe(false);
+      expect(moreBtn(el).getAttribute('aria-expanded')).toBe('false');
+      expect(el.shadowRoot?.activeElement).toBe(moreBtn(el));
     });
 
     it('removes the document listener on disconnect (no leak)', () => {
@@ -517,6 +546,10 @@ describe('slicc-scoop-overflow', () => {
       expect(() =>
         document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       ).not.toThrow();
+      expect(() =>
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      ).not.toThrow();
+      expect(el.open).toBe(true);
     });
   });
 });
