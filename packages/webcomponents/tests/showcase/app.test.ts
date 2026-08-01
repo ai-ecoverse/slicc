@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SliccPill } from '../../src/pill/slicc-pill.js';
 // The full-app showcase story assembles the whole surface; importing it
 // registers every element it composes (agent tabs included).
 import { Collapsed, FreezerPreview, ScoopPreview } from '../../src/showcase/app.stories.js';
+import type { SliccAgentAvatar } from '../../src/switcher/slicc-agent-avatar.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
 /** Render the showcase `Collapsed` story into the document and return its frame. */
@@ -26,8 +26,10 @@ function agentTab(frame: HTMLElement, label: string): HTMLButtonElement {
 }
 
 /** The focused-agent avatar exposed by the tabs' public `avatar` part. */
-function focusedAvatar(frame: HTMLElement): SliccPill {
-  return frame.querySelector('slicc-agent-tabs > slicc-pill[part="avatar"]') as SliccPill;
+function focusedAvatar(frame: HTMLElement): SliccAgentAvatar {
+  return frame.querySelector(
+    'slicc-agent-tabs > slicc-agent-avatar[part="avatar"]'
+  ) as SliccAgentAvatar;
 }
 
 /** Resolve a CSS color (e.g. a hex token) to its computed `rgb(...)` form. */
@@ -93,7 +95,7 @@ describe('showcase full-app agent tabs', () => {
     expect(svg).toBeTruthy();
     const r = svg.getBoundingClientRect();
     document.dispatchEvent(
-      new MouseEvent('mousemove', {
+      new PointerEvent('pointermove', {
         clientX: r.left + r.width + 500,
         clientY: r.top + r.height + 500,
       })

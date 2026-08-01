@@ -100,7 +100,7 @@ describe('slicc-agent-tabs', () => {
   it('renders avatar, segmented control, then the composed overflow tag', () => {
     const element = mount();
     expect([...element.children].map((child) => child.tagName.toLowerCase())).toEqual([
-      'slicc-pill',
+      'slicc-agent-avatar',
       'div',
     ]);
     expect(
@@ -210,7 +210,7 @@ describe('slicc-agent-tabs', () => {
   it('focuses the first descriptor by default and updates avatar + selected segment', () => {
     const element = mount();
     expect(avatar(element)?.getAttribute('type')).toBe('cone');
-    expect(avatar(element)?.hasAttribute('track')).toBe(true);
+    expect(avatar(element)?.getAttribute('role')).toBe('img');
     expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     element.active = 'researcher';
     expect(avatar(element)?.getAttribute('type')).toBe('scoop');
@@ -223,7 +223,7 @@ describe('slicc-agent-tabs', () => {
   it('falls back to the first descriptor when active does not exist', () => {
     const element = mount();
     element.active = 'missing';
-    expect(avatar(element)?.getAttribute('label')).toBe('Sliccy');
+    expect(avatar(element)?.getAttribute('aria-label')).toBe('Sliccy focused agent');
     expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
   });
 
@@ -531,24 +531,123 @@ describe('slicc-agent-tabs', () => {
       expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     });
 
-    it('keeps the avatar and overflow trigger keyboard reachable but outside tab semantics', () => {
+    it('keeps the decorative avatar outside the tab order and the overflow trigger reachable', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
-      const avatarButton = avatar(element)?.shadowRoot?.querySelector(
-        'button'
-      ) as HTMLButtonElement;
       const overflowButton = overflow(element).shadowRoot?.querySelector(
         '.morebtn'
       ) as HTMLButtonElement;
 
-      expect(avatarButton.tabIndex).toBe(0);
-      expect(avatarButton.getAttribute('role')).not.toBe('tab');
-      avatarButton.focus();
-      expect(avatar(element)?.shadowRoot?.activeElement).toBe(avatarButton);
+      expect(avatar(element)?.tabIndex).toBe(-1);
+      expect(avatar(element)?.getAttribute('role')).toBe('img');
       expect(overflowButton.tabIndex).toBe(0);
       expect(overflowButton.getAttribute('role')).not.toBe('tab');
       overflowButton.focus();
       expect(overflow(element).shadowRoot?.activeElement).toBe(overflowButton);
+    });
+  });
+
+  describe('focused avatar tracking', () => {
+    function mountFocused(key: string, scoops: ScoopDescriptor[] = ROSTER): SliccAgentTabs {
+      const element = document.createElement('slicc-agent-tabs') as SliccAgentTabs;
+      element.style.width = '720px';
+      element.scoops = scoops;
+      element.active = key;
+      document.body.append(element);
+      return element;
+    }
+
+    it('tracks the focused scoop with one listener and fill-derived pupils', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const element = mountFocused('researcher');
+      const focused = avatar(element) as HTMLElement;
+      const pupil = focused.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
+      const pupilCircle = pupil.querySelector('circle') as SVGCircleElement;
+
+      expect(focused.getAttribute('type')).toBe('scoop');
+      expect(pupilCircle.getAttribute('r')).toBe(String(18 * (1 + (12 / 35) * 1.2)));
+      expect(add.mock.calls.filter(([type]) => type === 'pointermove')).toHaveLength(1);
+
+      document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1200, clientY: 40 }));
+      expect(pupil.getAttribute('transform')).not.toBe('translate(0,0)');
+      add.mockRestore();
+    });
+
+    it('never binds pointer tracking for dead eyes', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const element = mountFocused('tester');
+      expect(avatar(element)?.getAttribute('eyes')).toBe('dead');
+      expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
+      add.mockRestore();
+    });
+
+    it('removes the pointer listener when disconnected', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      const remove = vi.spyOn(document, 'removeEventListener');
+      const element = mountFocused('researcher');
+      const listener = add.mock.calls.find(([type]) => type === 'pointermove')?.[1];
+
+      element.remove();
+
+      expect(listener).toBeDefined();
+      expect(remove).toHaveBeenCalledWith('pointermove', listener);
+      add.mockRestore();
+      remove.mockRestore();
+    });
+
+    it('does not bind pointer tracking when reduced motion is requested', () => {
+      const realMatchMedia = window.matchMedia;
+      const add = vi.spyOn(document, 'addEventListener');
+      window.matchMedia = vi.fn().mockReturnValue({
+        matches: true,
+        media: '(prefers-reduced-motion: reduce)',
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }) as typeof window.matchMedia;
+      try {
+        mountFocused('researcher');
+        expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
+      } finally {
+        window.matchMedia = realMatchMedia;
+        add.mockRestore();
+      }
+    });
+
+    it('stops tracking and recentres pupils when reduced motion changes', () => {
+      const realMatchMedia = window.matchMedia;
+      let motionListener: EventListener | undefined;
+      const query = {
+        matches: false,
+        media: '(prefers-reduced-motion: reduce)',
+        addEventListener: vi.fn((_type: string, listener: EventListener) => {
+          motionListener = listener;
+        }),
+        removeEventListener: vi.fn(),
+      };
+      window.matchMedia = vi.fn().mockReturnValue(query) as typeof window.matchMedia;
+      try {
+        const element = mountFocused('researcher');
+        const pupil = avatar(element)?.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
+        document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1200, clientY: 40 }));
+        expect(pupil.getAttribute('transform')).not.toBe('translate(0,0)');
+
+        query.matches = true;
+        motionListener?.(new Event('change'));
+        expect(pupil.getAttribute('transform')).toBe('translate(0,0)');
+      } finally {
+        window.matchMedia = realMatchMedia;
+      }
+    });
+
+    it('keeps the avatar footprint fixed at 26px', () => {
+      const element = mountFocused('researcher');
+      const bounds = (avatar(element) as HTMLElement).getBoundingClientRect();
+      expect(bounds.width).toBe(26);
+      expect(bounds.height).toBe(26);
     });
   });
 
