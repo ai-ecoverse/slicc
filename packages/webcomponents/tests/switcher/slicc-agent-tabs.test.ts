@@ -1,3 +1,4 @@
+import { page } from '@vitest/browser/context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   arcDash,
@@ -74,6 +75,15 @@ function avatar(element: SliccAgentTabs): HTMLElement | null {
 
 function overflow(element: SliccAgentTabs): SliccScoopOverflow {
   return element.querySelector('slicc-scoop-overflow') as SliccScoopOverflow;
+}
+
+function rosterOf(count: number): ScoopDescriptor[] {
+  return Array.from({ length: count }, (_, index) => ({
+    key: index === 0 ? 'cone' : `scoop-${index}`,
+    type: index === 0 ? ('cone' as const) : ('scoop' as const),
+    label: index === 0 ? 'sliccy' : `agent-${index}`,
+    state: 'idle' as const,
+  }));
 }
 
 describe('slicc-agent-tabs', () => {
@@ -652,6 +662,99 @@ describe('slicc-agent-tabs', () => {
   });
 
   describe('overflow reflow', () => {
+    it.each([1, 2, 6, 12])(
+      'reaches the same overflow fixed point across forced reflows for %i scoops',
+      (count) => {
+        const element = mount(rosterOf(count), 220);
+        const states = Array.from({ length: 4 }, () => {
+          element.reflow();
+          return {
+            overflow: element.classList.contains('has-overflow'),
+            hidden: segments(element).filter((item) => item.classList.contains('hide')).length,
+            items: overflow(element).items.length,
+          };
+        });
+        expect(states.slice(1)).toEqual([states[0], states[0], states[0]]);
+        expect(states[0].hidden).toBe(states[0].items);
+      }
+    );
+
+    it('reserves the overflow footprint without changing track padding after reflow', () => {
+      const element = mount(rosterOf(1), 220);
+      const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
+      element.reflow();
+      const withoutOverflow = getComputedStyle(track).paddingRight;
+      expect(withoutOverflow).toBe('41px');
+
+      element.scoops = rosterOf(12);
+      element.reflow();
+      expect(element.classList.contains('has-overflow')).toBe(true);
+      expect(getComputedStyle(track).paddingRight).toBe(withoutOverflow);
+    });
+
+    it('uses the rendered sliccy width as its floor and ellipsizes long labels at the ceiling', () => {
+      const element = mount(rosterOf(1));
+      element.reflow();
+      const sliccy = segment(element, 'cone');
+      const style = getComputedStyle(sliccy);
+      const context = document.createElement('canvas').getContext('2d') as CanvasRenderingContext2D;
+      context.font = style.font;
+      const expectedFloor =
+        context.measureText('sliccy').width +
+        14 +
+        Number.parseFloat(style.columnGap) +
+        Number.parseFloat(style.paddingLeft) +
+        Number.parseFloat(style.paddingRight);
+      expect(sliccy.getBoundingClientRect().width).toBeCloseTo(expectedFloor, 1);
+      expect(sliccy.getBoundingClientRect().width).toBeLessThan(72);
+
+      const long = mount([
+        { key: 'cone', type: 'cone', label: 'a very long agent label that must truncate' },
+      ]);
+      long.reflow();
+      const longSegment = segment(long, 'cone');
+      const label = longSegment.querySelector('.slicc-agent-tabs__label') as HTMLElement;
+      expect(longSegment.getBoundingClientRect().width).toBeLessThanOrEqual(160);
+      expect(label.scrollWidth).toBeGreaterThan(label.clientWidth);
+      expect(getComputedStyle(label).textOverflow).toBe('ellipsis');
+    });
+
+    it('centres the clickable overflow trigger on the track frame', () => {
+      const element = mount(rosterOf(6), 220);
+      element.reflow();
+      const frame = element.querySelector('.slicc-agent-tabs__track-frame') as HTMLElement;
+      const trigger = overflow(element).shadowRoot?.querySelector('[part="more"]') as HTMLElement;
+      const frameRect = frame.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const centreDelta = Math.abs(
+        (frameRect.top + frameRect.bottom - triggerRect.top - triggerRect.bottom) / 2
+      );
+      expect(centreDelta).toBeLessThanOrEqual(1);
+    });
+
+    it('fits an unellipsized sliccy tab and overflow trigger in a real 360px viewport', async () => {
+      const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+      try {
+        await page.viewport(360, originalViewport.height);
+        expect(window.innerWidth).toBe(360);
+        const element = mount(rosterOf(12), 360);
+        element.reflow();
+        const sliccy = segment(element, 'cone');
+        const label = sliccy.querySelector('.slicc-agent-tabs__label') as HTMLElement;
+        const frame = element.querySelector('.slicc-agent-tabs__track-frame') as HTMLElement;
+        const trigger = overflow(element).shadowRoot?.querySelector('[part="more"]') as HTMLElement;
+        const sliccyRect = sliccy.getBoundingClientRect();
+        const frameRect = frame.getBoundingClientRect();
+        const triggerRect = trigger.getBoundingClientRect();
+        expect(element.clientWidth).toBe(360);
+        expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
+        expect(sliccyRect.right).toBeLessThanOrEqual(triggerRect.left);
+        expect(triggerRect.right).toBeLessThanOrEqual(frameRect.right);
+      } finally {
+        await page.viewport(originalViewport.width, originalViewport.height);
+      }
+    });
+
     it('hides a trailing contiguous set, never the cone, and reserves overflow room', () => {
       const element = mount(ROSTER, 250);
       element.reflow();
@@ -695,7 +798,7 @@ describe('slicc-agent-tabs', () => {
       expect(element.classList.contains('has-overflow')).toBe(false);
     });
 
-    it('re-emits overflow selection with the canonical key payload', () => {
+    it('re-emits an actual overflow row click with the canonical key payload', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
       const item = overflow(element).items[0];
@@ -703,15 +806,18 @@ describe('slicc-agent-tabs', () => {
       element.addEventListener('slicc-scoop-select', (event) =>
         listener((event as CustomEvent<ScoopSelectDetail>).detail)
       );
-      overflow(element).dispatchEvent(
-        new CustomEvent('slicc-scoop-select', {
-          detail: { id: item.id, label: item.label ?? item.id },
-          bubbles: true,
-          composed: true,
-        })
-      );
+      const overflowButton = overflow(element).shadowRoot?.querySelector(
+        '.morebtn'
+      ) as HTMLButtonElement;
+      const overflowRow = overflow(element).shadowRoot?.querySelector(
+        '.popup-row'
+      ) as HTMLButtonElement;
+      overflowButton.click();
+      expect(overflow(element).open).toBe(true);
+      overflowRow.click();
       expect(listener).toHaveBeenCalledWith({ id: item.id, key: item.id, label: item.label });
       expect(element.active).toBe(item.id);
+      expect(overflow(element).open).toBe(false);
     });
 
     it('shows no overflow when the host is not laid out yet', () => {

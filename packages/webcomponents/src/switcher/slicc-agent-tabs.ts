@@ -1,6 +1,6 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
-import '../pill/slicc-pill.js';
+import './slicc-agent-avatar.js';
 import './slicc-scoop-overflow.js';
 import type {
   SliccScoopOverflow,
@@ -34,6 +34,11 @@ const AVATAR_WIDTH = 26;
 const HOST_GAP = 8;
 const TRACK_CHROME = 6;
 const MORE_RESERVE = 39;
+const SEGMENT_FLOOR_LABEL = 'sliccy';
+const SEGMENT_GLYPH_WIDTH = 14;
+const SEGMENT_GAP = 5;
+const SEGMENT_INLINE_PADDING = 16;
+const SEGMENT_FLOOR_FALLBACK = 61;
 
 const DATA_K_HUE: Record<string, string> = {
   cone: 'var(--waffle)',
@@ -46,14 +51,10 @@ const DATA_K_HUE: Record<string, string> = {
 const STYLE = `
 .slicc-agent-tabs{display:flex;align-items:center;gap:${HOST_GAP}px;min-width:0;overflow:visible;color:var(--ink);font-family:var(--ui);}
 .slicc-agent-tabs *{box-sizing:border-box;}
-.slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;--pill-w:${AVATAR_WIDTH}px;pointer-events:none;}
-.slicc-agent-tabs__focus-avatar::part(pill){width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;padding:0;overflow:hidden;border:0;border-radius:7px;background:transparent;cursor:inherit;}
-.slicc-agent-tabs__focus-avatar::part(icon){width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;overflow:hidden;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,transparent);}
-.slicc-agent-tabs__focus-avatar::part(label){display:none;}
+.slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;pointer-events:none;}
 .slicc-agent-tabs__track-frame{position:relative;flex:1 1 auto;min-width:0;height:var(--ctl-h,30px);overflow:visible;border:1px solid var(--line);border-radius:9px;background:var(--ghost);}
-.slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px;overflow:hidden;}
-.slicc-agent-tabs.has-overflow .slicc-agent-tabs__track{padding-right:41px;}
-.slicc-agent-tabs__segment{position:relative;display:inline-flex;flex:1 0 72px;align-items:center;justify-content:center;gap:5px;min-width:72px;height:24px;padding:0 8px;overflow:hidden;color:var(--txt-2);font:500 11px/1 var(--ui);white-space:nowrap;border:0;border-radius:6px;background:transparent;cursor:pointer;--slicc-agent-tabs-attention-outline:transparent;outline:2px solid var(--slicc-agent-tabs-attention-outline);outline-offset:-2px;animation:slicc-agent-tabs-attention 1.6s ease-in-out infinite;animation-play-state:paused;}
+.slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px 41px 2px 2px;overflow:hidden;}
+.slicc-agent-tabs__segment{position:relative;display:inline-flex;flex:0 1 auto;align-items:center;justify-content:center;gap:${SEGMENT_GAP}px;width:max-content;min-width:var(--slicc-agent-tabs-segment-floor,${SEGMENT_FLOOR_FALLBACK}px);max-width:160px;height:24px;padding:0 8px;overflow:hidden;color:var(--txt-2);font:500 11px/1 var(--ui);white-space:nowrap;border:0;border-radius:6px;background:transparent;cursor:pointer;--slicc-agent-tabs-attention-outline:transparent;outline:2px solid var(--slicc-agent-tabs-attention-outline);outline-offset:-2px;animation:slicc-agent-tabs-attention 1.6s ease-in-out infinite;animation-play-state:paused;}
 .slicc-agent-tabs__segment:hover{color:var(--ink);}
 .slicc-agent-tabs__segment[aria-selected='true']{color:var(--ink);background:var(--canvas);box-shadow:0 1px 3px color-mix(in srgb,var(--ink) 12%,transparent);}
 .slicc-agent-tabs__segment[data-attention='true']{--slicc-agent-tabs-attention-outline:var(--ink);animation-play-state:running;}
@@ -74,7 +75,8 @@ const STYLE = `
 .slicc-agent-tabs__broken-x{stroke:currentColor;stroke-linecap:round;}
 .slicc-agent-tabs__initializing-ring{fill:none;stroke:currentColor;stroke-dasharray:1.7 1.7;}
 .slicc-agent-tabs slicc-scoop-overflow{display:none;}
-.slicc-agent-tabs slicc-scoop-overflow[count]{position:absolute;top:2px;right:2px;display:block;width:39px;height:24px;}
+.slicc-agent-tabs slicc-scoop-overflow[count]{position:absolute;top:50%;right:2px;display:block;width:39px;height:24px;transform:translateY(-50%);}
+.slicc-agent-tabs slicc-scoop-overflow::part(wrap){display:flex;height:24px;}
 .slicc-agent-tabs slicc-scoop-overflow::part(more){display:inline-flex;width:39px;height:24px;justify-content:center;padding:0;border:0;border-radius:6px;background:transparent;}
 .slicc-agent-tabs slicc-scoop-overflow::part(pop){right:0;left:auto;}
 @keyframes slicc-agent-tabs-arc{from{transform:rotate(-90deg);}to{transform:rotate(270deg);}}
@@ -103,6 +105,19 @@ function svgEl<K extends keyof SVGElementTagNameMap>(
 
 function boundedFill(fill: number | undefined): number {
   return typeof fill === 'number' && Number.isFinite(fill) ? Math.max(0, Math.min(100, fill)) : 0;
+}
+
+function segmentFloor(segment: HTMLElement): number {
+  const context = segment.ownerDocument.createElement('canvas').getContext('2d');
+  const style = segment.ownerDocument.defaultView?.getComputedStyle(segment);
+  if (!context || !style) return SEGMENT_FLOOR_FALLBACK;
+  context.font = style.font;
+  return (
+    context.measureText(SEGMENT_FLOOR_LABEL).width +
+    SEGMENT_GLYPH_WIDTH +
+    SEGMENT_GAP +
+    SEGMENT_INLINE_PADDING
+  );
 }
 
 export function arcDash(fill: number): number {
@@ -197,6 +212,7 @@ export class SliccAgentTabs extends HTMLElement {
   #reflowing = false;
   #reflowRaf: number | null = null;
   #initialized = false;
+  #segmentFloor: number | null = null;
   readonly #onClick = (event: Event): void => this.#handleClick(event);
   readonly #onKeyDown = (event: KeyboardEvent): void => this.#handleKeyDown(event);
 
@@ -292,6 +308,10 @@ export class SliccAgentTabs extends HTMLElement {
       this.#feedOverflow([]);
       return;
     }
+    if (this.#segmentFloor === null) {
+      this.#segmentFloor = segmentFloor(segments[0]);
+      this.style.setProperty('--slicc-agent-tabs-segment-floor', `${this.#segmentFloor}px`);
+    }
     const available = this.clientWidth;
     if (available <= 0) {
       this.#feedOverflow([]);
@@ -303,11 +323,11 @@ export class SliccAgentTabs extends HTMLElement {
     const widths = segments.map((segment) => segment.offsetWidth);
     const segmentSpace = Math.max(0, available - AVATAR_WIDTH - HOST_GAP - TRACK_CHROME);
     const total = widths.reduce((sum, width) => sum + width, 0);
-    if (total <= segmentSpace + 1) {
+    const budget = Math.max(0, segmentSpace - MORE_RESERVE);
+    if (total <= budget + 1) {
       this.#feedOverflow([]);
       return;
     }
-    const budget = Math.max(0, segmentSpace - MORE_RESERVE);
     const hidden: HTMLButtonElement[] = [];
     let used = 0;
     segments.forEach((segment, index) => {
@@ -365,11 +385,10 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   #avatar(scoop: ScoopDescriptor): HTMLElement {
-    const avatar = h('slicc-pill', {
+    const avatar = h('slicc-agent-avatar', {
       class: `${PREFIX}__focus-avatar`,
       part: 'avatar',
-      compact: true,
-      track: true,
+      role: 'img',
     });
     this.#updateAvatar(avatar, scoop);
     return avatar;
@@ -382,7 +401,7 @@ export class SliccAgentTabs extends HTMLElement {
     this.#setAttribute(avatar, 'eyes', eyesFor(scoop));
     this.#setAttribute(avatar, 'fill', String(Math.round(boundedFill(scoop.fill))));
     this.#setAttribute(avatar, 'blink', state === 'working');
-    this.#setAttribute(avatar, 'label', scoop.label ?? scoop.key);
+    this.#setAttribute(avatar, 'aria-label', `${scoop.label ?? scoop.key} focused agent`);
     avatar.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
   }
 
