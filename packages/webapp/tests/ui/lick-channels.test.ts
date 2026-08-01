@@ -29,6 +29,11 @@ describe('isLickChannel', () => {
     expect(LICK_CHANNELS.has('discovery')).toBe(true);
   });
 
+  it('recognizes preview lifecycle announcements as licks', () => {
+    expect(isLickChannel('preview')).toBe(true);
+    expect(LICK_CHANNELS.has('preview')).toBe(true);
+  });
+
   it('recognizes the scoop sudo escalation channel as a lick', () => {
     // The orchestrator's `deliverSudoRequestToCone` builds a
     // `channel: 'sudo-request'` ChannelMessage so a pending escalation

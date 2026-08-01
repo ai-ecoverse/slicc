@@ -55,6 +55,22 @@ class FakeNamespace {
     }
     return instance;
   }
+
+  reconstruct(name: string): SessionTrayDurableObject {
+    const state = this.states.get(name);
+    if (!state) throw new Error(`No Durable Object state for ${name}`);
+    const instance = new SessionTrayDurableObject(
+      state as never,
+      {},
+      {
+        now: () => Date.now(),
+        webSocketPairFactory: () => createFakeWebSocketPair(state),
+      }
+    );
+    state.instance = instance;
+    this.instances.set(name, instance);
+    return instance;
+  }
 }
 
 const MOCK_HTML = '<html><body>SPA</body></html>';
@@ -115,6 +131,7 @@ export interface BridgeHarness {
     bridge: boolean;
     maxTabs?: number;
     webhookId?: string;
+    quiet?: boolean;
   }) => Promise<string>;
   openBridge: () => Promise<BridgeConnection>;
   deliverLeaderMessage: (msg: unknown) => Promise<void>;
@@ -128,6 +145,7 @@ export interface BridgeHarness {
    * `bridge.connected`).
    */
   reconnectLeader: () => Promise<unknown[]>;
+  reconstructDO: () => void;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -142,6 +160,7 @@ export async function makeTrayWithConnectedLeader(opts: {
   bridge: boolean;
   maxTabs?: number;
   webhookId?: string;
+  quiet?: boolean;
 }): Promise<BridgeHarness> {
   const { env, namespace } = createTestEnv();
   const workerBaseUrl = 'https://www.sliccy.ai';
@@ -155,20 +174,24 @@ export async function makeTrayWithConnectedLeader(opts: {
   );
 
   // 7. Mint preview
+  let activeStub = stub;
   const previewToken = await mintPreviewInternal(
-    stub,
+    activeStub,
     controllerToken,
     workerBaseUrl,
     opts.bridge,
     opts.maxTabs ?? 20,
-    opts.webhookId
+    opts.webhookId,
+    opts.quiet
   );
 
   // 8. Build helpers
   const harness: BridgeHarness = {
-    do: stub,
+    get do() {
+      return activeStub;
+    },
     state,
-    stub: { fetch: (req: Request) => stub.fetch(req) },
+    stub: { fetch: (req: Request) => activeStub.fetch(req) },
     leaderSent,
     previewToken,
     workerBaseUrl,
@@ -180,19 +203,20 @@ export async function makeTrayWithConnectedLeader(opts: {
 
     async mintBridgedPreview(newOpts) {
       return mintPreviewInternal(
-        stub,
+        activeStub,
         controllerToken,
         workerBaseUrl,
         newOpts.bridge,
         newOpts.maxTabs ?? 20,
-        newOpts.webhookId
+        newOpts.webhookId,
+        newOpts.quiet
       );
     },
 
     async openBridge() {
       // Open bridge WebSocket via the DO directly (not through worker routing)
       const url = harness.bridgeUrl();
-      const upgradeResponse = await stub.fetch(
+      const upgradeResponse = await activeStub.fetch(
         new Request(url, {
           headers: {
             Upgrade: 'websocket',
@@ -245,15 +269,15 @@ export async function makeTrayWithConnectedLeader(opts: {
     // the multi-await webSocketMessage/Close handler.) LEADER_WS_TAG='leader', BRIDGE_WS_TAG='bridge'.
     async deliverLeaderMessage(msg) {
       const leaderServer = state.getWebSockets('leader')[0];
-      await stub.webSocketMessage(leaderServer as never, JSON.stringify(msg));
+      await activeStub.webSocketMessage(leaderServer as never, JSON.stringify(msg));
     },
 
     async deliverBridgeMessage(b, msg) {
-      await stub.webSocketMessage(b.serverWs as never, JSON.stringify(msg));
+      await activeStub.webSocketMessage(b.serverWs as never, JSON.stringify(msg));
     },
 
     async closeBridge(b) {
-      await stub.webSocketClose(b.serverWs as never);
+      await activeStub.webSocketClose(b.serverWs as never);
       b.closed = true;
     },
 
@@ -279,6 +303,10 @@ export async function makeTrayWithConnectedLeader(opts: {
         controllerUrl: session.capabilities.controller.url,
         leaderKey: leader.leaderKey,
       }),
+
+    reconstructDO() {
+      activeStub = namespace.reconstruct(session.trayId);
+    },
   };
 
   return harness;
@@ -379,7 +407,8 @@ async function mintPreviewInternal(
   workerBaseUrl: string,
   bridge: boolean,
   maxTabs: number,
-  webhookId?: string
+  webhookId?: string,
+  quiet?: boolean
 ): Promise<string> {
   // Call the DO's mintPreview method directly
   // biome-ignore lint/suspicious/noExplicitAny: mintPreview is a private method we access for testing
@@ -391,6 +420,7 @@ async function mintPreviewInternal(
     bridge,
     maxTabs,
     webhookId,
+    quiet,
     workerBaseUrl,
   });
   return result.previewToken;

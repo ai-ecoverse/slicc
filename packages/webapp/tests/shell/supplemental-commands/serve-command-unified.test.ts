@@ -309,6 +309,24 @@ describe('serve command (unified preview)', () => {
     expect(result.stdout).toContain('Pushed to 2 followers');
   });
 
+  it('keeps a bare logs argument available as a directory name', async () => {
+    const minter = vi.fn().mockResolvedValue({
+      previewToken: 'tok-logs',
+      url: 'https://example.test/index.html',
+      pushed: 0,
+    });
+    setPreviewMinter(minter);
+    const ctx = createMockCtx({
+      directories: ['/workspace/logs'],
+      files: ['/workspace/logs/index.html'],
+    });
+
+    const result = await createServeCommand().execute(['logs'], ctx as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(minter).toHaveBeenCalledWith(expect.objectContaining({ servedRoot: '/workspace/logs' }));
+  });
+
   it('errors when neither in-realm minter nor panel-RPC client is available', async () => {
     const cmd = createServeCommand();
     const ctx = createMockCtx({

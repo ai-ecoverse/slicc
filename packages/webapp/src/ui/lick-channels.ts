@@ -8,10 +8,11 @@
  * session-reload, navigate, discovery, upgrade, workflow) AND the synthetic
  * scoop-lifecycle channels (`scoop-notify`, `scoop-idle`, `scoop-wait`)
  * the Orchestrator fires when a scoop completes, stays idle, or when a
- * previously scheduled `scoop_wait` resolves. It deliberately omits
- * `'cherry'` — that `LickEvent['type']` renders live via
- * `EXTERNAL_LICK_CHANNELS` (`scoops/lick-formatting.ts`) as its own chat
- * chip, not through the inline collapsible lick widget this set drives.
+ * previously scheduled `scoop_wait` resolves. `'preview'` is included because
+ * its persisted lifecycle announcement must use this guard to render as a
+ * compact chip both live and on replay. It deliberately omits `'cherry'` —
+ * that `LickEvent['type']` renders through its dedicated Cherry event path,
+ * not through the inline collapsible lick widget this set drives.
  * We render everything in this set with the same widget so the cone's
  * chat history stays visually coherent across "something external
  * happened" and "a scoop finished" events.
@@ -31,6 +32,7 @@ export type LickChannel =
   | 'discovery'
   | 'upgrade'
   | 'workflow'
+  | 'preview'
   | 'scoop-notify'
   | 'scoop-idle'
   | 'scoop-wait'
@@ -46,6 +48,7 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'discovery',
   'upgrade',
   'workflow',
+  'preview',
   'scoop-notify',
   'scoop-idle',
   'scoop-wait',

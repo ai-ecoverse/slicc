@@ -9,6 +9,7 @@ import type {
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
+  WorkerPreviewState,
 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
@@ -32,7 +33,7 @@ import {
   labelForFollower,
 } from './tray-leader/follower-registry.js';
 import { FsRouter } from './tray-leader/fs-router.js';
-import { PreviewBridgeManager } from './tray-leader/preview-bridge.js';
+import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { TabRouter } from './tray-leader/tab-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
@@ -397,6 +398,22 @@ export class LeaderSyncManager {
 
   dropMintedPreview(previewToken: string): void {
     this.previewBridge.dropMintedPreview(previewToken);
+  }
+
+  restorePreviewState(msg: WorkerPreviewState): void {
+    this.previewBridge.restorePreviewState(msg);
+  }
+
+  getPreviewLifecycleRecords(previewToken?: string): readonly PreviewLifecycleRecord[] {
+    return this.previewBridge.getPreviewLifecycleRecords(previewToken);
+  }
+
+  clearPreviewLifecycleRecords(previewToken?: string): number {
+    return this.previewBridge.clearPreviewLifecycleRecords(previewToken);
+  }
+
+  rearmPreviewAnnouncements(previewToken?: string): number {
+    return this.previewBridge.rearmPreviewAnnouncements(previewToken);
   }
 
   onBridgeConnected(msg: WorkerBridgeConnected): void {

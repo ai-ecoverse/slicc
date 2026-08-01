@@ -20,6 +20,7 @@ export interface MintArgs {
   maxTabs?: number;
   webhookId?: string;
   userHash?: string;
+  quiet?: boolean;
 }
 
 export interface PreviewListItem {
@@ -51,6 +52,7 @@ export async function mintPreviewViaWorker(
       maxTabs: args.maxTabs,
       webhookId: args.webhookId,
       userHash: args.userHash,
+      quiet: args.quiet,
     }),
   });
   if (!res.ok) throw new Error(`Preview mint failed: ${res.status}`);

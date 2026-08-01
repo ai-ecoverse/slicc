@@ -91,6 +91,21 @@ describe('buildThreadChildren', () => {
     expect(card.textContent).toContain('Mount recovery required');
   });
 
+  it('renders a preview-channel message as a collapsed lick card', () => {
+    const [card] = messageEls({
+      id: 'preview-1',
+      role: 'user',
+      content: 'Preview tab connected from https://example.test',
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'preview',
+    });
+    expect(card.tagName.toLowerCase()).toBe('slicc-lick-card');
+    expect(card.getAttribute('kind')).toBe('preview');
+    expect(card.hasAttribute('collapsible')).toBe(true);
+    expect(card.hasAttribute('collapsed')).toBe(true);
+  });
+
   it('carries the collation count onto the card, one section per part', () => {
     const [card] = messageEls({
       id: 'l1',

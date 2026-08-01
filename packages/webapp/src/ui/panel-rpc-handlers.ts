@@ -96,6 +96,12 @@ export interface StandalonePanelRpcHandlerOptions {
       createdAt: string;
     }>;
   }>;
+  /** Read preview lifecycle records held by the page-side leader. */
+  getPreviewLifecycleRecords?: (previewToken?: string) => PanelRpcResults['tray-preview-logs'];
+  /** Clear lifecycle records and re-arm the matching announcement latch. */
+  truncatePreviewLifecycleRecords?: (
+    previewToken?: string
+  ) => PanelRpcResults['tray-preview-truncate'];
   /**
    * Leave the page-side leader/follower tray (or switch role to leader
    * on the supplied worker URL). Wired by `mainStandaloneWorker` to the
@@ -609,6 +615,20 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('serve: no active leader tray; cannot list previews');
       }
       return await options.listPreviews();
+    },
+
+    'tray-preview-logs': async ({ previewToken }) => {
+      if (!options.getPreviewLifecycleRecords) {
+        throw new Error('serve --logs: no active leader tray; cannot read preview logs');
+      }
+      return options.getPreviewLifecycleRecords(previewToken);
+    },
+
+    'tray-preview-truncate': async ({ previewToken }) => {
+      if (!options.truncatePreviewLifecycleRecords) {
+        throw new Error('serve --truncate: no active leader tray; cannot truncate preview logs');
+      }
+      return options.truncatePreviewLifecycleRecords(previewToken);
     },
 
     'tray-leave': async ({ workerBaseUrl, requestId }) => {

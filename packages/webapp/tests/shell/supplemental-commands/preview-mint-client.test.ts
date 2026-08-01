@@ -23,6 +23,7 @@ describe('mintPreviewViaWorker', () => {
         servedRoot: '/workspace/dist',
         entryPath: '/workspace/dist/index.html',
         allowLive: false,
+        quiet: true,
       },
       fetchMock
     );
@@ -39,6 +40,7 @@ describe('mintPreviewViaWorker', () => {
           servedRoot: '/workspace/dist',
           entryPath: '/workspace/dist/index.html',
           allowLive: false,
+          quiet: true,
         }),
       })
     );

@@ -8,7 +8,9 @@ describe('handleBridgeWebSocket', () => {
     const h = await makeTrayWithConnectedLeader({ bridge: true, maxTabs: 2 });
     const res = await h.stub.fetch(new Request(h.bridgeUrl(), { headers: upgrade }));
     expect(res.status).toBe(101);
-    expect(h.leaderSent.some((m) => m.type === 'bridge.connected')).toBe(true);
+    const connected = h.leaderSent.find((message) => message.type === 'bridge.connected');
+    expect(connected).toBeDefined();
+    expect(connected).not.toHaveProperty('replay');
   });
 
   it('rejects a non-bridged token with 403', async () => {

@@ -70,6 +70,28 @@ export interface StandalonePanelRpcDeps {
   window: Window;
 }
 
+type ActiveLeaderSync = NonNullable<PageLeaderTrayHandle['currentLeaderSync']>;
+
+function requirePreviewSync(
+  getLeader: StandalonePanelRpcDeps['getLeader'],
+  flag: '--logs' | '--truncate'
+): ActiveLeaderSync {
+  const sync = getLeader()?.currentLeaderSync;
+  if (!sync) throw new Error(`serve ${flag}: no active leader tray`);
+  return sync;
+}
+
+function getPreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
+  return { lifecycleRecords: [...sync.getPreviewLifecycleRecords(previewToken)] };
+}
+
+function truncatePreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
+  return {
+    cleared: sync.clearPreviewLifecycleRecords(previewToken),
+    rearmed: sync.rearmPreviewAnnouncements(previewToken),
+  };
+}
+
 export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Promise<void> {
   const {
     instanceId,
@@ -136,8 +158,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         // abort to SIGINT on the follower, which is the Ctrl+C path.
         execAborters.get(execToken)?.abort();
       },
-      // Worker-side `serve` bridges here so the kernel-worker can mint a preview URL
-      // via the page-side leader's controllerToken and broadcast preview.open.
+      // Worker-side `serve` mints via the page-side leader's controllerToken.
       // Extension uses the in-realm `setPreviewMinter` hook instead.
       mintPreview: async ({
         entryPath,
@@ -175,6 +196,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           maxTabs,
           webhookId,
           userHash,
+          quiet: quiet ?? false,
         });
         // Get title from entryPath basename, or 'Preview' if empty
         const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';
@@ -218,6 +240,10 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           controllerToken,
         });
       },
+      getPreviewLifecycleRecords: (previewToken) =>
+        getPreviewRecords(requirePreviewSync(getLeader, '--logs'), previewToken),
+      truncatePreviewLifecycleRecords: (previewToken) =>
+        truncatePreviewRecords(requirePreviewSync(getLeader, '--truncate'), previewToken),
       listRemoteTargets: () => browser.listAllTargets(),
       remoteCdp: remoteCdpBridge,
       // Lazy lookup — the leader surface may mount after the panel-RPC

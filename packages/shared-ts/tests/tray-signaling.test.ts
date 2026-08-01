@@ -27,6 +27,7 @@ describe('tray signaling contract', () => {
         offer: { type: 'offer', sdp: 'v=0' },
       },
       { type: 'bridge.close', connId: 'conn1' },
+      { type: 'preview.state.update', previewToken: 't1.p1', announced: true },
     ];
     const workerMessages: WorkerToLeaderControlMessage[] = [
       { type: 'pong', trayId: 't1' },
@@ -36,6 +37,12 @@ describe('tray signaling contract', () => {
         headers: { 'content-type': 'application/json' },
         body: { hello: true },
         timestamp: '2026-07-06T00:00:00Z',
+      },
+      {
+        type: 'preview.state',
+        previewToken: 't1.p1',
+        quiet: false,
+        announced: true,
       },
     ];
     const followerRequests: FollowerBootstrapRequest[] = [

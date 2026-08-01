@@ -185,6 +185,7 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     bridge?: boolean;
     maxTabs?: number;
     webhookId?: string;
+    quiet?: boolean;
   };
   await deps.loadTray();
   const tray = deps.getTray();
@@ -386,6 +387,7 @@ export async function mintPreview(
     maxTabs?: number;
     webhookId?: string;
     userHash?: string;
+    quiet?: boolean;
   },
   deps: PreviewDeps
 ): Promise<{ previewToken: string; url: string }> {
@@ -415,6 +417,8 @@ export async function mintPreview(
     maxTabs: req.maxTabs ?? 20,
     webhookId: req.webhookId,
     userHash: req.userHash,
+    quiet: req.quiet ?? false,
+    announced: false,
   };
 
   tray.previews ??= {};
@@ -469,4 +473,13 @@ export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> 
   const tray = deps.getTray();
   if (!tray || tray.expiredAt) return [];
   return Object.values(tray.previews ?? {});
+}
+
+export function previewAnnouncementState(
+  record: PreviewRecord
+): Pick<PreviewRecord, 'quiet' | 'announced'> {
+  return {
+    quiet: record.quiet ?? true,
+    announced: record.announced ?? true,
+  };
 }

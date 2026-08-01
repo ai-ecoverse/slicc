@@ -2,7 +2,7 @@ import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from 
 import { describe, expect, it } from 'vitest';
 
 describe('bridge control messages', () => {
-  it('constructs a bridge.connected + bridge.cdp.request', () => {
+  it('constructs bridge and durable preview-state messages', () => {
     const connected: WorkerToLeaderControlMessage = {
       type: 'bridge.connected',
       connId: 'c1',
@@ -18,7 +18,20 @@ describe('bridge control messages', () => {
       method: 'Runtime.evaluate',
       params: { expression: '1+1' },
     };
+    const restored: WorkerToLeaderControlMessage = {
+      type: 'preview.state',
+      previewToken: 'tray.secret',
+      quiet: true,
+      announced: false,
+    };
+    const update: LeaderToWorkerControlMessage = {
+      type: 'preview.state.update',
+      previewToken: 'tray.secret',
+      announced: true,
+    };
     expect(connected.type).toBe('bridge.connected');
     expect(req.method).toBe('Runtime.evaluate');
+    expect(restored.quiet).toBe(true);
+    expect(update.announced).toBe(true);
   });
 });
