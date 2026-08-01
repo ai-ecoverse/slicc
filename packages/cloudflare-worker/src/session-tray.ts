@@ -898,6 +898,7 @@ export class SessionTrayDurableObject {
           origin: att.origin ?? '',
           userAgent: att.userAgent ?? '',
           connectedAt: att.connectedAt ?? this.isoNow(),
+          replay: true,
         })
       );
     }

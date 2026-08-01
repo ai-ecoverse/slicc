@@ -65,8 +65,17 @@ export class PreviewBridgeManager {
 
   onBridgeConnected(msg: WorkerBridgeConnected): void {
     const { connId, previewToken, origin, userAgent, connectedAt } = msg;
-    const mint = this.getOrCreatePreview(previewToken, origin);
+    const replay = msg.replay === true;
+    const mint = replay
+      ? (this.mintMap.get(previewToken) ?? {
+          url: origin,
+          title: 'Preview',
+          quiet: false,
+          announced: false,
+        })
+      : this.getOrCreatePreview(previewToken, origin);
     if (this.bridgeConns.has(connId)) {
+      if (replay) return;
       this.recordLifecycle({
         timestamp: new Date().toISOString(),
         lifecycle: 'connected',
@@ -99,6 +108,7 @@ export class PreviewBridgeManager {
       transport,
     });
     this.context.log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
+    if (replay) return;
     const timestamp = new Date().toISOString();
     const announced = !mint.announced && !quiet && Boolean(this.context.options.onPreviewLick);
     mint.announced = true;

@@ -141,6 +141,7 @@ export interface WorkerBridgeConnected {
   origin: string;
   userAgent: string;
   connectedAt: string;
+  replay?: true;
 }
 
 export interface WorkerBridgeDisconnected {
