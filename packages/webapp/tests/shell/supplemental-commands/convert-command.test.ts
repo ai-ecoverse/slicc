@@ -381,6 +381,32 @@ describe('convert image composition', () => {
     expect(appendDirections).toEqual(['horizontal', 'horizontal', 'vertical']);
   });
 
+  it('retries annotation font loading after a transient failure', async () => {
+    const { addFont } = installCompositionMock();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary font failure'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const args = ['input.jpg', '-annotate', '+0+0', 'label', 'output.jpg'];
+    const context = createMockCtx({
+      fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) },
+    });
+
+    const first = await createConvertCommand().execute(args, context);
+    const second = await createConvertCommand().execute(args, context);
+
+    expect(first.exitCode).toBe(1);
+    expect(first.stderr).toContain('temporary font failure');
+    expect(second.exitCode).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(addFont).toHaveBeenCalledWith('AdobeClean-Regular.otf', new Uint8Array([1, 2, 3]));
+  });
+
   it('applies gravity, colors, point size, and annotation within input groups', async () => {
     const { addFont, appendDirections, drawCalls } = installCompositionMock();
     vi.stubGlobal(

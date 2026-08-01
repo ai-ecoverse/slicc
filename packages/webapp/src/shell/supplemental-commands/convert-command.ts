@@ -419,12 +419,17 @@ function applyAnnotation(
 
 async function ensureAnnotationFont(magick: MagickModule): Promise<void> {
   if (fontRegisteredModules.has(magick.Magick)) return;
-  annotationFontData ??= fetch(annotationFontUrl).then(async (response) => {
+  const fontData = (annotationFontData ??= fetch(annotationFontUrl).then(async (response) => {
     if (!response.ok) throw new Error(`Failed to load annotation font (${response.status})`);
     return new Uint8Array(await response.arrayBuffer());
-  });
-  magick.Magick.addFont(ANNOTATION_FONT_NAME, await annotationFontData);
-  fontRegisteredModules.add(magick.Magick);
+  }));
+  try {
+    magick.Magick.addFont(ANNOTATION_FONT_NAME, await fontData);
+    fontRegisteredModules.add(magick.Magick);
+  } catch (error) {
+    if (annotationFontData === fontData) annotationFontData = null;
+    throw error;
+  }
 }
 
 function hasAnnotation(expression: ImageExpression): boolean {
