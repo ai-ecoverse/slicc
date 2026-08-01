@@ -9,6 +9,7 @@ import type {
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
+  WorkerPreviewState,
 } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
@@ -397,6 +398,10 @@ export class LeaderSyncManager {
 
   dropMintedPreview(previewToken: string): void {
     this.previewBridge.dropMintedPreview(previewToken);
+  }
+
+  restorePreviewState(msg: WorkerPreviewState): void {
+    this.previewBridge.restorePreviewState(msg);
   }
 
   getPreviewLifecycleRecords(previewToken?: string): readonly PreviewLifecycleRecord[] {

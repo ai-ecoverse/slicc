@@ -640,8 +640,8 @@ serve --truncate [<token>]            # Clear records and re-arm first-visit ann
 
 ### Diagnostics
 
-- `serve --logs [<token>] [--lines <N>]` — Print recorded connects and disconnects oldest-to-newest, including timestamps and whether each event was announced or suppressed. The optional exact preview token scopes one preview; `--lines` keeps only the newest N matching entries. This read-only command never emits a lick or wakes the cone. The bounded recorder is leader-memory-only and resets when the leader restarts.
-- `serve --truncate [<token>]` — Clear all lifecycle records, or only those for the exact preview token, **and re-arm the matching first-visit announcement latch**. The next visit announces once again unless the preview was minted with `--quiet`. Output reports both the number of records cleared and announcements re-armed.
+- `serve --logs [<token>] [--lines <N>]` — Print recorded connects and disconnects oldest-to-newest, including timestamps and whether each event was announced or suppressed. The optional exact preview token scopes one preview; `--lines` keeps only the newest N matching entries. This read-only command never emits a lick or wakes the cone. The bounded recorder is leader-memory-only and resets when the leader restarts; the per-preview quiet and announcement latch state does not.
+- `serve --truncate [<token>]` — Clear all lifecycle records, or only those for the exact preview token, **and durably re-arm the matching first-visit announcement latch**. The next visit announces once again unless the preview was minted with `--quiet`, including after a leader restart. Output reports both the number of records cleared and announcements re-armed.
 
 ### Visitor page API (bridged previews only)
 

@@ -311,6 +311,10 @@ function buildLeaderManager(
         sync.dropMintedPreview(message.previewToken);
         return;
       }
+      if (message.type === 'preview.state') {
+        sync.restorePreviewState(message);
+        return;
+      }
       if (message.type === 'bridge.connected') {
         sync.onBridgeConnected(message);
         return;

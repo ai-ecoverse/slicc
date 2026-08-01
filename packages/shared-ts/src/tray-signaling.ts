@@ -134,6 +134,13 @@ export interface WorkerPreviewRevoked {
   previewToken: string;
 }
 
+export interface WorkerPreviewState {
+  type: 'preview.state';
+  previewToken: string;
+  quiet: boolean;
+  announced: boolean;
+}
+
 export interface WorkerBridgeConnected {
   type: 'bridge.connected';
   connId: string;
@@ -174,6 +181,7 @@ export type WorkerToLeaderControlMessage =
   | WebhookEventMessage
   | WorkerPreviewRequest
   | WorkerPreviewRevoked
+  | WorkerPreviewState
   | WorkerBridgeConnected
   | WorkerBridgeDisconnected
   | WorkerBridgeCdpResponse;
@@ -232,6 +240,12 @@ export interface LeaderPreviewPurge {
   previewToken: string;
 }
 
+export interface LeaderPreviewStateUpdate {
+  type: 'preview.state.update';
+  previewToken: string;
+  announced: boolean;
+}
+
 export interface LeaderBridgeCdpRequest {
   type: 'bridge.cdp.request';
   connId: string;
@@ -256,6 +270,7 @@ export type LeaderToWorkerControlMessage =
   | LeaderPreviewResponseOk
   | LeaderPreviewResponseError
   | LeaderPreviewPurge
+  | LeaderPreviewStateUpdate
   | LeaderBridgeCdpRequest
   | LeaderBridgeClose;
 

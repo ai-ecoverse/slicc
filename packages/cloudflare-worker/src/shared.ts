@@ -101,6 +101,8 @@ export interface PreviewRecord {
   maxTabs: number; // concurrent tab cap (default 20)
   webhookId?: string; // optional webhook identifier for bridge events
   userHash?: string; // first 8 hex chars of SHA-256(providerId:userName); absent for anonymous
+  quiet: boolean; // suppresses the preview's first-visit announcement
+  announced: boolean; // durable per-preview first-visit latch
 }
 
 export interface TrayRecord {

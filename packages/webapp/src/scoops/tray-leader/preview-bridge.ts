@@ -2,6 +2,7 @@ import type {
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
+  WorkerPreviewState,
 } from '@slicc/shared-ts';
 import { PreviewBridgeCdpTransport } from '../../cdp/preview-bridge-cdp-transport.js';
 import type { LickEvent } from '../lick-manager.js';
@@ -58,6 +59,21 @@ export class PreviewBridgeManager {
     this.mintMap.set(previewToken, { ...meta, announced });
   }
 
+  restorePreviewState(msg: WorkerPreviewState): void {
+    const existing = this.mintMap.get(msg.previewToken);
+    if (existing) {
+      existing.quiet = msg.quiet;
+      existing.announced = msg.announced;
+      return;
+    }
+    this.mintMap.set(msg.previewToken, {
+      url: '',
+      title: 'Preview',
+      quiet: msg.quiet,
+      announced: msg.announced,
+    });
+  }
+
   dropMintedPreview(previewToken: string): void {
     this.mintMap.delete(previewToken);
     this.clearPreviewLifecycleRecords(previewToken);
@@ -69,6 +85,7 @@ export class PreviewBridgeManager {
     const mint = replay
       ? this.restoreReplayedPreview(previewToken, origin)
       : this.getOrCreatePreview(previewToken, origin);
+    if (!mint.url) mint.url = origin;
     if (this.bridgeConns.has(connId)) {
       if (replay) return;
       this.recordLifecycle({
@@ -105,8 +122,16 @@ export class PreviewBridgeManager {
     this.context.log.info('Preview bridge connected', { connId, previewToken, origin, userAgent });
     if (replay) return;
     const timestamp = new Date().toISOString();
-    const announced = !mint.announced && !quiet && Boolean(this.context.options.onPreviewLick);
-    mint.announced = true;
+    const firstVisit = !mint.announced;
+    const announced = firstVisit && !quiet && Boolean(this.context.options.onPreviewLick);
+    if (firstVisit) {
+      mint.announced = true;
+      this.context.sendControl({
+        type: 'preview.state.update',
+        previewToken,
+        announced: true,
+      });
+    }
     this.recordLifecycle({
       timestamp,
       lifecycle: 'connected',
@@ -205,6 +230,11 @@ export class PreviewBridgeManager {
     for (const [token, preview] of this.mintMap) {
       if (previewToken !== undefined && token !== previewToken) continue;
       preview.announced = false;
+      this.context.sendControl({
+        type: 'preview.state.update',
+        previewToken: token,
+        announced: false,
+      });
       rearmed += 1;
     }
     return rearmed;
@@ -221,7 +251,7 @@ export class PreviewBridgeManager {
   private restoreReplayedPreview(previewToken: string, origin: string): MintedPreview {
     const existing = this.mintMap.get(previewToken);
     if (existing) {
-      existing.announced = true;
+      if (!existing.announced) existing.announced = true;
       return existing;
     }
     const preview = { url: origin, title: 'Preview', quiet: true, announced: true };

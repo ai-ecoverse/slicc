@@ -158,8 +158,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         // abort to SIGINT on the follower, which is the Ctrl+C path.
         execAborters.get(execToken)?.abort();
       },
-      // Worker-side `serve` bridges here so the kernel-worker can mint a preview URL
-      // via the page-side leader's controllerToken and broadcast preview.open.
+      // Worker-side `serve` mints via the page-side leader's controllerToken.
       // Extension uses the in-realm `setPreviewMinter` hook instead.
       mintPreview: async ({
         entryPath,
@@ -197,6 +196,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           maxTabs,
           webhookId,
           userHash,
+          quiet: quiet ?? false,
         });
         // Get title from entryPath basename, or 'Preview' if empty
         const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';

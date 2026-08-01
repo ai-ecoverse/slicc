@@ -159,6 +159,81 @@ describe('PreviewBridgeManager', () => {
     await expect(response).resolves.toEqual({ value: 2 });
   });
 
+  it('restores durable state without a socket, then persists first visit and truncate transitions', () => {
+    const { bridge, options } = createHarness();
+    bridge.restorePreviewState({
+      type: 'preview.state',
+      previewToken: 'token',
+      quiet: false,
+      announced: false,
+    });
+
+    bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'first',
+      previewToken: 'token',
+      origin: 'https://example.com',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+    });
+    expect(options.onPreviewLick).toHaveBeenCalledTimes(1);
+    expect(options.sendControl).toHaveBeenCalledWith({
+      type: 'preview.state.update',
+      previewToken: 'token',
+      announced: true,
+    });
+
+    expect(bridge.rearmPreviewAnnouncements('token')).toBe(1);
+    expect(options.sendControl).toHaveBeenLastCalledWith({
+      type: 'preview.state.update',
+      previewToken: 'token',
+      announced: false,
+    });
+  });
+
+  it('synthesizes replay state silently and only upgrades announced on existing metadata', () => {
+    const synthetic = createHarness();
+    synthetic.bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'synthetic',
+      previewToken: 'synthetic-token',
+      origin: 'https://synthetic.example',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+      replay: true,
+    });
+    expect(synthetic.bridge.mintMap.get('synthetic-token')).toEqual({
+      url: 'https://synthetic.example',
+      title: 'Preview',
+      quiet: true,
+      announced: true,
+    });
+    expect(synthetic.options.onPreviewLick).not.toHaveBeenCalled();
+    expect(synthetic.bridge.getPreviewLifecycleRecords()).toEqual([]);
+
+    const existing = createHarness();
+    existing.bridge.registerMintedPreview('token', {
+      url: 'https://real.example/page',
+      title: 'Real metadata',
+      quiet: false,
+    });
+    existing.bridge.onBridgeConnected({
+      type: 'bridge.connected',
+      connId: 'existing',
+      previewToken: 'token',
+      origin: 'https://fallback.example',
+      userAgent: 'test',
+      connectedAt: '2026-07-27T00:00:00.000Z',
+      replay: true,
+    });
+    expect(existing.bridge.mintMap.get('token')).toEqual({
+      url: 'https://real.example/page',
+      title: 'Real metadata',
+      quiet: false,
+      announced: true,
+    });
+  });
+
   it.each([
     { quiet: false, initialLicks: 1 },
     { quiet: true, initialLicks: 0 },

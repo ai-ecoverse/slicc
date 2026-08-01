@@ -28,7 +28,7 @@ export interface MintPreviewOpts {
   noBridge: boolean;
   /** Max tabs allowed (from `--max-tabs`). Passed to the DO record. */
   maxTabs?: number;
-  /** `--quiet` flag: suppress the preview-open notification in the page registry. */
+  /** `--quiet` flag: durably suppress the preview's first-visit announcement. */
   quiet?: boolean;
   /** Webhook id (from pre-mint webhook creation for `--bridge`). Stored on the DO record. */
   webhookId?: string;

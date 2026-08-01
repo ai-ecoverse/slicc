@@ -181,11 +181,14 @@ interface PreviewDOMethods {
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    quiet?: boolean;
   }): Promise<{ previewToken: string; url: string }>;
   resolvePreview(previewToken: string): Promise<{
     servedRoot: string;
     entryPath: string;
     allowLive: boolean;
+    quiet: boolean;
+    announced: boolean;
   } | null>;
   revokePreview(previewToken: string): Promise<{ revoked: boolean }>;
   listPreviews(): Promise<unknown[]>;
@@ -262,6 +265,7 @@ describe('SessionTrayDurableObject preview methods', () => {
       entryPath: '/workspace/dist/index.html',
       allowLive: false,
       workerBaseUrl: 'https://www.sliccy.ai',
+      quiet: true,
     });
 
     expect(result.previewToken).toMatch(/^[^.]+\.[0-9a-f]+$/);
@@ -272,6 +276,8 @@ describe('SessionTrayDurableObject preview methods', () => {
       servedRoot: '/workspace/dist',
       entryPath: '/workspace/dist/index.html',
       allowLive: false,
+      quiet: true,
+      announced: false,
     });
   });
 

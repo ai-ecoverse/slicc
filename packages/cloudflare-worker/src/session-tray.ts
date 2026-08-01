@@ -26,6 +26,7 @@ import {
   type PreviewAssembler,
   type PreviewDeps,
   type PreviewResponseChunk,
+  previewAnnouncementState,
   pushPreviewResponseChunk,
   resolvePreview as resolvePreviewImpl,
   revokePreview as revokePreviewImpl,
@@ -865,6 +866,10 @@ export class SessionTrayDurableObject {
       })
     );
 
+    // Rehydrate the leader's per-preview announcement metadata even when no
+    // visitor sockets are currently live.
+    this.replayPreviewStatesToLeader(server);
+
     // Replay live bridge connections so a (re)connected leader repopulates its
     // in-memory bridge registry. A leader page reload wipes that map while the
     // DO's bridge sockets stay open — without this, those tabs would be
@@ -872,6 +877,20 @@ export class SessionTrayDurableObject {
     this.replayBridgeConnectionsToLeader(server);
 
     return websocketResponse(client);
+  }
+
+  private replayPreviewStatesToLeader(leaderWs: TrayWebSocketLike): void {
+    for (const record of Object.values(this.tray?.previews ?? {})) {
+      const { quiet, announced } = previewAnnouncementState(record);
+      leaderWs.send(
+        JSON.stringify({
+          type: 'preview.state',
+          previewToken: record.previewToken,
+          quiet,
+          announced,
+        })
+      );
+    }
   }
 
   /**
@@ -1139,6 +1158,9 @@ export class SessionTrayDurableObject {
       } else if (message.type === 'preview.response') {
         pushPreviewResponseChunk(this.pendingPreviews, message as unknown as PreviewResponseChunk);
         persistentMutation = false;
+      } else if (message.type === 'preview.state.update') {
+        const record = this.tray.previews?.[message.previewToken];
+        if (record) record.announced = message.announced;
       } else if (message.type === 'preview.purge') {
         await handlePreviewPurge(message.previewToken, this.previewDeps());
       } else if (message.type === 'bridge.cdp.request') {
@@ -1924,6 +1946,7 @@ export class SessionTrayDurableObject {
     entryPath: string;
     allowLive: boolean;
     workerBaseUrl: string;
+    quiet?: boolean;
   }): Promise<{ previewToken: string; url: string }> {
     return mintPreviewImpl(req, this.previewDeps());
   }
