@@ -90,6 +90,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: Capture screenshots
+        id: capture
         run: |
           set -euo pipefail
           mkdir -p .ios-screenshots
@@ -205,6 +206,7 @@ jobs:
         env:
           UPLOAD_MODE: ${{ steps.mode.outputs.mode }}
           R2_UPLOAD_OUTCOME: ${{ steps.r2_upload.outcome }}
+          CAPTURE_OUTCOME: ${{ steps.capture.outcome }}
         with:
           script: |
             const fs = require('fs');
@@ -252,6 +254,33 @@ jobs:
               return existing.find((c) => c.body && c.body.includes(MARKER));
             };
 
+            // Capture (or a step before it) failed: say so explicitly rather
+            // than letting the zero-shot branch overwrite a prior comment
+            // with a misleading "no changed screenshots".
+            const captureOutcome = process.env.CAPTURE_OUTCOME || '';
+            if (captureOutcome !== 'success') {
+              const body = `${MARKER}\n> ⚠️ iOS screenshot capture did not run for \`${shortSha}\``
+                + ` (\`${captureOutcome || 'unknown'}\`) — see the [workflow run](${runUrl}).`
+                + ` Any screenshots below a previous push are stale.\n`;
+              const prior = await findPrior();
+              if (prior) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: prior.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body,
+                });
+              }
+              return;
+            }
+
             // Zero NEW screenshots: shrink a prior comment to a one-line note
             // so stale images don't linger; otherwise skip entirely.
             if (newShots.length === 0) {
@@ -261,8 +290,7 @@ jobs:
                 return;
               }
               let body = `${MARKER}\n`;
-              body += `_No changed iOS screenshots in the latest commit (\`${shortSha}\`)`;
-              body += ` — ${cachedCount} matched existing content._\n`;
+              body += `_All ${cachedCount} iOS screenshots for \`${shortSha}\` matched the previous upload byte-for-byte._\n`;
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -277,7 +305,7 @@ jobs:
             lines.push('## 📱 iOS screenshots');
             lines.push('');
             const device = manifest && manifest.device ? ` · ${manifest.device}` : '';
-            const totalNote = cachedCount > 0 ? ` (${cachedCount} unchanged, ${newShots.length} changed)` : '';
+            const totalNote = cachedCount > 0 ? ` (${cachedCount} matched the previous upload, ${newShots.length} uploaded)` : '';
             lines.push(`Commit \`${shortSha}\`${device} · ${newShots.length} ${newShots.length === 1 ? 'screen' : 'screens'}${totalNote}`);
             lines.push('');
 

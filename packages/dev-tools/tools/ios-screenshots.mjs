@@ -79,6 +79,32 @@ try {
 }
 simctl('install', udid, args.app);
 
+// Pin the status bar so identical app states hash identically across runs:
+// the live clock (and battery/signal chrome) is part of the PNG, and a
+// churning hash defeats the R2 dedup and makes every screen read "changed".
+console.log('==> pinning simulator status bar');
+try {
+  simctl(
+    'status_bar',
+    udid,
+    'override',
+    '--time',
+    '9:41',
+    '--batteryState',
+    'charged',
+    '--batteryLevel',
+    '100',
+    '--wifiBars',
+    '3',
+    '--cellularBars',
+    '4',
+    '--operatorName',
+    ''
+  );
+} catch {
+  console.warn('::warning::simctl status_bar override unavailable; screenshot hashes may churn');
+}
+
 mkdirSync(args.out, { recursive: true });
 const hashes = {};
 for (const screen of screens) {
@@ -99,6 +125,11 @@ try {
   simctl('terminate', udid, BUNDLE_ID);
 } catch {
   // Already gone.
+}
+try {
+  simctl('status_bar', udid, 'clear');
+} catch {
+  // Best-effort; the override is harmless to leave on a CI simulator.
 }
 
 const manifest = buildManifest(screens, hashes, { device: deviceName });
