@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Security
+import SliccTraySession
 import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "TraySessionCLI")

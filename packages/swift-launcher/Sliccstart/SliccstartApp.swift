@@ -1,6 +1,7 @@
 import AppKit
 import AppUpdater
 import Combine
+import SliccTraySession
 import SwiftOptel
 import SwiftUI
 import os

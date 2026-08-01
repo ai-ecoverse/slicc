@@ -1,0 +1,8 @@
+# Inherits the shared rule set from the repo-root .swiftlint.yml.
+# The `excluded` paths are redeclared here so they resolve relative to this
+# package (SwiftLint resolves excluded paths relative to the config file).
+parent_config: ../../.swiftlint.yml
+
+excluded:
+  - .build
+  - Package.resolved

@@ -1,4 +1,5 @@
 import AppUpdater
+import SliccTraySession
 import SwiftUI
 import UniformTypeIdentifiers
 
