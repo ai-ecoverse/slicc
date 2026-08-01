@@ -136,6 +136,42 @@ describe('createStandalonePanelRpcHandlers — tray-open-preview', () => {
   });
 });
 
+describe('createStandalonePanelRpcHandlers — preview lifecycle diagnostics', () => {
+  it('forwards logs and truncate to the page-side leader callbacks', async () => {
+    const getPreviewLifecycleRecords = vi.fn(() => ({
+      lifecycleRecords: [
+        {
+          timestamp: '2026-08-01T00:00:00.000Z',
+          lifecycle: 'connected' as const,
+          connId: 'conn-1',
+          previewToken: 'site-a',
+          announced: false,
+        },
+      ],
+    }));
+    const truncatePreviewLifecycleRecords = vi.fn(() => ({ cleared: 1, rearmed: 1 }));
+    const handlers = createStandalonePanelRpcHandlers({
+      getPreviewLifecycleRecords,
+      truncatePreviewLifecycleRecords,
+    });
+
+    const logs = await handlers['tray-preview-logs']!({ previewToken: 'site-a' });
+    const truncated = await handlers['tray-preview-truncate']!({ previewToken: 'site-a' });
+
+    expect(logs.lifecycleRecords).toHaveLength(1);
+    expect(truncated).toEqual({ cleared: 1, rearmed: 1 });
+    expect(getPreviewLifecycleRecords).toHaveBeenCalledWith('site-a');
+    expect(truncatePreviewLifecycleRecords).toHaveBeenCalledWith('site-a');
+  });
+
+  it('rejects diagnostics when no leader callbacks are wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+
+    await expect(handlers['tray-preview-logs']!({})).rejects.toThrow(/no active leader tray/i);
+    await expect(handlers['tray-preview-truncate']!({})).rejects.toThrow(/no active leader tray/i);
+  });
+});
+
 describe('createStandalonePanelRpcHandlers — tray-leave', () => {
   it('forwards the payload to the leaveTray callback and returns its result', async () => {
     const calls: Array<{ workerBaseUrl: string | null; requestId?: string }> = [];

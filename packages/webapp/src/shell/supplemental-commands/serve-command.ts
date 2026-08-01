@@ -7,6 +7,7 @@ import {
   getPreviewMinter,
   getPreviewOp,
   type MintPreviewResult,
+  type PreviewLifecycleRecordResult,
 } from '../../scoops/preview-minter.js';
 import { getLickManagerSurface } from './lick-surface.js';
 import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
@@ -21,11 +22,12 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
  *    the extension agent (offscreen) or the extension panel terminal
  *    (also in offscreen via `RemoteTerminalView`) has registered one
  *    via `setPreviewMinter(...)`. Same-realm call, no cross-realm hop.
- *    `getPreviewOp()` handles `--stop` / `--list` via the same pattern.
+ *    `getPreviewOp()` handles `--stop` / `--list` / `logs` / `truncate`
+ *    via the same pattern.
  *
  *  - **Cross-realm**: standalone kernel-worker shell → page-side via
  *    the panel-RPC `tray-open-preview` / `tray-revoke-preview` /
- *    `tray-list-previews` ops. The page-side handler
+ *    `tray-list-previews` / preview lifecycle ops. The page-side handler
  *    (wired in `ui/boot/setup-standalone-panel-rpc.ts`) reaches
  *    `LeaderSyncManager` and the worker HTTP API.
  *
@@ -41,11 +43,15 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
  *    but still mints.
  *  - `--stop <token>` revokes a previously-minted preview token.
  *  - `--list` lists active previews on the tray.
+ *  - `--logs [<token>]` prints leader-memory-only preview lifecycle diagnostics.
+ *  - `--truncate [<token>]` clears diagnostics and re-arms the announcement latch.
  */
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: serve [--entry <relative-path>] [--bridge | --no-bridge] [--max-tabs <n>] [--quiet] [--stop <token>] [--list] <directory>\n\n' +
+      'usage: serve [--entry <relative-path>] [--bridge | --no-bridge] [--max-tabs <n>] [--quiet] [--stop <token>] [--list] <directory>\n' +
+      '       serve --logs [<token>] [--lines <n>]\n' +
+      '       serve --truncate [<token>]\n\n' +
       '  Mint a worker-hosted preview URL for a VFS directory, broadcast it to\n' +
       "  all connected followers, and open it in the leader's browser.\n\n" +
       '  --entry      Override the entry file within the directory (default: index.html).\n' +
@@ -53,10 +59,13 @@ function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
       '               auto-provision a webhook for its window.slicc.emit() beacons.\n' +
       '  --no-bridge  Force the live bridge OFF even when followers are Cherry-attached.\n' +
       '  --max-tabs   Cap concurrent bridge tab connections (default 20; with --bridge).\n' +
-      '  --quiet      Suppress the per-connection preview-connected/disconnected licks.\n' +
+      '  --quiet      Suppress the single first-visit preview announcement.\n' +
       '  --stop <t>   Revoke a previously-minted preview token (closes bridge sockets,\n' +
       '               deletes the auto-provisioned webhook).\n' +
       '  --list       List active previews on this tray.\n' +
+      '  --logs [t]   Show recent connects/disconnects without emitting a lick.\n' +
+      '  --lines <n>  Limit --logs output to the newest n matching records.\n' +
+      '  --truncate [t]  Clear lifecycle records and re-arm the announcement latch.\n' +
       '  --project    Obsolete; ignored. Root-absolute paths work natively\n' +
       '               under unified preview.\n',
     stderr: '',
@@ -72,6 +81,9 @@ interface ParsedServeArgs {
   project: boolean;
   stop?: string;
   list: boolean;
+  logs?: true | string;
+  truncate?: true | string;
+  lines?: number;
   maxTabs?: number;
   quiet: boolean;
   error?: string;
@@ -81,6 +93,43 @@ type ArgStepResult = { skip: number } | { error: string };
 
 function isArgError(r: ArgStepResult): r is { error: string } {
   return 'error' in r;
+}
+
+function parseDiagnosticFlag(
+  arg: string,
+  nextArg: string | undefined,
+  state: ParsedServeArgs
+): ArgStepResult | undefined {
+  if (arg === '--list') {
+    state.list = true;
+    return { skip: 0 };
+  }
+  if (arg === '--logs' || arg === '--truncate') {
+    const field = arg === '--logs' ? 'logs' : 'truncate';
+    if (nextArg && !nextArg.startsWith('-')) {
+      state[field] = nextArg;
+      return { skip: 1 };
+    }
+    state[field] = true;
+    return { skip: 0 };
+  }
+  if (arg.startsWith('--logs=') || arg.startsWith('--truncate=')) {
+    const field = arg.startsWith('--logs=') ? 'logs' : 'truncate';
+    const value = arg.slice(arg.indexOf('=') + 1);
+    if (!value) return { error: `serve: missing value for --${field}\n` };
+    state[field] = value;
+    return { skip: 0 };
+  }
+  if (arg === '--lines' || arg.startsWith('--lines=')) {
+    const value = arg === '--lines' ? nextArg : arg.slice('--lines='.length);
+    const lines = value === undefined ? Number.NaN : Number(value);
+    if (!Number.isSafeInteger(lines) || lines <= 0) {
+      return { error: 'serve: --lines must be a positive integer\n' };
+    }
+    state.lines = lines;
+    return { skip: arg === '--lines' ? 1 : 0 };
+  }
+  return undefined;
 }
 
 function parseOneFlag(
@@ -118,10 +167,8 @@ function parseOneFlag(
     state.stop = arg.slice('--stop='.length);
     return { skip: 0 };
   }
-  if (arg === '--list') {
-    state.list = true;
-    return { skip: 0 };
-  }
+  const diagnostic = parseDiagnosticFlag(arg, nextArg, state);
+  if (diagnostic) return diagnostic;
   if (arg === '--max-tabs') {
     if (!nextArg) return { error: 'serve: missing value for --max-tabs\n' };
     const n = Number.parseInt(nextArg, 10);
@@ -180,6 +227,11 @@ interface ServeValidation {
 }
 
 type ServeResult = { stdout: string; stderr: string; exitCode: number };
+
+interface PreviewLogsOpts {
+  previewToken?: string;
+  lines?: number;
+}
 
 async function validateServeTarget(
   directory: string,
@@ -309,6 +361,80 @@ async function listPreviews(): Promise<ServeResult> {
     (p) => `  ${p.previewToken}  ${p.url}  ${p.servedRoot}  ${p.createdAt}\n`
   );
   return { stdout: `Active previews:\n${lines.join('')}`, stderr: '', exitCode: 0 };
+}
+
+const EMPTY_PREVIEW_LOG_MESSAGE =
+  'No preview lifecycle records. The recorder is leader-memory-only and resets on leader restart.\n';
+
+function formatPreviewLifecycleRecord(record: PreviewLifecycleRecordResult): string {
+  const disposition = record.announced ? 'announced' : 'suppressed';
+  const preview = record.previewToken ?? '-';
+  const detail =
+    record.lifecycle === 'connected'
+      ? `origin=${record.origin ?? '-'} userAgent=${record.userAgent ?? '-'}`
+      : `reason=${record.reason ?? '-'}`;
+  return `${record.timestamp}  ${record.lifecycle.padEnd(12)} ${disposition.padEnd(10)} preview=${preview} conn=${record.connId} ${detail}\n`;
+}
+
+async function previewLogs(opts: PreviewLogsOpts): Promise<ServeResult> {
+  let lifecycleRecords: PreviewLifecycleRecordResult[];
+  const inRealm = getPreviewOp();
+  if (inRealm) {
+    const result = await inRealm({ type: 'logs', previewToken: opts.previewToken });
+    lifecycleRecords = result.lifecycleRecords ?? [];
+  } else {
+    const rpc = getPanelRpcClient();
+    if (!rpc) {
+      return {
+        stdout: '',
+        stderr:
+          'serve --logs: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
+        exitCode: 1,
+      };
+    }
+    const result = await rpc.call('tray-preview-logs', {
+      previewToken: opts.previewToken,
+    });
+    lifecycleRecords = result.lifecycleRecords;
+  }
+  if (opts.lines !== undefined) lifecycleRecords = lifecycleRecords.slice(-opts.lines);
+  if (lifecycleRecords.length === 0) {
+    return { stdout: EMPTY_PREVIEW_LOG_MESSAGE, stderr: '', exitCode: 0 };
+  }
+  return {
+    stdout: `Preview lifecycle records (oldest to newest):\n${lifecycleRecords.map(formatPreviewLifecycleRecord).join('')}`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+async function truncatePreviewLogs(previewToken?: string): Promise<ServeResult> {
+  let cleared: number;
+  let rearmed: number;
+  const inRealm = getPreviewOp();
+  if (inRealm) {
+    const result = await inRealm({ type: 'truncate', previewToken });
+    cleared = result.cleared ?? 0;
+    rearmed = result.rearmed ?? 0;
+  } else {
+    const rpc = getPanelRpcClient();
+    if (!rpc) {
+      return {
+        stdout: '',
+        stderr:
+          'serve --truncate: no leader tray available. Enable multi-browser sync via `host enable` or the avatar popover.\n',
+        exitCode: 1,
+      };
+    }
+    const result = await rpc.call('tray-preview-truncate', { previewToken });
+    cleared = result.cleared;
+    rearmed = result.rearmed;
+  }
+  return {
+    stdout: `Cleared ${cleared} preview lifecycle record${cleared === 1 ? '' : 's'}; re-armed ${rearmed} preview announcement${rearmed === 1 ? '' : 's'}.\n`,
+    stderr: '',
+    exitCode: 0,
+  };
 }
 
 interface MintOpts {
@@ -461,6 +587,24 @@ async function handleServeCommand(
   }
   if (parsed.list) {
     return await withServeError(() => listPreviews());
+  }
+  if (parsed.logs && parsed.truncate) {
+    return {
+      stdout: '',
+      stderr: 'serve: --logs and --truncate are mutually exclusive\n',
+      exitCode: 1,
+    };
+  }
+  if (parsed.lines !== undefined && !parsed.logs) {
+    return { stdout: '', stderr: 'serve: --lines requires --logs\n', exitCode: 1 };
+  }
+  if (parsed.logs) {
+    const previewToken = typeof parsed.logs === 'string' ? parsed.logs : undefined;
+    return await withServeError(() => previewLogs({ previewToken, lines: parsed.lines }));
+  }
+  if (parsed.truncate) {
+    const previewToken = typeof parsed.truncate === 'string' ? parsed.truncate : undefined;
+    return await withServeError(() => truncatePreviewLogs(previewToken));
   }
 
   if (!parsed.directory) {

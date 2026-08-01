@@ -70,6 +70,28 @@ export interface StandalonePanelRpcDeps {
   window: Window;
 }
 
+type ActiveLeaderSync = NonNullable<PageLeaderTrayHandle['currentLeaderSync']>;
+
+function requirePreviewSync(
+  getLeader: StandalonePanelRpcDeps['getLeader'],
+  flag: '--logs' | '--truncate'
+): ActiveLeaderSync {
+  const sync = getLeader()?.currentLeaderSync;
+  if (!sync) throw new Error(`serve ${flag}: no active leader tray`);
+  return sync;
+}
+
+function getPreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
+  return { lifecycleRecords: [...sync.getPreviewLifecycleRecords(previewToken)] };
+}
+
+function truncatePreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
+  return {
+    cleared: sync.clearPreviewLifecycleRecords(previewToken),
+    rearmed: sync.rearmPreviewAnnouncements(previewToken),
+  };
+}
+
 export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Promise<void> {
   const {
     instanceId,
@@ -218,6 +240,10 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           controllerToken,
         });
       },
+      getPreviewLifecycleRecords: (previewToken) =>
+        getPreviewRecords(requirePreviewSync(getLeader, '--logs'), previewToken),
+      truncatePreviewLifecycleRecords: (previewToken) =>
+        truncatePreviewRecords(requirePreviewSync(getLeader, '--truncate'), previewToken),
       listRemoteTargets: () => browser.listAllTargets(),
       remoteCdp: remoteCdpBridge,
       // Lazy lookup — the leader surface may mount after the panel-RPC

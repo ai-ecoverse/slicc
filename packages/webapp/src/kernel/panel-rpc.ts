@@ -212,6 +212,18 @@ export type PanelRpcRequest =
       payload?: undefined;
     }
   | {
+      // Read recent preview bridge lifecycle records from leader memory.
+      // This is diagnostic-only and must not emit a lick or wake the cone.
+      op: 'tray-preview-logs';
+      payload: { previewToken?: string };
+    }
+  | {
+      // Clear lifecycle records and re-arm the matching preview announcement
+      // latch. Both actions are required for `serve truncate` semantics.
+      op: 'tray-preview-truncate';
+      payload: { previewToken?: string };
+    }
+  | {
       // Leave the multi-browser-sync tray (or switch from follower to
       // leader on the supplied worker base URL). Worker callers (the
       // `host leave` shell command) route through here; the
@@ -577,6 +589,20 @@ export interface PanelRpcResults {
       createdAt: string;
     }>;
   };
+  'tray-preview-logs': {
+    lifecycleRecords: Array<{
+      timestamp: string;
+      lifecycle: 'connected' | 'disconnected';
+      connId: string;
+      previewToken?: string;
+      origin?: string;
+      userAgent?: string;
+      connectedAt?: string;
+      reason?: string;
+      announced: boolean;
+    }>;
+  };
+  'tray-preview-truncate': { cleared: number; rearmed: number };
   'tray-leave': TrayLeaveResult;
   'tray-join': { joinUrl: string };
   'tray-exec': { stdout: string; stderr: string; exitCode: number; error?: string };

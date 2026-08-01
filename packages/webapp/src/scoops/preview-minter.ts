@@ -5,8 +5,8 @@
  *
  * Standalone (where `serve` lives in a different realm from
  * `LeaderSyncManager`) does NOT use these hooks — it uses the
- * `tray-open-preview` / `tray-revoke-preview` / `tray-list-previews`
- * panel-RPC ops instead.
+ * `tray-open-preview` / `tray-revoke-preview` / `tray-list-previews` and
+ * preview lifecycle panel-RPC ops instead.
  *
  * NOTE: `setPreviewMinter` and `setPreviewOp` have no production
  * callers today. They are placeholders for the extension offscreen
@@ -54,13 +54,25 @@ export function getPreviewMinter(): PreviewMinter | null {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// In-realm preview operations (--stop / --list) for the extension path.
+// In-realm preview operations (--stop / --list / logs / truncate) for the extension path.
 // Mirrors the same pattern as `setPreviewMinter`.
 // ────────────────────────────────────────────────────────────────────────
 
 export interface PreviewOpRequest {
-  type: 'stop' | 'list';
+  type: 'stop' | 'list' | 'logs' | 'truncate';
   previewToken?: string;
+}
+
+export interface PreviewLifecycleRecordResult {
+  timestamp: string;
+  lifecycle: 'connected' | 'disconnected';
+  connId: string;
+  previewToken?: string;
+  origin?: string;
+  userAgent?: string;
+  connectedAt?: string;
+  reason?: string;
+  announced: boolean;
 }
 
 export interface PreviewOpListItem {
@@ -75,6 +87,9 @@ export interface PreviewOpListItem {
 export interface PreviewOpResult {
   revoked?: boolean;
   previews?: PreviewOpListItem[];
+  lifecycleRecords?: PreviewLifecycleRecordResult[];
+  cleared?: number;
+  rearmed?: number;
   /** Webhook id of a revoked bridged preview (for `serve --stop` webhook cleanup). */
   webhookId?: string;
 }
