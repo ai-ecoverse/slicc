@@ -225,6 +225,32 @@ describe('startPageLeaderTray', () => {
     handle.stop();
   });
 
+  it('logs coalesced scoop broadcast failures instead of leaking a timer exception', async () => {
+    const { fetchImpl, webSocketFactory } = makeLeaderFetch();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      _scoopBroadcastCoalesceMs: 10,
+    });
+    vi.spyOn(handle.sync, 'broadcastScoopsList').mockImplementation(() => {
+      throw new Error('channel closed');
+    });
+
+    try {
+      handle.scheduleScoopsListBroadcast();
+      await vi.waitFor(() =>
+        expect(
+          errorSpy.mock.calls.some((args) =>
+            String(args[1] ?? '').includes('Failed to broadcast coalesced scoop list')
+          )
+        ).toBe(true)
+      );
+    } finally {
+      handle.stop();
+      errorSpy.mockRestore();
+    }
+  });
+
   it('uses slicc-standalone as the runtime identifier (matches pre-regression value)', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
     const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, webSocketFactory, store }));

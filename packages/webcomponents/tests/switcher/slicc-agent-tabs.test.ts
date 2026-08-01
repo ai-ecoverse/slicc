@@ -489,6 +489,8 @@ describe('slicc-agent-tabs', () => {
       expect(element.active).toBeNull();
       expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
       expect(segment(element, 'researcher').getAttribute('aria-selected')).toBe('false');
+      expect(segment(element, 'cone').tabIndex).toBe(-1);
+      expect(segment(element, 'researcher').tabIndex).toBe(0);
 
       expect(keydown(segment(element, 'researcher'), 'PageDown').defaultPrevented).toBe(false);
       expect(document.activeElement).toBe(segment(element, 'researcher'));
@@ -532,6 +534,7 @@ describe('slicc-agent-tabs', () => {
       const after = segment(element, 'designer');
       expect(after).toBe(before);
       expect(document.activeElement).toBe(after);
+      expect(after.tabIndex).toBe(0);
       expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     });
 
@@ -603,9 +606,7 @@ describe('slicc-agent-tabs', () => {
       element.reflow();
       const item = overflowOptions(element)[0];
       const listener = vi.fn();
-      element.addEventListener('slicc-scoop-select', (event) =>
-        listener((event as CustomEvent<ScoopSelectDetail>).detail)
-      );
+      element.addEventListener('slicc-scoop-select', (event) => listener(event.detail));
       overflowTrigger(element).click();
       expect(overflow(element).classList.contains('open')).toBe(true);
       expect(overflowTrigger(element).getAttribute('aria-expanded')).toBe('true');
@@ -616,8 +617,28 @@ describe('slicc-agent-tabs', () => {
         label: item.textContent,
       });
       expect(element.active).toBe(item.dataset.k);
+      expect(segment(element, item.dataset.k ?? '').classList.contains('hide')).toBe(false);
+      expect(segment(element, item.dataset.k ?? '').tabIndex).toBe(0);
       expect(overflow(element).classList.contains('open')).toBe(false);
       expect(overflowTrigger(element).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('restores focus to the same overflow option after a state-driven reflow', () => {
+      const element = mount(ROSTER, 180);
+      element.reflow();
+      overflowTrigger(element).click();
+      const before = overflowOptions(element)[0];
+      const key = before.dataset.k;
+      before.focus();
+
+      element.scoops = ROSTER.map((scoop) =>
+        scoop.key === 'tester' ? { ...scoop, fill: 85 } : scoop
+      );
+
+      const after = overflowOptions(element).find((option) => option.dataset.k === key);
+      expect(after).toBeTruthy();
+      expect(after).not.toBe(before);
+      expect(document.activeElement).toBe(after);
     });
 
     it('closes the overflow popup on an outside click', () => {

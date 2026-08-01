@@ -251,6 +251,7 @@ export class SliccAgentTabs extends HTMLElement {
   #overflow: HTMLDivElement | null = null;
   #overflowButton: HTMLButtonElement | null = null;
   #overflowPop: HTMLDivElement | null = null;
+  #tabStopKey: string | null = null;
   #ro: ResizeObserver | null = null;
   #reflowing = false;
   #reflowRaf: number | null = null;
@@ -290,8 +291,9 @@ export class SliccAgentTabs extends HTMLElement {
     this.ownerDocument.removeEventListener('click', this.#onDocumentClick);
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null): void {
     if (!this.#initialized || !this.isConnected) return;
+    if (name === 'active' && this.#focusedSegmentKey() === null) this.#tabStopKey = newValue;
     this.#render();
     this.reflow();
   }
@@ -333,6 +335,7 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   select(key: string): void {
+    this.#tabStopKey = key;
     this.active = key;
     const label = this.#scoops.find((scoop) => scoop.key === key)?.label ?? key;
     this.dispatchEvent(
@@ -377,18 +380,23 @@ export class SliccAgentTabs extends HTMLElement {
       return;
     }
     const budget = Math.max(0, segmentSpace - MORE_RESERVE);
+    const selectedIndex = segments.findIndex(
+      (segment) => segment.getAttribute('aria-selected') === 'true'
+    );
     const hidden: HTMLButtonElement[] = [];
-    let used = 0;
+    let used = widths[0] + (selectedIndex > 0 ? widths[selectedIndex] : 0);
+    let overflowStarted = false;
     segments.forEach((segment, index) => {
-      if (index === 0) {
-        used += widths[index];
-      } else if (hidden.length === 0 && used + widths[index] <= budget) {
+      if (index === 0 || index === selectedIndex) return;
+      if (!overflowStarted && used + widths[index] <= budget) {
         used += widths[index];
       } else {
+        overflowStarted = true;
         segment.classList.add('hide');
         hidden.push(segment);
       }
     });
+    this.#ensureVisibleTabStop(segments);
     this.#feedOverflow(hidden);
   }
 
@@ -396,6 +404,11 @@ export class SliccAgentTabs extends HTMLElement {
     const focusedKey = this.#focusedSegmentKey();
     const focused =
       this.#scoops.find((scoop) => scoop.key === this.active) ?? this.#scoops.at(0) ?? null;
+    if (focusedKey && this.#scoops.some((scoop) => scoop.key === focusedKey)) {
+      this.#tabStopKey = focusedKey;
+    } else if (!this.#scoops.some((scoop) => scoop.key === this.#tabStopKey)) {
+      this.#tabStopKey = focused?.key ?? null;
+    }
     this.#ensureStructure();
     this.#reconcileAvatar(focused);
     this.#reconcileSegments(focused?.key ?? null);
@@ -523,7 +536,7 @@ export class SliccAgentTabs extends HTMLElement {
     const wantsAttention = this.attention === scoop.key;
     segment.className = `${PREFIX}__segment${scoop.ephemeral ? ' ephemeral' : ''}`;
     segment.setAttribute('aria-selected', String(scoop.key === focused));
-    segment.tabIndex = scoop.key === focused ? 0 : -1;
+    segment.tabIndex = scoop.key === this.#tabStopKey ? 0 : -1;
     segment.setAttribute(
       'aria-label',
       `${scoop.label ?? scoop.key}: ${state}, ${Math.round(fill)}% context fill${wantsAttention ? ', needs attention' : ''}`
@@ -576,6 +589,11 @@ export class SliccAgentTabs extends HTMLElement {
 
   #feedOverflow(hidden: HTMLButtonElement[]): void {
     if (!this.#overflow || !this.#overflowButton || !this.#overflowPop) return;
+    const focusedOption = this.ownerDocument.activeElement?.closest<HTMLButtonElement>(
+      `.${PREFIX}__overflow-option`
+    );
+    const focusedOptionKey =
+      focusedOption && this.#overflowPop.contains(focusedOption) ? focusedOption.dataset.k : null;
     const items = hidden.map((segment) => {
       const key = segment.dataset.k ?? '';
       const scoop = this.#scoops.find((item) => item.key === key) ?? { key };
@@ -612,6 +630,11 @@ export class SliccAgentTabs extends HTMLElement {
         )
       )
     );
+    if (focusedOptionKey) {
+      [...this.#overflowPop.querySelectorAll<HTMLButtonElement>(`.${PREFIX}__overflow-option`)]
+        .find((option) => option.dataset.k === focusedOptionKey)
+        ?.focus();
+    }
     if (items.length === 0) this.#setOverflowOpen(false);
   }
 
@@ -658,7 +681,23 @@ export class SliccAgentTabs extends HTMLElement {
     else if (event.key === 'End') next = tabs.at(-1);
     else return;
     event.preventDefault();
+    this.#setTabStop(next?.dataset.k ?? null);
     next?.focus();
+  }
+
+  #setTabStop(key: string | null): void {
+    this.#tabStopKey = key;
+    for (const segment of this.querySelectorAll<HTMLButtonElement>(`.${PREFIX}__segment`)) {
+      segment.tabIndex = segment.dataset.k === key ? 0 : -1;
+    }
+  }
+
+  #ensureVisibleTabStop(segments: HTMLButtonElement[]): void {
+    const visible = segments.filter((segment) => !segment.classList.contains('hide'));
+    if (visible.some((segment) => segment.dataset.k === this.#tabStopKey)) return;
+    const fallback =
+      visible.find((segment) => segment.getAttribute('aria-selected') === 'true') ?? visible[0];
+    this.#setTabStop(fallback?.dataset.k ?? null);
   }
 
   #focusedSegmentKey(): string | null {
@@ -695,5 +734,8 @@ define('slicc-agent-tabs', SliccAgentTabs);
 declare global {
   interface HTMLElementTagNameMap {
     'slicc-agent-tabs': SliccAgentTabs;
+  }
+  interface HTMLElementEventMap {
+    'slicc-scoop-select': CustomEvent<ScoopSelectDetail>;
   }
 }

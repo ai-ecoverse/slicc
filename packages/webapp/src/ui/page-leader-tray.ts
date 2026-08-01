@@ -510,7 +510,14 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
     if (stopped || scoopBroadcastTimer !== null) return;
     scoopBroadcastTimer = setTimeout(() => {
       scoopBroadcastTimer = null;
-      if (!stopped) sync.broadcastScoopsList();
+      if (stopped) return;
+      try {
+        sync.broadcastScoopsList();
+      } catch (err) {
+        log.error('Failed to broadcast coalesced scoop list', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }, scoopBroadcastCoalesceMs);
   };
   return {
