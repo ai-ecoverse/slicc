@@ -163,9 +163,9 @@ dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
 rewrites every file it scans — run it on a clean tree.
 
 The CI job ends with an informational Periphery dead-code scan. It never fails
-the job (`|| true`), and unlike the SPM-based Swift packages there is no
-`Package.swift` for Periphery to infer from, so the scan names the XcodeGen
-project, scheme, and target explicitly.
+the job (`|| true`). The app and test targets live in the XcodeGen project, not
+the SPM manifest (which declares only the library), so unlike the SPM-based
+Swift packages the scan names the project, scheme, and target explicitly.
 
 ## Formatting
 

@@ -17,8 +17,16 @@ installed iPhone runtime: an older one can fail at launch with a missing
 ```bash
 cd packages/ios-app
 xcodegen generate
+# Pick an iPhone from the newest installed iOS runtime. simctl's JSON dict
+# order is unspecified, so sort runtimes by version instead of taking `first` —
+# an older runtime can fail at launch (see Prerequisites).
 UDID=$(xcrun simctl list devices available --json \
-  | jq -r '[.devices[][] | select(.isAvailable and (.name | test("iPhone")))] | first | .udid')
+  | jq -r '[.devices | to_entries[]
+      | select(.key | test("SimRuntime\\.iOS"))
+      | {ver: (.key | capture("iOS-(?<v>[0-9-]+)").v | split("-") | map(tonumber)),
+         devs: [.value[] | select(.isAvailable and (.name | test("iPhone")))]}
+      | select(.devs | length > 0)]
+    | sort_by(.ver) | last | .devs | first | .udid')
 xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
 open -a Simulator                                # optional: watch live
 xcodebuild build -project SliccFollower.xcodeproj -scheme SliccFollower \
