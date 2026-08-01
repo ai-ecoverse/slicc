@@ -40,6 +40,17 @@ export interface ImageMagickModule {
   ImageMagick: {
     read: (data: Uint8Array, callback: (image: IMagickImage) => Promise<void>) => Promise<void>;
   };
+  MagickImageCollection: {
+    create: () => IMagickImageCollection;
+  };
+  Drawables: new () => IDrawables;
+  MagickColor: new (color: string) => IMagickColor;
+  Magick: {
+    addFont(name: string, data: Uint8Array): void;
+  };
+  AlphaAction: Record<string, number>;
+  ColorSpace: Record<string, number>;
+  Gravity: Record<string, number>;
   MagickFormat: Record<string, string>;
   MagickGeometry: {
     new (value: string): IMagickGeometry;
@@ -59,16 +70,60 @@ export interface IMagickGeometry {
 }
 
 export interface IMagickImage {
+  alpha(value: number): void;
+  autoGamma(): void;
+  autoLevel(): void;
+  autoOrient(): void;
+  backgroundColor: IMagickColor;
+  blur(radius: number, sigma: number): void;
+  colorSpace: number;
   resize(width: number, height: number): void;
   resize(geometry: IMagickGeometry): void;
   rotate(degrees: number): void;
   crop(geometry: IMagickGeometry): void;
+  crop(geometry: IMagickGeometry, gravity: number): void;
   crop(width: number, height: number): void;
+  extent(geometry: IMagickGeometry): void;
+  extent(geometry: IMagickGeometry, gravity: number): void;
+  extent(geometry: IMagickGeometry, backgroundColor: IMagickColor): void;
+  extent(geometry: IMagickGeometry, gravity: number, backgroundColor: IMagickColor): void;
+  flip(): void;
+  flop(): void;
+  negate(): void;
+  normalize(): void;
   quality: number;
+  sharpen(radius: number, sigma: number): void;
+  strip(): void;
+  thumbnail(geometry: IMagickGeometry): void;
+  transparent(color: IMagickColor): void;
+  trim(): void;
   width: number;
   height: number;
   write(format: string, callback: (data: Uint8Array) => void): void;
   write(callback: (data: Uint8Array) => void): void;
+}
+
+export interface IMagickColor {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
+  readonly a: number;
+}
+
+export interface IDrawables {
+  fillColor(color: IMagickColor): IDrawables;
+  textUnderColor(color: IMagickColor): IDrawables;
+  font(name: string): IDrawables;
+  fontPointSize(pointSize: number): IDrawables;
+  gravity(gravity: number): IDrawables;
+  text(x: number, y: number, value: string): IDrawables;
+  draw(image: IMagickImage): IDrawables;
+}
+
+export interface IMagickImageCollection extends Array<IMagickImage> {
+  appendHorizontally(callback: (image: IMagickImage) => Promise<void>): Promise<void>;
+  appendVertically(callback: (image: IMagickImage) => Promise<void>): Promise<void>;
+  dispose(): void;
 }
 
 /** MIME type to ImageMagick format string mapping. Single source of truth. */

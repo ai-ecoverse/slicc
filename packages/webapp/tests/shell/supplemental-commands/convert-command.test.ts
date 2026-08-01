@@ -4,7 +4,7 @@ import { unsafeBytesFromLatin1 } from 'just-bash';
 import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createConvertCommand,
   createIpkContextFromCtx,
@@ -51,6 +51,9 @@ describe('convert --help', () => {
     expect(result.stdout).toContain('-rotate');
     expect(result.stdout).toContain('-crop');
     expect(result.stdout).toContain('-quality');
+    expect(result.stdout).toContain('-thumbnail');
+    expect(result.stdout).toContain('-auto-orient');
+    expect(result.stdout).toContain('-extent');
     expect(result.stderr).toBe('');
   });
 
@@ -81,7 +84,7 @@ describe('convert argument parsing errors', () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(['input.png', 'extra.png', 'output.png'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('expected exactly one input file and one output file');
+    expect(result.stderr).toContain('multiple input files require +append or -append');
   });
 
   it('errors when -resize is missing argument', async () => {
@@ -110,9 +113,15 @@ describe('convert argument parsing errors', () => {
 
   it('errors on unsupported option', async () => {
     const cmd = createConvertCommand();
-    const result = await cmd.execute(['input.png', '-sharpen', '2', 'output.png'], createMockCtx());
+    const result = await cmd.execute(['input.png', '-emboss', '2', 'output.png'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('unsupported option -sharpen');
+    expect(result.stderr).toContain('unsupported option -emboss');
+  });
+
+  it('requires an output after a zero-argument operation', async () => {
+    const result = await createConvertCommand().execute(['input.png', '-flip'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('expected an output file');
   });
 
   it('uses custom command name in error messages', async () => {
@@ -199,6 +208,344 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
     const cmd = createConvertCommand();
     await cmd.execute(['photo.png', 'out.png'], createMockCtx({ fs: { readFileBuffer } }));
     expect(readFileBuffer).toHaveBeenCalledWith('/home/photo.png');
+  });
+});
+
+describe('convert image composition', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function installCompositionMock() {
+    const appendDirections: string[] = [];
+    const drawCalls: Array<{ image: string; steps: string[] }> = [];
+    const operationCalls: string[] = [];
+    const addFont = vi.fn();
+    let imageNumber = 0;
+    class MockGeometry {
+      constructor(
+        readonly value: string | number,
+        readonly height?: number
+      ) {}
+    }
+    const createImage = (name: string) => ({
+      name,
+      width: 160,
+      height: 284,
+      quality: 0,
+      set backgroundColor(color: { value: string }) {
+        operationCalls.push(`background:${color.value}`);
+      },
+      set colorSpace(value: number) {
+        operationCalls.push(`colorspace:${value}`);
+      },
+      alpha: (value: number) => operationCalls.push(`alpha:${value}`),
+      autoGamma: () => operationCalls.push('auto-gamma'),
+      autoLevel: () => operationCalls.push('auto-level'),
+      autoOrient: () => operationCalls.push('auto-orient'),
+      blur: (radius: number, sigma: number) => operationCalls.push(`blur:${radius}x${sigma}`),
+      resize: (geometry: MockGeometry) => operationCalls.push(`resize:${geometry.value}`),
+      rotate: vi.fn(),
+      crop: (geometry: MockGeometry, gravity?: number) =>
+        operationCalls.push(`crop:${geometry.value}:${gravity ?? 'none'}`),
+      extent: (geometry: MockGeometry, ...args: Array<number | { value: string }>) =>
+        operationCalls.push(
+          `extent:${geometry.value}:${args.map((arg) => (typeof arg === 'number' ? arg : arg.value)).join(':')}`
+        ),
+      flip: () => operationCalls.push('flip'),
+      flop: () => operationCalls.push('flop'),
+      negate: () => operationCalls.push('negate'),
+      normalize: () => operationCalls.push('normalize'),
+      sharpen: (radius: number, sigma: number) => operationCalls.push(`sharpen:${radius}x${sigma}`),
+      strip: () => operationCalls.push('strip'),
+      thumbnail: (geometry: MockGeometry) => operationCalls.push(`thumbnail:${geometry.value}`),
+      transparent: (color: { value: string }) => operationCalls.push(`transparent:${color.value}`),
+      trim: () => operationCalls.push('trim'),
+      write: vi.fn((_format: string, callback: (data: Uint8Array) => void) => {
+        callback(new Uint8Array([1, 2, 3]));
+      }),
+    });
+    class MockDrawables {
+      steps: string[] = [];
+      gravity(value: number) {
+        this.steps.push(`gravity:${value}`);
+        return this;
+      }
+      fillColor(color: { value: string }) {
+        this.steps.push(`fill:${color.value}`);
+        return this;
+      }
+      textUnderColor(color: { value: string }) {
+        this.steps.push(`undercolor:${color.value}`);
+        return this;
+      }
+      font(name: string) {
+        this.steps.push(`font:${name}`);
+        return this;
+      }
+      fontPointSize(value: number) {
+        this.steps.push(`pointsize:${value}`);
+        return this;
+      }
+      text(x: number, y: number, value: string) {
+        this.steps.push(`text:${x},${y}:${value}`);
+        return this;
+      }
+      draw(image: { name: string }) {
+        drawCalls.push({ image: image.name, steps: [...this.steps] });
+        return this;
+      }
+    }
+    const read = vi.fn(async (_bytes: Uint8Array, callback: (image: unknown) => Promise<void>) => {
+      await callback(createImage(`input-${imageNumber++}`));
+    });
+    vi.spyOn(magickWasm, 'getMagick').mockResolvedValue({
+      ImageMagick: { read },
+      MagickImageCollection: {
+        create: () => {
+          const collection = [] as unknown as Array<unknown> & {
+            appendHorizontally: (callback: (image: unknown) => Promise<void>) => Promise<void>;
+            appendVertically: (callback: (image: unknown) => Promise<void>) => Promise<void>;
+            dispose: () => void;
+          };
+          collection.appendHorizontally = async (callback) => {
+            appendDirections.push('horizontal');
+            await callback(createImage('horizontal'));
+          };
+          collection.appendVertically = async (callback) => {
+            appendDirections.push('vertical');
+            await callback(createImage('vertical'));
+          };
+          collection.dispose = vi.fn();
+          return collection;
+        },
+      },
+      Drawables: MockDrawables,
+      MagickColor: class {
+        readonly r = 0;
+        readonly g = 0;
+        readonly b = 0;
+        readonly a = 0;
+        constructor(readonly value: string) {}
+      },
+      Magick: { addFont },
+      AlphaAction: { Extract: 8, Off: 9, Remove: 12, Set: 13, OffIfOpaque: 16 },
+      ColorSpace: { CMYK: 2, Gray: 3, sRGB: 23 },
+      Gravity: { Center: 5, South: 8 },
+      MagickFormat: { JPEG: 'JPEG', PNG: 'PNG' },
+      MagickGeometry: MockGeometry,
+      Percentage: class {},
+      initializeImageMagick: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof magickWasm.getMagick>>);
+    return { addFont, appendDirections, drawCalls, operationCalls, read };
+  }
+
+  it('joins multiple inputs horizontally with +append', async () => {
+    const { appendDirections, read } = installCompositionMock();
+    const readFileBuffer = vi.fn().mockResolvedValue(new Uint8Array([1]));
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const result = await createConvertCommand().execute(
+      ['f00.jpg', 'f01.jpg', 'f02.jpg', 'f03.jpg', '+append', '/tmp/filmstrip.jpg'],
+      createMockCtx({ fs: { readFileBuffer, writeFile } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(appendDirections).toEqual(['horizontal']);
+    expect(writeFile).toHaveBeenCalledWith('/tmp/filmstrip.jpg', new Uint8Array([1, 2, 3]));
+  });
+
+  it('supports nested horizontal rows joined with -append', async () => {
+    const { appendDirections } = installCompositionMock();
+    const result = await createConvertCommand().execute(
+      [
+        '(',
+        'f00.jpg',
+        'f01.jpg',
+        '+append',
+        ')',
+        '(',
+        'f02.jpg',
+        'f03.jpg',
+        '+append',
+        ')',
+        '-append',
+        '/tmp/grid.jpg',
+      ],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(appendDirections).toEqual(['horizontal', 'horizontal', 'vertical']);
+  });
+
+  it('applies gravity, colors, point size, and annotation within input groups', async () => {
+    const { addFont, appendDirections, drawCalls } = installCompositionMock();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      })
+    );
+    const result = await createConvertCommand().execute(
+      [
+        '(',
+        'f00.jpg',
+        '-gravity',
+        'south',
+        '-fill',
+        'white',
+        '-undercolor',
+        '#00000080',
+        '-pointsize',
+        '14',
+        '-annotate',
+        '+0+2',
+        '0:06',
+        ')',
+        '(',
+        'f01.jpg',
+        '-gravity',
+        'south',
+        '-fill',
+        'white',
+        '-undercolor',
+        '#00000080',
+        '-pointsize',
+        '14',
+        '-annotate',
+        '+0+2',
+        '0:19',
+        ')',
+        '+append',
+        '/tmp/labeled.jpg',
+      ],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(addFont).toHaveBeenCalledWith('AdobeClean-Regular.otf', new Uint8Array([1, 2, 3]));
+    expect(appendDirections).toEqual(['horizontal']);
+    expect(drawCalls).toEqual([
+      {
+        image: 'input-0',
+        steps: [
+          'gravity:8',
+          'fill:white',
+          'undercolor:#00000080',
+          'font:AdobeClean-Regular.otf',
+          'pointsize:14',
+          'text:0,2:0:06',
+        ],
+      },
+      {
+        image: 'input-1',
+        steps: [
+          'gravity:8',
+          'fill:white',
+          'undercolor:#00000080',
+          'font:AdobeClean-Regular.otf',
+          'pointsize:14',
+          'text:0,2:0:19',
+        ],
+      },
+    ]);
+  });
+
+  it('supports common resize, orientation, cleanup, mirror, and filter operations', async () => {
+    const { operationCalls } = installCompositionMock();
+    const result = await createConvertCommand().execute(
+      [
+        'input.jpg',
+        '-resize',
+        '800x600^',
+        '-thumbnail',
+        '200x200>',
+        '-auto-orient',
+        '-flip',
+        '-flop',
+        '-strip',
+        '-trim',
+        '-auto-gamma',
+        '-auto-level',
+        '-normalize',
+        '-negate',
+        '-blur',
+        '0x2',
+        '-sharpen',
+        '0x1.5',
+        'output.jpg',
+      ],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(operationCalls).toEqual([
+      'resize:800x600^',
+      'thumbnail:200x200>',
+      'auto-orient',
+      'flip',
+      'flop',
+      'strip',
+      'trim',
+      'auto-gamma',
+      'auto-level',
+      'normalize',
+      'negate',
+      'blur:0x2',
+      'sharpen:0x1.5',
+    ]);
+  });
+
+  it('supports canvas, transparency, and colorspace operations', async () => {
+    const { operationCalls } = installCompositionMock();
+    const result = await createConvertCommand().execute(
+      [
+        'input.png',
+        '-background',
+        'white',
+        '-gravity',
+        'center',
+        '-crop',
+        '100x100-5+10',
+        '-extent',
+        '800x600+0+0',
+        '-alpha',
+        'off-if-opaque',
+        '-colorspace',
+        'gray',
+        '-transparent',
+        'white',
+        'output.png',
+      ],
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(operationCalls).toEqual([
+      'background:white',
+      'crop:100x100-5+10:5',
+      'extent:800x600+0+0:5:white',
+      'alpha:16',
+      'colorspace:3',
+      'transparent:white',
+    ]);
+  });
+
+  it.each([
+    [['input.png', '-extent', '100', 'output.png'], 'Invalid extent geometry'],
+    [['input.png', '-blur', 'nope', 'output.png'], 'Invalid blur radius/sigma'],
+    [['input.png', '-colorspace', 'made-up', 'output.png'], 'Invalid colorspace'],
+    [['input.png', '-alpha', 'made-up', 'output.png'], 'Invalid alpha mode'],
+  ])('rejects invalid common option values: %s', async (args, message) => {
+    installCompositionMock();
+    const result = await createConvertCommand().execute(
+      args,
+      createMockCtx({ fs: { readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([1])) } })
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(message);
   });
 });
 
