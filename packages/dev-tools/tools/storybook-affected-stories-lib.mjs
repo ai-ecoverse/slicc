@@ -61,7 +61,7 @@ export const GLOBAL_AREAS = new Set(['theme', 'internal']);
  *
  * `importPath` is the Storybook-style path you'd match against `index.json`
  * entries (relative to the Storybook config root, which IS the package root),
- * e.g. `./src/pill/slicc-pill.stories.ts`.
+ * e.g. `./src/switcher/slicc-agent-tabs.stories.ts`.
  */
 export function classifyChangedFile(repoRelPath) {
   if (typeof repoRelPath !== 'string') return null;
@@ -80,7 +80,7 @@ export function classifyChangedFile(repoRelPath) {
 
 /**
  * Extract the `<area>` slug from a Storybook `importPath` such as
- * `./src/pill/slicc-pill.stories.ts` → `'pill'`. Returns `null` if the path
+ * `./src/switcher/slicc-agent-tabs.stories.ts` → `'switcher'`. Returns `null` if the path
  * doesn't fit the expected `./src/<area>/...` shape.
  */
 function areaFromImportPath(importPath) {

@@ -1,12 +1,6 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
-import '../pill/slicc-pill.js';
-import './slicc-scoop-overflow.js';
-import type {
-  SliccScoopOverflow,
-  SliccScoopOverflowItem,
-  SliccScoopSelectDetail,
-} from './slicc-scoop-overflow.js';
+import '../primitives/slicc-googly-eyes.js';
 
 export type AgentState = 'working' | 'broken' | 'initializing' | 'idle';
 
@@ -21,8 +15,10 @@ export interface ScoopDescriptor {
   state?: AgentState;
 }
 
-export interface ScoopSelectDetail extends SliccScoopSelectDetail {
+export interface ScoopSelectDetail {
+  id: string;
   key: string;
+  label: string;
 }
 
 const PREFIX = 'slicc-agent-tabs';
@@ -46,10 +42,10 @@ const DATA_K_HUE: Record<string, string> = {
 const STYLE = `
 .slicc-agent-tabs{display:flex;align-items:center;gap:${HOST_GAP}px;min-width:0;overflow:visible;color:var(--ink);font-family:var(--ui);}
 .slicc-agent-tabs *{box-sizing:border-box;}
-.slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;--pill-w:${AVATAR_WIDTH}px;pointer-events:none;}
-.slicc-agent-tabs__focus-avatar::part(pill){width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;padding:0;overflow:hidden;border:0;border-radius:7px;background:transparent;cursor:inherit;}
-.slicc-agent-tabs__focus-avatar::part(icon){width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;overflow:hidden;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,transparent);}
-.slicc-agent-tabs__focus-avatar::part(label){display:none;}
+.slicc-agent-tabs__focus-avatar{display:grid;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;place-items:center;overflow:hidden;color:var(--slicc-agent-tabs-hue);border:1px solid color-mix(in srgb,var(--slicc-agent-tabs-hue) 34%,var(--line));border-radius:7px;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,var(--canvas));pointer-events:none;}
+.slicc-agent-tabs__focus-avatar[data-type='scoop']{border-radius:50%;}
+.slicc-agent-tabs__focus-avatar-mark{font:700 11px/1 var(--ui);text-transform:uppercase;}
+.slicc-agent-tabs__focus-avatar slicc-googly-eyes{display:block;line-height:0;}
 .slicc-agent-tabs__track-frame{position:relative;flex:1 1 auto;min-width:0;height:var(--ctl-h,30px);overflow:visible;border:1px solid var(--line);border-radius:9px;background:var(--ghost);}
 .slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px;overflow:hidden;}
 .slicc-agent-tabs.has-overflow .slicc-agent-tabs__track{padding-right:41px;}
@@ -73,10 +69,24 @@ const STYLE = `
 .slicc-agent-tabs [data-state='initializing'] .slicc-agent-tabs__initializing-ring{display:inline;}
 .slicc-agent-tabs__broken-x{stroke:currentColor;stroke-linecap:round;}
 .slicc-agent-tabs__initializing-ring{fill:none;stroke:currentColor;stroke-dasharray:1.7 1.7;}
-.slicc-agent-tabs slicc-scoop-overflow{display:none;}
-.slicc-agent-tabs slicc-scoop-overflow[count]{position:absolute;top:2px;right:2px;display:block;width:39px;height:24px;}
-.slicc-agent-tabs slicc-scoop-overflow::part(more){display:inline-flex;width:39px;height:24px;justify-content:center;padding:0;border:0;border-radius:6px;background:transparent;}
-.slicc-agent-tabs slicc-scoop-overflow::part(pop){right:0;left:auto;}
+.slicc-agent-tabs__overflow{display:none;position:absolute;top:2px;right:2px;width:39px;height:24px;}
+.slicc-agent-tabs.has-overflow .slicc-agent-tabs__overflow{display:block;}
+.slicc-agent-tabs__overflow-trigger{display:inline-flex;width:39px;height:24px;align-items:center;justify-content:center;padding:0;color:var(--txt-2);border:0;border-radius:6px;background:transparent;cursor:pointer;}
+.slicc-agent-tabs__overflow-trigger:hover,.slicc-agent-tabs__overflow-trigger:focus-visible{color:var(--ink);background:var(--ghost);}
+.slicc-agent-tabs__overflow-grid{display:grid;width:13px;height:13px;grid-template:repeat(3,3px)/repeat(3,3px);gap:2px;}
+.slicc-agent-tabs__overflow-dot{width:3px;height:3px;border-radius:50%;background:var(--txt-3);}
+.slicc-agent-tabs__overflow-dot[data-state='broken']{background:var(--red);}
+.slicc-agent-tabs__overflow-dot[data-state='working']{background:var(--green);}
+.slicc-agent-tabs__overflow-dot[data-state='near-limit']{background:var(--amber);}
+.slicc-agent-tabs__overflow-pop{display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:180px;z-index:20;flex-direction:column;gap:4px;}
+.slicc-agent-tabs__overflow.open .slicc-agent-tabs__overflow-pop{display:flex;}
+.slicc-agent-tabs__overflow-option{display:flex;width:100%;height:30px;align-items:center;gap:8px;padding:0 10px;color:var(--txt-2);font:500 12px/1 var(--ui);text-align:left;border:1px solid var(--line);border-radius:7px;background:var(--canvas);cursor:pointer;}
+.slicc-agent-tabs__overflow-option:hover,.slicc-agent-tabs__overflow-option:focus-visible{color:var(--ink);background:var(--ghost);}
+.slicc-agent-tabs__overflow-option-dot{width:8px;height:8px;flex:0 0 8px;border-radius:50%;background:var(--slicc-agent-tabs-hue);box-shadow:0 0 0 2px color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,transparent);}
+.slicc-agent-tabs__overflow-option[data-state='working'] .slicc-agent-tabs__overflow-option-dot{background:var(--green);}
+.slicc-agent-tabs__overflow-option[data-near-limit='true'] .slicc-agent-tabs__overflow-option-dot{background:var(--amber);}
+.slicc-agent-tabs__overflow-option[data-state='broken'] .slicc-agent-tabs__overflow-option-dot{background:var(--red);}
+.slicc-agent-tabs__overflow-option-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 @keyframes slicc-agent-tabs-arc{from{transform:rotate(-90deg);}to{transform:rotate(270deg);}}
 @keyframes slicc-agent-tabs-attention{0%,100%{outline-color:var(--slicc-agent-tabs-attention-outline);}50%{outline-color:color-mix(in srgb,var(--slicc-agent-tabs-attention-outline) 45%,transparent);}}
 @media (prefers-reduced-motion:reduce){.slicc-agent-tabs__glyph-arc{animation:none;transform:rotate(-90deg);}.slicc-agent-tabs__segment{animation:none;}}
@@ -185,6 +195,52 @@ function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
   );
 }
 
+interface OverflowItem {
+  id: string;
+  label: string;
+  color?: string;
+  state: AgentState;
+  fill: number;
+}
+
+function overflowState(item: OverflowItem): 'broken' | 'near-limit' | 'working' | 'idle' {
+  if (item.state === 'broken') return 'broken';
+  if (item.fill >= 75) return 'near-limit';
+  if (item.state === 'working') return 'working';
+  return 'idle';
+}
+
+function overflowSummary(items: OverflowItem[]): string {
+  const severity = { idle: 0, working: 1, 'near-limit': 2, broken: 3 } as const;
+  const worst = items.reduce<ReturnType<typeof overflowState>>((current, item) => {
+    const state = overflowState(item);
+    return severity[state] > severity[current] ? state : current;
+  }, 'idle');
+  const stateLabel = worst === 'near-limit' ? 'near context limit' : worst;
+  return `${items.length} hidden scoop${items.length === 1 ? '' : 's'}; worst state ${stateLabel}`;
+}
+
+function overflowGrid(items: OverflowItem[]): HTMLElement {
+  const cells = Array.from({ length: 9 }, (_, index) => {
+    const item = items[index];
+    return h('span', {
+      class: `${PREFIX}__overflow-dot`,
+      'data-state': item ? overflowState(item) : null,
+      'aria-hidden': 'true',
+    });
+  });
+  return h(
+    'span',
+    {
+      class: `${PREFIX}__overflow-grid`,
+      role: 'img',
+      'aria-label': overflowSummary(items),
+      'data-hidden-count': String(items.length),
+    },
+    ...cells
+  );
+}
+
 export class SliccAgentTabs extends HTMLElement {
   static readonly observedAttributes = ['active', 'attention'];
 
@@ -192,13 +248,24 @@ export class SliccAgentTabs extends HTMLElement {
   #avatarElement: HTMLElement | null = null;
   #track: HTMLDivElement | null = null;
   #trackFrame: HTMLDivElement | null = null;
-  #overflow: SliccScoopOverflow | null = null;
+  #overflow: HTMLDivElement | null = null;
+  #overflowButton: HTMLButtonElement | null = null;
+  #overflowPop: HTMLDivElement | null = null;
   #ro: ResizeObserver | null = null;
   #reflowing = false;
   #reflowRaf: number | null = null;
   #initialized = false;
   readonly #onClick = (event: Event): void => this.#handleClick(event);
   readonly #onKeyDown = (event: KeyboardEvent): void => this.#handleKeyDown(event);
+  readonly #onDocumentClick = (event: Event): void => {
+    if (
+      this.#overflow?.classList.contains('open') &&
+      event.target instanceof Node &&
+      !this.contains(event.target)
+    ) {
+      this.#setOverflowOpen(false);
+    }
+  };
 
   connectedCallback(): void {
     ensureStyle(this.ownerDocument);
@@ -207,6 +274,7 @@ export class SliccAgentTabs extends HTMLElement {
     if (!this.#initialized) this.#initialized = true;
     this.addEventListener('click', this.#onClick);
     this.addEventListener('keydown', this.#onKeyDown);
+    this.ownerDocument.addEventListener('click', this.#onDocumentClick);
     this.#render();
     this.#observe();
     requestAnimationFrame(() => this.reflow());
@@ -219,6 +287,7 @@ export class SliccAgentTabs extends HTMLElement {
     this.#reflowRaf = null;
     this.removeEventListener('click', this.#onClick);
     this.removeEventListener('keydown', this.#onKeyDown);
+    this.ownerDocument.removeEventListener('click', this.#onDocumentClick);
   }
 
   attributeChangedCallback(): void {
@@ -346,14 +415,32 @@ export class SliccAgentTabs extends HTMLElement {
       role: 'tablist',
       'aria-label': 'Agents',
     }) as HTMLDivElement;
-    const overflow = this.ownerDocument.createElement('slicc-scoop-overflow') as SliccScoopOverflow;
-    overflow.setAttribute('part', 'overflow');
-    overflow.addEventListener('slicc-scoop-select', (event: Event) => {
-      const id = (event as CustomEvent<SliccScoopSelectDetail>).detail?.id;
-      if (typeof id !== 'string') return;
+    this.#overflowButton = h(
+      'button',
+      {
+        class: `${PREFIX}__overflow-trigger`,
+        part: 'overflow-trigger',
+        type: 'button',
+        'aria-haspopup': 'true',
+        'aria-expanded': 'false',
+        'aria-label': 'Show hidden scoops',
+      },
+      overflowGrid([])
+    ) as HTMLButtonElement;
+    this.#overflowButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      this.select(id);
+      this.#setOverflowOpen(!this.#overflow?.classList.contains('open'));
     });
+    this.#overflowPop = h('div', {
+      class: `${PREFIX}__overflow-pop`,
+      part: 'overflow-pop',
+    }) as HTMLDivElement;
+    const overflow = h(
+      'div',
+      { class: `${PREFIX}__overflow`, part: 'overflow' },
+      this.#overflowButton,
+      this.#overflowPop
+    ) as HTMLDivElement;
     this.#overflow = overflow;
     this.#trackFrame = h(
       'div',
@@ -365,25 +452,40 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   #avatar(scoop: ScoopDescriptor): HTMLElement {
-    const avatar = h('slicc-pill', {
-      class: `${PREFIX}__focus-avatar`,
-      part: 'avatar',
-      compact: true,
-      track: true,
-    });
+    const avatar = h(
+      'span',
+      { class: `${PREFIX}__focus-avatar`, part: 'avatar', role: 'img' },
+      h('span', { class: `${PREFIX}__focus-avatar-mark`, 'aria-hidden': 'true' })
+    );
     this.#updateAvatar(avatar, scoop);
     return avatar;
   }
 
   #updateAvatar(avatar: HTMLElement, scoop: ScoopDescriptor): void {
     const state = stateFor(scoop, this.attention);
-    this.#setAttribute(avatar, 'type', typeFor(scoop));
-    this.#setAttribute(avatar, 'color', scoop.color ?? null);
-    this.#setAttribute(avatar, 'eyes', eyesFor(scoop));
-    this.#setAttribute(avatar, 'fill', String(Math.round(boundedFill(scoop.fill))));
-    this.#setAttribute(avatar, 'blink', state === 'working');
-    this.#setAttribute(avatar, 'label', scoop.label ?? scoop.key);
+    const eyeState = eyesFor(scoop);
+    const label = scoop.label ?? scoop.key;
+    avatar.dataset.type = typeFor(scoop);
+    avatar.dataset.eyes = eyeState;
+    avatar.dataset.fill = String(Math.round(boundedFill(scoop.fill)));
+    avatar.setAttribute('aria-label', `${label} avatar`);
     avatar.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
+    const mark = avatar.querySelector<HTMLElement>(`.${PREFIX}__focus-avatar-mark`);
+    if (mark) {
+      mark.textContent = label.slice(0, 1);
+      mark.hidden = eyeState !== 'none';
+    }
+    let eyes = avatar.querySelector<HTMLElement>('slicc-googly-eyes');
+    if (eyeState === 'none') {
+      eyes?.remove();
+      return;
+    }
+    if (!eyes) {
+      eyes = h('slicc-googly-eyes', { size: 6, tracking: 'on' });
+      avatar.append(eyes);
+    }
+    this.#setAttribute(eyes, 'eyes', eyeState);
+    this.#setAttribute(eyes, 'blink', state === 'working');
   }
 
   #reconcileAvatar(focused: ScoopDescriptor | null): void {
@@ -473,28 +575,59 @@ export class SliccAgentTabs extends HTMLElement {
   }
 
   #feedOverflow(hidden: HTMLButtonElement[]): void {
-    if (!this.#overflow) return;
-    const items: Array<SliccScoopOverflowItem & { state?: AgentState; fill?: number }> = hidden.map(
-      (segment) => {
-        const key = segment.dataset.k ?? '';
-        const scoop = this.#scoops.find((item) => item.key === key) ?? { key };
-        return {
-          id: key,
-          label: scoop.label ?? key,
-          type: typeFor(scoop),
-          color: scoop.color,
-          eyes: eyesFor(scoop),
-          state: stateFor(scoop, this.attention),
-          fill: boundedFill(scoop.fill),
-        };
-      }
-    );
-    this.#overflow.items = items;
+    if (!this.#overflow || !this.#overflowButton || !this.#overflowPop) return;
+    const items = hidden.map((segment) => {
+      const key = segment.dataset.k ?? '';
+      const scoop = this.#scoops.find((item) => item.key === key) ?? { key };
+      return {
+        id: key,
+        label: scoop.label ?? key,
+        color: hueFor(scoop),
+        state: stateFor(scoop, this.attention),
+        fill: boundedFill(scoop.fill),
+      };
+    });
     this.classList.toggle('has-overflow', items.length > 0);
+    this.#overflowButton.setAttribute(
+      'aria-label',
+      `${items.length} hidden scoop${items.length === 1 ? '' : 's'}. Show hidden scoops`
+    );
+    this.#overflowButton.replaceChildren(overflowGrid(items));
+    this.#overflowPop.replaceChildren(
+      ...items.map((item) =>
+        h(
+          'button',
+          {
+            class: `${PREFIX}__overflow-option`,
+            part: 'overflow-option',
+            type: 'button',
+            'data-k': item.id,
+            'data-state': item.state,
+            'data-fill': String(item.fill),
+            'data-near-limit': item.fill >= 75 ? 'true' : null,
+            style: `--slicc-agent-tabs-hue:${item.color}`,
+          },
+          h('span', { class: `${PREFIX}__overflow-option-dot`, 'aria-hidden': 'true' }),
+          h('span', { class: `${PREFIX}__overflow-option-label` }, item.label)
+        )
+      )
+    );
+    if (items.length === 0) this.#setOverflowOpen(false);
+  }
+
+  #setOverflowOpen(open: boolean): void {
+    this.#overflow?.classList.toggle('open', open);
+    this.#overflowButton?.setAttribute('aria-expanded', String(open));
   }
 
   #handleClick(event: Event): void {
     const target = event.target as HTMLElement | null;
+    const option = target?.closest<HTMLButtonElement>(`.${PREFIX}__overflow-option`);
+    if (option && this.contains(option) && option.dataset.k) {
+      this.#setOverflowOpen(false);
+      this.select(option.dataset.k);
+      return;
+    }
     const segment = target?.closest<HTMLButtonElement>(`.${PREFIX}__segment`);
     if (segment && this.contains(segment) && segment.dataset.k) this.select(segment.dataset.k);
   }

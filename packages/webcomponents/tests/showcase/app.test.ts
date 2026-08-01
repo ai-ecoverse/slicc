@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SliccPill } from '../../src/pill/slicc-pill.js';
 // The full-app showcase story assembles the whole surface; importing it
 // registers every element it composes (agent tabs included).
 import { Collapsed, FreezerPreview, ScoopPreview } from '../../src/showcase/app.stories.js';
@@ -26,8 +25,8 @@ function agentTab(frame: HTMLElement, label: string): HTMLButtonElement {
 }
 
 /** The focused-agent avatar exposed by the tabs' public `avatar` part. */
-function focusedAvatar(frame: HTMLElement): SliccPill {
-  return frame.querySelector('slicc-agent-tabs > slicc-pill[part="avatar"]') as SliccPill;
+function focusedAvatar(frame: HTMLElement): HTMLElement {
+  return frame.querySelector('slicc-agent-tabs > [part="avatar"]') as HTMLElement;
 }
 
 /** Resolve a CSS color (e.g. a hex token) to its computed `rgb(...)` form. */
@@ -60,7 +59,7 @@ describe('showcase full-app agent tabs', () => {
   it('renders the cone tab and focused cone avatar in the nav', () => {
     frame = renderShowcase();
     expect(agentTab(frame, 'Sliccy')).toBeTruthy();
-    expect(focusedAvatar(frame).getAttribute('type')).toBe('cone');
+    expect(focusedAvatar(frame).dataset.type).toBe('cone');
   });
 
   it('selects the cone as the fallback without setting an explicit active tab', () => {
@@ -85,23 +84,22 @@ describe('showcase full-app agent tabs', () => {
     expect(getComputedStyle(agentTab(frame, 'Sliccy')).color).not.toBe('rgb(255, 255, 255)');
   });
 
-  it('keeps the cone eye-tracking intact (cone, eyes open, pupils follow the cursor)', () => {
+  it('keeps the cone eye-tracking intact through the shared eyes primitive', () => {
     frame = renderShowcase();
     const cone = focusedAvatar(frame);
-    expect(cone.getAttribute('eyes')).toBe('open');
-    const svg = cone.shadowRoot?.querySelector('.eyes-svg') as SVGElement;
-    expect(svg).toBeTruthy();
-    const r = svg.getBoundingClientRect();
+    expect(cone.dataset.eyes).toBe('open');
+    const eyes = cone.querySelector('slicc-googly-eyes') as HTMLElement;
+    expect(eyes).toBeTruthy();
+    const r = eyes.getBoundingClientRect();
     document.dispatchEvent(
       new MouseEvent('mousemove', {
         clientX: r.left + r.width + 500,
         clientY: r.top + r.height + 500,
       })
     );
-    const left = cone.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
-    const right = cone.shadowRoot?.querySelector('.pupil-r') as SVGGElement;
-    expect(left.getAttribute('transform')).toMatch(/^translate\(/);
-    expect(right.getAttribute('transform')).toMatch(/^translate\(/);
+    const pupils = [...(eyes.shadowRoot?.querySelectorAll<HTMLElement>('.eye') ?? [])];
+    expect(pupils).toHaveLength(2);
+    expect(pupils.every((eye) => eye.style.getPropertyValue('--px') !== '')).toBe(true);
   });
 });
 

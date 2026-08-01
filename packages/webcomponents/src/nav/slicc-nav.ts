@@ -67,8 +67,8 @@ function ensureNavStyle(doc: Document): void {
 /**
  * `<slicc-nav>` — the top navigation bar from the prototype (`.nav`). A frosted,
  * context-tinted header shell that lays out the leader's chrome in a single flex
- * row: the `<slicc-logo>` wordmark, the `<slicc-agent-tabs>` tab row (whose
- * own `<slicc-scoop-overflow>` more-button rides along as a sibling), a flexible
+ * row: the `<slicc-logo>` wordmark, the `<slicc-agent-tabs>` tab row (including
+ * its internal overflow controls), a flexible
  * `.spacer`, then the `<slicc-floatbar>`, `<slicc-theme-toggle>`, and
  * `<slicc-avatar>` pinned to the right edge. It composes those elements BY TAG —
  * it never imports or reaches into them — so the host app slots whichever

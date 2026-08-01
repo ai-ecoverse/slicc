@@ -5,8 +5,8 @@ import '../src/theme/tokens.css';
  * Theme decorator — the prototype is light-default and flips to dark via a
  * `dark` class on <body> (see project decision: prototype token polarity is the
  * lib contract). We mirror that here and also forward a `theme` attribute to the
- * document root so shadow-DOM components that honor `[theme]` (slicc-pill,
- * slicc-add-menu) stay in sync with the toolbar.
+ * document root so shadow-DOM components that honor `[theme]` stay in sync with
+ * the toolbar.
  */
 const withTheme: Decorator = (story, context) => {
   const theme = context.globals.theme === 'dark' ? 'dark' : 'light';

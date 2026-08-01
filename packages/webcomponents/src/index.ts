@@ -121,7 +121,6 @@ export {
   type UsbPermissionProvider,
 } from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
-export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export {
@@ -156,7 +155,6 @@ export {
   type ScoopSelectDetail,
   SliccAgentTabs,
 } from './switcher/slicc-agent-tabs.js';
-export { SliccScoopOverflow } from './switcher/slicc-scoop-overflow.js';
 export { SliccTheme } from './theme/slicc-theme.js';
 export { SliccThemeToggle } from './theme/slicc-theme-toggle.js';
 export * from './theme/tokens.js';

@@ -135,7 +135,7 @@ export const Wide: Story = {
 
 /**
  * Narrow frame (560px): the tabs no longer fit, so the component collapses the
- * trailing scoops into its `<slicc-scoop-overflow>` more-popup (the cone tab is
+ * trailing scoops into its internal more-popup (the cone tab is
  * never hidden). The floatbar, toggle, and avatar still hold the right edge —
  * the interesting overflow state to review.
  */

@@ -19,12 +19,12 @@ function runGuard() {
 
 describe('check-no-innerhtml: isShippedSource', () => {
   it('accepts component source .ts', () => {
-    expect(isShippedSource('slicc-pill.ts')).toBe(true);
+    expect(isShippedSource('slicc-agent-tabs.ts')).toBe(true);
   });
 
   it('rejects stories and tests', () => {
-    expect(isShippedSource('slicc-pill.stories.ts')).toBe(false);
-    expect(isShippedSource('slicc-pill.test.ts')).toBe(false);
+    expect(isShippedSource('slicc-agent-tabs.stories.ts')).toBe(false);
+    expect(isShippedSource('slicc-agent-tabs.test.ts')).toBe(false);
   });
 
   it('rejects non-.ts files', () => {

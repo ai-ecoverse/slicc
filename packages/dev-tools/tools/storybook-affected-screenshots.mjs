@@ -24,7 +24,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, writeFileSync } 
  *       "title": string,           // e.g. "Pill/Pill"
  *       "name": string,            // e.g. "Cone Open Idle"
  *       "area": string,            // src/<area>/, e.g. "pill"
- *       "importPath": string,      // e.g. "./src/pill/slicc-pill.stories.ts"
+ *       "importPath": string,      // e.g. "./src/switcher/slicc-agent-tabs.stories.ts"
  *       "theme": "light" | "dark",
  *       "file": string,            // basename, relative to manifest dir
  *       "contentHash": string,     // SHA-256 hex digest of the PNG file

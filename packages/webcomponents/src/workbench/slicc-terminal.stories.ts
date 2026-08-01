@@ -32,7 +32,7 @@ function npmTestSession(term: SliccTerminal): void {
   term.writeln(`${PASS}tests/workbench/slicc-terminal.test.ts ${DIM('(8 tests) 142ms')}`);
   term.writeln(`${PASS}tests/workbench/slicc-surface.test.ts ${DIM('(22 tests) 088ms')}`);
   term.writeln(`${PASS}tests/workbench/slicc-tab-bar.test.ts ${DIM('(31 tests) 121ms')}`);
-  term.writeln(`${PASS}tests/pill/slicc-pill.test.ts ${DIM('(19 tests) 097ms')}`);
+  term.writeln(`${PASS}tests/switcher/slicc-agent-tabs.test.ts ${DIM('(19 tests) 097ms')}`);
   term.writeln('');
   term.writeln(` ${DIM('Test Files')}  ${GREEN('4 passed')} ${DIM('(4)')}`);
   term.writeln(`      ${DIM('Tests')}  ${GREEN('80 passed')} ${DIM('(80)')}`);

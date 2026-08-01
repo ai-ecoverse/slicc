@@ -5,7 +5,6 @@ import {
   type ScoopSelectDetail,
   SliccAgentTabs,
 } from '../../src/switcher/slicc-agent-tabs.js';
-import type { SliccScoopOverflow } from '../../src/switcher/slicc-scoop-overflow.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 const ROSTER: ScoopDescriptor[] = [
@@ -72,8 +71,20 @@ function avatar(element: SliccAgentTabs): HTMLElement | null {
   return element.querySelector('.slicc-agent-tabs__focus-avatar');
 }
 
-function overflow(element: SliccAgentTabs): SliccScoopOverflow {
-  return element.querySelector('slicc-scoop-overflow') as SliccScoopOverflow;
+function overflow(element: SliccAgentTabs): HTMLDivElement {
+  return element.querySelector('.slicc-agent-tabs__overflow') as HTMLDivElement;
+}
+
+function overflowTrigger(element: SliccAgentTabs): HTMLButtonElement {
+  return overflow(element).querySelector(
+    '.slicc-agent-tabs__overflow-trigger'
+  ) as HTMLButtonElement;
+}
+
+function overflowOptions(element: SliccAgentTabs): HTMLButtonElement[] {
+  return [
+    ...overflow(element).querySelectorAll<HTMLButtonElement>('.slicc-agent-tabs__overflow-option'),
+  ];
 }
 
 describe('slicc-agent-tabs', () => {
@@ -97,18 +108,18 @@ describe('slicc-agent-tabs', () => {
     expect(document.querySelectorAll('#slicc-agent-tabs-style')).toHaveLength(1);
   });
 
-  it('renders avatar, segmented control, then the composed overflow tag', () => {
+  it('renders avatar, segmented control, and its internal overflow controls', () => {
     const element = mount();
     expect([...element.children].map((child) => child.tagName.toLowerCase())).toEqual([
-      'slicc-pill',
+      'span',
       'div',
     ]);
     expect(
       [...(element.querySelector('.slicc-agent-tabs__track-frame')?.children ?? [])].map((child) =>
         child.tagName.toLowerCase()
       )
-    ).toEqual(['div', 'slicc-scoop-overflow']);
-    expect(overflow(element).tagName.toLowerCase()).toBe('slicc-scoop-overflow');
+    ).toEqual(['div', 'div']);
+    expect(overflow(element).classList.contains('slicc-agent-tabs__overflow')).toBe(true);
   });
 
   it('round-trips scoops defensively and keeps every descriptor field', () => {
@@ -209,21 +220,22 @@ describe('slicc-agent-tabs', () => {
 
   it('focuses the first descriptor by default and updates avatar + selected segment', () => {
     const element = mount();
-    expect(avatar(element)?.getAttribute('type')).toBe('cone');
-    expect(avatar(element)?.hasAttribute('track')).toBe(true);
+    expect(avatar(element)?.dataset.type).toBe('cone');
+    expect(avatar(element)?.querySelector('slicc-googly-eyes')?.getAttribute('tracking')).toBe(
+      'on'
+    );
     expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     element.active = 'researcher';
-    expect(avatar(element)?.getAttribute('type')).toBe('scoop');
-    expect(avatar(element)?.getAttribute('color')).toBe('#06b6d4');
-    expect(avatar(element)?.getAttribute('fill')).toBe('62');
-    expect(avatar(element)?.hasAttribute('blink')).toBe(true);
+    expect(avatar(element)?.dataset.type).toBe('scoop');
+    expect(avatar(element)?.dataset.fill).toBe('62');
+    expect(avatar(element)?.querySelector('slicc-googly-eyes')?.hasAttribute('blink')).toBe(true);
     expect(segment(element, 'researcher').getAttribute('aria-selected')).toBe('true');
   });
 
   it('falls back to the first descriptor when active does not exist', () => {
     const element = mount();
     element.active = 'missing';
-    expect(avatar(element)?.getAttribute('label')).toBe('Sliccy');
+    expect(avatar(element)?.getAttribute('aria-label')).toBe('Sliccy avatar');
     expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
   });
 
@@ -360,7 +372,7 @@ describe('slicc-agent-tabs', () => {
       expect(arcDash(200)).toBeCloseTo(arcDash(100));
       expect(arcDash(Number.NaN)).toBeCloseTo(arcDash(0));
       const element = mount([{ key: 'cone', fill: 200 }]);
-      expect(avatar(element)?.getAttribute('fill')).toBe('100');
+      expect(avatar(element)?.dataset.fill).toBe('100');
     });
 
     it('writes the calculated dash length into the SVG arc', () => {
@@ -531,24 +543,17 @@ describe('slicc-agent-tabs', () => {
       expect(segment(element, 'cone').getAttribute('aria-selected')).toBe('true');
     });
 
-    it('keeps the avatar and overflow trigger keyboard reachable but outside tab semantics', () => {
+    it('keeps the decorative avatar out of the tab order and the overflow trigger reachable', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
-      const avatarButton = avatar(element)?.shadowRoot?.querySelector(
-        'button'
-      ) as HTMLButtonElement;
-      const overflowButton = overflow(element).shadowRoot?.querySelector(
-        '.morebtn'
-      ) as HTMLButtonElement;
+      const overflowButton = overflowTrigger(element);
 
-      expect(avatarButton.tabIndex).toBe(0);
-      expect(avatarButton.getAttribute('role')).not.toBe('tab');
-      avatarButton.focus();
-      expect(avatar(element)?.shadowRoot?.activeElement).toBe(avatarButton);
+      expect(avatar(element)?.getAttribute('role')).toBe('img');
+      expect(avatar(element)?.tabIndex).toBe(-1);
       expect(overflowButton.tabIndex).toBe(0);
       expect(overflowButton.getAttribute('role')).not.toBe('tab');
       overflowButton.focus();
-      expect(overflow(element).shadowRoot?.activeElement).toBe(overflowButton);
+      expect(document.activeElement).toBe(overflowButton);
     });
   });
 
@@ -559,7 +564,7 @@ describe('slicc-agent-tabs', () => {
       const hidden = segments(element).filter((item) => item.classList.contains('hide'));
       expect(segment(element, 'cone').classList.contains('hide')).toBe(false);
       expect(hidden.length).toBeGreaterThan(0);
-      expect(overflow(element).items).toHaveLength(hidden.length);
+      expect(overflowOptions(element)).toHaveLength(hidden.length);
       expect(element.classList.contains('has-overflow')).toBe(true);
       expect(hidden.map((item) => item.dataset.k)).toEqual(
         segments(element)
@@ -568,58 +573,66 @@ describe('slicc-agent-tabs', () => {
       );
     });
 
-    it('feeds hidden descriptors through the composed tag with state and fill', () => {
+    it('renders hidden descriptors with state, fill, and an accessible severity summary', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
-      const items = overflow(element).items as Array<{
-        id: string;
-        state?: string;
-        fill?: number;
-        eyes?: string;
-      }>;
+      const items = overflowOptions(element);
+      const tester = items.find((item) => item.dataset.k === 'tester');
       expect(items.length).toBeGreaterThan(0);
-      expect(items.find((item) => item.id === 'tester')).toMatchObject({
-        state: 'broken',
-        fill: 84,
-        eyes: 'dead',
-      });
+      expect(tester?.dataset.state).toBe('broken');
+      expect(tester?.dataset.fill).toBe('84');
+      expect(tester?.dataset.nearLimit).toBe('true');
+      expect(
+        overflowTrigger(element).querySelector('[role="img"]')?.getAttribute('aria-label')
+      ).toContain('worst state broken');
     });
 
     it('restores every segment and clears overflow when widened', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
-      expect(overflow(element).items.length).toBeGreaterThan(0);
+      expect(overflowOptions(element).length).toBeGreaterThan(0);
       element.style.width = '1000px';
       element.reflow();
       expect(segments(element).some((item) => item.classList.contains('hide'))).toBe(false);
-      expect(overflow(element).items).toHaveLength(0);
+      expect(overflowOptions(element)).toHaveLength(0);
       expect(element.classList.contains('has-overflow')).toBe(false);
     });
 
-    it('re-emits overflow selection with the canonical key payload', () => {
+    it('opens, selects an overflow option, emits the canonical payload, and closes', () => {
       const element = mount(ROSTER, 180);
       element.reflow();
-      const item = overflow(element).items[0];
+      const item = overflowOptions(element)[0];
       const listener = vi.fn();
       element.addEventListener('slicc-scoop-select', (event) =>
         listener((event as CustomEvent<ScoopSelectDetail>).detail)
       );
-      overflow(element).dispatchEvent(
-        new CustomEvent('slicc-scoop-select', {
-          detail: { id: item.id, label: item.label ?? item.id },
-          bubbles: true,
-          composed: true,
-        })
-      );
-      expect(listener).toHaveBeenCalledWith({ id: item.id, key: item.id, label: item.label });
-      expect(element.active).toBe(item.id);
+      overflowTrigger(element).click();
+      expect(overflow(element).classList.contains('open')).toBe(true);
+      expect(overflowTrigger(element).getAttribute('aria-expanded')).toBe('true');
+      item.click();
+      expect(listener).toHaveBeenCalledWith({
+        id: item.dataset.k,
+        key: item.dataset.k,
+        label: item.textContent,
+      });
+      expect(element.active).toBe(item.dataset.k);
+      expect(overflow(element).classList.contains('open')).toBe(false);
+      expect(overflowTrigger(element).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('closes the overflow popup on an outside click', () => {
+      const element = mount(ROSTER, 180);
+      element.reflow();
+      overflowTrigger(element).click();
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(overflow(element).classList.contains('open')).toBe(false);
     });
 
     it('shows no overflow when the host is not laid out yet', () => {
       const element = mount(ROSTER, 180);
       element.style.display = 'none';
       element.reflow();
-      expect(overflow(element).items).toHaveLength(0);
+      expect(overflowOptions(element)).toHaveLength(0);
     });
   });
 

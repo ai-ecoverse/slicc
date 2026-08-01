@@ -93,7 +93,7 @@ const STYLE = `
 
 /* Hover/focus tip surfacing the collapsed label + rate + connection state.
    Hidden in the wide pill (the full label already shows everything); only the
-   narrow square badge reveals it, mirroring slicc-pill's dark .tip convention.
+   narrow square badge reveals it, mirroring the shared dark tooltip convention.
    Decorative (aria-hidden); the accessible name rides the host title attribute. */
 .tip {
   position: absolute;

@@ -111,7 +111,7 @@ function thread(): HTMLElement {
   const d1 = el('slicc-delegation-line', { kind: 'feed', scoop: 'researcher', verb: 'feed_scoop' });
   const row = el('slicc-action-row', {
     icon: '✎',
-    label: 'edit_file slicc-pill.ts',
+    label: 'edit_file slicc-agent-tabs.ts',
     result: '+42 −7',
     open: '',
   });

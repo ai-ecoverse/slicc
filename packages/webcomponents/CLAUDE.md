@@ -15,7 +15,6 @@ src/
   internal/      define() (guarded registration), dom.ts (h()/sheet()/frag()), icons.ts (iconEl()), url-state.ts (per-component URL param sync), shared helpers
   theme/         tokens.css (prototype token vocabulary), tokens.ts, slicc-theme*
   primitives/    token-only leaves (logo, tag, icon-button, send-button, eyes, …)
-  pill/          slicc-pill (shadow DOM, lifted from prototype)
   add-menu/      slicc-add-menu (shadow DOM, lifted from prototype)
   chat/          message/card/dip composites + verbatim pure modules
   overlay/       slicc-dialog (modal shell) and other viewport overlays
@@ -46,7 +45,7 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 - **NodeNext imports:** relative imports MUST carry the `.js` extension
   (`./foo.js`), including in stories and tests. tsc enforces this.
 - **Shadow vs light vs iframe** (per project decision):
-  - Shadow DOM for self-contained chips: pill, add-menu, tag, icon-button, logo.
+  - Shadow DOM for self-contained chips: add-menu, tag, icon-button, logo.
   - Light DOM for layout/gesture/slotting hosts: nav, composer, shell, file-tree,
     press-button (slots app content, app CSS styles it).
   - `slicc-dip` stays **iframe-isolated** (preserve the webapp `dip.ts`
@@ -56,7 +55,7 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
   do not re-declare them. Light is default; dark is `body.dark` / `.dark` /
   `[data-theme="dark"]`. Components needing per-element dark tweaks add their own
   `.dark &` / `:host(...)` rules. Preserve `::part` hooks on lifted elements
-  (`slicc-pill`, `slicc-add-menu`) exactly.
+  (for example, `slicc-add-menu`) exactly.
 - **Animation loops must not force reflow.** A `requestAnimationFrame` loop must
   never call `getComputedStyle`, append/measure a DOM probe, or otherwise read
   computed style/layout per frame — each one forces a full-document style recalc,
@@ -145,14 +144,14 @@ comment builder):
   "viewport": { "width": 1280, "height": 900 },
   "shots": [
     {
-      "storyId": "pill-pill--cone-open-idle",
-      "title": "Pill/Pill",
-      "name": "Cone Open Idle",
-      "area": "pill",
-      "importPath": "./src/pill/slicc-pill.stories.ts",
+      "storyId": "switcher-agenttabs--default",
+      "title": "Switcher/AgentTabs",
+      "name": "Default",
+      "area": "switcher",
+      "importPath": "./src/switcher/slicc-agent-tabs.stories.ts",
       "theme": "light",
-      "file": "pill-pill--cone-open-idle.light.png",
-      "triggeredBy": ["packages/webcomponents/src/pill/slicc-pill.ts"]
+      "file": "switcher-agenttabs--default.light.png",
+      "triggeredBy": ["packages/webcomponents/src/switcher/slicc-agent-tabs.ts"]
     }
   ]
 }

@@ -87,8 +87,7 @@ function buildTabs(args: AgentTabsArgs): HTMLElement {
   if (args.overflowOpen) {
     requestAnimationFrame(() => {
       tabs.reflow();
-      const overflow = tabs.querySelector('slicc-scoop-overflow');
-      if (overflow) overflow.open = true;
+      tabs.querySelector<HTMLButtonElement>('.slicc-agent-tabs__overflow-trigger')?.click();
     });
   }
   return frame;

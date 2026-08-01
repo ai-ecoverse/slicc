@@ -8,30 +8,30 @@ import {
 /**
  * Small fixture mirroring the shape Storybook 10 emits in
  * `storybook-static/index.json`. importPath is package-relative with a `./`
- * prefix — verified against `packages/webcomponents/src/pill/slicc-pill.stories.ts`.
+ * prefix — verified against the agent-tabs Storybook entry.
  */
 const indexJson = {
   v: 5,
   entries: {
-    'pill-pill--cone-open-idle': {
-      id: 'pill-pill--cone-open-idle',
-      title: 'Pill/Pill',
-      name: 'Cone Open Idle',
-      importPath: './src/pill/slicc-pill.stories.ts',
+    'switcher-agenttabs--default': {
+      id: 'switcher-agenttabs--default',
+      title: 'Switcher/AgentTabs',
+      name: 'Default',
+      importPath: './src/switcher/slicc-agent-tabs.stories.ts',
       type: 'story',
     },
-    'pill-pill--scoop-open-idle': {
-      id: 'pill-pill--scoop-open-idle',
-      title: 'Pill/Pill',
-      name: 'Scoop Open Idle',
-      importPath: './src/pill/slicc-pill.stories.ts',
+    'switcher-agenttabs--cone-focused': {
+      id: 'switcher-agenttabs--cone-focused',
+      title: 'Switcher/AgentTabs',
+      name: 'Cone Focused',
+      importPath: './src/switcher/slicc-agent-tabs.stories.ts',
       type: 'story',
     },
-    'pill-pill--docs': {
-      id: 'pill-pill--docs',
-      title: 'Pill/Pill',
+    'switcher-agenttabs--docs': {
+      id: 'switcher-agenttabs--docs',
+      title: 'Switcher/AgentTabs',
       name: 'Docs',
-      importPath: './src/pill/slicc-pill.stories.ts',
+      importPath: './src/switcher/slicc-agent-tabs.stories.ts',
       type: 'docs',
     },
     'chat-agent-message--default': {
@@ -60,18 +60,20 @@ const indexJson = {
 
 describe('classifyChangedFile', () => {
   it('classifies a source file under an area', () => {
-    expect(classifyChangedFile('packages/webcomponents/src/pill/slicc-pill.ts')).toEqual({
-      area: 'pill',
+    expect(classifyChangedFile('packages/webcomponents/src/switcher/slicc-agent-tabs.ts')).toEqual({
+      area: 'switcher',
       isStoryFile: false,
-      importPath: './src/pill/slicc-pill.ts',
+      importPath: './src/switcher/slicc-agent-tabs.ts',
     });
   });
 
   it('classifies a story file as a story file', () => {
-    expect(classifyChangedFile('packages/webcomponents/src/pill/slicc-pill.stories.ts')).toEqual({
-      area: 'pill',
+    expect(
+      classifyChangedFile('packages/webcomponents/src/switcher/slicc-agent-tabs.stories.ts')
+    ).toEqual({
+      area: 'switcher',
       isStoryFile: true,
-      importPath: './src/pill/slicc-pill.stories.ts',
+      importPath: './src/switcher/slicc-agent-tabs.stories.ts',
     });
   });
 
@@ -89,7 +91,9 @@ describe('classifyChangedFile', () => {
   });
 
   it('returns null for files outside the webcomponents src tree', () => {
-    expect(classifyChangedFile('packages/webcomponents/tests/pill/slicc-pill.test.ts')).toBeNull();
+    expect(
+      classifyChangedFile('packages/webcomponents/tests/switcher/slicc-agent-tabs.test.ts')
+    ).toBeNull();
     expect(classifyChangedFile('packages/webcomponents/package.json')).toBeNull();
     expect(classifyChangedFile('packages/webapp/src/main.ts')).toBeNull();
     expect(classifyChangedFile('README.md')).toBeNull();
@@ -105,15 +109,17 @@ describe('classifyChangedFile', () => {
 describe('resolveAffectedStories', () => {
   it('source-file change selects every story in the area', () => {
     const result = resolveAffectedStories(
-      ['packages/webcomponents/src/pill/slicc-pill.ts'],
+      ['packages/webcomponents/src/switcher/slicc-agent-tabs.ts'],
       indexJson
     );
     expect(result.map((s) => s.storyId)).toEqual([
-      'pill-pill--cone-open-idle',
-      'pill-pill--scoop-open-idle',
+      'switcher-agenttabs--cone-focused',
+      'switcher-agenttabs--default',
     ]);
-    expect(result[0].area).toBe('pill');
-    expect(result[0].triggeredBy).toEqual(['packages/webcomponents/src/pill/slicc-pill.ts']);
+    expect(result[0].area).toBe('switcher');
+    expect(result[0].triggeredBy).toEqual([
+      'packages/webcomponents/src/switcher/slicc-agent-tabs.ts',
+    ]);
   });
 
   it('story-file change selects only stories declared in that file', () => {
@@ -137,7 +143,7 @@ describe('resolveAffectedStories', () => {
   it('multiple non-global areas produce the union of affected stories', () => {
     const result = resolveAffectedStories(
       [
-        'packages/webcomponents/src/pill/slicc-pill.ts',
+        'packages/webcomponents/src/switcher/slicc-agent-tabs.ts',
         'packages/webcomponents/src/chat/slicc-agent-message.ts',
       ],
       indexJson
@@ -145,8 +151,8 @@ describe('resolveAffectedStories', () => {
     expect(result.map((s) => s.storyId)).toEqual([
       'chat-agent-message--default',
       'chat-user-message--default',
-      'pill-pill--cone-open-idle',
-      'pill-pill--scoop-open-idle',
+      'switcher-agenttabs--cone-focused',
+      'switcher-agenttabs--default',
     ]);
   });
 
@@ -157,15 +163,15 @@ describe('resolveAffectedStories', () => {
     expect(result.map((s) => s.storyId)).toEqual([
       'chat-agent-message--default',
       'chat-user-message--default',
-      'pill-pill--cone-open-idle',
-      'pill-pill--scoop-open-idle',
+      'switcher-agenttabs--cone-focused',
+      'switcher-agenttabs--default',
       'theme-toggle--default',
     ]);
     for (const shot of result) {
       expect(shot.triggeredBy).toEqual([themeFile]);
     }
     // Each story keeps its own area, not the changed-file's area.
-    expect(result.find((s) => s.storyId === 'pill-pill--cone-open-idle').area).toBe('pill');
+    expect(result.find((s) => s.storyId === 'switcher-agenttabs--default').area).toBe('switcher');
     expect(result.find((s) => s.storyId === 'theme-toggle--default').area).toBe('theme');
   });
 
@@ -175,8 +181,8 @@ describe('resolveAffectedStories', () => {
     expect(result.map((s) => s.storyId)).toEqual([
       'chat-agent-message--default',
       'chat-user-message--default',
-      'pill-pill--cone-open-idle',
-      'pill-pill--scoop-open-idle',
+      'switcher-agenttabs--cone-focused',
+      'switcher-agenttabs--default',
       'theme-toggle--default',
     ]);
     for (const shot of result) {
@@ -184,14 +190,14 @@ describe('resolveAffectedStories', () => {
     }
   });
 
-  it('pill (non-global) change still selects only pill stories', () => {
+  it('switcher (non-global) change still selects only switcher stories', () => {
     const result = resolveAffectedStories(
-      ['packages/webcomponents/src/pill/slicc-pill.ts'],
+      ['packages/webcomponents/src/switcher/slicc-agent-tabs.ts'],
       indexJson
     );
     expect(result.map((s) => s.storyId)).toEqual([
-      'pill-pill--cone-open-idle',
-      'pill-pill--scoop-open-idle',
+      'switcher-agenttabs--cone-focused',
+      'switcher-agenttabs--default',
     ]);
   });
 
@@ -205,10 +211,10 @@ describe('resolveAffectedStories', () => {
 
   it('skips docs entries — only renderable stories are returned', () => {
     const result = resolveAffectedStories(
-      ['packages/webcomponents/src/pill/slicc-pill.stories.ts'],
+      ['packages/webcomponents/src/switcher/slicc-agent-tabs.stories.ts'],
       indexJson
     );
-    expect(result.map((s) => s.storyId)).not.toContain('pill-pill--docs');
+    expect(result.map((s) => s.storyId)).not.toContain('switcher-agenttabs--docs');
   });
 
   it('merges triggers when source AND story-file in the same area both change', () => {
@@ -239,7 +245,7 @@ describe('resolveAffectedStories', () => {
 
   it('tolerates an empty index', () => {
     expect(
-      resolveAffectedStories(['packages/webcomponents/src/pill/slicc-pill.ts'], {
+      resolveAffectedStories(['packages/webcomponents/src/switcher/slicc-agent-tabs.ts'], {
         v: 5,
         entries: {},
       })
@@ -249,11 +255,11 @@ describe('resolveAffectedStories', () => {
 
 describe('screenshotFileName', () => {
   it('joins storyId and theme with a stable extension', () => {
-    expect(screenshotFileName('pill-pill--cone-open-idle', 'light')).toBe(
-      'pill-pill--cone-open-idle-light.png'
+    expect(screenshotFileName('switcher-agenttabs--default', 'light')).toBe(
+      'switcher-agenttabs--default-light.png'
     );
-    expect(screenshotFileName('pill-pill--cone-open-idle', 'dark')).toBe(
-      'pill-pill--cone-open-idle-dark.png'
+    expect(screenshotFileName('switcher-agenttabs--default', 'dark')).toBe(
+      'switcher-agenttabs--default-dark.png'
     );
   });
 });
