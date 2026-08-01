@@ -67,12 +67,7 @@ export class PreviewBridgeManager {
     const { connId, previewToken, origin, userAgent, connectedAt } = msg;
     const replay = msg.replay === true;
     const mint = replay
-      ? (this.mintMap.get(previewToken) ?? {
-          url: origin,
-          title: 'Preview',
-          quiet: false,
-          announced: false,
-        })
+      ? this.restoreReplayedPreview(previewToken, origin)
       : this.getOrCreatePreview(previewToken, origin);
     if (this.bridgeConns.has(connId)) {
       if (replay) return;
@@ -219,6 +214,17 @@ export class PreviewBridgeManager {
     const existing = this.mintMap.get(previewToken);
     if (existing) return existing;
     const preview = { url: origin, title: 'Preview', quiet: false, announced: false };
+    this.mintMap.set(previewToken, preview);
+    return preview;
+  }
+
+  private restoreReplayedPreview(previewToken: string, origin: string): MintedPreview {
+    const existing = this.mintMap.get(previewToken);
+    if (existing) {
+      existing.announced = true;
+      return existing;
+    }
+    const preview = { url: origin, title: 'Preview', quiet: true, announced: true };
     this.mintMap.set(previewToken, preview);
     return preview;
   }
