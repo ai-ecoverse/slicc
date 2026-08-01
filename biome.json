@@ -26,6 +26,7 @@
       "!**/artifacts/**",
       "!**/.wrangler/**",
       "!**/.worktrees/**",
+      "!**/.yolo/**",
       "!**/.qa/**",
       "!**/.build/**",
       "!**/package-lock.json",

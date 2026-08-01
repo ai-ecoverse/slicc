@@ -9,6 +9,7 @@ dist/
 coverage/
 .worktrees/
 worktrees/
+.yolo/
 .wrangler/
 .qa/
 artifacts/
