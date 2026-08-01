@@ -1,0 +1,77 @@
+{
+  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only — see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping — the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png).",
+  "screens": [
+    {
+      "name": "settings",
+      "description": "Settings sheet as opened on first launch (no stored join URL)",
+      "args": ["-joinUrl", ""]
+    },
+    {
+      "name": "icloud-sessions",
+      "description": "Settings with fixture iCloud sessions listed",
+      "args": ["-joinUrl", "", "-uiTestSessionsFixture", "YES"]
+    },
+    {
+      "name": "icloud-empty",
+      "description": "Settings with the iCloud empty state",
+      "args": ["-joinUrl", "", "-uiTestSessionsEmpty", "YES"]
+    },
+    {
+      "name": "conversation-fixture",
+      "description": "Every chat message variant, leaderless (FixtureConversationView)",
+      "args": ["-uiTestFixtureRoute", "YES"]
+    },
+    {
+      "name": "connection-failed",
+      "description": "Failed connection pill (dials 127.0.0.1:1, refused instantly)",
+      "args": ["-joinUrl", "http://127.0.0.1:1/join/screenshots"],
+      "settleSeconds": 10
+    },
+    {
+      "name": "connection-stalled",
+      "description": "Connected but the leader stopped answering",
+      "args": ["-uiTestConnectionState", "stalled"]
+    },
+    {
+      "name": "connection-gave-up",
+      "description": "Reconnect budget exhausted (terminal, actionable)",
+      "args": ["-uiTestConnectionState", "gaveUp"]
+    },
+    {
+      "name": "frozen-list",
+      "description": "Past Sessions sheet with fixture archives",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenFixture",
+        "YES",
+        "-uiTestOpenFrozenRail",
+        "YES"
+      ]
+    },
+    {
+      "name": "frozen-readonly",
+      "description": "An archived session open read-only (banner replaces composer)",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenFixture",
+        "YES",
+        "-uiTestOpenFrozenSession",
+        "YES"
+      ]
+    },
+    {
+      "name": "frozen-empty",
+      "description": "Past Sessions sheet with no archived sessions",
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots",
+        "-uiTestFrozenEmpty",
+        "YES",
+        "-uiTestOpenFrozenRail",
+        "YES"
+      ]
+    }
+  ]
+}
