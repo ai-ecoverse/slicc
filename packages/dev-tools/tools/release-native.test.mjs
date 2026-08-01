@@ -125,6 +125,12 @@ describe('matchesAnyPrefix', () => {
       true
     );
     expect(matchesAnyPrefix('packages/spoon/src/index.ts', MACOS_PATH_PREFIXES)).toBe(true);
+    expect(
+      matchesAnyPrefix(
+        'packages/swift-traysession/Sources/SliccTraySession/TraySessionSyncStore.swift',
+        MACOS_PATH_PREFIXES
+      )
+    ).toBe(true);
     expect(matchesAnyPrefix('packages/ios-app/scripts/x.sh', IOS_PATH_PREFIXES)).toBe(true);
   });
 

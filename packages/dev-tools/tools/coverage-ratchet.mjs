@@ -38,6 +38,7 @@ const only = onlyArg ? onlyArg.slice('--only='.length) : null;
 const SWIFT_BUNDLES = {
   'swift-server': 'SliccServerPackageTests',
   'swift-optel': 'SwiftOptelPackageTests',
+  'swift-traysession': 'SliccTraySessionPackageTests',
   'swift-launcher': 'SliccstartPackageTests',
   // ios-app cannot run `swift test` at all (iOS-only WebRTC dependency), so it
   // is measured through the coverage script's --xcodebuild simulator mode. The
