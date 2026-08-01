@@ -26,6 +26,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# Resolved before any `cd` below — BASH_SOURCE may be a relative path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 XCODE_SCHEME=""
 if [[ "${1:-}" == "--xcodebuild" ]]; then
@@ -82,22 +84,34 @@ if [[ -n "$XCODE_SCHEME" ]]; then
     echo "::warning::simctl bootstatus did not report a clean boot; continuing"
 
   echo "==> xcodebuild test -enableCodeCoverage YES ($PACKAGE_DIR, simulator $UDID)"
-  # xcodebuild refuses to overwrite an existing result bundle, so a second local
-  # run would fail before ever reaching the tests.
   mkdir -p .build/coverage
-  rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
   set -o pipefail
-  xcodebuild test \
-    -project "${XCODE_SCHEME}.xcodeproj" \
-    -scheme "$XCODE_SCHEME" \
-    -destination "platform=iOS Simulator,id=$UDID" \
-    -derivedDataPath "$DERIVED_DATA" \
-    -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
-    -enableCodeCoverage YES \
-    -parallel-testing-enabled YES \
-    -retry-tests-on-failure \
-    -test-iterations 2 \
-    CODE_SIGNING_ALLOWED=NO
+
+  # The pre-boot above shrinks but does not eliminate the window where the
+  # UI-test runner dies at initialization on a loaded CI host — see the
+  # sourced lib for why `-retry-tests-on-failure` cannot catch that.
+  # shellcheck source=packages/dev-tools/tools/swift-coverage-runner-retry.sh
+  source "$SCRIPT_DIR/swift-coverage-runner-retry.sh"
+  XCODEBUILD_LOG=$(mktemp -t swift-coverage-xcodebuild)
+  trap 'rm -f "$XCODEBUILD_LOG"' EXIT
+
+  run_single_xcodebuild_attempt() {
+    # xcodebuild refuses to overwrite an existing result bundle, so every
+    # attempt (and a second local run) must clear it first.
+    rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
+    xcodebuild test \
+      -project "${XCODE_SCHEME}.xcodeproj" \
+      -scheme "$XCODE_SCHEME" \
+      -destination "platform=iOS Simulator,id=$UDID" \
+      -derivedDataPath "$DERIVED_DATA" \
+      -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
+      -enableCodeCoverage YES \
+      -parallel-testing-enabled YES \
+      -retry-tests-on-failure \
+      -test-iterations 2 \
+      CODE_SIGNING_ALLOWED=NO
+  }
+  run_with_runner_init_retry "$XCODEBUILD_LOG" run_single_xcodebuild_attempt
 
   # Newest wins. xcodebuild keys ProfileData by device UDID, so a machine that
   # has run the suite against more than one simulator keeps several — and an
