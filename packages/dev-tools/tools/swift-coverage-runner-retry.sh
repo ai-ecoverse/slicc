@@ -3,13 +3,17 @@
 # swift-coverage-runner-retry.test.mjs.
 #
 # A UI-test runner that dies at initialization ("Timed out while loading
-# Accessibility" / "failed to initialize for UI testing") aborts the xcodebuild
-# session before a single test runs, so `-retry-tests-on-failure` never sees
-# it — that flag retries failed tests, not a runner that never started. This
-# guard retries exactly that infrastructure signature, once. A genuine test
-# failure does not match and fails on the first attempt, preserving its exit
-# status.
-RUNNER_INIT_RE='failed to initialize for UI testing|Timed out while loading Accessibility'
+# Accessibility", "failed to initialize for UI testing", or SpringBoard
+# refusing the launch with Busy / "Application failed preflight checks" —
+# deliberately NOT the generic "Failed to install or launch the test
+# runner" wrapper, which also wraps permanent failures like a bad bundle
+# or signature)
+# aborts the xcodebuild session before a single test runs, so
+# `-retry-tests-on-failure` never sees it — that flag retries failed tests,
+# not a runner that never started. This guard retries exactly those
+# infrastructure signatures, once. A genuine test failure does not match and
+# fails on the first attempt, preserving its exit status.
+RUNNER_INIT_RE='failed to initialize for UI testing|Timed out while loading Accessibility|Application failed preflight checks'
 
 # run_with_runner_init_retry <logfile> <cmd...>
 # Runs <cmd...> (stdout+stderr teed to <logfile>) up to twice. Returns 0 on

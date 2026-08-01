@@ -79,6 +79,35 @@ describe('run_with_runner_init_retry', () => {
     expect(calls()).toBe(2);
   });
 
+  it('also matches the SpringBoard preflight-Busy launch refusal', () => {
+    const { stub, calls } = makeStub([
+      {
+        output:
+          'SliccFollowerUITests-Runner encountered an error (Failed to install or launch the test runner. ' +
+          '(Underlying Error: The request was denied by service delegate (SBMainWorkspace) for reason: ' +
+          'Busy ("Application failed preflight checks").))',
+        exit: 65,
+      },
+      { output: 'ok', exit: 0 },
+    ]);
+    expect(run(stub).status).toBe(0);
+    expect(calls()).toBe(2);
+  });
+
+  it('does not retry a permanent install failure (generic wrapper without Busy)', () => {
+    const { stub, calls } = makeStub([
+      {
+        output:
+          'Failed to install or launch the test runner. (Underlying Error: ' +
+          'The code signature is invalid.)',
+        exit: 65,
+      },
+    ]);
+    const res = run(stub);
+    expect(res.status).toBe(65);
+    expect(calls()).toBe(1);
+  });
+
   it('does not retry a genuine test failure and preserves its exit status', () => {
     const { stub, calls } = makeStub([{ output: "Test Case 'testSomething' failed", exit: 65 }]);
     const res = run(stub);
