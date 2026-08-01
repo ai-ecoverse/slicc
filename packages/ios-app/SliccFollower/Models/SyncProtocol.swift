@@ -574,7 +574,10 @@ enum LeaderToFollowerMessage: Codable {
 /// runtime path that emits `tab.openError`. See `docs/architecture.md`
 /// "Multi-Browser Sync (Tray) Architecture" for the canonical matrix.
 enum FollowerToLeaderMessage: Codable {
-    case userMessage(text: String, messageId: String)
+    /// `steer` interrupts the leader's running turn instead of queueing
+    /// behind it (`user_message.steer`, optional on the wire — omitted when
+    /// false, mirroring the browser follower).
+    case userMessage(text: String, messageId: String, steer: Bool = false)
     case abort
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
@@ -611,7 +614,7 @@ enum FollowerToLeaderMessage: Codable {
     case pong
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, messageId, scoopJid
+        case type, text, messageId, scoopJid, steer
         case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
@@ -627,7 +630,8 @@ enum FollowerToLeaderMessage: Codable {
         case "user_message":
             self = .userMessage(
                 text: try container.decode(String.self, forKey: .text),
-                messageId: try container.decode(String.self, forKey: .messageId))
+                messageId: try container.decode(String.self, forKey: .messageId),
+                steer: try container.decodeIfPresent(Bool.self, forKey: .steer) ?? false)
         case "abort":
             self = .abort
         case "request_snapshot":
@@ -704,10 +708,12 @@ enum FollowerToLeaderMessage: Codable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .userMessage(let text, let messageId):
+        case .userMessage(let text, let messageId, let steer):
             try container.encode("user_message", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
+            // Optional on the wire: omit rather than sending `false`.
+            if steer { try container.encode(true, forKey: .steer) }
         case .abort:
             try container.encode("abort", forKey: .type)
         case .requestSnapshot(let scoopJid):

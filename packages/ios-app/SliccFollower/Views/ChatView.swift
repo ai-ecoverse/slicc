@@ -133,6 +133,10 @@ struct ConversationView: View {
                 },
                 onAbort: {
                     appState.abort()
+                },
+                onSteer: { text in
+                    appState.sendMessage(text, steer: true)
+                    inputText = ""
                 }
             )
         }
