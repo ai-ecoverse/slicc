@@ -16,7 +16,13 @@ const RuntimeTag = "slicc-cli"
 // Capabilities is the additive `hello.capabilities` advertisement.
 type Capabilities struct {
 	// Exec marks this peer as able to run OS shell commands (the `follow` CLI).
-	Exec bool `json:"exec,omitempty"`
+	//
+	// No `omitempty`: a peer that sends `capabilities` at all is making a
+	// statement, and `omitempty` would erase an explicit `exec: false` into an
+	// absent field. The leader's gate reads `peerCapabilities?.exec`, so the
+	// two behave alike today — but only one of them survives a round-trip, and
+	// the iOS follower does send an explicit false.
+	Exec bool `json:"exec"`
 }
 
 // Hello is the additive version handshake both sides send first.
