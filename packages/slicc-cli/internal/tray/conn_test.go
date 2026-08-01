@@ -319,6 +319,34 @@ func TestDispatchEvictsOldestIncompleteReassembly(t *testing.T) {
 	}
 }
 
+// The empty string is a syntactically valid chunkId, so it must be evictable
+// like any other id — a sentinel-based selection would skip it (or let a later
+// map entry steal the selection) and the pending-entry bound would not hold.
+func TestDispatchEvictsOldestEvenWithEmptyChunkID(t *testing.T) {
+	calls := 0
+	c := newConnForDispatch(func(_ string, _ []byte) { calls++ })
+
+	original := `{"type":"user_message_echo","text":"` + strings.Repeat("x", 200_000) + `"}`
+	oldest := frameChunks(original, "")
+	encoded, _ := json.Marshal(oldest[0])
+	c.dispatch(encoded)
+	for i := 0; i < maxPendingReassemblies+1; i++ {
+		frames := frameChunks(original, string(rune('a'+i)))
+		encoded, _ := json.Marshal(frames[0])
+		c.dispatch(encoded)
+	}
+
+	// The empty-id reassembly was the oldest, so completing it emits nothing.
+	for _, frame := range oldest[1:] {
+		encoded, _ := json.Marshal(frame)
+		c.dispatch(encoded)
+	}
+
+	if calls != 0 {
+		t.Errorf("handler ran %d times for an evicted empty-id reassembly", calls)
+	}
+}
+
 func TestDispatchPassesSmallMessagesThrough(t *testing.T) {
 	var gotType string
 	c := newConnForDispatch(func(msgType string, _ []byte) { gotType = msgType })
