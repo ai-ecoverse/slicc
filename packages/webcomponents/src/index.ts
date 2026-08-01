@@ -133,7 +133,6 @@ export { SliccFloatbar } from './primitives/slicc-floatbar.js';
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
 export { SliccImagePreview } from './primitives/slicc-image-preview.js';
-export { SliccLogo } from './primitives/slicc-logo.js';
 export { SliccPane } from './primitives/slicc-pane.js';
 export { SliccPaneTag } from './primitives/slicc-pane-tag.js';
 export { SliccPressButton } from './primitives/slicc-press-button.js';
