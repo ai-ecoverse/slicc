@@ -26,6 +26,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# Resolved before any `cd` below — BASH_SOURCE may be a relative path.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 XCODE_SCHEME=""
 if [[ "${1:-}" == "--xcodebuild" ]]; then
@@ -86,19 +88,17 @@ if [[ -n "$XCODE_SCHEME" ]]; then
   set -o pipefail
 
   # The pre-boot above shrinks but does not eliminate the window where the
-  # UI-test runner dies at initialization ("Timed out while loading
-  # Accessibility" / "failed to initialize for UI testing") on a loaded CI
-  # host. That failure aborts the session before a single test runs, so
-  # `-retry-tests-on-failure` never sees it — it retries failed tests, not a
-  # runner that never started. Guard exactly that signature with one full
-  # re-run; genuine test failures still fail on the first attempt.
+  # UI-test runner dies at initialization on a loaded CI host — see the
+  # sourced lib for why `-retry-tests-on-failure` cannot catch that.
+  # shellcheck source=packages/dev-tools/tools/swift-coverage-runner-retry.sh
+  source "$SCRIPT_DIR/swift-coverage-runner-retry.sh"
   XCODEBUILD_LOG=$(mktemp -t swift-coverage-xcodebuild)
-  RUNNER_INIT_RE='failed to initialize for UI testing|Timed out while loading Accessibility'
-  for XCB_ATTEMPT in 1 2; do
+  trap 'rm -f "$XCODEBUILD_LOG"' EXIT
+
+  run_single_xcodebuild_attempt() {
     # xcodebuild refuses to overwrite an existing result bundle, so every
     # attempt (and a second local run) must clear it first.
     rm -rf ".build/coverage/${PACKAGE_NAME}.xcresult"
-    XCB_RC=0
     xcodebuild test \
       -project "${XCODE_SCHEME}.xcodeproj" \
       -scheme "$XCODE_SCHEME" \
@@ -109,16 +109,9 @@ if [[ -n "$XCODE_SCHEME" ]]; then
       -parallel-testing-enabled YES \
       -retry-tests-on-failure \
       -test-iterations 2 \
-      CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$XCODEBUILD_LOG" || XCB_RC=$?
-    if [[ $XCB_RC -eq 0 ]]; then
-      break
-    fi
-    if [[ $XCB_ATTEMPT -eq 1 ]] && grep -qE "$RUNNER_INIT_RE" "$XCODEBUILD_LOG"; then
-      echo "::warning::UI-test runner failed to initialize (simulator infrastructure, not a test failure); re-running xcodebuild test once"
-      continue
-    fi
-    exit "$XCB_RC"
-  done
+      CODE_SIGNING_ALLOWED=NO
+  }
+  run_with_runner_init_retry "$XCODEBUILD_LOG" run_single_xcodebuild_attempt
 
   # Newest wins. xcodebuild keys ProfileData by device UDID, so a machine that
   # has run the suite against more than one simulator keeps several — and an
