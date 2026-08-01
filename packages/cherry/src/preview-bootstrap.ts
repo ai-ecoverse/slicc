@@ -59,6 +59,8 @@ class PreviewSocketController {
   private started = false;
   private stopped = false;
   private suspended = false;
+  private resumePending = false;
+  private pingOnOpen = false;
   private readonly wiredSockets = new Set<WebSocket>();
 
   constructor(private readonly opts: SocketControllerOptions) {
@@ -81,6 +83,7 @@ class PreviewSocketController {
     this.wireSocket(this.ws);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
     window.addEventListener('pagehide', this.onPageHide);
+    window.addEventListener('pageshow', this.onPageShow);
     if (this.socketIsOpen()) this.startKeepalive();
     else if (this.ws.readyState === WebSocket.CLOSED) this.scheduleReconnect();
   }
@@ -89,11 +92,14 @@ class PreviewSocketController {
     if (this.stopped) return;
     this.stopped = true;
     this.suspended = true;
+    this.resumePending = false;
+    this.pingOnOpen = false;
     this.clearPingInterval();
     this.clearReconnectTimer();
     if (typeof window !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibilityChange);
       window.removeEventListener('pagehide', this.onPageHide);
+      window.removeEventListener('pageshow', this.onPageShow);
     }
     for (const socket of this.wiredSockets) this.unwireSocket(socket);
     this.wiredSockets.clear();
@@ -181,6 +187,10 @@ class PreviewSocketController {
   private handleSocketOpen(socket: WebSocket): void {
     if (socket !== this.ws || this.stopped || this.suspended) return;
     this.reconnectAttempt = 0;
+    if (this.pingOnOpen) {
+      this.pingOnOpen = false;
+      this.sendPing();
+    }
     this.startKeepalive();
   }
 
@@ -222,23 +232,38 @@ class PreviewSocketController {
   private readonly onVisibilityChange = (): void => {
     if (this.stopped) return;
     if (document.visibilityState !== 'visible') {
+      this.resumePending = true;
       this.sendPing();
       return;
     }
+    this.resume();
+  };
+
+  private readonly onPageShow = (): void => {
+    this.resume();
+  };
+
+  private resume(): void {
+    if (this.stopped || !this.resumePending) return;
+    this.resumePending = false;
     this.suspended = false;
+    this.clearReconnectTimer();
+    this.reconnectAttempt = 0;
     if (this.socketIsOpen()) {
       this.sendPing();
       this.startKeepalive();
     } else if (this.ws.readyState !== WebSocket.CONNECTING) {
-      this.clearReconnectTimer();
-      this.reconnectAttempt = 0;
+      this.pingOnOpen = true;
       this.connectReplacement();
+    } else {
+      this.pingOnOpen = true;
     }
-  };
+  }
 
   private readonly onPageHide = (): void => {
     if (this.stopped) return;
     this.suspended = true;
+    this.resumePending = true;
     this.clearPingInterval();
     this.clearReconnectTimer();
     this.closeCurrentSocket();

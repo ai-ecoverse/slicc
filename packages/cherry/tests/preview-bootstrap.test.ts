@@ -213,6 +213,80 @@ describe('preview bootstrap', () => {
     bridge.stop();
   });
 
+  it('resumes the bridge when a pagehide is restored from BFCache with pageshow', () => {
+    const sent: string[] = [];
+    const initial = fakeWs({ readyState: 1 }) as { readyState: number; close(): void };
+    initial.close = () => {
+      initial.readyState = 3;
+    };
+    const createWebSocket = vi.fn(() =>
+      fakeWs({ readyState: 1, send: (data: string) => sent.push(data) })
+    );
+    const bridge = createPreviewBridge({ ws: initial as never, createWebSocket });
+    bridge.start();
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide'));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual(['ping']);
+    bridge.stop();
+  });
+
+  it('creates one socket and sends one ping when pageshow and visibilitychange both restore', () => {
+    const sent: string[] = [];
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    const initial = fakeWs({ readyState: 1 }) as { readyState: number; close(): void };
+    initial.close = () => {
+      initial.readyState = 3;
+    };
+    const createWebSocket = vi.fn(() =>
+      fakeWs({ readyState: 1, send: (data: string) => sent.push(data) })
+    );
+    const bridge = createPreviewBridge({ ws: initial as never, createWebSocket });
+    bridge.start();
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide'));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(visibility).toHaveReturnedWith('visible');
+    expect(createWebSocket).toHaveBeenCalledTimes(1);
+    expect(sent.filter((data) => data === 'ping')).toHaveLength(1);
+    bridge.stop();
+  });
+
+  it('does not resume a stopped bridge on pageshow', () => {
+    const sent: string[] = [];
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    const createWebSocket = vi.fn(() =>
+      fakeWs({ readyState: 1, send: (data: string) => sent.push(data) })
+    );
+    const bridge = createPreviewBridge({ ws: fakeWs({ readyState: 1 }), createWebSocket });
+    bridge.start();
+    const pageshowListener = addEventListener.mock.calls.find(
+      ([type]) => type === 'pageshow'
+    )?.[1] as EventListener | undefined;
+    window.dispatchEvent(new PageTransitionEvent('pagehide'));
+    bridge.stop();
+
+    pageshowListener?.(new PageTransitionEvent('pageshow', { persisted: true }));
+
+    expect(createWebSocket).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('removes the pageshow listener on teardown', () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    const removeEventListener = vi.spyOn(window, 'removeEventListener');
+    const bridge = createPreviewBridge({ ws: fakeWs({ readyState: 1 }) });
+    bridge.start();
+    const pageshowListener = addEventListener.mock.calls.find(([type]) => type === 'pageshow')?.[1];
+    bridge.stop();
+
+    expect(removeEventListener).toHaveBeenCalledWith('pageshow', pageshowListener);
+  });
+
   it('reconnects unexpected closes with bounded exponential backoff', () => {
     vi.useFakeTimers();
     let closeHandler: ((event: Event) => void) | undefined;
