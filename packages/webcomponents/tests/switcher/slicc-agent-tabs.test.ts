@@ -1,5 +1,5 @@
-import { page } from '@vitest/browser/context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 import {
   arcDash,
   type ScoopDescriptor,
