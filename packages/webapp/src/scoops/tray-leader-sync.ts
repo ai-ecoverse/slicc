@@ -32,7 +32,7 @@ import {
   labelForFollower,
 } from './tray-leader/follower-registry.js';
 import { FsRouter } from './tray-leader/fs-router.js';
-import { PreviewBridgeManager } from './tray-leader/preview-bridge.js';
+import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { TabRouter } from './tray-leader/tab-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
@@ -397,6 +397,18 @@ export class LeaderSyncManager {
 
   dropMintedPreview(previewToken: string): void {
     this.previewBridge.dropMintedPreview(previewToken);
+  }
+
+  getPreviewLifecycleRecords(previewToken?: string): readonly PreviewLifecycleRecord[] {
+    return this.previewBridge.getPreviewLifecycleRecords(previewToken);
+  }
+
+  clearPreviewLifecycleRecords(previewToken?: string): number {
+    return this.previewBridge.clearPreviewLifecycleRecords(previewToken);
+  }
+
+  rearmPreviewAnnouncements(previewToken?: string): number {
+    return this.previewBridge.rearmPreviewAnnouncements(previewToken);
   }
 
   onBridgeConnected(msg: WorkerBridgeConnected): void {
