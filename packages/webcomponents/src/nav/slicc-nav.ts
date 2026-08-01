@@ -9,7 +9,7 @@ import { define } from '../internal/define.js';
  * Lifted faithfully from the prototype (`proto/StellarRubySwift.html` `.nav` /
  * `.nav .spacer`): the top header shell. A flex row of fixed bar height
  * (`--barh`, 44px) with `0 24px` padding and a `14px` gap, carrying — in order —
- * the logo, the agent tabs (+ their overflow more-button sibling), a flexible
+ * the agent tabs (+ their overflow more-button sibling), a flexible
  * `.spacer`, the runtime floatbar, the theme toggle, and the user avatar.
  *
  * Frosted glass: the background is the per-context `--ctx` accent at 12% mixed
@@ -46,8 +46,11 @@ const STYLE = `
    right edge (prototype .nav .spacer{flex:1}). */
 .slicc-nav > .slicc-nav__spacer,
 .slicc-nav > .spacer { flex: 1; }
-/* Narrow / extension-sidebar: tighten the bar's padding + gap so the logo,
-   the (overflowing) agent tabs, and the right-side controls all still fit. */
+/* The tabs yield before the fixed controls, but never below the focused avatar
+   + gap + 39px overflow trigger footprint. */
+.slicc-nav > slicc-agent-tabs { flex: 1 1 auto; min-width: 73px; }
+/* Narrow / extension-sidebar: tighten the bar's padding + gap so the
+   overflowing agent tabs and the right-side controls all still fit. */
 @media (max-width: 560px) {
   .slicc-nav { gap: 8px; padding: 0 10px; }
 }
@@ -67,8 +70,8 @@ function ensureNavStyle(doc: Document): void {
 /**
  * `<slicc-nav>` — the top navigation bar from the prototype (`.nav`). A frosted,
  * context-tinted header shell that lays out the leader's chrome in a single flex
- * row: the `<slicc-logo>` wordmark, the `<slicc-agent-tabs>` tab row (whose
- * own `<slicc-scoop-overflow>` more-button rides along as a sibling), a flexible
+ * row: the `<slicc-agent-tabs>` tab row (whose own `<slicc-scoop-overflow>`
+ * more-button rides along as a sibling), a flexible
  * `.spacer`, then the `<slicc-floatbar>`, `<slicc-theme-toggle>`, and
  * `<slicc-avatar>` pinned to the right edge. It composes those elements BY TAG —
  * it never imports or reaches into them — so the host app slots whichever
@@ -92,7 +95,7 @@ function ensureNavStyle(doc: Document): void {
  * @attr accent - context hue; sets `--ctx` inline on the host (the frosted tint reacts)
  * @csspart bar - the header row (the host element itself carries `part="bar"`)
  * @csspart spacer - the flexible gap that pushes the right-aligned controls to the edge
- * @slot - default; the bar's children, laid out in DOM order (logo, agent tabs,
+ * @slot - default; the bar's children, laid out in DOM order (agent tabs,
  *   `.spacer`, floatbar, theme toggle, avatar), composed by tag
  * @fires slicc-nav-accent-change - `CustomEvent<{ accent: string | null }>`,
  *   composed + bubbling, dispatched whenever the `accent` (→ `--ctx`) changes
@@ -144,8 +147,8 @@ export class SliccNav extends HTMLElement {
   }
 
   /**
-   * Ensure the bar has a flexible spacer separating the left cluster (logo +
-   * agent tabs) from the right-aligned controls. Idempotent — runs once and is a
+   * Ensure the bar has a flexible spacer separating the agent tabs from the
+   * right-aligned controls. Idempotent — runs once and is a
    * no-op if the author already supplied a `.spacer`. The spacer is inserted
    * immediately before the first right-aligned control (the floatbar, theme
    * toggle, or avatar); failing those it goes at the end of the row.
