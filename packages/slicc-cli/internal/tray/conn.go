@@ -94,8 +94,9 @@ type Conn struct {
 
 	// reassemblyMu guards reassembly; dispatch runs on the data-channel read
 	// goroutine, so inbound frames arrive serially, but Close may race it.
-	reassemblyMu sync.Mutex
-	reassembly   map[string]*chunkReassembly
+	reassemblyMu  sync.Mutex
+	reassembly    map[string]*chunkReassembly
+	reassemblySeq uint64
 
 	connected chan struct{}
 	done      chan struct{}
@@ -412,7 +413,10 @@ type chunkReassembly struct {
 	seen     []bool
 	received int
 	bytes    int
-	started  time.Time
+	// seq orders entries by insertion for oldest-first eviction. Not wall
+	// time: time.Now() is coarse enough on Windows that entries started in
+	// the same tick tie, and map iteration then evicts an arbitrary one.
+	seq uint64
 }
 
 // dispatch decodes the discriminant and routes inbound messages.
@@ -479,10 +483,11 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 		return
 	}
 	if !ok {
+		c.reassemblySeq++
 		entry = &chunkReassembly{
-			chunks:  make([]string, frame.TotalChunks),
-			seen:    make([]bool, frame.TotalChunks),
-			started: time.Now(),
+			chunks: make([]string, frame.TotalChunks),
+			seen:   make([]bool, frame.TotalChunks),
+			seq:    c.reassemblySeq,
 		}
 		c.reassembly[frame.ChunkID] = entry
 		c.evictOldestReassemblyLocked()
@@ -517,10 +522,10 @@ func (c *Conn) acceptChunkFrame(data []byte) {
 func (c *Conn) evictOldestReassemblyLocked() {
 	for len(c.reassembly) > maxPendingReassemblies {
 		var oldestID string
-		var oldest time.Time
+		var oldest uint64
 		for id, entry := range c.reassembly {
-			if oldestID == "" || entry.started.Before(oldest) {
-				oldestID, oldest = id, entry.started
+			if oldestID == "" || entry.seq < oldest {
+				oldestID, oldest = id, entry.seq
 			}
 		}
 		if oldestID == "" {
