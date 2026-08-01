@@ -16,6 +16,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | `SliccFollower/Models/SyncProtocol.swift`                                                                                                                                                     | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                                                              |
 | `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`                                                                                           | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture. See `docs/architecture.md`                                 |
 | `SliccFollower/Sync/Keepalive.swift`                                                                                                                                                          | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                                                       |
+| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                                                                                                                  | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                                                           |
 | `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift`                                                                                          | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                 |
 | `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                                                                                                                        | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                                                     |
 | `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`                                                                                                                                 | SwiftUI chat surface. `MessageListView` is the active renderer                                                                                                                                                    |
@@ -89,6 +90,19 @@ Payload fields decode _and_ render. Deliberate divergences from the web:
 - The error card omits the web's CTAs (`Try again`, `Open Settings`): each acts on leader state with no follower→leader equivalent, so it would silently no-op.
 - `tool_ui` renders a read-only card keyed by `requestId`, title extracted from the leader's HTML minus badge and meta (which carries the mount path). `tool_ui_done` removes it; a `snapshot` clears all cards.
 
+## iCloud Sessions
+
+`AppState.sessionStore` is a read-only `TraySessionSyncStore` from
+**`packages/swift-traysession`** (the launcher publishes; the phone only
+joins). `SettingsView` lists sessions grouped by device (`ICloudSessionList`);
+a tap joins via `connectToDiscoveredSession` — never the Join URL field or
+visible history; the empty state distinguishes
+signed-out from no-published-sessions. The entitlement's KVS id
+(`S8LB56P782.ai.sliccy.trays`) MUST match macOS releases. Unprovisioned builds
+degrade to an empty local cache; `SLICC_IOS_NO_ICLOUD=1` archives TestFlight
+without the entitlement. `joinUrl` carries the session secret — never log it
+or put it in telemetry/accessibility ids (rows use the one-way `session.id`).
+
 ## Build
 
 ```bash
@@ -133,7 +147,10 @@ arguments, and getting a real Join URL — is covered in
 A `bundle.ui-testing` target runs alongside the unit bundle in the `SliccFollower`
 scheme, so `swift-coverage-check.sh --xcodebuild` picks up both. No test needs a
 leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
-**UI Fixture** route (`FixtureConversationView`) without a tap. `UITestHooks`
+**UI Fixture** route (`FixtureConversationView`) without a tap, and
+`-uiTestSessionsFixture YES` / `-uiTestSessionsEmpty YES` seed the iCloud
+sessions list from an in-memory backend (fixture join URLs dial
+`127.0.0.1:1`, so a tapped row settles on Connection Failed hermetically). `UITestHooks`
 (`App/UITestHooks.swift`) reads it and is `#if DEBUG` only — a shipped binary
 must not carry a flag that skips the connection path. The failure-state test
 dials `http://127.0.0.1:1/…` — refused without DNS or egress, so

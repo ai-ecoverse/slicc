@@ -1,13 +1,20 @@
+import SliccTraySession
 import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("joinUrl") private var storedJoinUrl: String = ""
+    /// Re-evaluates session staleness and ages while the sheet stays open —
+    /// without it, `Date()` in `body` is only sampled on unrelated redraws and
+    /// a row crossing the 12h TTL would stay enabled indefinitely.
+    @State private var now = Date()
+    private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
             Form {
+                iCloudSessionsSection
                 connectionSection
                 if appState.connectionState == .connected {
                     trayInfoSection
@@ -32,6 +39,87 @@ struct SettingsView: View {
                 storedJoinUrl = newValue
             }
         }
+    }
+
+    // MARK: - iCloud Sessions Section
+
+    /// Live leaders other devices on this Apple ID advertised to iCloud.
+    /// Tapping one threads its join URL into the normal connect path — the
+    /// URL carries the session secret, so it is never rendered, logged, or
+    /// used in an accessibility identifier (rows use the one-way session id).
+    private var iCloudSessionsSection: some View {
+        Section {
+            let groups = ICloudSessionList.groups(from: appState.sessionStore.sessions)
+            if groups.isEmpty {
+                sessionsEmptyState
+            } else {
+                ForEach(groups) { group in
+                    ForEach(group.sessions) { session in
+                        sessionRow(session, deviceName: group.deviceName)
+                    }
+                }
+            }
+        } header: {
+            Text("iCloud Sessions")
+        } footer: {
+            Text(
+                "Leaders started with Sliccstart on this Apple ID appear here automatically. Others (cloud, another Apple ID) still join via a pasted Join URL below."
+            )
+        }
+        .onAppear {
+            appState.sessionStore.reload()
+            now = Date()
+        }
+        .onReceive(staleTicker) { now = $0 }
+    }
+
+    private func sessionRow(_ session: SyncedTraySession, deviceName: String) -> some View {
+        Button {
+            // Revalidate at tap time: the row's disabled state was computed at
+            // render time, and a session can age out in between.
+            guard !session.isStale(ttl: TraySessionSyncStore.defaultTTL, now: Date()) else {
+                appState.sessionStore.reload()
+                return
+            }
+            appState.connectToDiscoveredSession(joinUrl: session.joinUrl)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.label.isEmpty ? "SLICC session" : session.label)
+                        .foregroundStyle(.primary)
+                    Text("\(deviceName) · \(ICloudSessionList.age(of: session.lastSeenAt, now: now))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle")
+                    .foregroundStyle(.tint)
+            }
+        }
+        // The one-way hash, deliberately — never the join URL.
+        .accessibilityIdentifier("icloud-session-\(session.id)")
+        .disabled(
+            session.isStale(ttl: TraySessionSyncStore.defaultTTL, now: now)
+                || appState.connectionState == .connecting
+        )
+    }
+
+    private var sessionsEmptyState: some View {
+        let reason = ICloudSessionList.emptyReason(
+            hasICloudIdentity: FileManager.default.ubiquityIdentityToken != nil
+        )
+        return HStack(spacing: 10) {
+            Image(systemName: reason == .iCloudUnavailable ? "icloud.slash" : "icloud")
+                .foregroundStyle(.secondary)
+            Text(
+                reason == .iCloudUnavailable
+                    ? "iCloud is unavailable on this device. Sign in to iCloud, or paste a Join URL below."
+                    : "No active sessions. Start a leader with Sliccstart on a Mac using this Apple ID, or paste a Join URL below."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("icloud-sessions-empty")
     }
 
     // MARK: - Connection Section

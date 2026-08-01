@@ -1,4 +1,5 @@
 import Foundation
+import SliccTraySession
 
 #if DEBUG
     /// Launch-argument seams that let XCUITest reach a deterministic screen
@@ -28,6 +29,66 @@ import Foundation
         /// "connected, but the leader stopped answering".
         static var forcedConnectionState: String? {
             UserDefaults.standard.string(forKey: "uiTestConnectionState")
+        }
+
+        /// Seed the iCloud sessions list without touching iCloud:
+        /// `-uiTestSessionsFixture YES` yields two devices' worth of fixture
+        /// sessions, `-uiTestSessionsEmpty YES` a deterministic empty store.
+        /// Join URLs dial 127.0.0.1:1 so a tap reaches Connection Failed
+        /// hermetically, like the existing failure-state test.
+        static func sessionsFixtureBackend() -> KeyValueSyncBackend? {
+            if UserDefaults.standard.bool(forKey: "uiTestSessionsEmpty") {
+                return InMemoryKeyValueBackend()
+            }
+            guard UserDefaults.standard.bool(forKey: "uiTestSessionsFixture") else { return nil }
+            let backend = InMemoryKeyValueBackend()
+            let now = Date()
+            seed(
+                backend,
+                deviceId: "fixture-macbook",
+                sessions: [
+                    SyncedTraySession(
+                        joinUrl: "http://127.0.0.1:1/join/fixture-chrome",
+                        label: "Chrome on Fixture MacBook",
+                        deviceId: "fixture-macbook",
+                        deviceName: "Fixture MacBook",
+                        createdAt: now.addingTimeInterval(-3600),
+                        lastSeenAt: now.addingTimeInterval(-60)
+                    ),
+                    SyncedTraySession(
+                        joinUrl: "http://127.0.0.1:1/join/fixture-edge",
+                        label: "Edge on Fixture MacBook",
+                        deviceId: "fixture-macbook",
+                        deviceName: "Fixture MacBook",
+                        createdAt: now.addingTimeInterval(-7200),
+                        lastSeenAt: now.addingTimeInterval(-7200)
+                    ),
+                ]
+            )
+            seed(
+                backend,
+                deviceId: "fixture-studio",
+                sessions: [
+                    SyncedTraySession(
+                        joinUrl: "http://127.0.0.1:1/join/fixture-studio",
+                        label: "Chrome on Fixture Studio",
+                        deviceId: "fixture-studio",
+                        deviceName: "Fixture Studio",
+                        createdAt: now.addingTimeInterval(-300),
+                        lastSeenAt: now.addingTimeInterval(-300)
+                    )
+                ]
+            )
+            return backend
+        }
+
+        private static func seed(
+            _ backend: KeyValueSyncBackend,
+            deviceId: String,
+            sessions: [SyncedTraySession]
+        ) {
+            guard let data = try? JSONEncoder().encode(sessions) else { return }
+            backend.setData(data, forKey: TraySessionSyncStore.storageKeyPrefix + deviceId)
         }
     }
 #endif

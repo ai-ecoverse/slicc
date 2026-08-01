@@ -1273,6 +1273,7 @@ jobs:
     if: >-
       needs.lint.result == 'success' &&
       (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     # Simulator boots can wedge on fresh runner images; fail fast instead of

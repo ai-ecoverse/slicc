@@ -132,6 +132,9 @@ describe('matchesAnyPrefix', () => {
       )
     ).toBe(true);
     expect(matchesAnyPrefix('packages/ios-app/scripts/x.sh', IOS_PATH_PREFIXES)).toBe(true);
+    expect(matchesAnyPrefix('packages/swift-traysession/Package.swift', IOS_PATH_PREFIXES)).toBe(
+      true
+    );
   });
 
   it('does not match unrelated files', () => {

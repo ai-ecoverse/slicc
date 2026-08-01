@@ -1,4 +1,5 @@
 import Foundation
+import SliccTraySession
 import SwiftUI
 import WebKit
 import WebRTC
@@ -140,10 +141,31 @@ class AppState: ObservableObject {
 
     // MARK: - Init
 
+    /// Tray sessions other devices published to iCloud KVS (the macOS
+    /// launcher is the producer). Read-only here: the phone joins sessions,
+    /// it never publishes one. `@Observable`, so SwiftUI views track it
+    /// directly; without iCloud provisioning it degrades to a local cache
+    /// and simply stays empty.
+    let sessionStore: TraySessionSyncStore
+
     init() {
+        sessionStore = AppState.makeSessionStore()
         if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
             joinUrlHistory = history
         }
+    }
+
+    private static func makeSessionStore() -> TraySessionSyncStore {
+        #if DEBUG
+            if let fixture = UITestHooks.sessionsFixtureBackend() {
+                return TraySessionSyncStore(
+                    backend: fixture,
+                    deviceId: "ios-under-test",
+                    deviceName: "iPhone Under Test"
+                )
+            }
+        #endif
+        return TraySessionSyncStore()
     }
 
     // MARK: - Private Networking / Sync
@@ -187,15 +209,34 @@ class AppState: ObservableObject {
 
     // MARK: - Connection Lifecycle
 
+    /// The URL of the session currently being dialed. Manual connects copy it
+    /// from the Join URL field; discovered sessions set it directly so the
+    /// secret-bearing URL never surfaces in the field, the persisted setting,
+    /// or the visible history. Reconnects reuse it.
+    private var activeJoinUrl: String = ""
+
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
-        let trimmed = joinUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        connect(to: joinUrl, rememberInHistory: true)
+    }
+
+    /// Join an iCloud-discovered session. The URL stays out of the Join URL
+    /// field, the `joinUrl` setting, and the Recent URLs list — a discovered
+    /// session is rediscoverable from iCloud, so nothing needs to remember
+    /// (or display) its secret.
+    func connectToDiscoveredSession(joinUrl url: String) {
+        connect(to: url, rememberInHistory: false)
+    }
+
+    private func connect(to rawUrl: String, rememberInHistory: Bool) {
+        let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
         guard connectionState != .connecting else { return }
 
         connectionState = .connecting
         lastError = nil
-        addToHistory(joinUrl)
+        if rememberInHistory { addToHistory(trimmed) }
+        activeJoinUrl = trimmed
 
         // Tear down any previous connection first.
         tearDown()
@@ -1228,9 +1269,9 @@ class AppState: ObservableObject {
             // moves us out of `.reconnecting`; abandon the budget silently.
             guard connectionState == .reconnecting else { return }
 
-            connect()
+            connect(to: activeJoinUrl, rememberInHistory: false)
 
-            // `connect()` drives its own async signaling; wait for it to settle
+            // `connect(to:)` drives its own async signaling; wait for it to settle
             // before deciding whether this attempt earned another.
             await connectTask?.value
             if Task.isCancelled { return }
