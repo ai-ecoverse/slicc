@@ -66,6 +66,7 @@ Subsystems:
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow
 - `sliccstart-browser.md` — Sliccstart's browser-like surfaces: the macOS default-browser role (registration, Info.plist declarations, incoming-link routing over CDP) and previous-session tab restore
+- `ios-simulator-qa.md` — hand-running the iOS follower in a Simulator: boot/build/install/launch, seeding `@AppStorage` via launch arguments, getting a real Join URL
 
 Review & gotchas:
 

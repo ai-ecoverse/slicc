@@ -858,10 +858,11 @@ class AppState: ObservableObject {
             fsClient.handleResponse(requestId: requestId, response: response)
 
         case .themeApply:
-            // Documented no-op: iOS themes natively via SwiftUI and does not
-            // apply web theme JSON. Decoded (not `.unknown`) so protocol
+            // Documented no-op: iOS ignores the leader's theme JSON — views
+            // hardcode `.preferredColorScheme(.dark)` until #1801 applies
+            // leader themes natively. Decoded (not `.unknown`) so protocol
             // parity is explicit — this was the drift that shipped silently.
-            logger.debug("Ignoring theme.apply (iOS uses native theming)")
+            logger.debug("Ignoring theme.apply (iOS hardcodes dark appearance)")
 
         case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             handleLeaderHello(

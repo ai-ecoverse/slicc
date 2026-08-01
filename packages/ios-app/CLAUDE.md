@@ -24,7 +24,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | Other views (`ChatFixture.swift`, `ConnectionStatusView.swift`, `ContentView.swift`, `InputBar.swift`, `MarkdownText.swift`, `MessageBubble.swift`, `SettingsView.swift`, `SliccIcons.swift`) | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                                                           |
 | `SliccFollower/Resources/Assets.xcassets`                                                                                                                                                     | App icon + asset catalog                                                                                                                                                                                          |
 
-`Package.swift` declares only the library product — there is no XCTest target yet, so `swift test` is a no-op until one is added.
+Plain SPM commands do nothing useful on a macOS host: `swift build` fails (`no such module 'UIKit'` — the sources import iOS-only frameworks) and `Package.swift` declares no test target, so `swift test` has nothing to run. Build and test both go through the XcodeGen project with a simulator destination. The two test bundles — `SliccFollowerTests` and `SliccFollowerUITests` — are defined in `project.yml`, wired into the scheme with coverage, and run in CI via `xcodebuild test` (see "Test + coverage").
 
 ## Protocol Mirror Invariant
 
@@ -48,7 +48,7 @@ When you change the protocol:
 4. Update each follower that needs to handle the new message:
    - **Browser follower (TS)**: extend the `handleLeaderMessage` switch in `tray-follower-sync.ts`, plus the page-side controller wiring if the change is user-visible.
    - **iOS follower (Swift)**: edit `AppState.handleDataChannelMessage`. That's the only dispatch point — every message (including chat events like `agent_event`, `snapshot`, `user_message_echo`) flows through it.
-5. Add the variant's fixture + iOS expectation to `tray-sync-protocol-corpus.ts`, regenerate the corpus JSON, and bump tests on both sides. The `SliccFollowerTests` bundle runs in CI via `xcodebuild test` on an iOS Simulator (plain `swift test` still cannot run on a macOS host — the package depends on an iOS-only WebRTC binary).
+5. Add the variant's fixture + iOS expectation to `tray-sync-protocol-corpus.ts`, regenerate the corpus JSON, and bump tests on both sides. The `SliccFollowerTests` bundle runs in CI via `xcodebuild test` on an iOS Simulator.
 6. Add a row to the tray message matrix in `docs/architecture.md` (between the `<!-- tray-sync-matrix:start/end -->` markers). `tray-sync-doc-matrix.test.ts` checks the row exists **and** that its Followers column agrees with the corpus.
 
 Skipping the iOS update now fails `SyncProtocolCorpusTests` in CI instead of quietly dropping the new message via the `.unknown` case (the pre-corpus era's most common form of protocol drift — `theme.apply` shipped exactly that way). Unknown leader message types are also logged at warning now.
@@ -93,9 +93,10 @@ Payload fields decode _and_ render. Deliberate divergences from the web:
 
 ```bash
 cd packages/ios-app
-swift build                                      # Library build (CI smoke)
 xcodegen generate                                # Regenerate SliccFollower.xcodeproj from project.yml
-xcodebuild -project SliccFollower.xcodeproj …    # IPA / TestFlight builds
+xcodebuild build -project SliccFollower.xcodeproj -scheme SliccFollower \
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO                        # The build CI runs
 swiftlint lint                                   # SwiftLint (config inherits repo-root .swiftlint.yml)
 ```
 
@@ -122,54 +123,10 @@ debug builds put the code and the coverage mapping in the dylib.
 
 ## Simulator QA path
 
-Running the app by hand, for exploratory checks the UI tests do not cover.
-
-**Prerequisites.** `brew install xcodegen`, plus a simulator runtime matching the
-Xcode SDK. If `xcodebuild -showdestinations …` lists only `iOS <x> is not
-installed`, run `xcodebuild -downloadPlatform iOS` (~8.5 GB, tens of minutes).
-Pick the newest installed iPhone runtime: an older one can fail at launch with a
-missing `libswiftWebKit.dylib`.
-
-**Boot, build, install, launch.**
-
-```bash
-cd packages/ios-app
-xcodegen generate
-UDID=$(xcrun simctl list devices available --json \
-  | jq -r '[.devices[][] | select(.isAvailable and (.name | test("iPhone")))] | first | .udid')
-xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
-open -a Simulator                                # optional: watch live
-xcodebuild build -project SliccFollower.xcodeproj -scheme SliccFollower \
-  -destination "platform=iOS Simulator,id=$UDID" \
-  -derivedDataPath .build/xcodebuild CODE_SIGNING_ALLOWED=NO
-APP=.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app
-xcrun simctl uninstall "$UDID" com.sliccy.follower   # drop any stored joinUrl
-xcrun simctl install "$UDID" "$APP"
-xcrun simctl launch "$UDID" com.sliccy.follower
-xcrun simctl io "$UDID" screenshot /tmp/slicc-ios-launch.png
-```
-
-With no stored `joinUrl`, `ChatView.onAppear` opens the Settings sheet, so the
-screenshot should show **Settings → Connection → Join URL** with
-`Status: Disconnected`. The uninstall matters: a stored `joinUrl` boots the app
-straight into the conversation and auto-connects.
-
-**Driving an interaction without tapping.** `simctl` cannot synthesize taps, but
-`UserDefaults` reads the argument domain, so launch arguments seed
-`@AppStorage`-backed state — relaunch with
-`-joinUrl "https://www.sliccy.ai/join/<token>"` to skip the Settings sheet and
-drive the real connect path. The pill under the `SLICC` title is the only
-signal: the pre-connect path emits no `os_log`, so a `log stream` on
-`subsystem == "com.slicc.follower"` stays silent until a data channel opens.
-`SliccFollowerUITests` already covers the sheet and the failure pill, so reach
-for this only against a real leader — a synthetic token reaches the failure
-state and no further, leaving chat, sprinkles, and the CDP carousel untested.
-
-**Getting a real Join URL.** Start a local leader
-(`npm run dev:standalone:fresh`, see [`docs/development.md`](../../docs/development.md)),
-then use the avatar menu's **Enable multi-browser sync**, or ask the agent to run
-`host` and report its `join_url` — the URL the CLI follower takes too, see
-[`packages/slicc-cli/README.md`](../slicc-cli/README.md).
+Hand-running the app for exploratory checks the UI tests do not cover — boot /
+build / install / launch commands, seeding `@AppStorage` state via launch
+arguments, and getting a real Join URL — is covered in
+[`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md).
 
 ## UI tests (`SliccFollowerUITests`)
 
@@ -205,6 +162,11 @@ dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
 `error`-severity violations fail CI. `swiftlint --fix` auto-corrects, but
 rewrites every file it scans — run it on a clean tree.
 
+The CI job ends with an informational Periphery dead-code scan. It never fails
+the job (`|| true`). The app and test targets live in the XcodeGen project, not
+the SPM manifest (which declares only the library), so unlike the SPM-based
+Swift packages the scan names the project, scheme, and target explicitly.
+
 ## Formatting
 
 SwiftLint lints; `swift format` (Swift 6+ toolchain) formats, against the
@@ -217,7 +179,16 @@ swift format lint --strict --parallel --recursive SliccFollower Package.swift   
 swift format --in-place --parallel --recursive SliccFollower Package.swift
 ```
 
-TestFlight automation: `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`).
+## TestFlight
+
+Releases run `scripts/package-and-upload-testflight.sh` (secrets via
+`setup-testflight-secrets.sh`), path-gated by `release-native.mjs`: only when
+`packages/ios-app/` changed since the last release. The script **soft-skips
+with exit 0** — the release goes green with **no TestFlight build** — in three
+cases: `SLICC_SKIP_TESTFLIGHT=1`, an Apple secret missing or set to `-`, or the
+runner's default Xcode below 26 (App Store rejects older builds). A green
+release is therefore not proof an ipa shipped; check the release job's log for
+the skip message.
 
 ## Related Guides
 
