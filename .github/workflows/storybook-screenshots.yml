@@ -116,6 +116,7 @@ jobs:
         id: r2_upload
         if: steps.mode.outputs.mode == 'r2'
         continue-on-error: true
+        timeout-minutes: 5
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
