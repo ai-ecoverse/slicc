@@ -90,5 +90,65 @@ import SliccTraySession
             guard let data = try? JSONEncoder().encode(sessions) else { return }
             backend.setData(data, forKey: TraySessionSyncStore.storageKeyPrefix + deviceId)
         }
+
+        /// Present the freezer surfaces on launch (screenshots + tests that
+        /// need the sheet or the frozen view without a tap).
+        static var opensFrozenRail: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestOpenFrozenRail")
+        }
+        static var opensFrozenSession: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestOpenFrozenSession")
+        }
+
+        /// Seed the freezer rail without a leader: `-uiTestFrozenFixture YES`
+        /// yields two archived sessions, `-uiTestFrozenEmpty YES` a
+        /// deterministic empty list.
+        static func frozenFixture() -> [FrozenSessionIndexEntry]? {
+            if UserDefaults.standard.bool(forKey: "uiTestFrozenEmpty") { return [] }
+            guard UserDefaults.standard.bool(forKey: "uiTestFrozenFixture") else { return nil }
+            return [
+                FrozenSessionIndexEntry(
+                    filename: "2026-07-30T10-00-00Z-fix-the-build.md",
+                    title: "Fix the build",
+                    frozenAt: "2026-07-30T10:00:00Z",
+                    messageCount: 12,
+                    sessionId: "fixture-frozen-1"
+                ),
+                FrozenSessionIndexEntry(
+                    filename: "2026-07-01T09-00-00Z-plan-the-launch.md",
+                    title: "Plan the launch",
+                    frozenAt: "2026-07-01T09:00:00Z",
+                    messageCount: 4,
+                    sessionId: "fixture-frozen-2"
+                ),
+            ]
+        }
+
+        /// The archive body backing the fixture entries — a modern archive
+        /// with an intact `slicc:session-data` block.
+        static func frozenArchiveFixture(for entry: FrozenSessionIndexEntry) -> String? {
+            guard UserDefaults.standard.bool(forKey: "uiTestFrozenFixture") else { return nil }
+            return """
+                ---
+                title: \(#""\#(entry.title)""#)
+                frozenAt: \(entry.frozenAt)
+                ---
+
+                <!-- slicc:session-data
+                [{"id":"m1","role":"user","content":"What did we ship?","timestamp":1753867200000},\
+                {"id":"m2","role":"assistant","content":"The freezer rail, read-only on your phone.","timestamp":1753867260000}]
+                -->
+
+                # \(entry.title)
+
+                ## User
+
+                What did we ship?
+
+                ## Assistant
+
+                The freezer rail, read-only on your phone.
+                """
+        }
     }
 #endif

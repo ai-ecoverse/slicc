@@ -224,8 +224,11 @@ function createLeaderOptionsFactory(
     execInShell: (command, execOpts) => runLeaderExecInShell(client, { command, ...execOpts }),
     browserAPI: deps.browser,
     browserTransport: deps.realCdpTransport,
-    // Lazy VFS proxy for preview.request handling — the kernel worker owns
-    // the real VFS; we bridge through openFs() on demand.
+    // Lazy VFS proxy for preview.request and follower-originated fs.request
+    // handling — the kernel worker owns the real VFS; we bridge through
+    // openFs() on demand. readDir exists for the iOS freezer rail's
+    // corrupt-index recovery (a /sessions scan); every op NOT listed here
+    // answers `ok: false` through handleFsRequest.
     vfs: {
       async stat(path: string) {
         const fs = await deps.openFs();
@@ -234,6 +237,10 @@ function createLeaderOptionsFactory(
       async readFile(path: string, options?: import('../../fs/types.js').ReadFileOptions) {
         const fs = await deps.openFs();
         return fs.readFile(path, options);
+      },
+      async readDir(path: string) {
+        const fs = await deps.openFs();
+        return fs.readDir(path);
       },
     } as import('../../fs/virtual-fs.js').VirtualFS,
   });

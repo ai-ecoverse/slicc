@@ -103,6 +103,14 @@ degrade to an empty local cache; `SLICC_IOS_NO_ICLOUD=1` archives TestFlight
 without the entitlement. `joinUrl` carries the session secret — never log it
 or put it in telemetry/accessibility ids (rows use the one-way `session.id`).
 
+## Frozen Sessions
+
+`Models/FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`:
+index parse (corrupt → rebuilt from a `/sessions` scan over `fs.*`), archive
+parser (`slicc:session-data` block + heading fallback). `FrozenSessionsView`
+lists past sessions; opening one swaps the transcript read-only and the
+ice-blue banner replaces the composer. Hooks: `-uiTestFrozenFixture/Empty`.
+
 ## Build
 
 ```bash
@@ -148,9 +156,8 @@ A `bundle.ui-testing` target runs alongside the unit bundle in the `SliccFollowe
 scheme, so `swift-coverage-check.sh --xcodebuild` picks up both. No test needs a
 leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
 **UI Fixture** route (`FixtureConversationView`) without a tap, and
-`-uiTestSessionsFixture YES` / `-uiTestSessionsEmpty YES` seed the iCloud
-sessions list from an in-memory backend (fixture join URLs dial
-`127.0.0.1:1`, so a tapped row settles on Connection Failed hermetically). `UITestHooks`
+`-uiTestSessionsFixture/Empty YES` seed the iCloud sessions list from an
+in-memory backend (fixture URLs dial `127.0.0.1:1`, failing hermetically). `UITestHooks`
 (`App/UITestHooks.swift`) reads it and is `#if DEBUG` only — a shipped binary
 must not carry a flag that skips the connection path. The failure-state test
 dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
