@@ -124,7 +124,7 @@ Operations:
   -fill COLOR        set annotation text color
   -undercolor COLOR  set annotation background color
   -pointsize N       set annotation text size
-  -annotate +X+Y TXT draw text at the configured anchor
+  -annotate +X+Y TXT draw text with the bundled Adobe Clean font
 
 Examples:
   convert input.jpg -resize 800x600 output.png

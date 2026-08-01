@@ -60,6 +60,8 @@ convert frame.jpg -gravity south -fill white -undercolor '#000000aa' \
   -pointsize 24 -annotate +0+10 'Frame 07 — 00:03.5' labeled.jpg
 ```
 
+Annotation uses the bundled Adobe Clean font; custom `-font` selection is not supported yet.
+
 Use `-gravity` with `northwest`, `north`, `northeast`, `west`, `center`, `east`, `southwest`, `south`, or `southeast`. Quote label text and colors containing `#`.
 
 ## Verify and inspect
