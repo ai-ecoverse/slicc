@@ -144,6 +144,11 @@
       "functions": 70,
       "regions": 79
     },
+    "swift-traysession": {
+      "lines": 85,
+      "functions": 83,
+      "regions": 83
+    },
     "ios-app": {
       "lines": 53,
       "functions": 40,

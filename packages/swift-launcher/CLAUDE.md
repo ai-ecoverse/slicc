@@ -94,23 +94,12 @@ Terminal.app and iTerm2 launch through Apple Events. `assemble-app.mjs` supplies
 ## iCloud Sync (Tray Sessions)
 
 Cross-device discovery of active tray join URLs so a leader on one Mac can be
-joined from another without hand-copying. The model is Foundation-only so the
-iOS follower (`packages/ios-app`) can reuse it.
+joined from another without hand-copying. The model and store
+(`SyncedTraySession`, `TraySessionSyncStore`) live in the shared
+**`packages/swift-traysession`** package (`import SliccTraySession`), consumed
+here and by the iOS follower — see that package's `CLAUDE.md` for the data
+model, per-device key scheme, TTL/cap, and its tests. Launcher-side pieces:
 
-- `Models/SyncedTraySession.swift` — one session: `id` (**SHA-256 of the join
-  URL**: opaque, so safe in accessibility ids / telemetry; the raw `joinUrl`
-  carries the secret and is never surfaced), `joinUrl`, `label`, `deviceId`
-  (per-device UUID for ownership), `deviceName`, `createdAt`, `lastSeenAt`,
-  `isStale(ttl:now:)`. `CryptoKit` + Foundation only; legacy payloads without
-  `deviceId` decode empty.
-- `Models/TraySessionSyncStore.swift` — `@Observable` store over a
-  `KeyValueSyncBackend` (default `UbiquitousKeyValueBackend`; tests inject
-  `InMemoryKeyValueBackend`). **Each device writes its own key
-  `storageKeyPrefix + deviceId` and reads the union**, so concurrent publishes
-  never clobber and same-host-name Macs stay distinct; `withdrawLocalSessions()`
-  clears only this device's key. Prunes stale by `defaultTTL` (12h), caps the
-  view at `maxSessions` (64), observes `didChangeExternallyNotification`. Pure
-  `active(from:)`/`upsert(_:into:)` are static and unit-tested.
 - **Producer** — `SliccstartApp` publishes when `leaderJoinUrl` becomes non-nil
   and withdraws when it clears; a 4-hour timer re-publishes a live leader so it
   never ages out of the TTL. `applicationWillTerminate` withdraws on clean quit
@@ -120,7 +109,9 @@ iOS follower (`packages/ios-app`) can reuse it.
   Follow reuses `launchTerminalFollower(_:joinURLOverride:)` (override attaches
   to a **remote** leader); Attach-browser uses `launchBrowserFollower`.
 - **Security** — join URLs carry the session secret and sync only through the
-  user's own (encrypted, same-Apple-ID) iCloud KVS. Tests: `TraySessionSyncTests`.
+  user's own (encrypted, same-Apple-ID) iCloud KVS. Launcher-side tests
+  (`TraySessionRow` formatting, remote follow override):
+  `TraySessionLauncherTests`.
 
 ### Headless CLI (`Sliccstart --list-sessions`)
 

@@ -7,6 +7,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/s1ntoneli/AppUpdater.git", exact: "0.2.0"),
         .package(path: "../swift-optel"),
+        .package(path: "../swift-traysession"),
     ],
     targets: [
         // Keep slicc-server as a separate Swift package; build-app.sh bundles its binary.
@@ -15,6 +16,7 @@ let package = Package(
             dependencies: [
                 "AppUpdater",
                 .product(name: "SwiftOptel", package: "swift-optel"),
+                .product(name: "SliccTraySession", package: "swift-traysession"),
             ],
             path: "Sliccstart",
             resources: [.process("Resources")]

@@ -1,4 +1,5 @@
 import Foundation
+import SliccTraySession
 
 /// Headless `Sliccstart --list-sessions` support.
 ///

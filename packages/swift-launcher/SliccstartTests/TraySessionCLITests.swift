@@ -1,3 +1,4 @@
+import SliccTraySession
 import XCTest
 
 @testable import Sliccstart

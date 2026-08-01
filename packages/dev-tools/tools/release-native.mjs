@@ -23,6 +23,7 @@ export const MACOS_PATH_PREFIXES = [
   'packages/swift-launcher/',
   'packages/swift-server/',
   'packages/swift-optel/',
+  'packages/swift-traysession/',
   'packages/spoon/',
   'packages/assets/',
 ];
