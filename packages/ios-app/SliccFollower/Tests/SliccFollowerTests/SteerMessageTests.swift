@@ -30,6 +30,19 @@ final class SteerMessageTests: XCTestCase {
         XCTAssertFalse(steer)
     }
 
+    @MainActor
+    func testComposerTargetsLeaderActiveScoopGatesOnMismatchOnly() {
+        let state = AppState()
+        // Unknown on either side errs permissive (pre-scoop leaders).
+        XCTAssertTrue(state.composerTargetsLeaderActiveScoop)
+        state.selectedScoopJid = "scoop-a"
+        XCTAssertTrue(state.composerTargetsLeaderActiveScoop)
+        state.leaderActiveScoopJid = "scoop-a"
+        XCTAssertTrue(state.composerTargetsLeaderActiveScoop)
+        state.leaderActiveScoopJid = "scoop-b"
+        XCTAssertFalse(state.composerTargetsLeaderActiveScoop)
+    }
+
     func testDecodeRoundTripsSteerTrue() throws {
         let json = #"{"type":"user_message","text":"hi","messageId":"m1","steer":true}"#
         let decoded = try JSONDecoder().decode(

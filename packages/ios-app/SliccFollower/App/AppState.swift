@@ -74,6 +74,19 @@ class AppState: ObservableObject {
     @Published var selectedScoopJid: String?
     /// JID of the leader's currently active scoop (informational; used to mark the active row).
     @Published var leaderActiveScoopJid: String?
+
+    /// Whether a message typed now lands where the user is looking. A
+    /// scoop-less `user_message` routes to the LEADER's active scoop, so a
+    /// follower viewing a different scoop must not be offered actions —
+    /// like steering — that would hit the wrong turn. Unknown state
+    /// (either side nil) errs permissive: pre-scoop leaders have exactly
+    /// one target.
+    var composerTargetsLeaderActiveScoop: Bool {
+        guard let selected = selectedScoopJid, let active = leaderActiveScoopJid else {
+            return true
+        }
+        return selected == active
+    }
     /// Per-scoop message buffers. Source of truth for `messages`.
     private var messagesByScoop: [String: [ChatMessage]] = [:]
 
