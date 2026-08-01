@@ -245,6 +245,13 @@ class AppState: ObservableObject {
         let archive: ParsedFrozenArchive
     }
 
+    /// Single-flight guard for `new_session`: the leader runs its own
+    /// guard, but the phone must not queue a second request while a save
+    /// (the slow, LLM-enriched path) is in flight. Cleared when the
+    /// leader's cleared snapshot arrives, with a timeout backstop.
+    @Published var newSessionInFlight = false
+    private var newSessionTimeout: Task<Void, Never>?
+
     @Published var frozenListState: FrozenListState = .idle
     @Published var frozenSessions: [FrozenSessionIndexEntry] = []
     /// Entry id currently being fetched from the leader, nil when none. The
@@ -339,6 +346,23 @@ class AppState: ObservableObject {
 
     func closeFrozenSession() {
         openFrozen = nil
+    }
+
+    /// Ask the leader to start a new chat. The phone never clears
+    /// optimistically — the leader broadcasts the cleared snapshot and
+    /// `ingestSnapshot` resets the buffers (and this flag) when it lands.
+    func requestNewSession(_ action: NewSessionAction) {
+        guard !newSessionInFlight else { return }
+        guard sendToLeader(.newSession(action: action)) else { return }
+        newSessionInFlight = true
+        // `save` runs LLM enrichment and can take a while; the backstop only
+        // exists so a dropped reply cannot pin the button forever.
+        newSessionTimeout?.cancel()
+        newSessionTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.newSessionInFlight = false
+        }
     }
 
     private func connect(to rawUrl: String, rememberInHistory: Bool) {
@@ -1104,6 +1128,12 @@ class AppState: ObservableObject {
     /// Apply a snapshot payload for `scoopJid` to the per-scoop buffer, and
     /// refresh `messages` if it matches the currently-viewed scoop.
     private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
+        // The reply to a `new_session` request is the leader's cleared
+        // snapshot; any snapshot settles the in-flight guard.
+        if newSessionInFlight {
+            newSessionInFlight = false
+            newSessionTimeout?.cancel()
+        }
         messagesByScoop[scoopJid] = chatMessages
         // A snapshot is the leader re-describing the world. Any approval
         // placeholder we are still holding predates it and can no longer be

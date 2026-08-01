@@ -571,7 +571,7 @@
     },
     {
       "type": "new_session",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "new_session",
         "action": "save"
