@@ -94,6 +94,20 @@ describe('run_with_runner_init_retry', () => {
     expect(calls()).toBe(2);
   });
 
+  it('does not retry a permanent install failure (generic wrapper without Busy)', () => {
+    const { stub, calls } = makeStub([
+      {
+        output:
+          'Failed to install or launch the test runner. (Underlying Error: ' +
+          'The code signature is invalid.)',
+        exit: 65,
+      },
+    ]);
+    const res = run(stub);
+    expect(res.status).toBe(65);
+    expect(calls()).toBe(1);
+  });
+
   it('does not retry a genuine test failure and preserves its exit status', () => {
     const { stub, calls } = makeStub([{ output: "Test Case 'testSomething' failed", exit: 65 }]);
     const res = run(stub);
