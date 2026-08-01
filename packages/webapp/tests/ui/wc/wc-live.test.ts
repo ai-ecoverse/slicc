@@ -231,6 +231,25 @@ describe('createWcLiveCallbacks', () => {
     );
   });
 
+  it('renders preview lifecycle announcements as live lick messages', () => {
+    const wiring = makeWiring({ selected: cone });
+    const callbacks = createWcLiveCallbacks(wiring);
+    const msg = {
+      id: 'preview-1',
+      content: 'Preview tab connected from https://example.test',
+      channel: 'preview',
+      timestamp: 1,
+    };
+    callbacks.onIncomingMessage(cone.jid, msg as never);
+    expect(wiring.controller.addLickMessage).toHaveBeenCalledWith(
+      'preview-1',
+      'Preview tab connected from https://example.test',
+      'preview',
+      1,
+      undefined
+    );
+  });
+
   it('flips an actionable lick state for the selected scoop only', () => {
     const wiring = makeWiring({ selected: cone });
     const callbacks = createWcLiveCallbacks(wiring);

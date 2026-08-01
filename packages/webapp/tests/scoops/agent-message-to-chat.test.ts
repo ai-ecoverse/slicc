@@ -381,6 +381,19 @@ describe('agentMessagesToChatMessages', () => {
     expect(out[0].content).toBe('[Upgrade Event: 2.37.0→2.38.1]\n\nSLICC was upgraded.');
   });
 
+  it('restores preview lick metadata from persisted envelopes', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 9:15 AM] preview:connected: Preview tab connected from https://example.test';
+    const out = agentMessagesToChatMessages([userMsg(raw, 301)], { idSeed: seedId });
+    expect(out[0]).toMatchObject({
+      role: 'user',
+      source: 'lick',
+      channel: 'preview',
+      content: 'Preview tab connected from https://example.test',
+    });
+  });
+
   it('recognizes scoop-lifecycle channels (scoop-notify / scoop-wait)', () => {
     counter = 0;
     const out = agentMessagesToChatMessages(
