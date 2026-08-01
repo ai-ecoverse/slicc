@@ -149,6 +149,7 @@ export {
 export { registerAllSliccComponents } from './register.js';
 export { SliccChatpane } from './shell/slicc-chatpane.js';
 export { SliccShell } from './shell/slicc-shell.js';
+export { SliccAgentAvatar } from './switcher/slicc-agent-avatar.js';
 export {
   type AgentState,
   arcDash,
