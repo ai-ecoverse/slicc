@@ -36,7 +36,7 @@ jobs:
           trap cleanup EXIT
           printf 'slicc R2 access probe\n' > "$source_file"
           npx --yes wrangler@4.114.0 r2 object put "$bucket/$key" --file "$source_file" --remote
-          npx --yes wrangler@4.114.0 r2 object get "$bucket/$key" --remote > "$fetched_file"
+          npx --yes wrangler@4.114.0 r2 object get "$bucket/$key" --file "$fetched_file" --remote
           cmp "$source_file" "$fetched_file"
 
   deploy-production:
