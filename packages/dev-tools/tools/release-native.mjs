@@ -366,6 +366,36 @@ function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build') {
   execSync(cmd, { stdio: 'inherit' });
 }
 
+/**
+ * Run a DISTRIBUTION step that must never gate the rest of the release.
+ * TestFlight archiving/upload is distribution, not build correctness (CI
+ * builds and tests iOS on every PR): a signing regression on Apple's side
+ * — a provisioning profile losing the iCloud capability, an expired cert —
+ * would otherwise hold the worker, extension, and macOS publishes hostage.
+ * On 2026-08-02 exactly that produced 16 consecutive silent red releases
+ * with a day of merged web work unshipped. The failure stays loud (a
+ * GitHub Actions error annotation that surfaces on the run summary), the
+ * release proceeds without an ipa — and a green release was already never
+ * proof an ipa shipped, since the script soft-skips on missing secrets and
+ * old Xcode too.
+ *
+ * `runStepImpl` is injectable for tests.
+ */
+export function runNonGatingStep(label, cmd, dryRun, runStepImpl = runStep) {
+  try {
+    runStepImpl(label, cmd, dryRun);
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`::error title=${label} failed (release continued)::${message.split('\n')[0]}`);
+    console.error(
+      `[release-native] ${label} FAILED — continuing the release without it. ` +
+        'Fix the native signing state and re-release to ship it.'
+    );
+    return false;
+  }
+}
+
 // IO wrapper: classify a captured `wrangler deploy` log file as "routes-only"
 // (tolerable — the script + assets already deployed and are live) or "fatal".
 // An unreadable file is conservatively "fatal" so an unclassifiable deploy is
@@ -412,8 +442,11 @@ function runNativeGate(args, changedFiles) {
     console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
   }
 
-  if (decision.ios) runStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
-  else console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
+  if (decision.ios) {
+    runNonGatingStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
+  } else {
+    console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
+  }
 
   const cliDecision = decideSliccCliGating({ lastTag: args.last, changedFiles });
   if (cliDecision.sliccCli) {

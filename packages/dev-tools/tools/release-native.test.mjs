@@ -34,6 +34,7 @@ import {
   parseArgs,
   parseChangedFiles,
   resolveDiffRef,
+  runNonGatingStep,
   WORKER_PATH_PREFIXES,
 } from './release-native.mjs';
 
@@ -720,5 +721,36 @@ describe('main biome-jsh gate', () => {
       logSpy.mockRestore();
     }
     expect(writeFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('runNonGatingStep', () => {
+  it('runs the step and reports success', () => {
+    const calls = [];
+    const ok = runNonGatingStep('iOS (TestFlight ipa)', 'cmd', false, (label, cmd, dryRun) => {
+      calls.push([label, cmd, dryRun]);
+    });
+    expect(ok).toBe(true);
+    expect(calls).toEqual([['iOS (TestFlight ipa)', 'cmd', false]]);
+  });
+
+  it('swallows a step failure so distribution cannot gate the release', () => {
+    // The 2026-08-02 outage: an Apple-side provisioning regression failed
+    // the iOS archive inside prepareCmd and held publish:worker hostage for
+    // 16 consecutive releases. The wrapper keeps the failure loud but lets
+    // the release proceed.
+    const errors = [];
+    const original = console.error;
+    console.error = (msg) => errors.push(String(msg));
+    try {
+      const ok = runNonGatingStep('iOS (TestFlight ipa)', 'cmd', false, () => {
+        throw new Error('Provisioning profile "X" doesn\'t include the iCloud capability.');
+      });
+      expect(ok).toBe(false);
+    } finally {
+      console.error = original;
+    }
+    expect(errors.some((e) => e.includes('::error'))).toBe(true);
+    expect(errors.some((e) => e.includes('continuing the release'))).toBe(true);
   });
 });
