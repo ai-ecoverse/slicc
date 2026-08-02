@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/ai-ecoverse/go-optel v0.0.0
-	github.com/pion/ice/v4 v4.3.0
+	github.com/pion/ice/v4 v4.4.0
 	github.com/pion/webrtc/v4 v4.2.17
 )
 
