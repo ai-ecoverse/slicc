@@ -143,6 +143,18 @@
       ]
     },
     {
+      "name": "composer-attachment",
+      "description": "A photo staged in the composer (chip with thumbnail + remove)",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestAttachmentFixture",
+        "YES",
+        "-uiTestComposerText",
+        "look at this"
+      ]
+    },
+    {
       "name": "frozen-empty",
       "description": "Past Sessions sheet with no archived sessions",
       "args": [

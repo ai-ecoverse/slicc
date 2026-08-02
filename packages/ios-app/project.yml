@@ -31,7 +31,7 @@ targets:
         PRODUCT_NAME: SliccFollower
         SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
         SUPPORTS_MACCATALYST: NO
-        INFOPLIST_KEY_NSCameraUsageDescription: 'This app does not access the camera. This entry is required because the bundled WebRTC framework references camera APIs.'
+        INFOPLIST_KEY_NSCameraUsageDescription: 'Take a photo to attach it to your message.'
         INFOPLIST_KEY_NSMicrophoneUsageDescription: 'Hold the message field to dictate a message with your voice.'
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 'Dictated audio is transcribed on this device when possible to fill the message field.'
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

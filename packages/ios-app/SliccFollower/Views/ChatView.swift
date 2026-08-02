@@ -233,15 +233,15 @@ struct ConversationView: View {
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
                 steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                onSend: { text in
-                    appState.sendMessage(text)
+                onSend: { text, attachments in
+                    appState.sendMessage(text, attachments: attachments)
                     inputText = ""
                 },
                 onAbort: {
                     appState.abort()
                 },
-                onSteer: { text in
-                    appState.sendMessage(text, steer: true)
+                onSteer: { text, attachments in
+                    appState.sendMessage(text, steer: true, attachments: attachments)
                     inputText = ""
                 }
             )

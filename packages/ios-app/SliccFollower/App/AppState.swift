@@ -473,16 +473,22 @@ class AppState: ObservableObject {
     /// `steer: true` interrupts the leader's running turn instead of
     /// queueing behind it — the phone's equivalent of the desktop's
     /// Cmd+Enter.
-    func sendMessage(_ text: String, steer: Bool = false) {
+    func sendMessage(
+        _ text: String, steer: Bool = false, attachments: [MessageAttachment]? = nil
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let attached = (attachments?.isEmpty == false) ? attachments : nil
+        // A pure-attachment message is legal (the web composer sends photos
+        // with no caption); only an entirely empty send is dropped.
+        guard !trimmed.isEmpty || attached != nil else { return }
 
         let messageId = UUID().uuidString
         let message = ChatMessage(
             id: messageId,
             role: .user,
             content: trimmed,
-            timestamp: Date().timeIntervalSince1970 * 1000
+            timestamp: Date().timeIntervalSince1970 * 1000,
+            attachments: attached
         )
         messages.append(message)
         // Mirror into the per-scoop buffer so swipe-back retains the message.
@@ -491,7 +497,7 @@ class AppState: ObservableObject {
         }
 
         let msg = FollowerToLeaderMessage.userMessage(
-            text: trimmed, messageId: messageId, steer: steer)
+            text: trimmed, messageId: messageId, steer: steer, attachments: attached)
         sendToLeader(msg)
     }
 

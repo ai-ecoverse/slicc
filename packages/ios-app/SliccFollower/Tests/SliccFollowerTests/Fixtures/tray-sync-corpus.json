@@ -723,7 +723,17 @@
         "type": "user_message",
         "text": "hello from follower",
         "messageId": "f-1",
-        "steer": true
+        "steer": true,
+        "attachments": [
+          {
+            "id": "p1",
+            "name": "photo.jpg",
+            "mimeType": "image/jpeg",
+            "size": 4,
+            "kind": "image",
+            "data": "aGk="
+          }
+        ]
       }
     }
   ],

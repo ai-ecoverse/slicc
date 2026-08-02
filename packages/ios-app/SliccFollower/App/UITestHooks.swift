@@ -1,5 +1,6 @@
 import Foundation
 import SliccTraySession
+import UIKit
 
 #if DEBUG
     /// Launch-argument seams that let XCUITest reach a deterministic screen
@@ -140,6 +141,27 @@ import SliccTraySession
             let grant = parsePermission(grantRaw) ?? .granted
             return ScriptedDictationEngine(
                 permission: permission, grantOutcome: grant, script: script)
+        }
+
+        /// Stage a canned photo in the composer on launch
+        /// (`-uiTestAttachmentFixture YES`): PhotosPicker runs out of
+        /// process and cannot be driven hermetically, so attachment UI
+        /// tests and screenshots seed the staging row directly.
+        static var stagesAttachmentFixture: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestAttachmentFixture")
+        }
+
+        /// A deterministic 320x200 two-tone image (no bundled asset needed).
+        static func attachmentFixtureImage() -> UIImage {
+            let size = CGSize(width: 320, height: 200)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.systemIndigo.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(x: 0, y: 120, width: 320, height: 80))
+            }
         }
 
         /// Apply a canned leader theme on launch

@@ -439,7 +439,22 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   user_message: {
     ios: 'decoded',
-    message: { type: 'user_message', text: 'hello from follower', messageId: 'f-1', steer: true },
+    message: {
+      type: 'user_message',
+      text: 'hello from follower',
+      messageId: 'f-1',
+      steer: true,
+      attachments: [
+        {
+          id: 'p1',
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          size: 4,
+          kind: 'image',
+          data: 'aGk=',
+        },
+      ],
+    },
   },
   abort: { ios: 'decoded', message: { type: 'abort' } },
   new_session: {
