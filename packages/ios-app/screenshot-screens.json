@@ -1,41 +1,66 @@
 {
-  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only — see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping — the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push — expected, not a bug.",
+  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only \u2014 see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping \u2014 the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push \u2014 expected, not a bug.",
   "screens": [
     {
       "name": "settings",
       "description": "Settings sheet as opened on first launch (no stored join URL)",
-      "args": ["-joinUrl", ""]
+      "args": [
+        "-joinUrl",
+        ""
+      ]
     },
     {
       "name": "icloud-sessions",
       "description": "Settings with fixture iCloud sessions listed",
-      "args": ["-joinUrl", "", "-uiTestSessionsFixture", "YES"]
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsFixture",
+        "YES"
+      ]
     },
     {
       "name": "icloud-empty",
       "description": "Settings with the iCloud empty state",
-      "args": ["-joinUrl", "", "-uiTestSessionsEmpty", "YES"]
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsEmpty",
+        "YES"
+      ]
     },
     {
       "name": "conversation-fixture",
       "description": "Every chat message variant, leaderless (FixtureConversationView)",
-      "args": ["-uiTestFixtureRoute", "YES"]
+      "args": [
+        "-uiTestFixtureRoute",
+        "YES"
+      ]
     },
     {
       "name": "connection-failed",
       "description": "Failed connection pill (dials 127.0.0.1:1, refused instantly)",
-      "args": ["-joinUrl", "http://127.0.0.1:1/join/screenshots"],
+      "args": [
+        "-joinUrl",
+        "http://127.0.0.1:1/join/screenshots"
+      ],
       "settleSeconds": 10
     },
     {
       "name": "connection-stalled",
       "description": "Connected but the leader stopped answering",
-      "args": ["-uiTestConnectionState", "stalled"]
+      "args": [
+        "-uiTestConnectionState",
+        "stalled"
+      ]
     },
     {
       "name": "connection-gave-up",
       "description": "Reconnect budget exhausted (terminal, actionable)",
-      "args": ["-uiTestConnectionState", "gaveUp"]
+      "args": [
+        "-uiTestConnectionState",
+        "gaveUp"
+      ]
     },
     {
       "name": "frozen-list",
@@ -76,12 +101,46 @@
     {
       "name": "ptt-enable",
       "description": "Hold-to-enable gate before the first permission prompt",
-      "args": ["-uiTestConnectionState", "connected", "-uiTestPttStage", "enable"]
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestPttStage",
+        "enable"
+      ]
     },
     {
       "name": "ptt-denied",
       "description": "Microphone blocked: instructions instead of a recorder",
-      "args": ["-uiTestConnectionState", "connected", "-uiTestPttStage", "denied"]
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestPttStage",
+        "denied"
+      ]
+    },
+    {
+      "name": "theme-forest",
+      "description": "Leader theme applied natively: token-driven dark-green palette",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestThemeFixture",
+        "forest",
+        "-uiTestComposerText",
+        "themed composer"
+      ]
+    },
+    {
+      "name": "theme-light",
+      "description": "Light-base leader theme: the canonical webapp light tokens",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestThemeFixture",
+        "light",
+        "-uiTestComposerText",
+        "light composer"
+      ]
     },
     {
       "name": "frozen-empty",

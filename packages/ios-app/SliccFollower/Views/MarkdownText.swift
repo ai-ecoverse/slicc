@@ -5,6 +5,8 @@ import SwiftUI
 /// Renders markdown content as styled SwiftUI views.
 /// Handles fenced code blocks specially since AttributedString(markdown:) doesn't support them well.
 struct MarkdownText: View {
+    @Environment(\.palette) private var palette
+
     let content: String
 
     var body: some View {
@@ -175,12 +177,12 @@ struct MarkdownText: View {
         ) {
             Text(styledForInlineCode(attributed))
                 .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(0.9))
-                .tint(Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255))
+                .foregroundStyle(palette.ink.opacity(0.9))
+                .tint(palette.accent)
         } else {
             Text(text)
                 .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(palette.ink.opacity(0.9))
         }
     }
 
@@ -191,8 +193,8 @@ struct MarkdownText: View {
     private func styledForInlineCode(_ input: AttributedString) -> AttributedString {
         return styledInlineCode(
             input,
-            background: Color.white.opacity(0.10),
-            foreground: Color(red: 0xC9 / 255, green: 0xBC / 255, blue: 0xFF / 255)
+            background: palette.ink.opacity(0.10),
+            foreground: palette.accent
         )
     }
 
@@ -218,11 +220,11 @@ struct MarkdownText: View {
         ) {
             Text(styledForInlineCode(attributed))
                 .font(.system(size: size, weight: weight))
-                .foregroundStyle(.white)
+                .foregroundStyle(palette.ink)
         } else {
             Text(text)
                 .font(.system(size: size, weight: weight))
-                .foregroundStyle(.white)
+                .foregroundStyle(palette.ink)
         }
     }
 
@@ -234,7 +236,7 @@ struct MarkdownText: View {
     private func blockquoteView(text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 1.5)
-                .fill(.white.opacity(0.20))
+                .fill(palette.ink.opacity(0.20))
                 .frame(width: 3)
             Group {
                 if let attributed = try? AttributedString(
@@ -247,7 +249,7 @@ struct MarkdownText: View {
                 }
             }
             .font(.system(size: 15))
-            .foregroundStyle(.white.opacity(0.65))
+            .foregroundStyle(palette.ink.opacity(0.65))
             .italic()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -260,7 +262,7 @@ struct MarkdownText: View {
             if let language, !language.isEmpty {
                 Text(language)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(palette.ink.opacity(0.4))
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
                     .padding(.bottom, 4)
@@ -276,7 +278,7 @@ struct MarkdownText: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x2E / 255))
+        .background(palette.field)
         .cornerRadius(8)
     }
 }

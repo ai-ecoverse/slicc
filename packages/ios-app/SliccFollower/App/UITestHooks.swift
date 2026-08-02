@@ -142,6 +142,27 @@ import SliccTraySession
                 permission: permission, grantOutcome: grant, script: script)
         }
 
+        /// Apply a canned leader theme on launch
+        /// (`-uiTestThemeFixture light|forest`): `light` is a bare
+        /// light-base theme (default light tokens), `forest` a custom token
+        /// map, so screenshots and UI tests cover both the base flip and
+        /// token-driven colors without a leader.
+        static func themeFixtureJson() -> String? {
+            switch UserDefaults.standard.string(forKey: "uiTestThemeFixture") {
+            case "light":
+                return #"{"id":"fixture-light","name":"Fixture Light","base":"light","tokens":{}}"#
+            case "forest":
+                return #"""
+                    {"id":"fixture-forest","name":"Fixture Forest","base":"dark","tokens":{
+                    "--canvas":"#0c1510","--bg":"#132019","--ghost":"#1b2c22",
+                    "--ink":"#e8f2ec","--txt-2":"#9fb8a9","--txt-3":"#6d8577",
+                    "--line":"#24382c","--ctx":"#34d399"}}
+                    """#
+            default:
+                return nil
+            }
+        }
+
         /// Pin the push-to-talk overlay to a stage on launch
         /// (`-uiTestPttStage enable|prompting|denied|restricted|recording|finalizing`,
         /// with `-uiTestPttCaption` filling the recording caption line). The

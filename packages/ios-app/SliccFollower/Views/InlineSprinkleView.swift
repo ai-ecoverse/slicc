@@ -19,6 +19,10 @@ struct InlineSprinkleView: UIViewRepresentable {
     /// Called when the inline content reports a new height in points.
     var onHeightChange: (CGFloat) -> Void
 
+    /// Leader-theme CSS variables ("" unthemed) appended after the inlined
+    /// dark tokens so `--s-*` surfaces follow the leader theme.
+    @Environment(\.sprinkleThemeCSS) private var themeCSS
+
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
@@ -44,14 +48,17 @@ struct InlineSprinkleView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
-        webView.loadHTMLString(Self.wrap(html), baseURL: URL(string: "about:blank"))
+        webView.loadHTMLString(
+            Self.wrap(html, themeCSS: themeCSS), baseURL: URL(string: "about:blank"))
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if context.coordinator.lastHTML != html {
+        if context.coordinator.lastHTML != html || context.coordinator.lastThemeCSS != themeCSS {
             context.coordinator.lastHTML = html
-            webView.loadHTMLString(Self.wrap(html), baseURL: URL(string: "about:blank"))
+            context.coordinator.lastThemeCSS = themeCSS
+            webView.loadHTMLString(
+                Self.wrap(html, themeCSS: themeCSS), baseURL: URL(string: "about:blank"))
         }
     }
 
@@ -63,6 +70,7 @@ struct InlineSprinkleView: UIViewRepresentable {
         let parent: InlineSprinkleView
         weak var webView: WKWebView?
         var lastHTML: String = ""
+        var lastThemeCSS: String = ""
 
         init(parent: InlineSprinkleView) { self.parent = parent }
 
@@ -97,13 +105,14 @@ struct InlineSprinkleView: UIViewRepresentable {
 
     // MARK: - HTML Wrapping
 
-    private static func wrap(_ fragment: String) -> String {
+    private static func wrap(_ fragment: String, themeCSS: String = "") -> String {
         return """
             <!DOCTYPE html>
             <html><head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
             <style>\(sprinkleCSS)</style>
+            <style>\(themeCSS)</style>
             </head><body class="sprinkle-inline">
             \(fragment)
             </body></html>

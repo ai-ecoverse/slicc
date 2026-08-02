@@ -109,7 +109,9 @@ struct ToolUIPlaceholder: Identifiable, Equatable {
 struct ToolUICardView: View {
     let card: ToolUIPlaceholder
 
-    private let cardBackground = Color(red: 0x1B / 255, green: 0x1B / 255, blue: 0x2A / 255)
+    @Environment(\.palette) private var palette
+
+    private var cardBackground: Color { palette.surface }
     private let borderColor = Color.white.opacity(0.10)
 
     var body: some View {
@@ -117,17 +119,17 @@ struct ToolUICardView: View {
             HStack(spacing: 7) {
                 Text(card.title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(palette.ink.opacity(0.85))
                 Text("pending")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(palette.ink.opacity(0.75))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 1)
                     .background(Capsule().fill(Color.white.opacity(0.12)))
             }
             Text("Waiting for approval on the leader…")
                 .font(.system(size: 12.5))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(palette.ink.opacity(0.6))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

@@ -13,8 +13,7 @@ struct TabsCarouselView: View {
     @State private var showingNewTabPrompt = false
     @State private var newTabUrlInput: String = "https://"
 
-    private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
-    private let headerBg = Color(red: 0x18 / 255, green: 0x18 / 255, blue: 0x28 / 255)
+    @Environment(\.palette) private var palette
 
     private var canControlTabs: Bool {
         appState.connectionState == .connected
@@ -28,7 +27,7 @@ struct TabsCarouselView: View {
                 pagedCarousel
             }
         }
-        .background(background)
+        .background(palette.canvas)
         .navigationTitle(currentTabTitle())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -176,12 +175,12 @@ struct TabsCarouselView: View {
                 appState.cdpBridgeReload(target.id)
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(palette.ink.opacity(0.7))
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(headerBg)
+        .background(palette.surface)
     }
 
     // MARK: - Helpers

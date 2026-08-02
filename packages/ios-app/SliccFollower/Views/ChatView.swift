@@ -6,6 +6,7 @@ import os
 /// route (conversation, tabs carousel, or a sprinkle's WKWebView).
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.colorScheme) private var systemScheme
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var route: DetailRoute? = .conversation
     @State private var showSettings = false
@@ -31,7 +32,14 @@ struct ChatView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .preferredColorScheme(.dark)
+        // A leader theme pins the scheme to its base; unthemed follows the
+        // system, like the unthemed webapp shell (#1801).
+        .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
+        .environment(
+            \.palette,
+            ThemePalette.resolve(theme: appState.leaderTheme, systemScheme: systemScheme)
+        )
+        .environment(\.sprinkleThemeCSS, appState.leaderTheme?.sprinkleCSSOverrides ?? "")
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(appState)
@@ -40,6 +48,9 @@ struct ChatView: View {
             guard !hasAppeared else { return }
             hasAppeared = true
             #if DEBUG
+                if let themeJson = UITestHooks.themeFixtureJson() {
+                    appState.applyLeaderTheme(themeJson)
+                }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
                     return
@@ -101,11 +112,10 @@ struct ChatView: View {
 /// status bar, scoop indicator, message list (with swipe gestures), and input bar.
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.palette) private var palette
     @Binding var showSettings: Bool
     @State private var inputText = ChatView.seededComposerText()
     @State private var showFrozenSessions = false
-
-    private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -123,7 +133,7 @@ struct ConversationView: View {
             if appState.scoops.count > 1 {
                 ScoopHeaderView()
                     .padding(.vertical, 6)
-                    .background(background.opacity(0.85))
+                    .background(palette.canvas.opacity(0.85))
             }
 
             if let frozen = appState.openFrozen {
@@ -143,7 +153,7 @@ struct ConversationView: View {
                 liveConversation
             }
         }
-        .background(background)
+        .background(palette.canvas)
         .navigationTitle(
             appState.openFrozen?.entry.title
                 ?? appState.selectedScoop?.assistantLabel ?? "SLICC"
@@ -158,7 +168,7 @@ struct ConversationView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { appState.closeFrozenSession() }) {
                         Image(systemName: "chevron.backward")
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(palette.ink.opacity(0.7))
                     }
                     .accessibilityLabel("Back to live session")
                     .accessibilityIdentifier("frozen-back")
@@ -170,7 +180,7 @@ struct ConversationView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showFrozenSessions = true }) {
                         Image(systemName: "snowflake")
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(palette.ink.opacity(0.7))
                     }
                     .accessibilityLabel("Past Sessions")
                     .accessibilityIdentifier("frozen-rail-button")
@@ -179,7 +189,7 @@ struct ConversationView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gearshape")
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(palette.ink.opacity(0.7))
                 }
             }
         }
@@ -278,9 +288,9 @@ struct ConversationView: View {
 /// every chat variant without disconnecting from the leader. Lick taps
 /// log to the console — there's no scoop on the other end of the bridge.
 struct FixtureConversationView: View {
+    @Environment(\.palette) private var palette
     @State private var messages: [ChatMessage] = ChatFixture.makeMessages()
     @State private var lastLick: String?
-    private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
     private static let log = Logger(subsystem: "com.slicc.follower", category: "Fixture")
 
     var body: some View {
@@ -297,7 +307,7 @@ struct FixtureConversationView: View {
                 } else {
                     Text("UI Fixture — synthetic session")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(palette.ink.opacity(0.7))
                         .accessibilityIdentifier("fixture-header")
                 }
                 Spacer()
@@ -326,7 +336,7 @@ struct FixtureConversationView: View {
                 }
             )
         }
-        .background(background)
+        .background(palette.canvas)
         .navigationTitle("UI Fixture")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -351,6 +361,7 @@ struct FixtureConversationView: View {
 /// manual prev/next switching (in addition to swipe gestures).
 struct ScoopHeaderView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.palette) private var palette
 
     var body: some View {
         HStack(spacing: 12) {
@@ -361,7 +372,7 @@ struct ScoopHeaderView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(palette.ink.opacity(0.6))
             }
 
             Spacer()
@@ -375,7 +386,7 @@ struct ScoopHeaderView: View {
                 .foregroundStyle(.purple)
                 Text(appState.selectedScoop?.assistantLabel ?? "—")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.ink)
                 if let active = appState.leaderActiveScoopJid,
                     active == appState.selectedScoopJid
                 {
@@ -394,7 +405,7 @@ struct ScoopHeaderView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(palette.ink.opacity(0.6))
             }
         }
         .padding(.horizontal, 14)

@@ -10,7 +10,7 @@ struct MessageBubble: View {
     /// Optional callback for inline sprinkle licks (forwarded to AppState).
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
 
-    private let userBubbleColor = Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255)
+    @Environment(\.palette) private var palette
 
     /// True when this message should render as a compact lick pill.
     /// Mirrors the web UI rule: source == "lick" or known lick channel.
@@ -42,7 +42,7 @@ struct MessageBubble: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(userBubbleColor)
+                            .background(palette.accent)
                             .cornerRadius(18)
                     }
                 }
@@ -56,7 +56,7 @@ struct MessageBubble: View {
                         Text(source)
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(palette.ink.opacity(0.45))
                     .padding(.horizontal, 4)
                 }
                 assistantBody
@@ -214,7 +214,7 @@ struct MessageBubble: View {
                 if let preview = toolPreview(for: tc), !preview.isEmpty {
                     Text(preview)
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(palette.ink.opacity(0.55))
                         .textSelection(.enabled)
                 }
                 if let result = tc.result {
@@ -238,14 +238,14 @@ struct MessageBubble: View {
                     .frame(width: 6, height: 6)
                 Image(systemName: SliccIcons.tool(tc.name))
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(palette.ink.opacity(0.55))
                 Text(SliccIcons.toolTitle(tc.name))
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(palette.ink.opacity(0.7))
                 if let preview = toolPreview(for: tc), !preview.isEmpty {
                     Text(preview)
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(palette.ink.opacity(0.4))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -285,13 +285,13 @@ struct MessageBubble: View {
             HStack(spacing: 6) {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(palette.ink.opacity(0.55))
                 Text("Working")
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(palette.ink.opacity(0.7))
                 Text(clusterPreview(for: toolCalls))
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(palette.ink.opacity(0.4))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
@@ -448,9 +448,11 @@ struct LickRow: View {
         known.contains(channel)
     }
 
-    private let pillBackground = Color(red: 0x1B / 255, green: 0x1B / 255, blue: 0x2A / 255)
-    private let bodyBackground = Color(red: 0x14 / 255, green: 0x14 / 255, blue: 0x22 / 255)
-    private let borderColor = Color.white.opacity(0.06)
+    @Environment(\.palette) private var palette
+
+    private var pillBackground: Color { palette.surface }
+    private var bodyBackground: Color { palette.field }
+    private var borderColor: Color { palette.ink.opacity(0.06) }
 
     private var channel: String { message.channel ?? "" }
     private var label: String { SliccIcons.lickLabel(channel) }
@@ -518,11 +520,11 @@ struct LickRow: View {
                 HStack(spacing: 8) {
                     Text(label)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(palette.ink.opacity(0.85))
                     if !previewLabel.isEmpty {
                         Text(previewLabel)
                             .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(palette.ink.opacity(0.55))
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -537,7 +539,7 @@ struct LickRow: View {
                     }
                     Image(systemName: iconName)
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(palette.ink.opacity(0.5))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -557,7 +559,7 @@ struct LickRow: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             Text(body)
                                 .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.75))
+                                .foregroundStyle(palette.ink.opacity(0.75))
                                 .textSelection(.enabled)
                                 .padding(12)
                         }
