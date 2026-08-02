@@ -76,7 +76,7 @@ run_check "custom-lints" bash -c '
 '
 
 # CI-only steps (not in lint:ci)
-run_check "complexity" node packages/dev-tools/tools/check-touched-exemptions.mjs
+run_check "boy-scout-debt" node packages/dev-tools/tools/check-touched-exemptions.mjs
 run_check "manifest" bash packages/dev-tools/tools/check-manifest-justifications.sh
 
 # Dead-code detection (two independent knip passes, pinned local binary)

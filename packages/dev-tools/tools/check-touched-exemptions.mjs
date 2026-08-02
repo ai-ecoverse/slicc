@@ -2,11 +2,10 @@
 // PR-level "boy-scout" gate for the repo's debt lists.
 //
 // Computes the PR's changed files via `git diff --name-only <base>...HEAD`
-// and intersects them with EVERY debt list: the two per-rule exemption glob
-// lists parsed from `biome.json` (see size-exemption-lib.mjs) — function-size
-// (`complexity.noExcessiveLinesPerFunction: "off"`) and cognitive-complexity
-// (`complexity.noExcessiveCognitiveComplexity: "off"`), both evaluated PER
-// FUNCTION/method — plus the `ui/` back-edge baseline
+// and intersects them with EVERY debt list: the per-rule exemption glob lists
+// parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
+// cognitive complexity, floating promises, and misused promises — plus the
+// `ui/` back-edge baseline
 // (`ui-back-edge-baseline.json`, see check-ui-back-edges.mjs), evaluated per
 // file.
 // Exits non-zero with a rule-appropriate fix-it message if any touched file
@@ -34,8 +33,10 @@ import { BASELINE_PATH, baselineFiles } from './check-ui-back-edges.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
+  FLOATING_PROMISE_RULE_KEY,
   findAddedExemptions,
   findTouchedExemptions,
+  MISUSED_PROMISE_RULE_KEY,
   readBiomeConfig,
   repoRoot,
   SIZE_RULE_KEY,
@@ -47,6 +48,7 @@ const UI_BASELINE_REL = relative(repoRoot, BASELINE_PATH).split('\\').join('/');
 
 const RULES = [
   {
+    group: 'complexity',
     key: SIZE_RULE_KEY,
     label: 'function-size',
     listRef: 'biome.json `overrides` → complexity.noExcessiveLinesPerFunction = off',
@@ -59,6 +61,7 @@ const RULES = [
       'instead of adding it to the function-size debt list.',
   },
   {
+    group: 'complexity',
     key: COMPLEXITY_RULE_KEY,
     label: 'cognitive-complexity',
     listRef: 'biome.json `overrides` → complexity.noExcessiveCognitiveComplexity = off',
@@ -70,6 +73,30 @@ const RULES = [
     addFixIt:
       'Fix: bring every function in the file under the configured per-function biome cap\n' +
       'instead of adding it to the cognitive-complexity debt list.',
+  },
+  {
+    group: 'nursery',
+    key: FLOATING_PROMISE_RULE_KEY,
+    label: 'floating-promise',
+    listRef: 'biome.json `overrides` → nursery.noFloatingPromises = off',
+    fixIt:
+      'Fix: in this same PR, await, return, or explicitly handle every promise in each\n' +
+      'file, then remove its entry from the debt-list `overrides` block in biome.json.',
+    addFixIt:
+      'Fix: await, return, or explicitly handle every promise in the file instead of\n' +
+      'adding it to the floating-promise debt list.',
+  },
+  {
+    group: 'nursery',
+    key: MISUSED_PROMISE_RULE_KEY,
+    label: 'misused-promise',
+    listRef: 'biome.json `overrides` → nursery.noMisusedPromises = off',
+    fixIt:
+      'Fix: in this same PR, keep promises out of synchronous callback/conditional\n' +
+      'positions, then remove the file from the debt-list override in biome.json.',
+    addFixIt:
+      'Fix: adapt the async callback or condition instead of adding the file to the\n' +
+      'misused-promise debt list.',
   },
 ];
 
@@ -166,8 +193,8 @@ function main() {
   const ruleStates = [
     ...RULES.map((rule) => ({
       ...rule,
-      globs: extractExemptionGlobsFor(biomeConfig, rule.key),
-      baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key),
+      globs: extractExemptionGlobsFor(biomeConfig, rule.key, rule.group),
+      baseGlobs: extractExemptionGlobsFor(baseConfig, rule.key, rule.group),
       baseReadable: baseConfig !== null,
     })),
     {
