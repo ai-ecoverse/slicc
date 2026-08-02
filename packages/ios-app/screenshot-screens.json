@@ -177,6 +177,28 @@
       ]
     },
     {
+      "name": "dock-memory",
+      "description": "Memory surface: the cone's workspace CLAUDE.md as tagged rows",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "memory",
+        "-uiTestMemoryFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-monitor",
+      "description": "Monitor surface: connection vitals, scoops, visible-session cost",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "monitor"
+      ]
+    },
+    {
       "name": "frozen-empty",
       "description": "Past Sessions sheet with no archived sessions",
       "args": [

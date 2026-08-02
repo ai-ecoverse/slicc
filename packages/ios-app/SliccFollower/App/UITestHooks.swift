@@ -143,6 +143,26 @@ import UIKit
                 permission: permission, grantOutcome: grant, script: script)
         }
 
+        /// Canned memory markdown (`-uiTestMemoryFixture YES`) so the
+        /// memory surface renders rows without a leader.
+        static func memoryFixtureMarkdown() -> String? {
+            guard UserDefaults.standard.bool(forKey: "uiTestMemoryFixture") else { return nil }
+            return """
+                ## User Preferences
+
+                - Prefers concise answers with code examples over prose.
+                - Dark mode always; reduce motion enabled on the phone.
+
+                ## Feedback & Corrections
+
+                - Never auto-merge UI PRs; wait for a visual sign-off first.
+
+                ## Project: iOS parity
+
+                - The dock rail mirrors slicc-dock.ts order; tap-active collapses.
+                """
+        }
+
         /// Open a workbench surface on launch
         /// (`-uiTestOpenDockSurface term|files|memory|monitor|browser|new`)
         /// so screenshots and UI tests reach the dock overlay without taps.

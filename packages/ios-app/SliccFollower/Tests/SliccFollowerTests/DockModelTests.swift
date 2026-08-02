@@ -28,12 +28,15 @@ final class DockModelTests: XCTestCase {
     }
 
     func testLeaderOnlySurfacesExplainThemselves() {
-        for surface in [DockSurface.files, .term, .memory, .monitor, .newSprinkle] {
+        for surface in [DockSurface.files, .term, .newSprinkle] {
             XCTAssertNotNil(
                 DockModel.placeholderText(for: surface),
                 "\(surface) has no native view — it must say why, not render empty")
         }
+        // Real views carry no placeholder: browser, sprinkles, monitor (#1868).
         XCTAssertNil(DockModel.placeholderText(for: .browser))
         XCTAssertNil(DockModel.placeholderText(for: .sprinkle(name: "x")))
+        XCTAssertNil(DockModel.placeholderText(for: .monitor))
+        XCTAssertNil(DockModel.placeholderText(for: .memory))
     }
 }

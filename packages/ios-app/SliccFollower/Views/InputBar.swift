@@ -35,11 +35,14 @@ struct InputBar: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
     @State private var showCamera = false
-    /// `UIPasteboard.general.hasImages` is not SwiftUI-observable — read
-    /// once, then track pasteboard changes and foreground returns (an image
-    /// copied in another app must surface Paste on the next menu open).
-    /// `hasImages` is a metadata check, so it never trips the paste banner.
-    @State private var pasteboardHasImage = UIPasteboard.general.hasImages
+    /// `UIPasteboard.general.hasImages` is not SwiftUI-observable — track
+    /// pasteboard changes and foreground returns (an image copied in
+    /// another app must surface Paste on the next menu open). Read lazily
+    /// in onAppear, NOT at struct init: the initial read is a synchronous
+    /// XPC to the pasteboard daemon, and on a contended simulator it can
+    /// stall the main thread through app launch. `hasImages` is a metadata
+    /// check, so none of this trips the paste banner.
+    @State private var pasteboardHasImage = false
 
     private var canSend: Bool {
         // Sending during a running turn queues on the leader (browser
@@ -107,6 +110,11 @@ struct InputBar: View {
                     stage(UITestHooks.attachmentFixtureImage(), name: "fixture.jpg")
                 }
             #endif
+            // Deferred first pasteboard read (see pasteboardHasImage) — off
+            // the launch-critical path, still ahead of any menu open.
+            DispatchQueue.main.async {
+                pasteboardHasImage = UIPasteboard.general.hasImages
+            }
         }
         // Handled from `.onChange` — NOT a callback stored at `onAppear` —
         // so the handler sees current props: an appear-time closure captures
