@@ -7,6 +7,7 @@ describe('matchHashedAssetPath', () => {
     expect(matchHashedAssetPath('/assets/index-a1b2c3d4.css')).toBe(true);
     expect(matchHashedAssetPath('/assets/entry-abcd1234.js.map')).toBe(true);
     expect(matchHashedAssetPath('/assets/logo-DEADBEEF.svg')).toBe(true);
+    expect(matchHashedAssetPath('/assets/AdobeClean-Regular-CVsq5gF7.otf')).toBe(true);
   });
   it('rejects non-asset / un-hashed / traversal / encoded paths', () => {
     expect(matchHashedAssetPath('/index.html')).toBe(false);
@@ -26,6 +27,7 @@ describe('mimeForAssetPath', () => {
     expect(mimeForAssetPath('/assets/x-abcd1234.wasm')).toBe('application/wasm');
     expect(mimeForAssetPath('/assets/x-abcd1234.js.map')).toBe('application/json');
     expect(mimeForAssetPath('/assets/x-abcd1234.woff2')).toBe('font/woff2');
+    expect(mimeForAssetPath('/assets/x-abcd1234.otf')).toBe('font/otf');
   });
   it('falls back to octet-stream', () => {
     expect(mimeForAssetPath('/assets/x-abcd1234.zzz')).toBe('application/octet-stream');

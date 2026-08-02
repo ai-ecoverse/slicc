@@ -1,5 +1,6 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import annotationFontUrl from '../../../../assets/fonts/AdobeClean-Regular.otf?url';
 import { getMagick, type IpkResolutionContext } from './magick-wasm.js';
 
 /**
@@ -39,42 +40,241 @@ function inferFormat(path: string): string {
   return 'PNG'; // default
 }
 
+type OperationType =
+  | 'resize'
+  | 'thumbnail'
+  | 'rotate'
+  | 'crop'
+  | 'quality'
+  | 'auto-orient'
+  | 'auto-gamma'
+  | 'auto-level'
+  | 'flip'
+  | 'flop'
+  | 'strip'
+  | 'trim'
+  | 'negate'
+  | 'normalize'
+  | 'background'
+  | 'extent'
+  | 'alpha'
+  | 'colorspace'
+  | 'transparent'
+  | 'blur'
+  | 'sharpen'
+  | 'gravity'
+  | 'fill'
+  | 'undercolor'
+  | 'pointsize'
+  | 'annotate';
+
 interface ParsedOperation {
-  type: 'resize' | 'rotate' | 'crop' | 'quality';
+  type: OperationType;
   value: string;
+  text?: string;
 }
+
+interface ExpressionBase {
+  operations: ParsedOperation[];
+}
+
+interface InputExpression extends ExpressionBase {
+  kind: 'input';
+  path: string;
+}
+
+interface AppendExpression extends ExpressionBase {
+  kind: 'append';
+  direction: 'horizontal' | 'vertical';
+  children: ImageExpression[];
+  appendSettings: { background?: string; gravity?: string };
+}
+
+type ImageExpression = InputExpression | AppendExpression;
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 type MagickModule = Awaited<ReturnType<typeof getMagick>>;
 type MagickImage = Parameters<Parameters<MagickModule['ImageMagick']['read']>[1]>[0];
 
-const HELP_TEXT = `usage: convert [input] [operations...] [output]
+const ANNOTATION_FONT_NAME = 'AdobeClean-Regular.otf';
+const fontRegisteredModules = new WeakSet<object>();
+let annotationFontData: Promise<Uint8Array> | null = null;
+
+const HELP_TEXT = `usage: convert [input ...] [operations...] [output]
 
 Operations:
-  -resize WxH        resize to width x height
-  -resize WxH!       resize to exact dimensions (ignore aspect ratio)
-  -resize N%         resize by percentage
+  -resize GEOMETRY   resize; supports %, !, ^, >, and < modifiers
+  -thumbnail GEOMETRY create an optimized thumbnail
   -rotate degrees    rotate image by degrees
-  -crop WxH+X+Y      crop to width x height at position X,Y
+  -crop WxH[+X+Y]    crop, optionally positioned with signed offsets
   -quality N         set output quality (0-100)
+  -auto-orient       apply EXIF orientation
+  -flip / -flop      mirror vertically / horizontally
+  -strip / -trim     remove metadata / uniform edges
+  -background COLOR  set the canvas background color
+  -extent GEOMETRY   resize the canvas using background and gravity
+  -alpha MODE        control alpha (set, remove, extract, off, ...)
+  -colorspace TYPE   convert color space (sRGB, Gray, CMYK, ...)
+  -transparent COLOR make matching pixels transparent
+  -blur / -sharpen R[xS] apply a Gaussian effect
+  -auto-gamma / -auto-level / -normalize / -negate
+  +append            join all images in the current sequence horizontally
+  -append            join all images in the current sequence vertically
+  -gravity POSITION  set annotation anchor
+  -fill COLOR        set annotation text color
+  -undercolor COLOR  set annotation background color
+  -pointsize N       set annotation text size
+  -annotate +X+Y TXT draw text with the bundled Adobe Clean font
 
 Examples:
   convert input.jpg -resize 800x600 output.png
   convert photo.png -resize 50% smaller.png
   convert image.jpg -rotate 90 -quality 85 rotated.jpg
   convert input.png -crop 100x100+50+50 cropped.png
+  convert frame1.jpg frame2.jpg +append filmstrip.jpg
+  convert \\( a.jpg b.jpg +append \\) \\( c.jpg d.jpg +append \\) -append grid.jpg
 `;
 
 function convertHelp(): CmdResult {
   return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
 }
 
-const OP_FLAGS = new Set(['-resize', '-rotate', '-crop', '-quality']);
+const OP_ARG_COUNTS = new Map<string, number>([
+  ['-resize', 1],
+  ['-thumbnail', 1],
+  ['-rotate', 1],
+  ['-crop', 1],
+  ['-quality', 1],
+  ['-auto-orient', 0],
+  ['-auto-gamma', 0],
+  ['-auto-level', 0],
+  ['-flip', 0],
+  ['-flop', 0],
+  ['-strip', 0],
+  ['-trim', 0],
+  ['-negate', 0],
+  ['-normalize', 0],
+  ['-background', 1],
+  ['-extent', 1],
+  ['-alpha', 1],
+  ['-colorspace', 1],
+  ['-transparent', 1],
+  ['-blur', 1],
+  ['-sharpen', 1],
+  ['-gravity', 1],
+  ['-fill', 1],
+  ['-undercolor', 1],
+  ['-pointsize', 1],
+  ['-annotate', 2],
+]);
 
 interface ParsedConvertArgs {
-  operations: ParsedOperation[];
-  positional: string[];
+  expression: ImageExpression;
+  outputPath: string;
+}
+
+class ConvertArgParser {
+  private index = 0;
+
+  constructor(private readonly tokens: string[]) {}
+
+  parse(): ImageExpression {
+    return this.readSequence(false);
+  }
+
+  private readSequence(insideGroup: boolean): ImageExpression {
+    const expressions: ImageExpression[] = [];
+    const pending: ParsedOperation[] = [];
+    let closed = false;
+    while (this.index < this.tokens.length) {
+      const token = this.tokens[this.index];
+      if (token === ')') {
+        if (!insideGroup) throw new Error('unexpected )');
+        this.index++;
+        closed = true;
+        break;
+      }
+      if (token === '(') this.readGroup(expressions, pending);
+      else if (token === '+append' || token === '-append') this.append(expressions, token);
+      else if (OP_ARG_COUNTS.has(token)) this.readOperation(expressions, pending, token);
+      else this.readInput(expressions, pending, token);
+    }
+    if (insideGroup && !closed) throw new Error('missing )');
+    return this.finishSequence(expressions, pending);
+  }
+
+  private readGroup(expressions: ImageExpression[], pending: ParsedOperation[]): void {
+    this.index++;
+    const expression = this.readSequence(true);
+    expression.operations.unshift(...pending.splice(0));
+    expressions.push(expression);
+  }
+
+  private append(expressions: ImageExpression[], token: '+append' | '-append'): void {
+    if (expressions.length < 2) throw new Error(`${token} requires at least two images`);
+    const children = [...expressions];
+    expressions.splice(0, expressions.length, {
+      kind: 'append',
+      direction: token === '+append' ? 'horizontal' : 'vertical',
+      children,
+      appendSettings: collectAppendSettings(children),
+      operations: [],
+    });
+    this.index++;
+  }
+
+  private readOperation(
+    expressions: ImageExpression[],
+    pending: ParsedOperation[],
+    token: string
+  ): void {
+    const argCount = OP_ARG_COUNTS.get(token)!;
+    const values = this.tokens.slice(this.index + 1, this.index + 1 + argCount);
+    if (values.length !== argCount || values.some((value) => isControlToken(value))) {
+      throw new Error(`missing argument for ${token}`);
+    }
+    const operation: ParsedOperation = {
+      type: token.slice(1) as ParsedOperation['type'],
+      value: values[0] ?? '',
+      ...(argCount === 2 ? { text: values[1] } : {}),
+    };
+    (expressions.at(-1)?.operations ?? pending).push(operation);
+    this.index += argCount + 1;
+  }
+
+  private readInput(
+    expressions: ImageExpression[],
+    pending: ParsedOperation[],
+    token: string
+  ): void {
+    if (token.startsWith('-') || token.startsWith('+')) {
+      throw new Error(`unsupported option ${token}`);
+    }
+    expressions.push({ kind: 'input', path: token, operations: pending.splice(0) });
+    this.index++;
+  }
+
+  private finishSequence(
+    expressions: ImageExpression[],
+    pending: ParsedOperation[]
+  ): ImageExpression {
+    if (pending.length > 0) throw new Error('operation requires an input image');
+    if (expressions.length === 0) throw new Error('expected an input image');
+    if (expressions.length > 1) throw new Error('multiple input files require +append or -append');
+    return expressions[0];
+  }
+}
+
+function collectAppendSettings(expressions: ImageExpression[]): AppendExpression['appendSettings'] {
+  const settings: AppendExpression['appendSettings'] = {};
+  for (const expression of expressions) {
+    for (const operation of expression.operations) {
+      if (operation.type === 'background') settings.background = operation.value;
+      if (operation.type === 'gravity') settings.gravity = operation.value;
+    }
+  }
+  return settings;
 }
 
 /**
@@ -84,57 +284,43 @@ interface ParsedConvertArgs {
  * a `${name}: ${msg}` stderr line. Operation order is preserved.
  */
 export function parseConvertArgs(args: string[]): ParsedConvertArgs {
-  const positional: string[] = [];
-  const operations: ParsedOperation[] = [];
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-    if (OP_FLAGS.has(arg)) {
-      if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-        throw new Error(`missing argument for ${arg}`);
-      }
-      const type = arg.slice(1) as ParsedOperation['type'];
-      operations.push({ type, value: args[i + 1] });
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith('-')) {
-      throw new Error(`unsupported option ${arg}`);
-    }
-    positional.push(arg);
-    i += 1;
+  if (args.length < 2) throw new Error('expected exactly one input file and one output file');
+  const outputPath = args.at(-1)!;
+  const outputArgCount = OP_ARG_COUNTS.get(outputPath);
+  if (outputArgCount !== undefined) {
+    if (outputArgCount > 0) throw new Error(`missing argument for ${outputPath}`);
+    throw new Error('expected an output file');
   }
-  if (positional.length !== 2) {
-    throw new Error('expected exactly one input file and one output file');
-  }
-  return { operations, positional };
+  if (isControlToken(outputPath)) throw new Error('expected an output file');
+  const expression = new ConvertArgParser(args.slice(0, -1)).parse();
+  return { expression, outputPath };
+}
+
+function isControlToken(value: string): boolean {
+  return (
+    value === '(' ||
+    value === ')' ||
+    value === '+append' ||
+    value === '-append' ||
+    OP_ARG_COUNTS.has(value)
+  );
+}
+
+const RESIZE_GEOMETRY = /^(?:\d+(?:x\d*)?|x\d+)(?:[%!^<>@])?$/;
+const CANVAS_GEOMETRY = /^\d+x\d+(?:[+-]\d+[+-]\d+)?$/;
+
+function parseGeometry(
+  magick: MagickModule,
+  value: string,
+  option: string
+): MagickModule['MagickGeometry']['prototype'] {
+  const pattern = option === 'resize' || option === 'thumbnail' ? RESIZE_GEOMETRY : CANVAS_GEOMETRY;
+  if (!pattern.test(value)) throw new Error(`Invalid ${option} geometry: ${value}`);
+  return new magick.MagickGeometry(value);
 }
 
 function applyResize(magick: MagickModule, image: MagickImage, value: string): void {
-  const resizeMatch = value.match(/^(\d+)%$/);
-  if (resizeMatch) {
-    const percent = parseInt(resizeMatch[1], 10);
-    const newWidth = Math.round((image.width * percent) / 100);
-    const newHeight = Math.round((image.height * percent) / 100);
-    image.resize(newWidth, newHeight);
-    return;
-  }
-  const ignoreAspect = value.endsWith('!');
-  const sizeStr = ignoreAspect ? value.slice(0, -1) : value;
-  const parts = sizeStr.split('x');
-  if (parts.length !== 2) {
-    throw new Error(`Invalid resize format: ${value}`);
-  }
-  const width = parseInt(parts[0], 10);
-  const height = parseInt(parts[1], 10);
-  if (ignoreAspect) {
-    // Create geometry with ignoreAspectRatio flag
-    const geo = new magick.MagickGeometry(width, height);
-    geo.ignoreAspectRatio = true;
-    image.resize(geo);
-  } else {
-    image.resize(width, height);
-  }
+  image.resize(parseGeometry(magick, value, 'resize'));
 }
 
 function applyRotate(image: MagickImage, value: string): void {
@@ -143,13 +329,15 @@ function applyRotate(image: MagickImage, value: string): void {
   image.rotate(degrees);
 }
 
-function applyCrop(magick: MagickModule, image: MagickImage, value: string): void {
-  // Parse WxH+X+Y format
-  const cropMatch = value.match(/^(\d+)x(\d+)\+(\d+)\+(\d+)$/);
-  if (!cropMatch) throw new Error(`Invalid crop format: ${value} (expected WxH+X+Y)`);
-  // Use string constructor which accepts ImageMagick geometry format
-  const geo = new magick.MagickGeometry(value);
-  image.crop(geo);
+function applyCrop(
+  magick: MagickModule,
+  image: MagickImage,
+  value: string,
+  gravity?: number
+): void {
+  const geometry = parseGeometry(magick, value, 'crop');
+  if (gravity === undefined) image.crop(geometry);
+  else image.crop(geometry, gravity);
 }
 
 function applyQuality(image: MagickImage, value: string): void {
@@ -160,37 +348,221 @@ function applyQuality(image: MagickImage, value: string): void {
   image.quality = quality;
 }
 
-function applyOperation(magick: MagickModule, image: MagickImage, op: ParsedOperation): void {
+interface DrawingState {
+  gravity?: number;
+  background?: string;
+  fill?: string;
+  undercolor?: string;
+  pointsize?: number;
+}
+
+const GRAVITY_NAMES: Record<string, string> = {
+  northwest: 'Northwest',
+  north: 'North',
+  northeast: 'Northeast',
+  west: 'West',
+  center: 'Center',
+  east: 'East',
+  southwest: 'Southwest',
+  south: 'South',
+  southeast: 'Southeast',
+};
+
+function resolveGravity(magick: MagickModule, value: string): number {
+  const gravityName = GRAVITY_NAMES[value.toLowerCase()];
+  const gravity = gravityName ? magick.Gravity[gravityName] : undefined;
+  if (gravity === undefined) throw new Error(`Invalid gravity: ${value}`);
+  return gravity;
+}
+
+const SIMPLE_OPERATIONS: Partial<Record<OperationType, (image: MagickImage) => void>> = {
+  'auto-orient': (image) => image.autoOrient(),
+  'auto-gamma': (image) => image.autoGamma(),
+  'auto-level': (image) => image.autoLevel(),
+  flip: (image) => image.flip(),
+  flop: (image) => image.flop(),
+  strip: (image) => image.strip(),
+  trim: (image) => image.trim(),
+  negate: (image) => image.negate(),
+  normalize: (image) => image.normalize(),
+};
+
+function normalizeEnumName(value: string): string {
+  return value.toLowerCase().replaceAll(/[-_ ]/g, '');
+}
+
+function resolveEnumValue(values: Record<string, number>, value: string, option: string): number {
+  const normalized = normalizeEnumName(value);
+  const entry = Object.entries(values).find(([name]) => normalizeEnumName(name) === normalized);
+  if (!entry) throw new Error(`Invalid ${option}: ${value}`);
+  return entry[1];
+}
+
+function applyExtent(
+  magick: MagickModule,
+  image: MagickImage,
+  value: string,
+  state: DrawingState
+): void {
+  const geometry = parseGeometry(magick, value, 'extent');
+  const background = state.background ? new magick.MagickColor(state.background) : undefined;
+  if (state.gravity !== undefined && background) image.extent(geometry, state.gravity, background);
+  else if (state.gravity !== undefined) image.extent(geometry, state.gravity);
+  else if (background) image.extent(geometry, background);
+  else image.extent(geometry);
+}
+
+function parseRadiusSigma(value: string, option: string): [number, number] {
+  const number = '(?:\\d+(?:\\.\\d*)?|\\.\\d+)';
+  const match = value.match(new RegExp(`^(${number})(?:x(${number}))?$`));
+  if (!match) throw new Error(`Invalid ${option} radius/sigma: ${value}`);
+  return [Number(match[1]), match[2] === undefined ? 1 : Number(match[2])];
+}
+
+function applyAnnotation(
+  magick: MagickModule,
+  image: MagickImage,
+  op: ParsedOperation,
+  state: DrawingState
+): void {
+  const offset = op.value.match(/^([+-]\d+)([+-]\d+)$/);
+  if (!offset) throw new Error(`Invalid annotate offset: ${op.value} (expected +X+Y)`);
+  const drawables = new magick.Drawables();
+  if (state.gravity !== undefined) drawables.gravity(state.gravity);
+  if (state.fill !== undefined) drawables.fillColor(new magick.MagickColor(state.fill));
+  if (state.undercolor !== undefined) {
+    drawables.textUnderColor(new magick.MagickColor(state.undercolor));
+  }
+  drawables.font(ANNOTATION_FONT_NAME);
+  if (state.pointsize !== undefined) drawables.fontPointSize(state.pointsize);
+  drawables.text(Number(offset[1]), Number(offset[2]), op.text ?? '').draw(image);
+}
+
+async function ensureAnnotationFont(magick: MagickModule): Promise<void> {
+  if (fontRegisteredModules.has(magick.Magick)) return;
+  const fontData = (annotationFontData ??= fetch(annotationFontUrl).then(async (response) => {
+    if (!response.ok) throw new Error(`Failed to load annotation font (${response.status})`);
+    return new Uint8Array(await response.arrayBuffer());
+  }));
+  try {
+    magick.Magick.addFont(ANNOTATION_FONT_NAME, await fontData);
+    fontRegisteredModules.add(magick.Magick);
+  } catch (error) {
+    if (annotationFontData === fontData) annotationFontData = null;
+    throw error;
+  }
+}
+
+function hasAnnotation(expression: ImageExpression): boolean {
+  if (expression.operations.some((operation) => operation.type === 'annotate')) return true;
+  return expression.kind === 'append' && expression.children.some(hasAnnotation);
+}
+
+function applyOperation(
+  magick: MagickModule,
+  image: MagickImage,
+  op: ParsedOperation,
+  state: DrawingState
+): void {
+  const simpleOperation = SIMPLE_OPERATIONS[op.type];
+  if (simpleOperation) {
+    simpleOperation(image);
+    return;
+  }
   switch (op.type) {
     case 'resize':
       applyResize(magick, image, op.value);
+      return;
+    case 'thumbnail':
+      image.thumbnail(parseGeometry(magick, op.value, 'thumbnail'));
       return;
     case 'rotate':
       applyRotate(image, op.value);
       return;
     case 'crop':
-      applyCrop(magick, image, op.value);
+      applyCrop(magick, image, op.value, state.gravity);
       return;
     case 'quality':
       applyQuality(image, op.value);
       return;
+    case 'background':
+      state.background = op.value;
+      image.backgroundColor = new magick.MagickColor(op.value);
+      return;
+    case 'extent':
+      applyExtent(magick, image, op.value, state);
+      return;
+    case 'alpha':
+      image.alpha(resolveEnumValue(magick.AlphaAction, op.value, 'alpha mode'));
+      return;
+    case 'colorspace':
+      image.colorSpace = resolveEnumValue(magick.ColorSpace, op.value, 'colorspace');
+      return;
+    case 'transparent':
+      image.transparent(new magick.MagickColor(op.value));
+      return;
+    case 'blur':
+      image.blur(...parseRadiusSigma(op.value, 'blur'));
+      return;
+    case 'sharpen':
+      image.sharpen(...parseRadiusSigma(op.value, 'sharpen'));
+      return;
+    case 'gravity': {
+      state.gravity = resolveGravity(magick, op.value);
+      return;
+    }
+    case 'fill':
+      state.fill = op.value;
+      return;
+    case 'undercolor':
+      state.undercolor = op.value;
+      return;
+    case 'pointsize': {
+      const pointsize = Number(op.value);
+      if (!Number.isFinite(pointsize) || pointsize <= 0) {
+        throw new Error(`Invalid point size: ${op.value}`);
+      }
+      state.pointsize = pointsize;
+      return;
+    }
+    case 'annotate':
+      applyAnnotation(magick, image, op, state);
+      return;
   }
 }
 
-/**
- * Apply every operation to the supplied image and snapshot the
- * encoded output bytes synchronously inside the `image.write`
- * callback (see the long-form comment below for the heap-clobber
- * rationale).
- */
-async function processImage(
+function prepareAppendImages(
+  magick: MagickModule,
+  expression: AppendExpression,
+  images: MagickImage[]
+): void {
+  const { background, gravity: gravityName } = expression.appendSettings;
+  if (background === undefined && gravityName === undefined) return;
+  const gravity = gravityName === undefined ? undefined : resolveGravity(magick, gravityName);
+  const backgroundColor = background === undefined ? undefined : new magick.MagickColor(background);
+  const maxWidth = Math.max(...images.map((image) => image.width));
+  const maxHeight = Math.max(...images.map((image) => image.height));
+  for (const image of images) {
+    const width = expression.direction === 'vertical' ? maxWidth : image.width;
+    const height = expression.direction === 'horizontal' ? maxHeight : image.height;
+    if (width === image.width && height === image.height) continue;
+    const geometry = new magick.MagickGeometry(width, height);
+    if (gravity !== undefined && backgroundColor) image.extent(geometry, gravity, backgroundColor);
+    else if (gravity !== undefined) image.extent(geometry, gravity);
+    else if (backgroundColor) image.extent(geometry, backgroundColor);
+  }
+}
+
+function applyOperations(
   magick: MagickModule,
   image: MagickImage,
-  operations: ParsedOperation[],
-  outputPath: string
-): Promise<Uint8Array | null> {
-  for (const op of operations) applyOperation(magick, image, op);
+  operations: ParsedOperation[]
+): void {
+  const drawingState: DrawingState = {};
+  for (const op of operations) applyOperation(magick, image, op, drawingState);
+}
 
+function writeImage(image: MagickImage, outputPath: string): Uint8Array | null {
   let outputData: Uint8Array | null = null;
   // Write output. Copy the bytes synchronously out of the
   // WASM heap — magick-wasm hands us a Uint8Array view into
@@ -203,11 +575,83 @@ async function processImage(
   // names, producing a "UTF-8 text with CRLF terminators"
   // garbage file). Symptom only surfaces in extension/
   // offscreen mode because of allocator timing differences.
-  const outputFormat = inferFormat(outputPath) as any; // MagickFormat type
+  const outputFormat = inferFormat(outputPath);
   image.write(outputFormat, (data: Uint8Array) => {
     outputData = new Uint8Array(data);
   });
   return outputData;
+}
+
+async function renderChildren(
+  magick: MagickModule,
+  expression: AppendExpression,
+  inputData: Map<InputExpression, Uint8Array>,
+  callback: (images: MagickImage[]) => Promise<void>,
+  images: MagickImage[] = [],
+  childIndex = 0
+): Promise<void> {
+  if (childIndex === expression.children.length) return callback(images);
+  await renderExpression(magick, expression.children[childIndex], inputData, async (image) => {
+    images.push(image);
+    await renderChildren(magick, expression, inputData, callback, images, childIndex + 1);
+    images.pop();
+  });
+}
+
+async function renderExpression(
+  magick: MagickModule,
+  expression: ImageExpression,
+  inputData: Map<InputExpression, Uint8Array>,
+  callback: (image: MagickImage) => Promise<void>
+): Promise<void> {
+  if (expression.kind === 'input') {
+    await magick.ImageMagick.read(inputData.get(expression)!, async (image) => {
+      applyOperations(magick, image, expression.operations);
+      await callback(image);
+    });
+    return;
+  }
+
+  await renderChildren(magick, expression, inputData, async (images) => {
+    prepareAppendImages(magick, expression, images);
+    const collection = magick.MagickImageCollection.create();
+    collection.push(...images);
+    const append =
+      expression.direction === 'horizontal'
+        ? collection.appendHorizontally.bind(collection)
+        : collection.appendVertically.bind(collection);
+    try {
+      await append(async (image) => {
+        applyOperations(magick, image, expression.operations);
+        await callback(image);
+      });
+    } finally {
+      // The collection treats pushed images as owned. They are callback-scoped
+      // by ImageMagick/read or a parent append, so detach them before disposal.
+      collection.length = 0;
+      collection.dispose();
+    }
+  });
+}
+
+async function loadInputData(
+  expression: ImageExpression,
+  ctx: CommandContext,
+  result = new Map<InputExpression, Uint8Array>(),
+  pathCache = new Map<string, Uint8Array>()
+): Promise<Map<InputExpression, Uint8Array>> {
+  if (expression.kind === 'input') {
+    const path = ctx.fs.resolvePath(ctx.cwd, expression.path);
+    let data = pathCache.get(path);
+    if (data === undefined) {
+      data = await ctx.fs.readFileBuffer(path);
+      pathCache.set(path, data);
+    }
+    result.set(expression, data);
+    return result;
+  }
+  for (const child of expression.children) await loadInputData(child, ctx, result, pathCache);
+  return result;
 }
 
 export function createConvertCommand(name: string = 'convert'): Command {
@@ -227,19 +671,17 @@ export function createConvertCommand(name: string = 'convert'): Command {
       };
     }
 
-    const [inputPath, outputPath] = parsed.positional;
     try {
-      const resolvedInput = ctx.fs.resolvePath(ctx.cwd, inputPath);
-      const inputData = await ctx.fs.readFileBuffer(resolvedInput);
-
+      const inputData = await loadInputData(parsed.expression, ctx);
       // Initialize ImageMagick — pass an ipk context so the browser
       // path can find `@imagemagick/magick-wasm/dist/magick.wasm` in
       // the VFS `node_modules`. Node / extension paths ignore it.
       const magick = await getMagick({ ipk: createIpkContextFromCtx(ctx) });
+      if (hasAnnotation(parsed.expression)) await ensureAnnotationFont(magick);
 
       let outputData: Uint8Array | null = null;
-      await magick.ImageMagick.read(inputData, async (image) => {
-        outputData = await processImage(magick, image, parsed.operations, outputPath);
+      await renderExpression(magick, parsed.expression, inputData, async (image) => {
+        outputData = writeImage(image, parsed.outputPath);
       });
 
       // `!outputData` is `false` for a zero-byte `Uint8Array` (it's
@@ -251,7 +693,7 @@ export function createConvertCommand(name: string = 'convert'): Command {
         throw new Error('Failed to generate output image');
       }
 
-      const resolvedOutput = ctx.fs.resolvePath(ctx.cwd, outputPath);
+      const resolvedOutput = ctx.fs.resolvePath(ctx.cwd, parsed.outputPath);
       await ctx.fs.writeFile(resolvedOutput, outputData);
 
       return { stdout: '', stderr: '', exitCode: 0 };

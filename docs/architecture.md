@@ -211,7 +211,7 @@ The extension is a thin CDP pass-through + bootstrapper. The webapp UI and agent
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `index.ts`               | Factory for all supplemental commands                                                                                                                                       |
 | `help-command.ts`        | `commands` — list all available commands                                                                                                                                    |
-| `convert-command.ts`     | `convert` — ImageMagick-style image processing (resize, rotate, crop, quality) via magick-wasm                                                                              |
+| `convert-command.ts`     | `convert` — ImageMagick-style transforms, nested append composition, and text annotation via magick-wasm                                                                    |
 | `crontask-command.ts`    | `crontask` — schedule cron jobs (dispatches licks to scoops); backed by node-cron                                                                                           |
 | `imgcat-command.ts`      | `imgcat` — display images inline in terminal                                                                                                                                |
 | `node-command.ts`        | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe)                                                                                              |

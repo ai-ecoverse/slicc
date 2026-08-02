@@ -8,6 +8,7 @@ describe('assertAllHashed', () => {
       'index-a1b2c3d4.css',
       'entry-abcd1234.js.map',
       'logo-DEADBEEF.svg',
+      'AdobeClean-Regular-CVsq5gF7.otf',
     ];
     expect(() => assertAllHashed(names)).not.toThrow();
   });
