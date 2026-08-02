@@ -761,6 +761,20 @@ describe('slicc-agent-tabs', () => {
       expect(getComputedStyle(track).paddingRight).toBe('41px');
     });
 
+    it('never reserves overflow space when the non-hideable first tab is the only tab', () => {
+      const element = mount(rosterOf(1), 40);
+      const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
+      const toggle = vi.spyOn(element.classList, 'toggle');
+
+      element.reflow();
+
+      expect(toggle).not.toHaveBeenCalledWith('has-overflow', true);
+      expect(element.classList.contains('has-overflow')).toBe(false);
+      expect(overflow(element).items).toHaveLength(0);
+      expect(getComputedStyle(track).paddingRight).toBe('2px');
+      toggle.mockRestore();
+    });
+
     it('settles at every pixel across the fit boundary and keeps tabs clear of the trigger', () => {
       const element = mount(rosterOf(6), 200);
       const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
@@ -776,6 +790,7 @@ describe('slicc-agent-tabs', () => {
             hidden: segments(element)
               .filter((item) => item.classList.contains('hide'))
               .map((item) => item.dataset.k),
+            items: overflow(element).items.length,
             paddingRight: getComputedStyle(track).paddingRight,
           };
         });
@@ -785,6 +800,7 @@ describe('slicc-agent-tabs', () => {
           states[0],
         ]);
         visited.add(states[0].overflow);
+        expect(states[0].items > 0).toBe(states[0].overflow);
         expect(states[0].paddingRight).toBe(states[0].overflow ? '41px' : '2px');
         if (states[0].overflow) {
           const visible = segments(element).filter((item) => !item.classList.contains('hide'));
