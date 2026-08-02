@@ -49,13 +49,20 @@ final class PttControllerTests: XCTestCase {
 
     final class FakeSession: DictationSession {
         let transcript: String
+        let stallStop: Bool
         private(set) var stopped = false
         private(set) var cancelled = false
 
-        init(transcript: String) { self.transcript = transcript }
+        init(transcript: String, stallStop: Bool = false) {
+            self.transcript = transcript
+            self.stallStop = stallStop
+        }
 
         func stop() async -> String {
             stopped = true
+            if stallStop {
+                await FakeEngine.parkForever()
+            }
             return transcript
         }
 
@@ -71,19 +78,30 @@ final class PttControllerTests: XCTestCase {
         private(set) var startCount = 0
         private(set) var lastSession: FakeSession?
         var lastPartial: (@MainActor @Sendable (String) -> Void)?
-        /// When set, `requestPermission` never resolves (timeout path).
+        /// When set, `requestPermission` never resolves (timeout path). The
+        /// stall deliberately ignores task cancellation — the failure mode
+        /// is a system permission callback that simply never fires, and the
+        /// controller's deadline must recover from exactly that.
         var stallPermission = false
+        /// When set, sessions' `stop()` never resolves (finalize-timeout
+        /// path), again immune to cancellation like a hung recognizer.
+        var stallStop = false
 
         init(permission: DictationPermission) { self.permission = permission }
 
         func requestPermission() async -> DictationPermission {
             permissionRequests += 1
             if stallPermission {
-                // Far beyond any test's timeout budget.
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                await Self.parkForever()
             }
             permission = grantOutcome
             return grantOutcome
+        }
+
+        /// Suspend forever, ignoring cancellation (unsafe continuation is
+        /// never resumed — no checked-continuation leak warning).
+        static func parkForever() async {
+            await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
         }
 
         func start(
@@ -92,7 +110,7 @@ final class PttControllerTests: XCTestCase {
         ) async throws -> DictationSession {
             startCount += 1
             lastPartial = onPartial
-            let session = FakeSession(transcript: transcript)
+            let session = FakeSession(transcript: transcript, stallStop: stallStop)
             lastSession = session
             return session
         }
@@ -304,6 +322,42 @@ final class PttControllerTests: XCTestCase {
             return XCTFail("a stalled request must surface, not freeze the overlay")
         }
         XCTAssertNotNil(message)
+    }
+
+    func testHungStopRecoversViaFinalizeTimeout() async {
+        let engine = FakeEngine(permission: .granted)
+        engine.transcript = "never delivered"
+        engine.stallStop = true
+        let scheduler = FakeScheduler()
+        let controller = PttController(
+            engine: engine,
+            scheduler: scheduler,
+            permissionTimeoutMs: 10_000,
+            finalizeTimeoutMs: 50
+        )
+        let committed = Committed()
+        committed.cancellable = controller.$event
+            .compactMap { $0 }
+            .sink { event in
+                switch event.kind {
+                case .commit(let transcript): committed.transcripts.append(transcript)
+                case .quickTap: committed.quickTaps += 1
+                }
+            }
+
+        controller.pressDown()
+        scheduler.fireNext()
+        await waitUntil(engine.startCount == 1)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        controller.pressUp()
+        XCTAssertEqual(controller.stage, .finalizing)
+
+        // A stop() that never settles (and ignores cancellation, like a
+        // hung recognizer) must not pin the overlay at "Transcribing…" —
+        // the deadline abandons it and the gesture recovers to idle.
+        await waitUntil(controller.stage == .idle)
+        XCTAssertEqual(controller.stage, .idle)
+        XCTAssertTrue(committed.transcripts.isEmpty)
     }
 
     func testEmptyTranscriptFallsBackToFocus() async {

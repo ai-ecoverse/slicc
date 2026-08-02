@@ -383,20 +383,45 @@ final class PttController: ObservableObject {
 
     /// Race `operation` against a deadline; `fallback` when the deadline
     /// wins. Non-throwing analogue of the web's `withTimeout`.
+    ///
+    /// Deliberately NOT a task group: a group only exits once every child
+    /// has completed, and cancellation is cooperative — an operation
+    /// suspended in a checked continuation (a permission callback that
+    /// never fires, a recognizer that never finalizes) would keep the
+    /// group, and therefore the overlay, stuck past the advertised
+    /// deadline. Here the loser is simply abandoned: both racers funnel
+    /// into a resume-once gate, and a stalled operation parks harmlessly
+    /// while the UI recovers.
     private static func withTimeout<T: Sendable>(
         ms: Int,
         fallback: T,
         operation: @escaping @MainActor @Sendable () async -> T
     ) async -> T {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { await operation() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
-                return nil
+        await withCheckedContinuation { (continuation: CheckedContinuation<T, Never>) in
+            let gate = ResumeOnceGate(continuation)
+            Task { @MainActor in
+                gate.resume(await operation())
             }
-            let first = await group.next()
-            group.cancelAll()
-            return first ?? fallback
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
+                gate.resume(fallback)
+            }
+        }
+    }
+
+    /// First racer through wins; later resumes are no-ops. MainActor-bound,
+    /// so no lock is needed.
+    @MainActor
+    private final class ResumeOnceGate<T: Sendable> {
+        private var continuation: CheckedContinuation<T, Never>?
+
+        init(_ continuation: CheckedContinuation<T, Never>) {
+            self.continuation = continuation
+        }
+
+        func resume(_ value: T) {
+            continuation?.resume(returning: value)
+            continuation = nil
         }
     }
 }

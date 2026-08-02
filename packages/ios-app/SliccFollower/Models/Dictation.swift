@@ -170,6 +170,10 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
                 let isFinal = result.isFinal
                 self.lock.lock()
                 self.latestTranscript = text
+                // A final result is terminal even when no stop() is waiting
+                // yet: mark finished so a later stop() takes the fast path
+                // instead of installing a continuation nothing will resume.
+                if isFinal { self.finished = true }
                 let continuation = isFinal ? self.takeContinuationLocked() : nil
                 self.lock.unlock()
                 if let continuation {
@@ -181,27 +185,30 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
             if let error {
                 self.lock.lock()
                 let transcript = self.latestTranscript
+                let wasFinished = self.finished
+                // An error ends the recognition task — terminal like a
+                // final result, whatever the ordering.
+                self.finished = true
                 let continuation = self.takeContinuationLocked()
-                let midSession = continuation == nil && !self.finished
                 self.lock.unlock()
                 // A stop() in flight settles with whatever was heard — an
                 // error after endAudio() (e.g. "no speech detected") is a
                 // normal empty finish, not something to surface.
                 if let continuation {
                     continuation.resume(returning: transcript)
-                } else if midSession {
+                } else if !wasFinished {
                     Task { @MainActor in onError(error.localizedDescription) }
                 }
             }
         }
     }
 
-    /// Must be called with `lock` held. Marks the session finished and hands
-    /// out the continuation exactly once.
+    /// Must be called with `lock` held. Hands out the continuation exactly
+    /// once; callers mark `finished` themselves (a terminal callback is
+    /// terminal whether or not a stop() was already waiting).
     private func takeContinuationLocked() -> CheckedContinuation<String, Never>? {
         guard let continuation = finalContinuation else { return nil }
         finalContinuation = nil
-        finished = true
         return continuation
     }
 
