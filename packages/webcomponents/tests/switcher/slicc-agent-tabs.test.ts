@@ -711,7 +711,7 @@ describe('slicc-agent-tabs', () => {
   });
 
   describe('overflow reflow', () => {
-    it('sizes a one-tab frame to its tab and permanently reserved overflow footprint', () => {
+    it('sizes a one-tab frame to its tab without reserving an overflow footprint', () => {
       const element = mount(rosterOf(1), 720);
       element.reflow();
       const frame = element.querySelector('.slicc-agent-tabs__track-frame') as HTMLElement;
@@ -727,6 +727,7 @@ describe('slicc-agent-tabs', () => {
         Number.parseFloat(frameStyle.borderRightWidth);
 
       expect(frame.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 1);
+      expect(trackStyle.paddingRight).toBe('2px');
       expect(frame.getBoundingClientRect().width).toBeLessThan(element.clientWidth / 2);
     });
 
@@ -747,17 +748,53 @@ describe('slicc-agent-tabs', () => {
       }
     );
 
-    it('reserves the overflow footprint without changing track padding after reflow', () => {
+    it('keeps the DOM and arithmetic overflow reserves in the same state', () => {
       const element = mount(rosterOf(1), 220);
       const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
       element.reflow();
-      const withoutOverflow = getComputedStyle(track).paddingRight;
-      expect(withoutOverflow).toBe('41px');
+      expect(element.classList.contains('has-overflow')).toBe(false);
+      expect(getComputedStyle(track).paddingRight).toBe('2px');
 
       element.scoops = rosterOf(12);
       element.reflow();
       expect(element.classList.contains('has-overflow')).toBe(true);
-      expect(getComputedStyle(track).paddingRight).toBe(withoutOverflow);
+      expect(getComputedStyle(track).paddingRight).toBe('41px');
+    });
+
+    it('settles at every pixel across the fit boundary and keeps tabs clear of the trigger', () => {
+      const element = mount(rosterOf(6), 200);
+      const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
+      const trigger = overflow(element).shadowRoot?.querySelector('[part="more"]') as HTMLElement;
+      const visited = new Set<boolean>();
+
+      for (let width = 200; width <= 560; width += 1) {
+        element.style.width = `${width}px`;
+        const states = Array.from({ length: 4 }, () => {
+          element.reflow();
+          return {
+            overflow: element.classList.contains('has-overflow'),
+            hidden: segments(element)
+              .filter((item) => item.classList.contains('hide'))
+              .map((item) => item.dataset.k),
+            paddingRight: getComputedStyle(track).paddingRight,
+          };
+        });
+        expect(states.slice(1), `reflow alternated at ${width}px`).toEqual([
+          states[0],
+          states[0],
+          states[0],
+        ]);
+        visited.add(states[0].overflow);
+        expect(states[0].paddingRight).toBe(states[0].overflow ? '41px' : '2px');
+        if (states[0].overflow) {
+          const visible = segments(element).filter((item) => !item.classList.contains('hide'));
+          expect(visible.at(-1)?.getBoundingClientRect().right).toBeLessThanOrEqual(
+            trigger.getBoundingClientRect().left
+          );
+        }
+      }
+
+      expect(visited).toEqual(new Set([true, false]));
     });
 
     it('uses the rendered sliccy width as its floor and ellipsizes long labels at the ceiling', () => {
