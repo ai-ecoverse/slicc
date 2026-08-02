@@ -130,6 +130,10 @@ const meta: Meta<AgentTabsArgs> = {
 export default meta;
 type Story = StoryObj<AgentTabsArgs>;
 
+export const SingleCone: Story = {
+  args: { scoops: [BASE_ROSTER[0]], active: 'cone', width: 720 },
+};
+
 export const Default: Story = { args: { scoops: BASE_ROSTER, active: 'cone', width: 720 } };
 
 export const ConeMostRecent: Story = {

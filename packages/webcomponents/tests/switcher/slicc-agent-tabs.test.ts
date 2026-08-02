@@ -711,6 +711,25 @@ describe('slicc-agent-tabs', () => {
   });
 
   describe('overflow reflow', () => {
+    it('sizes a one-tab frame to its tab and permanently reserved overflow footprint', () => {
+      const element = mount(rosterOf(1), 720);
+      element.reflow();
+      const frame = element.querySelector('.slicc-agent-tabs__track-frame') as HTMLElement;
+      const track = element.querySelector('.slicc-agent-tabs__track') as HTMLElement;
+      const tabWidth = segment(element, 'cone').getBoundingClientRect().width;
+      const trackStyle = getComputedStyle(track);
+      const frameStyle = getComputedStyle(frame);
+      const expectedWidth =
+        tabWidth +
+        Number.parseFloat(trackStyle.paddingLeft) +
+        Number.parseFloat(trackStyle.paddingRight) +
+        Number.parseFloat(frameStyle.borderLeftWidth) +
+        Number.parseFloat(frameStyle.borderRightWidth);
+
+      expect(frame.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 1);
+      expect(frame.getBoundingClientRect().width).toBeLessThan(element.clientWidth / 2);
+    });
+
     it.each([1, 2, 6, 12])(
       'reaches the same overflow fixed point across forced reflows for %i scoops',
       (count) => {
@@ -793,11 +812,20 @@ describe('slicc-agent-tabs', () => {
         const sliccy = segment(element, 'cone');
         const label = sliccy.querySelector('.slicc-agent-tabs__label') as HTMLElement;
         const frame = element.querySelector('.slicc-agent-tabs__track-frame') as HTMLElement;
+        const focusedAvatar = avatar(element) as HTMLElement;
         const trigger = overflow(element).shadowRoot?.querySelector('[part="more"]') as HTMLElement;
         const sliccyRect = sliccy.getBoundingClientRect();
         const frameRect = frame.getBoundingClientRect();
         const triggerRect = trigger.getBoundingClientRect();
         expect(element.clientWidth).toBe(360);
+        expect(frameRect.width).toBeCloseTo(
+          element.clientWidth -
+            focusedAvatar.getBoundingClientRect().width -
+            Number.parseFloat(getComputedStyle(element).columnGap),
+          1
+        );
+        expect(triggerRect.width).toBeCloseTo(39, 1);
+        expect(triggerRect.height).toBeCloseTo(24, 1);
         expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
         expect(sliccyRect.right).toBeLessThanOrEqual(triggerRect.left);
         expect(triggerRect.right).toBeLessThanOrEqual(frameRect.right);
@@ -882,6 +910,12 @@ describe('slicc-agent-tabs', () => {
   describe('ResizeObserver lifecycle', () => {
     const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
+    async function waitForObserverReflow(): Promise<void> {
+      await nextFrame();
+      await nextFrame();
+      await nextFrame();
+    }
+
     function stubResizeObserver(): {
       callback: { current: ResizeObserverCallback | null };
       restore: () => void;
@@ -914,6 +948,28 @@ describe('slicc-agent-tabs', () => {
       } finally {
         restore();
       }
+    });
+
+    it('settles after crossing the fit/overflow boundary instead of oscillating', async () => {
+      const element = mount(rosterOf(6), 220);
+      await waitForObserverReflow();
+      const reflow = vi.spyOn(element, 'reflow');
+      const states: boolean[] = [];
+
+      for (const width of [220, 320, 420, 520, 420, 320, 220]) {
+        const before = reflow.mock.calls.length;
+        element.style.width = `${width}px`;
+        element.getBoundingClientRect();
+        await waitForObserverReflow();
+        const settled = reflow.mock.calls.length;
+        states.push(element.classList.contains('has-overflow'));
+        expect(settled - before).toBeLessThanOrEqual(2);
+        await waitForObserverReflow();
+        expect(reflow).toHaveBeenCalledTimes(settled);
+      }
+
+      expect(states).toContain(true);
+      expect(states).toContain(false);
     });
 
     it('cancels a pending observer reflow on disconnect', async () => {
