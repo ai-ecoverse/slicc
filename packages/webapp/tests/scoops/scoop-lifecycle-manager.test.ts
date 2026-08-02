@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import {
   type ScoopLifecycleDeps,
   ScoopLifecycleManager,
 } from '../../src/scoops/scoop-lifecycle-manager.js';
-import type { RegisteredScoop } from '../../src/scoops/types.js';
+import type { ChannelMessage, RegisteredScoop } from '../../src/scoops/types.js';
 
 vi.mock('../../src/scoops/scoop-context.js', () => ({
   ScoopContext: class {
+    constructor(
+      _scoop: RegisteredScoop,
+      readonly callbacks: { onFatalError(error: string): void }
+    ) {}
+
     async init(): Promise<void> {}
   },
 }));
@@ -19,6 +25,17 @@ const scoop: RegisteredScoop = {
   type: 'cone',
   requiresTrigger: false,
   assistantLabel: 'sliccy',
+  addedAt: new Date().toISOString(),
+};
+
+const worker: RegisteredScoop = {
+  jid: 'scoop_overflow_1',
+  name: 'overflow-worker',
+  folder: 'overflow-worker',
+  isCone: false,
+  type: 'scoop',
+  requiresTrigger: false,
+  assistantLabel: 'overflow-worker',
   addedAt: new Date().toISOString(),
 };
 
@@ -70,5 +87,71 @@ describe('ScoopLifecycleManager', () => {
 
     await expect(manager.createTab(scoop.jid)).resolves.toBeUndefined();
     expect(flushOnIdle).toHaveBeenCalledOnce();
+  });
+
+  it('routes fatal scoop errors to the cone and releases active scoop_wait callers', async () => {
+    const scoops = new Map([
+      [scoop.jid, scoop],
+      [worker.jid, worker],
+    ]);
+    const incoming: ChannelMessage[] = [];
+    const routed: ChannelMessage[] = [];
+    const completionService = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findCone: () => scoop,
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: (_jid, message) => incoming.push(message),
+      handleMessage: async (message) => {
+        routed.push(message);
+      },
+      reportError: vi.fn(),
+    });
+    const forgetScoop = vi.spyOn(completionService, 'forgetScoop');
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      callbacks: {
+        onError: vi.fn(),
+        onStatusChange: vi.fn(),
+        onIncomingMessage: (_jid: string, message: ChannelMessage) => incoming.push(message),
+      },
+      completionService,
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      handleMessage: async (message: ChannelMessage) => {
+        routed.push(message);
+      },
+    } as unknown as ScoopLifecycleDeps);
+
+    await manager.createTab(worker.jid);
+    const waitPromise = completionService.waitForScoops([worker.jid]);
+    const context = manager.getContext(worker.jid) as unknown as {
+      callbacks: { onFatalError(error: string): void };
+    };
+
+    context.callbacks.onFatalError('Context window exceeded and could not be reduced');
+
+    await expect(waitPromise).resolves.toEqual([
+      { jid: worker.jid, summary: null, timedOut: true },
+    ]);
+    expect(forgetScoop).toHaveBeenCalledWith(worker.jid, 'fatal-error');
+    expect(incoming).toEqual([
+      expect.objectContaining({ chatJid: scoop.jid, channel: 'scoop-error' }),
+    ]);
+    expect(routed).toEqual([
+      expect.objectContaining({
+        chatJid: scoop.jid,
+        channel: 'scoop-error',
+        content: expect.stringContaining('Context window exceeded and could not be reduced'),
+      }),
+    ]);
   });
 });
