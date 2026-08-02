@@ -174,11 +174,10 @@ jobs:
       - uses: ./.github/actions/npm-ci
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
-      - name: Debt boy-scout gate (complexity + ui back-edges)
+      - name: Debt boy-scout gate (biome rules + ui back-edges)
         # Fail when this PR touches a file that is still on a debt list —
-        # the biome.json complexity lists (function-size or cognitive-
-        # complexity) or the ui-back-edge baseline — without removing its
-        # entry. Skips automatically on merge_group / push.
+        # a per-rule biome.json exemption list or the ui-back-edge baseline —
+        # without removing its entry. Skips on merge_group / push.
         run: node packages/dev-tools/tools/check-touched-exemptions.mjs
       - name: Check Chrome Web Store manifest justifications
         # Fail if the extension manifest gains/drops a permission without a

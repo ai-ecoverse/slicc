@@ -3,11 +3,13 @@ import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
   extractSizeExemptionGlobs,
+  FLOATING_PROMISE_RULE_KEY,
   findAddedExemptions,
   findTouchedExemptions,
   globToRegex,
   isExemptionOverrideFor,
   isSizeExemptionOverride,
+  MISUSED_PROMISE_RULE_KEY,
   matchesAnyGlob,
   SIZE_RULE_KEY,
 } from './size-exemption-lib.mjs';
@@ -106,6 +108,10 @@ describe('isExemptionOverrideFor (parameterized by rule key)', () => {
       },
     },
   };
+  const floatingPromiseOnly = {
+    includes: ['packages/z.ts'],
+    linter: { rules: { nursery: { noFloatingPromises: 'off' } } },
+  };
 
   it('matches a complexity-only debt block for the complexity key but not the size key', () => {
     expect(isExemptionOverrideFor(complexityOnly, COMPLEXITY_RULE_KEY)).toBe(true);
@@ -133,6 +139,15 @@ describe('isExemptionOverrideFor (parameterized by rule key)', () => {
       )
     ).toBe(false);
   });
+
+  it('matches a debt block in a non-complexity rule group', () => {
+    expect(isExemptionOverrideFor(floatingPromiseOnly, FLOATING_PROMISE_RULE_KEY, 'nursery')).toBe(
+      true
+    );
+    expect(
+      isExemptionOverrideFor(floatingPromiseOnly, FLOATING_PROMISE_RULE_KEY, 'complexity')
+    ).toBe(false);
+  });
 });
 
 describe('extractExemptionGlobsFor (parameterized by rule key)', () => {
@@ -153,6 +168,14 @@ describe('extractExemptionGlobsFor (parameterized by rule key)', () => {
       {
         includes: ['packages/size-b.ts', 'packages/size-c.ts'],
         linter: { rules: { complexity: { noExcessiveLinesPerFunction: 'off' } } },
+      },
+      {
+        includes: ['packages/async-a.ts', 'packages/async-b.ts'],
+        linter: { rules: { nursery: { noFloatingPromises: 'off' } } },
+      },
+      {
+        includes: ['packages/callback-a.ts'],
+        linter: { rules: { nursery: { noMisusedPromises: 'off' } } },
       },
     ],
   };
@@ -175,6 +198,16 @@ describe('extractExemptionGlobsFor (parameterized by rule key)', () => {
   it('returns [] when no debt block exists for the key', () => {
     expect(extractExemptionGlobsFor({ overrides: [] }, COMPLEXITY_RULE_KEY)).toEqual([]);
     expect(extractExemptionGlobsFor({}, COMPLEXITY_RULE_KEY)).toEqual([]);
+  });
+
+  it('returns promise-rule globs from the nursery group only', () => {
+    expect(extractExemptionGlobsFor(cfg, FLOATING_PROMISE_RULE_KEY, 'nursery')).toEqual([
+      'packages/async-a.ts',
+      'packages/async-b.ts',
+    ]);
+    expect(extractExemptionGlobsFor(cfg, MISUSED_PROMISE_RULE_KEY, 'nursery')).toEqual([
+      'packages/callback-a.ts',
+    ]);
   });
 });
 

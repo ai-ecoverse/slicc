@@ -1,7 +1,7 @@
 ---
 name: verifying-before-push
 description: |
-  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout debt gate (check-touched-exemptions.mjs — complexity + ui back-edges; not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
+  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout debt gate (check-touched-exemptions.mjs — complexity, promise safety, and ui back-edges; not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
 ---
 
 # verifying-before-push
@@ -59,7 +59,7 @@ npm run bundle-size                    # Bundle budgets; needs the builds above
 ```
 
 The `check-touched-exemptions.mjs` gate runs right after lint because it catches
-complexity debt that lint alone misses. See the section below for details.
+grandfathered debt that lint alone misses. See the section below for details.
 
 ## Lint
 
@@ -130,25 +130,29 @@ node packages/dev-tools/tools/check-touched-exemptions.mjs
 CI's `lint` job runs this step **after** `lint:ci`. It is **not** part of `npm run lint`, so
 it is easy to miss locally.
 
-The gate enforces three "debt lists" of files grandfathered out of a rule:
+The gate enforces five "debt lists" of files grandfathered out of a rule:
 
 - `complexity.noExcessiveCognitiveComplexity` (`biome.json` `overrides`; cap: cognitive
   complexity **≤ 25**)
 - `complexity.noExcessiveLinesPerFunction` (`biome.json` `overrides`; cap: **≤ 150** lines
   per function)
+- `nursery.noFloatingPromises` (`biome.json` `overrides`; promises must be awaited,
+  returned, or explicitly handled)
+- `nursery.noMisusedPromises` (`biome.json` `overrides`; promises cannot stand in for
+  synchronous callbacks or conditions)
 - `ui/` layer back-edges (`packages/dev-tools/tools/ui-back-edge-baseline.json`; cap: **0**
   imports from `ui/` below the ui layer)
 
 When a PR **touches** any file still on one of those debt lists, this gate **fails** unless,
 in the same change, you pay the file's debt down and remove its entry:
 
-- Complexity lists: refactor every function in that file under the relevant cap, then delete
-  the file's entry from the corresponding `biome.json` `overrides` block.
+- Biome lists: fix every violation of the named rule, then delete the file's entry from the
+  corresponding `biome.json` `overrides` block.
 - Back-edge baseline: remove every `ui/` import from the file (move the pure helper into a
   lower-layer module), then run
   `node packages/dev-tools/tools/check-ui-back-edges.mjs --update`.
 
-Treat all three as one-way ratchets: never add a file to a debt list to silence it — the gate
+Treat all five as one-way ratchets: never add a file to a debt list to silence it — the gate
 also fails when a PR grows any list vs the base ref. The gate auto-skips on `merge_group` /
 `push` events (it resolves the merge-base against `$GITHUB_BASE_REF`), so always run it
 locally before pushing if you touched a listed file.
@@ -157,9 +161,8 @@ For warning-only cleanup PRs, this means "lint warning count down" is not enough
 touch a debt-listed file, you must fully pay down that file's debt in the same PR or avoid
 touching that file.
 
-To check whether a file is exempt, search `biome.json` for its path under the
-`noExcessiveCognitiveComplexity: "off"` / `noExcessiveLinesPerFunction: "off"` overrides,
-and `ui-back-edge-baseline.json` for its path key.
+To check whether a file is exempt, search `biome.json` for its path under a single-rule
+`"off"` override, and `ui-back-edge-baseline.json` for its path key.
 
 ## Coverage
 

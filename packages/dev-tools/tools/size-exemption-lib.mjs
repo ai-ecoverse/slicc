@@ -1,12 +1,10 @@
 // Shared logic for the PR-level "boy-scout" debt-list exemption gates.
 //
-// Biome's `complexity` group hosts two caps that each get a parallel debt
-// list in `biome.json`: function size (`noExcessiveLinesPerFunction`) and
-// cognitive complexity (`noExcessiveCognitiveComplexity`). For each rule,
+// Selected Biome rules get parallel debt lists in `biome.json`. For each rule,
 // current offenders are listed in dedicated `overrides` blocks that disable
 // ONLY that one rule — those blocks are the debt list: they can never grow,
-// and any PR that touches a file still on the list must bring it under the
-// cap and remove the entry in the same PR.
+// and any PR that touches a file still on the list must fix every violation and
+// remove the entry in the same PR.
 //
 // The pure functions here (no IO) are unit-tested by the `dev-tools` vitest
 // project. The thin IO + CLI driver lives in `check-touched-exemptions.mjs`.
@@ -20,31 +18,33 @@ export const biomeConfigPath = resolve(repoRoot, 'biome.json');
 
 export const SIZE_RULE_KEY = 'noExcessiveLinesPerFunction';
 export const COMPLEXITY_RULE_KEY = 'noExcessiveCognitiveComplexity';
+export const FLOATING_PROMISE_RULE_KEY = 'noFloatingPromises';
+export const MISUSED_PROMISE_RULE_KEY = 'noMisusedPromises';
 
 // Identify a debt-list `overrides` entry for a given rule key: blocks whose
 // ONLY linter rule customization is `complexity.<ruleKey>: "off"`. Other
 // overrides (e.g. the test-file block, which disables many rules) are
 // general policy, not debt, and are intentionally excluded.
-export function isExemptionOverrideFor(override, ruleKey) {
+export function isExemptionOverrideFor(override, ruleKey, ruleGroup = 'complexity') {
   const rules = override?.linter?.rules;
   if (!rules || typeof rules !== 'object') return false;
   const groups = Object.keys(rules);
-  if (groups.length !== 1 || groups[0] !== 'complexity') return false;
-  const complexity = rules.complexity;
-  if (!complexity || typeof complexity !== 'object') return false;
-  const ruleKeys = Object.keys(complexity);
+  if (groups.length !== 1 || groups[0] !== ruleGroup) return false;
+  const groupRules = rules[ruleGroup];
+  if (!groupRules || typeof groupRules !== 'object') return false;
+  const ruleKeys = Object.keys(groupRules);
   if (ruleKeys.length !== 1 || ruleKeys[0] !== ruleKey) return false;
-  return complexity[ruleKey] === 'off';
+  return groupRules[ruleKey] === 'off';
 }
 
 // Parse a biome config object and return the deduped list of exempted globs
 // for the given rule key (the union of `includes` from every matching
 // debt-list override block).
-export function extractExemptionGlobsFor(biomeConfig, ruleKey) {
+export function extractExemptionGlobsFor(biomeConfig, ruleKey, ruleGroup = 'complexity') {
   const overrides = Array.isArray(biomeConfig?.overrides) ? biomeConfig.overrides : [];
   const out = new Set();
   for (const override of overrides) {
-    if (!isExemptionOverrideFor(override, ruleKey)) continue;
+    if (!isExemptionOverrideFor(override, ruleKey, ruleGroup)) continue;
     const includes = Array.isArray(override.includes) ? override.includes : [];
     for (const glob of includes) {
       if (typeof glob === 'string' && glob.length > 0) out.add(glob);
