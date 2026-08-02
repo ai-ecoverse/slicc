@@ -19,6 +19,12 @@ struct InputBar: View {
     var onSteer: (String) -> Void = { _ in }
 
     @FocusState private var isFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// Push-to-talk: holding the EMPTY composer dictates a message
+    /// (`PttController` owns the state machine; the engine is swappable so
+    /// UI tests script it via `-uiTestSpeechPermission`).
+    @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
 
     private let accentPurple = Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255)
     private let barBackground = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x2E / 255)
@@ -59,6 +65,51 @@ struct InputBar: View {
         .opacity(isComposable ? 1.0 : 0.5)
         .disabled(!isComposable)
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
+        .overlay {
+            // The walkie-talkie overlay while a hold is active. Covers the
+            // whole band so the held finger has nothing else to hit.
+            if ptt.stage != .idle {
+                PttOverlayView(
+                    stage: ptt.stage,
+                    caption: ptt.caption,
+                    captionIsError: ptt.captionIsError,
+                    statusLine: ptt.engineStatusLine
+                )
+            }
+        }
+        .onAppear {
+            #if DEBUG
+                if let forced = UITestHooks.pttStage() {
+                    ptt.forceStage(forced.stage, caption: forced.caption)
+                }
+            #endif
+        }
+        // Handled from `.onChange` — NOT a callback stored at `onAppear` —
+        // so the handler sees current props: an appear-time closure captures
+        // the view value from before the connection state settled, and a
+        // commit routed through that snapshot fails `isComposable` silently.
+        .onChange(of: ptt.event) { _, event in
+            guard let event else { return }
+            switch event.kind {
+            case .commit(let transcript):
+                // The gesture only arms on an empty composer, so the
+                // transcript IS the message — reuse the exact send path.
+                text = transcript
+                sendIfPossible()
+            case .quickTap:
+                // Restore the native behavior the surface intercepted: a
+                // plain tap places the caret.
+                isFocused = true
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // SwiftUI's DragGesture has no touch-cancel callback; a system
+            // interrupt (incoming call, app switcher) surfaces as a scene
+            // phase change instead, and a press must not outlive it.
+            if phase != .active {
+                ptt.pressCancelled()
+            }
+        }
     }
 
     // MARK: - Text Field
@@ -89,6 +140,14 @@ struct InputBar: View {
                 .onSubmit {
                     sendIfPossible()
                 }
+                // While push-to-talk is armed the UIKit text view must not
+                // swallow touches: UITextView sits above any sibling overlay
+                // in UIKit z-order no matter what SwiftUI declares, so the
+                // press surface only ever hears a touch if the editor is
+                // hit-disabled. There is nothing to lose — the composer is
+                // empty (no caret to place, no text to select) and a quick
+                // tap restores focus through the `quickTap` event.
+                .allowsHitTesting(!pttArmed)
         }
         .background(fieldBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -96,6 +155,31 @@ struct InputBar: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
         )
+        .overlay {
+            // Hold-to-talk arms ONLY from an empty composer (web parity:
+            // once text is present a press is editing it, so the surface
+            // unmounts and selection/caret placement stay native). A quick
+            // tap forwards to focus via the `quickTap` event.
+            if pttArmed {
+                PttPressSurface(
+                    onDown: { ptt.pressDown() },
+                    onUp: { ptt.pressUp() }
+                )
+            }
+        }
+    }
+
+    /// The press surface mounts (and the editor yields its touches) only on
+    /// an empty, usable composer.
+    private var pttArmed: Bool { text.isEmpty && isComposable }
+
+    /// The recognizer behind push-to-talk: a UI test's scripted fake when
+    /// the launch arguments ask for one, Apple's on-device engine otherwise.
+    private static func makeDictationEngine() -> DictationEngine {
+        #if DEBUG
+            if let scripted = UITestHooks.speechEngine() { return scripted }
+        #endif
+        return AppleDictationEngine()
     }
 
     // MARK: - Action Button
