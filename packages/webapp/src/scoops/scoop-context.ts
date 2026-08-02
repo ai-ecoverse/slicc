@@ -18,7 +18,11 @@ import {
   streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
+import {
+  createCompactContext,
+  hasCompactionProgress,
+  stripOrphanedToolResults,
+} from '../core/context-compaction.js';
 import type {
   AgentMessage,
   AssistantMessage,
@@ -326,7 +330,13 @@ export class ScoopContext {
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
-  private isRecovering: 'overflow' | 'image' | false = false;
+  private imageRecoveryActive = false;
+  private compactFn: ReturnType<typeof createCompactContext> | null = null;
+  private getCompactionApiKey: (() => string | undefined) | null = null;
+  private overflowRecoveryAttempted = false;
+  private overflowRecoveryActive = false;
+  private overflowRecoveryPromise: Promise<void> | null = null;
+  private overflowRecoveryEscalated = false;
   private coneJid: string | undefined;
 
   private skillsFs: VirtualFS | null = null;
@@ -611,6 +621,7 @@ export class ScoopContext {
 
     const compactionHeaders =
       model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
+    const getCompactionApiKey = () => getApiKey() ?? undefined;
     const onMemoryUpdates =
       this.scoop.isCone && this.callbacks.appendConeMemory
         ? (bullets: string) =>
@@ -628,13 +639,13 @@ export class ScoopContext {
         typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? model.contextWindow
           : undefined,
-      getApiKey: () => getApiKey() ?? undefined,
+      getApiKey: getCompactionApiKey,
       headers: compactionHeaders,
       onMemoryUpdates,
       onCompactionStateChange: this.callbacks.onCompactionStateChange,
     });
 
-    return { streamWithSessionId, compactFn };
+    return { streamWithSessionId, compactFn, getCompactionApiKey };
   }
 
   /** Initialize the scoop's environment */
@@ -680,9 +691,12 @@ export class ScoopContext {
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
       const restoredMessages = await this.restoreSession();
-      const { streamWithSessionId, compactFn } = await this.buildSessionHelpers(model);
+      const { streamWithSessionId, compactFn, getCompactionApiKey } =
+        await this.buildSessionHelpers(model);
 
       if (this.disposed) return;
+      this.compactFn = compactFn;
+      this.getCompactionApiKey = getCompactionApiKey;
 
       const lockedEffort = this.getLockedEffortLevel();
       const thinkingLevel = resolveThinkingLevel(
@@ -714,7 +728,9 @@ export class ScoopContext {
         },
       });
 
-      this.unsubscribe = this.agent.subscribe((event) => this.handleAgentEvent(event));
+      this.unsubscribe = this.agent.subscribe((event, signal) =>
+        this.handleAgentEvent(event, signal)
+      );
 
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
@@ -915,12 +931,22 @@ export class ScoopContext {
   private async tryAgentPrompt(
     agent: Agent,
     text: string,
-    images: ImageContent[]
+    images: ImageContent[],
+    abortSignal: AbortSignal
   ): Promise<Error | null> {
     this.didStreamDeltas = false;
     this.promptStreamErrorMessage = null;
     try {
       await agent.prompt(text, images);
+      if (this.disposed || abortSignal.aborted) return null;
+
+      const recovery = this.overflowRecoveryPromise;
+      if (recovery) {
+        await recovery;
+        if (this.overflowRecoveryPromise === recovery) this.overflowRecoveryPromise = null;
+        if (this.disposed || abortSignal.aborted) return null;
+      }
+
       if (this.promptStreamErrorMessage) {
         return new Error(this.promptStreamErrorMessage);
       }
@@ -982,7 +1008,7 @@ export class ScoopContext {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       if (this.disposed || abortSignal.aborted) return null;
 
-      const error = await this.tryAgentPrompt(agent, text, images);
+      const error = await this.tryAgentPrompt(agent, text, images, abortSignal);
       if (!error) return null;
 
       if (this.disposed || abortSignal.aborted) return null;
@@ -1023,6 +1049,10 @@ export class ScoopContext {
 
     this.isProcessing = true;
     this.setStatus('processing');
+    this.overflowRecoveryAttempted = false;
+    this.overflowRecoveryActive = false;
+    this.overflowRecoveryPromise = null;
+    this.overflowRecoveryEscalated = false;
 
     const turnProcess = this.registerTurnProcess(text, abortController);
     this.currentTurnProcess = turnProcess;
@@ -1249,6 +1279,8 @@ export class ScoopContext {
     // this field for as long as anything retains the disposed context.
     this.unsubscribe = null;
     this.shell?.dispose();
+    this.compactFn = null;
+    this.getCompactionApiKey = null;
     this.agent = null;
     this.shell = null;
     this.fs = null;
@@ -1300,29 +1332,41 @@ export class ScoopContext {
     this.callbacks.onToolEnd?.(event.toolName, joined, event.isError);
   }
 
+  private shouldRecoverFromOverflow(message: PiAssistantMessage): boolean {
+    return !this.imageRecoveryActive && isContextOverflow(message);
+  }
+
+  private hasActiveRecovery(): boolean {
+    return this.imageRecoveryActive || this.overflowRecoveryActive;
+  }
+
   /** Handle agent_end error recovery and persistence. */
-  private handleAgentEndEvent(messages: AgentMessage[]): void {
+  private handleAgentEndEvent(messages: AgentMessage[], abortSignal?: AbortSignal): void {
+    if (this.disposed || abortSignal?.aborted) return;
     if (messages.length > 0) {
       const last = messages[messages.length - 1];
       if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
         const errorMsg = (last as AssistantMessage).errorMessage!;
-        if (!this.isRecovering && isImageProcessingError(errorMsg)) {
+        if (!this.hasActiveRecovery() && isImageProcessingError(errorMsg)) {
           this.recoverFromImageError(messages);
           return;
         }
-        if (!this.isRecovering && isContextOverflow(last as PiAssistantMessage)) {
-          this.recoverFromOverflow(messages);
+        if (this.shouldRecoverFromOverflow(last as PiAssistantMessage)) {
+          this.recoverFromOverflow(messages, abortSignal);
           return;
         }
-        if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
+        if (!this.hasActiveRecovery() && this.isProcessing && !this.didStreamDeltas) {
           this.promptStreamErrorMessage = errorMsg;
           return;
         }
-        this.isRecovering = false;
+        this.imageRecoveryActive = false;
+        this.overflowRecoveryActive = false;
         emitAgentError('llm', errorMsg);
         this.callbacks.onError(errorMsg);
       } else {
-        this.isRecovering = false;
+        this.imageRecoveryActive = false;
+        this.overflowRecoveryActive = false;
+        if (last.role === 'assistant') this.overflowRecoveryAttempted = false;
       }
     }
 
@@ -1345,7 +1389,7 @@ export class ScoopContext {
     }
   }
 
-  private handleAgentEvent(event: CoreAgentEvent): void {
+  private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): void {
     if (this.disposed) return;
     switch (event.type) {
       case 'message_update': {
@@ -1375,6 +1419,7 @@ export class ScoopContext {
       case 'message_end': {
         if (event.message.role === 'assistant') {
           const msg = event.message as AssistantMessage;
+          if (!msg.errorMessage) this.overflowRecoveryAttempted = false;
           const fullText = msg.content
             .filter((c): c is TextContent => c.type === 'text')
             .map((c) => c.text)
@@ -1388,116 +1433,132 @@ export class ScoopContext {
       }
 
       case 'turn_end': {
+        if (
+          event.message.role === 'assistant' &&
+          isContextOverflow(event.message as PiAssistantMessage)
+        ) {
+          break;
+        }
         this.callbacks.onResponseDone();
         break;
       }
 
       case 'agent_end': {
-        this.handleAgentEndEvent(event.messages);
+        this.handleAgentEndEvent(event.messages, abortSignal);
         break;
       }
     }
   }
 
-  /** Trim oversized messages for overflow recovery. Returns trimmed messages + count. */
-  private trimOversizedMessages(messages: AgentMessage[]): {
-    trimmed: AgentMessage[];
-    replaced: number;
-  } {
-    const trimmed = messages.slice(0, -1);
-    const TOKEN_THRESHOLD = 10000;
-    const CHAR_THRESHOLD = TOKEN_THRESHOLD * 4;
-    let replaced = 0;
+  /** Compact once after an overflow, then resume only after the active run settles. */
+  private recoverFromOverflow(messages: AgentMessage[], abortSignal?: AbortSignal): void {
+    const turnSignal = this.promptAbortController?.signal;
+    const signal =
+      abortSignal && turnSignal
+        ? AbortSignal.any([abortSignal, turnSignal])
+        : (abortSignal ?? turnSignal);
+    if (!this.agent || this.disposed || signal?.aborted) return;
 
-    for (let i = trimmed.length - 1; i >= 0 && replaced < 5; i--) {
-      const msg = trimmed[i] as RecoveryMessage;
-      if (!Array.isArray(msg.content)) continue;
-
-      let msgSize = 0;
-      for (const block of msg.content) {
-        if (block.type === 'text' && block.text) msgSize += block.text.length;
-        if (block.type === 'image' && block.data) msgSize += block.data.length;
-      }
-
-      if (msgSize > CHAR_THRESHOLD) {
-        const role = msg.role === 'toolResult' ? 'tool result' : msg.role;
-        const placeholder = {
-          type: 'text' as const,
-          text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
-        };
-
-        if (msg.role === 'assistant') {
-          const toolCalls = msg.content.filter((block) => block.type === 'toolCall');
-          trimmed[i] = {
-            ...msg,
-            content: [placeholder, ...toolCalls],
-          } as AgentMessage;
-        } else {
-          trimmed[i] = {
-            ...msg,
-            content: [placeholder],
-          } as AgentMessage;
-        }
-        replaced++;
-        log.info('Replaced oversized message', {
-          index: i,
-          role: msg.role,
-          size: msgSize,
-          preservedToolCalls:
-            msg.role === 'assistant' ? msg.content.filter((b) => b.type === 'toolCall').length : 0,
-        });
-      }
+    if (this.overflowRecoveryAttempted) {
+      this.escalateOverflowRecovery(signal);
+      return;
     }
-
-    return { trimmed, replaced };
-  }
-
-  /**
-   * Recover from a context overflow error by trimming oversized messages
-   * and re-prompting the agent with an explanation.
-   */
-  private recoverFromOverflow(messages: AgentMessage[]): void {
-    if (!this.agent) return;
+    this.overflowRecoveryAttempted = true;
+    this.overflowRecoveryActive = true;
 
     log.warn('Context overflow detected, attempting recovery', {
       folder: this.scoop.folder,
       messageCount: messages.length,
     });
 
-    this.isRecovering = 'overflow';
-    this.callbacks.onResponse(
-      'Context window exceeded — recovering by trimming oversized messages...',
-      false
+    const agent = this.agent;
+    const compactFn = this.compactFn;
+    const history = agent.state.messages;
+    const last = history[history.length - 1];
+    const messagesWithoutOverflow =
+      last?.role === 'assistant' && isContextOverflow(last as PiAssistantMessage)
+        ? history.slice(0, -1)
+        : history;
+    agent.state.messages = messagesWithoutOverflow;
+
+    if (!compactFn || !agent.state.model || !this.getCompactionApiKey?.()) {
+      this.escalateOverflowRecovery(signal, new Error('Compaction is unavailable'));
+      return;
+    }
+
+    this.overflowRecoveryPromise = this.compactAndResumeOverflow(
+      agent,
+      compactFn,
+      messagesWithoutOverflow,
+      signal
     );
+  }
 
+  private async compactAndResumeOverflow(
+    agent: Agent,
+    compactFn: ReturnType<typeof createCompactContext>,
+    messages: AgentMessage[],
+    abortSignal?: AbortSignal
+  ): Promise<void> {
     try {
-      const { trimmed, replaced } = this.trimOversizedMessages(messages);
-      this.agent.state.messages = trimmed;
-
-      const explanation =
-        replaced > 0
-          ? `[System: Context overflow recovered. ${replaced} oversized message(s) were replaced with placeholders to fit within the context window. The conversation continues — you may need to re-read files or re-run commands if their output was removed.]`
-          : `[System: Context overflow recovered. Older messages were trimmed. The conversation continues — compaction will summarize history on the next turn.]`;
-
-      this.agent.prompt(explanation).catch((err) => {
-        log.error('Recovery re-prompt failed', {
-          folder: this.scoop.folder,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        this.isRecovering = false;
-        this.callbacks.onError(
-          `Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`
+      const compacted = await compactFn(messages, abortSignal, { force: true });
+      if (this.disposed || abortSignal?.aborted || this.agent !== agent) return;
+      if (!hasCompactionProgress(messages, compacted)) {
+        this.escalateOverflowRecovery(
+          abortSignal,
+          new Error('Forced compaction did not reduce the context')
         );
+        return;
+      }
+      agent.state.messages = compacted;
+      this.callbacks.onResponse(
+        'Context window exceeded — compacting history and continuing...',
+        false
+      );
+
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          if (this.disposed || abortSignal?.aborted || this.agent !== agent) {
+            resolve();
+            return;
+          }
+          agent
+            .continue()
+            .then(resolve)
+            .catch((err) => {
+              if (!this.disposed && !abortSignal?.aborted) {
+                this.escalateOverflowRecovery(abortSignal, err);
+              }
+              resolve();
+            });
+        }, 100);
       });
     } catch (err) {
-      log.error('Recovery failed', {
-        folder: this.scoop.folder,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      this.isRecovering = false;
-      this.callbacks.onError(
-        `Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`
-      );
+      if (!this.disposed && !abortSignal?.aborted) {
+        this.escalateOverflowRecovery(abortSignal, err);
+      }
+    } finally {
+      this.overflowRecoveryActive = false;
+    }
+  }
+
+  private escalateOverflowRecovery(abortSignal?: AbortSignal, cause?: unknown): void {
+    this.overflowRecoveryActive = false;
+    if (this.disposed || abortSignal?.aborted || this.overflowRecoveryEscalated) return;
+    this.overflowRecoveryEscalated = true;
+    const causeMessage = cause instanceof Error ? cause.message : cause ? String(cause) : undefined;
+    log.error('Context overflow recovery exhausted', {
+      folder: this.scoop.folder,
+      error: causeMessage,
+    });
+    this.setStatus('error');
+    const message = `Scoop "${this.scoop.name}" context window was exceeded and could not be reduced. Re-delegate with a narrower task.`;
+    if (this.scoop.isCone) {
+      this.callbacks.onError(message);
+    } else if (this.callbacks.onFatalError) {
+      this.callbacks.onFatalError(message);
+    } else {
+      this.callbacks.onError(message);
     }
   }
 
@@ -1513,7 +1574,7 @@ export class ScoopContext {
       messageCount: messages.length,
     });
 
-    this.isRecovering = 'image';
+    this.imageRecoveryActive = true;
 
     this.callbacks.onResponse(
       'Image rejected by API — removing problematic images and continuing...',
@@ -1559,7 +1620,7 @@ export class ScoopContext {
           folder: this.scoop.folder,
           error: err instanceof Error ? err.message : String(err),
         });
-        this.isRecovering = false;
+        this.imageRecoveryActive = false;
         this.callbacks.onError(
           `Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -1569,7 +1630,7 @@ export class ScoopContext {
         folder: this.scoop.folder,
         error: err instanceof Error ? err.message : String(err),
       });
-      this.isRecovering = false;
+      this.imageRecoveryActive = false;
       this.callbacks.onError(
         `Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`
       );

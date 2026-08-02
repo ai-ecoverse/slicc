@@ -136,6 +136,11 @@ export interface CompactionConfig {
   onCompactionStateChange?: (state: CompactionState) => void;
 }
 
+export interface CompactionOptions {
+  /** Run the existing compaction path even when the local estimate is below its threshold. */
+  force?: boolean;
+}
+
 /**
  * Phases of an in-flight compaction. `idle` is the resting state; the UI
  * should clear any compaction-specific affordance when it sees it.
@@ -343,6 +348,47 @@ function buildElisionStub(approxBytes: number, role: 'toolResult' | 'assistant')
   return `[${prefix}: ${kb} KB, exceeds half the context window. Re-run with smaller arguments — e.g. open --view --size low.]`;
 }
 
+function elideMessageContent(message: AgentMessage): AgentMessage {
+  const role = (message as { role: string }).role as 'toolResult' | 'assistant';
+  const content = (message as { content?: unknown }).content;
+  const bytes = approxContentBytes(content);
+  if (role === 'toolResult') {
+    return {
+      ...(message as object),
+      content: [{ type: 'text', text: buildElisionStub(bytes, role) }],
+    } as AgentMessage;
+  }
+
+  const toolCalls = Array.isArray(content)
+    ? (content.filter((block) => (block as { type?: string }).type === 'toolCall') as Array<{
+        type: string;
+        id?: string;
+        name?: string;
+        arguments?: unknown;
+      }>)
+    : [];
+  const elidedToolCalls = toolCalls.map((toolCall) => {
+    let argumentBytes = 0;
+    if (toolCall.arguments !== undefined) {
+      try {
+        argumentBytes = JSON.stringify(toolCall.arguments).length;
+      } catch {
+        // unserializable arguments — best-effort, treat as 0 bytes
+      }
+    }
+    return {
+      type: toolCall.type,
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: { elided: true, originalBytes: argumentBytes },
+    };
+  });
+  return {
+    ...(message as object),
+    content: [{ type: 'text', text: buildElisionStub(bytes, role) }, ...elidedToolCalls],
+  } as AgentMessage;
+}
+
 /**
  * In the hopeless branch, replace the content of any single `toolResult`
  * (or assistant message carrying tool calls) whose estimated tokens exceed
@@ -380,10 +426,7 @@ function elideHopelessMessages(
     if (role === 'toolResult') {
       elidedCount++;
       elidedBytes += bytes;
-      return {
-        ...(msg as object),
-        content: [{ type: 'text', text: buildElisionStub(bytes, 'toolResult') }],
-      } as AgentMessage;
+      return elideMessageContent(msg);
     }
 
     // Assistant branch: only elide turns that actually carry tool calls.
@@ -396,33 +439,9 @@ function elideHopelessMessages(
     }>;
     if (toolCalls.length === 0) return msg;
 
-    // Rewrite each toolCall's `arguments` to a small stub while preserving
-    // `type`, `id`, and `name`. This drops multi-megabyte argument payloads
-    // (e.g. a large `write_file` `content` field) that would otherwise
-    // survive elision and keep the conversation over the hopeless threshold.
-    const elidedToolCalls = toolCalls.map((tc) => {
-      let argBytes = 0;
-      if (tc.arguments !== undefined) {
-        try {
-          argBytes = JSON.stringify(tc.arguments).length;
-        } catch {
-          // unserializable arguments — best-effort, treat as 0 bytes
-        }
-      }
-      return {
-        type: tc.type,
-        id: tc.id,
-        name: tc.name,
-        arguments: { elided: true, originalBytes: argBytes },
-      };
-    });
-
     elidedCount++;
     elidedBytes += bytes;
-    return {
-      ...(msg as object),
-      content: [{ type: 'text', text: buildElisionStub(bytes, 'assistant') }, ...elidedToolCalls],
-    } as AgentMessage;
+    return elideMessageContent(msg);
   });
 
   return { messages: out, elidedCount, elidedBytes };
@@ -435,6 +454,15 @@ function estimateTotalTokens(messages: AgentMessage[]): number {
     total += estimateTokens(msg);
   }
   return total;
+}
+
+/** Whether compaction changed the message sequence rather than returning a true no-op. */
+export function hasCompactionProgress(
+  messages: AgentMessage[],
+  compacted: AgentMessage[]
+): boolean {
+  if (messages.length !== compacted.length) return true;
+  return messages.some((message, index) => message !== compacted[index]);
 }
 
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
@@ -619,7 +647,7 @@ async function summarizeWithLlm(
  * Create a transformContext function that uses LLM summarization for compaction.
  *
  * The returned function:
- * 1. Checks if total tokens exceed (contextWindow - reserveTokens)
+ * 1. Checks if total tokens exceed (contextWindow - reserveTokens), unless forced by the caller
  * 2. If so, finds a cut point that keeps ~keepRecentTokens of recent messages
  * 3. Calls the LLM to summarize the older messages — conversation embedded in
  *    the system prompt so a follow-up call can cache-hit the prefix.
@@ -631,7 +659,11 @@ async function summarizeWithLlm(
  */
 export function createCompactContext(
   config: CompactionConfig
-): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
+): (
+  messages: AgentMessage[],
+  signal?: AbortSignal,
+  options?: CompactionOptions
+) => Promise<AgentMessage[]> {
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const reserveTokens = config.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
   const keepRecentTokens = config.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
@@ -639,11 +671,15 @@ export function createCompactContext(
 
   const settings = { enabled: true, reserveTokens, keepRecentTokens };
 
-  return async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+  return async (
+    messages: AgentMessage[],
+    signal?: AbortSignal,
+    options?: CompactionOptions
+  ): Promise<AgentMessage[]> => {
     if (messages.length === 0) return messages;
 
     const totalTokens = estimateTotalTokens(messages);
-    if (!shouldCompact(totalTokens, contextWindow, settings)) {
+    if (!options?.force && !shouldCompact(totalTokens, contextWindow, settings)) {
       return messages;
     }
 
