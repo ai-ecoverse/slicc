@@ -65,4 +65,32 @@ final class MemoryStoreTests: XCTestCase {
     func testHeadingOnlyDocumentYieldsNoRows() {
         XCTAssertTrue(MemoryStore.parse("## Empty\n\n### Also empty").isEmpty)
     }
+
+    func testAutoExtractedSectionsClassifyByContent() {
+        let rows = MemoryStore.parse(
+            """
+            ## Auto-extracted (2026-08-02)
+
+            - User prefers concise answers with keyboard-first workflows.
+            - Correction: never auto-merge UI PRs without review.
+            - The tray hub worker deploys manually.
+            """)
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(rows[0].tag, .user, "content evidence, not the generic heading")
+        XCTAssertEqual(rows[1].tag, .feedback)
+        XCTAssertNil(rows[2].tag, "auto-extracted without signals stays untagged")
+    }
+
+    func testProseOnlyDocumentBecomesOneRow() {
+        let rows = MemoryStore.parse(
+            """
+            # Memory
+
+            The user works from Berlin and prefers espresso-length reviews.
+            Deploys happen manually on Fridays.
+            """)
+        XCTAssertEqual(rows.count, 1, "a bullet-less memory file is not empty")
+        XCTAssertTrue(rows[0].body.contains("espresso-length"))
+        XCTAssertTrue(rows[0].body.contains("Fridays"))
+    }
 }

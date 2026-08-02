@@ -33,12 +33,22 @@ enum MemoryStore {
         pattern:
             "\\b(user|preferences?|identit(?:y|ies)|accounts?|personal|interface|working rhythm|keyboard|accessibility)\\b",
         options: [.caseInsensitive])
+    /// The session freezer files everything under a generic
+    /// `Auto-extracted (…)` heading — classification must then look at the
+    /// bullet's own content, not the heading (web parity: `tagFor` builds
+    /// its evidence the same way).
+    private static let autoExtractedSection = try! NSRegularExpression(
+        pattern: "^Auto-extracted \\(", options: [])
 
-    static func tag(forSection section: String) -> MemoryRow.Tag? {
-        let range = NSRange(section.startIndex..., in: section)
-        if feedbackSection.firstMatch(in: section, range: range) != nil { return .feedback }
-        if userSection.firstMatch(in: section, range: range) != nil { return .user }
-        if section.isEmpty { return nil }
+    static func tag(forSection section: String, content: String = "") -> MemoryRow.Tag? {
+        let sectionRange = NSRange(section.startIndex..., in: section)
+        let autoExtracted =
+            autoExtractedSection.firstMatch(in: section, range: sectionRange) != nil
+        let evidence = autoExtracted ? content : "\(section) \(content)"
+        let range = NSRange(evidence.startIndex..., in: evidence)
+        if feedbackSection.firstMatch(in: evidence, range: range) != nil { return .feedback }
+        if userSection.firstMatch(in: evidence, range: range) != nil { return .user }
+        if autoExtracted || section.isEmpty { return nil }
         return .project
     }
 
@@ -81,7 +91,7 @@ enum MemoryStore {
             rows.append(
                 MemoryRow(
                     id: rows.count, section: section, title: title, body: body,
-                    tag: tag(forSection: section)))
+                    tag: tag(forSection: section, content: body)))
         }
 
         for rawLine in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -108,6 +118,24 @@ enum MemoryStore {
             }
         }
         flush()
+        if rows.isEmpty {
+            // A memory file with prose but no bullets is still memory: the
+            // web parser folds a bullet-less document into a single row
+            // rather than claiming it is empty.
+            let prose =
+                markdown
+                .split(separator: "\n", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.hasPrefix("#") && !$0.isEmpty }
+                .joined(separator: "\n")
+            if !prose.isEmpty {
+                let (title, _) = splitTitle(prose)
+                rows.append(
+                    MemoryRow(
+                        id: 0, section: section, title: title, body: prose,
+                        tag: tag(forSection: section, content: prose)))
+            }
+        }
         return rows
     }
 }
