@@ -34,7 +34,7 @@ The two version strings (`from`, `to`) are valid git tags on `https://github.com
 
 The runtime renders the upgrade lick as a binary action card automatically — you do not render a sprinkle. The card has exactly two outcomes, which you drive with the lick tools using the `Lick ID` from the message:
 
-- **`lick_confirm` → Update workspace files.** This is the primary action: run the three-way merge of bundled `vfs-root` content into the user's VFS (see below). Only confirm once the user has decided to pull the new files.
+- **`lick_confirm` → Update workspace files.** This runs `upgrade apply` with the stored release versions. Only confirm once the user has decided to pull the new files.
 - **`lick_dismiss` → clear the card.** Use this when the user wants to skip the merge; nothing is changed and the card mutes (✗). The lick will not fire again until the next upgrade.
 
 The card flips to ✓ on confirm / muted ✗ on dismiss. Never auto-run the merge — the user must choose. Reviewing the changelog is **not** a card action; it is a separate step you can run first to help the user decide.
@@ -52,33 +52,23 @@ curl -sSL "https://api.github.com/repos/ai-ecoverse/slicc/compare/v${FROM_VERSIO
 
 Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, ...). If the compare returns 404 (tags missing), fall back to the GitHub releases page URL: `https://github.com/ai-ecoverse/slicc/releases/tag/v${TO_VERSION}`.
 
-## Three-way merge (the `lick_confirm` / "Update workspace files" action)
+## Applying workspace files (the `lick_confirm` action)
 
-The user's VFS may have local edits to bundled skills, sprinkles, or scripts. The three inputs to the merge are:
+`lick_confirm` runs the browser-native command below through the cone shell using the versions stored with the lick. Do not run a second merge after confirming.
 
-- **base** = the bundled vfs-root file at the **previous** release tag (`v${FROM_VERSION}`). This is what the user originally received and is the common ancestor of both sides.
-- **ours** = the file currently in the user's VFS (which may equal `base` if untouched, or may carry local edits).
-- **theirs** = the bundled vfs-root file at the **new** release tag (`v${TO_VERSION}`).
+```bash
+upgrade apply --from="${FROM_VERSION}" --to="${TO_VERSION}"
+```
 
-Concretely:
+The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, and `/shared/sounds`; prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
 
-1. Identify candidate paths under `/workspace/skills/` and `/shared/sprinkles/` that match bundled files. Per file:
-   - Fetch `base` from `https://raw.githubusercontent.com/ai-ecoverse/slicc/v${FROM_VERSION}/packages/vfs-root/<rest-of-path>`.
-   - Fetch `theirs` from `https://raw.githubusercontent.com/ai-ecoverse/slicc/v${TO_VERSION}/packages/vfs-root/<rest-of-path>`.
-   - Read `ours` from the user's VFS at the equivalent runtime path (e.g. `/workspace/skills/<name>/SKILL.md`).
-2. Decide per file:
-   - If `base == theirs`: nothing changed upstream → leave the user's file alone (no merge needed).
-   - If `ours == base` and `base != theirs`: the user has not edited this file → safe fast-forward to `theirs`.
-   - If `ours != base` and `base != theirs`: real 3-way merge. Write the three sides to `/tmp` and let `git merge-file` produce the result:
-     ```bash
-     git merge-file --stdout /tmp/ours /tmp/base /tmp/theirs > /tmp/merged
-     ```
-     Exit code 0 → clean merge; write `/tmp/merged` back to the VFS path. Non-zero exit means conflicts (`<<<<<<<` markers in the output) — surface the conflicting hunks and let the user pick.
-3. Present the per-file outcome as a summary table (`auto-applied`, `kept-local`, `needs-review`) and stop. Do not silently overwrite anything.
+An exit code of `1` means discovery/fetch failed or at least one path needs review. Conflicts are written to the reported collision-safe sidecar while the live file remains unchanged. Show the JSON summary and sidecar paths to the user; never copy conflict markers into the live file automatically. The command never deletes local-only files.
+
+The command can also be run directly with explicit release versions for manual recovery, but an upgrade card still requires the user's confirmation before changing files.
 
 ## Do not
 
-- Do not run a merge before the user confirms. The merge runs only as the `lick_confirm` ("Update workspace files") action; if the user dismisses, do nothing.
+- Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
 - Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, and `/shared/sounds/` without the user explicitly extending the scope.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

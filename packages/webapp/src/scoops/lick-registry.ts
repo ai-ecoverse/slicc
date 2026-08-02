@@ -45,7 +45,7 @@ export interface LickResolution {
 
 export interface LickRegistryDeps {
   /**
-   * Look up the cone's shell. Used by the upskill / mount-recovery resolution
+   * Look up the cone's shell. Used by upskill, mount-recovery, and upgrade resolution
    * paths to actually run the relevant commands in the cone's environment.
    * Returns `null` when no cone is registered or its context is not ready.
    */
@@ -279,13 +279,7 @@ export class LickRegistry {
     return { settled: true, persisted: false, message: 'Session-reload notice acknowledged.' };
   }
 
-  /**
-   * Binary upgrade action. On allow/always: return the merge directive so the
-   * agent runs the upgrade skill's three-way merge of bundled vfs-root content
-   * (scoped to the stored `from`→`to` tags); on deny: clear the notice without
-   * touching any files. Reviewing the changelog is NOT handled here — it stays
-   * a separate agent step the agent can run before deciding.
-   */
+  /** Run the stored release upgrade on confirmation; dismissal performs no shell work. */
   private async resolveUpgrade(
     id: string,
     entry: Extract<LickEntry, { kind: 'upgrade' }>,
@@ -296,14 +290,23 @@ export class LickRegistry {
     if (decision.decision === 'deny') {
       message = 'Upgrade dismissed — workspace files were left unchanged.';
     } else {
-      message =
-        `Update workspace files: run the upgrade skill's three-way merge of bundled ` +
-        `vfs-root content from v${entry.from} → v${entry.to} ` +
-        `(base = v${entry.from}, theirs = v${entry.to}, ours = the user's VFS). ` +
-        `Apply the per-file outcomes and present the summary; do not delete files or ` +
-        `overwrite local edits without showing the result.`;
+      message = await this.runUpgrade(entry);
     }
     await this.deps.persistLickDecision(id, decision.decision);
     return { settled: true, persisted: false, message };
+  }
+
+  private async runUpgrade(entry: Extract<LickEntry, { kind: 'upgrade' }>): Promise<string> {
+    const shell = this.deps.getConeShell();
+    if (!shell) return 'upgrade could not run: no cone shell available.';
+    const command =
+      `upgrade apply --from=${shellQuote(entry.from)} ` + `--to=${shellQuote(entry.to)}`;
+    try {
+      const result = await shell.executeCommand(command);
+      const out = `${result.stdout}${result.stderr}`.trim();
+      return out.length > 0 ? out : `upgrade exited ${result.exitCode}.`;
+    } catch (err) {
+      return `upgrade failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 }

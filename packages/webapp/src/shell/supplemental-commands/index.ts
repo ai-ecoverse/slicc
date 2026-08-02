@@ -67,6 +67,7 @@ import { createThemeCommand } from './theme-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
+import { createUpgradeCommand } from './upgrade-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
 import { createWebhookCommand } from './webhook-command.js';
@@ -94,7 +95,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
   /**
-   * Proxied/secure fetch used by network-bound commands (currently `ipk`/`npm`).
+   * Proxied/secure fetch used by network-bound commands (including `ipk` and `upgrade`).
    * `AlmostBashShellHeadless` injects `createProxiedFetch()`; when omitted, the
    * registry-backed `ipk` commands are not registered.
    */
@@ -180,6 +181,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
           createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
           createDiCommand('di', { fs: options.fs, fetch: options.fetch }),
           createDiCommand('uv', { fs: options.fs, fetch: options.fetch }),
+          createUpgradeCommand({ fs: options.fs, fetch: options.fetch }),
         ]
       : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),

@@ -3583,7 +3583,7 @@ describe('Orchestrator upgrade-lick actionable resolution', () => {
     });
   }
 
-  it('upgrade lick_confirm returns the update-workspace-files merge directive and flips the card to confirmed', async () => {
+  it('upgrade lick_confirm runs upgrade apply through the cone shell and flips the card', async () => {
     const onMessageUpdate = vi.fn();
     orch = makeOrch(onMessageUpdate);
     await orch.init();
@@ -3596,13 +3596,19 @@ describe('Orchestrator upgrade-lick actionable resolution', () => {
       body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
     } as any);
     await saveUpgradeMessage(lickId);
+    const executeCommand = vi.fn().mockResolvedValue({
+      stdout: '{"ok":true,"results":[]}\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    const coneCtx = orch.getScoopContext(cone.jid);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
 
     const result = await orch.resolveActionableLick(lickId, { decision: 'allow' });
 
     expect(result.settled).toBe(true);
-    expect(result.message).toContain('Update workspace files');
-    expect(result.message).toContain('v0.4.1');
-    expect(result.message).toContain('v0.5.0');
+    expect(executeCommand).toHaveBeenCalledWith("upgrade apply --from='0.4.1' --to='0.5.0'");
+    expect(result.message).toBe('{"ok":true,"results":[]}');
     expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
       messageId: `upgrade-0.5.0-${lickId}`,
       lickId,
@@ -3629,10 +3635,14 @@ describe('Orchestrator upgrade-lick actionable resolution', () => {
       body: { from: '0.4.1', to: '0.5.0', releasedAt: null },
     } as any);
     await saveUpgradeMessage(lickId);
+    const executeCommand = vi.fn();
+    const coneCtx = orch.getScoopContext(cone.jid);
+    vi.spyOn(coneCtx!, 'getShell').mockReturnValue({ executeCommand } as never);
 
     const result = await orch.resolveActionableLick(lickId, { decision: 'deny' });
 
     expect(result.settled).toBe(true);
+    expect(executeCommand).not.toHaveBeenCalled();
     expect(result.message).toContain('dismissed');
     expect(result.message).not.toContain('Update workspace files');
     expect(onMessageUpdate).toHaveBeenCalledWith(cone.jid, {
