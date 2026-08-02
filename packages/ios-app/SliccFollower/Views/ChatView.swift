@@ -216,7 +216,14 @@ struct ConversationView: View {
                                 .foregroundStyle(palette.ink.opacity(0.7))
                         }
                     }
-                    .disabled(appState.newSessionInFlight)
+                    // Gated like the composer: with no usable leader the
+                    // request would silently vanish (requestNewSession
+                    // returns when the channel cannot be written).
+                    .disabled(
+                        appState.newSessionInFlight
+                            || appState.connectionState != .connected
+                            || appState.isLeaderStalled
+                    )
                     .accessibilityLabel("New chat")
                     .accessibilityIdentifier("new-chat-button")
                 }
