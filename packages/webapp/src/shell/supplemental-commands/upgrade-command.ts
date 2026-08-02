@@ -230,6 +230,58 @@ async function buildPlan(
   };
 }
 
+interface WriteSnapshot {
+  path: string;
+  content: Uint8Array | undefined;
+}
+
+async function restoreSnapshot(fs: VirtualFS, snapshot: WriteSnapshot): Promise<void> {
+  if (snapshot.content) {
+    await fs.writeFile(snapshot.path, snapshot.content);
+  } else if (await fs.exists(snapshot.path)) {
+    await fs.rm(snapshot.path);
+  }
+}
+
+async function commitPlans(fs: VirtualFS, plans: UpgradePlan[]): Promise<void> {
+  const writes = plans.filter(
+    (plan): plan is UpgradePlan & { content: Uint8Array } => plan.content !== undefined
+  );
+  const snapshots = await Promise.all(
+    writes.map(async (plan) => {
+      const path = plan.sidecar ?? plan.path;
+      return { path, content: await readLocal(fs, path) };
+    })
+  );
+  const applied: WriteSnapshot[] = [];
+
+  for (let index = 0; index < writes.length; index += 1) {
+    const plan = writes[index];
+    const snapshot = snapshots[index];
+    try {
+      await fs.writeFile(snapshot.path, plan.content);
+      applied.push(snapshot);
+    } catch (error) {
+      const rollbackErrors: string[] = [];
+      for (const target of [snapshot, ...applied.slice().reverse()]) {
+        try {
+          await restoreSnapshot(fs, target);
+        } catch (rollbackError) {
+          rollbackErrors.push(
+            `${target.path}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+          );
+        }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const rollback =
+        rollbackErrors.length === 0
+          ? 'all writes rolled back'
+          : `rollback failed (${rollbackErrors.join('; ')})`;
+      throw new Error(`apply failed for ${snapshot.path}: ${message}; ${rollback}`);
+    }
+  }
+}
+
 async function applyUpgrade(
   deps: UpgradeCommandDeps,
   from: string,
@@ -266,10 +318,7 @@ async function applyUpgrade(
   }
 
   // All discovery, downloads, local reads, merges, and sidecar selection succeeded.
-  for (const plan of plans) {
-    if (!plan.content) continue;
-    await deps.fs.writeFile(plan.sidecar ?? plan.path, plan.content);
-  }
+  await commitPlans(deps.fs, plans);
   return plans;
 }
 

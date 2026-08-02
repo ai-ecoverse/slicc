@@ -160,6 +160,37 @@ describe('upgrade apply', () => {
     expect(await fs.exists(missing)).toBe(false);
   });
 
+  it('rolls back earlier writes when a later write fails', async () => {
+    const first = '/workspace/skills/first.txt';
+    const second = '/workspace/skills/second.txt';
+    await fs.writeFile(first, 'first base\n');
+    await fs.writeFile(second, 'second base\n');
+    const writeFile = fs.writeFile.bind(fs);
+    let failed = false;
+    vi.spyOn(fs, 'writeFile').mockImplementation(async (path, content, options) => {
+      if (path === second && !failed) {
+        failed = true;
+        throw new Error('disk full');
+      }
+      await writeFile(path, content, options);
+    });
+
+    const { result, json } = await run(
+      fs,
+      makeFetch({
+        'v1.0.0': { [first]: 'first base\n', [second]: 'second base\n' },
+        'v2.0.0': { [first]: 'first next\n', [second]: 'second next\n' },
+      })
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(json.errors[0]).toContain(
+      `apply failed for ${second}: disk full; all writes rolled back`
+    );
+    expect(await fs.readFile(first)).toBe('first base\n');
+    expect(await fs.readFile(second)).toBe('second base\n');
+  });
+
   it('returns JSON and a nonzero exit for discovery errors', async () => {
     const { result, json } = await run(fs, makeFetch({ 'v1.0.0': {} }));
     expect(result.exitCode).toBe(1);
