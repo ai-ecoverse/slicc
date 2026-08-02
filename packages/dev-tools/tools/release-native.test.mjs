@@ -31,6 +31,7 @@ import {
   MACOS_PATH_PREFIXES,
   main,
   matchesAnyPrefix,
+  NON_GATING_STEP_TIMEOUT_MS,
   parseArgs,
   parseChangedFiles,
   resolveDiffRef,
@@ -725,13 +726,25 @@ describe('main biome-jsh gate', () => {
 });
 
 describe('runNonGatingStep', () => {
-  it('runs the step and reports success', () => {
+  it('runs the step time-bounded and reports success', () => {
     const calls = [];
-    const ok = runNonGatingStep('iOS (TestFlight ipa)', 'cmd', false, (label, cmd, dryRun) => {
-      calls.push([label, cmd, dryRun]);
-    });
+    const ok = runNonGatingStep(
+      'iOS (TestFlight ipa)',
+      'cmd',
+      false,
+      (label, cmd, dryRun, _verb, _dryVerb, execOpts) => {
+        calls.push([label, cmd, dryRun, execOpts]);
+      }
+    );
     expect(ok).toBe(true);
-    expect(calls).toEqual([['iOS (TestFlight ipa)', 'cmd', false]]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('iOS (TestFlight ipa)');
+    // A hung xcodebuild must not consume the job timeout inside prepareCmd
+    // — the invocation carries a kill-backed deadline.
+    expect(calls[0][3]).toEqual({
+      timeout: NON_GATING_STEP_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
   });
 
   it('swallows a step failure so distribution cannot gate the release', () => {

@@ -357,14 +357,20 @@ export function getChangedFiles(lastTag) {
   return parseChangedFiles(out);
 }
 
-function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build') {
+function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build', execOpts = {}) {
   if (dryRun) {
     console.log(`[release-native] (dry-run) would ${dryVerb} ${label}: ${cmd}`);
     return;
   }
   console.log(`[release-native] ${verb} ${label} …`);
-  execSync(cmd, { stdio: 'inherit' });
+  execSync(cmd, { stdio: 'inherit', ...execOpts });
 }
+
+// Bound on a non-gating step. An archive + TestFlight upload normally runs
+// well under 20 minutes; a hung xcodebuild/altool would otherwise sit on
+// semantic-release's prepareCmd until the JOB timeout and gate every later
+// publish anyway — the exact failure mode the wrapper exists to prevent.
+export const NON_GATING_STEP_TIMEOUT_MS = 25 * 60 * 1000;
 
 /**
  * Run a DISTRIBUTION step that must never gate the rest of the release.
@@ -379,11 +385,21 @@ function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build') {
  * proof an ipa shipped, since the script soft-skips on missing secrets and
  * old Xcode too.
  *
+ * The invocation is time-bounded (`NON_GATING_STEP_TIMEOUT_MS`): a HUNG
+ * tool never throws on its own, and an unbounded synchronous call inside
+ * prepareCmd would consume the job timeout and gate every later publish —
+ * the same hostage situation, wearing a different face. On timeout,
+ * execSync kills the process (SIGKILL — xcodebuild ignores politer
+ * signals when wedged) and throws, landing in the same catch.
+ *
  * `runStepImpl` is injectable for tests.
  */
 export function runNonGatingStep(label, cmd, dryRun, runStepImpl = runStep) {
   try {
-    runStepImpl(label, cmd, dryRun);
+    runStepImpl(label, cmd, dryRun, undefined, undefined, {
+      timeout: NON_GATING_STEP_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
