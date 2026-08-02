@@ -1,6 +1,12 @@
 import Foundation
 import UIKit
 
+/// The three `new_session` dispositions, mirroring
+/// `packages/shared-ts/src/tray-sync-protocol.ts`.
+enum NewSessionAction: String, Codable {
+    case save, skip, erase
+}
+
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
@@ -575,6 +581,9 @@ enum LeaderToFollowerMessage: Codable {
 /// "Multi-Browser Sync (Tray) Architecture" for the canonical matrix.
 enum FollowerToLeaderMessage: Codable {
     case userMessage(text: String, messageId: String)
+    /// Start a new chat with one of three dispositions (`new_session`):
+    /// save (enriched freeze), skip (quick freeze), erase (discard).
+    case newSession(action: NewSessionAction)
     case abort
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
@@ -611,7 +620,7 @@ enum FollowerToLeaderMessage: Codable {
     case pong
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, messageId, scoopJid
+        case type, text, messageId, scoopJid, action
         case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
@@ -628,6 +637,9 @@ enum FollowerToLeaderMessage: Codable {
             self = .userMessage(
                 text: try container.decode(String.self, forKey: .text),
                 messageId: try container.decode(String.self, forKey: .messageId))
+        case "new_session":
+            self = .newSession(
+                action: try container.decode(NewSessionAction.self, forKey: .action))
         case "abort":
             self = .abort
         case "request_snapshot":
@@ -708,6 +720,9 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("user_message", forKey: .type)
             try container.encode(text, forKey: .text)
             try container.encode(messageId, forKey: .messageId)
+        case .newSession(let action):
+            try container.encode("new_session", forKey: .type)
+            try container.encode(action, forKey: .action)
         case .abort:
             try container.encode("abort", forKey: .type)
         case .requestSnapshot(let scoopJid):

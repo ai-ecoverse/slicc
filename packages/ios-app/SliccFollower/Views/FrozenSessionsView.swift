@@ -8,6 +8,18 @@ struct FrozenSessionsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @State private var query = ""
+    @State private var showNewSessionDialog = FrozenSessionsView.autoOpensNewSession()
+    @State private var confirmErase = false
+
+    /// `-uiTestOpenNewSession YES` presents the dialog on appear —
+    /// screenshots and tests without a tap. Constant false outside DEBUG.
+    static func autoOpensNewSession() -> Bool {
+        #if DEBUG
+            return UserDefaults.standard.bool(forKey: "uiTestOpenNewSession")
+        #else
+            return false
+        #endif
+    }
 
     var body: some View {
         NavigationStack {
@@ -27,9 +39,55 @@ struct FrozenSessionsView: View {
             .navigationTitle("Past Sessions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    // The rail's "New +": ask the leader to start a new chat.
+                    // Disabled while a request is in flight — the leader
+                    // single-flights too, but the phone must not queue one.
+                    Button {
+                        showNewSessionDialog = true
+                    } label: {
+                        if appState.newSessionInFlight {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "plus.circle")
+                        }
+                    }
+                    .disabled(appState.newSessionInFlight)
+                    .accessibilityLabel("New session")
+                    .accessibilityIdentifier("new-session-button")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .confirmationDialog(
+                "Start a new chat?", isPresented: $showNewSessionDialog, titleVisibility: .visible
+            ) {
+                Button("Save & start new") {
+                    appState.requestNewSession(.save)
+                    dismiss()
+                }
+                Button("New chat — skip memory") {
+                    appState.requestNewSession(.skip)
+                    dismiss()
+                }
+                Button("Erase & start new", role: .destructive) {
+                    // Irreversible — double-confirm rather than firing off a
+                    // destructive action from a slippable dialog.
+                    confirmErase = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The current session is archived on the leader; Save also extracts memory.")
+            }
+            .alert("Erase the current session?", isPresented: $confirmErase) {
+                Button("Erase", role: .destructive) {
+                    appState.requestNewSession(.erase)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This discards the current chat permanently — nothing is archived.")
             }
         }
         .onAppear { appState.loadFrozenSessions() }
