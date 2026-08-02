@@ -874,6 +874,9 @@ async function runConverseRequest(
   const responseBody = await response.json();
   parseConverseResponse(responseBody, model, output, stream);
 
+  if (output.stopReason === 'pending') {
+    throw new Error('Bedrock CAMP response ended without a stop reason');
+  }
   if (output.stopReason === 'error' || output.stopReason === 'aborted') {
     throw new Error('An unknown error occurred');
   }
