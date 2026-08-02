@@ -66,12 +66,12 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
 - Message dispatch: `handleDataChannelMessage(_ data: Data)` switch
 - Sprinkles: `refreshSprinkles()`, `fetchSprinkleContent(_:)` (chunk reassembly + waiter dedup), `sendSprinkleLick(_:body:targetScoop:)`, `handleSprinkleContent(...)`
 - Leader VFS: `Sync/FsClient.swift`. iOS is the _requester_ — `fs.request` with
-  `targetRuntimeId: "leader"` reads the **leader's** files, and a
+  `targetRuntimeId: "leader"` accesses the **leader's** files, and a
   leader-originated request gets an `ENOTSUP` reply rather than silence
   (`fs-router.ts` has no timeout, so a drop hangs its promise). The client owns
-  the deadline and all-or-nothing reassembly the leader lacks. Only
-  `readFile`/`stat` reach a live leader: the webapp hands `handleFsRequest` a
-  two-method proxy cast `as VirtualFS`, so the other six answer `ok: false`.
+  the deadline and all-or-nothing reassembly the leader lacks. The live leader
+  supports reads plus `writeFile`/`mkdir`/`rm` everywhere except `/proc`;
+  `exists` and `walk` remain unsupported by the page proxy.
 - `hello`: sends `capabilities: { exec: false }` explicitly plus a device-derived `motd` for the leader's `ssh --list`. The leader's gate reads `peerCapabilities?.exec`, so absent and false behave alike — only one of them is a stated contract.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle

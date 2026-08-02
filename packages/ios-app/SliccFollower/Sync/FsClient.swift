@@ -8,15 +8,11 @@ import OSLog
 /// `FsRouter.executeLocalFs` on the leader's own VFS. It does **not** serve
 /// leader-originated requests against phone storage — see `refusal(for:)`.
 ///
-/// **The leader serves less than the protocol describes.** `handleFsRequest`
-/// calls eight VFS methods, but the object the webapp hands it
-/// (`createLeaderOptionsFactory` in `wc-tray.ts`) is a lazy proxy implementing
-/// only `stat` and `readFile`, cast `as VirtualFS`. The other six reach an
-/// undefined method and come back `ok: false`. So `readFile` and `stat` work
-/// against a live leader; `readDir`, `exists` and `walk` are wired for when
-/// that proxy widens and report a leader error until it does. Write ops are
-/// unreachable for the same accidental reason — the proxy has no `writeFile`,
-/// not because anything gates one.
+/// **The leader serves less than the protocol describes.** The lazy VFS proxy
+/// implements `readFile`, `stat`, `readDir`, `writeFile`, `mkdir`, and `rm`;
+/// `exists` and `walk` still return a leader error. Authenticated followers may
+/// use the implemented operations on any normalized absolute path except
+/// `/proc`, and writes route through the worker's writable VFS RPC.
 ///
 /// Two properties this owns that the leader does not:
 ///
