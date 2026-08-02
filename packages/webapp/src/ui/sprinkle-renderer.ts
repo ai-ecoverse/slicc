@@ -296,6 +296,8 @@ export class SprinkleRenderer {
   private iframe: HTMLIFrameElement | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
   private visibilityObserver: IntersectionObserver | null = null;
+  private bridgeLifecycleReady = false;
+  private pendingBridgeLifecycle: Array<() => void> = [];
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
@@ -307,9 +309,22 @@ export class SprinkleRenderer {
     this.dispose();
 
     if (isFullDocument(content)) {
-      await this.renderFullDoc(content, sprinkleName);
+      try {
+        await this.renderFullDoc(content, sprinkleName);
+      } catch (err) {
+        this.dispose();
+        throw err;
+      }
     } else {
       this.renderInline(content, sprinkleName);
+    }
+  }
+
+  /** Release lifecycle calls once the owner has registered this renderer. */
+  activateBridgeLifecycle(): void {
+    this.bridgeLifecycleReady = true;
+    while (this.bridgeLifecycleReady && this.pendingBridgeLifecycle.length > 0) {
+      this.pendingBridgeLifecycle.shift()!();
     }
   }
 
@@ -613,6 +628,22 @@ export class SprinkleRenderer {
     iframe.srcdoc = modified;
     this.iframe = iframe;
 
+    // Install the parent listener before appending: srcdoc scripts can post
+    // bridge calls synchronously while appendChild() is still loading the iframe.
+    const handlers = createSharedBridgeHandlers(this.bridge);
+    for (const type of ['sprinkle-close', 'sprinkle-minimize']) {
+      const handler = handlers[type];
+      handlers[type] = (target, msg) => {
+        if (!this.bridgeLifecycleReady) {
+          this.pendingBridgeLifecycle.push(() => handler(target, msg));
+          return;
+        }
+        handler(target, msg);
+      };
+    }
+    this.messageHandler = createIframeMessageListener(iframe, handlers);
+    window.addEventListener('message', this.messageHandler);
+
     // Wait for iframe to load
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -645,16 +676,6 @@ export class SprinkleRenderer {
       );
       this.container.appendChild(iframe);
     });
-
-    // Listen for messages from the iframe — the full-doc bridge script only
-    // sends the shared VFS/exec/device/lifecycle messages (no localStorage
-    // proxying, `sprinkle-open`, or `sprinkle-fetch-script` — those are
-    // sandbox-only, injected via extension-runtime-only script tags).
-    this.messageHandler = createIframeMessageListener(
-      iframe,
-      createSharedBridgeHandlers(this.bridge)
-    );
-    window.addEventListener('message', this.messageHandler);
 
     // The sprinkle's `<slicc-surface>` host stays mounted and toggles
     // `display:none`/`display:flex` on tab switches instead of destroying the
@@ -726,6 +747,8 @@ export class SprinkleRenderer {
 
   /** Clean up scripts and content. */
   dispose(): void {
+    this.bridgeLifecycleReady = false;
+    this.pendingBridgeLifecycle = [];
     if (this.visibilityObserver) {
       this.visibilityObserver.disconnect();
       this.visibilityObserver = null;

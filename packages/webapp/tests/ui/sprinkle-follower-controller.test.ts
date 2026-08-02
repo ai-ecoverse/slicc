@@ -23,6 +23,7 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
     rendered = '';
     disposed = false;
     pushed: unknown[] = [];
+    sprinkleName = '';
 
     constructor(container: HTMLElement, api: unknown) {
       this.container = container;
@@ -31,6 +32,7 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
     }
     async render(content: string, sprinkleName?: string): Promise<void> {
       this.rendered = content;
+      this.sprinkleName = sprinkleName ?? '';
       const gate = sprinkleName ? manualRenderGate.get(sprinkleName) : undefined;
       if (gate) {
         manualRenderGate.delete(sprinkleName!);
@@ -43,14 +45,21 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
     dispose(): void {
       this.disposed = true;
     }
+    activateBridgeLifecycle(): void {
+      if (FakeRenderer.closeOnActivate.delete(this.sprinkleName)) {
+        (this.api as { close(): void }).close();
+      }
+    }
     pushUpdate(data: unknown): void {
       this.pushed.push(data);
     }
 
     static instances: FakeRenderer[] = [];
+    static closeOnActivate = new Set<string>();
     static reset(): void {
       FakeRenderer.instances = [];
       manualRenderGate.clear();
+      FakeRenderer.closeOnActivate.clear();
     }
     static installManualRender(name: string): {
       resolve: () => void;
@@ -62,6 +71,9 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
       };
       manualRenderGate.set(name, handle);
       return handle;
+    }
+    static installCloseOnActivate(name: string): void {
+      FakeRenderer.closeOnActivate.add(name);
     }
   }
   return { SprinkleRenderer: FakeRenderer };
@@ -85,6 +97,7 @@ const FakeRenderer = SprinkleRenderer as unknown as {
   }>;
   reset(): void;
   installManualRender(name: string): { resolve: () => void; reject: (err: Error) => void };
+  installCloseOnActivate(name: string): void;
 };
 
 function makeSprinkle(name: string, opts: Partial<SprinkleSummary> = {}): SprinkleSummary {
@@ -350,6 +363,16 @@ describe('SprinkleFollowerController', () => {
       await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
 
       FakeRenderer.instances[0].api.close();
+
+      expect(removeSprinkle).toHaveBeenCalledWith('welcome');
+      expect(FakeRenderer.instances[0].disposed).toBe(true);
+    });
+
+    it('publishes the renderer before releasing a queued close lifecycle call', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      FakeRenderer.installCloseOnActivate('welcome');
+
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
 
       expect(removeSprinkle).toHaveBeenCalledWith('welcome');
       expect(FakeRenderer.instances[0].disposed).toBe(true);

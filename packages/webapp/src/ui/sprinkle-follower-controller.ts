@@ -247,6 +247,8 @@ export class SprinkleFollowerController {
     }
 
     entry.renderer = renderer;
+    renderer.activateBridgeLifecycle();
+    if (!this.open.has(sprinkleName)) return;
     log.info('Sprinkle reloaded in place', { sprinkleName });
   }
 
@@ -362,6 +364,8 @@ export class SprinkleFollowerController {
     // interleaving the buffered replay against them.
     this.open.set(name, { renderer, container });
     this.opening.delete(name);
+    renderer.activateBridgeLifecycle();
+    if (!this.open.has(name)) return;
     const buffered = this.pendingUpdates.get(name);
     if (buffered !== undefined) {
       this.pendingUpdates.delete(name);
