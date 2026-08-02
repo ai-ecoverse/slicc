@@ -30,24 +30,21 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      # Analyze commits with semantic-release's real default analyzer, but omit
-      # every prepare/publish plugin. Non-release pushes stop on this cheap Linux
-      # runner before reserving macOS or rebuilding the repository.
+      # Call semantic-release's default commit analyzer directly, avoiding the
+      # CLI's repository push-access verification. Non-release pushes stop on
+      # this read-only Linux runner before reserving macOS or rebuilding.
       - name: Plan release
         id: release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          LOG="$RUNNER_TEMP/semantic-release-analyze.log"
-          npx semantic-release --dry-run --no-ci \
-            --plugins @semantic-release/commit-analyzer 2>&1 | tee "$LOG"
+          RELEASE_TYPE="$(node packages/dev-tools/tools/release-plan.mjs)"
 
-          if grep -q 'The next release version is' "$LOG"; then
+          if [ "$RELEASE_TYPE" != 'none' ]; then
             echo "required=true" >> "$GITHUB_OUTPUT"
           else
             echo "required=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "release_type=$RELEASE_TYPE" >> "$GITHUB_OUTPUT"
 
   release:
     needs: analyze

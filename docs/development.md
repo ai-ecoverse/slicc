@@ -33,7 +33,7 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 ### End-to-end flow
 
 1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
-2. A lightweight Linux preflight runs semantic-release's commit analyzer. Pushes with no releasable commits stop before reserving the `macos-26` release runner.
+2. A lightweight, read-only Linux preflight invokes semantic-release's commit analyzer directly. Pushes with no releasable commits stop before reserving the `macos-26` release runner.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
 4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
 5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing. Worker and Chrome deploy scripts independently skip their release operations when their dependent sources did not change, and GitHub Release creation attaches the generated artifacts.
