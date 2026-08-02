@@ -62,6 +62,7 @@ function injectAgent(
     secondOverflow?: boolean;
     compactionError?: Error;
     continueError?: Error;
+    largerCompaction?: boolean;
     unchangedCompaction?: boolean;
     noApiKey?: boolean;
     noModel?: boolean;
@@ -71,7 +72,14 @@ function injectAgent(
   const runAbortController = new AbortController();
   const compactedMessage = {
     role: 'user' as const,
-    content: [{ type: 'text' as const, text: '[compacted history]' }],
+    content: [
+      {
+        type: 'text' as const,
+        text: options.largerCompaction
+          ? 'natural-language summary '.repeat(100)
+          : '[compacted history]',
+      },
+    ],
   };
   const emit = (
     message:
@@ -178,6 +186,15 @@ describe('ScoopContext overflow compaction recovery', () => {
 
     expect(agent.continue).not.toHaveBeenCalled();
     expect(cb.onFatalError).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes when changed compaction has a larger heuristic estimate', async () => {
+    const { agent } = injectAgent(ctx, { largerCompaction: true });
+
+    await ctx.prompt('work');
+
+    expect(agent.continue).toHaveBeenCalledTimes(1);
+    expect(cb.onFatalError).not.toHaveBeenCalled();
   });
 
   it.each([{ noApiKey: true }, { noModel: true }])(

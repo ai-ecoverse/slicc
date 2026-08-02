@@ -456,12 +456,13 @@ function estimateTotalTokens(messages: AgentMessage[]): number {
   return total;
 }
 
-/** Whether compaction reduced the estimated message tokens enough to make forward progress. */
+/** Whether compaction changed the message sequence rather than returning a true no-op. */
 export function hasCompactionProgress(
   messages: AgentMessage[],
   compacted: AgentMessage[]
 ): boolean {
-  return estimateTotalTokens(compacted) < estimateTotalTokens(messages);
+  if (messages.length !== compacted.length) return true;
+  return messages.some((message, index) => message !== compacted[index]);
 }
 
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
