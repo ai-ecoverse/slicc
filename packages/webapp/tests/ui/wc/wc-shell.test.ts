@@ -366,6 +366,48 @@ describe('mountWcUiPreview', () => {
     expect(refs.freezer.hasAttribute('ctx')).toBe(false);
   });
 
+  it('writes the cone and scoop tint before swapping the shader mode', async () => {
+    const { applyShellContext, mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 't',
+      placeholder: 'p',
+    });
+    const writes: string[] = [];
+    const shaderSetAttribute = refs.shader.setAttribute.bind(refs.shader);
+    const shaderRemoveAttribute = refs.shader.removeAttribute.bind(refs.shader);
+    const frameSetProperty = refs.frame.style.setProperty.bind(refs.frame.style);
+    const frameRemoveProperty = refs.frame.style.removeProperty.bind(refs.frame.style);
+    vi.spyOn(refs.shader, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'mode' || name === 'tint') writes.push(`shader.${name}=${value}`);
+      shaderSetAttribute(name, value);
+    });
+    vi.spyOn(refs.shader, 'removeAttribute').mockImplementation((name) => {
+      if (name === 'tint') writes.push('shader.tint removed');
+      shaderRemoveAttribute(name);
+    });
+    vi.spyOn(refs.frame.style, 'setProperty').mockImplementation((name, value, priority) => {
+      if (name === '--ctx') writes.push(`frame.${name}=${value}`);
+      frameSetProperty(name, value, priority);
+    });
+    vi.spyOn(refs.frame.style, 'removeProperty').mockImplementation((name) => {
+      if (name === '--ctx') writes.push('frame.--ctx removed');
+      return frameRemoveProperty(name);
+    });
+
+    applyShellContext(refs, { kind: 'scoop', accent: '#06b6d4' });
+    expect
+      .soft(writes)
+      .toEqual(['shader.tint=#06b6d4', 'frame.--ctx=#06b6d4', 'shader.mode=scoop']);
+
+    writes.length = 0;
+    applyShellContext(refs, { kind: 'cone' });
+    expect.soft(writes).toEqual(['shader.tint removed', 'frame.--ctx removed', 'shader.mode=cone']);
+  });
+
   it('feeds thread scroll into the shader scroll attribute (rAF-throttled)', async () => {
     const root = mount();
     const thread = root.querySelector('slicc-chat-thread') as HTMLElement;

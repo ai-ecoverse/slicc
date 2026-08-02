@@ -306,6 +306,37 @@ describe('createWcLiveCallbacks', () => {
 });
 
 describe('prepareWcShell scoop selection', () => {
+  it('activates the selected tab before applying its shader context', () => {
+    const app = document.createElement('div');
+    const boot = prepareWcShell(app, 'test');
+    const selected = scoop({ jid: 'scoop-order', name: 'order' });
+    const writes: string[] = [];
+    const switcherSetAttribute = boot.refs.switcher.setAttribute.bind(boot.refs.switcher);
+    const shaderSetAttribute = boot.refs.shader.setAttribute.bind(boot.refs.shader);
+    vi.spyOn(boot.refs.switcher, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'active') writes.push(`switcher.active=${value}`);
+      switcherSetAttribute(name, value);
+    });
+    vi.spyOn(boot.refs.shader, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'mode' || name === 'tint') writes.push(`shader.${name}=${value}`);
+      shaderSetAttribute(name, value);
+    });
+    boot.setClient({
+      selectedScoopJid: null,
+      setSelectedScoopJid: vi.fn(),
+      requestScoopMessages: vi.fn(),
+      isProcessing: vi.fn(() => false),
+    } as never);
+
+    boot.selectScoop(selected);
+
+    expect(writes).toEqual([
+      `switcher.active=${selected.jid}`,
+      `shader.tint=${scoopColor(selected)}`,
+      'shader.mode=scoop',
+    ]);
+  });
+
   it('shows cached backpressure when its scoop is selected and honors an unselected retraction', () => {
     const app = document.createElement('div');
     const boot = prepareWcShell(app, 'test');
