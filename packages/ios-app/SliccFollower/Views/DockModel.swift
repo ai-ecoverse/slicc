@@ -1,0 +1,77 @@
+import Foundation
+
+/// A workbench surface the dock can open. Mirrors the web dock's item set
+/// (`packages/webcomponents/src/dock/slicc-dock.ts`): sprinkle launchers
+/// plus the pinned system tools, in prototype order.
+enum DockSurface: Hashable {
+    case sprinkle(name: String)
+    /// The always-present `New +` launcher. Sprinkles are authored on the
+    /// leader, so on a follower this opens an honest placeholder.
+    case newSprinkle
+    case browser
+    case files
+    case term
+    case memory
+    case monitor
+}
+
+/// One rail entry. `id` doubles as the accessibility identifier suffix
+/// (`dock-<id>`), mirroring the web items' `data-t` ids.
+struct DockItem: Identifiable, Hashable {
+    let id: String
+    let surface: DockSurface
+    let systemImage: String
+    let label: String
+}
+
+/// Pure builders so the rail's order is unit-testable: sprinkle launchers
+/// at the top, then `New +`; the pinned tools anchor the bottom after a
+/// spacer + divider (the view owns those two).
+enum DockModel {
+    static func sprinkleItems(_ sprinkles: [SprinkleSummary]) -> [DockItem] {
+        sprinkles.map { sprinkle in
+            DockItem(
+                id: "sprinkle-\(sprinkle.name)",
+                surface: .sprinkle(name: sprinkle.name),
+                systemImage: "sparkles",
+                label: sprinkle.title
+            )
+        } + [
+            DockItem(
+                id: "new", surface: .newSprinkle, systemImage: "plus",
+                label: "New sprinkle")
+        ]
+    }
+
+    /// The pinned system tools, in the web dock's exact order.
+    static let toolItems: [DockItem] = [
+        DockItem(id: "browser", surface: .browser, systemImage: "globe", label: "Browser"),
+        DockItem(id: "files", surface: .files, systemImage: "folder", label: "Files"),
+        DockItem(id: "term", surface: .term, systemImage: "terminal", label: "Terminal"),
+        DockItem(id: "memory", surface: .memory, systemImage: "brain", label: "Memory"),
+        DockItem(
+            id: "monitor", surface: .monitor, systemImage: "waveform.path.ecg",
+            label: "Monitor"),
+    ]
+
+    /// The follower-honest placeholder for surfaces the phone cannot serve,
+    /// texts shared with the browser follower (`wc-follower.ts`) so both
+    /// followers explain the constraint in the same words. Nil for surfaces
+    /// that have a real view.
+    static func placeholderText(for surface: DockSurface) -> String? {
+        switch surface {
+        case .sprinkle, .browser:
+            return nil
+        case .newSprinkle:
+            return "Sprinkles are authored on the leader. Ask the cone to scoop one up — it appears here when the leader registers it."
+        case .files:
+            return "Files live on the leader. A follower mirrors the leader's chat, sprinkles, and browser tabs - not its filesystem."
+        case .term:
+            return "The shell runs on the leader. A follower has no local terminal - drive the session through chat."
+        case .memory:
+            return "Memory lives on the leader. A follower has no local memory store."
+        case .monitor:
+            return "Monitor reads the leader's kernel state. A follower has no local kernel."
+        }
+    }
+}
