@@ -16,7 +16,7 @@ const scoop: RegisteredScoop = {
 
 const userMessage = () => ({
   role: 'user' as const,
-  content: [{ type: 'text' as const, text: 'work' }],
+  content: [{ type: 'text' as const, text: 'work '.repeat(100) }],
 });
 const overflowMessage = () => ({
   role: 'assistant' as const,
@@ -62,11 +62,13 @@ function injectAgent(
     secondOverflow?: boolean;
     compactionError?: Error;
     continueError?: Error;
+    unchangedCompaction?: boolean;
     noApiKey?: boolean;
     noModel?: boolean;
   } = {}
 ) {
   const continueStatuses: string[] = [];
+  const runAbortController = new AbortController();
   const compactedMessage = {
     role: 'user' as const,
     content: [{ type: 'text' as const, text: '[compacted history]' }],
@@ -78,15 +80,13 @@ function injectAgent(
       | ReturnType<typeof assistantErrorMessage>
   ) => {
     agent.state.messages = [...agent.state.messages, message];
-    const signal = (ctx as unknown as { promptAbortController?: AbortController })
-      .promptAbortController?.signal;
     const handler = (
       ctx as unknown as {
         handleAgentEvent: (event: unknown, signal?: AbortSignal) => void;
       }
     ).handleAgentEvent.bind(ctx);
-    handler({ type: 'turn_end', message, toolResults: [] }, signal);
-    handler({ type: 'agent_end', messages: agent.state.messages }, signal);
+    handler({ type: 'turn_end', message, toolResults: [] }, runAbortController.signal);
+    handler({ type: 'agent_end', messages: agent.state.messages }, runAbortController.signal);
   };
   const agent = {
     prompt: vi.fn(async () => {
@@ -106,8 +106,9 @@ function injectAgent(
       model: options.noModel ? undefined : { contextWindow: 200_000 },
     },
   };
-  const compactFn = vi.fn(async () => {
+  const compactFn = vi.fn(async (messages: unknown[]) => {
     if (options.compactionError) throw options.compactionError;
+    if (options.unchangedCompaction) return [...messages];
     return [compactedMessage];
   });
   (ctx as unknown as { agent: typeof agent }).agent = agent;
@@ -115,7 +116,7 @@ function injectAgent(
   (ctx as unknown as { getCompactionApiKey: () => string | undefined }).getCompactionApiKey = () =>
     options.noApiKey ? undefined : 'test-key';
   (ctx as unknown as { status: string }).status = 'ready';
-  return { agent, compactFn, compactedMessage, continueStatuses, emit };
+  return { agent, compactFn, compactedMessage, continueStatuses, emit, runAbortController };
 }
 
 describe('ScoopContext overflow compaction recovery', () => {
@@ -132,7 +133,9 @@ describe('ScoopContext overflow compaction recovery', () => {
 
     await ctx.prompt('work');
 
-    expect(compactFn).toHaveBeenCalledWith([userMessage()], expect.any(AbortSignal));
+    expect(compactFn).toHaveBeenCalledWith([userMessage()], expect.any(AbortSignal), {
+      force: true,
+    });
     expect(agent.prompt).toHaveBeenCalledTimes(1);
     expect(agent.continue).toHaveBeenCalledTimes(1);
     expect(continueStatuses).toEqual(['processing']);
@@ -161,6 +164,15 @@ describe('ScoopContext overflow compaction recovery', () => {
 
   it('escalates immediately when compaction throws', async () => {
     const { agent } = injectAgent(ctx, { compactionError: new Error('summary failed') });
+
+    await ctx.prompt('work');
+
+    expect(agent.continue).not.toHaveBeenCalled();
+    expect(cb.onFatalError).toHaveBeenCalledTimes(1);
+  });
+
+  it('escalates instead of resuming when forced compaction makes no progress', async () => {
+    const { agent } = injectAgent(ctx, { unchangedCompaction: true });
 
     await ctx.prompt('work');
 
@@ -232,6 +244,16 @@ describe('ScoopContext overflow compaction recovery', () => {
       emit(overflowMessage());
       ctx[action]();
     });
+
+    await ctx.prompt('work');
+
+    expect(agent.continue).not.toHaveBeenCalled();
+    expect(cb.onFatalError).not.toHaveBeenCalled();
+  });
+
+  it('does not continue when Stop aborts recovery during the resume delay', async () => {
+    const { agent } = injectAgent(ctx);
+    vi.mocked(cb.onResponse).mockImplementationOnce(() => ctx.stop());
 
     await ctx.prompt('work');
 

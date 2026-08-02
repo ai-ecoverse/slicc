@@ -18,7 +18,11 @@ import {
   streamSimple,
 } from '@earendil-works/pi-ai/compat';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
+import {
+  createCompactContext,
+  hasCompactionProgress,
+  stripOrphanedToolResults,
+} from '../core/context-compaction.js';
 import type {
   AgentMessage,
   AssistantMessage,
@@ -1448,7 +1452,11 @@ export class ScoopContext {
 
   /** Compact once after an overflow, then resume only after the active run settles. */
   private recoverFromOverflow(messages: AgentMessage[], abortSignal?: AbortSignal): void {
-    const signal = abortSignal ?? this.promptAbortController?.signal;
+    const turnSignal = this.promptAbortController?.signal;
+    const signal =
+      abortSignal && turnSignal
+        ? AbortSignal.any([abortSignal, turnSignal])
+        : (abortSignal ?? turnSignal);
     if (!this.agent || this.disposed || signal?.aborted) return;
 
     if (this.overflowRecoveryAttempted) {
@@ -1493,8 +1501,15 @@ export class ScoopContext {
     abortSignal?: AbortSignal
   ): Promise<void> {
     try {
-      const compacted = await compactFn(messages, abortSignal);
+      const compacted = await compactFn(messages, abortSignal, { force: true });
       if (this.disposed || abortSignal?.aborted || this.agent !== agent) return;
+      if (!hasCompactionProgress(messages, compacted)) {
+        this.escalateOverflowRecovery(
+          abortSignal,
+          new Error('Forced compaction did not reduce the context')
+        );
+        return;
+      }
       agent.state.messages = compacted;
       this.callbacks.onResponse(
         'Context window exceeded — compacting history and continuing...',
