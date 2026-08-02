@@ -106,6 +106,15 @@ struct InputBar: View {
                 ptt.pressCancelled()
             }
         }
+        .onChange(of: pttArmed) { _, armed in
+            // The surface unmounts the moment the composer disables (leader
+            // stalled or disconnected mid-hold) — its onEnded then never
+            // fires, so cancel here or the mic stays live behind a dead
+            // composer.
+            if !armed {
+                ptt.pressCancelled()
+            }
+        }
     }
 
     // MARK: - Text Field

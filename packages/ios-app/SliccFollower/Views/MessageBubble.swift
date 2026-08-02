@@ -182,7 +182,7 @@ struct MessageBubble: View {
         HStack(spacing: 4) {
             ForEach(0..<3) { i in
                 Circle()
-                    .fill(.white.opacity(0.5))
+                    .fill(palette.ink.opacity(0.5))
                     .frame(width: 5, height: 5)
                     .modifier(PulsingDot(delay: Double(i) * 0.2))
             }
@@ -225,7 +225,7 @@ struct MessageBubble: View {
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(
                             tc.isError == true
-                                ? Color.red.opacity(0.8) : .white.opacity(0.6)
+                                ? Color.red.opacity(0.8) : palette.ink.opacity(0.6)
                         )
                         .textSelection(.enabled)
                 }
@@ -256,7 +256,7 @@ struct MessageBubble: View {
                 }
             }
         }
-        .tint(.white.opacity(0.4))
+        .tint(palette.ink.opacity(0.4))
     }
 
     /// Collapsed "Working" cluster — mirrors the webapp's
@@ -278,7 +278,7 @@ struct MessageBubble: View {
             .padding(.top, 4)
             .overlay(alignment: .leading) {
                 Rectangle()
-                    .fill(.white.opacity(0.10))
+                    .fill(palette.ink.opacity(0.10))
                     .frame(width: 2)
             }
         } label: {

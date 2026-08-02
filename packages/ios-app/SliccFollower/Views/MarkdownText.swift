@@ -270,7 +270,7 @@ struct MarkdownText: View {
             ScrollView(.horizontal, showsIndicators: true) {
                 Text(code)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(palette.ink.opacity(0.85))
                     .padding(.horizontal, 12)
                     .padding(.vertical, language != nil ? 4 : 12)
                     .padding(.bottom, 8)
