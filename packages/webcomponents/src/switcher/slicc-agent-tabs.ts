@@ -317,6 +317,7 @@ export class SliccAgentTabs extends HTMLElement {
   #reflowOnce(): void {
     const segments = [...this.querySelectorAll<HTMLButtonElement>(`.${PREFIX}__segment`)];
     for (const segment of segments) segment.classList.remove('hide');
+    this.classList.remove('has-overflow');
     if (segments.length === 0) {
       this.#feedOverflow([]);
       return;
@@ -334,10 +335,9 @@ export class SliccAgentTabs extends HTMLElement {
       return;
     }
     const segmentSpace = Math.max(0, available - AVATAR_WIDTH - HOST_GAP - TRACK_CHROME);
-    this.classList.remove('has-overflow');
     const widthsWithoutReserve = segments.map((segment) => segment.offsetWidth);
     const totalWithoutReserve = widthsWithoutReserve.reduce((sum, width) => sum + width, 0);
-    const reserve = totalWithoutReserve > segmentSpace + 1;
+    const reserve = segments.length > 1 && totalWithoutReserve > segmentSpace + 1;
     this.classList.toggle('has-overflow', reserve);
     const widths = reserve ? segments.map((segment) => segment.offsetWidth) : widthsWithoutReserve;
     const budget = Math.max(0, segmentSpace - (reserve ? MORE_RESERVE : 0));
@@ -526,7 +526,6 @@ export class SliccAgentTabs extends HTMLElement {
       }
     );
     this.#overflow.items = items;
-    this.classList.toggle('has-overflow', items.length > 0);
   }
 
   #handleClick(event: Event): void {
