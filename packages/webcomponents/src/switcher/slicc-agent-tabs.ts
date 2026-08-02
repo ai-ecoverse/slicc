@@ -54,13 +54,14 @@ const STYLE = `
 .slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;pointer-events:none;}
 .slicc-agent-tabs__track-frame{position:relative;flex:1 1 auto;min-width:0;height:var(--ctl-h,30px);overflow:visible;border:1px solid var(--line);border-radius:9px;background:var(--ghost);}
 .slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px 41px 2px 2px;overflow:hidden;}
-.slicc-agent-tabs__segment{position:relative;display:inline-flex;flex:0 1 auto;align-items:center;justify-content:center;gap:${SEGMENT_GAP}px;width:max-content;min-width:var(--slicc-agent-tabs-segment-floor,${SEGMENT_FLOOR_FALLBACK}px);max-width:160px;height:24px;padding:0 8px;overflow:hidden;color:var(--txt-2);font:500 11px/1 var(--ui);white-space:nowrap;border:0;border-radius:6px;background:transparent;cursor:pointer;--slicc-agent-tabs-attention-outline:transparent;outline:2px solid var(--slicc-agent-tabs-attention-outline);outline-offset:-2px;animation:slicc-agent-tabs-attention 1.6s ease-in-out infinite;animation-play-state:paused;}
+.slicc-agent-tabs__segment{position:relative;display:inline-flex;flex:0 1 auto;align-items:center;justify-content:center;gap:${SEGMENT_GAP}px;width:max-content;min-width:var(--slicc-agent-tabs-segment-floor,${SEGMENT_FLOOR_FALLBACK}px);max-width:160px;height:24px;padding:0 8px;overflow:hidden;color:var(--txt-2);font:500 11px/1 var(--ui);white-space:nowrap;border:0;border-radius:6px;background:transparent;cursor:pointer;}
 .slicc-agent-tabs__segment:hover{color:var(--ink);}
 .slicc-agent-tabs__segment[aria-selected='true']{color:var(--ink);background:var(--canvas);box-shadow:0 1px 3px color-mix(in srgb,var(--ink) 12%,transparent);}
-.slicc-agent-tabs__segment[data-attention='true']{--slicc-agent-tabs-attention-outline:var(--ink);animation-play-state:running;}
 .slicc-agent-tabs__segment.hide{display:none;}
 .slicc-agent-tabs__label{min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .slicc-agent-tabs__status-glyph{flex:0 0 14px;width:14px;height:14px;overflow:visible;color:var(--slicc-agent-tabs-hue);}
+.slicc-agent-tabs__glyph-glow{fill:none;stroke:currentColor;opacity:0;filter:drop-shadow(0 0 1px color-mix(in srgb,currentColor 70%,transparent)) drop-shadow(0 0 2.5px color-mix(in srgb,currentColor 35%,transparent));transition:opacity 320ms ease-in-out;}
+.slicc-agent-tabs__segment[data-attention='true'] .slicc-agent-tabs__glyph-glow{opacity:.72;}
 .slicc-agent-tabs__glyph-base{fill:none;stroke:color-mix(in srgb,currentColor 30%,var(--line));}
 .slicc-agent-tabs__glyph-arc{fill:none;stroke:currentColor;stroke-linecap:round;transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;animation:slicc-agent-tabs-arc 10.8s linear infinite;animation-play-state:paused;}
 .slicc-agent-tabs__glyph-pin{display:none;fill:currentColor;}
@@ -80,8 +81,7 @@ const STYLE = `
 .slicc-agent-tabs slicc-scoop-overflow::part(more){display:inline-flex;width:39px;height:24px;justify-content:center;padding:0;border:0;border-radius:6px;background:transparent;}
 .slicc-agent-tabs slicc-scoop-overflow::part(pop){right:0;left:auto;}
 @keyframes slicc-agent-tabs-arc{from{transform:rotate(-90deg);}to{transform:rotate(270deg);}}
-@keyframes slicc-agent-tabs-attention{0%,100%{outline-color:var(--slicc-agent-tabs-attention-outline);}50%{outline-color:color-mix(in srgb,var(--slicc-agent-tabs-attention-outline) 45%,transparent);}}
-@media (prefers-reduced-motion:reduce){.slicc-agent-tabs__glyph-arc{animation:none;transform:rotate(-90deg);}.slicc-agent-tabs__segment{animation:none;}}
+@media (prefers-reduced-motion:reduce){.slicc-agent-tabs__glyph-arc{animation:none;transform:rotate(-90deg);}.slicc-agent-tabs__glyph-glow{transition:none;}}
 `;
 
 function ensureStyle(doc: Document): void {
@@ -146,6 +146,13 @@ function hueFor(scoop: ScoopDescriptor): string {
 
 function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
   const children: SVGElement[] = [
+    svgEl('circle', {
+      class: `${PREFIX}__glyph-glow`,
+      cx: 7,
+      cy: 7,
+      r: ARC_RADIUS,
+      'stroke-width': 1.5,
+    }),
     svgEl('circle', {
       class: `${PREFIX}__glyph-base`,
       cx: 7,
@@ -443,7 +450,7 @@ export class SliccAgentTabs extends HTMLElement {
     segment.tabIndex = scoop.key === focused ? 0 : -1;
     segment.setAttribute(
       'aria-label',
-      `${scoop.label ?? scoop.key}: ${state}, ${Math.round(fill)}% context fill${wantsAttention ? ', needs attention' : ''}`
+      `${scoop.label ?? scoop.key}: ${state}, ${Math.round(fill)}% context fill${wantsAttention ? ', spoke most recently' : ''}`
     );
     segment.dataset.k = scoop.key;
     segment.dataset.state = state;

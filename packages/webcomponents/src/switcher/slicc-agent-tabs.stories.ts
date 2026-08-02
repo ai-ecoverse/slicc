@@ -83,6 +83,9 @@ function buildTabs(args: AgentTabsArgs): HTMLElement {
       arc.style.animation = 'none';
       arc.style.transform = 'rotate(-90deg)';
     }
+    for (const glow of tabs.querySelectorAll<SVGElement>('.slicc-agent-tabs__glyph-glow')) {
+      glow.style.transition = 'none';
+    }
   }
   if (args.overflowOpen) {
     requestAnimationFrame(() => {
@@ -129,6 +132,33 @@ type Story = StoryObj<AgentTabsArgs>;
 
 export const Default: Story = { args: { scoops: BASE_ROSTER, active: 'cone', width: 720 } };
 
+export const ConeMostRecent: Story = {
+  args: { scoops: BASE_ROSTER, active: 'cone', attention: 'cone', width: 720 },
+};
+
+export const ScoopMostRecent: Story = {
+  args: { scoops: BASE_ROSTER, active: 'cone', attention: 'designer', width: 720 },
+};
+
+export const WorkingAndMostRecent: Story = {
+  args: {
+    scoops: BASE_ROSTER.map((scoop) =>
+      scoop.key === 'researcher' ? { ...scoop, state: undefined } : scoop
+    ),
+    active: 'cone',
+    attention: 'researcher',
+    width: 720,
+  },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'The rotating fullness arc still means working; its quiet static glow independently marks the most-recent speaker.',
+      },
+    },
+  },
+};
+
 export const ConeFocused: Story = {
   args: { scoops: BASE_ROSTER, active: 'cone', width: 720 },
 };
@@ -166,6 +196,7 @@ export const ReducedMotion: Story = {
   args: {
     scoops: fullnessRoster(),
     active: 'fill-50',
+    attention: 'fill-50',
     width: 620,
     reducedMotion: true,
   },

@@ -77,6 +77,10 @@ function overflow(element: SliccAgentTabs): SliccScoopOverflow {
   return element.querySelector('slicc-scoop-overflow') as SliccScoopOverflow;
 }
 
+function glow(element: SliccAgentTabs, key: string): SVGCircleElement {
+  return segment(element, key).querySelector('.slicc-agent-tabs__glyph-glow') as SVGCircleElement;
+}
+
 function rosterOf(count: number): ScoopDescriptor[] {
   return Array.from({ length: count }, (_, index) => ({
     key: index === 0 ? 'cone' : `scoop-${index}`,
@@ -301,7 +305,7 @@ describe('slicc-agent-tabs', () => {
       ).toBe('none');
     });
 
-    it('derives legacy state from dead eyes and attention when state is omitted', () => {
+    it('derives legacy state from dead eyes and attention when state is omitted', async () => {
       const element = mount([
         { key: 'cone', eyes: 'open' },
         { key: 'busy', eyes: 'open' },
@@ -311,25 +315,45 @@ describe('slicc-agent-tabs', () => {
       expect(segment(element, 'cone').dataset.state).toBe('idle');
       expect(segment(element, 'busy').dataset.state).toBe('working');
       expect(segment(element, 'failed').dataset.state).toBe('broken');
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(getComputedStyle(glow(element, 'busy')).opacity).toBe('0.72');
+      expect(
+        getComputedStyle(
+          segment(element, 'busy').querySelector('.slicc-agent-tabs__glyph-arc') as SVGCircleElement
+        ).animationPlayState
+      ).toBe('running');
     });
 
-    it('renders attention independently when explicit state remains idle', () => {
+    it('cross-fades the ring glow when the most-recent speaker moves', async () => {
       const element = mount([{ key: 'cone' }, { key: 'paused', state: 'idle' }]);
       element.attention = 'paused';
+      const coneGlow = glow(element, 'cone');
+      const pausedGlow = glow(element, 'paused');
       expect(segment(element, 'paused').dataset.state).toBe('idle');
       expect(segment(element, 'paused').dataset.attention).toBe('true');
-      expect(segment(element, 'paused').getAttribute('aria-label')).toContain('needs attention');
+      expect(segment(element, 'paused').getAttribute('aria-label')).toContain(
+        'spoke most recently'
+      );
       expect(segment(element, 'cone').hasAttribute('data-attention')).toBe(false);
+      expect(getComputedStyle(pausedGlow).transitionProperty).toContain('opacity');
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
+      expect(getComputedStyle(coneGlow).opacity).toBe('0');
 
       element.attention = 'cone';
       expect(segment(element, 'paused').hasAttribute('data-attention')).toBe(false);
       expect(segment(element, 'paused').getAttribute('aria-label')).not.toContain(
-        'needs attention'
+        'spoke most recently'
       );
       expect(segment(element, 'cone').dataset.attention).toBe('true');
+      expect(glow(element, 'paused')).toBe(pausedGlow);
+      expect(glow(element, 'cone')).toBe(coneGlow);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(getComputedStyle(pausedGlow).opacity).toBe('0');
+      expect(getComputedStyle(coneGlow).opacity).toBe('0.72');
     });
 
-    it('renders attention as a layout-neutral outline over broken and selected states', () => {
+    it('renders attention as a layout-neutral ring glow over broken and selected states', async () => {
       const element = mount([{ key: 'cone' }, { key: 'failed', state: 'broken', eyes: 'dead' }]);
       element.active = 'failed';
       const failed = segment(element, 'failed');
@@ -338,22 +362,20 @@ describe('slicc-agent-tabs', () => {
       element.attention = 'failed';
       const attentionStyle = getComputedStyle(failed);
       const after = failed.getBoundingClientRect();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const glowStyle = getComputedStyle(glow(element, 'failed'));
 
       expect(failed.dataset.state).toBe('broken');
       expect(failed.getAttribute('aria-selected')).toBe('true');
-      expect(attentionStyle.outlineStyle).toBe('solid');
-      expect(attentionStyle.outlineWidth).toBe('2px');
-      expect(attentionStyle.outlineColor).not.toBe('rgba(0, 0, 0, 0)');
-      expect(attentionStyle.animationName).toBe('slicc-agent-tabs-attention');
-      expect(attentionStyle.animationPlayState).toBe('running');
+      expect(attentionStyle.outlineStyle).toBe('none');
       expect(attentionStyle.boxShadow).not.toBe('none');
-      expect(
-        getComputedStyle(failed.querySelector('.slicc-agent-tabs__status-glyph') as SVGElement)
-          .color
-      ).not.toBe(attentionStyle.outlineColor);
+      expect(glowStyle.opacity).toBe('0.72');
+      expect(glowStyle.filter).not.toBe('none');
       expect(after.width).toBeCloseTo(before.width);
       expect(after.height).toBeCloseTo(before.height);
-      expect(getComputedStyle(segment(element, 'cone')).animationPlayState).toBe('paused');
+      const style = document.querySelector('#slicc-agent-tabs-style') as HTMLStyleElement;
+      expect(style.textContent).not.toContain('--slicc-agent-tabs-attention-outline');
+      expect(style.textContent).not.toContain('@keyframes slicc-agent-tabs-attention');
     });
 
     it('maps 0/25/50/75/100 fullness to a 90°–360° sweep', () => {
@@ -416,7 +438,7 @@ describe('slicc-agent-tabs', () => {
       );
     });
 
-    it('keeps the sweep and attention outline but stops their motion under reduced motion', () => {
+    it('keeps a static attention glow and fullness sweep under reduced motion', () => {
       mount();
       const style = document.querySelector('#slicc-agent-tabs-style') as HTMLStyleElement;
       const media = [...(style.sheet?.cssRules ?? [])].find(
@@ -428,9 +450,9 @@ describe('slicc-agent-tabs', () => {
         (rule): rule is CSSStyleRule =>
           rule instanceof CSSStyleRule && rule.selectorText.includes('__glyph-arc')
       );
-      const reducedAttentionRule = [...(media?.cssRules ?? [])].find(
+      const reducedGlowRule = [...(media?.cssRules ?? [])].find(
         (rule): rule is CSSStyleRule =>
-          rule instanceof CSSStyleRule && rule.selectorText.includes('__segment')
+          rule instanceof CSSStyleRule && rule.selectorText.includes('__glyph-glow')
       );
       const attentionRule = [...(style.sheet?.cssRules ?? [])].find(
         (rule): rule is CSSStyleRule =>
@@ -438,10 +460,8 @@ describe('slicc-agent-tabs', () => {
       );
       expect(reducedArcRule?.style.animationName).toBe('none');
       expect(reducedArcRule?.style.transform).toBe('rotate(-90deg)');
-      expect(reducedAttentionRule?.style.animationName).toBe('none');
-      expect(attentionRule?.style.getPropertyValue('--slicc-agent-tabs-attention-outline')).toBe(
-        'var(--ink)'
-      );
+      expect(reducedGlowRule?.style.transitionProperty).toBe('none');
+      expect(attentionRule?.style.opacity).toBe('0.72');
     });
   });
 
