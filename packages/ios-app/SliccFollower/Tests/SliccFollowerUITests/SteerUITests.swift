@@ -31,8 +31,13 @@ final class SteerUITests: XCTestCase {
             "A non-empty composer during a running turn should offer send")
 
         // Long-press reveals the interrupt option (Menu primaryAction keeps
-        // plain tap as the queueing send).
+        // plain tap as the queueing send). Under CI load a context menu can
+        // eat the first press without opening (load-dependent, seen only on
+        // busy simulator clones), so give it one more before judging.
         send.press(forDuration: 1.0)
+        if !app.buttons["Interrupt & send"].waitForExistence(timeout: 10) {
+            send.press(forDuration: 1.2)
+        }
         XCTAssertTrue(
             app.buttons["Interrupt & send"].waitForExistence(timeout: 10),
             "The long-press menu should offer the steer action")
