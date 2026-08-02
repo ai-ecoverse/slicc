@@ -1,6 +1,20 @@
+import { normalizePath } from '../../fs/path-utils.js';
 import { handleFsRequest } from '../tray-fs-handler.js';
 import type { TrayFsRequest, TrayFsResponse } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
+
+const FOLLOWER_FS_READ_ROOTS = ['/sessions', '/workspace', '/tmp/upload'] as const;
+
+function canFollowerRead(request: TrayFsRequest): boolean {
+  if (!['readFile', 'stat', 'readDir', 'exists', 'walk'].includes(request.op)) return false;
+  if (typeof request.path !== 'string' || !request.path.startsWith('/')) return false;
+  const path = normalizePath(request.path);
+  return FOLLOWER_FS_READ_ROOTS.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
+function followerFsDenied(): TrayFsResponse {
+  return { ok: false, error: 'Follower filesystem access denied', code: 'EACCES' };
+}
 
 /** Tracks an fs request being routed through the leader. */
 export interface PendingFsRoute {
@@ -50,6 +64,11 @@ export class FsRouter {
         requestId,
         response: { ok: false, error: 'Leader has no VFS' },
       });
+      return;
+    }
+
+    if (!canFollowerRead(request)) {
+      follower.sync.send({ type: 'fs.response', requestId, response: followerFsDenied() });
       return;
     }
 

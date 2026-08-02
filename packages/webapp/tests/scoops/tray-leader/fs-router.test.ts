@@ -9,19 +9,21 @@ import { FsRouter } from '../../../src/scoops/tray-leader/fs-router.js';
 import type { LeaderSyncManagerOptions } from '../../../src/scoops/tray-leader-sync.js';
 import type {
   LeaderToFollowerMessage,
+  TrayFsRequest,
   TrayFsResponse,
 } from '../../../src/scoops/tray-sync-protocol.js';
 
-function createHarness() {
+function createHarness(overrides: Partial<LeaderSyncManagerOptions> = {}) {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as Logger;
   const followers = new FollowerRegistry({ log, onMessage: vi.fn() });
-  const options = {
+  const options: LeaderSyncManagerOptions = {
     getMessages: () => [],
     getScoopJid: () => 'cone',
     onFollowerMessage: vi.fn(),
     onFollowerAbort: vi.fn(),
     sendControl: vi.fn(),
-  } satisfies LeaderSyncManagerOptions;
+    ...overrides,
+  };
   const context: LeaderSyncContext = {
     options,
     followers,
@@ -49,6 +51,55 @@ function addFollower(registry: FollowerRegistry, bootstrapId: string) {
 }
 
 describe('FsRouter', () => {
+  it.each(['/secret.txt', '/workspace/../secret.txt', '/workspace-other/secret.txt'])(
+    'refuses follower reads outside the allowlist: %s',
+    async (path) => {
+      const readFile = vi.fn();
+      const { followers, router } = createHarness({
+        vfs: { readFile } as unknown as NonNullable<LeaderSyncManagerOptions['vfs']>,
+      });
+      const sent = addFollower(followers, 'requester');
+
+      await router.executeLocalFs('denied-read', { op: 'readFile', path }, 'requester');
+
+      expect(readFile).not.toHaveBeenCalled();
+      expect(sent).toEqual([
+        {
+          type: 'fs.response',
+          requestId: 'denied-read',
+          response: {
+            ok: false,
+            error: 'Follower filesystem access denied',
+            code: 'EACCES',
+          },
+        },
+      ]);
+    }
+  );
+
+  it('refuses follower mutations even inside an allowed path', async () => {
+    const writeFile = vi.fn();
+    const { followers, router } = createHarness({
+      vfs: { writeFile } as unknown as NonNullable<LeaderSyncManagerOptions['vfs']>,
+    });
+    const sent = addFollower(followers, 'requester');
+    const request: TrayFsRequest = {
+      op: 'writeFile',
+      path: '/tmp/upload/payload.txt',
+      content: 'blocked',
+      encoding: 'utf-8',
+    };
+
+    await router.executeLocalFs('denied-write', request, 'requester');
+
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(sent[0]).toMatchObject({
+      type: 'fs.response',
+      requestId: 'denied-write',
+      response: { ok: false, code: 'EACCES' },
+    });
+  });
+
   it('reassembles multi-chunk responses in arrival order', async () => {
     const { followers, router } = createHarness();
     const sent = addFollower(followers, 'target');
