@@ -749,11 +749,13 @@ describe('slicc-agent-tabs', () => {
       const context = document.createElement('canvas').getContext('2d') as CanvasRenderingContext2D;
       context.font = style.font;
       const expectedFloor =
-        context.measureText('sliccy').width +
-        14 +
-        Number.parseFloat(style.columnGap) +
-        Number.parseFloat(style.paddingLeft) +
-        Number.parseFloat(style.paddingRight);
+        Math.ceil(
+          context.measureText('sliccy').width +
+            14 +
+            Number.parseFloat(style.columnGap) +
+            Number.parseFloat(style.paddingLeft) +
+            Number.parseFloat(style.paddingRight)
+        ) + 4;
       expect(sliccy.getBoundingClientRect().width).toBeCloseTo(expectedFloor, 1);
       expect(sliccy.getBoundingClientRect().width).toBeLessThan(72);
 
