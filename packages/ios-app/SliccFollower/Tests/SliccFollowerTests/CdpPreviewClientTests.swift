@@ -40,9 +40,18 @@ final class CdpPreviewClientTests: XCTestCase {
 
         while sent.count < 2 { await Task.yield() }
         guard
+            case .cdpRequest(let frontId, "leader", "tab1", "Page.bringToFront", _, "s1") =
+                sent[1]
+        else { return XCTFail("the target foregrounds before capture: \(sent[1])") }
+        client.handleResponse(
+            requestId: frontId, result: AnyCodable([:]), error: nil,
+            chunkData: nil, chunkIndex: nil, totalChunks: nil)
+
+        while sent.count < 3 { await Task.yield() }
+        guard
             case .cdpRequest(
-                let shotId, "leader", "tab1", "Page.captureScreenshot", _, let sessionId) = sent[1]
-        else { return XCTFail("second request must capture: \(sent[1])") }
+                let shotId, "leader", "tab1", "Page.captureScreenshot", _, let sessionId) = sent[2]
+        else { return XCTFail("then the capture: \(sent[2])") }
         XCTAssertEqual(sessionId, "s1", "the capture rides the attached session")
         client.handleResponse(
             requestId: shotId, result: AnyCodable(["data": jpegBase64()]), error: nil,
@@ -50,9 +59,9 @@ final class CdpPreviewClientTests: XCTestCase {
 
         let image = try await capture
         XCTAssertGreaterThan(image.size.width, 0)
-        while sent.count < 3 { await Task.yield() }
-        guard case .cdpRequest(_, "leader", _, "Target.detachFromTarget", _, _) = sent[2]
-        else { return XCTFail("the session detaches after capture: \(sent[2])") }
+        while sent.count < 4 { await Task.yield() }
+        guard case .cdpRequest(_, "leader", _, "Target.detachFromTarget", _, _) = sent[3]
+        else { return XCTFail("the session detaches after capture: \(sent[3])") }
     }
 
     func testChunkedResponsesReassembleInOrder() async throws {
@@ -77,8 +86,14 @@ final class CdpPreviewClientTests: XCTestCase {
             chunkData: String(serialized[..<mid]), chunkIndex: 0, totalChunks: 2)
 
         while sent.count < 2 { await Task.yield() }
-        guard case .cdpRequest(let shotId, _, _, "Page.captureScreenshot", _, "s2") = sent[1]
+        guard case .cdpRequest(let frontId, _, _, "Page.bringToFront", _, "s2") = sent[1]
         else { return XCTFail("chunked attach result must parse: \(sent[1])") }
+        client.handleResponse(
+            requestId: frontId, result: AnyCodable([:]), error: nil,
+            chunkData: nil, chunkIndex: nil, totalChunks: nil)
+        while sent.count < 3 { await Task.yield() }
+        guard case .cdpRequest(let shotId, _, _, "Page.captureScreenshot", _, "s2") = sent[2]
+        else { return XCTFail("then the capture: \(sent[2])") }
         client.handleResponse(
             requestId: shotId, result: AnyCodable(["data": jpegBase64()]), error: nil,
             chunkData: nil, chunkIndex: nil, totalChunks: nil)

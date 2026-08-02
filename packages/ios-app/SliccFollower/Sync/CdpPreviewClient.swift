@@ -58,6 +58,13 @@ final class CdpPreviewClient {
                     localTargetId: targetId, method: "Target.detachFromTarget",
                     params: AnyCodable(["sessionId": sessionId]), sessionId: nil))
         }
+        // Foreground first: Chrome returns a blank capture (without
+        // throwing) for a throttled background renderer — the review
+        // checklist's "foreground before screenshots" exists for exactly
+        // this. Failure is non-fatal; the capture still gets attempted.
+        _ = try? await request(
+            targetRuntimeId: "leader", localTargetId: targetId,
+            method: "Page.bringToFront", params: [:], sessionId: sessionId)
         let shot = try await request(
             targetRuntimeId: "leader", localTargetId: targetId,
             method: "Page.captureScreenshot",
