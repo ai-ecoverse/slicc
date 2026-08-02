@@ -74,6 +74,19 @@ class AppState: ObservableObject {
     @Published var selectedScoopJid: String?
     /// JID of the leader's currently active scoop (informational; used to mark the active row).
     @Published var leaderActiveScoopJid: String?
+
+    /// Whether a message typed now lands where the user is looking. A
+    /// scoop-less `user_message` routes to the LEADER's active scoop, so a
+    /// follower viewing a different scoop must not be offered actions —
+    /// like steering — that would hit the wrong turn. Unknown state
+    /// (either side nil) errs permissive: pre-scoop leaders have exactly
+    /// one target.
+    var composerTargetsLeaderActiveScoop: Bool {
+        guard let selected = selectedScoopJid, let active = leaderActiveScoopJid else {
+            return true
+        }
+        return selected == active
+    }
     /// Per-scoop message buffers. Source of truth for `messages`.
     private var messagesByScoop: [String: [ChatMessage]] = [:]
 
@@ -454,7 +467,10 @@ class AppState: ObservableObject {
     // MARK: - UI Actions
 
     /// Send a user message to the agent via the data channel.
-    func sendMessage(_ text: String) {
+    /// `steer: true` interrupts the leader's running turn instead of
+    /// queueing behind it — the phone's equivalent of the desktop's
+    /// Cmd+Enter.
+    func sendMessage(_ text: String, steer: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -471,7 +487,8 @@ class AppState: ObservableObject {
             messagesByScoop[jid, default: []].append(message)
         }
 
-        let msg = FollowerToLeaderMessage.userMessage(text: trimmed, messageId: messageId)
+        let msg = FollowerToLeaderMessage.userMessage(
+            text: trimmed, messageId: messageId, steer: steer)
         sendToLeader(msg)
     }
 

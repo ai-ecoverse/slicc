@@ -59,13 +59,31 @@ struct ChatView: View {
         }
     }
 
+    /// Composer text seeded from the `-uiTestComposerText` launch argument —
+    /// screenshots and UI tests need a non-empty composer without typing.
+    /// Empty (and compiled to a constant) outside DEBUG.
+    static func seededComposerText() -> String {
+        #if DEBUG
+            return UserDefaults.standard.string(forKey: "uiTestComposerText") ?? ""
+        #else
+            return ""
+        #endif
+    }
+
     #if DEBUG
         /// Pin the banner to one state for a UI test. `stalled` is a connected
-        /// leader that stopped answering, so it sets both fields.
+        /// leader that stopped answering, so it sets both fields; `streaming`
+        /// is a connected leader mid-turn, unlocking the send-while-streaming
+        /// affordance without a live peer.
         private func applyForcedConnectionState(_ raw: String) {
             if raw == "stalled" {
                 appState.connectionState = .connected
                 appState.isLeaderStalled = true
+                return
+            }
+            if raw == "streaming" {
+                appState.connectionState = .connected
+                appState.isStreaming = true
                 return
             }
             guard let state = ConnectionState(rawValue: raw) else { return }
@@ -84,7 +102,7 @@ struct ChatView: View {
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Binding var showSettings: Bool
-    @State private var inputText = ""
+    @State private var inputText = ChatView.seededComposerText()
     @State private var showFrozenSessions = false
 
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
@@ -204,12 +222,17 @@ struct ConversationView: View {
                 // composer and lost, so block sending — but say why, rather
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
+                steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
                 onSend: { text in
                     appState.sendMessage(text)
                     inputText = ""
                 },
                 onAbort: {
                     appState.abort()
+                },
+                onSteer: { text in
+                    appState.sendMessage(text, steer: true)
+                    inputText = ""
                 }
             )
         }

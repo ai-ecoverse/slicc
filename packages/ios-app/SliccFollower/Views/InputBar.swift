@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct InputBar: View {
     @Binding var text: String
@@ -7,8 +8,15 @@ struct InputBar: View {
     /// Leader stopped answering pings while its channel stayed open. Sending is
     /// blocked, but this is not a disconnect and must not read as one.
     var isStalled: Bool = false
+    /// A scoop-less `user_message` routes to the leader's ACTIVE scoop;
+    /// when the follower is viewing a different one, the streaming-send /
+    /// steer affordance hides so an interrupt cannot hit the wrong turn.
+    var steersActiveScoop: Bool = true
     let onSend: (String) -> Void
     let onAbort: () -> Void
+    /// Send interrupting the running turn (`user_message.steer`). Only
+    /// reachable while streaming, via the long-press menu on send.
+    var onSteer: (String) -> Void = { _ in }
 
     @FocusState private var isFocused: Bool
 
@@ -18,8 +26,9 @@ struct InputBar: View {
     private let separatorColor = Color(white: 1, opacity: 0.1)
 
     private var canSend: Bool {
+        // Sending during a running turn queues on the leader (browser
+        // parity); only an empty composer or an unusable connection blocks.
         isComposable && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !isStreaming
     }
 
     /// Whether a message can be handed to the leader at all.
@@ -94,10 +103,32 @@ struct InputBar: View {
     @ViewBuilder
     private var actionButton: some View {
         if isStreaming {
-            Button(action: onAbort) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.red)
+            HStack(spacing: 6) {
+                if canSend && steersActiveScoop {
+                    // Tap queues behind the running turn; the long-press menu
+                    // offers the interrupt — a discoverable, standard iOS
+                    // idiom for the desktop's Cmd+Enter steer.
+                    Menu {
+                        Button(role: .destructive) {
+                            steerIfPossible()
+                        } label: {
+                            Label("Interrupt & send", systemImage: "bolt.fill")
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(accentPurple)
+                    } primaryAction: {
+                        sendIfPossible()
+                    }
+                    .accessibilityIdentifier("send-while-streaming")
+                    .transition(.scale.combined(with: .opacity))
+                }
+                Button(action: onAbort) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.red)
+                }
             }
             .transition(.scale.combined(with: .opacity))
             .padding(.bottom, 2)
@@ -117,8 +148,17 @@ struct InputBar: View {
 
     private func sendIfPossible() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, isComposable, !isStreaming else { return }
+        guard !trimmed.isEmpty, isComposable else { return }
         onSend(trimmed)
+        text = ""
+    }
+
+    private func steerIfPossible() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, isComposable, isStreaming else { return }
+        // Interrupting work in progress deserves a physical acknowledgment.
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onSteer(trimmed)
         text = ""
     }
 }
