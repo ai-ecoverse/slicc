@@ -343,6 +343,47 @@ function buildElisionStub(approxBytes: number, role: 'toolResult' | 'assistant')
   return `[${prefix}: ${kb} KB, exceeds half the context window. Re-run with smaller arguments — e.g. open --view --size low.]`;
 }
 
+function elideMessageContent(message: AgentMessage): AgentMessage {
+  const role = (message as { role: string }).role as 'toolResult' | 'assistant';
+  const content = (message as { content?: unknown }).content;
+  const bytes = approxContentBytes(content);
+  if (role === 'toolResult') {
+    return {
+      ...(message as object),
+      content: [{ type: 'text', text: buildElisionStub(bytes, role) }],
+    } as AgentMessage;
+  }
+
+  const toolCalls = Array.isArray(content)
+    ? (content.filter((block) => (block as { type?: string }).type === 'toolCall') as Array<{
+        type: string;
+        id?: string;
+        name?: string;
+        arguments?: unknown;
+      }>)
+    : [];
+  const elidedToolCalls = toolCalls.map((toolCall) => {
+    let argumentBytes = 0;
+    if (toolCall.arguments !== undefined) {
+      try {
+        argumentBytes = JSON.stringify(toolCall.arguments).length;
+      } catch {
+        // unserializable arguments — best-effort, treat as 0 bytes
+      }
+    }
+    return {
+      type: toolCall.type,
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: { elided: true, originalBytes: argumentBytes },
+    };
+  });
+  return {
+    ...(message as object),
+    content: [{ type: 'text', text: buildElisionStub(bytes, role) }, ...elidedToolCalls],
+  } as AgentMessage;
+}
+
 /**
  * In the hopeless branch, replace the content of any single `toolResult`
  * (or assistant message carrying tool calls) whose estimated tokens exceed
@@ -380,10 +421,7 @@ function elideHopelessMessages(
     if (role === 'toolResult') {
       elidedCount++;
       elidedBytes += bytes;
-      return {
-        ...(msg as object),
-        content: [{ type: 'text', text: buildElisionStub(bytes, 'toolResult') }],
-      } as AgentMessage;
+      return elideMessageContent(msg);
     }
 
     // Assistant branch: only elide turns that actually carry tool calls.
@@ -396,33 +434,9 @@ function elideHopelessMessages(
     }>;
     if (toolCalls.length === 0) return msg;
 
-    // Rewrite each toolCall's `arguments` to a small stub while preserving
-    // `type`, `id`, and `name`. This drops multi-megabyte argument payloads
-    // (e.g. a large `write_file` `content` field) that would otherwise
-    // survive elision and keep the conversation over the hopeless threshold.
-    const elidedToolCalls = toolCalls.map((tc) => {
-      let argBytes = 0;
-      if (tc.arguments !== undefined) {
-        try {
-          argBytes = JSON.stringify(tc.arguments).length;
-        } catch {
-          // unserializable arguments — best-effort, treat as 0 bytes
-        }
-      }
-      return {
-        type: tc.type,
-        id: tc.id,
-        name: tc.name,
-        arguments: { elided: true, originalBytes: argBytes },
-      };
-    });
-
     elidedCount++;
     elidedBytes += bytes;
-    return {
-      ...(msg as object),
-      content: [{ type: 'text', text: buildElisionStub(bytes, 'assistant') }, ...elidedToolCalls],
-    } as AgentMessage;
+    return elideMessageContent(msg);
   });
 
   return { messages: out, elidedCount, elidedBytes };
