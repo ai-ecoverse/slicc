@@ -13,7 +13,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_required: ${{ steps.release.outputs.required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      # Analyze commits with semantic-release's real default analyzer, but omit
+      # every prepare/publish plugin. Non-release pushes stop on this cheap Linux
+      # runner before reserving macOS or rebuilding the repository.
+      - name: Plan release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          LOG="$RUNNER_TEMP/semantic-release-analyze.log"
+          npx semantic-release --dry-run --no-ci \
+            --plugins @semantic-release/commit-analyzer 2>&1 | tee "$LOG"
+
+          if grep -q 'The next release version is' "$LOG"; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "required=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: analyze
+    if: needs.analyze.outputs.release_required == 'true'
     # macos-26 GA'd 2026-02-26 and is the image that ships Xcode 26
     # by default. Apple now rejects App Store submissions built with
     # anything older: "Validation failed (409) SDK version issue.
@@ -49,7 +87,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test
-      - run: npm run build
 
       - name: Import Apple certificates
         if: env.APPLE_CERTIFICATE_BASE64 != ''

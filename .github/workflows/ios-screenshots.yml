@@ -21,6 +21,11 @@ name: iOS Screenshots
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'packages/ios-app/**'
+      - 'packages/swift-traysession/**'
+      - 'packages/dev-tools/tools/ios-screenshots*'
+      - '.github/workflows/ios-screenshots.yml'
 
 concurrency:
   group: ios-screenshots-${{ github.event.pull_request.number }}
@@ -31,25 +36,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      ios: ${{ steps.filter.outputs.ios }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
-        id: filter
-        with:
-          filters: |
-            ios:
-              - 'packages/ios-app/**'
-              - 'packages/swift-traysession/**'
-              - 'packages/dev-tools/tools/ios-screenshots*'
-              - '.github/workflows/ios-screenshots.yml'
-
   screenshots:
-    needs: changes
-    if: needs.changes.outputs.ios == 'true'
     runs-on: macos-latest
     timeout-minutes: 40
     env:

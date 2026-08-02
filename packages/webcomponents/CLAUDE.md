@@ -106,9 +106,9 @@ with light + dark Storybook screenshots of the **affected** stories. Driven by
 `.github/workflows/storybook-screenshots.yml`; the capture script and resolver
 live under `packages/dev-tools/tools/` (see that package's `CLAUDE.md`).
 
-**Trigger:** any path under `packages/webcomponents/**` on a `pull_request` to
-`main` (`dorny/paths-filter` `webcomponents` flag). PRs that don't touch the
-package don't run the job.
+**Trigger:** the workflow is event-filtered to `packages/webcomponents/**`, its
+screenshot tooling, and the workflow definition on a `pull_request` to `main`.
+Unrelated PRs do not start the workflow.
 
 **Affected-story heuristic** (directory-level, intentionally coarse — easy to
 reason about, no module-graph plumbing):
