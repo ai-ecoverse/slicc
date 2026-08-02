@@ -28,7 +28,7 @@ final class DockModelTests: XCTestCase {
     }
 
     func testLeaderOnlySurfacesExplainThemselves() {
-        for surface in [DockSurface.files, .term, .newSprinkle] {
+        for surface in [DockSurface.term, .newSprinkle] {
             XCTAssertNotNil(
                 DockModel.placeholderText(for: surface),
                 "\(surface) has no native view — it must say why, not render empty")
@@ -38,5 +38,6 @@ final class DockModelTests: XCTestCase {
         XCTAssertNil(DockModel.placeholderText(for: .sprinkle(name: "x")))
         XCTAssertNil(DockModel.placeholderText(for: .monitor))
         XCTAssertNil(DockModel.placeholderText(for: .memory))
+        XCTAssertNil(DockModel.placeholderText(for: .files))
     }
 }

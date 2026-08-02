@@ -312,6 +312,16 @@ enum LeaderToFollowerMessage: Codable {
         method: String,
         params: AnyCodable?,
         sessionId: String?)
+    /// Answer to a FOLLOWER-originated `cdp.request` (tab previews drive
+    /// leader tabs via CDP). Large results arrive chunked: `chunkData`
+    /// slices of the serialized result JSON, reassembled by requestId.
+    case cdpResponse(
+        requestId: String,
+        result: AnyCodable?,
+        error: String?,
+        chunkData: String?,
+        chunkIndex: Int?,
+        totalChunks: Int?)
     case targetsRegistry(targets: [TrayTargetEntry])
     case tabOpen(requestId: String, url: String)
     case previewOpen(requestId: String, url: String)
@@ -338,7 +348,7 @@ enum LeaderToFollowerMessage: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case type, messages, scoopJid, chunkData, chunkIndex, totalChunks
-        case event, text, messageId, scoopStatus, error
+        case event, text, messageId, scoopStatus, error, result
         case scoops, activeScoopJid, sprinkles
         case requestId, sprinkleName, content, data, attachments
         case localTargetId, method, params, sessionId, targets, url
@@ -412,6 +422,14 @@ enum LeaderToFollowerMessage: Codable {
                 params: try container.decodeIfPresent(AnyCodable.self, forKey: .params),
                 sessionId: try container.decodeIfPresent(String.self, forKey: .sessionId)
             )
+        case "cdp.response":
+            self = .cdpResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                result: try container.decodeIfPresent(AnyCodable.self, forKey: .result),
+                error: try container.decodeIfPresent(String.self, forKey: .error),
+                chunkData: try container.decodeIfPresent(String.self, forKey: .chunkData),
+                chunkIndex: try container.decodeIfPresent(Int.self, forKey: .chunkIndex),
+                totalChunks: try container.decodeIfPresent(Int.self, forKey: .totalChunks))
         case "targets.registry":
             self = .targetsRegistry(
                 targets: (try? container.decode([TrayTargetEntry].self, forKey: .targets)) ?? []
@@ -528,6 +546,16 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode(method, forKey: .method)
             try container.encodeIfPresent(params, forKey: .params)
             try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        case .cdpResponse(
+            let requestId, let result, let error, let chunkData, let chunkIndex,
+            let totalChunks):
+            try container.encode("cdp.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encodeIfPresent(result, forKey: .result)
+            try container.encodeIfPresent(error, forKey: .error)
+            try container.encodeIfPresent(chunkData, forKey: .chunkData)
+            try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
+            try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
         case .targetsRegistry(let targets):
             try container.encode("targets.registry", forKey: .type)
             try container.encode(targets, forKey: .targets)
@@ -604,6 +632,17 @@ enum FollowerToLeaderMessage: Codable {
     case sprinkleLick(sprinkleName: String, body: AnyCodable?, targetScoop: String?)
     // CDP / federated targets — follower → leader
     case targetsAdvertise(targets: [RemoteTargetInfo], runtimeId: String)
+    /// Follower-originated CDP against a federated target.
+    /// `targetRuntimeId: "leader"` runs on the leader's own browser
+    /// transport (tab previews use Target.attachToTarget +
+    /// Page.captureScreenshot); other values forward to that follower.
+    case cdpRequest(
+        requestId: String,
+        targetRuntimeId: String,
+        localTargetId: String,
+        method: String,
+        params: AnyCodable?,
+        sessionId: String?)
     case cdpResponse(
         requestId: String,
         result: AnyCodable?,
@@ -638,7 +677,7 @@ enum FollowerToLeaderMessage: Codable {
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
         case method, params, sessionId, targetId, url
         case protocolVersion, runtime
-        case targetRuntimeId, request, response
+        case targetRuntimeId, localTargetId, request, response
     }
 
     init(from decoder: Decoder) throws {
@@ -677,6 +716,14 @@ enum FollowerToLeaderMessage: Codable {
             self = .targetsAdvertise(
                 targets: (try? container.decode([RemoteTargetInfo].self, forKey: .targets)) ?? [],
                 runtimeId: try container.decode(String.self, forKey: .runtimeId))
+        case "cdp.request":
+            self = .cdpRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                targetRuntimeId: try container.decode(String.self, forKey: .targetRuntimeId),
+                localTargetId: try container.decode(String.self, forKey: .localTargetId),
+                method: try container.decode(String.self, forKey: .method),
+                params: try container.decodeIfPresent(AnyCodable.self, forKey: .params),
+                sessionId: try container.decodeIfPresent(String.self, forKey: .sessionId))
         case "cdp.response":
             self = .cdpResponse(
                 requestId: try container.decode(String.self, forKey: .requestId),
@@ -766,6 +813,16 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("targets.advertise", forKey: .type)
             try container.encode(targets, forKey: .targets)
             try container.encode(runtimeId, forKey: .runtimeId)
+        case .cdpRequest(
+            let requestId, let targetRuntimeId, let localTargetId, let method, let params,
+            let sessionId):
+            try container.encode("cdp.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(targetRuntimeId, forKey: .targetRuntimeId)
+            try container.encode(localTargetId, forKey: .localTargetId)
+            try container.encode(method, forKey: .method)
+            try container.encodeIfPresent(params, forKey: .params)
+            try container.encodeIfPresent(sessionId, forKey: .sessionId)
         case .cdpResponse(let requestId, let result, let error, let chunkData, let chunkIndex, let totalChunks):
             try container.encode("cdp.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)

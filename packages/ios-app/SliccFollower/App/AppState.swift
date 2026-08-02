@@ -107,6 +107,10 @@ class AppState: ObservableObject {
     private(set) lazy var fsClient = FsClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
+    /// Follower-originated CDP for tab previews (#1865).
+    private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
+        self?.sendToLeader(message) ?? false
+    }
     /// What the leader advertised on `hello`. Decoded and kept so the field is
     /// inspectable rather than dropped; nothing gates on it yet.
     private(set) var leaderCapabilities: TraySyncCapabilities?
@@ -173,19 +177,6 @@ class AppState: ObservableObject {
         }
     }
 
-    private static func makeSessionStore() -> TraySessionSyncStore {
-        #if DEBUG
-            if let fixture = UITestHooks.sessionsFixtureBackend() {
-                return TraySessionSyncStore(
-                    backend: fixture,
-                    deviceId: "ios-under-test",
-                    deviceName: "iPhone Under Test"
-                )
-            }
-        #endif
-        return TraySessionSyncStore()
-    }
-
     // MARK: - Private Networking / Sync
 
     // These are fileprivate so WebRTCBridge (same file) can access them.
@@ -224,6 +215,9 @@ class AppState: ObservableObject {
     private var targetsAdvertiseTimer: Timer?
     /// Visible carousel of locally-hosted CDP targets (one per WKWebView).
     @Published var cdpTargets: [CDPTargetSummary] = []
+    /// Federated tabs elsewhere in the tray (`targets.registry`, own
+    /// runtime excluded) — the browser surface's preview cards.
+    @Published var remoteTargets: [TrayTargetEntry] = []
 
     // MARK: - Connection Lifecycle
 
@@ -1048,10 +1042,19 @@ class AppState: ObservableObject {
             logger.info("Leader requested preview tab: \(url)")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
-        case .targetsRegistry:
-            // Informational — registry of all federated targets across the tray.
-            // We don't act on it locally; relevant only for cross-runtime CDP.
-            break
+        case .targetsRegistry(let targets):
+            // Tabs the tray federates elsewhere (leader + other followers);
+            // the browser surface renders them as preview cards (#1865).
+            // Our own advertised targets are excluded — they are the live
+            // local carousel.
+            remoteTargets = targets.filter { $0.runtimeId != controllerId }
+
+        case .cdpResponse(
+            let requestId, let result, let error, let chunkData, let chunkIndex,
+            let totalChunks):
+            cdpPreviews.handleResponse(
+                requestId: requestId, result: result, error: error,
+                chunkData: chunkData, chunkIndex: chunkIndex, totalChunks: totalChunks)
 
         case .ping:
             sendToLeader(.pong)

@@ -189,6 +189,30 @@
       ]
     },
     {
+      "name": "dock-browser-remote",
+      "description": "Browser surface with federated remote-tab preview cards",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "browser",
+        "-uiTestRemoteTargetsFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "dock-files",
+      "description": "Files surface: browsing the leader's VFS with share-to-Files export",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "files",
+        "-uiTestFilesFixture",
+        "YES"
+      ]
+    },
+    {
       "name": "dock-monitor",
       "description": "Monitor surface: connection vitals, scoops, visible-session cost",
       "args": [

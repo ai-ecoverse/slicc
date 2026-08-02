@@ -143,6 +143,64 @@ import UIKit
                 permission: permission, grantOutcome: grant, script: script)
         }
 
+        /// Canned leader-VFS tree (`-uiTestFilesFixture YES`) so the files
+        /// surface browses hermetically. Paths map to listings; file taps
+        /// synthesize contents in the view.
+        static func filesFixture(path: String) -> [TrayFsDirEntry]? {
+            guard UserDefaults.standard.bool(forKey: "uiTestFilesFixture") else { return nil }
+            switch path {
+            case "/":
+                return [
+                    TrayFsDirEntry(name: "workspace", type: .directory),
+                    TrayFsDirEntry(name: "shared", type: .directory),
+                    TrayFsDirEntry(name: "README.md", type: .file),
+                ]
+            case "/workspace":
+                return [
+                    TrayFsDirEntry(name: "CLAUDE.md", type: .file),
+                    TrayFsDirEntry(name: "notes.txt", type: .file),
+                ]
+            default:
+                return []
+            }
+        }
+
+        /// Seed federated remote tabs (`-uiTestRemoteTargetsFixture YES`)
+        /// so the browser surface renders preview cards without a leader;
+        /// the paired canned preview image stands in for a CDP capture.
+        static func remoteTargetsFixture() -> [TrayTargetEntry]? {
+            guard UserDefaults.standard.bool(forKey: "uiTestRemoteTargetsFixture") else {
+                return nil
+            }
+            return [
+                TrayTargetEntry(
+                    targetId: "leader:tab-docs", localTargetId: "tab-docs",
+                    runtimeId: "leader", title: "SLICC docs — architecture",
+                    url: "https://www.sliccy.ai/docs/architecture", isLocal: false),
+                TrayTargetEntry(
+                    targetId: "cli:tab-ci", localTargetId: "tab-ci",
+                    runtimeId: "slicc-cli-a1b2", title: "CI dashboard",
+                    url: "https://github.com/ai-ecoverse/slicc/actions", isLocal: false),
+            ]
+        }
+
+        static func remotePreviewFixtureImage() -> UIImage? {
+            guard UserDefaults.standard.bool(forKey: "uiTestRemoteTargetsFixture") else {
+                return nil
+            }
+            let size = CGSize(width: 480, height: 280)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.systemIndigo.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                UIColor.white.setFill()
+                context.fill(CGRect(x: 24, y: 24, width: 432, height: 40))
+                context.fill(CGRect(x: 24, y: 84, width: 320, height: 16))
+                context.fill(CGRect(x: 24, y: 112, width: 380, height: 16))
+            }
+        }
+
         /// Canned memory markdown (`-uiTestMemoryFixture YES`) so the
         /// memory surface renders rows without a leader.
         static func memoryFixtureMarkdown() -> String? {
