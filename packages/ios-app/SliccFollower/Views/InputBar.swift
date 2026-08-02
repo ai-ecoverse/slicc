@@ -35,6 +35,11 @@ struct InputBar: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
     @State private var showCamera = false
+    /// `UIPasteboard.general.hasImages` is not SwiftUI-observable — read
+    /// once, then track pasteboard changes and foreground returns (an image
+    /// copied in another app must surface Paste on the next menu open).
+    /// `hasImages` is a metadata check, so it never trips the paste banner.
+    @State private var pasteboardHasImage = UIPasteboard.general.hasImages
 
     private var canSend: Bool {
         // Sending during a running turn queues on the leader (browser
@@ -138,6 +143,19 @@ struct InputBar: View {
                 ptt.pressCancelled()
             }
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)
+        ) { _ in
+            pasteboardHasImage = UIPasteboard.general.hasImages
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.willEnterForegroundNotification)
+        ) { _ in
+            // Cross-app copies do not fire the pasteboard notification in
+            // THIS process — re-check on every return to the foreground.
+            pasteboardHasImage = UIPasteboard.general.hasImages
+        }
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photoItems,
@@ -179,7 +197,7 @@ struct InputBar: View {
                     Label("Camera", systemImage: "camera")
                 }
             }
-            if UIPasteboard.general.hasImages {
+            if pasteboardHasImage {
                 Button {
                     pasteImages()
                 } label: {
