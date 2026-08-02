@@ -21,10 +21,10 @@ export const COMPLEXITY_RULE_KEY = 'noExcessiveCognitiveComplexity';
 export const FLOATING_PROMISE_RULE_KEY = 'noFloatingPromises';
 export const MISUSED_PROMISE_RULE_KEY = 'noMisusedPromises';
 
-// Identify a debt-list `overrides` entry for a given rule key: blocks whose
-// ONLY linter rule customization is `complexity.<ruleKey>: "off"`. Other
-// overrides (e.g. the test-file block, which disables many rules) are
-// general policy, not debt, and are intentionally excluded.
+// Identify a debt-list `overrides` entry for a given rule group + key: blocks
+// whose ONLY linter rule customization is `<ruleGroup>.<ruleKey>: "off"`. Other
+// overrides (e.g. the test-file block, which disables many rules) are general
+// policy, not debt, and are intentionally excluded.
 export function isExemptionOverrideFor(override, ruleKey, ruleGroup = 'complexity') {
   const rules = override?.linter?.rules;
   if (!rules || typeof rules !== 'object') return false;
