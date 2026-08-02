@@ -1,0 +1,282 @@
+/** Browser-native upgrade of bundled VFS files across SLICC release refs. */
+import type { Command, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import type { VirtualFS } from '../../fs/index.js';
+import { threeWayMerge } from '../../git/merge-file-core.js';
+import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
+
+const REPO = 'ai-ecoverse/slicc';
+const BUNDLED_PREFIX = 'packages/vfs-root';
+const SCOPES = [
+  `${BUNDLED_PREFIX}/workspace/skills/`,
+  `${BUNDLED_PREFIX}/shared/sprinkles/`,
+  `${BUNDLED_PREFIX}/shared/sounds/`,
+] as const;
+const CLASSIFICATIONS = [
+  'auto-applied',
+  'merged-clean',
+  'kept-local',
+  'needs-review',
+  'unchanged',
+  'added-new',
+] as const;
+
+export type UpgradeClassification = (typeof CLASSIFICATIONS)[number];
+
+interface GitTreeResponse {
+  truncated?: boolean;
+  tree?: Array<{ path?: string; type?: string }>;
+}
+
+interface UpgradePlan {
+  path: string;
+  classification: UpgradeClassification;
+  content?: Uint8Array;
+  sidecar?: string;
+}
+
+export interface UpgradeCommandDeps {
+  fs: VirtualFS;
+  fetch: SecureFetch;
+}
+
+function emptySummary(): Record<UpgradeClassification, number> {
+  return Object.fromEntries(CLASSIFICATIONS.map((name) => [name, 0])) as Record<
+    UpgradeClassification,
+    number
+  >;
+}
+
+function output(from: string, to: string, plans: UpgradePlan[], errors: string[]): string {
+  const summary = emptySummary();
+  for (const plan of plans) summary[plan.classification] += 1;
+  return `${JSON.stringify({
+    ok: errors.length === 0 && summary['needs-review'] === 0,
+    from,
+    to,
+    results: plans.map(({ path, classification: status, sidecar }) => ({
+      path,
+      status,
+      ...(sidecar ? { sidecar } : {}),
+    })),
+    summary,
+    errors,
+  })}\n`;
+}
+
+function parseArgs(args: string[]): { from: string; to: string } {
+  if (args[0] !== 'apply') {
+    throw new Error('usage: upgrade apply --from=<version> --to=<version>');
+  }
+  const flags = new Map<string, string>();
+  for (const arg of args.slice(1)) {
+    const match = arg.match(/^--(from|to)=(.+)$/);
+    if (!match) throw new Error(`unsupported argument: ${arg}`);
+    flags.set(match[1], match[2]);
+  }
+  const from = flags.get('from') ?? '';
+  const to = flags.get('to') ?? '';
+  const safeVersion = /^v?[0-9][0-9A-Za-z.+_-]*$/;
+  if (!safeVersion.test(from) || !safeVersion.test(to)) {
+    throw new Error('both --from and --to must be release versions');
+  }
+  return { from, to };
+}
+
+function releaseRef(version: string): string {
+  return version.startsWith('v') ? version : `v${version}`;
+}
+
+function runtimePath(repoPath: string): string | null {
+  if (!SCOPES.some((prefix) => repoPath.startsWith(prefix))) return null;
+  const relative = repoPath.slice(BUNDLED_PREFIX.length);
+  if (!relative || relative.split('/').some((part) => part === '.' || part === '..')) {
+    return null;
+  }
+  return relative;
+}
+
+async function checkedFetch(fetchFn: SecureFetch, url: string): ReturnType<SecureFetch> {
+  let response: Awaited<ReturnType<SecureFetch>>;
+  try {
+    response = await fetchFn(url, { method: 'GET', headers: { Accept: 'application/json' } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`fetch failed for ${url}: ${message}`);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`fetch failed for ${url}: HTTP ${response.status} ${response.statusText}`);
+  }
+  return response;
+}
+
+async function discover(ref: string, fetchFn: SecureFetch): Promise<Map<string, string>> {
+  const url = `https://api.github.com/repos/${REPO}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+  const response = await checkedFetch(fetchFn, url);
+  const tree = parseFetchJson<GitTreeResponse>(response.body);
+  if (tree.truncated) throw new Error(`bundled file discovery was truncated for ${ref}`);
+  if (!Array.isArray(tree.tree)) {
+    throw new Error(`invalid bundled file discovery response for ${ref}`);
+  }
+  const files = new Map<string, string>();
+  for (const item of tree.tree) {
+    if (item.type !== 'blob' || typeof item.path !== 'string') continue;
+    const path = runtimePath(item.path);
+    if (path) files.set(path, item.path);
+  }
+  return files;
+}
+
+function rawUrl(ref: string, repoPath: string): string {
+  const path = repoPath.split('/').map(encodeURIComponent).join('/');
+  return `https://raw.githubusercontent.com/${REPO}/${encodeURIComponent(ref)}/${path}`;
+}
+
+function equal(a: Uint8Array | undefined, b: Uint8Array | undefined): boolean {
+  if (!a || !b || a.byteLength !== b.byteLength) return false;
+  return a.every((byte, index) => byte === b[index]);
+}
+
+function decodeText(bytes: Uint8Array): string | null {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+async function readLocal(fs: VirtualFS, path: string): Promise<Uint8Array | undefined> {
+  if (!(await fs.exists(path))) return undefined;
+  const value = await fs.readFile(path, { encoding: 'binary' });
+  return value instanceof Uint8Array ? value : new TextEncoder().encode(value);
+}
+
+async function collisionSafeSidecar(
+  fs: VirtualFS,
+  path: string,
+  from: string,
+  to: string,
+  blocked: Set<string>
+): Promise<string> {
+  const stem = `${path}.upgrade-${releaseRef(from)}-to-${releaseRef(to)}.conflict`;
+  if (!blocked.has(stem) && !(await fs.exists(stem))) {
+    blocked.add(stem);
+    return stem;
+  }
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${stem}.${suffix}`;
+    if (!blocked.has(candidate) && !(await fs.exists(candidate))) {
+      blocked.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+async function buildPlan(
+  deps: UpgradeCommandDeps,
+  path: string,
+  from: string,
+  to: string,
+  base: Uint8Array | undefined,
+  theirs: Uint8Array | undefined,
+  blocked: Set<string>
+): Promise<UpgradePlan> {
+  const ours = await readLocal(deps.fs, path);
+  if (!theirs) return { path, classification: ours ? 'kept-local' : 'unchanged' };
+  if (!base) {
+    if (!ours) return { path, classification: 'added-new', content: theirs };
+    return { path, classification: equal(ours, theirs) ? 'unchanged' : 'kept-local' };
+  }
+  if (equal(base, theirs) || equal(ours, theirs)) return { path, classification: 'unchanged' };
+  if (!ours) return { path, classification: 'kept-local' };
+  if (equal(ours, base)) return { path, classification: 'auto-applied', content: theirs };
+
+  const [oursText, baseText, theirsText] = [ours, base, theirs].map(decodeText);
+  if (oursText !== null && baseText !== null && theirsText !== null) {
+    const merged = threeWayMerge(oursText, baseText, theirsText, {
+      diff3: true,
+      labels: {
+        current: `local:${path}`,
+        base: `${releaseRef(from)}:${path}`,
+        other: `${releaseRef(to)}:${path}`,
+      },
+    });
+    const content = new TextEncoder().encode(merged.content);
+    if (merged.conflicts === 0) return { path, classification: 'merged-clean', content };
+    return {
+      path,
+      classification: 'needs-review',
+      content,
+      sidecar: await collisionSafeSidecar(deps.fs, path, from, to, blocked),
+    };
+  }
+  return {
+    path,
+    classification: 'needs-review',
+    content: theirs,
+    sidecar: await collisionSafeSidecar(deps.fs, path, from, to, blocked),
+  };
+}
+
+async function applyUpgrade(
+  deps: UpgradeCommandDeps,
+  from: string,
+  to: string
+): Promise<UpgradePlan[]> {
+  const fromRef = releaseRef(from);
+  const toRef = releaseRef(to);
+  const [baseFiles, newFiles] = await Promise.all([
+    discover(fromRef, deps.fetch),
+    discover(toRef, deps.fetch),
+  ]);
+  const paths = [...new Set([...baseFiles.keys(), ...newFiles.keys()])].sort();
+  const prefetched = await Promise.all(
+    paths.map(async (path) => {
+      const [base, theirs] = await Promise.all([
+        baseFiles.has(path)
+          ? checkedFetch(deps.fetch, rawUrl(fromRef, baseFiles.get(path)!)).then((response) =>
+              getFetchBodyBytes(response.body)
+            )
+          : undefined,
+        newFiles.has(path)
+          ? checkedFetch(deps.fetch, rawUrl(toRef, newFiles.get(path)!)).then((response) =>
+              getFetchBodyBytes(response.body)
+            )
+          : undefined,
+      ]);
+      return { path, base, theirs };
+    })
+  );
+  const blocked = new Set(paths);
+  const plans: UpgradePlan[] = [];
+  for (const { path, base, theirs } of prefetched) {
+    plans.push(await buildPlan(deps, path, from, to, base, theirs, blocked));
+  }
+
+  // All discovery, downloads, local reads, merges, and sidecar selection succeeded.
+  for (const plan of plans) {
+    if (!plan.content) continue;
+    await deps.fs.writeFile(plan.sidecar ?? plan.path, plan.content);
+  }
+  return plans;
+}
+
+export function createUpgradeCommand(deps: UpgradeCommandDeps): Command {
+  return defineCommand('upgrade', async (args) => {
+    let from = '';
+    let to = '';
+    try {
+      ({ from, to } = parseArgs(args));
+      const plans = await applyUpgrade(deps, from, to);
+      const hasConflict = plans.some((plan) => plan.classification === 'needs-review');
+      return {
+        stdout: output(from, to, plans, []),
+        stderr: '',
+        exitCode: hasConflict ? 1 : 0,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { stdout: output(from, to, [], [message]), stderr: '', exitCode: 1 };
+    }
+  });
+}
