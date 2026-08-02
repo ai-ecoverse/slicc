@@ -833,11 +833,11 @@ The Anthropic API requires every `tool_result` content block to reference a `too
 
 Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assistant messages. Three code paths mutate messages:
 
-| Path                     | File                                         | How it handles pairing                                                                                              |
-| ------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Context compaction**   | `context-compaction.ts`                      | While loop walks cut point backward past `toolResult` messages to include their assistant                           |
-| **Overflow recovery**    | `scoop-context.ts` `recoverFromOverflow()`   | When replacing oversized assistant content, preserves `type: 'toolCall'` blocks (only replaces text/image/thinking) |
-| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'` which naturally preserves ToolCall blocks                                                |
+| Path                     | File                                         | How it handles pairing                                                                 |
+| ------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Context compaction**   | `context-compaction.ts`                      | Walks the cut point backward past `toolResult` messages to include their assistant     |
+| **Overflow recovery**    | `scoop-context.ts` `recoverFromOverflow()`   | Drops only the trailing overflow error, then delegates reduction to context compaction |
+| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'`, which naturally preserves ToolCall blocks                  |
 
 **When adding new message mutation code:**
 
@@ -847,9 +847,21 @@ Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assista
 
 **Key files:**
 
-- `scoop-context.ts` lines 462-487 (overflow recovery with ToolCall preservation)
-- `context-compaction.ts` lines 85-89 (compaction pair protection)
-- `scoop-context.test.ts` "overflow recovery" tests (7 tests covering ToolCall preservation)
+- `scoop-context.ts` (`recoverFromOverflow` and `compactAndResumeOverflow`)
+- `context-compaction.ts` (compaction pair protection)
+- `scoop-context.overflow-recovery.test.ts`
+
+## Scoop Overflow Recovery Must Restart the Agent Loop
+
+An `agent_end` listener runs while pi-agent-core still has an active run. Calling `agent.prompt()`
+there throws `Agent is already processing`; `followUp()` only queues a message and does not restart
+the stopped loop. After removing the overflow error and compacting, defer `agent.continue()` until
+the listener stack has cleared so the same turn resumes.
+
+A scoop has no human to trigger a next turn. A second overflow before a successful assistant
+message, unavailable compaction, or compaction failure must call `onFatalError`; the lifecycle then
+notifies the cone over `scoop-error` and releases `scoop_wait`. Abort and disposal are clean exits,
+but any other terminal path that leaves a scoop stalled is a bug.
 
 ## Service Worker Must Be Self-Contained
 

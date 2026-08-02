@@ -511,7 +511,17 @@ the cone's memory-extraction call — at a fraction of a large model's capacity.
 
 **No truncation**: Tool results pass through at full fidelity. Image tags (`<img:...>`) are parsed into `ImageContent` blocks by `tool-adapter.ts`, but neither text nor image content is truncated. Full-size data is preserved until compaction summarizes older messages.
 
-**Overflow recovery**: If the context still exceeds the API limit after compaction (e.g., due to token estimation inaccuracy, system prompt size, or multiple large recent results), `ScoopContext` catches the "prompt too long" error via `isContextOverflow()` from pi-ai, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops.
+**Overflow recovery**: Proactive compaction still runs at the context-window threshold. If an
+`agent_end` event nevertheless reports context overflow, `ScoopContext` drops the trailing error
+message, runs the same compactor over the remaining history, and resumes the current turn with a
+deferred `agent.continue()`. Recovery is limited to one attempt until a successful assistant
+message resets the attempt flag; there is no trimming fallback.
+
+A second overflow before success, a compaction failure, or unavailable model credentials escalates
+through `onFatalError`. The scoop lifecycle sends a `scoop-error` message to the cone and releases
+`scoop_wait` through `forgetScoop`; abort and disposal exit without escalation. A scoop has no human
+to trigger another turn, so a stalled scoop is a bug: every failed terminal path must notify the
+cone, which can re-delegate a narrower task.
 
 ---
 
