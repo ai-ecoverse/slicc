@@ -27,6 +27,12 @@ struct SprinkleWebView: UIViewRepresentable {
     /// Dismiss callback for `sprinkle.close()`.
     var onClose: () -> Void
 
+    /// Leader-theme CSS variables ("" unthemed). Injected as a `<style>`
+    /// element so full sprinkle documents reading webapp variables follow
+    /// the leader theme; see `SliccTheme.sprinkleCSSOverrides`.
+    @Environment(\.sprinkleThemeCSS) private var themeCSS
+    @Environment(\.palette) private var palette
+
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
@@ -47,12 +53,20 @@ struct SprinkleWebView: UIViewRepresentable {
             forMainFrameOnly: true
         )
         userContent.addUserScript(bridgeScript)
+        if !themeCSS.isEmpty {
+            let themeScript = WKUserScript(
+                source: Self.themeInjectionJS(themeCSS),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            userContent.addUserScript(themeScript)
+        }
         config.userContentController = userContent
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
-        webView.backgroundColor = UIColor(red: 0.06, green: 0.06, blue: 0.10, alpha: 1)
+        webView.backgroundColor = UIColor(palette.canvas)
         webView.scrollView.backgroundColor = webView.backgroundColor
 
         context.coordinator.webView = webView
@@ -70,6 +84,33 @@ struct SprinkleWebView: UIViewRepresentable {
         if let data = updates {
             context.coordinator.deliverUpdate(data)
         }
+        webView.backgroundColor = UIColor(palette.canvas)
+        webView.scrollView.backgroundColor = webView.backgroundColor
+        // Re-style in place when the leader theme changes mid-session.
+        if context.coordinator.lastThemeCSS != themeCSS {
+            context.coordinator.lastThemeCSS = themeCSS
+            webView.evaluateJavaScript(Self.themeInjectionJS(themeCSS), completionHandler: nil)
+        }
+    }
+
+    /// Idempotent injector: create-or-update a dedicated `<style>` element
+    /// with the leader theme's variables. The CSS text itself is built from
+    /// allowlisted characters only (see `sprinkleCSSOverrides`), and is
+    /// JSON-escaped here for the JS string literal.
+    static func themeInjectionJS(_ css: String) -> String {
+        let encoded =
+            (try? String(data: JSONEncoder().encode(css), encoding: .utf8)) ?? "\"\""
+        return """
+            (function () {
+              var el = document.getElementById('slicc-native-theme');
+              if (!el) {
+                el = document.createElement('style');
+                el.id = 'slicc-native-theme';
+                (document.head || document.documentElement).appendChild(el);
+              }
+              el.textContent = \(encoded);
+            })();
+            """
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -82,6 +123,7 @@ struct SprinkleWebView: UIViewRepresentable {
         let parent: SprinkleWebView
         weak var webView: WKWebView?
         var lastContent: String = ""
+        var lastThemeCSS: String = ""
         private let logger = Logger(subsystem: "com.slicc.follower", category: "SprinkleWebView")
 
         init(parent: SprinkleWebView) {

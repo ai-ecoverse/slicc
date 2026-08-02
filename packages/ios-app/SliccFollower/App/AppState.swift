@@ -131,6 +131,9 @@ class AppState: ObservableObject {
     /// signaling attempt, an exhausted reconnect. Kept apart from `leaderError`
     /// so a network blip and a cone failure do not read identically.
     @Published var lastError: String?
+    /// The leader's active theme (`theme.apply`), nil when unthemed — the
+    /// phone then follows the system scheme like the unthemed webapp shell.
+    @Published var leaderTheme: SliccTheme?
 
     /// Last error reported *by the leader's agent*. A cone problem, not a
     /// transport problem: reconnecting cannot fix it and the UI must not offer
@@ -1052,12 +1055,8 @@ class AppState: ObservableObject {
         case .fsResponse(let requestId, let response):
             fsClient.handleResponse(requestId: requestId, response: response)
 
-        case .themeApply:
-            // Documented no-op: iOS ignores the leader's theme JSON — views
-            // hardcode `.preferredColorScheme(.dark)` until #1801 applies
-            // leader themes natively. Decoded (not `.unknown`) so protocol
-            // parity is explicit — this was the drift that shipped silently.
-            logger.debug("Ignoring theme.apply (iOS hardcodes dark appearance)")
+        case .themeApply(let themeJson):
+            applyLeaderTheme(themeJson)
 
         case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             handleLeaderHello(

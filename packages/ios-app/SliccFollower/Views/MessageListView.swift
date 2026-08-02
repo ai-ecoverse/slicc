@@ -11,7 +11,7 @@ struct MessageListView: View {
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
 
-    private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
+    @Environment(\.palette) private var palette
 
     var body: some View {
         Group {
@@ -21,7 +21,7 @@ struct MessageListView: View {
                 messageList
             }
         }
-        .background(background)
+        .background(palette.canvas)
     }
 
     // MARK: - Empty State
@@ -30,10 +30,10 @@ struct MessageListView: View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 40))
-                .foregroundStyle(.white.opacity(0.2))
+                .foregroundStyle(palette.ink.opacity(0.2))
             Text("No messages yet")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.3))
+                .foregroundStyle(palette.ink.opacity(0.3))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -48,7 +48,7 @@ struct MessageListView: View {
                         // Timestamp header
                         Text(group.label)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.3))
+                            .foregroundStyle(palette.ink.opacity(0.3))
                             .padding(.top, 12)
                             .padding(.bottom, 4)
 

@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ConnectionStatusView: View {
+    @Environment(\.palette) private var palette
+
     let state: ConnectionState
     /// In-flight reconnect attempt, 1-based. Zero renders no attempt count.
     var reconnectAttempt: Int = 0
@@ -53,7 +55,7 @@ struct ConnectionStatusView: View {
                 if let text = statusText {
                     Text(text)
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(palette.ink.opacity(0.85))
                         .accessibilityIdentifier("connection-status")
                 }
 
@@ -67,7 +69,7 @@ struct ConnectionStatusView: View {
             .padding(.vertical, 6)
             .background(
                 Capsule()
-                    .fill(Color.white.opacity(0.08))
+                    .fill(palette.ink.opacity(0.08))
                     .overlay(
                         Capsule()
                             .stroke(dotColor.opacity(0.3), lineWidth: 0.5)

@@ -14,8 +14,10 @@ import SwiftUI
 struct AttachmentChips: View {
     let attachments: [MessageAttachment]
 
-    private let chipBackground = Color.white.opacity(0.07)
-    private let borderColor = Color.white.opacity(0.10)
+    @Environment(\.palette) private var palette
+
+    private var chipBackground: Color { palette.field }
+    private var borderColor: Color { palette.ink.opacity(0.10) }
 
     var body: some View {
         // `flex-wrap: wrap` on the web. A horizontal scroller is the closest
@@ -37,7 +39,7 @@ struct AttachmentChips: View {
             visual(attachment)
             Text(attachment.name)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(palette.ink.opacity(0.85))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -66,7 +68,7 @@ struct AttachmentChips: View {
             // payloads to a VFS path, leaving no bytes to draw.
             Image(systemName: SliccIcons.attachment(attachment.kind))
                 .font(.system(size: 16))
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(palette.ink.opacity(0.6))
                 .frame(width: 30, height: 30)
         }
     }

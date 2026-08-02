@@ -318,8 +318,9 @@ enum LeaderToFollowerMessage: Codable {
     case fsRequest(requestId: String, request: TrayFsRequest)
     /// Reply to a follower-originated `fs.request`, chunked for large reads.
     case fsResponse(requestId: String, response: TrayFsResponse)
-    /// Leader theme broadcast. iOS decodes it (protocol parity) and discards
-    /// it — views hardcode dark appearance until #1801 — see AppState.
+    /// Leader theme broadcast. iOS derives a native palette from `base` +
+    /// `tokens` (raw `css` and per-component overrides are ignored — see
+    /// `AppState.applyLeaderTheme`); `null` resets to the system scheme.
     case themeApply(themeJson: String?)
     /// Additive version handshake (`hello`) — both sides send it first.
     /// `capabilities` and `motd` are decoded for parity; nothing on iOS

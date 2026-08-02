@@ -15,8 +15,7 @@ struct PttOverlayView: View {
     /// The engine's "where does my audio go" disclosure line.
     let statusLine: String
 
-    private let accentPurple = Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255)
-    private let barBackground = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x2E / 255)
+    @Environment(\.palette) private var palette
 
     var body: some View {
         VStack(spacing: 6) {
@@ -27,61 +26,61 @@ struct PttOverlayView: View {
                 micIcon(pulse: false)
                 Text("Hold to enable push to talk")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.ink)
                 sweepBar
                 Text("Requesting microphone access when the bar fills")
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(palette.inkSecondary)
             case .prompting:
                 micIcon(pulse: false)
                 Text("Allow microphone access")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.ink)
                 Text("Waiting for permission…")
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(palette.inkSecondary)
             case .denied(let message):
                 Image(systemName: "mic.slash.fill")
                     .font(.system(size: 24))
                     .foregroundStyle(.red)
                 Text(message == nil ? "Microphone access is blocked" : "Push to talk unavailable")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.ink)
                 Text(
                     message
                         ?? "Enable the microphone and speech recognition for SLICC in Settings, then hold again."
                 )
                 .font(.caption2)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(palette.inkSecondary)
                 .multilineTextAlignment(.center)
                 .accessibilityIdentifier("ptt-denied")
             case .recording:
                 micIcon(pulse: true)
                 Text(caption.isEmpty ? "Listening…" : caption)
                     .font(.subheadline)
-                    .foregroundStyle(captionIsError ? .red : .white)
+                    .foregroundStyle(captionIsError ? .red : palette.ink)
                     .lineLimit(1)
                     .truncationMode(.head)
                     .accessibilityIdentifier("ptt-caption")
                 Text(statusLine)
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(palette.inkSecondary)
                     .accessibilityIdentifier("ptt-status")
             case .finalizing:
                 ProgressView()
-                    .tint(accentPurple)
+                    .tint(palette.accent)
                 Text("Transcribing…")
                     .font(.subheadline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.ink)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(barBackground)
+        .background(palette.surface)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(accentPurple.opacity(0.6))
+                .fill(palette.accent.opacity(0.6))
                 .frame(height: 1)
         }
         // No container-level identifier: SwiftUI stamps one onto every leaf,
@@ -91,12 +90,12 @@ struct PttOverlayView: View {
 
     @ViewBuilder
     private func micIcon(pulse: Bool) -> some View {
-        PulsingMic(active: pulse, tint: accentPurple)
+        PulsingMic(active: pulse, tint: palette.accent)
     }
 
     @ViewBuilder
     private var sweepBar: some View {
-        EnableSweepBar(tint: accentPurple)
+        EnableSweepBar(tint: palette.accent)
     }
 }
 

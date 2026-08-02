@@ -20,16 +20,12 @@ struct InputBar: View {
 
     @FocusState private var isFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.palette) private var palette
 
     /// Push-to-talk: holding the EMPTY composer dictates a message
     /// (`PttController` owns the state machine; the engine is swappable so
     /// UI tests script it via `-uiTestSpeechPermission`).
     @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
-
-    private let accentPurple = Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255)
-    private let barBackground = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x2E / 255)
-    private let fieldBackground = Color(white: 1, opacity: 0.07)
-    private let separatorColor = Color(white: 1, opacity: 0.1)
 
     private var canSend: Bool {
         // Sending during a running turn queues on the leader (browser
@@ -49,7 +45,7 @@ struct InputBar: View {
         VStack(spacing: 0) {
             // Top separator
             Rectangle()
-                .fill(separatorColor)
+                .fill(palette.line)
                 .frame(height: 0.5)
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -61,7 +57,7 @@ struct InputBar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .background(barBackground)
+        .background(palette.surface)
         .opacity(isComposable ? 1.0 : 0.5)
         .disabled(!isComposable)
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
@@ -110,6 +106,15 @@ struct InputBar: View {
                 ptt.pressCancelled()
             }
         }
+        .onChange(of: pttArmed) { _, armed in
+            // The surface unmounts the moment the composer disables (leader
+            // stalled or disconnected mid-hold) — its onEnded then never
+            // fires, so cancel here or the mic stays live behind a dead
+            // composer.
+            if !armed {
+                ptt.pressCancelled()
+            }
+        }
     }
 
     // MARK: - Text Field
@@ -120,7 +125,7 @@ struct InputBar: View {
             // Placeholder
             if text.isEmpty {
                 Text(placeholderText)
-                    .foregroundColor(.gray)
+                    .foregroundColor(palette.inkSecondary)
                     .font(.system(size: 16))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -130,7 +135,7 @@ struct InputBar: View {
 
             TextEditor(text: $text)
                 .font(.system(size: 16))
-                .foregroundColor(.white)
+                .foregroundColor(palette.ink)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
@@ -149,11 +154,11 @@ struct InputBar: View {
                 // tap restores focus through the `quickTap` event.
                 .allowsHitTesting(!pttArmed)
         }
-        .background(fieldBackground)
+        .background(palette.field)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
+                .stroke(palette.ink.opacity(0.12), lineWidth: 0.5)
         )
         .overlay {
             // Hold-to-talk arms ONLY from an empty composer (web parity:
@@ -201,7 +206,7 @@ struct InputBar: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 30))
-                            .foregroundStyle(accentPurple)
+                            .foregroundStyle(palette.accent)
                     } primaryAction: {
                         sendIfPossible()
                     }
@@ -220,7 +225,7 @@ struct InputBar: View {
             Button(action: { sendIfPossible() }) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
-                    .foregroundStyle(canSend ? accentPurple : Color.gray.opacity(0.4))
+                    .foregroundStyle(canSend ? palette.accent : palette.inkTertiary.opacity(0.6))
             }
             .disabled(!canSend)
             .transition(.scale.combined(with: .opacity))
