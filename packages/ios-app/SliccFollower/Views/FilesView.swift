@@ -20,7 +20,12 @@ struct FilesView: View {
     struct OpenFile: Identifiable {
         let id = UUID()
         let name: String
-        let content: String
+        /// Raw bytes — what the share sheet exports, so binary files
+        /// (images, PDFs, archives) survive untouched.
+        let data: Data
+        /// UTF-8 decode of `data` when it is text; nil means binary and
+        /// the preview shows a size line instead of mangled bytes.
+        var text: String? { String(data: data, encoding: .utf8) }
     }
 
     private var currentPath: String {
@@ -120,13 +125,15 @@ struct FilesView: View {
         #if DEBUG
             if UITestHooks.filesFixture(path: currentPath) != nil {
                 openFile = OpenFile(
-                    name: name, content: "fixture contents of \(filePath)\n")
+                    name: name, data: Data("fixture contents of \(filePath)\n".utf8))
                 return
             }
         #endif
         do {
-            let content = try await appState.fsClient.readFile(filePath)
-            openFile = OpenFile(name: name, content: content)
+            // Binary-safe: bytes round-trip base64 over the tray, so a PNG
+            // shared to Files is the PNG the leader holds.
+            let data = try await appState.fsClient.readBinaryFile(filePath)
+            openFile = OpenFile(name: name, data: data)
         } catch {
             self.error =
                 "Could not read \(filePath) from the leader: \(error.localizedDescription)"
@@ -145,12 +152,22 @@ struct FilePreviewSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Text(file.content)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(palette.ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let text = file.text {
+                    Text(text)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(palette.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .textSelection(.enabled)
+                } else {
+                    Label(
+                        "Binary file · \(file.data.count) bytes — share to open elsewhere",
+                        systemImage: "doc.zipper"
+                    )
+                    .font(.system(size: 13))
+                    .foregroundStyle(palette.inkSecondary)
                     .padding(12)
-                    .textSelection(.enabled)
+                }
             }
             .background(palette.canvas)
             .navigationTitle(file.name)
@@ -181,7 +198,7 @@ struct FilePreviewSheet: View {
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try file.content.write(to: url, atomically: true, encoding: .utf8)
+            try file.data.write(to: url, options: .atomic)
             return url
         } catch {
             return nil

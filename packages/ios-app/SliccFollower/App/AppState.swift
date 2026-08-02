@@ -457,6 +457,10 @@ class AppState: ObservableObject {
         cdpBridge?.reset()
         cdpBridge = nil
         cdpTargets.removeAll()
+        // Per-tray like cdpTargets: a new leader deliberately sends no
+        // empty registry, so stale remote tabs would otherwise outlive the
+        // tray that owned them.
+        remoteTargets.removeAll()
     }
 
     /// Clear all stored data (history, credentials, etc.)
