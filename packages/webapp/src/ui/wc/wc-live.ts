@@ -1787,6 +1787,7 @@ export function attachWcClient(
           getSelectedJid: () => boot.getSelected()?.jid ?? 'cone',
           agentHandle,
           openFs: openReader,
+          openWriter: async () => (await openVfs()).writer,
           baseFloatLabel: options.standalone.baseFloatLabel,
           window,
           log,

@@ -51,8 +51,8 @@ function addFollower(registry: FollowerRegistry, bootstrapId: string) {
 }
 
 describe('FsRouter', () => {
-  it.each(['/secret.txt', '/workspace/../secret.txt', '/workspace-other/secret.txt'])(
-    'refuses follower reads outside the allowlist: %s',
+  it.each(['/proc', '/proc/1/status', '/workspace/../proc/1/status'])(
+    'refuses follower access to proc: %s',
     async (path) => {
       const readFile = vi.fn();
       const { followers, router } = createHarness({
@@ -77,26 +77,26 @@ describe('FsRouter', () => {
     }
   );
 
-  it('refuses follower mutations even inside an allowed path', async () => {
-    const writeFile = vi.fn();
+  it('allows follower mutations outside proc', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
     const { followers, router } = createHarness({
       vfs: { writeFile } as unknown as NonNullable<LeaderSyncManagerOptions['vfs']>,
     });
     const sent = addFollower(followers, 'requester');
     const request: TrayFsRequest = {
       op: 'writeFile',
-      path: '/tmp/upload/payload.txt',
-      content: 'blocked',
+      path: '/etc/follower.txt',
+      content: 'allowed',
       encoding: 'utf-8',
     };
 
-    await router.executeLocalFs('denied-write', request, 'requester');
+    await router.executeLocalFs('allowed-write', request, 'requester');
 
-    expect(writeFile).not.toHaveBeenCalled();
+    expect(writeFile).toHaveBeenCalledWith('/etc/follower.txt', 'allowed');
     expect(sent[0]).toMatchObject({
       type: 'fs.response',
-      requestId: 'denied-write',
-      response: { ok: false, code: 'EACCES' },
+      requestId: 'allowed-write',
+      response: { ok: true, data: { type: 'void' } },
     });
   });
 

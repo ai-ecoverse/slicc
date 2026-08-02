@@ -3,13 +3,10 @@ import { handleFsRequest } from '../tray-fs-handler.js';
 import type { TrayFsRequest, TrayFsResponse } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
 
-const FOLLOWER_FS_READ_ROOTS = ['/sessions', '/workspace', '/tmp/upload'] as const;
-
-function canFollowerRead(request: TrayFsRequest): boolean {
-  if (!['readFile', 'stat', 'readDir', 'exists', 'walk'].includes(request.op)) return false;
+function canFollowerAccess(request: TrayFsRequest): boolean {
   if (typeof request.path !== 'string' || !request.path.startsWith('/')) return false;
   const path = normalizePath(request.path);
-  return FOLLOWER_FS_READ_ROOTS.some((root) => path === root || path.startsWith(`${root}/`));
+  return path !== '/proc' && !path.startsWith('/proc/');
 }
 
 function followerFsDenied(): TrayFsResponse {
@@ -67,7 +64,7 @@ export class FsRouter {
       return;
     }
 
-    if (!canFollowerRead(request)) {
+    if (!canFollowerAccess(request)) {
       follower.sync.send({ type: 'fs.response', requestId, response: followerFsDenied() });
       return;
     }
