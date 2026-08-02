@@ -32,7 +32,7 @@ export interface ToolCall {
 
 // ─── Message Types ──────────────────────────────────────────────────────────
 
-export type StopReason = 'stop' | 'length' | 'toolUse' | 'error' | 'aborted';
+export type StopReason = 'stop' | 'length' | 'toolUse' | 'error' | 'aborted' | 'pending';
 
 export interface Usage {
   input: number;
