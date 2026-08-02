@@ -136,6 +136,11 @@ export interface CompactionConfig {
   onCompactionStateChange?: (state: CompactionState) => void;
 }
 
+export interface CompactionOptions {
+  /** Run the existing compaction path even when the local estimate is below its threshold. */
+  force?: boolean;
+}
+
 /**
  * Phases of an in-flight compaction. `idle` is the resting state; the UI
  * should clear any compaction-specific affordance when it sees it.
@@ -451,6 +456,14 @@ function estimateTotalTokens(messages: AgentMessage[]): number {
   return total;
 }
 
+/** Whether compaction reduced the estimated message tokens enough to make forward progress. */
+export function hasCompactionProgress(
+  messages: AgentMessage[],
+  compacted: AgentMessage[]
+): boolean {
+  return estimateTotalTokens(compacted) < estimateTotalTokens(messages);
+}
+
 /** Emit a compaction lifecycle hook safely — listener bugs must never abort compaction. */
 function emitCompactionState(config: CompactionConfig, state: CompactionState): void {
   try {
@@ -633,7 +646,7 @@ async function summarizeWithLlm(
  * Create a transformContext function that uses LLM summarization for compaction.
  *
  * The returned function:
- * 1. Checks if total tokens exceed (contextWindow - reserveTokens)
+ * 1. Checks if total tokens exceed (contextWindow - reserveTokens), unless forced by the caller
  * 2. If so, finds a cut point that keeps ~keepRecentTokens of recent messages
  * 3. Calls the LLM to summarize the older messages — conversation embedded in
  *    the system prompt so a follow-up call can cache-hit the prefix.
@@ -645,7 +658,11 @@ async function summarizeWithLlm(
  */
 export function createCompactContext(
   config: CompactionConfig
-): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
+): (
+  messages: AgentMessage[],
+  signal?: AbortSignal,
+  options?: CompactionOptions
+) => Promise<AgentMessage[]> {
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const reserveTokens = config.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
   const keepRecentTokens = config.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
@@ -653,11 +670,15 @@ export function createCompactContext(
 
   const settings = { enabled: true, reserveTokens, keepRecentTokens };
 
-  return async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+  return async (
+    messages: AgentMessage[],
+    signal?: AbortSignal,
+    options?: CompactionOptions
+  ): Promise<AgentMessage[]> => {
     if (messages.length === 0) return messages;
 
     const totalTokens = estimateTotalTokens(messages);
-    if (!shouldCompact(totalTokens, contextWindow, settings)) {
+    if (!options?.force && !shouldCompact(totalTokens, contextWindow, settings)) {
       return messages;
     }
 

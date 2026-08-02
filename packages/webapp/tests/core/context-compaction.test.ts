@@ -73,6 +73,7 @@ import {
   COMPACTION_TITLE_INSTRUCTION,
   compactContext,
   createCompactContext,
+  hasCompactionProgress,
   runOneOffCompactionCall,
   stripOrphanedToolResults,
 } from '../../src/core/context-compaction.js';
@@ -293,8 +294,26 @@ describe('createCompactContext', () => {
     const messages = [createMessage('user', 'Hello'), createMessage('assistant', 'Hi')];
 
     const result = await compact(messages);
-    expect(result).toEqual(messages);
+    expect(result).toBe(messages);
     expect(mockCompleteSimple).not.toHaveBeenCalled();
+  });
+
+  it('forces the existing compaction path when under threshold', async () => {
+    const compact = createCompactContext(mockConfig);
+    const baseMsg = 'x'.repeat(30_000);
+    const messages = Array.from({ length: 4 }, () => createMessage('user', baseMsg));
+
+    const result = await compact(messages, undefined, { force: true });
+
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+    expect(firstText(result[0])).toContain('<context-summary>');
+    expect(hasCompactionProgress(messages, result)).toBe(true);
+  });
+
+  it('reports no progress for an unchanged copy', () => {
+    const messages = [createMessage('user', 'Hello'), createMessage('assistant', 'Hi')];
+
+    expect(hasCompactionProgress(messages, [...messages])).toBe(false);
   });
 
   it('returns empty array for empty input', async () => {
