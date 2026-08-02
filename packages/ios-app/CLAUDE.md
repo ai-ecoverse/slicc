@@ -25,7 +25,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | Other views (`ChatFixture.swift`, `ConnectionStatusView.swift`, `ContentView.swift`, `InputBar.swift`, `MarkdownText.swift`, `MessageBubble.swift`, `SettingsView.swift`, `SliccIcons.swift`) | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                                                           |
 | `SliccFollower/Resources/Assets.xcassets`                                                                                                                                                     | App icon + asset catalog                                                                                                                                                                                          |
 
-Plain SPM commands do nothing useful on a macOS host: `swift build` fails (`no such module 'UIKit'` — the sources import iOS-only frameworks) and `Package.swift` declares no test target, so `swift test` has nothing to run. Build and test both go through the XcodeGen project with a simulator destination. The two test bundles — `SliccFollowerTests` and `SliccFollowerUITests` — are defined in `project.yml`, wired into the scheme with coverage, and run in CI via `xcodebuild test` (see "Test + coverage").
+Plain SPM commands do nothing useful on a macOS host (`swift build` hits iOS-only frameworks; `Package.swift` declares no test target). Build and test go through the XcodeGen project on a simulator (see "Test + coverage").
 
 ## Protocol Mirror Invariant
 
@@ -111,6 +111,15 @@ parser (`slicc:session-data` block + heading fallback). `FrozenSessionsView`
 lists past sessions; opening one swaps the transcript read-only and the
 ice-blue banner replaces the composer. Hooks: `-uiTestFrozenFixture/Empty`.
 
+## Push to Talk
+
+Holding the EMPTY composer dictates a `user_message` (no protocol change).
+`Models/PttController.swift` ports `<slicc-composer>`'s gesture;
+`Models/Dictation.swift` seams the engine (`SFSpeechRecognizer`, on-device
+when the locale supports it). Hooks: `-uiTestSpeechPermission`/
+`-uiTestSpeechScript` script the engine; `-uiTestPttStage` pins the
+overlay for screenshots.
+
 ## Build
 
 ```bash
@@ -124,8 +133,7 @@ swiftlint lint                                   # SwiftLint (config inherits re
 
 ## Test + coverage
 
-Plain `swift test` cannot run on a macOS host (iOS-only WebRTC binary), so the
-suite runs through `xcodebuild test` on a simulator. The shared coverage gate
+The suite runs through `xcodebuild test` on a simulator. The shared coverage gate
 picks a simulator, enables coverage and on-failure retries, and enforces the
 `ios-app` floors in `coverage-thresholds.json`.
 
@@ -145,9 +153,8 @@ debug builds put the code and the coverage mapping in the dylib.
 
 ## Simulator QA path
 
-Hand-running the app for exploratory checks the UI tests do not cover — boot /
-build / install / launch commands, seeding `@AppStorage` state via launch
-arguments, and getting a real Join URL — is covered in
+Hand-running the app for exploratory QA (boot/build/install/launch, seeding
+`@AppStorage` via launch arguments, getting a real Join URL) is covered in
 [`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md).
 
 ## UI tests (`SliccFollowerUITests`)

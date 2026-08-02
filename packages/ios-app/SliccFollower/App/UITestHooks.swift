@@ -124,6 +124,56 @@ import SliccTraySession
             ]
         }
 
+        /// A scripted dictation engine so push-to-talk UI tests never depend
+        /// on a simulator microphone or the system permission prompts.
+        /// `-uiTestSpeechPermission granted|undetermined|denied|restricted`
+        /// selects the starting permission; `-uiTestSpeechScript "…"` is the
+        /// transcript the fake session streams word by word;
+        /// `-uiTestSpeechGrant denied` makes the in-app prompt resolve to a
+        /// refusal (default: granted).
+        static func speechEngine() -> DictationEngine? {
+            guard let raw = UserDefaults.standard.string(forKey: "uiTestSpeechPermission"),
+                let permission = parsePermission(raw)
+            else { return nil }
+            let script = UserDefaults.standard.string(forKey: "uiTestSpeechScript") ?? ""
+            let grantRaw = UserDefaults.standard.string(forKey: "uiTestSpeechGrant") ?? "granted"
+            let grant = parsePermission(grantRaw) ?? .granted
+            return ScriptedDictationEngine(
+                permission: permission, grantOutcome: grant, script: script)
+        }
+
+        /// Pin the push-to-talk overlay to a stage on launch
+        /// (`-uiTestPttStage enable|prompting|denied|restricted|recording|finalizing`,
+        /// with `-uiTestPttCaption` filling the recording caption line). The
+        /// overlay otherwise exists only while a finger holds the composer,
+        /// which a screenshot run cannot stage.
+        static func pttStage() -> (stage: PttStage, caption: String)? {
+            guard let raw = UserDefaults.standard.string(forKey: "uiTestPttStage") else {
+                return nil
+            }
+            let caption = UserDefaults.standard.string(forKey: "uiTestPttCaption") ?? ""
+            switch raw {
+            case "enable": return (.enable, caption)
+            case "prompting": return (.prompting, caption)
+            case "denied": return (.denied(message: nil), caption)
+            case "restricted":
+                return (.denied(message: PttController.restrictedMessage), caption)
+            case "recording": return (.recording, caption)
+            case "finalizing": return (.finalizing, caption)
+            default: return nil
+            }
+        }
+
+        private static func parsePermission(_ raw: String) -> DictationPermission? {
+            switch raw {
+            case "granted": return .granted
+            case "undetermined": return .undetermined
+            case "denied": return .denied
+            case "restricted": return .restricted
+            default: return nil
+            }
+        }
+
         /// The archive body backing the fixture entries — a modern archive
         /// with an intact `slicc:session-data` block.
         static func frozenArchiveFixture(for entry: FrozenSessionIndexEntry) -> String? {
@@ -149,6 +199,65 @@ import SliccTraySession
 
                 The freezer rail, read-only on your phone.
                 """
+        }
+    }
+
+    /// DEBUG-only dictation engine behind `-uiTestSpeechPermission`: the
+    /// scripted transcript streams word by word as partials (like a real
+    /// recognizer refining its interim result) and returns whole from
+    /// `stop()`, so a UI test can hold, watch the caption, release, and
+    /// assert the committed message — no microphone involved.
+    final class ScriptedDictationEngine: DictationEngine {
+        private(set) var permission: DictationPermission
+        private let grantOutcome: DictationPermission
+        private let script: String
+
+        init(permission: DictationPermission, grantOutcome: DictationPermission, script: String) {
+            self.permission = permission
+            self.grantOutcome = grantOutcome
+            self.script = script
+        }
+
+        var statusLine: String { "Scripted test engine" }
+
+        func requestPermission() async -> DictationPermission {
+            permission = grantOutcome
+            return grantOutcome
+        }
+
+        func start(
+            onPartial: @escaping @MainActor @Sendable (String) -> Void,
+            onError: @escaping @MainActor @Sendable (String) -> Void
+        ) async throws -> DictationSession {
+            ScriptedDictationSession(script: script, onPartial: onPartial)
+        }
+    }
+
+    final class ScriptedDictationSession: DictationSession {
+        private let script: String
+        private let streamTask: Task<Void, Never>
+
+        init(script: String, onPartial: @escaping @MainActor @Sendable (String) -> Void) {
+            self.script = script
+            let words = script.split(separator: " ").map(String.init)
+            streamTask = Task { @MainActor in
+                var heard: [String] = []
+                for word in words {
+                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    guard !Task.isCancelled else { return }
+                    heard.append(word)
+                    onPartial(heard.joined(separator: " "))
+                }
+            }
+        }
+
+        func stop() async -> String {
+            streamTask.cancel()
+            return script
+        }
+
+        func cancel() {
+            streamTask.cancel()
         }
     }
 #endif
