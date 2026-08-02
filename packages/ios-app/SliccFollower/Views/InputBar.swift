@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -12,11 +13,13 @@ struct InputBar: View {
     /// when the follower is viewing a different one, the streaming-send /
     /// steer affordance hides so an interrupt cannot hit the wrong turn.
     var steersActiveScoop: Bool = true
-    let onSend: (String) -> Void
+    /// Send the composed message: trimmed text + any staged attachments
+    /// (nil rather than an empty array, matching the wire shape).
+    let onSend: (String, [MessageAttachment]?) -> Void
     let onAbort: () -> Void
     /// Send interrupting the running turn (`user_message.steer`). Only
     /// reachable while streaming, via the long-press menu on send.
-    var onSteer: (String) -> Void = { _ in }
+    var onSteer: (String, [MessageAttachment]?) -> Void = { _, _ in }
 
     @FocusState private var isFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -27,10 +30,24 @@ struct InputBar: View {
     /// UI tests script it via `-uiTestSpeechPermission`).
     @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
 
+    /// Photos staged for the next send (downscaled + base64 already).
+    @State private var stagedAttachments: [MessageAttachment] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotoPicker = false
+    @State private var showCamera = false
+    /// `UIPasteboard.general.hasImages` is not SwiftUI-observable — read
+    /// once, then track pasteboard changes and foreground returns (an image
+    /// copied in another app must surface Paste on the next menu open).
+    /// `hasImages` is a metadata check, so it never trips the paste banner.
+    @State private var pasteboardHasImage = UIPasteboard.general.hasImages
+
     private var canSend: Bool {
         // Sending during a running turn queues on the leader (browser
         // parity); only an empty composer or an unusable connection blocks.
-        isComposable && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // A staged photo with no caption is a legal send (web parity).
+        isComposable
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !stagedAttachments.isEmpty)
     }
 
     /// Whether a message can be handed to the leader at all.
@@ -48,7 +65,15 @@ struct InputBar: View {
                 .fill(palette.line)
                 .frame(height: 0.5)
 
+            if !stagedAttachments.isEmpty {
+                StagedAttachmentsRow(attachments: stagedAttachments) { removed in
+                    stagedAttachments.removeAll { $0.id == removed.id }
+                }
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
+                // Attachment menu (library / camera / paste)
+                attachButton
                 // Text input area
                 textField
                 // Action button (send or abort)
@@ -77,6 +102,9 @@ struct InputBar: View {
             #if DEBUG
                 if let forced = UITestHooks.pttStage() {
                     ptt.forceStage(forced.stage, caption: forced.caption)
+                }
+                if UITestHooks.stagesAttachmentFixture, stagedAttachments.isEmpty {
+                    stage(UITestHooks.attachmentFixtureImage(), name: "fixture.jpg")
                 }
             #endif
         }
@@ -113,6 +141,105 @@ struct InputBar: View {
             // composer.
             if !armed {
                 ptt.pressCancelled()
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)
+        ) { _ in
+            pasteboardHasImage = UIPasteboard.general.hasImages
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIApplication.willEnterForegroundNotification)
+        ) { _ in
+            // Cross-app copies do not fire the pasteboard notification in
+            // THIS process — re-check on every return to the foreground.
+            pasteboardHasImage = UIPasteboard.general.hasImages
+        }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $photoItems,
+            maxSelectionCount: 4,
+            matching: .images
+        )
+        .onChange(of: photoItems) { _, items in
+            loadPhotoItems(items)
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker(
+                onCapture: { image in
+                    stage(image, name: "camera.jpg")
+                    showCamera = false
+                },
+                onCancel: { showCamera = false }
+            )
+            .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - Attachments
+
+    /// The composer's capture menu. Camera appears only where one exists
+    /// (never in a simulator), paste only while the pasteboard holds an
+    /// image — an option that would fail must disappear instead.
+    @ViewBuilder
+    private var attachButton: some View {
+        Menu {
+            Button {
+                showPhotoPicker = true
+            } label: {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button {
+                    showCamera = true
+                } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+            }
+            if pasteboardHasImage {
+                Button {
+                    pasteImages()
+                } label: {
+                    Label("Paste Image", systemImage: "doc.on.clipboard")
+                }
+            }
+        } label: {
+            Image(systemName: "plus.circle.fill")
+                .font(.system(size: 26))
+                .foregroundStyle(palette.inkSecondary)
+        }
+        .accessibilityIdentifier("attach-menu")
+        .padding(.bottom, 4)
+    }
+
+    private func stage(_ image: UIImage, name: String) {
+        // The shared budget keeps a multi-photo message under the tray
+        // ceiling at STAGING time — over-budget photos become error chips
+        // here instead of a send the transport must refuse later.
+        let used = stagedAttachments.reduce(0) { $0 + ($1.data?.count ?? 0) }
+        stagedAttachments.append(
+            ImageAttachmentBuilder.inlineAttachment(
+                from: image, name: name,
+                base64BudgetRemaining: ImageAttachmentBuilder.messageBase64Budget - used))
+    }
+
+    private func pasteImages() {
+        for (index, image) in (UIPasteboard.general.images ?? []).enumerated() {
+            stage(image, name: "pasted-\(index + 1).jpg")
+        }
+    }
+
+    /// Drain picked library items into staged attachments.
+    private func loadPhotoItems(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        photoItems = []
+        Task { @MainActor in
+            for (index, item) in items.enumerated() {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                    let image = UIImage(data: data)
+                else { continue }
+                stage(image, name: "photo-\(index + 1).jpg")
             }
         }
     }
@@ -228,6 +355,7 @@ struct InputBar: View {
                     .foregroundStyle(canSend ? palette.accent : palette.inkTertiary.opacity(0.6))
             }
             .disabled(!canSend)
+            .accessibilityIdentifier("composer-send")
             .transition(.scale.combined(with: .opacity))
             .padding(.bottom, 2)
         }
@@ -237,18 +365,20 @@ struct InputBar: View {
 
     private func sendIfPossible() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, isComposable else { return }
-        onSend(trimmed)
+        guard canSend else { return }
+        onSend(trimmed, stagedAttachments.isEmpty ? nil : stagedAttachments)
         text = ""
+        stagedAttachments = []
     }
 
     private func steerIfPossible() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, isComposable, isStreaming else { return }
+        guard canSend, isStreaming else { return }
         // Interrupting work in progress deserves a physical acknowledgment.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onSteer(trimmed)
+        onSteer(trimmed, stagedAttachments.isEmpty ? nil : stagedAttachments)
         text = ""
+        stagedAttachments = []
     }
 }
 
@@ -263,7 +393,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: true,
-                onSend: { _ in },
+                onSend: { _, _ in },
                 onAbort: {}
             )
         }
@@ -280,7 +410,7 @@ struct InputBar: View {
                 text: .constant("Hello world"),
                 isStreaming: true,
                 isConnected: true,
-                onSend: { _ in },
+                onSend: { _, _ in },
                 onAbort: {}
             )
         }
@@ -297,7 +427,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: false,
-                onSend: { _ in },
+                onSend: { _, _ in },
                 onAbort: {}
             )
         }

@@ -30,6 +30,12 @@ struct ThemePalette: Equatable {
     let line: Color
     /// The action accent (scoop accent / `--ctx`).
     let accent: Color
+    /// User-bubble ground (`--deep` — the web's inverted iMessage bubble).
+    let bubble: Color
+    /// User-bubble text. The web contract flips it by base: white on the
+    /// light base's near-black `--deep`, near-black on the dark base's
+    /// near-white one (`slicc-user-message.ts`).
+    let bubbleText: Color
     /// Whether this palette came from a leader theme (drives sprinkle CSS
     /// injection — an unthemed phone lets sprinkle content self-theme).
     let isLeaderTheme: Bool
@@ -45,6 +51,10 @@ struct ThemePalette: Equatable {
         inkTertiary: Color.white.opacity(0.5),
         line: Color(white: 1, opacity: 0.1),
         accent: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
+        // Unthemed dark keeps the app's shipped purple bubble + white text
+        // (deliberately not the web's --deep inversion — byte-for-byte).
+        bubble: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
+        bubbleText: .white,
         isLeaderTheme: false
     )
 
@@ -58,6 +68,9 @@ struct ThemePalette: Equatable {
         inkTertiary: Color(hexToken: "#a1a1a1") ?? .gray,
         line: Color(hexToken: "#e5e5e5") ?? .gray,
         accent: Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255),
+        // Web light `--deep` is black; the bubble text stays white on it.
+        bubble: Color(hexToken: "#000000") ?? .black,
+        bubbleText: .white,
         isLeaderTheme: false
     )
 
@@ -79,6 +92,17 @@ struct ThemePalette: Equatable {
             inkTertiary: token("--txt-3", base.inkTertiary),
             line: token("--line", base.line),
             accent: token("--ctx", base.accent),
+            // Themed bubbles follow the WEB contract (not the unthemed-dark
+            // purple): `--deep` ground — near-white on a dark base, black on
+            // a light one — with text flipped by base, so a light accent can
+            // never end up under white text (slicc-user-message.ts parity).
+            bubble: token(
+                "--deep",
+                theme.base == .dark
+                    ? (Color(hexToken: "#f5f5f2") ?? .white)
+                    : (Color(hexToken: "#000000") ?? .black)),
+            bubbleText: theme.base == .dark
+                ? (Color(hexToken: "#0a0a0a") ?? .black) : .white,
             isLeaderTheme: true
         )
     }

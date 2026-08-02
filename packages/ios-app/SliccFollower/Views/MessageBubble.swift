@@ -26,7 +26,11 @@ struct MessageBubble: View {
         if isLick {
             LickRow(message: message)
                 .padding(.horizontal, 4)
-        } else if message.error == true {
+        } else if message.error == true, message.role != .user {
+            // Cone errors render as the red card; a USER message flagged
+            // errored is a failed local delivery — it keeps its bubble (and
+            // attachment chips) below, with a note, because swapping in the
+            // cone-error card would discard what the user tried to send.
             ErrorCard(message: message)
         } else if message.role == .user {
             VStack(alignment: .trailing, spacing: 6) {
@@ -39,12 +43,18 @@ struct MessageBubble: View {
                         Spacer(minLength: UIScreen.main.bounds.width * 0.2)
                         userBubbleText
                             .font(.system(size: 15))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(palette.bubbleText)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(palette.accent)
+                            .background(palette.bubble)
                             .cornerRadius(18)
                     }
+                }
+                if message.error == true {
+                    Text("Not delivered")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("send-failed-note")
                 }
             }
         } else {
@@ -77,7 +87,7 @@ struct MessageBubble: View {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             Text(styleUserBubbleCode(attributed))
-                .tint(.white)
+                .tint(palette.bubbleText)
         } else {
             Text(message.content)
         }
@@ -92,8 +102,8 @@ struct MessageBubble: View {
     private func styleUserBubbleCode(_ input: AttributedString) -> AttributedString {
         return styledInlineCode(
             input,
-            background: Color.white.opacity(0.22),
-            foreground: Color.white
+            background: palette.bubbleText.opacity(0.22),
+            foreground: palette.bubbleText
         )
     }
 

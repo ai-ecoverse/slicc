@@ -181,6 +181,7 @@ export interface LeaderSyncManagerOptions {
 }
 
 export class LeaderSyncManager {
+  private lastThemeJson: string | null = null;
   private readonly followerRegistry: FollowerRegistry;
   private readonly broadcast: BroadcastManager;
   private readonly cdpRouter: CDPRouter;
@@ -255,6 +256,12 @@ export class LeaderSyncManager {
     void this.broadcast.sendSnapshotToFollower(bootstrapId);
     this.broadcast.sendScoopsListToFollower(bootstrapId);
     this.broadcast.sendSprinklesListToFollower(bootstrapId);
+    // The snapshot carries chat state only — a themed leader must also hand
+    // the joiner its palette or the phone renders unthemed until the next
+    // theme change. Null means unthemed, which is every follower's default.
+    if (this.lastThemeJson !== null) {
+      sync.send({ type: 'theme.apply', themeJson: this.lastThemeJson });
+    }
     this.teleportPool.sendTargetRegistryToFollower(bootstrapId);
   }
 
@@ -291,6 +298,9 @@ export class LeaderSyncManager {
   }
 
   broadcastTheme(themeJson: string | null): void {
+    // Remembered so a follower that joins AFTER the theme was applied still
+    // receives it (followers reset per-leader theme state on connect).
+    this.lastThemeJson = themeJson;
     this.broadcast.broadcastTheme(themeJson);
   }
 

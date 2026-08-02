@@ -24,7 +24,7 @@ final class SteerMessageTests: XCTestCase {
         let json = #"{"type":"user_message","text":"hi","messageId":"m1"}"#
         let decoded = try JSONDecoder().decode(
             FollowerToLeaderMessage.self, from: Data(json.utf8))
-        guard case .userMessage(_, _, let steer) = decoded else {
+        guard case .userMessage(_, _, let steer, _) = decoded else {
             return XCTFail("expected userMessage")
         }
         XCTAssertFalse(steer)
@@ -47,7 +47,7 @@ final class SteerMessageTests: XCTestCase {
         let json = #"{"type":"user_message","text":"hi","messageId":"m1","steer":true}"#
         let decoded = try JSONDecoder().decode(
             FollowerToLeaderMessage.self, from: Data(json.utf8))
-        guard case .userMessage(_, _, let steer) = decoded else {
+        guard case .userMessage(_, _, let steer, _) = decoded else {
             return XCTFail("expected userMessage")
         }
         XCTAssertTrue(steer)

@@ -348,6 +348,17 @@ function resolveTheme(id: string): SliccTheme | undefined {
   return PRESETS.find((p) => p.id === id) ?? getCustomThemes().find((t) => t.id === id);
 }
 
+/** The active theme serialized for the wire, or null when unthemed (or the
+ *  transient `__preview`). Lets the tray leader hand a newly joined follower
+ *  the palette the change listener alone would only deliver on the NEXT
+ *  change. */
+export function getActiveThemeJson(): string | null {
+  const id = getActiveThemeId();
+  if (!id || id === '__preview') return null;
+  const theme = resolveTheme(id);
+  return theme ? exportTheme(theme) : null;
+}
+
 let onThemeChanged: ((themeJson: string | null) => void) | null = null;
 
 export function setThemeChangeListener(fn: ((themeJson: string | null) => void) | null): void {

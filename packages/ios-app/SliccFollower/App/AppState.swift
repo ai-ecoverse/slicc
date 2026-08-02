@@ -88,7 +88,9 @@ class AppState: ObservableObject {
         return selected == active
     }
     /// Per-scoop message buffers. Source of truth for `messages`.
-    private var messagesByScoop: [String: [ChatMessage]] = [:]
+    /// Internal (not private) so the delivery extension can flag a failed
+    /// send in the buffer too.
+    var messagesByScoop: [String: [ChatMessage]] = [:]
 
     // Sprinkle awareness
     @Published var sprinkles: [SprinkleSummary] = []
@@ -388,6 +390,9 @@ class AppState: ObservableObject {
 
         connectionState = .connecting
         lastError = nil
+        // Per-leader state: a new session must not inherit the previous
+        // leader's palette. A themed leader re-sends theme.apply on join.
+        leaderTheme = nil
         if rememberInHistory { addToHistory(trimmed) }
         activeJoinUrl = trimmed
 
@@ -473,16 +478,22 @@ class AppState: ObservableObject {
     /// `steer: true` interrupts the leader's running turn instead of
     /// queueing behind it — the phone's equivalent of the desktop's
     /// Cmd+Enter.
-    func sendMessage(_ text: String, steer: Bool = false) {
+    func sendMessage(
+        _ text: String, steer: Bool = false, attachments: [MessageAttachment]? = nil
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let attached = (attachments?.isEmpty == false) ? attachments : nil
+        // A pure-attachment message is legal (the web composer sends photos
+        // with no caption); only an entirely empty send is dropped.
+        guard !trimmed.isEmpty || attached != nil else { return }
 
         let messageId = UUID().uuidString
         let message = ChatMessage(
             id: messageId,
             role: .user,
             content: trimmed,
-            timestamp: Date().timeIntervalSince1970 * 1000
+            timestamp: Date().timeIntervalSince1970 * 1000,
+            attachments: attached
         )
         messages.append(message)
         // Mirror into the per-scoop buffer so swipe-back retains the message.
@@ -491,8 +502,18 @@ class AppState: ObservableObject {
         }
 
         let msg = FollowerToLeaderMessage.userMessage(
-            text: trimmed, messageId: messageId, steer: steer)
-        sendToLeader(msg)
+            text: trimmed, messageId: messageId, steer: steer, attachments: attached)
+        #if DEBUG
+            // A hermetic UI test forces the connection state with no real
+            // channel behind it — extend the same fiction to delivery, or
+            // every test send would flag itself undelivered.
+            let hermeticallyConnected = UITestHooks.forcedConnectionState != nil
+        #else
+            let hermeticallyConnected = false
+        #endif
+        if !sendToLeader(msg), !hermeticallyConnected {
+            markUndelivered(messageId)
+        }
     }
 
     /// Abort the current streaming response.
