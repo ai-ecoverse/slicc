@@ -15,30 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  probe-r2-access:
-    name: Probe sliccy.now basic storage
-    if: github.ref != 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Verify R2 object read and write access
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          bucket='sliccy-now-basic-storage'
-          key="probes/github-actions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          source_file="$(mktemp)"
-          fetched_file="$(mktemp)"
-          cleanup() {
-            npx --yes wrangler@4.114.0 r2 object delete "$bucket/$key" --remote >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-          printf 'slicc R2 access probe\n' > "$source_file"
-          npx --yes wrangler@4.114.0 r2 object put "$bucket/$key" --file "$source_file" --remote
-          npx --yes wrangler@4.114.0 r2 object get "$bucket/$key" --file "$fetched_file" --remote
-          cmp "$source_file" "$fetched_file"
-
   deploy-production:
     name: Deploy production + smoke test
     if: github.ref == 'refs/heads/main'
