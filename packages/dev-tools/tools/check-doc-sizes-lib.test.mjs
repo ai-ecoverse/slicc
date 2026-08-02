@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkPackageClaudes,
   discoverPackageClaudes,
+  findUnlinkedPackageGuides,
   PACKAGE_CLAUDE_EXEMPTIONS,
   PACKAGE_CLAUDE_MAX_CHARS,
   resolvePackageClaudeLimit,
@@ -155,6 +156,20 @@ describe('checkPackageClaudes', () => {
       limit: PACKAGE_CLAUDE_MAX_CHARS,
       pass: true,
     });
+  });
+});
+
+describe('findUnlinkedPackageGuides', () => {
+  const guides = ['packages/alpha/CLAUDE.md', 'packages/beta/CLAUDE.md'];
+
+  it('returns package guides missing from the root link list', () => {
+    const root = '- [`alpha`](packages/alpha/CLAUDE.md)';
+    expect(findUnlinkedPackageGuides(root, guides)).toEqual(['packages/beta/CLAUDE.md']);
+  });
+
+  it('requires a markdown link rather than a prose mention', () => {
+    const root = 'See `packages/alpha/CLAUDE.md` for details.';
+    expect(findUnlinkedPackageGuides(root, guides)).toEqual(guides);
   });
 });
 
