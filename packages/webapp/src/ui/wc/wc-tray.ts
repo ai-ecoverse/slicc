@@ -285,14 +285,20 @@ function createLeaderHookSetup(
         ?.setOnLocalProcessingChange((processing) =>
           handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
         );
-      import('../theme-engine.js').then(({ setThemeChangeListener, getActiveThemeId }) => {
-        let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-        setThemeChangeListener((themeJson) => {
-          if (getActiveThemeId() === '__preview') return;
-          clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(() => handle.sync.broadcastTheme(themeJson), 150);
-        });
-      });
+      import('../theme-engine.js').then(
+        ({ setThemeChangeListener, getActiveThemeId, getActiveThemeJson }) => {
+          let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+          setThemeChangeListener((themeJson) => {
+            if (getActiveThemeId() === '__preview') return;
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => handle.sync.broadcastTheme(themeJson), 150);
+          });
+          // Seed the sync layer with the CURRENT theme: the listener only
+          // fires on the next change, but a follower joining a leader that
+          // booted themed must receive the palette at bootstrap.
+          handle.sync.broadcastTheme(getActiveThemeJson());
+        }
+      );
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);

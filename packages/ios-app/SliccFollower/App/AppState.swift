@@ -388,6 +388,9 @@ class AppState: ObservableObject {
 
         connectionState = .connecting
         lastError = nil
+        // Per-leader state: a new session must not inherit the previous
+        // leader's palette. A themed leader re-sends theme.apply on join.
+        leaderTheme = nil
         if rememberInHistory { addToHistory(trimmed) }
         activeJoinUrl = trimmed
 

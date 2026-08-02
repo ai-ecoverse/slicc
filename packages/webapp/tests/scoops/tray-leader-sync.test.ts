@@ -117,6 +117,34 @@ describe('LeaderSyncManager', () => {
     }
   });
 
+  it('hands a joining follower the current theme, but only when one is set', () => {
+    const { manager } = createManager();
+
+    // Unthemed leader: bootstrap sends no theme.apply.
+    const before = new FakeChannel();
+    manager.addFollower('b0', before);
+    expect(before.parseSent().some((m) => m.type === 'theme.apply')).toBe(false);
+
+    manager.broadcastTheme('{"id":"t","name":"T","base":"dark","tokens":{}}');
+
+    // A follower joining AFTER the theme was applied still receives it —
+    // followers reset per-leader theme state on connect.
+    const late = new FakeChannel();
+    manager.addFollower('b1', late);
+    const themed = late.parseSent().find((m) => m.type === 'theme.apply');
+    expect(themed).toBeDefined();
+    if (themed?.type === 'theme.apply') {
+      expect(themed.themeJson).toContain('"base":"dark"');
+    }
+
+    // A reset clears the remembered theme: the next joiner gets nothing
+    // (unthemed is every follower's default).
+    manager.broadcastTheme(null);
+    const afterReset = new FakeChannel();
+    manager.addFollower('b2', afterReset);
+    expect(afterReset.parseSent().some((m) => m.type === 'theme.apply')).toBe(false);
+  });
+
   it('fires onFollowerCountChanged on add and remove', () => {
     const onFollowerCountChanged = vi.fn();
     const { manager } = createManager({ onFollowerCountChanged });

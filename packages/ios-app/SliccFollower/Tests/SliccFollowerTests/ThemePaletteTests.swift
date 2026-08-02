@@ -97,6 +97,30 @@ final class ThemePaletteTests: XCTestCase {
         XCTAssertEqual(css, "html { color-scheme: light; }")
     }
 
+    // MARK: Bubble contrast
+
+    func testThemedBubbleFollowsTheDeepContract() {
+        // Dark base: near-white --deep default, near-black text.
+        let dark = ThemePalette.fromTheme(theme(base: .dark))
+        XCTAssertEqual(dark.bubble, Color(hexToken: "#f5f5f2"))
+        XCTAssertEqual(dark.bubbleText, Color(hexToken: "#0a0a0a"))
+        // Light base: black --deep default, white text.
+        let light = ThemePalette.fromTheme(theme(base: .light))
+        XCTAssertEqual(light.bubble, Color(hexToken: "#000000") ?? .black)
+        XCTAssertEqual(light.bubbleText, .white)
+        // A --deep token overrides the ground; the text still flips by base,
+        // so a light accent can never sit under white text.
+        let custom = ThemePalette.fromTheme(
+            theme(base: .dark, tokens: ["--deep": "#123456"]))
+        XCTAssertEqual(custom.bubble, Color(hexToken: "#123456"))
+        XCTAssertEqual(custom.bubbleText, Color(hexToken: "#0a0a0a"))
+    }
+
+    func testUnthemedDarkKeepsTheShippedBubble() {
+        XCTAssertEqual(ThemePalette.dark.bubble, ThemePalette.dark.accent)
+        XCTAssertEqual(ThemePalette.dark.bubbleText, .white)
+    }
+
     // MARK: AppState wiring
 
     func testApplyLeaderThemeDecodesAndPublishes() {

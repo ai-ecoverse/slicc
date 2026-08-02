@@ -39,10 +39,10 @@ struct MessageBubble: View {
                         Spacer(minLength: UIScreen.main.bounds.width * 0.2)
                         userBubbleText
                             .font(.system(size: 15))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(palette.bubbleText)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(palette.accent)
+                            .background(palette.bubble)
                             .cornerRadius(18)
                     }
                 }
@@ -77,7 +77,7 @@ struct MessageBubble: View {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             Text(styleUserBubbleCode(attributed))
-                .tint(.white)
+                .tint(palette.bubbleText)
         } else {
             Text(message.content)
         }
@@ -92,8 +92,8 @@ struct MessageBubble: View {
     private func styleUserBubbleCode(_ input: AttributedString) -> AttributedString {
         return styledInlineCode(
             input,
-            background: Color.white.opacity(0.22),
-            foreground: Color.white
+            background: palette.bubbleText.opacity(0.22),
+            foreground: palette.bubbleText
         )
     }
 
