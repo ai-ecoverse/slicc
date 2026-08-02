@@ -315,8 +315,7 @@ describe('slicc-agent-tabs', () => {
       expect(segment(element, 'cone').dataset.state).toBe('idle');
       expect(segment(element, 'busy').dataset.state).toBe('working');
       expect(segment(element, 'failed').dataset.state).toBe('broken');
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      expect(getComputedStyle(glow(element, 'busy')).opacity).toBe('0.72');
+      await vi.waitFor(() => expect(getComputedStyle(glow(element, 'busy')).opacity).toBe('0.72'));
       expect(
         getComputedStyle(
           segment(element, 'busy').querySelector('.slicc-agent-tabs__glyph-arc') as SVGCircleElement
@@ -336,9 +335,10 @@ describe('slicc-agent-tabs', () => {
       );
       expect(segment(element, 'cone').hasAttribute('data-attention')).toBe(false);
       expect(getComputedStyle(pausedGlow).transitionProperty).toContain('opacity');
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
-      expect(getComputedStyle(coneGlow).opacity).toBe('0');
+      await vi.waitFor(() => {
+        expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
+        expect(getComputedStyle(coneGlow).opacity).toBe('0');
+      });
 
       element.attention = 'cone';
       expect(segment(element, 'paused').hasAttribute('data-attention')).toBe(false);
@@ -348,9 +348,18 @@ describe('slicc-agent-tabs', () => {
       expect(segment(element, 'cone').dataset.attention).toBe('true');
       expect(glow(element, 'paused')).toBe(pausedGlow);
       expect(glow(element, 'cone')).toBe(coneGlow);
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      expect(getComputedStyle(pausedGlow).opacity).toBe('0');
-      expect(getComputedStyle(coneGlow).opacity).toBe('0.72');
+      expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
+      expect(getComputedStyle(coneGlow).opacity).toBe('0');
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeGreaterThan(0);
+      expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeLessThan(0.72);
+      expect(Number.parseFloat(getComputedStyle(coneGlow).opacity)).toBeGreaterThan(0);
+      expect(Number.parseFloat(getComputedStyle(coneGlow).opacity)).toBeLessThan(0.72);
+
+      await vi.waitFor(() => {
+        expect(getComputedStyle(pausedGlow).opacity).toBe('0');
+        expect(getComputedStyle(coneGlow).opacity).toBe('0.72');
+      });
     });
 
     it('renders attention as a layout-neutral ring glow over broken and selected states', async () => {
@@ -362,7 +371,9 @@ describe('slicc-agent-tabs', () => {
       element.attention = 'failed';
       const attentionStyle = getComputedStyle(failed);
       const after = failed.getBoundingClientRect();
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await vi.waitFor(() =>
+        expect(getComputedStyle(glow(element, 'failed')).opacity).toBe('0.72')
+      );
       const glowStyle = getComputedStyle(glow(element, 'failed'));
 
       expect(failed.dataset.state).toBe('broken');
