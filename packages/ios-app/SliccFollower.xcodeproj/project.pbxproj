@@ -17,6 +17,7 @@
 		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
 		2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB646EF0D0006D1A43F527D /* ChatMessage.swift */; };
 		2A750B8B02200270E97C8D6E /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F4A75BA9D14DA689D0E9F4 /* Dictation.swift */; };
+		2AB3075DAEAC8AC08789EF37 /* AppStateDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */; };
 		2CE789AA836BB0713F1250D7 /* CDPBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBE0A7D88487F7712E451646 /* CDPBridge.swift */; };
 		306C9DAD5071D0E813194FC5 /* ICloudSessionListTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55D53BAF8B8E31F0EC06B69E /* ICloudSessionListTests.swift */; };
 		319F6B893CA643B51BE218BB /* FrozenSessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */; };
@@ -188,6 +189,7 @@
 		F9555BBF8AC72C74630432D1 /* theme-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "theme-vectors.json"; sourceTree = "<group>"; };
 		FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRouteUITests.swift; sourceTree = "<group>"; };
 		FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tray-sync-corpus.json"; sourceTree = "<group>"; };
+		FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateDelivery.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -234,6 +236,7 @@
 			isa = PBXGroup;
 			children = (
 				434BBAD25E91BD0B7D626821 /* AppState.swift */,
+				FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */,
 				6A88993C99745347AF830860 /* AppStateTheme.swift */,
 				C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */,
 				DD1308398CD972FF297E2C75 /* UITestHooks.swift */,
@@ -543,6 +546,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */,
+				2AB3075DAEAC8AC08789EF37 /* AppStateDelivery.swift in Sources */,
 				9494D2F9E9EFAB61FFC71886 /* AppStateTheme.swift in Sources */,
 				5B5741496E7C7EA37979CFF2 /* AttachmentChips.swift in Sources */,
 				A0327A6785996F45F4FED08A /* AttachmentStaging.swift in Sources */,

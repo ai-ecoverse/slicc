@@ -26,7 +26,11 @@ struct MessageBubble: View {
         if isLick {
             LickRow(message: message)
                 .padding(.horizontal, 4)
-        } else if message.error == true {
+        } else if message.error == true, message.role != .user {
+            // Cone errors render as the red card; a USER message flagged
+            // errored is a failed local delivery — it keeps its bubble (and
+            // attachment chips) below, with a note, because swapping in the
+            // cone-error card would discard what the user tried to send.
             ErrorCard(message: message)
         } else if message.role == .user {
             VStack(alignment: .trailing, spacing: 6) {
@@ -45,6 +49,12 @@ struct MessageBubble: View {
                             .background(palette.bubble)
                             .cornerRadius(18)
                     }
+                }
+                if message.error == true {
+                    Text("Not delivered")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("send-failed-note")
                 }
             }
         } else {

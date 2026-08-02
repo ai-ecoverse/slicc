@@ -196,8 +196,14 @@ struct InputBar: View {
     }
 
     private func stage(_ image: UIImage, name: String) {
+        // The shared budget keeps a multi-photo message under the tray
+        // ceiling at STAGING time — over-budget photos become error chips
+        // here instead of a send the transport must refuse later.
+        let used = stagedAttachments.reduce(0) { $0 + ($1.data?.count ?? 0) }
         stagedAttachments.append(
-            ImageAttachmentBuilder.inlineAttachment(from: image, name: name))
+            ImageAttachmentBuilder.inlineAttachment(
+                from: image, name: name,
+                base64BudgetRemaining: ImageAttachmentBuilder.messageBase64Budget - used))
     }
 
     private func pasteImages() {

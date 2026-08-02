@@ -14,12 +14,18 @@ enum ImageAttachmentBuilder {
     /// `MAX_IMAGE_BYTES` (`wc-attach.ts`) — ceiling on the encoded bytes.
     static let maxImageBytes = 4 * 1024 * 1024
     static let jpegQuality: CGFloat = 0.85
+    /// Budget for ALL staged attachments' base64 in one message, held
+    /// safely under the 8 MiB tray ceiling (`TRAY_MAX_MESSAGE_BYTES`) so a
+    /// multi-photo send can never assemble a message the transport must
+    /// refuse.
+    static let messageBase64Budget = 6 * 1024 * 1024
 
     /// Downscale + encode one image. Failures come back as an `error`
     /// attachment rather than nothing — the web behaves the same way, so
     /// the user sees why a photo did not reach the leader.
     static func inlineAttachment(
-        from image: UIImage, name: String, maxBytes: Int = maxImageBytes
+        from image: UIImage, name: String, maxBytes: Int = maxImageBytes,
+        base64BudgetRemaining: Int = messageBase64Budget
     ) -> MessageAttachment {
         let scaled = downscale(image, maxEdgePixels: inlineMaxEdge)
         guard let jpeg = scaled.jpegData(compressionQuality: jpegQuality) else {
@@ -29,6 +35,13 @@ enum ImageAttachmentBuilder {
             return failed(
                 name: name,
                 reason: "The image is still over the size ceiling after downscaling.")
+        }
+        // Base64 expands 4/3: budget on the ENCODED footprint, since that is
+        // what rides in the JSON the transport measures.
+        guard (jpeg.count * 4) / 3 <= base64BudgetRemaining else {
+            return failed(
+                name: name,
+                reason: "Attachments exceed the message size limit — remove one first.")
         }
         return MessageAttachment(
             id: UUID().uuidString,

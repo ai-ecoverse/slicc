@@ -90,6 +90,16 @@ final class AttachmentMessageTests: XCTestCase {
             "the encoded image respects INLINE_MAX_EDGE")
     }
 
+    func testExhaustedMessageBudgetBecomesAnErrorAttachment() {
+        let attachment = ImageAttachmentBuilder.inlineAttachment(
+            from: makeImage(width: 800, height: 600), name: "late.jpg",
+            base64BudgetRemaining: 64)
+        XCTAssertNotNil(
+            attachment.error,
+            "a photo that would push the message over the tray ceiling fails at staging")
+        XCTAssertNil(attachment.data)
+    }
+
     func testOversizeAfterDownscaleBecomesAnErrorAttachment() {
         let attachment = ImageAttachmentBuilder.inlineAttachment(
             from: makeImage(width: 2000, height: 2000), name: "big.jpg", maxBytes: 64)

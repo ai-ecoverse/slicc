@@ -88,7 +88,9 @@ class AppState: ObservableObject {
         return selected == active
     }
     /// Per-scoop message buffers. Source of truth for `messages`.
-    private var messagesByScoop: [String: [ChatMessage]] = [:]
+    /// Internal (not private) so the delivery extension can flag a failed
+    /// send in the buffer too.
+    var messagesByScoop: [String: [ChatMessage]] = [:]
 
     // Sprinkle awareness
     @Published var sprinkles: [SprinkleSummary] = []
@@ -501,7 +503,17 @@ class AppState: ObservableObject {
 
         let msg = FollowerToLeaderMessage.userMessage(
             text: trimmed, messageId: messageId, steer: steer, attachments: attached)
-        sendToLeader(msg)
+        #if DEBUG
+            // A hermetic UI test forces the connection state with no real
+            // channel behind it — extend the same fiction to delivery, or
+            // every test send would flag itself undelivered.
+            let hermeticallyConnected = UITestHooks.forcedConnectionState != nil
+        #else
+            let hermeticallyConnected = false
+        #endif
+        if !sendToLeader(msg), !hermeticallyConnected {
+            markUndelivered(messageId)
+        }
     }
 
     /// Abort the current streaming response.
