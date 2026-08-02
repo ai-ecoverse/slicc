@@ -1500,6 +1500,8 @@ describe('FollowerSyncManager', () => {
           folder: '/workspace',
           isCone: true,
           assistantLabel: 'sliccy',
+          state: 'working' as const,
+          fill: 64,
         },
         {
           jid: 'scoop-1',
@@ -1507,6 +1509,8 @@ describe('FollowerSyncManager', () => {
           folder: '/scoops/research',
           isCone: false,
           assistantLabel: 'research',
+          state: 'broken' as const,
+          fill: 82,
         },
       ];
       channel.simulateLeaderMessage({ type: 'scoops.list', scoops, activeScoopJid: 'cone-jid' });

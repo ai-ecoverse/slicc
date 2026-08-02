@@ -121,7 +121,6 @@ export {
   type UsbPermissionProvider,
 } from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
-export { SliccPill } from './pill/slicc-pill.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export {
@@ -134,7 +133,6 @@ export { SliccFloatbar } from './primitives/slicc-floatbar.js';
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
 export { SliccImagePreview } from './primitives/slicc-image-preview.js';
-export { SliccLogo } from './primitives/slicc-logo.js';
 export { SliccPane } from './primitives/slicc-pane.js';
 export { SliccPaneTag } from './primitives/slicc-pane-tag.js';
 export { SliccPressButton } from './primitives/slicc-press-button.js';
@@ -149,8 +147,15 @@ export {
 export { registerAllSliccComponents } from './register.js';
 export { SliccChatpane } from './shell/slicc-chatpane.js';
 export { SliccShell } from './shell/slicc-shell.js';
+export { SliccAgentAvatar } from './switcher/slicc-agent-avatar.js';
+export {
+  type AgentState,
+  arcDash,
+  type ScoopDescriptor,
+  type ScoopSelectDetail,
+  SliccAgentTabs,
+} from './switcher/slicc-agent-tabs.js';
 export { SliccScoopOverflow } from './switcher/slicc-scoop-overflow.js';
-export { SliccScoopSwitcher } from './switcher/slicc-scoop-switcher.js';
 export { SliccTheme } from './theme/slicc-theme.js';
 export { SliccThemeToggle } from './theme/slicc-theme-toggle.js';
 export * from './theme/tokens.js';

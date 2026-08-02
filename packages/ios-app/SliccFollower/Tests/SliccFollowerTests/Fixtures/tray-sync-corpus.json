@@ -1046,10 +1046,12 @@
       "ios": "mirrored",
       "mirrored": [
         "assistantLabel",
+        "fill",
         "folder",
         "isCone",
         "jid",
         "name",
+        "state",
         "trigger"
       ],
       "dropped": [],
@@ -1059,7 +1061,9 @@
         "folder": "/scoops/reviewer",
         "isCone": false,
         "assistantLabel": "Reviewer",
-        "trigger": "on-push"
+        "trigger": "on-push",
+        "state": "broken",
+        "fill": 82
       }
     },
     {

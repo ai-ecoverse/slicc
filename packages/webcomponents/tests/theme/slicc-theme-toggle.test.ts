@@ -151,18 +151,15 @@ describe('slicc-theme-toggle', () => {
     expect(fired).toBe(false);
   });
 
-  it('forwards the resolved theme to slicc-pill and slicc-add-menu peers', () => {
-    const pill = document.createElement('slicc-pill');
+  it('forwards the resolved theme to slicc-add-menu peers', () => {
     const menu = document.createElement('slicc-add-menu');
-    document.body.append(pill, menu);
+    document.body.append(menu);
 
     const el = mount();
     // Default-to-light connect already stamps the peers.
-    expect(pill.getAttribute('theme')).toBe('light');
     expect(menu.getAttribute('theme')).toBe('light');
 
     button(el).click();
-    expect(pill.getAttribute('theme')).toBe('dark');
     expect(menu.getAttribute('theme')).toBe('dark');
   });
 

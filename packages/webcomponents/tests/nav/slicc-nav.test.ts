@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccNav } from '../../src/nav/slicc-nav.js';
 // Siblings from earlier waves — already registered; safe to import so the
-// populated bar mirrors the prototype's header (logo + switcher + controls).
+// populated bar mirrors the production header (agent tabs + controls).
 import '../../src/primitives/slicc-avatar.js';
 import '../../src/primitives/slicc-floatbar.js';
-import '../../src/primitives/slicc-logo.js';
-import '../../src/switcher/slicc-scoop-switcher.js';
+import type { ScoopDescriptor, SliccAgentTabs } from '../../src/switcher/slicc-agent-tabs.js';
+import '../../src/switcher/slicc-agent-tabs.js';
 import '../../src/theme/slicc-theme-toggle.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
@@ -15,8 +15,8 @@ function spacerOf(el: SliccNav): HTMLElement | null {
 }
 
 /**
- * Build a realistic, populated nav: logo → scoop switcher → floatbar → theme
- * toggle → avatar, in DOM (== layout) order, matching the prototype header. The
+ * Build a realistic, populated nav: a neutral leading child → agent tabs →
+ * floatbar → theme toggle → avatar, in DOM (== layout) order. The
  * nav auto-inserts the flexible spacer before the floatbar.
  */
 function makeNav(accent?: string): SliccNav {
@@ -25,11 +25,8 @@ function makeNav(accent?: string): SliccNav {
   el.style.cssText = 'width:1000px;';
   if (accent) el.setAttribute('accent', accent);
   el.innerHTML = `
-    <slicc-logo></slicc-logo>
-    <slicc-scoop-switcher active="cone">
-      <slicc-pill class="scoop" data-k="cone" type="cone" color="#b07823" eyes="open" label="Sliccy" active></slicc-pill>
-      <slicc-pill class="scoop" data-k="researcher" type="scoop" color="#06b6d4" eyes="none" label="researcher"></slicc-pill>
-    </slicc-scoop-switcher>
+    <div data-testid="nav-leading"></div>
+    <slicc-agent-tabs active="cone"></slicc-agent-tabs>
     <slicc-floatbar label="CLI · tray · 1 follower" linked online></slicc-floatbar>
     <slicc-theme-toggle></slicc-theme-toggle>
     <slicc-avatar initials="PM"></slicc-avatar>`;
@@ -75,12 +72,12 @@ describe('slicc-nav', () => {
   it('keeps the composed controls in DOM (== layout) order', () => {
     const el = makeNav();
     document.body.appendChild(el);
-    const tags = [...el.children]
-      .filter((c) => c.tagName.startsWith('SLICC-') || c.classList.contains('slicc-nav__spacer'))
-      .map((c) => (c.classList.contains('slicc-nav__spacer') ? 'spacer' : c.tagName.toLowerCase()));
-    // logo, switcher, [auto spacer], floatbar, theme toggle, avatar.
-    expect(tags[0]).toBe('slicc-logo');
-    expect(tags[1]).toBe('slicc-scoop-switcher');
+    const tags = [...el.children].map((c) =>
+      c.classList.contains('slicc-nav__spacer') ? 'spacer' : c.tagName.toLowerCase()
+    );
+    // Neutral leading child, agent tabs, [auto spacer], floatbar, theme toggle, avatar.
+    expect(tags[0]).toBe('div');
+    expect(tags[1]).toBe('slicc-agent-tabs');
     expect(tags).toContain('spacer');
     expect(tags).toContain('slicc-floatbar');
     expect(tags).toContain('slicc-theme-toggle');
@@ -106,7 +103,7 @@ describe('slicc-nav', () => {
   it('respects an author-supplied .spacer (does not insert a second one)', () => {
     const el = document.createElement('slicc-nav') as SliccNav;
     el.innerHTML = `
-      <slicc-logo></slicc-logo>
+      <slicc-agent-tabs></slicc-agent-tabs>
       <div class="spacer"></div>
       <slicc-avatar initials="PM"></slicc-avatar>`;
     document.body.appendChild(el);
@@ -117,7 +114,7 @@ describe('slicc-nav', () => {
 
   it('falls back to appending the spacer at the end when there is no right-aligned control', () => {
     const el = document.createElement('slicc-nav') as SliccNav;
-    el.innerHTML = '<slicc-logo></slicc-logo>';
+    el.innerHTML = '<slicc-agent-tabs></slicc-agent-tabs>';
     document.body.appendChild(el);
     const spacer = spacerOf(el);
     expect(spacer).not.toBeNull();
@@ -253,18 +250,59 @@ describe('slicc-nav', () => {
     expect(avatarRect.left - navRect.left).toBeGreaterThan(300);
   });
 
-  it('tightens its padding + gap below 560px so the bar fits an extension sidebar', () => {
+  it('tightens padding + gap from its own available width, not the viewport', () => {
     const el = document.createElement('slicc-nav');
+    el.style.width = '560px';
     document.body.appendChild(el);
-    const sheet = (document.getElementById('slicc-nav-style') as HTMLStyleElement).sheet;
-    const media = Array.from(sheet?.cssRules ?? []).find(
-      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
-    );
-    expect(media).toBeDefined();
-    const navRule = Array.from((media as CSSMediaRule).cssRules).find(
-      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('.slicc-nav')
-    );
-    expect(navRule?.style.paddingLeft).toBe('10px');
-    expect(navRule?.style.gap).toBe('8px');
+    const style = getComputedStyle(el);
+    expect(el.hasAttribute('data-narrow')).toBe(true);
+    expect(style.paddingLeft).toBe('10px');
+    expect(style.columnGap).toBe('8px');
+    expect(style.containerName).toBe('slicc-nav');
+    expect(style.containerType).toBe('inline-size');
   });
+
+  it.each([560, 360])(
+    'keeps the 39×24px overflow grid clear of the focused avatar at %ipx',
+    async (width) => {
+      const el = makeNav();
+      el.style.width = `${width}px`;
+      const tabs = el.querySelector('slicc-agent-tabs') as SliccAgentTabs;
+      const scoops: ScoopDescriptor[] = [
+        { key: 'cone', type: 'cone', label: 'Sliccy', eyes: 'open', state: 'idle' },
+        ...Array.from({ length: 18 }, (_, index) => ({
+          key: `scoop-${index}`,
+          type: 'scoop' as const,
+          label: `Scoop ${index}`,
+          eyes: 'open' as const,
+          fill: index * 5,
+          state: index % 4 === 0 ? ('working' as const) : ('idle' as const),
+        })),
+      ];
+      tabs.scoops = scoops;
+      document.body.appendChild(el);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      tabs.reflow();
+
+      const focusedAvatar = tabs.querySelector('slicc-agent-avatar') as HTMLElement;
+      const overflow = tabs.querySelector('slicc-scoop-overflow') as HTMLElement;
+      const trigger = overflow.shadowRoot?.querySelector('[part="more"]') as HTMLElement;
+      const avatarRect = focusedAvatar.getBoundingClientRect();
+      const triggerRect = trigger.getBoundingClientRect();
+      const tabsRect = tabs.getBoundingClientRect();
+
+      expect(focusedAvatar.tagName).toBe('SLICC-AGENT-AVATAR');
+      expect(triggerRect.width).toBeCloseTo(39, 1);
+      expect(triggerRect.height).toBeCloseTo(24, 1);
+      expect(avatarRect.right).toBeLessThanOrEqual(triggerRect.left + 0.5);
+      expect(triggerRect.right).toBeLessThanOrEqual(tabsRect.right + 0.5);
+      if (width === 360) {
+        const firstLabel = tabs.querySelector('.slicc-agent-tabs__label') as HTMLElement;
+        const floatbar = el.querySelector('slicc-floatbar') as HTMLElement;
+        expect(firstLabel.clientWidth).toBeGreaterThanOrEqual(firstLabel.scrollWidth);
+        expect(floatbar.getBoundingClientRect().width).toBeCloseTo(30, 1);
+        expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth + 1);
+      }
+    }
+  );
 });

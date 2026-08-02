@@ -188,7 +188,29 @@ function eyesFor(status: ScoopStatus | undefined): SwitcherScoop['eyes'] {
   return 'open';
 }
 
-/** Map registered scoops onto switcher chip descriptors (cone first). */
+/**
+ * Map runtime lifecycle onto tab glyph state: processing → working,
+ * error → broken, initializing → initializing, and ready → idle. A scoop
+ * missing its first status broadcast is also idle because no work or failure
+ * has been observed yet.
+ */
+function stateFor(status: ScoopStatus | undefined): NonNullable<SwitcherScoop['state']> {
+  switch (status) {
+    case 'processing':
+      return 'working';
+    case 'error':
+      return 'broken';
+    case 'initializing':
+      return 'initializing';
+    case 'ready':
+    case undefined:
+      return 'idle';
+  }
+  status satisfies never;
+  return 'idle';
+}
+
+/** Map registered scoops onto switcher tab descriptors (cone first). */
 export function toSwitcherScoops(
   scoops: readonly RegisteredScoop[],
   statuses?: ReadonlyMap<string, ScoopStatus>,
@@ -204,6 +226,7 @@ export function toSwitcherScoops(
         color: scoopColor(scoop),
         label: scoop.isCone ? 'sliccy' : scoop.name,
         eyes: eyesFor(statuses?.get(scoop.jid)),
+        state: stateFor(statuses?.get(scoop.jid)),
         // The chip pupils dilate with context fullness (pill `fill` 0-100).
         fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
       };
@@ -235,6 +258,8 @@ export interface WcLiveWiring {
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
   selectScoop(scoop: RegisteredScoop): void;
+  /** Notify the tray leader after the rendered lifecycle transition gate fires. */
+  notifyScoopStateChanged?(): void;
   /** Fired once the kernel reports ready (late wiring re-runs boot reads). */
   notifyReady?(): void;
 }
@@ -290,10 +315,15 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
   return {
     onStatusChange: (jid, status) => {
       const previous = wiring.statuses.get(jid);
-      wiring.statuses.set(jid, status as ScoopStatus);
-      // Re-chip only on eye-state transitions; processing flickers are
-      // frequent and don't change the chip rendering.
-      if (eyesFor(previous) !== eyesFor(status as ScoopStatus)) refreshScoops();
+      const next = status as ScoopStatus;
+      wiring.statuses.set(jid, next);
+      // The tabs setter rebuilds the Light DOM row and reflows it. Meaningful
+      // rendered transitions are worth that cost for the small runtime roster;
+      // suppress duplicate churn that would needlessly interrupt hover or focus.
+      if (eyesFor(previous) !== eyesFor(next) || stateFor(previous) !== stateFor(next)) {
+        refreshScoops();
+        wiring.notifyScoopStateChanged?.();
+      }
       if (wiring.getSelected()?.jid !== jid) return;
       wiring.getController()?.setProcessing(status === 'processing');
     },
@@ -370,13 +400,13 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
 async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
   refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
   refs.thread.setAttribute('accent', scoopColor(scoop));
+  refs.switcher.setAttribute('active', scoop.jid);
   // The whole frame changes mood with the selection: Caramel Sugar Glass for
   // the cone, swirling pastels + the scoop's accent for scoops.
   applyShellContext(
     refs,
     scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
   );
-  refs.switcher.setAttribute('active', scoop.jid);
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   refs.composerMeta.setAttribute(
     'thinking',
@@ -1219,7 +1249,7 @@ function wireWcBrowserOverlay(
     .catch((err) => log.error('WC browser overlay wiring failed', err));
 }
 
-/** Switcher wiring: chip clicks select scoops; hovered chips get LLM tooltips. */
+/** Switcher wiring: tab clicks select scoops; hovered segments get LLM tooltips. */
 function wireWcSwitcher(boot: WcShellBoot, client: OffscreenClient): void {
   const { refs } = boot;
   refs.switcher.addEventListener('slicc-scoop-select', (event) => {
@@ -1262,8 +1292,8 @@ function makeTurnFinishedHook(deps: {
 }
 
 /**
- * Richer scoop/cone hover tooltips: pointing at a chip sets a one-line LLM
- * summary of that agent's most recent activity as the chip's native title.
+ * Richer scoop/cone hover tooltips: pointing at a segment sets a one-line LLM
+ * summary of that agent's most recent activity as the segment's native title.
  * Summaries generate lazily on hover (no calls for idle scoops), are cached
  * per activity snapshot, and the bare scoop label stands in while (or if)
  * the call doesn't land.
@@ -1282,7 +1312,9 @@ export function wireWcChipTips(deps: {
   const tips = new Map<string, { activity: string; tip: string }>();
   const inFlight = new Set<string>();
   deps.switcher.addEventListener('pointerover', (event) => {
-    const chip = (event.target as HTMLElement | null)?.closest?.<HTMLElement>('slicc-pill.scoop');
+    const chip = (event.target as HTMLElement | null)?.closest?.<HTMLElement>(
+      '.slicc-agent-tabs__segment'
+    );
     if (!chip || !deps.switcher.contains(chip)) return;
     const jid = chip.dataset.k ?? '';
     const scoop = deps.getScoops().find((s) => s.jid === jid);
@@ -1773,7 +1805,7 @@ export function attachWcClient(
       if (options.standalone && options.instanceId) {
         const { wireWcTray } = await import('./wc-tray.js');
         const zoneCallbacks = sprinkles.zone.callbacks();
-        await wireWcTray({
+        const tray = await wireWcTray({
           refs,
           client,
           browser: options.standalone.browser,
@@ -1791,6 +1823,7 @@ export function attachWcClient(
           window,
           log,
         });
+        boot.wiring.notifyScoopStateChanged = () => tray.scheduleScoopsListBroadcast();
       }
     })
     .catch((err) => log.error('WC sprinkle/tray wiring failed', err));

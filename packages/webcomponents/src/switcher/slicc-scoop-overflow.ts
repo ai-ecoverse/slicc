@@ -1,16 +1,14 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
-// The popup renders <slicc-pill> clones, so it owns the registration.
-import '../pill/slicc-pill.js';
 
 // ---------------------------------------------------------------------------
 // Lifted from proto/StellarRubySwift.html: the switcher overflow popup
 // (.switcher-more / .morebtn / .pop / .has-overflow / .open, CSS ~L68-76, the
 // reflow IIFE ~L937-1007). The prototype's reflow logic measures the live
-// header and moves chips that don't fit into a "⋯" dropdown that stacks them
+// header and moves chips that don't fit into an overflow dropdown that stacks them
 // column-wise; this lift keeps the *popup* half of that contract — the trigger
-// button + the dropdown of full-width <slicc-pill> clones — and exposes the set
-// of overflowed scoops as a declarative `items` property. Geometry measurement
+// button + the dropdown of full-width status rows — and exposes the set of
+// overflowed scoops as a declarative `items` property. Geometry measurement
 // stays the host's job (the header switcher owns layout); the host feeds the
 // hidden chips in via `items` and listens for `slicc-scoop-select`.
 //
@@ -18,11 +16,10 @@ import '../pill/slicc-pill.js';
 // the trigger uses --txt-2 / --line / --ghost / --ink / --ctl-h. The opened
 // dropdown is intentionally *frameless* — no background / border / shadow /
 // padding — so the overflowed scoops simply appear stacked underneath the
-// trigger (their own pill surfaces are affordance enough). Dark therefore flips
+// trigger. Dark therefore flips
 // automatically via the library's .dark / [data-theme="dark"] / body.dark
-// scopes. Cloned pills carry their own theme tokens (each <slicc-pill> manages
-// its own palette) and reveal with a per-item staggered entrance (suppressed
-// under prefers-reduced-motion).
+// scopes. Rows reveal with a per-item staggered entrance (suppressed under
+// prefers-reduced-motion).
 // ---------------------------------------------------------------------------
 
 const STYLE = `
@@ -31,75 +28,248 @@ const STYLE = `
 .morebtn{display:none;font:inherit;font-size:13px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid var(--line);border-radius:9999px;height:var(--ctl-h,30px);padding:0 11px;cursor:pointer;line-height:1;align-items:center;}
 .morebtn:hover{background:var(--ghost);color:var(--ink);}
 :host([count]:not([count="0"])) .morebtn,.switcher-more.has-overflow .morebtn{display:inline-flex;}
-.pop{display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:180px;z-index:20;flex-direction:column;gap:4px;}
+.overflow-grid{display:grid;grid-template:repeat(3,3px)/repeat(3,3px);gap:2px;width:13px;height:13px;flex:0 0 13px;}
+.overflow-grid-cell{display:grid;width:3px;height:3px;place-items:center;border-radius:50%;background:color-mix(in srgb,var(--txt-3) 12%,transparent);box-shadow:inset 0 0 0 .75px color-mix(in srgb,var(--txt-3) 28%,transparent);}
+.overflow-grid-cell[data-dot-state="idle"]{background:var(--txt-3);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="broken"]{background:var(--red);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="working"]{background:var(--green);box-shadow:none;}
+.overflow-grid-cell[data-dot-state="near-limit"]{background:var(--amber);box-shadow:none;}
+.overflow-grid-cell--plus{position:relative;overflow:visible;color:var(--txt-2);background:transparent;box-shadow:none;}
+.overflow-plus-bar{position:absolute;top:50%;left:50%;background:currentColor;transform:translate(-50%,-50%);}
+.overflow-plus-bar--horizontal{width:4px;height:1px;}
+.overflow-plus-bar--vertical{width:1px;height:4px;}
+.pop{display:none;position:absolute;top:calc(100% + 6px);left:0;width:184px;z-index:20;flex-direction:column;gap:4px;}
 .switcher-more.open .pop{display:flex;}
-.pop slicc-pill{display:block;width:100%;--pill-w:100%;animation:scoopReveal .24s ease both;animation-delay:calc(var(--i,0) * 45ms);}
+.popup-row{box-sizing:border-box;display:flex;align-items:center;gap:7px;width:100%;min-height:30px;padding:0 9px;color:var(--ink);font:500 11px/1 var(--ui);text-align:left;border:1px solid var(--line);border-radius:7px;background:var(--canvas);box-shadow:0 3px 10px color-mix(in srgb,var(--ink) 8%,transparent);cursor:pointer;animation:scoopReveal .24s ease both;animation-delay:calc(var(--i,0) * 45ms);}
+.popup-label{flex:1 1 auto;}
+.popup-state{color:var(--txt-3);font-size:9px;font-variant-numeric:tabular-nums;}
+.status-glyph{flex:0 0 14px;width:14px;height:14px;overflow:visible;color:var(--hue);}
+.glyph-base{fill:none;stroke:color-mix(in srgb,currentColor 30%,var(--line));}
+.glyph-arc{fill:none;stroke:currentColor;stroke-linecap:round;transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;}
+.glyph-pin{fill:currentColor;}
+.popup-row[data-state="working"] .glyph-arc{animation:scoopArc 10.8s linear infinite;}
+.popup-row[data-state="broken"] .status-glyph{color:var(--red);}
+.broken-x{stroke:currentColor;stroke-linecap:round;}
+.initializing-ring{fill:none;stroke:currentColor;stroke-dasharray:1.7 1.7;}
 @keyframes scoopReveal{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
-@media (prefers-reduced-motion: reduce){.pop slicc-pill{animation:none;}}
-/* Narrow / mobile viewport: a <slicc-pill> compacts to icon-only by default
-   (its own viewport media query). The dropdown stacks column-wise with ample
-   horizontal room, so its overflow chips keep their WIDE, labeled form instead.
-   Outer-tree ::part rules win the cascade over the pill's internal rules, so we
-   restore the full-width button geometry + re-show the label here; the now
-   redundant hover tip is suppressed. Non-overflow pills elsewhere are untouched. */
-@media (max-width:560px){
-  .pop slicc-pill::part(pill){width:100%;padding:0 14px 0 0;}
-  .pop slicc-pill::part(label){display:block;}
-  .pop slicc-pill::part(tip){display:none;}
-}
+@keyframes scoopArc{from{transform:rotate(-90deg);}to{transform:rotate(270deg);}}
+@media (prefers-reduced-motion:reduce){.popup-row{animation:none;}.popup-row[data-state="working"] .glyph-arc{animation:none;transform:rotate(-90deg);}}
 `;
 const SHEET = sheet(STYLE);
 
+type OverflowDotState = 'broken' | 'near-limit' | 'working' | 'idle';
+type AgentState = 'working' | 'broken' | 'initializing' | 'idle';
+
+const GRID_FILL_ORDER = [4, 5, 3, 7, 1, 6, 2, 0, 8] as const;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ARC_RADIUS = 5;
+const ARC_CIRCUMFERENCE = 2 * Math.PI * ARC_RADIUS;
+
+function svgEl<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string | number>,
+  ...children: SVGElement[]
+): SVGElementTagNameMap[K] {
+  const element = document.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, String(value));
+  element.append(...children);
+  return element;
+}
+
+function boundedFill(fill: number | undefined): number {
+  return typeof fill === 'number' && Number.isFinite(fill) ? Math.max(0, Math.min(100, fill)) : 0;
+}
+
+function itemState(item: SliccScoopOverflowItem): AgentState {
+  return item.state ?? 'idle';
+}
+
+function arcDash(fill: number): number {
+  const sweep = 90 + boundedFill(fill) * 2.7;
+  return (sweep / 360) * ARC_CIRCUMFERENCE;
+}
+
+function statusGlyph(state: AgentState, fill: number): SVGSVGElement {
+  const children: SVGElement[] = [];
+  if (state === 'initializing') {
+    children.push(
+      svgEl('circle', {
+        class: 'initializing-ring',
+        cx: 7,
+        cy: 7,
+        r: ARC_RADIUS,
+        'stroke-width': 1.7,
+      })
+    );
+  } else {
+    children.push(
+      svgEl('circle', {
+        class: 'glyph-base',
+        cx: 7,
+        cy: 7,
+        r: ARC_RADIUS,
+        'stroke-width': 1.5,
+      })
+    );
+  }
+  if (state === 'working' || state === 'idle') {
+    children.push(
+      svgEl('circle', {
+        class: 'glyph-arc',
+        cx: 7,
+        cy: 7,
+        r: ARC_RADIUS,
+        'stroke-width': 2,
+        'stroke-dasharray': `${arcDash(fill).toFixed(3)} ${ARC_CIRCUMFERENCE.toFixed(3)}`,
+        'stroke-dashoffset': 0,
+      })
+    );
+  }
+  if (state === 'working') {
+    children.push(svgEl('circle', { class: 'glyph-pin', cx: 7, cy: 7, r: 1.25 }));
+  }
+  if (state === 'broken') {
+    children.push(
+      svgEl('line', {
+        class: 'broken-x',
+        x1: 4.8,
+        y1: 4.8,
+        x2: 9.2,
+        y2: 9.2,
+        'stroke-width': 1.8,
+      }),
+      svgEl('line', {
+        class: 'broken-x',
+        x1: 9.2,
+        y1: 4.8,
+        x2: 4.8,
+        y2: 9.2,
+        'stroke-width': 1.8,
+      })
+    );
+  }
+  return svgEl(
+    'svg',
+    {
+      class: 'status-glyph',
+      viewBox: '0 0 14 14',
+      width: 14,
+      height: 14,
+      'aria-hidden': 'true',
+    },
+    ...children
+  );
+}
+
+function dotState(item: SliccScoopOverflowItem): OverflowDotState {
+  if (item.state === 'broken') return 'broken';
+  if ((item.fill ?? 0) >= 75) return 'near-limit';
+  if (item.state === 'working') return 'working';
+  return 'idle';
+}
+
+function dotSeverity(state: OverflowDotState): number {
+  if (state === 'broken') return 3;
+  if (state === 'near-limit') return 2;
+  if (state === 'working') return 1;
+  return 0;
+}
+
+function hiddenSummary(items: SliccScoopOverflowItem[]): string {
+  const worst = items.reduce<OverflowDotState>((current, item) => {
+    const state = dotState(item);
+    return dotSeverity(state) > dotSeverity(current) ? state : current;
+  }, 'idle');
+  const stateLabel = worst === 'near-limit' ? 'near context limit' : worst;
+  return `${items.length} hidden scoop${items.length === 1 ? '' : 's'}; worst state ${stateLabel}`;
+}
+
+function gridCell(state?: OverflowDotState, plus = false): HTMLElement {
+  if (plus) {
+    return h(
+      'span',
+      { class: 'overflow-grid-cell overflow-grid-cell--plus', 'aria-hidden': 'true' },
+      h('span', { class: 'overflow-plus-bar overflow-plus-bar--horizontal' }),
+      h('span', { class: 'overflow-plus-bar overflow-plus-bar--vertical' })
+    );
+  }
+  const attributes: Record<string, string> = {
+    class: 'overflow-grid-cell',
+    'aria-hidden': 'true',
+  };
+  if (state) attributes['data-dot-state'] = state;
+  return h('span', attributes);
+}
+
+function overflowGrid(items: SliccScoopOverflowItem[]): HTMLElement {
+  const represented = items
+    .map((item, order) => ({ order, state: dotState(item) }))
+    .sort((a, b) => dotSeverity(b.state) - dotSeverity(a.state) || a.order - b.order)
+    .slice(0, items.length > 9 ? 8 : 9);
+  const cells = Array.from({ length: GRID_FILL_ORDER.length }, () => gridCell());
+  represented.forEach((entry, position) => {
+    cells[GRID_FILL_ORDER[position]] = gridCell(entry.state);
+  });
+  if (items.length > 9) cells[GRID_FILL_ORDER.at(-1)!] = gridCell(undefined, true);
+  return h(
+    'span',
+    {
+      class: 'overflow-grid',
+      role: 'img',
+      'aria-label': hiddenSummary(items),
+      'data-hidden-count': String(items.length),
+    },
+    ...cells
+  );
+}
+
 /**
- * A descriptor for one overflowed scoop chip rendered as a `<slicc-pill>` clone
- * inside the popup. Mirrors the attributes the prototype copies off the hidden
- * header chip (`type` / `color` / `eyes` / `label`) plus the stable `id`
- * (`data-k`) used to identify the scoop in the emitted event.
+ * A descriptor for one overflowed scoop rendered as a status row inside the
+ * popup. Carries the stable `id` (`data-k`) used to identify the scoop in the
+ * emitted event, plus its label, hue, state, and context fullness.
  */
 export interface SliccScoopOverflowItem {
   /** Stable scoop identity (the prototype's `data-k`); forwarded in the event. */
   id: string;
-  /** Pill label text. Falls back to `id` when omitted. */
+  /** Row label text. Falls back to `id` when omitted. */
   label?: string;
-  /** Glyph type forwarded to the pill (`cone` | `scoop`, default `scoop`). */
+  /** Agent glyph type retained for descriptor compatibility. */
   type?: 'cone' | 'scoop';
-  /** Accent color hex forwarded to the pill. */
+  /** Accent color applied to the status glyph. */
   color?: string;
-  /** Eye state forwarded to the pill (`open` | `none` | `dead`, default `none`). */
+  /** Eye state retained for descriptor compatibility. */
   eyes?: 'open' | 'none' | 'dead';
+  /** Runtime state used by the status-coded overflow grid. */
+  state?: 'working' | 'broken' | 'initializing' | 'idle';
+  /** Context-window fullness from 0–100; 75+ is represented as near-limit. */
+  fill?: number;
 }
 
 /** The `detail` payload of the `slicc-scoop-select` event. */
 export interface SliccScoopSelectDetail {
   /** The selected scoop's stable id (the descriptor's `id`). */
   id: string;
+  /** Compatibility alias used by switcher consumers to select the scoop. */
+  key: string;
   /** The selected scoop's label (or `id` when no label was supplied). */
   label: string;
 }
 
 /**
  * `<slicc-scoop-overflow>` — the prototype's switcher overflow popup
- * (`.switcher-more`). A pill-shaped "⋯" trigger (`.morebtn`) that stays hidden
+ * (`.switcher-more`). A rounded status-grid trigger (`.morebtn`) that stays hidden
  * until there is overflow, plus an absolutely-positioned, *frameless* dropdown
- * (`.pop`) that stacks the overflowed scoop chips column-wise as full-width
- * `<slicc-pill>` clones — the chips simply appear underneath the trigger with no
+ * (`.pop`) that stacks the overflowed scoops column-wise as full-width status
+ * rows — the rows simply appear underneath the trigger with no
  * surrounding background / border / shadow / padding, revealing with a per-item
  * staggered entrance (suppressed under `prefers-reduced-motion`). Clicking the
  * trigger toggles the popup (and `aria-expanded`); a click anywhere outside
- * closes it; clicking a chip emits `slicc-scoop-select` and closes.
+ * closes it; clicking a row emits `slicc-scoop-select` and closes.
  *
  * Self-contained shadow DOM. The trigger maps onto inherited library tokens
  * (`--txt-2`, `--line`, `--ghost`, `--ink`, `--ctl-h`) so dark flips
  * automatically via `.dark` / `[data-theme="dark"]` / `body.dark`. The frameless
- * popup carries no surface of its own; the cloned `<slicc-pill>` chips manage
- * their own theme.
- *
- * In a narrow / mobile viewport (≤560px) a `<slicc-pill>` would normally compact
- * to icon-only (its own viewport media query). The dropdown stacks the chips
- * column-wise with ample horizontal room, so it overrides the cloned pills'
- * `::part(pill)` / `::part(label)` to keep them in their wide, labeled form there
- * (suppressing the now-redundant hover `::part(tip)`); non-overflow pills are
- * untouched.
+ * popup carries no surface of its own; each row carries its own surface.
  *
  * Overflow detection (which chips don't fit) stays the host's responsibility —
  * the header switcher owns layout. The host feeds the overflowed chips in via
@@ -108,13 +278,13 @@ export interface SliccScoopSelectDetail {
  *
  * @attr open - boolean; reflects whether the popup is shown
  * @attr count - reflected number of overflow items (the trigger shows when > 0)
- * @csspart more - the "⋯" trigger button
+ * @csspart more - the status-grid trigger button
  * @csspart pop - the dropdown popup panel
- * @csspart pill - each cloned overflow `<slicc-pill>` chip
- * @slot more - replaces the default "⋯" trigger glyph
+ * @csspart row - each overflow status row
+ * @slot more - replaces the default status-grid trigger glyph
  * @slot empty - shown inside the popup when there are no items
  * @fires slicc-scoop-select - composed + bubbling
- *   `CustomEvent<SliccScoopSelectDetail>` emitted when an overflow chip is clicked
+ *   `CustomEvent<SliccScoopSelectDetail>` emitted when an overflow row is clicked
  */
 export class SliccScoopOverflow extends HTMLElement {
   static readonly observedAttributes = ['open'];
@@ -127,11 +297,20 @@ export class SliccScoopOverflow extends HTMLElement {
   // Element refs, populated by #render.
   #wrap!: HTMLDivElement;
   #moreBtn!: HTMLButtonElement;
+  #moreSlot!: HTMLSlotElement;
   #pop!: HTMLDivElement;
 
   /** Document-level outside-click closer; bound once, attached only while open. */
   readonly #onDoc = (e: MouseEvent): void => {
     if (this.open && !this.contains(e.target as Node)) this.close();
+  };
+
+  /** Document-level Escape closer; attached only while open. */
+  readonly #onKeyDown = (e: KeyboardEvent): void => {
+    if (!this.open || e.key !== 'Escape') return;
+    e.preventDefault();
+    this.close();
+    this.#moreBtn.focus();
   };
 
   constructor() {
@@ -147,6 +326,7 @@ export class SliccScoopOverflow extends HTMLElement {
 
   disconnectedCallback(): void {
     document.removeEventListener('click', this.#onDoc);
+    document.removeEventListener('keydown', this.#onKeyDown);
   }
 
   attributeChangedCallback(name: string): void {
@@ -208,7 +388,7 @@ export class SliccScoopOverflow extends HTMLElement {
   // ----- Render --------------------------------------------------------------
 
   #render(): void {
-    const moreSlot = h('slot', { name: 'more' }, '⋯');
+    this.#moreSlot = h('slot', { name: 'more' }, overflowGrid(this.#items)) as HTMLSlotElement;
     this.#moreBtn = h(
       'button',
       {
@@ -219,9 +399,9 @@ export class SliccScoopOverflow extends HTMLElement {
         'aria-haspopup': 'true',
         'aria-expanded': 'false',
       },
-      moreSlot
+      this.#moreSlot
     ) as HTMLButtonElement;
-    this.#pop = h('div', { class: 'pop', part: 'pop' }) as HTMLDivElement;
+    this.#pop = h('div', { class: 'pop', part: 'pop', role: 'menu' }) as HTMLDivElement;
     this.#wrap = h(
       'div',
       { class: 'switcher-more', part: 'wrap' },
@@ -240,7 +420,7 @@ export class SliccScoopOverflow extends HTMLElement {
     this.#syncOpen();
   }
 
-  /** Rebuild the popup's cloned pills + reflect `count` / `.has-overflow`. */
+  /** Rebuild the popup rows + reflect `count` / `.has-overflow`. */
   #renderPop(): void {
     const n = this.#items.length;
     // Reflect the overflow count (mirrors the prototype's `.has-overflow`).
@@ -248,39 +428,48 @@ export class SliccScoopOverflow extends HTMLElement {
     else this.removeAttribute('count');
     this.#wrap.classList.toggle('has-overflow', n > 0);
     this.#moreBtn.setAttribute('aria-haspopup', 'true');
+    const summary = hiddenSummary(this.#items);
+    this.#moreBtn.setAttribute('aria-label', `${summary}. Show hidden scoops`);
+    this.#moreSlot.replaceChildren(overflowGrid(this.#items));
 
     if (n === 0) {
-      // No chips left — surface an optional `empty` slot and force the popup shut.
+      // No rows left — surface an optional `empty` slot and force the popup shut.
       this.#pop.replaceChildren(h('slot', { name: 'empty' }));
       if (this.open) this.close();
       return;
     }
 
-    const pills: HTMLElement[] = [];
+    const rows: HTMLButtonElement[] = [];
     this.#items.forEach((item, i) => {
       const id = item.id;
       const label = item.label ?? item.id;
-      const type = item.type === 'cone' ? 'cone' : 'scoop';
-      const eyes = item.eyes === 'open' || item.eyes === 'dead' ? item.eyes : 'none';
+      const state = itemState(item);
+      const fill = boundedFill(item.fill);
       // `--i` drives the per-item stagger (animation-delay) on reveal.
-      const pill = h('slicc-pill', {
-        class: 'scoop',
-        part: 'pill',
-        'data-k': id,
-        type,
-        eyes,
-        color: item.color ?? false,
-        label,
-        style: `--i:${i}`,
-      });
-      pill.addEventListener('click', () => {
-        const k = pill.dataset.k ?? '';
+      const row = h(
+        'button',
+        {
+          class: 'popup-row',
+          part: 'row',
+          type: 'button',
+          role: 'menuitem',
+          'aria-label': `${label}: ${state}, ${fill}% context fill`,
+          'data-state': state,
+          'data-k': id,
+          style: `--hue:${item.color ?? 'var(--rose)'};--i:${i}`,
+        },
+        statusGlyph(state, fill),
+        h('span', { class: 'popup-label' }, label),
+        h('span', { class: 'popup-state' }, `${state} · ${fill}%`)
+      ) as HTMLButtonElement;
+      row.addEventListener('click', () => {
+        const k = row.dataset.k ?? '';
         const found = this.#items.find((it) => it.id === k);
         this.#select(k, found?.label ?? k);
       });
-      pills.push(pill);
+      rows.push(row);
     });
-    this.#pop.replaceChildren(...pills);
+    this.#pop.replaceChildren(...rows);
   }
 
   /** Reflect the `open` attribute onto the wrap class + `aria-expanded`. */
@@ -290,14 +479,18 @@ export class SliccScoopOverflow extends HTMLElement {
     this.#moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     // Outside-click closer is attached only while open (cheap + leak-free).
     document.removeEventListener('click', this.#onDoc);
-    if (open) document.addEventListener('click', this.#onDoc);
+    document.removeEventListener('keydown', this.#onKeyDown);
+    if (open) {
+      document.addEventListener('click', this.#onDoc);
+      document.addEventListener('keydown', this.#onKeyDown);
+    }
   }
 
-  /** Emit `slicc-scoop-select` for the chosen chip and close the popup. */
+  /** Emit `slicc-scoop-select` for the chosen row and close the popup. */
   #select(id: string, label: string): void {
     this.dispatchEvent(
       new CustomEvent<SliccScoopSelectDetail>('slicc-scoop-select', {
-        detail: { id, label },
+        detail: { id, key: id, label },
         bubbles: true,
         composed: true,
       })

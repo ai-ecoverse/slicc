@@ -24,10 +24,9 @@ import '../overlay/slicc-dialog.js';
 import '../primitives/slicc-avatar.js';
 import '../primitives/slicc-day-separator.js';
 import '../primitives/slicc-floatbar.js';
-import '../primitives/slicc-logo.js';
 import '../shell/slicc-chatpane.js';
 import '../shell/slicc-shell.js';
-import '../switcher/slicc-scoop-switcher.js';
+import '../switcher/slicc-agent-tabs.js';
 import '../workbench/slicc-file-tree.js';
 import '../workbench/slicc-surface.js';
 import '../workbench/slicc-tab-bar.js';
@@ -177,18 +176,17 @@ function frozenThread(slug: string, title: string, metaLine: string): HTMLElemen
 }
 
 /**
- * The full-width top bar (the prototype's `.nav`): logo + scoop switcher (pills)
- * + a flexible spacer + floatbar + theme toggle + avatar. A SIBLING above the
- * shell — NOT inside the chat column — so the switcher gets the whole row width
- * and its pills never collapse into the chat pane when the workbench opens.
+ * The full-width top bar (the prototype's `.nav`): agent tabs + a flexible
+ * spacer + floatbar + theme toggle + avatar. A SIBLING above the
+ * shell — NOT inside the chat column — so the tabs get the whole row width and
+ * never collapse into the chat pane when the workbench opens.
  */
 function topnav(): HTMLElement {
   const nav = el('slicc-nav', { accent: 'var(--waffle)' });
-  const logo = el('slicc-logo', { badge: 'studio' });
   // No active chip: the cone renders in its "open idle" configuration (white
   // background, dark text) rather than the accent color-fill — the resting
   // leader look (matches the Pill/Pill ConeOpenIdle story).
-  const switcher = el('slicc-scoop-switcher') as HTMLElement & {
+  const switcher = el('slicc-agent-tabs') as HTMLElement & {
     scoops?: unknown;
   };
   (switcher as { scoops?: unknown }).scoops = SCOOPS;
@@ -214,7 +212,7 @@ function topnav(): HTMLElement {
     { kind: 'separator' },
     { id: 'signout', label: 'Sign out', icon: 'log-out', danger: true },
   ];
-  nav.append(logo, switcher, floatbar, toggle, menu);
+  nav.append(switcher, floatbar, toggle, menu);
   return nav;
 }
 
@@ -431,7 +429,7 @@ function app(opts: AppOpts): HTMLElement {
   }
 
   function setActiveChip(key: string | null): void {
-    const sw = frame.querySelector('slicc-scoop-switcher');
+    const sw = frame.querySelector('slicc-agent-tabs');
     if (key == null) sw?.removeAttribute('active');
     else sw?.setAttribute('active', key);
   }

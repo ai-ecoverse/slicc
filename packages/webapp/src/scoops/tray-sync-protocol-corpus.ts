@@ -844,6 +844,8 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: 'mirrored',
     assistantLabel: 'mirrored',
     trigger: 'mirrored',
+    state: 'mirrored',
+    fill: 'mirrored',
   },
   sample: {
     jid: 'reviewer',
@@ -852,6 +854,8 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: false,
     assistantLabel: 'Reviewer',
     trigger: 'on-push',
+    state: 'broken',
+    fill: 82,
   },
 };
 

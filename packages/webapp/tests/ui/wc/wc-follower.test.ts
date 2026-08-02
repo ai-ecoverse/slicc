@@ -358,8 +358,8 @@ describe('mountWcUiFollower', () => {
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
     const opts = startFollowerSpy.mock.calls[0]![0];
 
-    const switcher = app.querySelector('slicc-scoop-switcher') as HTMLElement & {
-      scoops: { key: string; type: string; label: string }[];
+    const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
+      scoops: { key: string; type: string; label: string; state: string; fill: number }[];
     };
     expect(switcher).toBeTruthy();
     expect(switcher.scoops).toEqual([]);
@@ -372,6 +372,8 @@ describe('mountWcUiFollower', () => {
           folder: '/workspace',
           isCone: true,
           assistantLabel: 'sliccy',
+          state: 'working',
+          fill: 64,
         },
         {
           jid: 'scoop-1',
@@ -379,6 +381,8 @@ describe('mountWcUiFollower', () => {
           folder: '/scoops/research',
           isCone: false,
           assistantLabel: 'research',
+          state: 'broken',
+          fill: 82,
         },
       ],
       'cone-jid'
@@ -388,6 +392,8 @@ describe('mountWcUiFollower', () => {
     expect(switcher.scoops.map((s) => s.type)).toEqual(['cone', 'scoop']);
     expect(switcher.scoops[0]!.label).toBe('sliccy');
     expect(switcher.scoops[1]!.label).toBe('research');
+    expect(switcher.scoops.map((s) => s.state)).toEqual(['working', 'broken']);
+    expect(switcher.scoops.map((s) => s.fill)).toEqual([64, 82]);
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
 

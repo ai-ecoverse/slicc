@@ -150,6 +150,10 @@ struct ScoopSummary: Codable, Identifiable, Hashable {
     let isCone: Bool
     let assistantLabel: String
     let trigger: String?
+    /// Agent-tab lifecycle state. Optional for compatibility with older leaders.
+    let state: String?
+    /// Context-window fullness on the browser agent tabs' 0...100 scale.
+    let fill: Double?
 
     var id: String { jid }
 }

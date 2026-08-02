@@ -78,7 +78,7 @@ function makeWiring(options: {
     updateLickState: vi.fn(),
     loadMessages: vi.fn(),
   };
-  const switcher = document.createElement('slicc-scoop-switcher') as WcShellRefs['switcher'];
+  const switcher = document.createElement('slicc-agent-tabs') as WcShellRefs['switcher'];
   const thread = document.createElement('slicc-chat-thread');
   const refs = { switcher, thread } as unknown as WcShellRefs;
   let selected = options.selected ?? null;
@@ -108,6 +108,22 @@ describe('toSwitcherScoops context fill', () => {
     const chips = toSwitcherScoops([cone, scoop({})], undefined, fills);
     expect(chips.find((c) => c.key === cone.jid)?.fill).toBe(42);
     expect(chips.find((c) => c.key === 'scoop-1')?.fill).toBeUndefined();
+  });
+});
+
+describe('toSwitcherScoops runtime state', () => {
+  it.each([
+    { status: 'initializing', state: 'initializing' },
+    { status: 'ready', state: 'idle' },
+    { status: 'processing', state: 'working' },
+    { status: 'error', state: 'broken' },
+  ] as const)('maps $status to $state', ({ status, state }) => {
+    const tabs = toSwitcherScoops([cone], new Map([[cone.jid, status]]));
+    expect(tabs[0]?.state).toBe(state);
+  });
+
+  it('treats a missing first status broadcast as idle', () => {
+    expect(toSwitcherScoops([cone])[0]?.state).toBe('idle');
   });
 });
 
@@ -146,6 +162,34 @@ describe('createWcLiveCallbacks', () => {
     const chips = wiring.refs.switcher.scoops;
     expect(chips.find((c) => c.key === 'scoop-err')?.eyes).toBe('dead');
     expect(chips.find((c) => c.key === 'cone-1')?.eyes).toBe('open');
+  });
+
+  it('re-renders segment state across ready → processing → ready', () => {
+    const worker = scoop({ jid: 'scoop-worker', name: 'worker' });
+    const wiring = makeWiring({ selected: cone, scoops: [cone, worker] });
+    const notifyScoopStateChanged = vi.fn();
+    wiring.notifyScoopStateChanged = notifyScoopStateChanged;
+    document.body.appendChild(wiring.refs.switcher);
+    const callbacks = createWcLiveCallbacks(wiring);
+    callbacks.onScoopListUpdate?.([cone, worker] as never);
+    const segment = (): HTMLElement | null =>
+      wiring.refs.switcher.querySelector(`[data-k="${worker.jid}"]`);
+
+    callbacks.onStatusChange(worker.jid, 'ready' as never);
+    expect(segment()?.dataset.state).toBe('idle');
+    expect(notifyScoopStateChanged).not.toHaveBeenCalled();
+    const idleSegment = segment();
+    callbacks.onStatusChange(worker.jid, 'ready' as never);
+    expect(segment()).toBe(idleSegment);
+    expect(notifyScoopStateChanged).not.toHaveBeenCalled();
+
+    callbacks.onStatusChange(worker.jid, 'processing' as never);
+    expect(segment()?.dataset.state).toBe('working');
+    expect(notifyScoopStateChanged).toHaveBeenCalledTimes(1);
+    callbacks.onStatusChange(worker.jid, 'ready' as never);
+    expect(segment()?.dataset.state).toBe('idle');
+    expect(notifyScoopStateChanged).toHaveBeenCalledTimes(2);
+    wiring.refs.switcher.remove();
   });
 
   it('caches lick backpressure for every scoop and renders only the selected scoop', () => {
@@ -281,6 +325,37 @@ describe('createWcLiveCallbacks', () => {
 });
 
 describe('prepareWcShell scoop selection', () => {
+  it('activates the selected tab before applying its shader context', () => {
+    const app = document.createElement('div');
+    const boot = prepareWcShell(app, 'test');
+    const selected = scoop({ jid: 'scoop-order', name: 'order' });
+    const writes: string[] = [];
+    const switcherSetAttribute = boot.refs.switcher.setAttribute.bind(boot.refs.switcher);
+    const shaderSetAttribute = boot.refs.shader.setAttribute.bind(boot.refs.shader);
+    vi.spyOn(boot.refs.switcher, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'active') writes.push(`switcher.active=${value}`);
+      switcherSetAttribute(name, value);
+    });
+    vi.spyOn(boot.refs.shader, 'setAttribute').mockImplementation((name, value) => {
+      if (name === 'mode' || name === 'tint') writes.push(`shader.${name}=${value}`);
+      shaderSetAttribute(name, value);
+    });
+    boot.setClient({
+      selectedScoopJid: null,
+      setSelectedScoopJid: vi.fn(),
+      requestScoopMessages: vi.fn(),
+      isProcessing: vi.fn(() => false),
+    } as never);
+
+    boot.selectScoop(selected);
+
+    expect(writes).toEqual([
+      `switcher.active=${selected.jid}`,
+      `shader.tint=${scoopColor(selected)}`,
+      'shader.mode=scoop',
+    ]);
+  });
+
   it('shows cached backpressure when its scoop is selected and honors an unselected retraction', () => {
     const app = document.createElement('div');
     const boot = prepareWcShell(app, 'test');
@@ -378,15 +453,14 @@ describe('URL boot-context routing (pendingUrlContext)', () => {
 
 describe('wireWcChipTips (richer hover tooltips)', () => {
   function makeSwitcherWithChip(jid: string): { switcher: HTMLElement; chip: HTMLElement } {
-    const switcher = document.createElement('slicc-scoop-switcher');
-    const seed = document.createElement('slicc-pill');
-    seed.className = 'scoop';
-    seed.dataset.k = jid;
-    switcher.appendChild(seed);
+    const switcher = document.createElement('slicc-agent-tabs');
+    const chip = document.createElement('button');
+    chip.className = 'slicc-agent-tabs__segment';
+    chip.dataset.k = jid;
     document.body.appendChild(switcher);
-    // The real switcher ADOPTS slotted pills and rebuilds them canonically —
-    // re-query for the live chip instead of holding the detached seed.
-    const chip = switcher.querySelector('slicc-pill.scoop') as HTMLElement;
+    // Append after connection because the real light-DOM component performs
+    // its initial canonical render from the `scoops` property when connected.
+    switcher.appendChild(chip);
     return { switcher, chip };
   }
 

@@ -9,13 +9,13 @@ import { define } from '../internal/define.js';
  * Lifted faithfully from the prototype (`proto/StellarRubySwift.html` `.nav` /
  * `.nav .spacer`): the top header shell. A flex row of fixed bar height
  * (`--barh`, 44px) with `0 24px` padding and a `14px` gap, carrying — in order —
- * the logo, the scoop switcher (+ its overflow more-button sibling), a flexible
+ * the agent tabs (+ their overflow more-button sibling), a flexible
  * `.spacer`, the runtime floatbar, the theme toggle, and the user avatar.
  *
  * Frosted glass: the background is the per-context `--ctx` accent at 12% mixed
  * over a translucent `--canvas` (68%), with `backdrop-filter: blur(18px)
  * saturate(1.4)` and a 1px `--line` bottom border. `z-index: 4` keeps the bar —
- * and the switcher's overflow popup, which escapes the bar — above the chat
+ * and the tabs' overflow popup, which escapes the bar — above the chat
  * shell below it. Every control shares the `--ctl-h` (30px) height.
  *
  * Everything is var-driven (`--ctx` / `--canvas` / `--line` / `--ui` / `--barh`
@@ -28,6 +28,7 @@ const STYLE = `
 .slicc-nav {
   display: flex;
   align-items: center;
+  container: slicc-nav / inline-size;
   gap: 14px;
   box-sizing: border-box;
   padding: 0 9px 0 24px;
@@ -46,11 +47,13 @@ const STYLE = `
    right edge (prototype .nav .spacer{flex:1}). */
 .slicc-nav > .slicc-nav__spacer,
 .slicc-nav > .spacer { flex: 1; }
-/* Narrow / extension-sidebar: tighten the bar's padding + gap so the logo,
-   the (overflowing) switcher, and the right-side controls all still fit. */
-@media (max-width: 560px) {
-  .slicc-nav { gap: 8px; padding: 0 10px; }
-}
+/* The tabs yield before the fixed controls, but never below the focused avatar
+   + gap + 39px overflow trigger footprint. */
+.slicc-nav > slicc-agent-tabs { flex: 1 1 auto; min-width: 73px; }
+/* Narrow / extension-sidebar: key layout tightening to the nav's available
+   width, not the viewport, so embedded and Storybook frames behave like the
+   real sidebar. */
+.slicc-nav[data-narrow] { gap: 8px; padding: 0 10px; }
 `;
 
 const STYLE_ID = 'slicc-nav-style';
@@ -67,8 +70,8 @@ function ensureNavStyle(doc: Document): void {
 /**
  * `<slicc-nav>` — the top navigation bar from the prototype (`.nav`). A frosted,
  * context-tinted header shell that lays out the leader's chrome in a single flex
- * row: the `<slicc-logo>` wordmark, the `<slicc-scoop-switcher>` chip row (whose
- * own `<slicc-scoop-overflow>` more-button rides along as a sibling), a flexible
+ * row: the `<slicc-agent-tabs>` tab row (whose own `<slicc-scoop-overflow>`
+ * more-button rides along as a sibling), a flexible
  * `.spacer`, then the `<slicc-floatbar>`, `<slicc-theme-toggle>`, and
  * `<slicc-avatar>` pinned to the right edge. It composes those elements BY TAG —
  * it never imports or reaches into them — so the host app slots whichever
@@ -92,7 +95,7 @@ function ensureNavStyle(doc: Document): void {
  * @attr accent - context hue; sets `--ctx` inline on the host (the frosted tint reacts)
  * @csspart bar - the header row (the host element itself carries `part="bar"`)
  * @csspart spacer - the flexible gap that pushes the right-aligned controls to the edge
- * @slot - default; the bar's children, laid out in DOM order (logo, switcher,
+ * @slot - default; the bar's children, laid out in DOM order (agent tabs,
  *   `.spacer`, floatbar, theme toggle, avatar), composed by tag
  * @fires slicc-nav-accent-change - `CustomEvent<{ accent: string | null }>`,
  *   composed + bubbling, dispatched whenever the `accent` (→ `--ctx`) changes
@@ -101,6 +104,7 @@ export class SliccNav extends HTMLElement {
   static readonly observedAttributes = ['accent'];
 
   #built = false;
+  #resizeObserver: ResizeObserver | null = null;
 
   connectedCallback(): void {
     ensureNavStyle(this.ownerDocument);
@@ -108,6 +112,16 @@ export class SliccNav extends HTMLElement {
     this.setAttribute('part', 'bar');
     this.#build();
     this.#applyAccent(this.getAttribute('accent'));
+    if (typeof ResizeObserver !== 'undefined') {
+      this.#resizeObserver = new ResizeObserver(() => this.#syncNarrow());
+      this.#resizeObserver.observe(this);
+    }
+    this.#syncNarrow();
+  }
+
+  disconnectedCallback(): void {
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = null;
   }
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
@@ -144,8 +158,8 @@ export class SliccNav extends HTMLElement {
   }
 
   /**
-   * Ensure the bar has a flexible spacer separating the left cluster (logo +
-   * switcher) from the right-aligned controls. Idempotent — runs once and is a
+   * Ensure the bar has a flexible spacer separating the agent tabs from the
+   * right-aligned controls. Idempotent — runs once and is a
    * no-op if the author already supplied a `.spacer`. The spacer is inserted
    * immediately before the first right-aligned control (the floatbar, theme
    * toggle, or avatar); failing those it goes at the end of the row.
@@ -173,6 +187,11 @@ export class SliccNav extends HTMLElement {
   #applyAccent(value: string | null): void {
     if (value == null || value.trim() === '') this.style.removeProperty('--ctx');
     else this.style.setProperty('--ctx', value);
+  }
+
+  /** Reflect the host's actual available width for self-targeting narrow CSS. */
+  #syncNarrow(): void {
+    this.toggleAttribute('data-narrow', this.getBoundingClientRect().width <= 560);
   }
 }
 

@@ -525,6 +525,10 @@ export interface ScoopSummary {
   isCone: boolean;
   assistantLabel: string;
   trigger?: string;
+  /** Rendered lifecycle state for follower agent tabs. Absent from older leaders. */
+  state?: 'working' | 'broken' | 'initializing' | 'idle';
+  /** Context-window fullness on the same 0-100 scale as the agent tabs. Absent from older leaders. */
+  fill?: number;
 }
 
 /** Lightweight sprinkle description sent to followers for the sprinkle sidebar. */
