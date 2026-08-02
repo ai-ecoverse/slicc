@@ -10,14 +10,12 @@ import SwiftUI
 ///
 /// Interaction semantics preserved from the web dock: tapping an idle item
 /// selects it; tapping the ACTIVE item collapses the workbench — a toggle,
-/// not a nav stack. The freezer slots into the leading (top) edge, absorbed
-/// from its pre-dock toolbar-only life (#1802 coordination note).
+/// not a nav stack. The rail belongs to sprinkles and the pinned tools;
+/// session-level actions (freezer, new chat, settings) live in the chat's
+/// top control cluster instead (#1864).
 struct DockRail: View {
     @Binding var active: DockSurface?
     let sprinkles: [SprinkleSummary]
-    /// Opens the Past Sessions sheet (the freezer keeps its sheet
-    /// presentation — it is chat history, not a workbench surface).
-    let onFreezer: () -> Void
 
     @Environment(\.palette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -25,15 +23,11 @@ struct DockRail: View {
     var body: some View {
         VStack(spacing: 6) {
             // The dynamic section scrolls; the pinned tools below never
-            // leave the screen. Seven fixed 36pt items already fill a
+            // leave the screen. Six fixed 36pt items already fill a
             // landscape rail — one leader sprinkle must not push the
             // terminal off the edge.
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 6) {
-                    railButton(
-                        id: "freezer", systemImage: "snowflake", label: "Past Sessions",
-                        isActive: false, action: onFreezer)
-
                     ForEach(DockModel.sprinkleItems(sprinkles)) { item in
                         itemButton(item)
                     }

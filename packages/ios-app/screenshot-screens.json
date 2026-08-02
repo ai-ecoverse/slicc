@@ -165,6 +165,18 @@
       ]
     },
     {
+      "name": "dock-left",
+      "description": "Left-handed mode: the dock rail mirrored to the leading edge",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-leftHandedDock",
+        "YES",
+        "-uiTestOpenDockSurface",
+        "term"
+      ]
+    },
+    {
       "name": "frozen-empty",
       "description": "Past Sessions sheet with no archived sessions",
       "args": [
