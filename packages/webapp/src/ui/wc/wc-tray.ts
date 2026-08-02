@@ -78,6 +78,7 @@ export interface WcTrayDeps {
   getSelectedJid(): string;
   agentHandle: AgentHandle;
   openFs(): Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>;
+  openWriter(): Promise<import('../../kernel/writable-vfs-client.js').WritableVfsClient>;
   /** Floatbar label to restore when the last follower leaves. */
   baseFloatLabel?: string;
   window: Window;
@@ -214,9 +215,8 @@ function createLeaderOptionsFactory(
     browserTransport: deps.realCdpTransport,
     // Lazy VFS proxy for preview.request and follower-originated fs.request
     // handling — the kernel worker owns the real VFS; we bridge through
-    // openFs() on demand. readDir exists for the iOS freezer rail's
-    // corrupt-index recovery (a /sessions scan); every op NOT listed here
-    // answers `ok: false` through handleFsRequest.
+    // openFs()/openWriter() on demand. The route-level guard in FsRouter
+    // excludes /proc before any operation reaches these handles.
     vfs: {
       async stat(path: string) {
         const fs = await deps.openFs();
@@ -229,6 +229,22 @@ function createLeaderOptionsFactory(
       async readDir(path: string) {
         const fs = await deps.openFs();
         return fs.readDir(path);
+      },
+      async writeFile(
+        path: string,
+        content: import('../../fs/types.js').FileContent,
+        options?: import('../../fs/types.js').WriteFileOptions
+      ) {
+        const fs = await deps.openWriter();
+        return fs.writeFile(path, content, options);
+      },
+      async mkdir(path: string, options?: import('../../fs/types.js').MkdirOptions) {
+        const fs = await deps.openWriter();
+        return fs.mkdir(path, options);
+      },
+      async rm(path: string, options?: import('../../fs/types.js').RmOptions) {
+        const fs = await deps.openWriter();
+        return fs.rm(path, options);
       },
     } as import('../../fs/virtual-fs.js').VirtualFS,
   });

@@ -1379,7 +1379,8 @@ describe('LeaderSyncManager', () => {
 
     it('handles fs.request for leader — executes locally and returns response', async () => {
       const { manager } = createManager({ vfs });
-      await vfs.writeFile('/hello.txt', 'world');
+      await vfs.mkdir('/workspace', { recursive: true });
+      await vfs.writeFile('/workspace/hello.txt', 'world');
 
       const ch1 = new FakeChannel();
       manager.addFollower('b1', ch1);
@@ -1389,7 +1390,7 @@ describe('LeaderSyncManager', () => {
         type: 'fs.request',
         requestId: 'fs-1',
         targetRuntimeId: 'leader',
-        request: { op: 'readFile', path: '/hello.txt' },
+        request: { op: 'readFile', path: '/workspace/hello.txt' },
       } as any);
 
       await vi.waitFor(() => {

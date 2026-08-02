@@ -1,6 +1,17 @@
+import { normalizePath } from '../../fs/path-utils.js';
 import { handleFsRequest } from '../tray-fs-handler.js';
 import type { TrayFsRequest, TrayFsResponse } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
+
+function canFollowerAccess(request: TrayFsRequest): boolean {
+  if (typeof request.path !== 'string' || !request.path.startsWith('/')) return false;
+  const path = normalizePath(request.path);
+  return path !== '/proc' && !path.startsWith('/proc/');
+}
+
+function followerFsDenied(): TrayFsResponse {
+  return { ok: false, error: 'Follower filesystem access denied', code: 'EACCES' };
+}
 
 /** Tracks an fs request being routed through the leader. */
 export interface PendingFsRoute {
@@ -50,6 +61,11 @@ export class FsRouter {
         requestId,
         response: { ok: false, error: 'Leader has no VFS' },
       });
+      return;
+    }
+
+    if (!canFollowerAccess(request)) {
+      follower.sync.send({ type: 'fs.response', requestId, response: followerFsDenied() });
       return;
     }
 
