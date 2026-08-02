@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This root file is the repo navigation hub. Keep package-specific architecture and implementation detail in the nearest package `CLAUDE.md`, and keep fast-changing how-to material in `docs/`.
+This is the repo navigation hub. Keep package details in the nearest package `CLAUDE.md` and fast-changing how-to material in `docs/`.
 
 ## Module Map
 
@@ -18,8 +18,11 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | `packages/webcomponents/`     | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`)                                    |
 | `packages/spoon/`             | `@ai-ecoverse/spoon` — injection overlay web component + IIFE bootstrap, used across all floats                   |
 | `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                             |
+| `packages/go-optel/`          | Dependency-free Go RUM client used by `slicc-cli`                                                                 |
 | `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                  |
+| `packages/swift-optel/`       | Pure-Swift RUM library shared by the iOS and macOS apps                                                           |
 | `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                  |
+| `packages/swift-traysession/` | Foundation-only iCloud tray-session sync shared by the launcher and iOS app                                       |
 | `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM, not npm)                     |
 | `packages/slicc-cli/`         | `slicc` — headless Go (pion) follower CLI: `prompt`/`exec`/`follow`; cross-compiled binaries (Go module, not npm) |
 | `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template                                 |
@@ -55,23 +58,21 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/cloud-core/CLAUDE.md`](packages/cloud-core/CLAUDE.md)
 - [`packages/shared-ts/CLAUDE.md`](packages/shared-ts/CLAUDE.md)
 - [`packages/webcomponents/CLAUDE.md`](packages/webcomponents/CLAUDE.md)
+- [`packages/spoon/CLAUDE.md`](packages/spoon/CLAUDE.md)
 - [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
+- [`packages/go-optel/CLAUDE.md`](packages/go-optel/CLAUDE.md)
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
+- [`packages/swift-optel/CLAUDE.md`](packages/swift-optel/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
+- [`packages/swift-traysession/CLAUDE.md`](packages/swift-traysession/CLAUDE.md)
 - [`packages/ios-app/CLAUDE.md`](packages/ios-app/CLAUDE.md)
+- [`packages/slicc-cli/CLAUDE.md`](packages/slicc-cli/CLAUDE.md)
 - [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)
 - [`docs/CLAUDE.md`](docs/CLAUDE.md)
 
 ## External Handoffs
 
-In this repo, phrases like `handoff to slicc` or `move this to slicc` mean:
-
-- compose a verb-prefixed instruction: `handoff:<free text>` or `upskill:<github url>`
-- open `https://www.sliccy.ai/handoff?handoff=<text>` (or `?upskill=<url>`) in the local browser
-- the cloudflare-worker serves that URL with an RFC 8288 `Link` header carrying the SLICC handoff or upskill rel
-- SLICC observes the `Link` header on main-frame navigations via a `navigate` lick and shows an approval prompt to the user
-
-Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when it exists.
+`handoff to slicc` or `move this to slicc` means opening `https://www.sliccy.ai/handoff?handoff=<text>` (or `?upskill=<url>`) with a verb-prefixed `handoff:` or `upskill:` instruction. The worker returns an RFC 8288 `Link` header that SLICC observes on navigation and presents for approval. Prefer `.agents/skills/slicc-handoff/scripts/slicc-handoff`.
 
 ## Ice Cream Vocabulary
 
@@ -85,7 +86,7 @@ Use ice cream terms in code review comments and docs when they match the domain 
 ## Git Conventions
 
 - Keep commits focused and package-local when possible.
-- **Linear history**: the merge queue and CI `linear-history` job reject branches with merge commits. Rebase onto the base (`git rebase origin/main`) instead of merging it in (`git config pull.rebase true` helps). Husky enforces this locally via `.husky/pre-merge-commit` and `.husky/pre-push` (reusing `packages/dev-tools/tools/check-linear-history.sh`).
+- **Linear history**: CI rejects merge commits. Rebase onto `origin/main`; Husky enforces this via `packages/dev-tools/tools/check-linear-history.sh`.
 - Do not hand-edit generated output in `dist/`.
 - Auth uses `git config github.token <PAT>` or GitHub OAuth login; see `docs/secrets.md`.
 
@@ -93,35 +94,23 @@ Use ice cream terms in code review comments and docs when they match the domain 
 
 ### Parallel Instances
 
-Multiple standalone SLICC instances can run simultaneously. All ports auto-resolve to avoid conflicts — just override the UI port:
+Run parallel standalone instances by overriding the UI port; profiles and CDP ports stay isolated:
 
 ```bash
 PORT=5720 npm run dev   # Second instance on port 5720
 PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
-Each instance gets an isolated Chrome profile (keyed by port) and separate CDP port (auto-detected). HMR shares the UI server. No shared state between instances.
-
-## Philosophy
-
-1. **The Claw Pattern**: SLICC is a persistent orchestration layer ("claw") on top of LLM agents, running in the browser. Agent engine is [Pi](https://github.com/earendil-works/pi-mono) (pi-agent-core, pi-ai).
-2. **Agents Love the CLI**: Shell-first core — new capabilities should be shell commands, not dedicated tools. MCP burns context tokens; CLI tools compose naturally.
-3. **The Browser is the OS**: All logic/state runs client-side. Server is a stateless relay. Prefer browser-native APIs (IndexedDB, Service Workers, WASM, fetch).
-
 ## Principles
 
-1. **Virtual CLIs over dedicated tools** — Shell commands first. Only create dedicated tools if bash can't do it.
-2. **Browser-first** — State in IndexedDB. Server only does what browsers physically cannot.
-3. **Minimal server** — Extension float has zero server. That's the target.
-4. **Skills over hardcoded features** — New agent capabilities should be SKILL.md files, not code changes.
+1. **Claw pattern** — SLICC is a persistent browser orchestration layer over [Pi](https://github.com/earendil-works/pi-mono).
+2. **Virtual CLIs first** — Prefer composable shell commands over dedicated tools.
+3. **Browser-first** — Keep state client-side and the server a stateless relay; the extension has zero server.
+4. **Skills over hardcoded features** — Add capabilities as SKILL.md files when possible.
 
 ## Architecture
 
-Browser-based AI coding agent running as Chrome extension (side panel), standalone CLI server, or Electron float. For a complete reference — float topology diagram, layer stack, subsystem file maps, build targets, and tray/sync architecture — see [`docs/architecture.md`](docs/architecture.md).
-
-### Deployment Floats
-
-Three primary floats: standalone CLI (Express + Chrome), Chrome extension (thin bridge, no bundled engine), and Electron. Plus hosted-leader (cloud via e2b sandbox) and Cherry (embedded follower iframe). See [`docs/architecture.md`](docs/architecture.md) for the full per-float description and the [float topology diagram](docs/architecture-diagram.png).
+SLICC runs as a standalone CLI (Express + Chrome), Chrome extension, Electron float, cloud hosted leader, or Cherry follower. See [`docs/architecture.md`](docs/architecture.md) and its [float topology diagram](docs/architecture-diagram.png).
 
 Each package `CLAUDE.md` is the authoritative source for its subsystem internals. Shell command reference: [`docs/shell-reference.md`](docs/shell-reference.md). Verification commands and CI gates: [`.agents/skills/verifying-before-push/SKILL.md`](.agents/skills/verifying-before-push/SKILL.md).
 
@@ -160,10 +149,7 @@ Run the full pre-push/PR pass — `lint` (always first; the most common CI failu
 
 ## Developer Agent Skills (.agents/skills/)
 
-Developer-facing skills for agents maintaining this repo. Each is a `SKILL.md`
-loaded into the system prompt by skill-aware harnesses (Claude Code, pi).
-For harnesses that only read AGENTS.md (Codex, Copilot), this router is the
-discovery channel — read the referenced skill when the moment matches.
+Skill-aware harnesses load these developer procedures directly; this list routes AGENTS.md-only harnesses to them.
 
 - Adding or changing a SLICC feature surface → use `adding-slicc-features`
 - Deploying or debugging the Cloudflare tray hub worker → use `deploying-tray-worker`

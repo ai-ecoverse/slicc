@@ -53,3 +53,8 @@ export function discoverPackageClaudes(packageDirs) {
     .map((name) => `packages/${name}/CLAUDE.md`)
     .sort();
 }
+
+/** Return package guides that are not linked from the root navigation hub. */
+export function findUnlinkedPackageGuides(rootContent, relPaths) {
+  return relPaths.filter((relPath) => !rootContent.includes(`](${relPath})`));
+}

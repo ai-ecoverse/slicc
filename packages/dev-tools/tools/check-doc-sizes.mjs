@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import {
   checkPackageClaudes,
   discoverPackageClaudes,
+  findUnlinkedPackageGuides,
   PACKAGE_CLAUDE_MAX_CHARS,
   resolvePackageClaudeLimit,
 } from './check-doc-sizes-lib.mjs';
@@ -148,6 +149,12 @@ for (const { path, size, limit, pass } of packageClaudeResults) {
   } else {
     process.stdout.write(`ok: ${path} is ${size}/${limit} chars${tag}\n`);
   }
+}
+
+const rootClaude = readFileSync(resolve(repoRoot, 'CLAUDE.md'), 'utf8');
+const missingPackageGuides = findUnlinkedPackageGuides(rootClaude, [...packageClaudeSizes.keys()]);
+for (const relPath of missingPackageGuides) {
+  failures.push(`CLAUDE.md: missing package guide link \`${relPath}\``);
 }
 
 if (failures.length > 0) {
