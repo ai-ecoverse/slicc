@@ -38,6 +38,15 @@ set -euo pipefail
 
 # iCloud KVS entitlement gate — see SLICC_IOS_NO_ICLOUD above. An empty
 # CODE_SIGN_ENTITLEMENTS override drops the project.yml entitlements file.
+#
+# KNOWN LIMIT (2026-08-02): this is NOT sufficient when the App ID itself
+# carries the iCloud capability in the developer portal — Xcode 26's
+# preflight then rejects a profile without iCloud for this bundle id
+# regardless of local entitlements ("doesn't include the iCloud
+# capability"). The fix is portal-side: regenerate the "Slicc Follower
+# App Store" profile with iCloud, or strip the capability from the App
+# ID. Until then the archive fails, which is why release-native runs this
+# script as a NON-GATING step.
 ENTITLEMENTS_OVERRIDE=()
 if [ "${SLICC_IOS_NO_ICLOUD:-}" = "1" ]; then
   echo "SLICC_IOS_NO_ICLOUD=1 — archiving without the iCloud KVS entitlement"

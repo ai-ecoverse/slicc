@@ -357,13 +357,59 @@ export function getChangedFiles(lastTag) {
   return parseChangedFiles(out);
 }
 
-function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build') {
+function runStep(label, cmd, dryRun, verb = 'Building', dryVerb = 'build', execOpts = {}) {
   if (dryRun) {
     console.log(`[release-native] (dry-run) would ${dryVerb} ${label}: ${cmd}`);
     return;
   }
   console.log(`[release-native] ${verb} ${label} …`);
-  execSync(cmd, { stdio: 'inherit' });
+  execSync(cmd, { stdio: 'inherit', ...execOpts });
+}
+
+// Bound on a non-gating step. An archive + TestFlight upload normally runs
+// well under 20 minutes; a hung xcodebuild/altool would otherwise sit on
+// semantic-release's prepareCmd until the JOB timeout and gate every later
+// publish anyway — the exact failure mode the wrapper exists to prevent.
+export const NON_GATING_STEP_TIMEOUT_MS = 25 * 60 * 1000;
+
+/**
+ * Run a DISTRIBUTION step that must never gate the rest of the release.
+ * TestFlight archiving/upload is distribution, not build correctness (CI
+ * builds and tests iOS on every PR): a signing regression on Apple's side
+ * — a provisioning profile losing the iCloud capability, an expired cert —
+ * would otherwise hold the worker, extension, and macOS publishes hostage.
+ * On 2026-08-02 exactly that produced 16 consecutive silent red releases
+ * with a day of merged web work unshipped. The failure stays loud (a
+ * GitHub Actions error annotation that surfaces on the run summary), the
+ * release proceeds without an ipa — and a green release was already never
+ * proof an ipa shipped, since the script soft-skips on missing secrets and
+ * old Xcode too.
+ *
+ * The invocation is time-bounded (`NON_GATING_STEP_TIMEOUT_MS`): a HUNG
+ * tool never throws on its own, and an unbounded synchronous call inside
+ * prepareCmd would consume the job timeout and gate every later publish —
+ * the same hostage situation, wearing a different face. On timeout,
+ * execSync kills the process (SIGKILL — xcodebuild ignores politer
+ * signals when wedged) and throws, landing in the same catch.
+ *
+ * `runStepImpl` is injectable for tests.
+ */
+export function runNonGatingStep(label, cmd, dryRun, runStepImpl = runStep) {
+  try {
+    runStepImpl(label, cmd, dryRun, undefined, undefined, {
+      timeout: NON_GATING_STEP_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    });
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`::error title=${label} failed (release continued)::${message.split('\n')[0]}`);
+    console.error(
+      `[release-native] ${label} FAILED — continuing the release without it. ` +
+        'Fix the native signing state and re-release to ship it.'
+    );
+    return false;
+  }
 }
 
 // IO wrapper: classify a captured `wrangler deploy` log file as "routes-only"
@@ -412,8 +458,11 @@ function runNativeGate(args, changedFiles) {
     console.log('[release-native] Skipping macOS native packaging (no macOS-relevant changes).');
   }
 
-  if (decision.ios) runStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
-  else console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
+  if (decision.ios) {
+    runNonGatingStep('iOS (TestFlight ipa)', IOS_SCRIPT_CMD, args.dryRun);
+  } else {
+    console.log('[release-native] Skipping iOS native packaging (no iOS-relevant changes).');
+  }
 
   const cliDecision = decideSliccCliGating({ lastTag: args.last, changedFiles });
   if (cliDecision.sliccCli) {

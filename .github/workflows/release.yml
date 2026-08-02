@@ -224,6 +224,25 @@ jobs:
           SLICC_IOS_NO_ICLOUD: ${{ vars.SLICC_IOS_NO_ICLOUD }}
         run: npx semantic-release
 
+      - name: Alert on red release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A red release is unshipped product — the 2026-08-02 provisioning
+          # regression ran 16 consecutive silent failures before a missing UI
+          # change exposed it. Keep one open tracking issue current instead
+          # of relying on someone watching the Actions tab.
+          TITLE="Release pipeline is red"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="[Release run](${RUN_URL}) failed on \`${{ github.sha }}\`. Everything merged since the last green release is unshipped until this is fixed."
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" --label ops
+          fi
+
       - name: Cleanup keychain
         if: always()
         run: |
