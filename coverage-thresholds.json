@@ -86,10 +86,10 @@
       ]
     },
     "cherry": {
-      "lines": 88,
-      "statements": 86,
-      "functions": 97,
-      "branches": 74
+      "lines": 89,
+      "statements": 87,
+      "functions": 98,
+      "branches": 75
     },
     "cloud-core": {
       "lines": 85,
@@ -150,9 +150,9 @@
       "regions": 83
     },
     "ios-app": {
-      "lines": 53,
-      "functions": 40,
-      "regions": 45
+      "lines": 59,
+      "functions": 46,
+      "regions": 50
     }
   }
 }
