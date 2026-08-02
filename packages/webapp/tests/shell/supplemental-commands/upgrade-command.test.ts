@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import type { SecureFetch } from 'just-bash';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
 import { createUpgradeCommand } from '../../../src/shell/supplemental-commands/upgrade-command.js';
@@ -165,5 +165,26 @@ describe('upgrade apply', () => {
     expect(result.exitCode).toBe(1);
     expect(json.ok).toBe(false);
     expect(json.errors[0]).toContain('HTTP 404');
+  });
+
+  it('returns JSON and a nonzero exit when a GitHub request times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = makeFetch({ 'v1.0.0': {}, 'v2.0.0': {} });
+      const hangingFetch = (async (url: string, options?: Parameters<SecureFetch>[1]) => {
+        if (url.includes('/git/trees/v2.0.0')) return new Promise<never>(() => undefined);
+        return fetch(url, options);
+      }) as SecureFetch;
+
+      const pending = run(fs, hangingFetch);
+      await vi.advanceTimersByTimeAsync(30_000);
+      const { result, json } = await pending;
+
+      expect(result.exitCode).toBe(1);
+      expect(json.ok).toBe(false);
+      expect(json.errors[0]).toContain('request timed out after 30000ms');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

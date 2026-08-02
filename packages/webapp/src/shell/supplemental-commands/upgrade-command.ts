@@ -7,6 +7,7 @@ import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 const REPO = 'ai-ecoverse/slicc';
 const BUNDLED_PREFIX = 'packages/vfs-root';
+const FETCH_TIMEOUT_MS = 30_000;
 const SCOPES = [
   `${BUNDLED_PREFIX}/workspace/skills/`,
   `${BUNDLED_PREFIX}/shared/sprinkles/`,
@@ -98,11 +99,22 @@ function runtimePath(repoPath: string): string | null {
 
 async function checkedFetch(fetchFn: SecureFetch, url: string): ReturnType<SecureFetch> {
   let response: Awaited<ReturnType<SecureFetch>>;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    response = await fetchFn(url, { method: 'GET', headers: { Accept: 'application/json' } });
+    response = await Promise.race([
+      fetchFn(url, { method: 'GET', headers: { Accept: 'application/json' } }),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`request timed out after ${FETCH_TIMEOUT_MS}ms`)),
+          FETCH_TIMEOUT_MS
+        );
+      }),
+    ]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`fetch failed for ${url}: ${message}`);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`fetch failed for ${url}: HTTP ${response.status} ${response.statusText}`);
