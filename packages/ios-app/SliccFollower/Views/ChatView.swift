@@ -2,36 +2,49 @@ import SwiftUI
 import os
 
 /// Top-level container view with a NavigationSplitView whose sidebar lists
-/// chat / browser tabs / sprinkles and whose detail column shows the selected
-/// route (conversation, tabs carousel, or a sprinkle's WKWebView).
+/// chat with the dock rail beside it — the webapp's narrow-viewport IA
+/// (`slicc-shell.ts` ≤560px): chat is the app, workbench surfaces overlay
+/// it full-bleed, and only the 48pt dock stays tappable. There is no
+/// sidebar and no split view on a phone.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var systemScheme
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-    @State private var route: DetailRoute? = .conversation
     @State private var showSettings = false
     @State private var hasAppeared = false
+    /// The open workbench surface; nil is the collapsed (chat-only) state.
+    @State private var activeSurface: DockSurface?
+    /// DEBUG fixture route (`-uiTestFixtureRoute`).
+    @State private var fixtureMode = false
+    /// Lifted to the shell so the dock's freezer item (leading edge) and
+    /// the chat toolbar snowflake open the same Past Sessions sheet.
+    @State private var showFrozenSessions = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SprinkleSidebarView(route: $route)
-        } detail: {
-            switch route {
-            case .conversation, .none:
-                ConversationView(showSettings: $showSettings)
-            case .fixture:
-                FixtureConversationView()
-            case .tabs:
-                TabsCarouselView()
-            case .sprinkle(let name):
-                if let sprinkle = appState.sprinkles.first(where: { $0.name == name }) {
-                    SprinkleDetailView(sprinkle: sprinkle)
-                } else {
-                    ConversationView(showSettings: $showSettings)
+        NavigationStack {
+            HStack(spacing: 0) {
+                ZStack {
+                    if fixtureMode {
+                        FixtureConversationView()
+                    } else {
+                        ConversationView(
+                            showSettings: $showSettings,
+                            showFrozenSessions: $showFrozenSessions)
+                    }
+                    // The workbench covers the chat, not the rail — the
+                    // same full-bleed overlay the web shell uses at ≤560px,
+                    // so tap-active-to-collapse stays reachable.
+                    if let surface = activeSurface {
+                        WorkbenchHost(surface: surface)
+                            .transition(.move(edge: .trailing))
+                    }
                 }
+                DockRail(
+                    active: $activeSurface,
+                    sprinkles: appState.sprinkles,
+                    onFreezer: { showFrozenSessions = true }
+                )
             }
         }
-        .navigationSplitViewStyle(.balanced)
         // A leader theme pins the scheme to its base; unthemed follows the
         // system, like the unthemed webapp shell (#1801).
         .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
@@ -51,12 +64,17 @@ struct ChatView: View {
                 if let themeJson = UITestHooks.themeFixtureJson() {
                     appState.applyLeaderTheme(themeJson)
                 }
+                // Before the connection-state early return: screenshots
+                // combine a forced state with an open surface.
+                if let surface = UITestHooks.opensDockSurface() {
+                    activeSurface = surface
+                }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
                     return
                 }
                 if UITestHooks.routesToFixture {
-                    route = .fixture
+                    fixtureMode = true
                     return
                 }
             #endif
@@ -114,8 +132,8 @@ struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
     @Binding var showSettings: Bool
+    @Binding var showFrozenSessions: Bool
     @State private var inputText = ChatView.seededComposerText()
-    @State private var showFrozenSessions = false
 
     var body: some View {
         VStack(spacing: 0) {

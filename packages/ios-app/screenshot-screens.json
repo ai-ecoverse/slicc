@@ -155,6 +155,16 @@
       ]
     },
     {
+      "name": "dock-term",
+      "description": "Dock rail + terminal placeholder overlay (leader-only surface)",
+      "args": [
+        "-uiTestConnectionState",
+        "connected",
+        "-uiTestOpenDockSurface",
+        "term"
+      ]
+    },
+    {
       "name": "frozen-empty",
       "description": "Past Sessions sheet with no archived sessions",
       "args": [

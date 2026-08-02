@@ -143,6 +143,21 @@ import UIKit
                 permission: permission, grantOutcome: grant, script: script)
         }
 
+        /// Open a workbench surface on launch
+        /// (`-uiTestOpenDockSurface term|files|memory|monitor|browser|new`)
+        /// so screenshots and UI tests reach the dock overlay without taps.
+        static func opensDockSurface() -> DockSurface? {
+            switch UserDefaults.standard.string(forKey: "uiTestOpenDockSurface") {
+            case "browser": return .browser
+            case "files": return .files
+            case "term": return .term
+            case "memory": return .memory
+            case "monitor": return .monitor
+            case "new": return .newSprinkle
+            default: return nil
+            }
+        }
+
         /// Stage a canned photo in the composer on launch
         /// (`-uiTestAttachmentFixture YES`): PhotosPicker runs out of
         /// process and cannot be driven hermetically, so attachment UI
