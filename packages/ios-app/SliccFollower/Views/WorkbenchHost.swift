@@ -24,7 +24,11 @@ struct WorkbenchHost: View {
                     // The leader unregistered it while open.
                     placeholder("This sprinkle is no longer registered on the leader.")
                 }
-            case .newSprinkle, .files, .term, .memory, .monitor:
+            case .monitor:
+                MonitorView()
+            case .memory:
+                MemoryView()
+            case .newSprinkle, .files, .term:
                 placeholder(DockModel.placeholderText(for: surface) ?? "")
             }
         }
