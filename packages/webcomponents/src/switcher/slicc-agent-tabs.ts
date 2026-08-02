@@ -56,7 +56,8 @@ const STYLE = `
 .slicc-agent-tabs *{box-sizing:border-box;}
 .slicc-agent-tabs__focus-avatar{display:block;flex:0 0 ${AVATAR_WIDTH}px;width:${AVATAR_WIDTH}px;height:${AVATAR_WIDTH}px;pointer-events:none;}
 .slicc-agent-tabs__track-frame{position:relative;flex:0 1 auto;min-width:0;height:var(--ctl-h,30px);overflow:visible;border:1px solid var(--line);border-radius:9px;background:var(--ghost);}
-.slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px 41px 2px 2px;overflow:hidden;}
+.slicc-agent-tabs__track{display:flex;align-items:center;min-width:0;height:100%;padding:2px;overflow:hidden;}
+.slicc-agent-tabs.has-overflow .slicc-agent-tabs__track{padding-right:${MORE_RESERVE + 2}px;}
 .slicc-agent-tabs__segment{position:relative;display:inline-flex;flex:0 1 auto;align-items:center;justify-content:center;gap:${SEGMENT_GAP}px;width:max-content;min-width:var(--slicc-agent-tabs-segment-floor,${SEGMENT_FLOOR_FALLBACK}px);max-width:160px;height:24px;padding:0 8px;overflow:hidden;color:var(--txt-2);font:500 11px/1 var(--ui);white-space:nowrap;border:0;border-radius:6px;background:transparent;cursor:pointer;}
 .slicc-agent-tabs__segment:hover{color:var(--ink);}
 .slicc-agent-tabs__segment[aria-selected='true']{color:var(--ink);background:var(--canvas);box-shadow:0 1px 3px color-mix(in srgb,var(--ink) 12%,transparent);}
@@ -332,11 +333,15 @@ export class SliccAgentTabs extends HTMLElement {
       });
       return;
     }
-    const widths = segments.map((segment) => segment.offsetWidth);
     const segmentSpace = Math.max(0, available - AVATAR_WIDTH - HOST_GAP - TRACK_CHROME);
-    const total = widths.reduce((sum, width) => sum + width, 0);
-    const budget = Math.max(0, segmentSpace - MORE_RESERVE);
-    if (total <= budget + 1) {
+    this.classList.remove('has-overflow');
+    const widthsWithoutReserve = segments.map((segment) => segment.offsetWidth);
+    const totalWithoutReserve = widthsWithoutReserve.reduce((sum, width) => sum + width, 0);
+    const reserve = totalWithoutReserve > segmentSpace + 1;
+    this.classList.toggle('has-overflow', reserve);
+    const widths = reserve ? segments.map((segment) => segment.offsetWidth) : widthsWithoutReserve;
+    const budget = Math.max(0, segmentSpace - (reserve ? MORE_RESERVE : 0));
+    if (!reserve) {
       this.#feedOverflow([]);
       return;
     }
