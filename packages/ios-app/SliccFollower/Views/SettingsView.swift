@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("joinUrl") private var storedJoinUrl: String = ""
+    @AppStorage("leftHandedDock") private var leftHandedDock = false
     /// Re-evaluates session staleness and ages while the sheet stays open —
     /// without it, `Date()` in `body` is only sampled on unrelated redraws and
     /// a row crossing the 12h TTL would stay enabled indefinitely.
@@ -290,6 +291,10 @@ struct SettingsView: View {
     private var advancedSection: some View {
         Section {
             Toggle("Auto-reconnect", isOn: $appState.autoReconnect)
+
+            // Mirrors the dock rail to the leading edge (#1864) — thumb
+            // reachability is a hand-dominance question, not a layout one.
+            Toggle("Left-handed dock", isOn: $leftHandedDock)
 
             if !appState.joinUrlHistory.isEmpty {
                 DisclosureGroup("Recent URLs") {

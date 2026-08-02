@@ -31,20 +31,36 @@ final class DockUITests: XCTestCase {
             "tap-active collapses back to chat")
     }
 
-    func testDockFreezerOpensPastSessions() {
+    func testNewChatLivesInTheTopControlNotTheRail() {
+        let app = XCUIApplication()
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "connected"]
+        app.launch()
+
+        let newChat = app.buttons["new-chat-button"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 60))
+        XCTAssertFalse(
+            app.buttons["dock-freezer"].exists,
+            "the rail belongs to sprinkles and tools — session actions live up top")
+        newChat.tap()
+
+        XCTAssertTrue(
+            app.buttons["Save & start new"].waitForExistence(timeout: 10),
+            "the top-control New chat opens the shared disposition dialog")
+    }
+
+    func testLeftHandedDockKeepsTheRailUsable() {
         let app = XCUIApplication()
         app.launchArguments += [
             "-joinUrl", "", "-uiTestConnectionState", "connected",
-            "-uiTestFrozenFixture", "YES",
+            "-leftHandedDock", "YES",
         ]
         app.launch()
 
-        let freezer = app.buttons["dock-freezer"]
-        XCTAssertTrue(freezer.waitForExistence(timeout: 60))
-        freezer.tap()
-
+        let term = app.buttons["dock-term"]
+        XCTAssertTrue(term.waitForExistence(timeout: 60))
+        term.tap()
         XCTAssertTrue(
-            app.staticTexts["Fix the build"].waitForExistence(timeout: 10),
-            "the dock's leading-edge freezer opens the Past Sessions sheet")
+            app.staticTexts["workbench-placeholder"].waitForExistence(timeout: 10),
+            "the mirrored rail toggles surfaces exactly like the trailing one")
     }
 }

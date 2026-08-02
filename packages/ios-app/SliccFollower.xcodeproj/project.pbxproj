@@ -66,6 +66,7 @@
 		9FA93426F018C3EE0C94E8E5 /* theme-vectors.json in Resources */ = {isa = PBXBuildFile; fileRef = F9555BBF8AC72C74630432D1 /* theme-vectors.json */; };
 		9FC130913A6643DA7276FFFA /* ToolUICard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */; };
 		A0327A6785996F45F4FED08A /* AttachmentStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844647F0DBCA8CC0C840D09A /* AttachmentStaging.swift */; };
+		A14D3D308AFA24D467ECDE96 /* NewSessionDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29562677500C7380445B16B9 /* NewSessionDialog.swift */; };
 		A2488147A916BDDB57B9A41C /* CDPTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FE6B46ECEC5C79FA6D986F9 /* CDPTarget.swift */; };
 		A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78C09597C5D63A373EB126 /* MessageBubble.swift */; };
 		A5A215E64B167C5F918EA6FA /* ICloudSessionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9FC22E5B3D4B0DA205C7F62 /* ICloudSessionsUITests.swift */; };
@@ -123,6 +124,7 @@
 		1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		224A81FCF4ECFA8EA4157E42 /* link-header-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "link-header-corpus.json"; sourceTree = "<group>"; };
 		26D6B6B896CB48304A39DAB8 /* SteerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerUITests.swift; sourceTree = "<group>"; };
+		29562677500C7380445B16B9 /* NewSessionDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionDialog.swift; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
 		31E089FCA5BF8861469F73C4 /* AttachmentChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChips.swift; sourceTree = "<group>"; };
 		3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsView.swift; sourceTree = "<group>"; };
@@ -342,6 +344,7 @@
 				523A4A068180D7EE98435885 /* MarkdownText.swift */,
 				AF78C09597C5D63A373EB126 /* MessageBubble.swift */,
 				7E727142147B0FB449F418D1 /* MessageListView.swift */,
+				29562677500C7380445B16B9 /* NewSessionDialog.swift */,
 				37C4F68634F8E70BBC83002C /* PttOverlayView.swift */,
 				F0A069AA812629AC5FE70AC9 /* SettingsView.swift */,
 				438577405ABBCA33F117862C /* SliccIcons.swift */,
@@ -589,6 +592,7 @@
 				7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */,
 				A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */,
 				5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */,
+				A14D3D308AFA24D467ECDE96 /* NewSessionDialog.swift in Sources */,
 				11F604368853A3A60AC0B10F /* PttController.swift in Sources */,
 				68FA70C9EC1A7C1137CC277D /* PttOverlayView.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,

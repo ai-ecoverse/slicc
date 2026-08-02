@@ -9,7 +9,6 @@ struct FrozenSessionsView: View {
     @Environment(\.dismiss) var dismiss
     @State private var query = ""
     @State private var showNewSessionDialog = FrozenSessionsView.autoOpensNewSession()
-    @State private var confirmErase = false
 
     /// `-uiTestOpenNewSession YES` presents the dialog on appear —
     /// screenshots and tests without a tap. Constant false outside DEBUG.
@@ -60,35 +59,10 @@ struct FrozenSessionsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .confirmationDialog(
-                "Start a new chat?", isPresented: $showNewSessionDialog, titleVisibility: .visible
-            ) {
-                Button("Save & start new") {
-                    appState.requestNewSession(.save)
-                    dismiss()
-                }
-                Button("New chat — skip memory") {
-                    appState.requestNewSession(.skip)
-                    dismiss()
-                }
-                Button("Erase & start new", role: .destructive) {
-                    // Irreversible — double-confirm rather than firing off a
-                    // destructive action from a slippable dialog.
-                    confirmErase = true
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("The current session is archived on the leader; Save also extracts memory.")
-            }
-            .alert("Erase the current session?", isPresented: $confirmErase) {
-                Button("Erase", role: .destructive) {
-                    appState.requestNewSession(.erase)
-                    dismiss()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This discards the current chat permanently — nothing is archived.")
-            }
+            .modifier(
+                NewSessionDialog(
+                    isPresented: $showNewSessionDialog,
+                    onRequested: { dismiss() }))
         }
         .onAppear { appState.loadFrozenSessions() }
         .onChange(of: appState.openFrozen?.entry.id) { _, opened in

@@ -15,13 +15,19 @@ struct ChatView: View {
     @State private var activeSurface: DockSurface?
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
     @State private var fixtureMode = false
-    /// Lifted to the shell so the dock's freezer item (leading edge) and
-    /// the chat toolbar snowflake open the same Past Sessions sheet.
+    /// Lifted to the shell so hook seeding and the chat toolbar snowflake
+    /// share the Past Sessions sheet state.
     @State private var showFrozenSessions = false
+    /// Mirror the rail to the leading edge (`-leftHandedDock` /
+    /// Settings toggle) — reachability for left-handed use.
+    @AppStorage("leftHandedDock") private var leftHandedDock = false
 
     var body: some View {
         NavigationStack {
             HStack(spacing: 0) {
+                if leftHandedDock {
+                    dockRail
+                }
                 ZStack {
                     if fixtureMode {
                         FixtureConversationView()
@@ -35,14 +41,12 @@ struct ChatView: View {
                     // so tap-active-to-collapse stays reachable.
                     if let surface = activeSurface {
                         WorkbenchHost(surface: surface)
-                            .transition(.move(edge: .trailing))
+                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
                     }
                 }
-                DockRail(
-                    active: $activeSurface,
-                    sprinkles: appState.sprinkles,
-                    onFreezer: { showFrozenSessions = true }
-                )
+                if !leftHandedDock {
+                    dockRail
+                }
             }
         }
         // A leader theme pins the scheme to its base; unthemed follows the
@@ -86,6 +90,10 @@ struct ChatView: View {
                 appState.connect()
             }
         }
+    }
+
+    private var dockRail: some View {
+        DockRail(active: $activeSurface, sprinkles: appState.sprinkles)
     }
 
     /// Composer text seeded from the `-uiTestComposerText` launch argument —
@@ -134,6 +142,7 @@ struct ConversationView: View {
     @Binding var showSettings: Bool
     @Binding var showFrozenSessions: Bool
     @State private var inputText = ChatView.seededComposerText()
+    @State private var showNewSessionDialog = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -196,6 +205,22 @@ struct ConversationView: View {
             // snowflake would only offer more of what is already on screen.
             if appState.openFrozen == nil {
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    // New chat lives beside the snowflake and gear (the
+                    // top control cluster owns session-level actions; the
+                    // dock rail owns workbench surfaces).
+                    Button(action: { showNewSessionDialog = true }) {
+                        if appState.newSessionInFlight {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "square.and.pencil")
+                                .foregroundStyle(palette.ink.opacity(0.7))
+                        }
+                    }
+                    .disabled(appState.newSessionInFlight)
+                    .accessibilityLabel("New chat")
+                    .accessibilityIdentifier("new-chat-button")
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showFrozenSessions = true }) {
                         Image(systemName: "snowflake")
                             .foregroundStyle(palette.ink.opacity(0.7))
@@ -215,6 +240,7 @@ struct ConversationView: View {
             FrozenSessionsView()
                 .environmentObject(appState)
         }
+        .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))
         .onAppear {
             #if DEBUG
                 if UITestHooks.opensFrozenRail { showFrozenSessions = true }
