@@ -23,11 +23,15 @@ struct ChatView: View {
     @AppStorage("leftHandedDock") private var leftHandedDock = false
 
     var body: some View {
-        NavigationStack {
-            HStack(spacing: 0) {
-                if leftHandedDock {
-                    dockRail
-                }
+        // The rail sits BESIDE the navigation stack, not inside it: a rail
+        // under the navigation bar collides with the bar's chrome (the
+        // leading title in left-handed mode, the trailing controls in
+        // right-handed). Outside, the bar spans only the chat column.
+        HStack(spacing: 0) {
+            if leftHandedDock {
+                dockRail
+            }
+            NavigationStack {
                 ZStack {
                     if fixtureMode {
                         FixtureConversationView()
@@ -44,9 +48,9 @@ struct ChatView: View {
                             .transition(.move(edge: leftHandedDock ? .leading : .trailing))
                     }
                 }
-                if !leftHandedDock {
-                    dockRail
-                }
+            }
+            if !leftHandedDock {
+                dockRail
             }
         }
         // A leader theme pins the scheme to its base; unthemed follows the
