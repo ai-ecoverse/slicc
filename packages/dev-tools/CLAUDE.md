@@ -37,7 +37,7 @@ This file covers the repo's developer-tooling surface.
 - **Cross-impl mask vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` — regenerate pinned mask vectors for TS/Swift parity tests after intentional masking changes.
 - **Cross-impl theme vectors**: `packages/dev-tools/tools/gen-theme-vectors.mjs` (run via `npx tsx`) — regenerate pinned theme-derivation vectors after intentional `theme-engine.ts` changes; asserted by `packages/webapp/tests/ui/theme-vectors.test.ts` and `ThemeEngineTests.swift` against the same fixture.
 - **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — fast `npm ci` staleness check wired via `pretypecheck` and `pretest` scripts.
-- **Release gating**: `packages/dev-tools/tools/release-native.mjs` — gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish steps, and the `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare, `--gate=biome-jsh` in publish) on whether relevant source changed since the last tag.
+- **Release gating**: `packages/dev-tools/tools/release-plan.mjs` invokes semantic-release's commit analyzer directly for the read-only Linux preflight. `release-native.mjs` gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish steps, and the `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare, `--gate=biome-jsh` in publish) on whether relevant source changed since the last tag.
 
 ### SLICC CDP Debug Toolkit
 
