@@ -303,6 +303,52 @@ describe('full document rendering', () => {
     expect(bridge.readFile).toHaveBeenCalledWith('/shared/state.json');
   });
 
+  it('defers lifecycle calls until the owner registers the renderer', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const appendChild = container.appendChild.bind(container);
+    vi.spyOn(container, 'appendChild').mockImplementation((node) => {
+      const result = appendChild(node);
+      const iframe = node as HTMLIFrameElement;
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent('message', {
+          data: { type: 'sprinkle-close' },
+          source: iframe.contentWindow,
+        })
+      );
+      return result;
+    });
+
+    await renderer.render('<!DOCTYPE html><html><head></head><body></body></html>', 'full-doc');
+    expect(bridge.close).not.toHaveBeenCalled();
+
+    renderer.activateBridgeLifecycle();
+    expect(bridge.close).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up the early listener when iframe loading fails', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    let iframe: HTMLIFrameElement | undefined;
+    vi.spyOn(container, 'appendChild').mockImplementation((node) => {
+      iframe = node as HTMLIFrameElement;
+      iframe.dispatchEvent(new dom.window.Event('error'));
+      return node;
+    });
+
+    await expect(
+      renderer.render('<!DOCTYPE html><html><head></head><body></body></html>', 'full-doc')
+    ).rejects.toThrow('full-doc iframe failed to load');
+
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent('message', {
+        data: { type: 'sprinkle-readfile', id: 'late-read', path: '/shared/state.json' },
+        source: iframe!.contentWindow,
+      })
+    );
+    expect(bridge.readFile).not.toHaveBeenCalled();
+  });
+
   it('dispose removes full-doc iframe', async () => {
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);

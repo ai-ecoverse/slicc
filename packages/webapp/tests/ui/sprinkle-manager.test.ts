@@ -13,10 +13,18 @@ import {
   writeOpenSprinklesToUrl,
 } from '../../src/ui/sprinkle-manager.js';
 
+const rendererState = vi.hoisted(() => ({ closeOnActivate: false }));
+
 vi.mock('../../src/ui/sprinkle-renderer.js', () => ({
   SprinkleRenderer: class {
-    constructor(_c: unknown, _api: unknown) {}
+    constructor(
+      _c: unknown,
+      private readonly api: { close(): void }
+    ) {}
     async render() {}
+    activateBridgeLifecycle() {
+      if (rendererState.closeOnActivate) this.api.close();
+    }
     dispose() {}
     pushUpdate() {}
   },
@@ -75,6 +83,7 @@ describe('SprinkleManager', () => {
   let mgr: SprinkleManager;
 
   beforeEach(async () => {
+    rendererState.closeOnActivate = false;
     vi.stubGlobal('localStorage', makeMemoryStorage());
     vi.stubGlobal('document', makeFakeDocument());
     // Reset the URL to a known state so URL-persistence tests start
@@ -534,6 +543,17 @@ describe('SprinkleManager', () => {
       await Promise.resolve();
       expect(calls.length).toBe(1);
     });
+  });
+
+  it('handles a close lifecycle call released immediately after renderer registration', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+    await mgr.refresh();
+    rendererState.closeOnActivate = true;
+
+    await expect(mgr.open('dash')).resolves.toBeUndefined();
+
+    expect(mgr.opened()).not.toContain('dash');
+    expect(closeSprinkleContent).toHaveBeenCalledWith('dash');
   });
 
   describe('one-shot auto-open consumption ledger (slicc-autoopened-once)', () => {

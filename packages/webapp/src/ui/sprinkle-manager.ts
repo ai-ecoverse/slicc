@@ -516,6 +516,8 @@ export class SprinkleManager implements SprinkleManagerHandle {
       return;
     }
     entry.renderer = renderer;
+    renderer.activateBridgeLifecycle();
+    if (!this.openSprinkles.has(name)) return;
 
     log.info('Sprinkle reloaded', { name });
     this.notifyChange();
@@ -951,7 +953,14 @@ export class SprinkleManager implements SprinkleManagerHandle {
     const renderer = new SprinkleRenderer(container, api);
     await renderer.render(content, name);
 
-    this.openSprinkles.get(name)!.renderer = renderer;
+    const entry = this.openSprinkles.get(name);
+    if (!entry) {
+      renderer.dispose();
+      return;
+    }
+    entry.renderer = renderer;
+    renderer.activateBridgeLifecycle();
+    if (!this.openSprinkles.has(name)) return;
     this.persistOpenSprinkles();
     trackSprinkleView(name);
     log.info('Sprinkle opened', { name, title: sprinkle.title });
