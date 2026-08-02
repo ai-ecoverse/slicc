@@ -613,6 +613,14 @@ export class SprinkleRenderer {
     iframe.srcdoc = modified;
     this.iframe = iframe;
 
+    // Install the parent listener before appending: srcdoc scripts can post
+    // bridge calls synchronously while appendChild() is still loading the iframe.
+    this.messageHandler = createIframeMessageListener(
+      iframe,
+      createSharedBridgeHandlers(this.bridge)
+    );
+    window.addEventListener('message', this.messageHandler);
+
     // Wait for iframe to load
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -645,16 +653,6 @@ export class SprinkleRenderer {
       );
       this.container.appendChild(iframe);
     });
-
-    // Listen for messages from the iframe — the full-doc bridge script only
-    // sends the shared VFS/exec/device/lifecycle messages (no localStorage
-    // proxying, `sprinkle-open`, or `sprinkle-fetch-script` — those are
-    // sandbox-only, injected via extension-runtime-only script tags).
-    this.messageHandler = createIframeMessageListener(
-      iframe,
-      createSharedBridgeHandlers(this.bridge)
-    );
-    window.addEventListener('message', this.messageHandler);
 
     // The sprinkle's `<slicc-surface>` host stays mounted and toggles
     // `display:none`/`display:flex` on tab switches instead of destroying the

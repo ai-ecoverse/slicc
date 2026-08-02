@@ -281,6 +281,28 @@ describe('full document rendering', () => {
     expect(srcdoc).toContain('sprinkle-agent');
   });
 
+  it('handles bridge calls posted while the iframe is being appended', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.readFile as ReturnType<typeof vi.fn>).mockResolvedValue('hydrated');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const appendChild = container.appendChild.bind(container);
+    vi.spyOn(container, 'appendChild').mockImplementation((node) => {
+      const result = appendChild(node);
+      const iframe = node as HTMLIFrameElement;
+      dom.window.dispatchEvent(
+        new dom.window.MessageEvent('message', {
+          data: { type: 'sprinkle-readfile', id: 'early-read', path: '/shared/state.json' },
+          source: iframe.contentWindow,
+        })
+      );
+      return result;
+    });
+
+    await renderer.render('<!DOCTYPE html><html><head></head><body></body></html>', 'full-doc');
+
+    expect(bridge.readFile).toHaveBeenCalledWith('/shared/state.json');
+  });
+
   it('dispose removes full-doc iframe', async () => {
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);
