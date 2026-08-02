@@ -316,6 +316,14 @@ describe('createCompactContext', () => {
     expect(hasCompactionProgress(messages, [...messages])).toBe(false);
   });
 
+  it('reports progress when changed content has a larger estimate', () => {
+    const messages = [createMessage('user', 'short')];
+    const compacted = [createMessage('user', 'a longer natural-language summary')];
+
+    expect(totalEstimatedTokens(compacted)).toBeGreaterThan(totalEstimatedTokens(messages));
+    expect(hasCompactionProgress(messages, compacted)).toBe(true);
+  });
+
   it('returns empty array for empty input', async () => {
     const compact = createCompactContext(mockConfig);
     const result = await compact([]);
