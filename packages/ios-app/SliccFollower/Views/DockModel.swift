@@ -60,12 +60,10 @@ enum DockModel {
     /// that have a real view.
     static func placeholderText(for surface: DockSurface) -> String? {
         switch surface {
-        case .sprinkle, .browser, .monitor, .memory:
+        case .sprinkle, .browser, .monitor, .memory, .files:
             return nil
         case .newSprinkle:
             return "Sprinkles are authored on the leader. Ask the cone to scoop one up — it appears here when the leader registers it."
-        case .files:
-            return "Files live on the leader. A follower mirrors the leader's chat, sprinkles, and browser tabs - not its filesystem."
         case .term:
             return "The shell runs on the leader. A follower has no local terminal - drive the session through chat."
         }

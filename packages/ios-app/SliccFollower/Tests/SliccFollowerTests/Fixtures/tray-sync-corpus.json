@@ -46,7 +46,7 @@
     },
     {
       "type": "cdp.response",
-      "ios": "unknown",
+      "ios": "decoded",
       "message": {
         "type": "cdp.response",
         "requestId": "cdp-2",
@@ -447,7 +447,7 @@
     },
     {
       "type": "cdp.request",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "cdp.request",
         "requestId": "cdp-3",

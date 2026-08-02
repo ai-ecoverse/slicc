@@ -19,12 +19,62 @@ struct TabsCarouselView: View {
         appState.connectionState == .connected
     }
 
+    /// Tabs living elsewhere in the tray (leader / other followers).
+    /// Remote pages cannot be hosted live here, so they render as preview
+    /// cards — screenshots captured over follower-originated CDP (#1865).
+    /// Local tabs stay live WKWebViews in the carousel above.
+    @ViewBuilder
+    private var remoteList: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                remoteHeader
+                ForEach(appState.remoteTargets, id: \.targetId) { target in
+                    RemoteTabCard(target: target)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private var remoteStrip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            remoteHeader
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(appState.remoteTargets, id: \.targetId) { target in
+                        RemoteTabCard(target: target)
+                            .frame(width: 240)
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+        }
+        .padding(.vertical, 8)
+        .background(palette.surface)
+    }
+
+    private var remoteHeader: some View {
+        Text("Elsewhere in the tray")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.inkSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+    }
+
     var body: some View {
         Group {
-            if appState.cdpTargets.isEmpty {
+            if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty {
                 emptyState
+            } else if appState.cdpTargets.isEmpty {
+                remoteList
             } else {
-                pagedCarousel
+                VStack(spacing: 0) {
+                    pagedCarousel
+                    if !appState.remoteTargets.isEmpty {
+                        remoteStrip
+                    }
+                }
             }
         }
         .background(palette.canvas)

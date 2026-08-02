@@ -77,6 +77,9 @@ struct ChatView: View {
                 if let surface = UITestHooks.opensDockSurface() {
                     activeSurface = surface
                 }
+                if let targets = UITestHooks.remoteTargetsFixture() {
+                    appState.remoteTargets = targets
+                }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
                     return

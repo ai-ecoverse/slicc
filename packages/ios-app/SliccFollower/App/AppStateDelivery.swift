@@ -1,4 +1,5 @@
 import Foundation
+import SliccTraySession
 
 /// Delivery-failure surfacing, separated from the main type body so the
 /// connection coordinator stays under the lint size cap.
@@ -17,5 +18,21 @@ extension AppState {
             messagesByScoop[jid]?[index].error = true
         }
         lastError = "The message could not be delivered — it may be too large."
+    }
+}
+
+/// Session-store construction, out of the main type body (lint size cap).
+extension AppState {
+    static func makeSessionStore() -> TraySessionSyncStore {
+        #if DEBUG
+            if let fixture = UITestHooks.sessionsFixtureBackend() {
+                return TraySessionSyncStore(
+                    backend: fixture,
+                    deviceId: "ios-under-test",
+                    deviceName: "iPhone Under Test"
+                )
+            }
+        #endif
+        return TraySessionSyncStore()
     }
 }

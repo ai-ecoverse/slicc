@@ -320,7 +320,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
   // Reply path for follower-originated CDP — iOS never originates, so its
   // mirror deliberately decodes these to `.unknown`.
   'cdp.response': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: { type: 'cdp.response', requestId: 'cdp-2', result: { ok: true } },
   },
   'cdp.event': {
@@ -512,7 +512,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   },
   // Follower-originated CDP / tab.open / FS are TS-only (iOS only responds).
   'cdp.request': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: {
       type: 'cdp.request',
       requestId: 'cdp-3',

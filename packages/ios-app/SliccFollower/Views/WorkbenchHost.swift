@@ -28,7 +28,9 @@ struct WorkbenchHost: View {
                 MonitorView()
             case .memory:
                 MemoryView()
-            case .newSprinkle, .files, .term:
+            case .files:
+                FilesView()
+            case .newSprinkle, .term:
                 placeholder(DockModel.placeholderText(for: surface) ?? "")
             }
         }
