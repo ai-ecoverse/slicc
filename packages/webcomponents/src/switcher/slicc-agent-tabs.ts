@@ -38,7 +38,10 @@ const SEGMENT_FLOOR_LABEL = 'sliccy';
 const SEGMENT_GLYPH_WIDTH = 14;
 const SEGMENT_GAP = 5;
 const SEGMENT_INLINE_PADDING = 16;
-const SEGMENT_FLOOR_FALLBACK = 61;
+// Canvas measureText of the lowercase constant under-measures the capitalised rendered label
+// and disagrees with layout metrics across font stacks.
+const SEGMENT_FLOOR_SLACK = 4;
+const SEGMENT_FLOOR_FALLBACK = 65;
 
 const DATA_K_HUE: Record<string, string> = {
   cone: 'var(--waffle)',
@@ -113,10 +116,12 @@ function segmentFloor(segment: HTMLElement): number {
   if (!context || !style) return SEGMENT_FLOOR_FALLBACK;
   context.font = style.font;
   return (
-    context.measureText(SEGMENT_FLOOR_LABEL).width +
-    SEGMENT_GLYPH_WIDTH +
-    SEGMENT_GAP +
-    SEGMENT_INLINE_PADDING
+    Math.ceil(
+      context.measureText(SEGMENT_FLOOR_LABEL).width +
+        SEGMENT_GLYPH_WIDTH +
+        SEGMENT_GAP +
+        SEGMENT_INLINE_PADDING
+    ) + SEGMENT_FLOOR_SLACK
   );
 }
 
