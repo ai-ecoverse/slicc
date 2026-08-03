@@ -35,6 +35,7 @@ final class VoiceReply {
     /// A dictated submission just went out — the next reply should be spoken.
     func markSubmission() {
         pendingCount += 1
+        logger.notice("dictated turn marked (\(self.pendingCount, privacy: .public) pending)")
     }
 
     /// Whether the completing turn was voice-initiated, decrementing when so.
@@ -65,7 +66,10 @@ final class VoiceReply {
         }
         let text = Self.speechText(
             fromMarkdown: DictationPriming.stripReplyLangMarker(markdown))
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            logger.info("spoken reply skipped: nothing speakable in the reply")
+            return
+        }
         speaker.speak(text, lang: lang)
     }
 
@@ -157,8 +161,12 @@ protocol SpeechSpeaking {
 }
 
 /// `AVSpeechSynthesizer` behind the seam.
+///
+/// `NSObject` because `AVSpeechSynthesizerDelegate` requires it — the
+/// delegate is how we learn the reply finished and can hand the audio route
+/// back to whatever was playing before.
 @MainActor
-final class AVSpeechSpeaker: SpeechSpeaking {
+final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelegate {
     /// Created on the first spoken reply, never at launch. Constructing a
     /// synthesizer wakes the system speech services on the main actor, and
     /// most sessions never dictate at all.
@@ -166,18 +174,20 @@ final class AVSpeechSpeaker: SpeechSpeaking {
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "voice-reply")
 
     func speak(_ text: String, lang: String?) {
-        configureSession()
+        guard activateSession() else { return }
         let utterance = AVSpeechUtterance(string: text)
         if let lang, let voice = Self.voice(for: lang) {
             utterance.voice = voice
         }
-        let synthesizer = synthesizer ?? AVSpeechSynthesizer()
-        self.synthesizer = synthesizer
+        let synthesizer = self.synthesizer ?? makeSynthesizer()
         // Barge-in: a new reply replaces the one still playing rather than
         // queueing behind it.
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
+        logger.notice(
+            "speaking reply: \(text.count, privacy: .public) chars, lang \(lang ?? "default", privacy: .public)"
+        )
         synthesizer.speak(utterance)
     }
 
@@ -190,6 +200,13 @@ final class AVSpeechSpeaker: SpeechSpeaking {
         Self.voice(for: lang) != nil
     }
 
+    private func makeSynthesizer() -> AVSpeechSynthesizer {
+        let created = AVSpeechSynthesizer()
+        created.delegate = self
+        synthesizer = created
+        return created
+    }
+
     /// An exact BCP-47 match first, then any voice sharing the base subtag —
     /// a `de` reply should still speak in `de-DE`.
     private static func voice(for lang: String) -> AVSpeechSynthesisVoice? {
@@ -200,18 +217,44 @@ final class AVSpeechSpeaker: SpeechSpeaking {
         }
     }
 
-    /// Push-to-talk leaves the session in a record-oriented mode; playback
-    /// needs `.duckOthers` so the reply is audible over other audio and does
-    /// not stop it outright.
-    private func configureSession() {
+    /// Sliccy answering is MEDIA, not a notification: `.playback` so the reply
+    /// is heard with the ring switch flipped and routes to the speaker on its
+    /// own. Dictation leaves the session on `.record` and deactivated, so the
+    /// category has to be reclaimed for every reply — and taking `.playback`
+    /// rather than `.playAndRecord` also drops the microphone, which nothing
+    /// needs while the phone is the one talking.
+    private func activateSession() -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(
-                .playAndRecord, mode: .spokenAudio,
-                options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
             try session.setActive(true, options: [])
+            return true
         } catch {
-            logger.warning("audio session for spoken reply failed: \(error.localizedDescription)")
+            logger.error("spoken reply audio session failed: \(error.localizedDescription)")
+            return false
         }
+    }
+
+    /// Hand the route back so ducked audio returns to full volume and the
+    /// next push-to-talk hold can claim the microphone.
+    private func releaseSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false, options: .notifyOthersOnDeactivation)
+        } catch {
+            logger.warning("releasing audio session failed: \(error.localizedDescription)")
+        }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
+    ) {
+        MainActor.assumeIsolated { releaseSession() }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
+    ) {
+        MainActor.assumeIsolated { releaseSession() }
     }
 }

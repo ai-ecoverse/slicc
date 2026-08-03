@@ -1029,6 +1029,21 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Speak a finished assistant reply when the turn it answers was dictated.
+    ///
+    /// Hooked to BOTH completion events because leaders disagree about which
+    /// they send — a plain text turn from the browser leader arrives as
+    /// `content_done` with no `turn_end` at all, which is why the first cut
+    /// of this never made a sound. Consuming the mark is what makes the
+    /// double hook safe: whichever event lands first is the only one that
+    /// speaks. The consume happens even for a background scoop so marks and
+    /// turns stay balanced; only a visible reply is read aloud.
+    private func speakIfDictated(_ content: String, isVisible: Bool) {
+        guard VoiceReply.shared.consumeSubmission(), isVisible else { return }
+        logger.notice("speaking the reply to a dictated turn")
+        VoiceReply.shared.speakReply(markdown: content)
+    }
+
     // MARK: - CDP advertise timer
 
     private func startTargetsAdvertiseTimer() {
@@ -1157,6 +1172,7 @@ class AppState: ObservableObject {
                     cancelPendingMessagesFlush()
                     messages = buffer
                 }
+                speakIfDictated(buffer[idx].content, isVisible: isVisible)
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
@@ -1199,11 +1215,7 @@ class AppState: ObservableObject {
                     isStreaming = false
                     streamingMessageId = nil
                 }
-                // Consume unconditionally, even for a background scoop, so
-                // marks and turns stay balanced; only speak what is on screen.
-                if VoiceReply.shared.consumeSubmission(), isVisible {
-                    VoiceReply.shared.speakReply(markdown: buffer[idx].content)
-                }
+                speakIfDictated(buffer[idx].content, isVisible: isVisible)
             }
 
         case .error(let error):
