@@ -47,7 +47,7 @@ function createHarness(overrides: Partial<LeaderSyncManagerOptions> = {}) {
     sendControl: options.sendControl,
   };
   const router = new CDPRouter(context, { getBridgeTransport: () => undefined });
-  return { followers, router };
+  return { followers, router, log };
 }
 
 function createFocusTransport(
@@ -59,6 +59,7 @@ function createFocusTransport(
   const sessionTargets = new Map<string, string>();
   const bringCalls: string[] = [];
   let focusedTargetId = initialFocus;
+  let failingBringTargetId: string | null = null;
   let sessionCounter = 0;
   const send = vi.fn(
     async (
@@ -101,6 +102,10 @@ function createFocusTransport(
         return { result: { value: targetId === focusedTargetId } };
       }
       if (method === 'Page.bringToFront') {
+        if (targetId === failingBringTargetId) {
+          failingBringTargetId = null;
+          throw new Error('Focus restore failed');
+        }
         focusedTargetId = targetId;
         bringCalls.push(targetId);
         return {};
@@ -122,6 +127,9 @@ function createFocusTransport(
     getFocusedTarget: () => focusedTargetId,
     setFocusedTarget: (targetId: string) => {
       focusedTargetId = targetId;
+    },
+    failNextBringToFront: (targetId: string) => {
+      failingBringTargetId = targetId;
     },
     removeTarget: (targetId: string) => {
       targets.delete(targetId);
@@ -203,6 +211,43 @@ describe('CDPRouter', () => {
 
     expect(focus.getFocusedTarget()).toBe('preview');
     expect(focus.bringCalls).toEqual(['preview']);
+  });
+
+  it('cancels teardown restoration and remains reusable after reset', async () => {
+    vi.useFakeTimers();
+    const focus = createFocusTransport(['leader', 'preview'], 'leader');
+    const { followers, router } = createHarness({ browserTransport: focus.transport });
+    addFollower(followers, 'requester');
+
+    await executePreview(router, 'preview-before-stop', 'preview');
+    router.resetPreviewFocus();
+    await vi.runAllTimersAsync();
+    expect(focus.bringCalls).toEqual(['preview']);
+
+    focus.setFocusedTarget('leader');
+    await executePreview(router, 'preview-after-reset', 'preview');
+    await vi.runAllTimersAsync();
+    expect(focus.bringCalls).toEqual(['preview', 'preview', 'leader']);
+  });
+
+  it('contains a thrown restore without breaking later preview bursts', async () => {
+    vi.useFakeTimers();
+    const focus = createFocusTransport(['leader', 'preview'], 'leader');
+    const { followers, router, log } = createHarness({ browserTransport: focus.transport });
+    addFollower(followers, 'requester');
+
+    await executePreview(router, 'preview-failed-restore', 'preview');
+    focus.failNextBringToFront('leader');
+    await vi.runAllTimersAsync();
+    expect(log.debug).toHaveBeenCalledWith(
+      'Follower preview focus restore skipped',
+      expect.objectContaining({ targetId: 'leader', error: 'Focus restore failed' })
+    );
+
+    focus.setFocusedTarget('leader');
+    await executePreview(router, 'preview-after-failure', 'preview');
+    await vi.runAllTimersAsync();
+    expect(focus.bringCalls).toEqual(['preview', 'preview', 'leader']);
   });
 
   it('reassembles out-of-order chunked responses before forwarding them', () => {

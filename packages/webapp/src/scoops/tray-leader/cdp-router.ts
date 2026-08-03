@@ -36,6 +36,7 @@ export class CDPRouter {
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   private previewOriginalTarget: Promise<string | null> | null = null;
   private previewLastTargetId: string | null = null;
+  private previewGeneration = 0;
   private previewSequence = 0;
   private previewLatestSuccessfulSequence = 0;
   private previewRequestsInFlight = 0;
@@ -114,6 +115,7 @@ export class CDPRouter {
     params: Record<string, unknown> | undefined,
     sessionId: string | undefined
   ): Promise<Record<string, unknown>> {
+    const generation = this.previewGeneration;
     const sequence = ++this.previewSequence;
     this.previewRequestsInFlight++;
     this.cancelPreviewRestore();
@@ -122,20 +124,35 @@ export class CDPRouter {
     try {
       await this.previewOriginalTarget;
       const result = await transport.send('Page.bringToFront', params, sessionId);
-      if (sequence > this.previewLatestSuccessfulSequence) {
+      if (
+        generation === this.previewGeneration &&
+        sequence > this.previewLatestSuccessfulSequence
+      ) {
         this.previewLatestSuccessfulSequence = sequence;
         this.previewLastTargetId = localTargetId;
       }
       return result;
     } finally {
-      this.previewRequestsInFlight--;
-      if (this.previewRequestsInFlight === 0 && this.previewLastTargetId === null) {
-        this.previewOriginalTarget = null;
-        this.previewLatestSuccessfulSequence = 0;
-      } else {
-        this.schedulePreviewRestore(transport);
+      if (generation === this.previewGeneration) {
+        this.previewRequestsInFlight--;
+        if (this.previewRequestsInFlight === 0 && this.previewLastTargetId === null) {
+          this.previewOriginalTarget = null;
+          this.previewLatestSuccessfulSequence = 0;
+        } else {
+          this.schedulePreviewRestore(transport);
+        }
       }
     }
+  }
+
+  /** Cancel pending follower-preview restoration without disabling future previews. */
+  resetPreviewFocus(): void {
+    this.cancelPreviewRestore();
+    this.previewGeneration++;
+    this.previewOriginalTarget = null;
+    this.previewLastTargetId = null;
+    this.previewLatestSuccessfulSequence = 0;
+    this.previewRequestsInFlight = 0;
   }
 
   private cancelPreviewRestore(): void {
