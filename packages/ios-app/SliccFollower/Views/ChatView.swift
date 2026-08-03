@@ -14,6 +14,9 @@ struct ChatView: View {
     @State private var hasAppeared = false
     /// The open workbench surface; nil is the collapsed (chat-only) state.
     @State private var activeSurface: DockSurface?
+    /// Once opened, keep Ghostty attached to the window behind other tabs so
+    /// removing its UIView cannot destroy the terminal surface and scrollback.
+    @State private var terminalWasOpened = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
     @State private var fixtureMode = false
     /// Lifted to the shell so hook seeding and the chat toolbar snowflake
@@ -44,7 +47,14 @@ struct ChatView: View {
                     // The workbench covers the chat, not the rail — the
                     // same full-bleed overlay the web shell uses at ≤560px,
                     // so tap-active-to-collapse stays reachable.
-                    if let surface = activeSurface {
+                    if terminalWasOpened || activeSurface == .term {
+                        WorkbenchHost(surface: .term)
+                            .opacity(activeSurface == .term ? 1 : 0)
+                            .allowsHitTesting(activeSurface == .term)
+                            .accessibilityHidden(activeSurface != .term)
+                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+                    }
+                    if let surface = activeSurface, surface != .term {
                         WorkbenchHost(surface: surface)
                             .transition(.move(edge: leftHandedDock ? .leading : .trailing))
                     }
@@ -77,6 +87,7 @@ struct ChatView: View {
                 // combine a forced state with an open surface.
                 if let surface = UITestHooks.opensDockSurface() {
                     activeSurface = surface
+                    terminalWasOpened = surface == .term
                 }
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
@@ -97,6 +108,9 @@ struct ChatView: View {
                 appState.joinUrl = stored
                 appState.connect()
             }
+        }
+        .onChange(of: activeSurface) { surface in
+            if surface == .term { terminalWasOpened = true }
         }
     }
 

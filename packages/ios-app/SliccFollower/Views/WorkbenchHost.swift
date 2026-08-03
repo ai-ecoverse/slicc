@@ -31,7 +31,12 @@ struct WorkbenchHost: View {
             case .files:
                 FilesView()
             case .term:
-                placeholder(DockModel.placeholderText(for: surface) ?? "")
+                TerminalView(
+                    client: appState.terminalClient,
+                    connectionAvailable: appState.connectionState == .connected
+                        && !appState.isLeaderStalled,
+                    theme: appState.leaderTheme
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

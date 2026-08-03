@@ -40,6 +40,7 @@ targets:
         # without it still run — the store degrades to a local cache.
         CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
     dependencies:
+      - package: GhosttyTerminal
       - package: WebRTC
       - package: SliccTraySession
       - sdk: WebKit.framework
@@ -95,6 +96,9 @@ schemes:
           parallelizable: false
           randomExecutionOrder: true
 packages:
+  GhosttyTerminal:
+    url: https://github.com/Lakr233/libghostty-spm
+    exactVersion: 1.3.2
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 150.0.0

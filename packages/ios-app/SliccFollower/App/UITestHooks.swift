@@ -242,6 +242,13 @@ import UIKit
             }
         }
 
+        /// Replace leader execution with deterministic output
+        /// (`-uiTestTerminalFixture YES`) while retaining the real Ghostty
+        /// surface and keyboard path.
+        static var terminalFixtureEnabled: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestTerminalFixture")
+        }
+
         /// Stage a canned photo in the composer on launch
         /// (`-uiTestAttachmentFixture YES`): PhotosPicker runs out of
         /// process and cannot be driven hermetically, so attachment UI

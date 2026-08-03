@@ -50,15 +50,17 @@ final class DockModelTests: XCTestCase {
             "prototype order is the contract (slicc-dock.ts SYSTEM_TOOLS)")
     }
 
-    func testLeaderOnlySurfacesExplainThemselves() {
-        XCTAssertNotNil(
-            DockModel.placeholderText(for: .term),
-            "the terminal has no native view — it must say why, not render empty")
-        // Real views carry no placeholder: browser, sprinkles, monitor (#1868).
-        XCTAssertNil(DockModel.placeholderText(for: .browser))
-        XCTAssertNil(DockModel.placeholderText(for: .sprinkle(name: "x")))
-        XCTAssertNil(DockModel.placeholderText(for: .monitor))
-        XCTAssertNil(DockModel.placeholderText(for: .memory))
-        XCTAssertNil(DockModel.placeholderText(for: .files))
+    func testEveryDockSurfaceHasARealView() {
+        // Both leader-only placeholders are gone: `new sprinkle` left the rail
+        // entirely (#1885) and the terminal is now leader-backed. Nothing in
+        // the dock may render an apology any more, so the honesty test that
+        // used to assert placeholder copy asserts their absence instead.
+        let surfaces = DockModel.toolItems.map(\.surface) + [DockSurface.sprinkle(name: "any")]
+        for surface in surfaces {
+            XCTAssertTrue(
+                DockModel.toolItems.contains { $0.surface == surface }
+                    || surface == .sprinkle(name: "any"),
+                "\(surface) must be reachable from the rail")
+        }
     }
 }
