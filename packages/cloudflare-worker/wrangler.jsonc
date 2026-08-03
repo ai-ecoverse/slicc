@@ -8,6 +8,12 @@
   "assets": {
     "directory": "../../dist/ui/",
     "binding": "ASSETS",
+    // `run_worker_first: true` routes every request through the worker's
+    // `fetch` before the ASSETS binding. Load-bearing for the E2E readiness
+    // probe: `packages/webapp/tests/e2e/playwright.config.ts` gates the
+    // wrangler `webServer` on a 200 from `/status`, which is a worker route.
+    // Flipping this to `false` (or the equivalent default) would let assets
+    // intercept `/status` and regress the gate back to bind-time semantics.
     "run_worker_first": true,
     "not_found_handling": "single-page-application"
   },

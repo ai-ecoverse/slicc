@@ -817,6 +817,12 @@ async function tryHandleInfoRoutes(
   }
 
   if (url.pathname === '/status' && (request.method === 'GET' || request.method === 'HEAD')) {
+    // Also load-bearing for the E2E suite: `packages/webapp/tests/e2e/playwright.config.ts`
+    // gates the wrangler `webServer` readiness on a 200 from this handler
+    // (see the `url:` comment there). A future refactor must preserve both
+    // the 200 status and the `no-store` header, and must keep this route
+    // reachable by the worker's `fetch` (i.e. must not move it behind an
+    // asset/SPA intercept — see `wrangler.jsonc` `run_worker_first: true`).
     return jsonResponse(
       {
         status: 'ok',
