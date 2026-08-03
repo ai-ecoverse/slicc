@@ -1,10 +1,10 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
     name: "SliccFollower",
     platforms: [
-        .iOS("18.0")
+        .iOS(.v26)
     ],
     products: [
         .library(
