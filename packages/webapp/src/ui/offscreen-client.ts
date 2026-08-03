@@ -28,6 +28,7 @@ import type {
   ScoopStatusMsg,
   ScoopTranscriptMsg,
   SessionStatsMsg,
+  SetThinkingLevelAckMsg,
   StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
@@ -143,6 +144,8 @@ export class OffscreenClient implements KernelClientFacade {
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
    */
   private pendingClearAcks = new Map<string, () => void>();
+  /** Pending thinking updates, resolved only after the worker has applied and persisted them. */
+  private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
   /**
    * Pending `request-scoop-transcript` requests awaiting the bridge's
    * reply. Keyed by `requestId`; resolved with the transcript string
@@ -405,8 +408,16 @@ export class OffscreenClient implements KernelClientFacade {
     jid: string,
     level: ThinkingLevel | undefined,
     effortOverride?: string
-  ): void {
-    this.send({ type: 'set-thinking-level', scoopJid: jid, level, effortOverride });
+  ): Promise<boolean> {
+    const requestId = `thinking-${uid()}`;
+    const ack = new Promise<boolean>((resolve) => {
+      this.pendingThinkingAcks.set(requestId, resolve);
+    });
+    this.send({ type: 'set-thinking-level', requestId, scoopJid: jid, level, effortOverride });
+    return Promise.race([
+      ack,
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]).finally(() => this.pendingThinkingAcks.delete(requestId));
   }
 
   /**
@@ -706,6 +717,10 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
+      case 'set-thinking-level-ack':
+        this.handleThinkingLevelAck(msg);
+        break;
+
       case 'scoop-created':
         this.handleScoopCreated(msg as ScoopCreatedMsg);
         break;
@@ -990,6 +1005,25 @@ export class OffscreenClient implements KernelClientFacade {
     }
     this.scoopStatuses.set(scoop.jid, msg.scoop.status);
     this.callbacks.onScoopCreated(scoop);
+  }
+
+  private handleThinkingLevelAck(msg: SetThinkingLevelAckMsg): void {
+    if (msg.applied) {
+      const scoop = this.getScoop(msg.scoopJid);
+      if (scoop) {
+        if (msg.level === undefined) {
+          const { thinkingLevel: _level, effortOverride: _effort, ...config } = scoop.config ?? {};
+          scoop.config = config;
+        } else {
+          scoop.config = {
+            ...(scoop.config ?? {}),
+            thinkingLevel: msg.level,
+            effortOverride: msg.effortOverride,
+          };
+        }
+      }
+    }
+    this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);
   }
 
   private handleScoopList(msg: ScoopListMsg): void {

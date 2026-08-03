@@ -2159,6 +2159,41 @@ describe('Bridge handlePanelMessage dispatch', () => {
     );
   });
 
+  it('set-thinking-level acknowledges only after the update completes', async () => {
+    let finish!: () => void;
+    mockOrchestrator.setScoopThinkingLevel.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve('xhigh');
+        })
+    );
+    const pending = (bridge as any).handlePanelMessage({
+      type: 'set-thinking-level',
+      requestId: 'thinking-1',
+      scoopJid: 'cone_1',
+      level: 'xhigh',
+      effortOverride: 'max',
+    });
+
+    expect(
+      sentMessages.find((m: any) => m.payload?.type === 'set-thinking-level-ack')
+    ).toBeUndefined();
+    finish();
+    await pending;
+    expect(sentMessages.find((m: any) => m.payload?.type === 'set-thinking-level-ack')).toEqual(
+      expect.objectContaining({
+        payload: {
+          type: 'set-thinking-level-ack',
+          requestId: 'thinking-1',
+          scoopJid: 'cone_1',
+          level: 'xhigh',
+          effortOverride: 'max',
+          applied: true,
+        },
+      })
+    );
+  });
+
   it('set-thinking-level swallows orchestrator errors', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockOrchestrator.setScoopThinkingLevel.mockRejectedValueOnce(new Error('bad level'));

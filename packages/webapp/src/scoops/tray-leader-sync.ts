@@ -47,7 +47,10 @@ import {
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayFsRequest,
   type TrayFsResponse,
+  type TrayModelCatalogEntry,
+  type TrayModelSelectionState,
   type TrayTargetEntry,
+  type TrayThinkingLevel,
 } from './tray-sync-protocol.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
@@ -67,6 +70,18 @@ export interface LeaderSyncManagerOptions {
   getScoops?: () => ScoopSummary[];
   /** Get summaries for every available sprinkle. Optional — when omitted, sprinkles list won't be broadcast. */
   getSprinkles?: () => SprinkleSummary[];
+  /** Build the credential-free model catalog advertised to followers. */
+  getModelCatalog?: () => TrayModelCatalogEntry[];
+  /** Resolve the current global model and per-scoop thinking state. */
+  getModelSelectionState?: (scoopJid: string) => TrayModelSelectionState;
+  /** Apply a validated follower model selection. False rejects it without changing state. */
+  onFollowerModelSelect?: (modelId: string) => boolean;
+  /** Apply thinking configuration to the follower's selected scoop. */
+  onFollowerThinkingSet?: (
+    scoopJid: string,
+    thinkingLevel: TrayThinkingLevel,
+    effortOverride?: string
+  ) => void | Promise<unknown>;
   /** Resolve a sprinkle's raw .shtml content for follower-side rendering. */
   readSprinkleContent?: (sprinkleName: string) => Promise<string | null> | string | null;
   /** Forward a sprinkle lick (from a follower's open or inline sprinkle) to the leader's lick router. */
@@ -257,6 +272,7 @@ export class LeaderSyncManager {
     sync.send({ type: 'hello', protocolVersion: TRAY_SYNC_PROTOCOL_VERSION });
     void this.broadcast.sendSnapshotToFollower(bootstrapId);
     this.broadcast.sendScoopsListToFollower(bootstrapId);
+    this.broadcast.sendModelCatalogToFollower(bootstrapId);
     this.broadcast.sendSprinklesListToFollower(bootstrapId);
     // The snapshot carries chat state only — a themed leader must also hand
     // the joiner its palette or the phone renders unthemed until the next
@@ -293,6 +309,14 @@ export class LeaderSyncManager {
 
   broadcastSprinklesList(): void {
     this.broadcast.broadcastSprinklesList();
+  }
+
+  broadcastModelCatalog(): void {
+    this.broadcast.broadcastModelCatalog();
+  }
+
+  broadcastModelState(): void {
+    this.broadcast.broadcastModelState();
   }
 
   broadcastSprinkleUpdate(sprinkleName: string, data: unknown): void {

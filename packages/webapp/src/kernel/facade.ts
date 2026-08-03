@@ -1566,21 +1566,7 @@ export class Bridge implements KernelFacade {
       }
 
       case 'set-thinking-level': {
-        // `msg` is already narrowed to `SetThinkingLevelMsg` by the union
-        // tag — the explicit annotation makes that obvious to readers and
-        // ensures the orchestrator call site receives a typed
-        // `ThinkingLevel | undefined` (the message field's literal union
-        // is the same shape the orchestrator expects).
-        const tlMsg: SetThinkingLevelMsg = msg;
-        try {
-          await this.orchestrator.setScoopThinkingLevel(
-            tlMsg.scoopJid,
-            tlMsg.level,
-            tlMsg.effortOverride
-          );
-        } catch (err) {
-          console.error('[kernel-bridge] set-thinking-level failed:', err);
-        }
+        await this.handleSetThinkingLevel(msg);
         break;
       }
 
@@ -1658,6 +1644,30 @@ export class Bridge implements KernelFacade {
         break;
       }
     }
+  }
+
+  private async handleSetThinkingLevel(msg: SetThinkingLevelMsg): Promise<void> {
+    if (!this.orchestrator) return;
+    let applied = false;
+    try {
+      applied =
+        (await this.orchestrator.setScoopThinkingLevel(
+          msg.scoopJid,
+          msg.level,
+          msg.effortOverride
+        )) !== null;
+    } catch (err) {
+      console.error('[kernel-bridge] set-thinking-level failed:', err);
+    }
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'set-thinking-level-ack',
+      requestId: msg.requestId,
+      scoopJid: msg.scoopJid,
+      level: msg.level,
+      effortOverride: msg.effortOverride,
+      applied,
+    });
   }
 
   /**

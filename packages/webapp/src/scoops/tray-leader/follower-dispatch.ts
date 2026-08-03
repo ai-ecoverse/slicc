@@ -19,7 +19,11 @@ import type { TranscriptExportManager } from './transcript-export.js';
 export interface FollowerDispatchCollaborators {
   broadcast: Pick<
     BroadcastManager,
-    'sendSnapshotToFollower' | 'sendSprinklesListToFollower' | 'handleSprinkleFetch'
+    | 'sendSnapshotToFollower'
+    | 'sendModelCatalogToFollower'
+    | 'broadcastModelState'
+    | 'sendSprinklesListToFollower'
+    | 'handleSprinkleFetch'
   >;
   cdpRouter: Pick<CDPRouter, 'handleCDPRequest' | 'handleCDPResponse' | 'handleCDPEvent'>;
   remoteExec: Pick<RemoteExecRouter, 'handleFollowerExecMessage'>;
@@ -71,6 +75,20 @@ export class FollowerDispatch {
         break;
       case 'scoops.select':
         this.handleScoopSelection(bootstrapId, message.scoopJid);
+        break;
+      case 'models.request':
+        broadcast.sendModelCatalogToFollower(bootstrapId);
+        break;
+      case 'model.select':
+        this.handleModelSelection(bootstrapId, message.modelId);
+        break;
+      case 'thinking.set':
+        this.handleThinkingSelection(
+          bootstrapId,
+          message.scoopJid,
+          message.thinkingLevel,
+          message.effortOverride
+        );
         break;
       case 'sprinkles.refresh':
         this.context.log.info('Follower requested sprinkles refresh', { bootstrapId });
@@ -210,6 +228,88 @@ export class FollowerDispatch {
     if (!follower) return;
     follower.selectedScoopJid = scoopJid;
     void this.collaborators.broadcast.sendSnapshotToFollower(bootstrapId, scoopJid);
+  }
+
+  private handleModelSelection(bootstrapId: string, modelId: string): void {
+    try {
+      if (this.context.options.onFollowerModelSelect?.(modelId) !== true) {
+        this.context.log.warn('Rejecting unknown or unresolvable follower model selection', {
+          bootstrapId,
+          modelId,
+        });
+        return;
+      }
+      this.collaborators.broadcast.broadcastModelState();
+    } catch (err) {
+      this.context.log.warn('Rejecting follower model selection after apply failure', {
+        bootstrapId,
+        modelId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private handleThinkingSelection(
+    bootstrapId: string,
+    requestedScoopJid: string,
+    thinkingLevel: Parameters<
+      NonNullable<LeaderSyncContext['options']['onFollowerThinkingSet']>
+    >[1],
+    effortOverride?: string
+  ): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    const scoopJid = follower?.selectedScoopJid;
+    if (!scoopJid) {
+      this.context.log.warn('Rejecting follower thinking selection without a selected scoop', {
+        bootstrapId,
+        requestedScoopJid,
+      });
+      return;
+    }
+    if (requestedScoopJid !== scoopJid) {
+      this.context.log.warn(
+        'Follower thinking selection targeted a stale scoop; using selected scoop',
+        {
+          bootstrapId,
+          requestedScoopJid,
+          scoopJid,
+        }
+      );
+    }
+    try {
+      const applied = this.context.options.onFollowerThinkingSet?.(
+        scoopJid,
+        thinkingLevel,
+        effortOverride
+      );
+      if (applied && typeof applied.then === 'function') {
+        void applied
+          .then((didApply) => {
+            if (didApply === false) {
+              this.logThinkingApplyFailure(
+                bootstrapId,
+                scoopJid,
+                new Error('thinking update was not acknowledged')
+              );
+              return;
+            }
+            this.collaborators.broadcast.broadcastModelState();
+          })
+          .catch((err) => this.logThinkingApplyFailure(bootstrapId, scoopJid, err));
+      } else {
+        this.collaborators.broadcast.broadcastModelState();
+      }
+    } catch (err) {
+      this.logThinkingApplyFailure(bootstrapId, scoopJid, err);
+    }
+  }
+
+  private logThinkingApplyFailure(bootstrapId: string, scoopJid: string, err: unknown): void {
+    this.context.log.warn('Follower thinking selection apply failed', {
+      bootstrapId,
+      scoopJid,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   private handleFollowerSprinkleLick(

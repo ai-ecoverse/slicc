@@ -97,4 +97,56 @@ describe('BroadcastManager', () => {
       },
     ]);
   });
+
+  it('sends a sanitized model catalog and the follower-selected scoop state', () => {
+    const getModelSelectionState = vi.fn((scoopJid: string) => ({
+      activeModelId: 'adobe:claude-opus-4-8',
+      scoopJid,
+      thinkingLevel: 'xhigh' as const,
+      effortOverride: 'max',
+    }));
+    const { broadcast, registry, sent } = createHarness({
+      getModelCatalog: () =>
+        [
+          {
+            providerName: 'Adobe',
+            modelId: 'adobe:claude-opus-4-8',
+            modelName: 'Claude Opus 4.8',
+            reasoning: true,
+            accessToken: 'must-not-cross-the-wire',
+            accountId: 'private-account',
+          },
+        ] as never,
+      getModelSelectionState,
+    });
+    const follower = registry.followers.get('follower');
+    if (!follower) throw new Error('missing follower');
+    follower.selectedScoopJid = 'scoop-1';
+
+    broadcast.sendModelCatalogToFollower('follower');
+
+    expect(sent).toEqual([
+      {
+        type: 'models.list',
+        models: [
+          {
+            providerName: 'Adobe',
+            modelId: 'adobe:claude-opus-4-8',
+            modelName: 'Claude Opus 4.8',
+            reasoning: true,
+          },
+        ],
+      },
+      {
+        type: 'model.state',
+        state: {
+          activeModelId: 'adobe:claude-opus-4-8',
+          scoopJid: 'scoop-1',
+          thinkingLevel: 'xhigh',
+          effortOverride: 'max',
+        },
+      },
+    ]);
+    expect(getModelSelectionState).toHaveBeenCalledWith('scoop-1');
+  });
 });

@@ -103,6 +103,86 @@ describe('labelForFollower', () => {
 });
 
 describe('LeaderSyncManager', () => {
+  it('advertises models on connect and converges model and thinking state across followers', () => {
+    let activeModelId = 'anthropic:claude-sonnet-4-6';
+    let thinkingLevel: 'off' | 'xhigh' = 'off';
+    let effortOverride: string | undefined;
+    const { manager } = createManager({
+      getModelCatalog: () => [
+        {
+          providerName: 'Anthropic',
+          modelId: 'anthropic:claude-sonnet-4-6',
+          modelName: 'Claude Sonnet 4.6',
+          reasoning: true,
+        },
+        {
+          providerName: 'Adobe',
+          modelId: 'adobe:claude-opus-4-8',
+          modelName: 'Claude Opus 4.8',
+          reasoning: true,
+        },
+      ],
+      getModelSelectionState: (scoopJid) => ({
+        activeModelId,
+        scoopJid,
+        thinkingLevel,
+        effortOverride,
+      }),
+      onFollowerModelSelect: (modelId) => {
+        activeModelId = modelId;
+        return true;
+      },
+      onFollowerThinkingSet: (_scoopJid, level, effort) => {
+        thinkingLevel = level as 'off' | 'xhigh';
+        effortOverride = effort;
+      },
+    });
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    expect(ch1.parseSent().map((message) => message.type)).toEqual([
+      'snapshot',
+      'models.list',
+      'model.state',
+    ]);
+    manager.addFollower('b2', ch2);
+    ch1.sent.length = 0;
+    ch2.sent.length = 0;
+
+    ch1.simulateMessage({ type: 'models.request' });
+    expect(ch1.parseSent().map((message) => message.type)).toEqual(['models.list', 'model.state']);
+    ch1.sent.length = 0;
+
+    ch1.simulateMessage({ type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
+    for (const channel of [ch1, ch2]) {
+      expect(channel.parseSent()).toEqual([
+        {
+          type: 'model.state',
+          state: expect.objectContaining({ activeModelId: 'adobe:claude-opus-4-8' }),
+        },
+      ]);
+      channel.sent.length = 0;
+    }
+
+    ch1.simulateMessage({
+      type: 'thinking.set',
+      scoopJid: 'cone',
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    });
+    for (const channel of [ch1, ch2]) {
+      expect(channel.parseSent()).toEqual([
+        {
+          type: 'model.state',
+          state: expect.objectContaining({
+            thinkingLevel: 'xhigh',
+            effortOverride: 'max',
+          }),
+        },
+      ]);
+    }
+  });
+
   it('sends a snapshot on addFollower', () => {
     const { manager, messages } = createManager();
     const channel = new FakeChannel();
@@ -2666,7 +2746,7 @@ describe('version handshake', () => {
 
     const first = JSON.parse(channel.sent[0]) as { type: string; protocolVersion: number };
     expect(first.type).toBe('hello');
-    expect(first.protocolVersion).toBe(4);
+    expect(first.protocolVersion).toBe(5);
   });
 
   it('warns when a follower speaks a newer protocol version', () => {

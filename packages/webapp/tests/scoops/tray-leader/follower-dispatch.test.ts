@@ -16,6 +16,8 @@ function createCollaborators(): FollowerDispatchCollaborators {
   return {
     broadcast: {
       sendSnapshotToFollower: vi.fn(async () => {}),
+      sendModelCatalogToFollower: vi.fn(),
+      broadcastModelState: vi.fn(),
       sendSprinklesListToFollower: vi.fn(),
       handleSprinkleFetch: vi.fn(async () => {}),
     },
@@ -47,7 +49,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
   };
 }
 
-function createHarness() {
+function createHarness(overrides: Partial<LeaderSyncManagerOptions> = {}) {
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as Logger;
   const options = {
     getMessages: () => [],
@@ -59,6 +61,7 @@ function createHarness() {
     onForwardedLick: vi.fn(),
     onFollowerCountChanged: vi.fn(),
     sendControl: vi.fn(),
+    ...overrides,
   } satisfies LeaderSyncManagerOptions;
   const followers = new FollowerRegistry({
     log,
@@ -87,12 +90,123 @@ function createHarness() {
     dispatch: new FollowerDispatch(context, collaborators),
     followers,
     keepalive,
+    log,
     options,
     send,
   };
 }
 
 describe('FollowerDispatch', () => {
+  it('waits for an asynchronous thinking update before broadcasting model state', async () => {
+    let cachedThinkingLevel = 'off';
+    let finishApply!: () => void;
+    const onFollowerThinkingSet = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishApply = () => {
+            cachedThinkingLevel = 'xhigh';
+            resolve();
+          };
+        })
+    );
+    const { collaborators: c, dispatch, followers } = createHarness({ onFollowerThinkingSet });
+    const follower = followers.followers.get('follower');
+    if (!follower) throw new Error('missing follower');
+    follower.selectedScoopJid = 'cone';
+    const broadcastLevels: string[] = [];
+    vi.mocked(c.broadcast.broadcastModelState).mockImplementation(() => {
+      broadcastLevels.push(cachedThinkingLevel);
+    });
+
+    dispatch.dispatch('follower', {
+      type: 'thinking.set',
+      scoopJid: 'cone',
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    });
+
+    expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
+    finishApply();
+    await vi.waitFor(() => expect(broadcastLevels).toEqual(['xhigh']));
+  });
+
+  it('does not broadcast when an asynchronous thinking update is not acknowledged', async () => {
+    const onFollowerThinkingSet = vi.fn(async () => false);
+    const {
+      collaborators: c,
+      dispatch,
+      followers,
+      log,
+    } = createHarness({
+      onFollowerThinkingSet,
+    });
+    const follower = followers.followers.get('follower');
+    if (!follower) throw new Error('missing follower');
+    follower.selectedScoopJid = 'cone';
+
+    dispatch.dispatch('follower', {
+      type: 'thinking.set',
+      scoopJid: 'cone',
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    });
+
+    await vi.waitFor(() =>
+      expect(log.warn).toHaveBeenCalledWith(
+        'Follower thinking selection apply failed',
+        expect.objectContaining({ scoopJid: 'cone' })
+      )
+    );
+    expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
+  });
+
+  it('dispatches model catalog, model selection, and max-effort thinking messages', () => {
+    const onFollowerModelSelect = vi.fn(() => true);
+    const onFollowerThinkingSet = vi.fn();
+    const {
+      collaborators: c,
+      dispatch,
+      followers,
+    } = createHarness({
+      onFollowerModelSelect,
+      onFollowerThinkingSet,
+    });
+    const follower = followers.followers.get('follower');
+    if (!follower) throw new Error('missing follower');
+    follower.selectedScoopJid = 'selected-scoop';
+
+    dispatch.dispatch('follower', { type: 'models.request' });
+    expect(c.broadcast.sendModelCatalogToFollower).toHaveBeenCalledWith('follower');
+
+    dispatch.dispatch('follower', { type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8');
+
+    dispatch.dispatch('follower', {
+      type: 'thinking.set',
+      scoopJid: 'stale-scoop',
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    });
+    expect(onFollowerThinkingSet).toHaveBeenCalledWith('selected-scoop', 'xhigh', 'max');
+    expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an invalid model id without throwing or broadcasting state', () => {
+    const onFollowerModelSelect = vi.fn(() => false);
+    const { collaborators: c, dispatch, log } = createHarness({ onFollowerModelSelect });
+
+    expect(() =>
+      dispatch.dispatch('follower', { type: 'model.select', modelId: 'unknown:nope' })
+    ).not.toThrow();
+
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('unknown:nope');
+    expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      'Rejecting unknown or unresolvable follower model selection',
+      expect.objectContaining({ modelId: 'unknown:nope' })
+    );
+  });
+
   it('routes every collaborator-owned message variant', () => {
     const { collaborators: c, dispatch } = createHarness();
     const route = (message: FollowerToLeaderMessage, spy: unknown, ...args: unknown[]) => {
@@ -282,7 +396,8 @@ describe('FollowerDispatch', () => {
       }),
       'follower'
     );
-    expect(options.onForwardedLick.mock.calls[0][0].targetScoop).toBeUndefined();
+    const forwardedLick = options.onForwardedLick as ReturnType<typeof vi.fn>;
+    expect(forwardedLick.mock.calls[0][0].targetScoop).toBeUndefined();
 
     dispatch.dispatch('follower', { type: 'ping' });
     expect(keepalive.receivePing).toHaveBeenCalledOnce();
