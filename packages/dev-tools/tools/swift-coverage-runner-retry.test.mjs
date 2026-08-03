@@ -192,3 +192,49 @@ printf 'sources=%s\\n' "\${COVERAGE_SOURCE_PATHS[*]}"`,
     expect(coverageScript).not.toContain('SliccTrayKit.framework');
   });
 });
+
+describe('swift-coverage-check SPM invocation', () => {
+  it('reports coverage when optional coverage argument arrays are empty', () => {
+    const packageRoot = join(dir, 'spm-package');
+    const bundleName = 'FixturePackageTests';
+    const coverageDir = join(packageRoot, '.build/coverage');
+    const testBinary = join(
+      packageRoot,
+      `.build/debug/${bundleName}.xctest/Contents/MacOS/${bundleName}`
+    );
+    const binDir = join(dir, 'bin');
+    mkdirSync(dirname(testBinary), { recursive: true });
+    mkdirSync(coverageDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(testBinary, 'fixture test binary');
+    writeFileSync(join(coverageDir, 'default.profdata'), 'fixture profile');
+    writeFileSync(join(binDir, 'swift'), '#!/bin/bash\nexit 0\n');
+    writeFileSync(
+      join(binDir, 'xcrun'),
+      `#!/bin/bash
+shift
+for arg in "$@"; do
+  [[ -n "$arg" ]] || exit 90
+done
+if [[ "$1" == "report" ]]; then
+  echo "TOTAL 1 0 100 1 0 100 1 0 100 1 0 100"
+fi
+`
+    );
+    chmodSync(testBinary, 0o755);
+    chmodSync(join(binDir, 'swift'), 0o755);
+    chmodSync(join(binDir, 'xcrun'), 0o755);
+
+    const result = spawnSync(
+      '/bin/bash',
+      [coverageScriptPath, packageRoot, bundleName, '0', '0', '0'],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      }
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Coverage summary:');
+  });
+});

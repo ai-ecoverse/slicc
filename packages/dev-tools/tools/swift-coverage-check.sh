@@ -228,11 +228,11 @@ else
   COV_TOOL=(llvm-cov)
 fi
 
-echo "==> ${COV_TOOL[*]} report $BINARY ${COVERAGE_OBJECT_ARGS[*]} ${COVERAGE_ARCH_ARGS[*]}"
+echo "==> ${COV_TOOL[*]} report $BINARY"
 COVERAGE_OUTPUT=$(
   "${COV_TOOL[@]}" report "$BINARY" \
-    "${COVERAGE_OBJECT_ARGS[@]}" \
-    "${COVERAGE_ARCH_ARGS[@]}" \
+    ${COVERAGE_OBJECT_ARGS[@]+"${COVERAGE_OBJECT_ARGS[@]}"} \
+    ${COVERAGE_ARCH_ARGS[@]+"${COVERAGE_ARCH_ARGS[@]}"} \
     -instr-profile="$PROFDATA" \
     --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
     "${COVERAGE_SOURCE_PATHS[@]}"
@@ -286,8 +286,8 @@ fi
 # llvm-cov builds support `export -format=lcov`).
 mkdir -p .build/coverage
 "${COV_TOOL[@]}" export "$BINARY" \
-  "${COVERAGE_OBJECT_ARGS[@]}" \
-  "${COVERAGE_ARCH_ARGS[@]}" \
+  ${COVERAGE_OBJECT_ARGS[@]+"${COVERAGE_OBJECT_ARGS[@]}"} \
+  ${COVERAGE_ARCH_ARGS[@]+"${COVERAGE_ARCH_ARGS[@]}"} \
   -instr-profile="$PROFDATA" \
   --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
   -format=lcov \
