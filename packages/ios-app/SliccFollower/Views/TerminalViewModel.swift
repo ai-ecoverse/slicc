@@ -248,8 +248,8 @@ final class TerminalViewModel: ObservableObject {
     }
 
     private func ensureFreshLine() {
-        guard let byte = lastRenderedByte, byte != 0x0A, byte != 0x0D else { return }
-        emit(Data("\r\n".utf8))
+        guard let byte = lastRenderedByte, byte != 0x0A else { return }
+        emit(byte == 0x0D ? Data([0x0A]) : Data("\r\n".utf8))
     }
 
     private func emit(_ raw: Data) {

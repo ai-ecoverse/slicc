@@ -122,6 +122,37 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(model.accessibilityTranscript.contains("é"))
     }
 
+    func testProgressCarriageReturnsStayLoneUntilPromptAdvancesLine() async {
+        let recorder = Recorder()
+        recorder.chunks = [
+            TerminalClient.OutputChunk(stream: .stdout, data: Data("50%\r75%\r".utf8))
+        ]
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+
+        model.receiveInput(Data("progress\r".utf8))
+        await waitUntilIdle(model)
+
+        XCTAssertTrue(
+            model.accessibilityTranscript.hasSuffix("50%\r75%\r\n\(TerminalViewModel.prompt)"))
+    }
+
+    func testSplitCRLFOutputIsNotDoubledBeforePrompt() async {
+        let recorder = Recorder()
+        recorder.chunks = [
+            TerminalClient.OutputChunk(stream: .stdout, data: Data("done\r".utf8)),
+            TerminalClient.OutputChunk(stream: .stdout, data: Data("\n".utf8)),
+        ]
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+
+        model.receiveInput(Data("work\r".utf8))
+        await waitUntilIdle(model)
+
+        XCTAssertTrue(
+            model.accessibilityTranscript.hasSuffix("done\r\n\(TerminalViewModel.prompt)"))
+    }
+
     func testNonzeroExitAndLeaderErrorAreVisible() async {
         let recorder = Recorder()
         recorder.result = TerminalClient.RunResult(
