@@ -3,7 +3,7 @@ import WebRTC
 
 // MARK: - WebRTCManagerDelegate
 
-protocol WebRTCManagerDelegate: AnyObject {
+public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didOpenDataChannel channel: RTCDataChannel)
     func webRTCManager(_ manager: WebRTCManager, didReceiveMessage data: Data)
     func webRTCManager(_ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState)
@@ -13,8 +13,8 @@ protocol WebRTCManagerDelegate: AnyObject {
 
 // MARK: - WebRTCManager
 
-class WebRTCManager: NSObject {
-    weak var delegate: WebRTCManagerDelegate?
+public class WebRTCManager: NSObject {
+    public weak var delegate: WebRTCManagerDelegate?
 
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
@@ -22,17 +22,17 @@ class WebRTCManager: NSObject {
     private let factory: RTCPeerConnectionFactory
 
     /// Whether the data channel is currently open and usable.
-    var isConnected: Bool {
+    public var isConnected: Bool {
         dataChannel?.readyState == .open
     }
 
     /// Bytes queued on the data channel but not yet sent. Zero when there is no
     /// channel, so a caller with nothing to send never reads as congested.
-    var bufferedAmount: UInt64 {
+    public var bufferedAmount: UInt64 {
         dataChannel?.bufferedAmount ?? 0
     }
 
-    override init() {
+    public override init() {
         RTCInitializeSSL()
         let encoderFactory = RTCDefaultVideoEncoderFactory()
         let decoderFactory = RTCDefaultVideoDecoderFactory()
@@ -46,7 +46,7 @@ class WebRTCManager: NSObject {
     // MARK: - Configuration
 
     /// Configure ICE servers from TURN credentials and create the peer connection.
-    func configure(iceServers: [TurnIceServer]) {
+    public func configure(iceServers: [TurnIceServer]) {
         // Close any existing connection before reconfiguring.
         close()
 
@@ -79,7 +79,7 @@ class WebRTCManager: NSObject {
 
     /// Handle an SDP offer received from the leader via signaling.
     /// Returns the SDP answer to send back.
-    func handleOffer(sdp: String) async throws -> (type: String, sdp: String) {
+    public func handleOffer(sdp: String) async throws -> (type: String, sdp: String) {
         guard let pc = peerConnection else {
             throw WebRTCError.notConfigured
         }
@@ -100,7 +100,9 @@ class WebRTCManager: NSObject {
     // MARK: - ICE Candidates
 
     /// Add a remote ICE candidate received from the leader.
-    func addIceCandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int32?) async throws {
+    public func addIceCandidate(
+        candidate: String, sdpMid: String?, sdpMLineIndex: Int32?
+    ) async throws {
         guard let pc = peerConnection else {
             throw WebRTCError.notConfigured
         }
@@ -117,7 +119,7 @@ class WebRTCManager: NSObject {
 
     /// Send raw data over the data channel.
     @discardableResult
-    func sendData(_ data: Data) -> Bool {
+    public func sendData(_ data: Data) -> Bool {
         guard let channel = dataChannel, channel.readyState == .open else {
             return false
         }
@@ -127,7 +129,7 @@ class WebRTCManager: NSObject {
 
     /// Send a UTF-8 string message over the data channel.
     @discardableResult
-    func sendString(_ message: String) -> Bool {
+    public func sendString(_ message: String) -> Bool {
         guard let data = message.data(using: .utf8) else {
             return false
         }
@@ -141,7 +143,7 @@ class WebRTCManager: NSObject {
     // MARK: - Teardown
 
     /// Close the peer connection and data channel.
-    func close() {
+    public func close() {
         dataChannel?.close()
         dataChannel = nil
         dataChannelOpenAnnounced = false
@@ -183,23 +185,23 @@ enum WebRTCError: LocalizedError {
 // MARK: - RTCPeerConnectionDelegate
 
 extension WebRTCManager: RTCPeerConnectionDelegate {
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
         // No action needed; ICE connection state is more relevant.
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
         // Data-only connection — no media streams expected.
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
         // Data-only connection — no media streams expected.
     }
 
-    func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
+    public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
         // The follower only responds to offers; it never initiates negotiation.
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         delegate?.webRTCManager(self, didChangeConnectionState: newState)
 
         switch newState {
@@ -212,19 +214,19 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
         }
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
         // Gathering state changes are informational; candidates are forwarded individually.
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         delegate?.webRTCManager(self, didGenerateLocalCandidate: candidate)
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
         // Candidate removal is uncommon and not needed for the tray protocol.
     }
 
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         // The leader creates the data channel; the follower receives it here.
         self.dataChannel = dataChannel
         dataChannelOpenAnnounced = false
@@ -239,7 +241,7 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
 // MARK: - RTCDataChannelDelegate
 
 extension WebRTCManager: RTCDataChannelDelegate {
-    func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         switch dataChannel.readyState {
         case .open:
             announceDataChannelOpenIfNeeded(dataChannel)
@@ -250,7 +252,7 @@ extension WebRTCManager: RTCDataChannelDelegate {
         }
     }
 
-    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+    public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         delegate?.webRTCManager(self, didReceiveMessage: buffer.data)
     }
 }

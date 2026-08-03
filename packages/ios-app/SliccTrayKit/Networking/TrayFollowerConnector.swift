@@ -3,7 +3,7 @@ import WebRTC
 
 // MARK: - TrayFollowerConnectorDelegate
 
-protocol TrayFollowerConnectorDelegate: AnyObject {
+public protocol TrayFollowerConnectorDelegate: AnyObject {
     /// Called when WebRTC data channel is connected and ready.
     func connector(_ connector: TrayFollowerConnector, didConnect channelSend: @escaping (Data) -> Bool)
     /// Called when connection is lost.
@@ -41,8 +41,8 @@ enum TrayFollowerConnectorError: LocalizedError {
 
 // MARK: - TrayFollowerConnector
 
-class TrayFollowerConnector: NSObject {
-    let joinUrl: URL
+public class TrayFollowerConnector: NSObject {
+    public let joinUrl: URL
 
     private var signaling: TraySignalingClient?
     private var webrtc: WebRTCManager?
@@ -57,16 +57,16 @@ class TrayFollowerConnector: NSObject {
     private var didConnectAnnounced: Bool = false
 
     /// Exponential backoff configuration (mirrors startFollowerWithAutoReconnect).
-    var baseDelaySeconds: TimeInterval = 2.0
-    var maxDelaySeconds: TimeInterval = 30.0
-    var backoffMultiplier: Double = 1.5
-    var maxReconnectAttempts: Int = 20
+    public var baseDelaySeconds: TimeInterval = 2.0
+    public var maxDelaySeconds: TimeInterval = 30.0
+    public var backoffMultiplier: Double = 1.5
+    public var maxReconnectAttempts: Int = 20
     /// Polling interval for bootstrap events.
-    var pollIntervalSeconds: TimeInterval = 1.0
+    public var pollIntervalSeconds: TimeInterval = 1.0
 
-    weak var delegate: TrayFollowerConnectorDelegate?
+    public weak var delegate: TrayFollowerConnectorDelegate?
 
-    init(joinUrl: URL) {
+    public init(joinUrl: URL) {
         self.joinUrl = joinUrl
         super.init()
     }
@@ -74,7 +74,7 @@ class TrayFollowerConnector: NSObject {
     // MARK: - Start
 
     /// Start the connection process (signaling → WebRTC → data channel).
-    func start() async throws {
+    public func start() async throws {
         stopped = false
         reconnecting = false
         controllerId = UUID().uuidString
@@ -86,14 +86,14 @@ class TrayFollowerConnector: NSObject {
     // MARK: - Stop / Cancel
 
     /// Stop and clean up.
-    func stop() {
+    public func stop() {
         stopped = true
         reconnecting = false
         tearDown()
     }
 
     /// Cancel everything (alias for stop).
-    func cancel() {
+    public func cancel() {
         stop()
     }
 
@@ -344,7 +344,7 @@ class TrayFollowerConnector: NSObject {
 // MARK: - WebRTCManagerDelegate
 
 extension TrayFollowerConnector: WebRTCManagerDelegate {
-    func webRTCManager(_ manager: WebRTCManager, didOpenDataChannel channel: RTCDataChannel) {
+    public func webRTCManager(_ manager: WebRTCManager, didOpenDataChannel channel: RTCDataChannel) {
         // Data channel open is handled by the polling loop checking isConnected.
         // But if we're already past the bootstrap phase, notify directly.
         guard !stopped else { return }
@@ -354,15 +354,19 @@ extension TrayFollowerConnector: WebRTCManagerDelegate {
         announceDidConnectIfNeeded(sendClosure)
     }
 
-    func webRTCManager(_ manager: WebRTCManager, didReceiveMessage data: Data) {
+    public func webRTCManager(_ manager: WebRTCManager, didReceiveMessage data: Data) {
         delegate?.connector(self, didReceiveData: data)
     }
 
-    func webRTCManager(_ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState) {
+    public func webRTCManager(
+        _ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState
+    ) {
         // Connection state monitoring — disconnection triggers reconnect.
     }
 
-    func webRTCManager(_ manager: WebRTCManager, didGenerateLocalCandidate candidate: RTCIceCandidate) {
+    public func webRTCManager(
+        _ manager: WebRTCManager, didGenerateLocalCandidate candidate: RTCIceCandidate
+    ) {
         delegate?.connector(self, didGenerateCandidate: candidate)
 
         // Also send the ICE candidate to the leader via signaling.
@@ -385,7 +389,7 @@ extension TrayFollowerConnector: WebRTCManagerDelegate {
         }
     }
 
-    func webRTCManagerDidDisconnect(_ manager: WebRTCManager, reason: String) {
+    public func webRTCManagerDidDisconnect(_ manager: WebRTCManager, reason: String) {
         guard !stopped else { return }
         delegate?.connectorDidDisconnect(self, reason: reason)
         startReconnectLoop(reason: reason)

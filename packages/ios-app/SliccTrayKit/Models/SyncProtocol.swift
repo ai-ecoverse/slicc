@@ -1,21 +1,20 @@
 import Foundation
-import UIKit
 
 /// The three `new_session` dispositions, mirroring
 /// `packages/shared-ts/src/tray-sync-protocol.ts`.
-enum NewSessionAction: String, Codable {
+public enum NewSessionAction: String, Codable {
     case save, skip, erase
 }
 
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-let traySyncProtocolVersion = 5
+public let traySyncProtocolVersion = 5
 
 // MARK: - AgentEvent
 
 /// Mirrors AgentEvent from packages/shared-ts/src/agent-wire-types.ts
-enum AgentEvent: Codable {
+public enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
     case contentDone(messageId: String, model: String?, usage: ChatMessageUsage?)
@@ -34,7 +33,7 @@ enum AgentEvent: Codable {
         case model, usage, requestId, html, base64, url
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
@@ -85,7 +84,7 @@ enum AgentEvent: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .messageStart(let messageId):
@@ -143,34 +142,34 @@ enum AgentEvent: Codable {
 // MARK: - ScoopSummary / SprinkleSummary
 
 /// Mirrors ScoopSummary from tray-sync-protocol.ts
-struct ScoopSummary: Codable, Identifiable, Hashable {
-    let jid: String
-    let name: String
-    let folder: String
-    let isCone: Bool
-    let assistantLabel: String
+public struct ScoopSummary: Codable, Identifiable, Hashable {
+    public let jid: String
+    public let name: String
+    public let folder: String
+    public let isCone: Bool
+    public let assistantLabel: String
     let trigger: String?
     /// Agent-tab lifecycle state. Optional for compatibility with older leaders.
-    let state: String?
+    public let state: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
-    let fill: Double?
+    public let fill: Double?
 
-    var id: String { jid }
+    public var id: String { jid }
 }
 
 /// Mirrors SprinkleSummary from tray-sync-protocol.ts
-struct SprinkleSummary: Codable, Identifiable, Hashable {
-    let name: String
-    let title: String
-    let path: String
-    let open: Bool
+public struct SprinkleSummary: Codable, Identifiable, Hashable {
+    public let name: String
+    public let title: String
+    public let path: String
+    public let open: Bool
     let autoOpen: Bool
     /// Raw icon spec from the leader's `.shtml` (Lucide name, VFS path, inline
     /// `<svg>`, or `data:` URL). Optional — sprinkles without an icon fall back
     /// to the default sparkle. iOS sidebar rendering doesn't consume this yet.
-    let icon: String?
+    public let icon: String?
 
-    var id: String { name }
+    public var id: String { name }
 }
 
 // MARK: - Model Catalog / Selection
@@ -206,44 +205,84 @@ struct TrayModelSelectionState: Codable, Equatable {
 /// Mirrors RemoteTargetInfo.capabilities from tray-sync-protocol.ts (Task 5).
 /// `network` gates whether the leader may drive `Network.*` CDP against this
 /// target; distinct from the host-page `openUrl` capability.
-struct CherryCapabilities: Codable, Hashable {
-    let navigate: Bool
-    let network: Bool
-    let screenshot: Bool
+public struct CherryCapabilities: Codable, Hashable {
+    public let navigate: Bool
+    public let network: Bool
+    public let screenshot: Bool
 }
 
 /// Mirrors RemoteTargetInfo from tray-sync-protocol.ts (sent in targets.advertise)
-struct RemoteTargetInfo: Codable, Hashable {
-    let targetId: String
-    let title: String
-    let url: String
-    var kind: String?
-    var capabilities: CherryCapabilities?
+public struct RemoteTargetInfo: Codable, Hashable {
+    public let targetId: String
+    public let title: String
+    public let url: String
+    public var kind: String?
+    public var capabilities: CherryCapabilities?
+
+    public init(
+        targetId: String,
+        title: String,
+        url: String,
+        kind: String? = nil,
+        capabilities: CherryCapabilities? = nil
+    ) {
+        self.targetId = targetId
+        self.title = title
+        self.url = url
+        self.kind = kind
+        self.capabilities = capabilities
+    }
 }
 
 // MARK: - CDPTargetSummary
 
 /// Lightweight description of a local CDP target (a hosted WKWebView). Used
 /// by the iOS UI's tabs carousel; not part of the wire protocol.
-struct CDPTargetSummary: Identifiable, Hashable {
-    let id: String
-    var title: String
-    var url: String
+public struct CDPTargetSummary: Identifiable, Hashable {
+    public let id: String
+    public var title: String
+    public var url: String
+
+    public init(id: String, title: String, url: String) {
+        self.id = id
+        self.title = title
+        self.url = url
+    }
 }
 
 /// Mirrors TrayTargetEntry from tray-sync-protocol.ts (received in targets.registry)
-struct TrayTargetEntry: Codable, Hashable {
-    let targetId: String
-    let localTargetId: String
-    let runtimeId: String
-    let title: String
-    let url: String
-    let isLocal: Bool
+public struct TrayTargetEntry: Codable, Hashable {
+    public let targetId: String
+    public let localTargetId: String
+    public let runtimeId: String
+    public let title: String
+    public let url: String
+    public let isLocal: Bool
     /// Distinguishes a real browser page from a cooperative cherry host page.
-    var kind: String?
+    public var kind: String?
     /// Only present for `kind == "cherry"`: what the host page lends to the
     /// leader. Same shape as `RemoteTargetInfo.capabilities`.
-    var capabilities: CherryCapabilities?
+    public var capabilities: CherryCapabilities?
+
+    public init(
+        targetId: String,
+        localTargetId: String,
+        runtimeId: String,
+        title: String,
+        url: String,
+        isLocal: Bool,
+        kind: String? = nil,
+        capabilities: CherryCapabilities? = nil
+    ) {
+        self.targetId = targetId
+        self.localTargetId = localTargetId
+        self.runtimeId = runtimeId
+        self.title = title
+        self.url = url
+        self.isLocal = isLocal
+        self.kind = kind
+        self.capabilities = capabilities
+    }
 }
 
 // MARK: - TrayChunkFrame
@@ -260,14 +299,24 @@ struct TrayTargetEntry: Codable, Hashable {
 /// expectation: the corpus enumerates the message unions, and this is not in
 /// them. It also means every leader→follower message type gains oversize
 /// support at once, rather than one type at a time.
-struct TrayChunkFrame: Codable {
-    static let typeTag = "__chunk"
+public struct TrayChunkFrame: Codable {
+    public static let typeTag = "__chunk"
 
-    let type: String
+    public let type: String
     let chunkId: String
-    let chunkIndex: Int
-    let totalChunks: Int
-    let chunkData: String
+    public let chunkIndex: Int
+    public let totalChunks: Int
+    public let chunkData: String
+
+    public init(
+        type: String, chunkId: String, chunkIndex: Int, totalChunks: Int, chunkData: String
+    ) {
+        self.type = type
+        self.chunkId = chunkId
+        self.chunkIndex = chunkIndex
+        self.totalChunks = totalChunks
+        self.chunkData = chunkData
+    }
 
     /// True when the frame's indices are self-consistent. Callers additionally
     /// bound `totalChunks` (see `TrayChunkLimits.maxChunkCount`) before
@@ -281,7 +330,7 @@ struct TrayChunkFrame: Codable {
 
 /// Mirrors `TraySyncCapabilities`. Advertised on `hello` so the leader can
 /// route capability-gated work.
-struct TraySyncCapabilities: Codable, Equatable {
+public struct TraySyncCapabilities: Codable, Equatable {
     /// This peer accepts commands via `exec.request`.
     ///
     /// Always false here, stated rather than implied. iOS has no OS shell, and
@@ -289,18 +338,15 @@ struct TraySyncCapabilities: Codable, Equatable {
     /// (`remote-exec.ts`), so omitting the field produced the right behaviour
     /// by accident. Sending it makes the contract explicit, and a future
     /// capability added to this struct starts from a written-down baseline.
-    let exec: Bool
+    public let exec: Bool
+
+    public init(exec: Bool) {
+        self.exec = exec
+    }
 }
 
 /// What this build tells the leader it can do.
-let trayFollowerCapabilities = TraySyncCapabilities(exec: false)
-
-/// One-line self-description surfaced by the leader's `ssh --list`, mirroring
-/// the `motd` the Go CLI sets. Identifies the phone among several followers.
-var trayFollowerMotd: String {
-    let device = UIDevice.current
-    return "SLICC iOS follower on \(device.name) (\(device.systemName) \(device.systemVersion)) — chat and CDP targets, no shell"
-}
+public let trayFollowerCapabilities = TraySyncCapabilities(exec: false)
 
 // MARK: - LeaderToFollowerMessage
 
@@ -316,7 +362,7 @@ var trayFollowerMotd: String {
 /// so it has no need to consume the reply. See
 /// `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" for the
 /// canonical per-message matrix.
-enum LeaderToFollowerMessage: Codable {
+public enum LeaderToFollowerMessage: Codable {
     case snapshot(messages: [ChatMessage], scoopJid: String)
     case snapshotChunk(chunkData: String, chunkIndex: Int, totalChunks: Int, scoopJid: String)
     case agentEvent(event: AgentEvent, scoopJid: String)
@@ -394,7 +440,7 @@ enum LeaderToFollowerMessage: Codable {
         case command, cwd, env, stream, exitCode, signal
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         if let remoteOperation = try Self.decodeRemoteOperation(type: type, from: container) {
@@ -564,7 +610,7 @@ enum LeaderToFollowerMessage: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         if try encodeRemoteOperation(to: &container) { return }
         switch self {
@@ -730,7 +776,7 @@ enum LeaderToFollowerMessage: Codable {
 /// `.tabOpened` synchronously after the navigation kickoff — there is no
 /// runtime path that emits `tab.openError`. See `docs/architecture.md`
 /// "Multi-Browser Sync (Tray) Architecture" for the canonical matrix.
-enum FollowerToLeaderMessage: Codable {
+public enum FollowerToLeaderMessage: Codable {
     /// `steer` interrupts the leader's running turn instead of queueing
     /// behind it (`user_message.steer`, optional on the wire — omitted when
     /// false, mirroring the browser follower). `attachments` inlines
@@ -808,7 +854,7 @@ enum FollowerToLeaderMessage: Codable {
         case command, cwd, env, stream, data, exitCode, signal
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
@@ -935,7 +981,7 @@ enum FollowerToLeaderMessage: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         if try encodeRemoteOperation(to: &container) { return }
         switch self {

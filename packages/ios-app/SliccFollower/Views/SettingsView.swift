@@ -18,7 +18,6 @@ struct SettingsView: View {
 
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
-    @AppStorage("joinUrl") private var storedJoinUrl: String = ""
     @AppStorage("leftHandedDock") private var leftHandedDock = false
     /// Re-evaluates session staleness and ages while the sheet stays open —
     /// without it, `Date()` in `body` is only sampled on unrelated redraws and
@@ -57,19 +56,10 @@ struct SettingsView: View {
                 }
             }
             .onAppear {
-                if appState.joinUrl.isEmpty, !storedJoinUrl.isEmpty {
-                    appState.joinUrl = storedJoinUrl
-                }
-                if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
-                    appState.joinUrlHistory = history
-                }
                 appState.refreshModels()
             }
             .task {
                 hasICloudIdentity = await Self.probeICloudIdentity()
-            }
-            .onChange(of: appState.joinUrl) { _, newValue in
-                storedJoinUrl = newValue
             }
             // Connecting is the reason the sheet was opened; once it lands,
             // the settings form is in the way of the conversation.
@@ -178,7 +168,9 @@ struct SettingsView: View {
                 return
             }
             awaitingConnect = true
-            appState.connectToDiscoveredSession(joinUrl: session.joinUrl)
+            appState.connectToDiscoveredSession(
+                joinUrl: session.joinUrl,
+                displayName: session.label.isEmpty ? nil : session.label)
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -422,7 +414,6 @@ struct SettingsView: View {
 
             Button("Clear Stored Data", role: .destructive) {
                 appState.clearStoredData()
-                storedJoinUrl = ""
             }
         } header: {
             Text("Advanced")

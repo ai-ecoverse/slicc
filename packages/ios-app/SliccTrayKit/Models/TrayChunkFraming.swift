@@ -13,11 +13,11 @@ import Foundation
 // MARK: - Limits
 
 /// Bounds mirroring the TS constants in tray-sync-protocol.ts.
-enum TrayChunkLimits {
+public enum TrayChunkLimits {
     /// Per-send SCTP ceiling. 65536 is the floor every SCTP implementation must
     /// accept (RFC 8831 §6.6), so framing to it is always safe regardless of
     /// what the peer negotiated.
-    static let maxMessageBytes = 65536
+    public static let maxMessageBytes = 65536
     /// Allowance for a frame's type/id/index fields.
     static let envelopeBytes = 512
     /// Bounds the growth of a slice of already-serialized JSON when it is
@@ -27,7 +27,7 @@ enum TrayChunkLimits {
     /// Caps frame payload, matching the TS chunkers.
     static let maxChunkBytes = 32 * 1024
     /// Hard ceiling on one reassembled message.
-    static let maxTotalBytes = 8 * 1024 * 1024
+    public static let maxTotalBytes = 8 * 1024 * 1024
     /// Queued-bytes ceiling above which a *chunked* send is refused: the next
     /// write is heading for a full send queue, and hundreds of frames would
     /// wedge the channel for everything behind them.
@@ -35,7 +35,7 @@ enum TrayChunkLimits {
     /// Deliberately not applied to small messages, so a congested channel still
     /// passes keepalive ping/pong and a merely busy peer is not mistaken for a
     /// dead one. Mirrors `TRAY_SEND_HIGH_WATER_BYTES`.
-    static let sendHighWaterBytes = 8 * 1024 * 1024
+    public static let sendHighWaterBytes = 8 * 1024 * 1024
     /// Concurrent in-flight reassemblies before the oldest is evicted.
     static let maxPending = 8
     /// Max frames one message may claim. Bounds the buffer allocated from a
@@ -46,7 +46,7 @@ enum TrayChunkLimits {
 
 // MARK: - Framing
 
-enum TrayChunkFraming {
+public enum TrayChunkFraming {
     /// Split an already-serialized message into frames that each fit within the
     /// SCTP per-message limit once re-escaped as JSON.
     ///
@@ -56,7 +56,7 @@ enum TrayChunkFraming {
     /// exceed the whole frame budget by itself, and appending it whole would
     /// produce an over-limit frame. Every scalar is at most 4 UTF-8 bytes, and
     /// cutting between scalars still yields valid UTF-8 on both sides.
-    static func frameChunks(_ text: String, chunkId: String = UUID().uuidString) -> [TrayChunkFrame] {
+    public static func frameChunks(_ text: String, chunkId: String = UUID().uuidString) -> [TrayChunkFrame] {
         let budget = max(
             1,
             min(
@@ -98,18 +98,18 @@ enum TrayChunkFraming {
 /// large messages and finishes none must not grow follower memory without
 /// limit. Frames are index-addressed, so out-of-order delivery is handled even
 /// though SCTP data channels are ordered by default.
-struct TrayChunkReassembler {
+public struct TrayChunkReassembler {
     /// Why a frame produced no message, for the caller to log.
-    enum Rejection: Equatable {
+    public enum Rejection: Equatable {
         case malformed
         case oversize
     }
 
-    struct Outcome {
+    public struct Outcome {
         /// The reassembled message, when this frame completed one.
-        let message: Data?
+        public let message: Data?
         /// Set when the frame was rejected rather than merely incomplete.
-        let rejection: Rejection?
+        public let rejection: Rejection?
 
         static let pending = Outcome(message: nil, rejection: nil)
         static func rejected(_ rejection: Rejection) -> Outcome {
@@ -136,10 +136,12 @@ struct TrayChunkReassembler {
 
     private var buffers: [String: Buffer] = [:]
 
-    /// True when at least one message is partially reassembled.
-    var isEmpty: Bool { buffers.isEmpty }
+    public init() {}
 
-    mutating func accept(_ frame: TrayChunkFrame) -> Outcome {
+    /// True when at least one message is partially reassembled.
+    public var isEmpty: Bool { buffers.isEmpty }
+
+    public mutating func accept(_ frame: TrayChunkFrame) -> Outcome {
         guard frame.hasValidIndices,
             frame.totalChunks <= TrayChunkLimits.maxChunkCount
         else {
@@ -179,7 +181,7 @@ struct TrayChunkReassembler {
         return .completed(data)
     }
 
-    mutating func removeAll() {
+    public mutating func removeAll() {
         buffers.removeAll()
     }
 

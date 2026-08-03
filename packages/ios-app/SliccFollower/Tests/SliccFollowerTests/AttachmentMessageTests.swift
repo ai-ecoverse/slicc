@@ -2,6 +2,7 @@ import UIKit
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// Composer attachments (#1797): the wire shape on `user_message` and the
 /// downscale-to-inline pipeline that mirrors `wc-attach.ts`.

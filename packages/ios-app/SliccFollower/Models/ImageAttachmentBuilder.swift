@@ -1,3 +1,4 @@
+import SliccTrayKit
 import UIKit
 
 /// Builds inline image attachments from picked, captured, or pasted photos,

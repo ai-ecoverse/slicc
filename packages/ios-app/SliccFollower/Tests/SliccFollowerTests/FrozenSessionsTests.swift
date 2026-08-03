@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 final class FrozenSessionsTests: XCTestCase {
     // MARK: - Index parsing

@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 import UIKit
 import os
@@ -86,12 +87,8 @@ struct ChatView: View {
                     return
                 }
             #endif
-            let stored = UserDefaults.standard.string(forKey: "joinUrl") ?? ""
-            if stored.isEmpty {
+            if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
                 showSettings = true
-            } else if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
-                appState.joinUrl = stored
-                appState.connect()
             }
         }
         .onChange(of: presentation.activeSurface) { surface in

@@ -8,9 +8,13 @@ let package = Package(
     ],
     products: [
         .library(
+            name: "SliccTrayKit",
+            targets: ["SliccTrayKit"]
+        ),
+        .library(
             name: "SliccFollower",
             targets: ["SliccFollower"]
-        )
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.3.2"),
@@ -19,9 +23,17 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "SliccTrayKit",
+            dependencies: [
+                .product(name: "WebRTC", package: "WebRTC")
+            ],
+            path: "SliccTrayKit"
+        ),
+        .target(
             name: "SliccFollower",
             dependencies: [
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+                "SliccTrayKit",
                 .product(name: "WebRTC", package: "WebRTC"),
                 .product(name: "SliccTraySession", package: "swift-traysession"),
             ],
@@ -29,6 +41,6 @@ let package = Package(
             resources: [
                 .process("Resources/Assets.xcassets")
             ]
-        )
+        ),
     ]
 )

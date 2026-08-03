@@ -3,10 +3,10 @@ import Foundation
 // MARK: - AnyCodable
 
 /// Minimal wrapper for arbitrary JSON values (String, Int, Double, Bool, Array, Dictionary, null).
-struct AnyCodable: Codable, Equatable {
-    let value: Any?
+public struct AnyCodable: Codable, Equatable {
+    public let value: Any?
 
-    init(_ value: Any?) {
+    public init(_ value: Any?) {
         // Flatten an already-wrapped value. Nesting used to survive
         // construction and then encode as `null`, because `encode(to:)`
         // switches on concrete types and an `AnyCodable` payload falls to the
@@ -19,7 +19,7 @@ struct AnyCodable: Codable, Equatable {
         }
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             value = nil
@@ -40,7 +40,7 @@ struct AnyCodable: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         guard let value = value else {
             try container.encodeNil()
@@ -64,7 +64,7 @@ struct AnyCodable: Codable, Equatable {
         }
     }
 
-    static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
+    public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
         // Simple equality: both nil, or both encode to the same JSON
         if lhs.value == nil && rhs.value == nil { return true }
         guard let lData = try? JSONEncoder().encode(lhs),
@@ -76,7 +76,7 @@ struct AnyCodable: Codable, Equatable {
 
 // MARK: - MessageRole
 
-enum MessageRole: String, Codable {
+public enum MessageRole: String, Codable {
     case user
     case assistant
 }
@@ -97,53 +97,91 @@ enum MessageRole: String, Codable {
 /// either, since its samples use known values. Preserving the original tag
 /// would need a sidecar field; only worth it if a follower ever re-emits a
 /// transcript.
-enum MessageAttachmentKind: String, Codable {
+public enum MessageAttachmentKind: String, Codable {
     case image
     case text
     case file
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = MessageAttachmentKind(rawValue: raw) ?? .file
     }
 }
 
 /// Mirrors `MessageAttachment` from agent-wire-types.ts.
-struct MessageAttachment: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    let mimeType: String
-    let size: Int
-    let kind: MessageAttachmentKind
+public struct MessageAttachment: Codable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let mimeType: String
+    public let size: Int
+    public let kind: MessageAttachmentKind
     /// Base64 payload for LLM-supported image attachments.
-    var data: String?
+    public var data: String?
     /// UTF-8 content for text-like file attachments.
-    var text: String?
+    public var text: String?
     /// VFS path when the file was too large to inline.
-    var path: String?
+    public var path: String?
     /// Human-readable reason the payload could not be included.
-    var error: String?
+    public var error: String?
+
+    public init(
+        id: String,
+        name: String,
+        mimeType: String,
+        size: Int,
+        kind: MessageAttachmentKind,
+        data: String? = nil,
+        text: String? = nil,
+        path: String? = nil,
+        error: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.mimeType = mimeType
+        self.size = size
+        self.kind = kind
+        self.data = data
+        self.text = text
+        self.path = path
+        self.error = error
+    }
 }
 
 // MARK: - Usage
 
 /// Mirrors `ChatMessageUsage['cost']` from agent-wire-types.ts.
-struct ChatMessageCost: Codable, Hashable {
-    let input: Double
-    let output: Double
+public struct ChatMessageCost: Codable, Hashable {
+    public let input: Double
+    public let output: Double
     let cacheRead: Double
     let cacheWrite: Double
-    let total: Double
+    public let total: Double
+
+    public init(input: Double, output: Double, cacheRead: Double, cacheWrite: Double, total: Double) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.total = total
+    }
 }
 
 /// Mirrors `ChatMessageUsage` from agent-wire-types.ts. Carried for cost
 /// attribution; the leader reports it once the provider closes the turn.
-struct ChatMessageUsage: Codable, Hashable {
-    let input: Int
-    let output: Int
+public struct ChatMessageUsage: Codable, Hashable {
+    public let input: Int
+    public let output: Int
     let cacheRead: Int
     let cacheWrite: Int
-    let cost: ChatMessageCost
+    public let cost: ChatMessageCost
+
+    public init(input: Int, output: Int, cacheRead: Int, cacheWrite: Int, cost: ChatMessageCost) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.cost = cost
+    }
 }
 
 // MARK: - LickState
@@ -152,12 +190,12 @@ struct ChatMessageUsage: Codable, Hashable {
 /// actionable lick card. Lenient for the same reason as
 /// `MessageAttachmentKind`, and lossy on re-encode in the same way: an unknown
 /// state must not empty a snapshot, so it degrades to `.pending`.
-enum LickState: String, Codable {
+public enum LickState: String, Codable {
     case pending
     case confirmed
     case dismissed
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = LickState(rawValue: raw) ?? .pending
     }
@@ -165,40 +203,88 @@ enum LickState: String, Codable {
 
 // MARK: - ToolCall
 
-struct ToolCall: Codable, Identifiable {
-    let id: String
-    let name: String
-    let input: AnyCodable?
-    var result: String?
-    var isError: Bool?
+public struct ToolCall: Codable, Identifiable {
+    public let id: String
+    public let name: String
+    public let input: AnyCodable?
+    public var result: String?
+    public var isError: Bool?
+
+    public init(
+        id: String, name: String, input: AnyCodable?, result: String? = nil, isError: Bool? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.input = input
+        self.result = result
+        self.isError = isError
+    }
 }
 
 // MARK: - ChatMessage
 
-struct ChatMessage: Codable, Identifiable {
-    let id: String
-    let role: MessageRole
-    var content: String
-    let timestamp: Double  // Unix ms
-    var attachments: [MessageAttachment]?
-    var toolCalls: [ToolCall]?
-    var isStreaming: Bool?
+public struct ChatMessage: Codable, Identifiable {
+    public let id: String
+    public let role: MessageRole
+    public var content: String
+    public let timestamp: Double  // Unix ms
+    public var attachments: [MessageAttachment]?
+    public var toolCalls: [ToolCall]?
+    public var isStreaming: Bool?
     /// Assistant model id, retained for cost attribution.
-    var model: String?
+    public var model: String?
     /// Final assistant usage, present once the provider reports the turn.
-    var usage: ChatMessageUsage?
-    var source: String?  // "cone", "lick", scoop name
-    var channel: String?  // "webhook", "cron"
+    public var usage: ChatMessageUsage?
+    public var source: String?  // "cone", "lick", scoop name
+    public var channel: String?  // "webhook", "cron"
     /// How many consecutive same-channel licks this row stands for.
-    var lickCount: Int?
+    public var lickCount: Int?
     /// The individual lick bodies folded into this row.
-    var lickParts: [String]?
+    public var lickParts: [String]?
     /// Orchestrator-minted id of an actionable lick, used to locate this card
     /// when its decision settles so the state can flip live.
     var lickId: String?
-    var lickState: LickState?
-    var queued: Bool?
+    public var lickState: LickState?
+    public var queued: Bool?
     /// Cone-error marker. The message is an error report rather than an
     /// ordinary assistant turn.
-    var error: Bool?
+    public var error: Bool?
+
+    public init(
+        id: String,
+        role: MessageRole,
+        content: String,
+        timestamp: Double,
+        attachments: [MessageAttachment]? = nil,
+        toolCalls: [ToolCall]? = nil,
+        isStreaming: Bool? = nil,
+        model: String? = nil,
+        usage: ChatMessageUsage? = nil,
+        source: String? = nil,
+        channel: String? = nil,
+        lickCount: Int? = nil,
+        lickParts: [String]? = nil,
+        lickId: String? = nil,
+        lickState: LickState? = nil,
+        queued: Bool? = nil,
+        error: Bool? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.timestamp = timestamp
+        self.attachments = attachments
+        self.toolCalls = toolCalls
+        self.isStreaming = isStreaming
+        self.model = model
+        self.usage = usage
+        self.source = source
+        self.channel = channel
+        self.lickCount = lickCount
+        self.lickParts = lickParts
+        self.lickId = lickId
+        self.lickState = lickState
+        self.queued = queued
+        self.error = error
+    }
 }

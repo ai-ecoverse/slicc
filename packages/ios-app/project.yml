@@ -12,6 +12,21 @@ settings:
     SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
     SUPPORTS_MACCATALYST: NO
 targets:
+  SliccTrayKit:
+    type: framework
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccTrayKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.traykit
+        PRODUCT_NAME: SliccTrayKit
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WebRTC
+      - sdk: FileProvider.framework
+      - sdk: Security.framework
+      - sdk: UniformTypeIdentifiers.framework
   SliccFollower:
     type: application
     supportedDestinations: [iOS]
@@ -42,11 +57,35 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
     dependencies:
       - package: GhosttyTerminal
+      - target: SliccTrayKit
+      - target: SliccFileProvider
       - package: WebRTC
       - package: SliccTraySession
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMotion.framework
+  SliccFileProvider:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccFileProvider
+    info:
+      path: SliccFileProvider/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: group.ai.sliccy.follower
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.fileprovider
+        PRODUCT_NAME: SliccFileProvider
+        CODE_SIGN_ENTITLEMENTS: SliccFileProvider.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - target: SliccTrayKit
+      - sdk: FileProvider.framework
+      - sdk: UniformTypeIdentifiers.framework
   SliccFollowerTests:
     type: bundle.unit-test
     supportedDestinations: [iOS]
@@ -54,6 +93,7 @@ targets:
       - path: SliccFollower/Tests/SliccFollowerTests
     dependencies:
       - target: SliccFollower
+      - target: SliccTrayKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
@@ -72,6 +112,8 @@ schemes:
   SliccFollower:
     build:
       targets:
+        SliccTrayKit: all
+        SliccFileProvider: all
         SliccFollower: all
         SliccFollowerTests: [test]
         SliccFollowerUITests: [test]

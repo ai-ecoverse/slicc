@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 import UIKit
 import WebKit
 import os

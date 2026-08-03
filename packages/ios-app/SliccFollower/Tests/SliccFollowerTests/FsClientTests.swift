@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// Covers the two properties `FsClient` owns that the leader does not: a
 /// deadline on every request, and all-or-nothing chunk reassembly.

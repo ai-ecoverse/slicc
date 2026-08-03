@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// Attachment chips shown above a user bubble.

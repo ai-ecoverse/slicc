@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 import UIKit
 
 /// Follower-originated CDP against the leader's browser transport, scoped

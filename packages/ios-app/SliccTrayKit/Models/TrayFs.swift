@@ -16,19 +16,19 @@ import Foundation
 // MARK: - Request
 
 /// Text encoding for a read. `binary` asks the leader to base64 the bytes.
-enum TrayFsReadEncoding: String, Codable {
+public enum TrayFsReadEncoding: String, Codable {
     case utf8 = "utf-8"
     case binary
 }
 
 /// Encoding of the `content` field on a write.
-enum TrayFsWriteEncoding: String, Codable {
+public enum TrayFsWriteEncoding: String, Codable {
     case utf8 = "utf-8"
     case base64
 }
 
 /// A single FS operation, discriminated by `op`.
-enum TrayFsRequest: Codable, Equatable {
+public enum TrayFsRequest: Codable, Equatable {
     case readFile(path: String, encoding: TrayFsReadEncoding?)
     case writeFile(path: String, content: String, encoding: TrayFsWriteEncoding)
     case stat(path: String)
@@ -43,7 +43,7 @@ enum TrayFsRequest: Codable, Equatable {
     }
 
     /// The `op` discriminator as it appears on the wire.
-    var op: String {
+    public var op: String {
         switch self {
         case .readFile: return "readFile"
         case .writeFile: return "writeFile"
@@ -57,7 +57,7 @@ enum TrayFsRequest: Codable, Equatable {
     }
 
     /// The target path, common to every op.
-    var path: String {
+    public var path: String {
         switch self {
         case .readFile(let path, _),
             .writeFile(let path, _, _),
@@ -71,7 +71,7 @@ enum TrayFsRequest: Codable, Equatable {
         }
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let op = try container.decode(String.self, forKey: .op)
         let path = try container.decode(String.self, forKey: .path)
@@ -109,7 +109,7 @@ enum TrayFsRequest: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(op, forKey: .op)
         try container.encode(path, forKey: .path)
@@ -130,26 +130,38 @@ enum TrayFsRequest: Codable, Equatable {
 // MARK: - Response payloads
 
 /// One entry from a `readDir`, or one node type from a `stat`.
-enum TrayFsNodeType: String, Codable {
+public enum TrayFsNodeType: String, Codable {
     case file
     case directory
     case symlink
 }
 
-struct TrayFsStat: Codable, Equatable {
-    let type: TrayFsNodeType
-    let size: Int
-    let mtime: Double
-    let ctime: Double
+public struct TrayFsStat: Codable, Equatable {
+    public let type: TrayFsNodeType
+    public let size: Int
+    public let mtime: Double
+    public let ctime: Double
+
+    public init(type: TrayFsNodeType, size: Int, mtime: Double, ctime: Double) {
+        self.type = type
+        self.size = size
+        self.mtime = mtime
+        self.ctime = ctime
+    }
 }
 
-struct TrayFsDirEntry: Codable, Equatable {
-    let name: String
-    let type: TrayFsNodeType
+public struct TrayFsDirEntry: Codable, Equatable {
+    public let name: String
+    public let type: TrayFsNodeType
+
+    public init(name: String, type: TrayFsNodeType) {
+        self.name = name
+        self.type = type
+    }
 }
 
 /// The `data` payload of a successful response, discriminated by `type`.
-enum TrayFsResponseData: Codable, Equatable {
+public enum TrayFsResponseData: Codable, Equatable {
     case file(content: String, encoding: TrayFsWriteEncoding)
     case stat(TrayFsStat)
     case dirEntries([TrayFsDirEntry])
@@ -161,7 +173,7 @@ enum TrayFsResponseData: Codable, Equatable {
         case type, content, encoding, stat, entries, exists, paths
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
@@ -187,7 +199,7 @@ enum TrayFsResponseData: Codable, Equatable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .file(let content, let encoding):
@@ -217,15 +229,15 @@ enum TrayFsResponseData: Codable, Equatable {
 /// A single FS response. `ok` discriminates: success carries `data` (and, for
 /// a chunked file read, `chunkIndex`/`totalChunks`), failure carries `error`
 /// and an optional errno-style `code`.
-struct TrayFsResponse: Codable, Equatable {
-    let ok: Bool
-    let data: TrayFsResponseData?
-    let error: String?
-    let code: String?
-    let chunkIndex: Int?
-    let totalChunks: Int?
+public struct TrayFsResponse: Codable, Equatable {
+    public let ok: Bool
+    public let data: TrayFsResponseData?
+    public let error: String?
+    public let code: String?
+    public let chunkIndex: Int?
+    public let totalChunks: Int?
 
-    init(
+    public init(
         ok: Bool,
         data: TrayFsResponseData? = nil,
         error: String? = nil,
