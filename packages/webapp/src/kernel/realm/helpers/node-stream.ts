@@ -1,7 +1,13 @@
 type StreamListener = (...args: unknown[]) => void;
 
+interface PipeDestination {
+  write(chunk: unknown): unknown;
+  end(): unknown;
+}
+
 class StreamBase {
   private _events: Map<string, StreamListener[]> = new Map();
+  private closeScheduled = false;
   writable = true;
   readable = true;
 
@@ -36,8 +42,17 @@ class StreamBase {
     return true;
   }
 
-  pipe(dest: StreamBase): StreamBase {
+  pipe<T extends PipeDestination>(dest: T): T {
+    this.on('data', (chunk) => dest.write(chunk));
+    this.once('end', () => dest.end());
     return dest;
+  }
+
+  protected closeOnDestroy(): this {
+    if (this.closeScheduled) return this;
+    this.closeScheduled = true;
+    queueMicrotask(() => this.emit('close'));
+    return this;
   }
 
   removeListener(event: string, fn: StreamListener): this {
@@ -55,7 +70,7 @@ export class Readable extends StreamBase {
     return null;
   }
   destroy(): this {
-    return this;
+    return this.closeOnDestroy();
   }
 }
 
@@ -69,7 +84,7 @@ class Writable extends StreamBase {
     return this;
   }
   destroy(): this {
-    return this;
+    return this.closeOnDestroy();
   }
 }
 
@@ -86,7 +101,7 @@ class Transform extends StreamBase {
     return null;
   }
   destroy(): this {
-    return this;
+    return this.closeOnDestroy();
   }
 }
 

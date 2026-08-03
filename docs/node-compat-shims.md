@@ -184,8 +184,9 @@ Static/hardcoded values: `tmpdir()` → `/tmp`, `homedir()` → `/home/user`,
 ### `stream`
 
 Minimal stubs: `Readable`, `Writable`, `Transform`, `PassThrough`, `Stream`.
-Basic event emission and `pipe()` work. These are NOT full Node streams —
-no backpressure, no flowing/paused modes, no proper pipe chaining.
+Basic event emission, `data`/`end` forwarding through `pipe()`, and `close` on
+`destroy()` work. These are NOT full Node streams — there is no backpressure,
+flowing/paused mode, `unpipe()`, or error propagation.
 
 ### `tty`
 
