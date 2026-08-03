@@ -941,7 +941,7 @@ export class ScoopContext {
       if (this.disposed || abortSignal.aborted) return null;
 
       const recovery = this.overflowRecoveryPromise;
-      if (recovery) {
+      if (recovery !== null) {
         await recovery;
         if (this.overflowRecoveryPromise === recovery) this.overflowRecoveryPromise = null;
         if (this.disposed || abortSignal.aborted) return null;
