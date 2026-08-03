@@ -219,7 +219,10 @@ export class TerminalSessionClient {
       this.clearOpenTimers();
       return;
     }
-    if (this.opened) this.send({ type: 'terminal-close', sid: this.sid });
+    // An open envelope may already be queued or executing in the worker even
+    // before its `opened` status reaches this client. Pair every begun handshake
+    // with a close so that late worker-side shell creation cannot leak.
+    if (this.opened || hadPendingOpen) this.send({ type: 'terminal-close', sid: this.sid });
     this.opened = false;
     // Reject pending opens (none in steady state) and resolve
     // pending execs with a synthetic exit so callers don't hang.
@@ -240,10 +243,10 @@ export class TerminalSessionClient {
    * (or skip `close()` and call this directly to abort).
    */
   dispose(): void {
-    this.clearOpenTimers();
-    const waiters = this.openWaiters;
-    this.openWaiters = [];
-    for (const waiter of waiters) waiter(new Error('terminal session disposed'));
+    // Close before dropping the event subscription. In particular, a queued
+    // terminal-open must still be followed by terminal-close when disposal
+    // races the open acknowledgement.
+    this.close();
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
@@ -293,6 +296,8 @@ export class TerminalSessionClient {
     if (status.state === 'opened') {
       this.opened = true;
       this.flushOpenWaiters();
+    } else if (status.state === 'closed') {
+      this.opened = false;
     } else if (status.state === 'error') {
       this.opened = false;
       this.flushOpenWaiters(new Error(status.error ?? 'terminal session error'));

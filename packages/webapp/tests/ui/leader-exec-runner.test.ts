@@ -24,7 +24,7 @@ interface TerminalEvent {
 class FakeOffscreen {
   private handlers: Array<(e: TerminalEvent) => void> = [];
   readonly sentTypes: string[] = [];
-  constructor(private readonly mode: 'auto' | 'signal' | 'stateful') {}
+  constructor(private readonly mode: 'auto' | 'signal' | 'stateful' | 'pending-open') {}
 
   onTerminalEvent(h: (e: TerminalEvent) => void): () => void {
     this.handlers.push(h);
@@ -38,7 +38,9 @@ class FakeOffscreen {
   sendRaw(msg: TerminalEvent): void {
     this.sentTypes.push(msg.type);
     if (msg.type === 'terminal-open') {
-      queueMicrotask(() => this.emit({ type: 'terminal-status', sid: msg.sid, state: 'opened' }));
+      if (this.mode !== 'pending-open') {
+        queueMicrotask(() => this.emit({ type: 'terminal-status', sid: msg.sid, state: 'opened' }));
+      }
     } else if (msg.type === 'terminal-exec' && this.mode === 'auto') {
       queueMicrotask(() => {
         this.emit({
@@ -142,6 +144,22 @@ describe('LeaderExecSessionPool', () => {
     expect(res.exitCode).toBe(130);
     expect(client.sentTypes).toContain('terminal-signal');
     pool.close('follower-2');
+  });
+
+  it('pairs a queued open with close when the follower disconnects during the handshake', async () => {
+    const client = new FakeOffscreen('pending-open');
+    const pool = new LeaderExecSessionPool(client as unknown as OffscreenClient);
+    const runP = pool.run({
+      sessionId: 'opening-follower',
+      command: 'pwd',
+      signal: new AbortController().signal,
+      onChunk: () => {},
+    });
+
+    pool.close('opening-follower');
+
+    await expect(runP).resolves.toMatchObject({ exitCode: 1, error: 'terminal session closed' });
+    expect(client.sentTypes).toEqual(['terminal-open', 'terminal-close']);
   });
 
   it('preserves cwd and exported variables across sequential follower commands', async () => {

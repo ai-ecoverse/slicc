@@ -268,6 +268,20 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     ctx.dispose();
   });
 
+  it('close before open resolves still disposes the queued worker shell', async () => {
+    const ctx = setupChannel();
+    const openP = ctx.client.open({ retryMs: 1000 });
+
+    // MessageChannel preserves the open → close order, but neither envelope
+    // reaches the worker until this synchronous turn completes.
+    ctx.client.close();
+
+    await expect(openP).rejects.toThrow(/closed/);
+    await vi.waitFor(() => expect(ctx.shellFactory).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ctx.shell.dispose).toHaveBeenCalledTimes(1));
+    ctx.dispose();
+  });
+
   it('registers a kind:"shell" process on each exec when ProcessManager is provided', async () => {
     const channel = new MessageChannel();
     const pm = new ProcessManager();
