@@ -140,7 +140,8 @@ they throw an error naming the async escape hatch instead.
 
 `env`, `cwd()`, `exit(code?)` (throws `NodeExitError` to unwind the stack),
 `stdout`, `stderr`, `stdin`, and `argv` (with a non-enumerable
-`argv.parseFlags()` helper).
+`argv.parseFlags()` helper). `stdout` and `stderr` accept `write()` and a no-op
+`end()`, so they can be used as stream pipe destinations.
 
 **Not available:** `platform`, `arch`, `version`, `pid`, `on()`,
 `nextTick()`, `hrtime`. (Source: `createProcessShim` in
@@ -184,8 +185,9 @@ Static/hardcoded values: `tmpdir()` → `/tmp`, `homedir()` → `/home/user`,
 ### `stream`
 
 Minimal stubs: `Readable`, `Writable`, `Transform`, `PassThrough`, `Stream`.
-Basic event emission and `pipe()` work. These are NOT full Node streams —
-no backpressure, no flowing/paused modes, no proper pipe chaining.
+Basic event emission, `data`/`end` forwarding through `pipe()`, and `close` on
+`destroy()` work. These are NOT full Node streams — there is no backpressure,
+flowing/paused mode, `unpipe()`, or error propagation.
 
 ### `tty`
 

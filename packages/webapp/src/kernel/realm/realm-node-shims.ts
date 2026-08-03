@@ -74,6 +74,8 @@ export function createProcessShim(
   // uncaught error).
   const stdinShim = createStdinShim(init.stdin ?? '', recordExit);
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
+  const stdout = { write: writeStdout, end: () => undefined, isTTY: !noColor };
+  const stderr = { write: writeStderr, end: () => undefined, isTTY: !noColor };
   const processShim = {
     argv: argvWithParseFlags,
     env: init.env,
@@ -84,8 +86,8 @@ export function createProcessShim(
       throw new NodeExitError(normalized);
     },
     stdin: stdinShim,
-    stdout: { write: writeStdout, isTTY: !noColor },
-    stderr: { write: writeStderr, isTTY: !noColor },
+    stdout,
+    stderr,
   };
   return {
     processShim,

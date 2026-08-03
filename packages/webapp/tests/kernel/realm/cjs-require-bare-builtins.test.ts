@@ -564,17 +564,62 @@ describe('node:stream shim', () => {
     expect(out.stdout.trim()).toBe('true true function function');
   });
 
-  it('pipe returns destination', async () => {
+  it('pipe returns the destination, forwards data, and ends it', async () => {
     const ctx = makeCtx();
     const out = await runCode(
       `const { Readable, Writable } = require('node:stream');
        const r = new Readable();
        const w = new Writable();
-       console.log(r.pipe(w) === w);`,
+       const chunks = [];
+       w.write = (chunk) => { chunks.push(chunk); return true; };
+       w.end = () => { console.log('ended', chunks.join(',')); return w; };
+       console.log(r.pipe(w) === w);
+       r.emit('data', 'a');
+       r.emit('data', 'b');
+       r.emit('end');`,
       ctx
     );
     expect(out.exitCode).toBe(0);
-    expect(out.stdout.trim()).toBe('true');
+    expect(out.stdout.trim()).toBe('true\nended a,b');
+  });
+
+  it('pipes to process.stdout without throwing when the source ends', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Readable } = require('node:stream');
+       const r = new Readable();
+       r.pipe(process.stdout);
+       r.emit('data', 'piped');
+       r.emit('end');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).toBe('');
+    expect(out.stdout).toBe('piped');
+  });
+
+  it('destroy emits close once for each stream type', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Readable, Writable, Transform, PassThrough } = require('stream');
+       const events = [];
+       const streams = [
+         ['readable', new Readable()],
+         ['writable', new Writable()],
+         ['transform', new Transform()],
+         ['pass-through', new PassThrough()],
+       ];
+       for (const [name, stream] of streams) {
+         stream.on('close', () => events.push(name));
+         stream.destroy();
+         stream.destroy();
+       }
+       await Promise.resolve();
+       console.log(events.join(','));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('readable,writable,transform,pass-through');
   });
 
   it('on/emit event wiring works', async () => {
