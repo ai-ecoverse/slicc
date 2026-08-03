@@ -175,8 +175,11 @@ final class TerminalViewModel: ObservableObject {
 
     private func deleteBackward() {
         guard !isRunning, !input.isEmpty else { return }
-        input.removeLast()
-        emit(Data([0x08, 0x20, 0x08]))
+        let width = input.removeLast().terminalDisplayWidth
+        guard width > 0 else { return }
+        emit(Data(repeating: 0x08, count: width))
+        emit(Data(repeating: 0x20, count: width))
+        emit(Data(repeating: 0x08, count: width))
     }
 
     private func submitInput() {
@@ -274,5 +277,52 @@ final class TerminalViewModel: ObservableObject {
     private func hexToken(_ name: String, from theme: SliccTheme?) -> String? {
         guard let raw = theme?.tokens[name], Color(hexToken: raw) != nil else { return nil }
         return raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
+    }
+}
+
+extension Character {
+    /// Ghostty renders one extended grapheme as at most two cells. Taking the
+    /// widest scalar preserves combining and ZWJ sequences as one glyph.
+    fileprivate var terminalDisplayWidth: Int {
+        if unicodeScalars.contains(where: { $0.value == 0xFE0F }) { return 2 }
+        return unicodeScalars.reduce(0) { max($0, $1.terminalCellWidth) }
+    }
+}
+
+extension UnicodeScalar {
+    /// Mirrors the deterministic width policy bundled with Ghostty's
+    /// ShellCraftKit. That helper is internal to a product this app does not
+    /// import, so the line editor keeps the scalar policy local.
+    fileprivate var terminalCellWidth: Int {
+        if properties.generalCategory == .control
+            || properties.generalCategory == .format
+            || properties.generalCategory == .nonspacingMark
+            || properties.generalCategory == .enclosingMark
+        {
+            return 0
+        }
+        if properties.isEmojiPresentation { return 2 }
+
+        switch value {
+        case 0x1100...0x115F,
+            0x2329...0x232A,
+            0x2E80...0x2FFB,
+            0x3000...0x303E,
+            0x3041...0x33FF,
+            0x3400...0x4DBF,
+            0x4E00...0xA4C6,
+            0xA960...0xA97C,
+            0xAC00...0xD7A3,
+            0xF900...0xFAFF,
+            0xFE10...0xFE19,
+            0xFE30...0xFE6B,
+            0xFF01...0xFF60,
+            0xFFE0...0xFFE6,
+            0x20000...0x2FFFD,
+            0x30000...0x3FFFD:
+            return 2
+        default:
+            return 1
+        }
     }
 }

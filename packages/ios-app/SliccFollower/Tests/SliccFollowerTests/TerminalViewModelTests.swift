@@ -92,6 +92,37 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
     }
 
+    func testBackspaceErasesASCIIAndWideGraphemeDisplayWidths() async {
+        let recorder = Recorder()
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+
+        model.receiveInput(Data("A界".utf8))
+        model.receiveInput(Data([0x7F]))
+        XCTAssertEqual(Array(model.transcriptData.suffix(6)), [0x08, 0x08, 0x20, 0x20, 0x08, 0x08])
+
+        model.receiveInput(Data("B".utf8))
+        model.receiveInput(Data([0x7F]))
+        XCTAssertEqual(Array(model.transcriptData.suffix(3)), [0x08, 0x20, 0x08])
+
+        model.receiveInput(Data("C\r".utf8))
+        await waitUntilIdle(model)
+        XCTAssertEqual(recorder.commands, ["AC"])
+    }
+
+    func testBackspaceTreatsCombiningAndZWJGraphemesAsSingleGlyphs() {
+        let recorder = Recorder()
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+
+        model.receiveInput(Data("e\u{301}👩‍💻".utf8))
+        model.receiveInput(Data([0x7F]))
+        XCTAssertEqual(Array(model.transcriptData.suffix(6)), [0x08, 0x08, 0x20, 0x20, 0x08, 0x08])
+
+        model.receiveInput(Data([0x7F]))
+        XCTAssertEqual(Array(model.transcriptData.suffix(3)), [0x08, 0x20, 0x08])
+    }
+
     func testMultilinePasteRunsEveryCommandInOrder() async {
         let recorder = Recorder()
         let model = model(recorder)
@@ -261,6 +292,18 @@ final class TerminalViewModelTests: XCTestCase {
             WorkbenchHost.terminalConnectionAvailable(
                 connectionState: .connected, isLeaderStalled: false,
                 leaderCapabilities: nil))
+    }
+
+    func testUnavailableTerminalDistinguishesDisconnectFromUnsupportedLeader() {
+        XCTAssertEqual(
+            TerminalView.unavailableState(transportConnected: false),
+            .disconnected)
+        XCTAssertEqual(
+            TerminalView.unavailableState(transportConnected: true),
+            .unsupported)
+        XCTAssertTrue(
+            TerminalView.UnavailableState.unsupported.message.localizedCaseInsensitiveContains(
+                "upgrade"))
     }
 
     func testTerminalAccessibilityRequiresConnectionAndActiveSurface() {

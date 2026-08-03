@@ -48,6 +48,26 @@ final class TerminalUITests: XCTestCase {
             placeholder.waitForExistence(timeout: 60),
             "a disconnected terminal asks for an active leader")
         XCTAssertTrue(placeholder.isHittable)
+        XCTAssertTrue(placeholder.label.contains("Connect"))
+        XCTAssertFalse(app.staticTexts["terminal-unsupported"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["terminal-surface"].exists)
+    }
+
+    func testConnectedUnsupportedLeaderShowsUpgradePlaceholder() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-joinUrl", "", "-uiTestConnectionState", "connected",
+            "-uiTestOpenDockSurface", "term",
+        ]
+        app.launch()
+
+        let placeholder = app.staticTexts["terminal-unsupported"]
+        XCTAssertTrue(
+            placeholder.waitForExistence(timeout: 60),
+            "a connected old leader explains that terminal execution is unsupported")
+        XCTAssertTrue(placeholder.isHittable)
+        XCTAssertTrue(placeholder.label.localizedCaseInsensitiveContains("upgrade"))
+        XCTAssertFalse(app.staticTexts["terminal-disconnected"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["terminal-surface"].exists)
     }
 }

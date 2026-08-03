@@ -41,6 +41,7 @@ struct WorkbenchHost: View {
                         connectionState: appState.connectionState,
                         isLeaderStalled: appState.isLeaderStalled,
                         leaderCapabilities: terminalLeaderCapabilities),
+                    transportConnected: appState.connectionState == .connected,
                     isActive: isActive,
                     theme: appState.leaderTheme
                 )

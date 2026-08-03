@@ -3,8 +3,32 @@ import SwiftUI
 import UIKit
 
 struct TerminalView: View {
+    enum UnavailableState: Equatable {
+        case disconnected
+        case unsupported
+
+        var message: String {
+            switch self {
+            case .disconnected:
+                return "Connect to a leader to use Terminal."
+            case .unsupported:
+                return "This leader does not support Terminal. Upgrade the leader to enable terminal execution."
+            }
+        }
+
+        var accessibilityIdentifier: String {
+            switch self {
+            case .disconnected: return "terminal-disconnected"
+            case .unsupported: return "terminal-unsupported"
+            }
+        }
+    }
+
     @StateObject private var model: TerminalViewModel
     let connectionAvailable: Bool
+    /// Kept separate from `connectionAvailable`, which also fails closed when
+    /// an old or limited leader does not advertise terminal execution.
+    let transportConnected: Bool
     /// False while the terminal stays mounted behind another surface. The
     /// view cannot be torn down (that would take the scrollback with it), so
     /// everything it vends has to be withdrawn from assistive tech by hand:
@@ -20,10 +44,12 @@ struct TerminalView: View {
     init(
         client: TerminalClient,
         connectionAvailable: Bool,
+        transportConnected: Bool,
         isActive: Bool,
         theme: SliccTheme?
     ) {
         self.connectionAvailable = connectionAvailable
+        self.transportConnected = transportConnected
         self.isActive = isActive
         self.theme = theme
         #if DEBUG
@@ -68,7 +94,7 @@ struct TerminalView: View {
                 // Unlike the surface, the placeholder holds no state worth
                 // preserving, so it is not rendered at all while collapsed.
                 if !connectionAvailable && isActive {
-                    disconnectedPlaceholder
+                    unavailablePlaceholder(Self.unavailableState(transportConnected: transportConnected))
                 }
             }
         }
@@ -97,6 +123,10 @@ struct TerminalView: View {
         connectionAvailable && isActive
     }
 
+    static func unavailableState(transportConnected: Bool) -> UnavailableState {
+        transportConnected ? .unsupported : .disconnected
+    }
+
     private var runningBar: some View {
         HStack(spacing: 8) {
             ProgressView()
@@ -114,16 +144,16 @@ struct TerminalView: View {
         .background(palette.surface)
     }
 
-    private var disconnectedPlaceholder: some View {
+    private func unavailablePlaceholder(_ state: UnavailableState) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "terminal")
                 .font(.system(size: 32))
                 .foregroundStyle(palette.inkTertiary)
-            Text("Connect to a leader to use Terminal.")
+            Text(state.message)
                 .font(.system(size: 14))
                 .foregroundStyle(palette.inkSecondary)
                 .multilineTextAlignment(.center)
-                .accessibilityIdentifier("terminal-disconnected")
+                .accessibilityIdentifier(state.accessibilityIdentifier)
         }
         .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
