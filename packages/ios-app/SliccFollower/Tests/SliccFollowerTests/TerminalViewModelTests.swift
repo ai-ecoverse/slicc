@@ -173,4 +173,22 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(recorder.commands.isEmpty)
         XCTAssertTrue(model.transcriptData.isEmpty)
     }
+
+    func testRunningBarOnlyAppearsWhileTerminalIsActive() {
+        XCTAssertTrue(TerminalView.shouldShowRunningBar(isRunning: true, isActive: true))
+        XCTAssertFalse(TerminalView.shouldShowRunningBar(isRunning: true, isActive: false))
+        XCTAssertFalse(TerminalView.shouldShowRunningBar(isRunning: false, isActive: true))
+    }
+
+    func testTerminalAccessibilityRequiresConnectionAndActiveSurface() {
+        XCTAssertTrue(
+            TerminalView.shouldExposeTerminalAccessibility(
+                connectionAvailable: true, isActive: true))
+        XCTAssertFalse(
+            TerminalView.shouldExposeTerminalAccessibility(
+                connectionAvailable: false, isActive: true))
+        XCTAssertFalse(
+            TerminalView.shouldExposeTerminalAccessibility(
+                connectionAvailable: true, isActive: false))
+    }
 }

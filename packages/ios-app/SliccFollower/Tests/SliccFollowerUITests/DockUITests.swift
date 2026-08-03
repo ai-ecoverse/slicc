@@ -28,11 +28,11 @@ final class DockUITests: XCTestCase {
         // nav stack (web dock parity).
         term.tap()
         let collapsed = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == false"),
+            predicate: NSPredicate(format: "exists == false"),
             object: placeholder)
         XCTAssertEqual(
             XCTWaiter.wait(for: [collapsed], timeout: 3), .completed,
-            "tap-active collapses back to chat")
+            "tap-active removes the collapsed placeholder from accessibility")
     }
 
     func testNewChatLivesInTheTopControlNotTheRail() {

@@ -1,5 +1,6 @@
 import GhosttyTerminal
 import SwiftUI
+import UIKit
 
 struct TerminalView: View {
     @StateObject private var model: TerminalViewModel
@@ -36,25 +37,28 @@ struct TerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.isRunning {
+            if Self.shouldShowRunningBar(isRunning: model.isRunning, isActive: isActive) {
                 runningBar
             }
             ZStack {
-                TerminalSurfaceView(context: model.terminal)
-                    .accessibilityLabel("Terminal")
-                    .accessibilityIdentifier("terminal-surface")
-                    .accessibilityValue(model.accessibilityTranscript)
-                    .allowsHitTesting(connectionAvailable && isActive)
-                    .accessibilityHidden(!isActive)
+                AccessibleTerminalSurfaceView(
+                    context: model.terminal,
+                    isAccessible: Self.shouldExposeTerminalAccessibility(
+                        connectionAvailable: connectionAvailable,
+                        isActive: isActive),
+                    transcript: model.accessibilityTranscript
+                )
+                .allowsHitTesting(connectionAvailable && isActive)
 
-                Text(model.accessibilityTranscript)
-                    .font(.system(size: 1))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.clear)
-                    .frame(width: 1, height: 1)
-                    .allowsHitTesting(false)
-                    .accessibilityIdentifier("terminal-transcript")
-                    .accessibilityHidden(!isActive)
+                if connectionAvailable && isActive {
+                    Text(model.accessibilityTranscript)
+                        .font(.system(size: 1))
+                        .lineLimit(1)
+                        .foregroundStyle(Color.clear)
+                        .frame(width: 1, height: 1)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("terminal-transcript")
+                }
 
                 // Unlike the surface, the placeholder holds no state worth
                 // preserving, so it is not rendered at all while collapsed.
@@ -71,6 +75,17 @@ struct TerminalView: View {
         .onChange(of: connectionAvailable) { model.setConnectionAvailable($0) }
         .onChange(of: theme) { model.applyTheme($0, systemScheme: colorScheme) }
         .onChange(of: colorScheme) { model.applyTheme(theme, systemScheme: $0) }
+    }
+
+    static func shouldShowRunningBar(isRunning: Bool, isActive: Bool) -> Bool {
+        isRunning && isActive
+    }
+
+    static func shouldExposeTerminalAccessibility(
+        connectionAvailable: Bool,
+        isActive: Bool
+    ) -> Bool {
+        connectionAvailable && isActive
     }
 
     private var runningBar: some View {
@@ -109,5 +124,32 @@ struct TerminalView: View {
     private func synchronizeModel() {
         model.setConnectionAvailable(connectionAvailable)
         model.applyTheme(theme, systemScheme: colorScheme)
+    }
+}
+
+private struct AccessibleTerminalSurfaceView: UIViewRepresentable {
+    let context: TerminalViewState
+    let isAccessible: Bool
+    let transcript: String
+
+    func makeUIView(context _: Context) -> GhosttyTerminal.TerminalView {
+        let view = GhosttyTerminal.TerminalView(frame: .zero)
+        view.delegate = context
+        view.controller = context.controller
+        view.configuration = context.configuration
+        configureAccessibility(view)
+        return view
+    }
+
+    func updateUIView(_ view: GhosttyTerminal.TerminalView, context _: Context) {
+        configureAccessibility(view)
+    }
+
+    private func configureAccessibility(_ view: GhosttyTerminal.TerminalView) {
+        view.isAccessibilityElement = isAccessible
+        view.accessibilityElementsHidden = !isAccessible
+        view.accessibilityLabel = isAccessible ? "Terminal" : nil
+        view.accessibilityIdentifier = isAccessible ? "terminal-surface" : nil
+        view.accessibilityValue = isAccessible ? transcript : nil
     }
 }

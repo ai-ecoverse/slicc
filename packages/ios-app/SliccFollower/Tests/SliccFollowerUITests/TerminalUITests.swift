@@ -24,6 +24,14 @@ final class TerminalUITests: XCTestCase {
         waitForExpectations(timeout: 10)
 
         app.buttons["dock-files"].tap()
+        let surfaceHidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: surface)
+        let transcriptHidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: transcript)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [surfaceHidden, transcriptHidden], timeout: 3), .completed,
+            "collapsed terminal leaves are withdrawn from accessibility")
+
         app.buttons["dock-term"].tap()
         XCTAssertTrue(surface.waitForExistence(timeout: 10))
         XCTAssertTrue(prompt.evaluate(with: transcript), "scrollback survives the tab switch")
@@ -38,8 +46,12 @@ final class TerminalUITests: XCTestCase {
         ]
         app.launch()
 
+        let placeholder = app.staticTexts["terminal-disconnected"]
         XCTAssertTrue(
-            app.staticTexts["terminal-disconnected"].waitForExistence(timeout: 60),
+            placeholder.waitForExistence(timeout: 60),
             "a disconnected terminal asks for an active leader")
+        XCTAssertTrue(placeholder.isHittable)
+        XCTAssertFalse(app.descendants(matching: .any)["terminal-surface"].exists)
+        XCTAssertFalse(app.staticTexts["terminal-transcript"].exists)
     }
 }
