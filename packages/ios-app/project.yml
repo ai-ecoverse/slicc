@@ -44,6 +44,7 @@ targets:
       - package: SliccTraySession
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
+      - sdk: CoreMotion.framework
   SliccFollowerTests:
     type: bundle.unit-test
     supportedDestinations: [iOS]
