@@ -175,9 +175,18 @@ final class TerminalViewModelTests: XCTestCase {
     }
 
     func testRunningBarOnlyAppearsWhileTerminalIsActive() {
-        XCTAssertTrue(TerminalView.shouldShowRunningBar(isRunning: true, isActive: true))
-        XCTAssertFalse(TerminalView.shouldShowRunningBar(isRunning: true, isActive: false))
-        XCTAssertFalse(TerminalView.shouldShowRunningBar(isRunning: false, isActive: true))
+        XCTAssertTrue(
+            TerminalView.shouldShowRunningBar(
+                isRunning: true, connectionAvailable: true, isActive: true))
+        XCTAssertFalse(
+            TerminalView.shouldShowRunningBar(
+                isRunning: true, connectionAvailable: true, isActive: false))
+        XCTAssertFalse(
+            TerminalView.shouldShowRunningBar(
+                isRunning: true, connectionAvailable: false, isActive: true))
+        XCTAssertFalse(
+            TerminalView.shouldShowRunningBar(
+                isRunning: false, connectionAvailable: true, isActive: true))
     }
 
     func testTerminalAccessibilityRequiresConnectionAndActiveSurface() {

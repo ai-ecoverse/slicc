@@ -37,7 +37,11 @@ struct TerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if Self.shouldShowRunningBar(isRunning: model.isRunning, isActive: isActive) {
+            if Self.shouldShowRunningBar(
+                isRunning: model.isRunning,
+                connectionAvailable: connectionAvailable,
+                isActive: isActive
+            ) {
                 runningBar
             }
             ZStack {
@@ -77,8 +81,12 @@ struct TerminalView: View {
         .onChange(of: colorScheme) { model.applyTheme(theme, systemScheme: $0) }
     }
 
-    static func shouldShowRunningBar(isRunning: Bool, isActive: Bool) -> Bool {
-        isRunning && isActive
+    static func shouldShowRunningBar(
+        isRunning: Bool,
+        connectionAvailable: Bool,
+        isActive: Bool
+    ) -> Bool {
+        isRunning && connectionAvailable && isActive
     }
 
     static func shouldExposeTerminalAccessibility(
