@@ -118,6 +118,35 @@ describe('FollowerRegistry', () => {
     registry.removeFollower('browser');
   });
 
+  it('exposes follower metadata and live keepalive health through a read snapshot', () => {
+    const registry = createRegistry();
+    const follower = registry.addFollower('b1', new FakeChannel(), {
+      runtime: 'slicc-electron',
+      connectedAt: '2026-08-03T08:00:00.000Z',
+    });
+    follower.hostOrigin = 'https://host.example';
+    follower.selectedScoopJid = 'research';
+
+    expect(registry.getFollowerDetails()).toEqual([
+      expect.objectContaining({
+        bootstrapId: 'b1',
+        runtime: 'slicc-electron',
+        connectedAt: '2026-08-03T08:00:00.000Z',
+        floatType: 'electron',
+        hostOrigin: 'https://host.example',
+        selectedScoopJid: 'research',
+        health: 'live',
+      }),
+    ]);
+
+    vi.advanceTimersByTime(40_000);
+    expect(registry.getFollowerDetails()[0].health).toBe('stalled');
+
+    follower.keepalive.receivePong();
+    expect(registry.getFollowerDetails()[0].health).toBe('live');
+    registry.removeFollower('b1');
+  });
+
   it('throttles repeated broadcast send-error logs per follower', () => {
     const log = createLog();
     const registry = createRegistry({ log });
