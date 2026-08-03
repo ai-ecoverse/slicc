@@ -75,6 +75,12 @@ class AppState: ObservableObject {
     /// JID of the leader's currently active scoop (informational; used to mark the active row).
     @Published var leaderActiveScoopJid: String?
 
+    // Model selection is global; thinking selection is scoped to the follower's
+    // currently selected scoop. These remain empty until a v5+ hello arrives.
+    @Published private(set) var leaderProtocolVersion: Int?
+    @Published private(set) var modelCatalog: [TrayModelCatalogEntry] = []
+    @Published private(set) var modelSelectionState: TrayModelSelectionState?
+
     /// Whether a message typed now lands where the user is looking. A
     /// scoop-less `user_message` routes to the LEADER's active scoop, so a
     /// follower viewing a different scoop must not be offered actions —
@@ -335,6 +341,9 @@ class AppState: ObservableObject {
         scoops = []
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
+        leaderProtocolVersion = nil
+        modelCatalog = []
+        modelSelectionState = nil
         messagesByScoop.removeAll()
         sprinkles = []
         sprinkleContents.removeAll()
@@ -445,46 +454,6 @@ class AppState: ObservableObject {
         isStreaming = false
         streamingMessageId = nil
         sendToLeader(.abort)
-    }
-
-    // MARK: - Scoop Switching
-
-    /// Select a specific scoop to view. Independent of the leader's selection.
-    func selectScoop(jid: String) {
-        guard jid != selectedScoopJid else { return }
-        guard scoops.contains(where: { $0.jid == jid }) else { return }
-        selectedScoopJid = jid
-        // Show whatever we already have buffered, then request a fresh snapshot.
-        let cached = messagesByScoop[jid] ?? []
-        messages = cached
-        isStreaming = cached.last?.isStreaming == true
-        streamingMessageId = isStreaming ? cached.last?.id : nil
-        sendToLeader(.requestSnapshot(scoopJid: jid))
-    }
-
-    /// Swipe left → next scoop in the list. Wraps around to the first when at end.
-    func swipeToNextScoop() {
-        guard !scoops.isEmpty else { return }
-        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
-        let nextIndex = (currentIndex + 1) % scoops.count
-        selectScoop(jid: scoops[nextIndex].jid)
-    }
-
-    /// Swipe right → previous scoop. Falls back to the cone if we'd otherwise
-    /// underflow (matches the user's "or cone if no more are left" expectation).
-    func swipeToPreviousScoop() {
-        guard !scoops.isEmpty else { return }
-        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
-        if currentIndex > 0 {
-            selectScoop(jid: scoops[currentIndex - 1].jid)
-        } else if let cone = scoops.first(where: { $0.isCone }) {
-            selectScoop(jid: cone.jid)
-        }
-    }
-
-    /// The summary for the currently-viewed scoop, if any.
-    var selectedScoop: ScoopSummary? {
-        scoops.first(where: { $0.jid == selectedScoopJid })
     }
 
     // MARK: - Sprinkles
@@ -750,6 +719,9 @@ class AppState: ObservableObject {
         logger.info("Data channel opened")
         connectionState = .connected
         connectedSince = Date()
+        leaderProtocolVersion = nil
+        modelCatalog = []
+        modelSelectionState = nil
 
         // Reuse the existing CDP bridge across reconnects so the user's
         // hosted tabs survive transient WebRTC drops. Only spin up a new
@@ -917,12 +889,27 @@ class AppState: ObservableObject {
                     selectedScoopJid = initial
                     // Pull buffered messages for this scoop if we haven't yet.
                     if messagesByScoop[initial] == nil {
-                        sendToLeader(.requestSnapshot(scoopJid: initial))
+                        sendToLeader(.scoopsSelect(scoopJid: initial))
                     } else {
                         messages = messagesByScoop[initial] ?? []
                     }
+                    refreshModels()
                 }
             }
+
+        case .modelsList(let models):
+            guard supportsModelControls else {
+                logger.warning("Ignoring models.list before a v5+ leader hello")
+                break
+            }
+            modelCatalog = models
+
+        case .modelState(let state):
+            guard supportsModelControls else {
+                logger.warning("Ignoring model.state before a v5+ leader hello")
+                break
+            }
+            modelSelectionState = state
 
         case .sprinklesList(let sprinkles):
             logger.info("Sprinkles list received: \(sprinkles.count) sprinkles")
@@ -1040,6 +1027,13 @@ class AppState: ObservableObject {
         // field that goes nowhere is the drift `theme.apply` already shipped.
         leaderCapabilities = capabilities
         leaderMotd = motd
+        leaderProtocolVersion = protocolVersion
+        if protocolVersion >= 5 {
+            refreshModels()
+        } else {
+            modelCatalog = []
+            modelSelectionState = nil
+        }
         if protocolVersion > traySyncProtocolVersion {
             logger.warning("Leader speaks a newer tray sync protocol (v\(protocolVersion) vs v\(traySyncProtocolVersion)) — update this app")
         } else {
@@ -1478,6 +1472,112 @@ class AppState: ObservableObject {
             joinUrlHistory = Array(joinUrlHistory.prefix(5))
         }
         UserDefaults.standard.set(joinUrlHistory, forKey: "joinUrlHistory")
+    }
+}
+
+// MARK: - Scoop / Model / Thinking Selection
+
+extension AppState {
+    /// Select a specific scoop to view. Independent of the leader's selection.
+    func selectScoop(jid: String) {
+        guard jid != selectedScoopJid else { return }
+        guard scoops.contains(where: { $0.jid == jid }) else { return }
+        selectedScoopJid = jid
+        // Show whatever we already have buffered, then request a fresh snapshot.
+        let cached = messagesByScoop[jid] ?? []
+        messages = cached
+        isStreaming = cached.last?.isStreaming == true
+        streamingMessageId = isStreaming ? cached.last?.id : nil
+        // `scoops.select` changes only this follower's view on the leader. It
+        // also updates the leader's per-follower selected scoop, which is the
+        // authority used to validate a later thinking.set.
+        sendToLeader(.scoopsSelect(scoopJid: jid))
+        refreshModels()
+    }
+
+    /// Swipe left → next scoop in the list. Wraps around to the first when at end.
+    func swipeToNextScoop() {
+        guard !scoops.isEmpty else { return }
+        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
+        let nextIndex = (currentIndex + 1) % scoops.count
+        selectScoop(jid: scoops[nextIndex].jid)
+    }
+
+    /// Swipe right → previous scoop. Falls back to the cone if we'd otherwise
+    /// underflow (matches the user's "or cone if no more are left" expectation).
+    func swipeToPreviousScoop() {
+        guard !scoops.isEmpty else { return }
+        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
+        if currentIndex > 0 {
+            selectScoop(jid: scoops[currentIndex - 1].jid)
+        } else if let cone = scoops.first(where: { $0.isCone }) {
+            selectScoop(jid: cone.jid)
+        }
+    }
+
+    /// The summary for the currently-viewed scoop, if any.
+    var selectedScoop: ScoopSummary? {
+        scoops.first(where: { $0.jid == selectedScoopJid })
+    }
+
+    var supportsModelControls: Bool {
+        (leaderProtocolVersion ?? 0) >= 5
+    }
+
+    var activeModel: TrayModelCatalogEntry? {
+        guard let activeModelId = modelSelectionState?.activeModelId else { return nil }
+        return modelCatalog.first(where: { $0.modelId == activeModelId })
+    }
+
+    var displayedThinkingLevel: String {
+        guard modelSelectionState?.scoopJid == selectedScoopJid else { return "off" }
+        if modelSelectionState?.effortOverride == "max" { return "max" }
+        switch modelSelectionState?.thinkingLevel {
+        case .minimal: return "low"
+        case .off, nil: return "off"
+        case .low: return "low"
+        case .medium: return "medium"
+        case .high: return "high"
+        case .xhigh: return "xhigh"
+        }
+    }
+
+    /// Refresh the credential-free catalog and current selection state. Legacy
+    /// leaders never see this additive v5 request.
+    func refreshModels() {
+        guard supportsModelControls else { return }
+        sendToLeader(.modelsRequest)
+    }
+
+    /// Ask the leader to change its global model selection. Only advertised
+    /// catalog ids are accepted, preventing arbitrary provider/account data
+    /// from reaching the wire.
+    func selectModel(_ modelId: String) {
+        guard supportsModelControls,
+            modelCatalog.contains(where: { $0.modelId == modelId })
+        else { return }
+        sendToLeader(.modelSelect(modelId: modelId))
+    }
+
+    /// Map the Settings control's browser-compatible scale onto the wire. The
+    /// UI-only `max` value is encoded as xhigh + effortOverride max.
+    func setThinkingLevel(_ displayLevel: String) {
+        guard supportsModelControls, activeModel?.reasoning == true,
+            let scoopJid = selectedScoopJid,
+            let wireValue = Self.thinkingWireValue(for: displayLevel)
+        else { return }
+        sendToLeader(
+            .thinkingSet(
+                scoopJid: scoopJid, thinkingLevel: wireValue.level,
+                effortOverride: wireValue.effortOverride))
+    }
+
+    static func thinkingWireValue(
+        for displayLevel: String
+    ) -> (level: TrayThinkingLevel, effortOverride: String?)? {
+        if displayLevel == "max" { return (.xhigh, "max") }
+        guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
+        return (level, nil)
     }
 }
 

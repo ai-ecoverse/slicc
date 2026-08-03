@@ -10,7 +10,7 @@ enum NewSessionAction: String, Codable {
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-let traySyncProtocolVersion = 4
+let traySyncProtocolVersion = 5
 
 // MARK: - AgentEvent
 
@@ -173,6 +173,34 @@ struct SprinkleSummary: Codable, Identifiable, Hashable {
     var id: String { name }
 }
 
+// MARK: - Model Catalog / Selection
+
+/// Thinking levels accepted by the leader's per-scoop configuration. The UI's
+/// `max` choice is represented on the wire as `.xhigh` plus
+/// `effortOverride: "max"`, matching the browser follower.
+enum TrayThinkingLevel: String, Codable, CaseIterable {
+    case off, minimal, low, medium, high, xhigh
+}
+
+/// Credential-free model metadata advertised by the leader. Provider account
+/// identity, keys, and tokens are deliberately absent from this wire shape.
+struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
+    let providerName: String
+    let modelId: String
+    let modelName: String
+    let reasoning: Bool
+
+    var id: String { modelId }
+}
+
+/// The global model selection plus thinking configuration for one scoop.
+struct TrayModelSelectionState: Codable, Equatable {
+    let activeModelId: String
+    let scoopJid: String
+    let thinkingLevel: TrayThinkingLevel?
+    let effortOverride: String?
+}
+
 // MARK: - TrayTargetEntry / RemoteTargetInfo
 
 /// Mirrors RemoteTargetInfo.capabilities from tray-sync-protocol.ts (Task 5).
@@ -277,7 +305,8 @@ var trayFollowerMotd: String {
 // MARK: - LeaderToFollowerMessage
 
 /// Mirrors a **subset** of `LeaderToFollowerMessage` from tray-sync-protocol.ts.
-/// Implemented here: chat, scoops, sprinkles, control, leader-initiated CDP
+/// Implemented here: chat, scoops, model/thinking selection, sprinkles,
+/// control, leader-initiated CDP
 /// (`cdp.request`, `targets.registry`, `tab.open`), the cherry host-page
 /// event fan-out (`cherry.slicc_event`), and the `fs.*` pair. TS-only and
 /// omitted from this enum: the leader→follower reply path for
@@ -295,6 +324,8 @@ enum LeaderToFollowerMessage: Codable {
     case status(scoopStatus: String)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
+    case modelsList(models: [TrayModelCatalogEntry])
+    case modelState(state: TrayModelSelectionState)
     case sprinklesList(sprinkles: [SprinkleSummary])
     case sprinkleContent(
         requestId: String,
@@ -349,7 +380,7 @@ enum LeaderToFollowerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, messages, scoopJid, chunkData, chunkIndex, totalChunks
         case event, text, messageId, scoopStatus, error, result
-        case scoops, activeScoopJid, sprinkles
+        case scoops, activeScoopJid, models, state, sprinkles
         case requestId, sprinkleName, content, data, attachments
         case localTargetId, method, params, sessionId, targets, url
         case targetId, name, detail
@@ -392,6 +423,12 @@ enum LeaderToFollowerMessage: Codable {
                 scoops: (try? container.decode([ScoopSummary].self, forKey: .scoops)) ?? [],
                 activeScoopJid: (try? container.decode(String.self, forKey: .activeScoopJid)) ?? ""
             )
+        case "models.list":
+            self = .modelsList(
+                models: try container.decode([TrayModelCatalogEntry].self, forKey: .models))
+        case "model.state":
+            self = .modelState(
+                state: try container.decode(TrayModelSelectionState.self, forKey: .state))
         case "sprinkles.list":
             self = .sprinklesList(
                 sprinkles: (try? container.decode([SprinkleSummary].self, forKey: .sprinkles)) ?? []
@@ -521,6 +558,12 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("scoops.list", forKey: .type)
             try container.encode(scoops, forKey: .scoops)
             try container.encode(activeScoopJid, forKey: .activeScoopJid)
+        case .modelsList(let models):
+            try container.encode("models.list", forKey: .type)
+            try container.encode(models, forKey: .models)
+        case .modelState(let state):
+            try container.encode("model.state", forKey: .type)
+            try container.encode(state, forKey: .state)
         case .sprinklesList(let sprinkles):
             try container.encode("sprinkles.list", forKey: .type)
             try container.encode(sprinkles, forKey: .sprinkles)
@@ -602,7 +645,8 @@ enum LeaderToFollowerMessage: Codable {
 // MARK: - FollowerToLeaderMessage
 
 /// Mirrors a **subset** of `FollowerToLeaderMessage` from tray-sync-protocol.ts.
-/// Implemented here: chat, scoops/sprinkles, targets advertise, CDP/tab.open
+/// Implemented here: chat, scoops, model/thinking selection, sprinkles,
+/// targets advertise, CDP/tab.open
 /// reply path back to the leader (`cdp.response`, `cdp.event`, `tab.opened`,
 /// `tab.openError`), and the `fs.*` pair — iOS originates `fs.request` against
 /// the leader's VFS and answers a leader-originated one with an error.
@@ -627,6 +671,10 @@ enum FollowerToLeaderMessage: Codable {
     case abort
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
+    case modelsRequest
+    case modelSelect(modelId: String)
+    case thinkingSet(
+        scoopJid: String, thinkingLevel: TrayThinkingLevel, effortOverride: String?)
     case sprinklesRefresh
     case sprinkleFetch(requestId: String, sprinkleName: String)
     case sprinkleLick(sprinkleName: String, body: AnyCodable?, targetScoop: String?)
@@ -672,6 +720,7 @@ enum FollowerToLeaderMessage: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case type, text, messageId, scoopJid, action, steer, attachments
+        case modelId, thinkingLevel, effortOverride
         case event, capabilities, motd
         case requestId, sprinkleName, body, targetScoop
         case targets, runtimeId, result, error, chunkData, chunkIndex, totalChunks
@@ -701,6 +750,17 @@ enum FollowerToLeaderMessage: Codable {
                 scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
         case "scoops.select":
             self = .scoopsSelect(scoopJid: try container.decode(String.self, forKey: .scoopJid))
+        case "models.request":
+            self = .modelsRequest
+        case "model.select":
+            self = .modelSelect(modelId: try container.decode(String.self, forKey: .modelId))
+        case "thinking.set":
+            self = .thinkingSet(
+                scoopJid: try container.decode(String.self, forKey: .scoopJid),
+                thinkingLevel: try container.decode(
+                    TrayThinkingLevel.self, forKey: .thinkingLevel),
+                effortOverride: try container.decodeIfPresent(
+                    String.self, forKey: .effortOverride))
         case "sprinkles.refresh":
             self = .sprinklesRefresh
         case "sprinkle.fetch":
@@ -798,6 +858,16 @@ enum FollowerToLeaderMessage: Codable {
         case .scoopsSelect(let scoopJid):
             try container.encode("scoops.select", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)
+        case .modelsRequest:
+            try container.encode("models.request", forKey: .type)
+        case .modelSelect(let modelId):
+            try container.encode("model.select", forKey: .type)
+            try container.encode(modelId, forKey: .modelId)
+        case .thinkingSet(let scoopJid, let thinkingLevel, let effortOverride):
+            try container.encode("thinking.set", forKey: .type)
+            try container.encode(scoopJid, forKey: .scoopJid)
+            try container.encode(thinkingLevel, forKey: .thinkingLevel)
+            try container.encodeIfPresent(effortOverride, forKey: .effortOverride)
         case .sprinklesRefresh:
             try container.encode("sprinkles.refresh", forKey: .type)
         case .sprinkleFetch(let requestId, let sprinkleName):
