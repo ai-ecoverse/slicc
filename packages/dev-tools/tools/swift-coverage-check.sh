@@ -29,6 +29,54 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # Resolved before any `cd` below — BASH_SOURCE may be a relative path.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+select_iphone_for_sdk() {
+  local sdk_version="$1"
+  IOS_SIMULATOR_RUNTIME_KEY="com.apple.CoreSimulator.SimRuntime.iOS-${sdk_version//./-}" node -e '
+    let input = "";
+    process.stdin.on("data", chunk => input += chunk).on("end", () => {
+      const devices = JSON.parse(input).devices?.[process.env.IOS_SIMULATOR_RUNTIME_KEY] ?? [];
+      const iphone = devices.find(device => device.isAvailable && /iPhone/.test(device.name));
+      process.stdout.write(iphone?.udid ?? "");
+    });
+  '
+}
+
+configure_xcode_coverage_scope() {
+  local package_name="$1"
+  local package_root="$2"
+  local app_dir="$3"
+
+  if [[ "$package_name" != "ios-app" ]]; then
+    return 0
+  fi
+
+  # The iOS coverage job is unit-only; UI execution has its own gate. Measure
+  # testable domain/transport code across the app and every linked framework,
+  # so extracting another local kit cannot silently remove it from the profile.
+  COVERAGE_OBJECT_ARGS=()
+  local framework_dir framework_binary framework_name
+  for framework_dir in "$app_dir/Frameworks/"*.framework; do
+    [[ -d "$framework_dir" ]] || continue
+    framework_name="$(basename "$framework_dir" .framework)"
+    framework_binary="$framework_dir/$framework_name"
+    [[ -f "$framework_binary" ]] || continue
+    COVERAGE_OBJECT_ARGS+=(-object "$framework_binary")
+  done
+  # Linked vendor frameworks can be universal binaries; select the simulator's
+  # host architecture so llvm-cov can inspect them alongside local frameworks.
+  COVERAGE_ARCH_ARGS=(-arch "$(uname -m)")
+  # The File Provider appex never launches in unit tests, so it has no coverage
+  # mapping and its sources would silently vanish instead of registering zero.
+  # Wave 2 enumeration/write-back therefore lives in measured SliccTrayKit;
+  # SliccFileProvider remains a thin NSFileProvider adapter.
+  COVERAGE_IGNORE_REGEX='\.build/|Tests/|SliccFileProvider/|SliccFollower/(Views|CDP)/|SliccFollower/App/(AppState|UITestHooks|SliccFollowerApp)\.swift$'
+  COVERAGE_SOURCE_PATHS=("$package_root")
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 XCODE_SCHEME=""
 if [[ "${1:-}" == "--xcodebuild" ]]; then
   XCODE_SCHEME="${2:?scheme required after --xcodebuild}"
@@ -60,17 +108,22 @@ cd "$PACKAGE_DIR"
 # coverage floor. Sibling packages with their own coverage jobs enforce their
 # own floors independently.
 PACKAGE_ROOT="$PWD"
+COVERAGE_OBJECT_ARGS=()
+COVERAGE_ARCH_ARGS=()
+COVERAGE_IGNORE_REGEX='\.build/|Tests/'
+COVERAGE_SOURCE_PATHS=("$PACKAGE_ROOT")
 
 # Both modes leave $PROFDATA and $BINARY pointing at the instrumented binary and
 # its merged profile, which the shared llvm-cov reporting below consumes.
 if [[ -n "$XCODE_SCHEME" ]]; then
   DERIVED_DATA=".build/xcodebuild"
+  SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
   UDID=$(
     xcrun simctl list devices available --json |
-      node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const d=JSON.parse(s).devices;const m=Object.values(d).flat().find(v=>v.isAvailable&&/iPhone/.test(v.name));process.stdout.write(m?m.udid:"")})'
+      select_iphone_for_sdk "$SDK_VERSION"
   )
   if [[ -z "$UDID" ]]; then
-    echo "::error::No available iPhone simulator (install one via 'xcodebuild -downloadPlatform iOS')"
+    echo "::error::No available iPhone simulator matching the iOS $SDK_VERSION SDK (install one via 'xcodebuild -downloadPlatform iOS')"
     exit 1
   fi
   # Boot the simulator and block until it reports ready, instead of letting
@@ -80,6 +133,7 @@ if [[ -n "$XCODE_SCHEME" ]]; then
   # `-retry-tests-on-failure` cannot rescue it, as that retries failed tests,
   # not a runner that never initialized.
   echo "==> waiting for simulator $UDID to finish booting"
+  xcrun simctl boot "$UDID" 2>/dev/null || true
   xcrun simctl bootstatus "$UDID" -b ||
     echo "::warning::simctl bootstatus did not report a clean boot; continuing"
 
@@ -106,10 +160,10 @@ if [[ -n "$XCODE_SCHEME" ]]; then
       -derivedDataPath "$DERIVED_DATA" \
       -resultBundlePath ".build/coverage/${PACKAGE_NAME}.xcresult" \
       -enableCodeCoverage YES \
-      -parallel-testing-enabled YES \
+      -parallel-testing-enabled NO \
       -retry-tests-on-failure \
       -test-iterations 2 \
-      CODE_SIGNING_ALLOWED=NO
+      "-only-testing:${TEST_BUNDLE_NAME}Tests"
   }
   run_with_runner_init_retry "$XCODEBUILD_LOG" run_single_xcodebuild_attempt
 
@@ -131,6 +185,7 @@ if [[ -n "$XCODE_SCHEME" ]]; then
   if [[ -f "$APP_DIR/${TEST_BUNDLE_NAME}.debug.dylib" ]]; then
     BINARY="$APP_DIR/${TEST_BUNDLE_NAME}.debug.dylib"
   fi
+  configure_xcode_coverage_scope "$PACKAGE_NAME" "$PACKAGE_ROOT" "$APP_DIR"
 else
   echo "==> swift test --enable-code-coverage ($PACKAGE_DIR)"
   # Per-test durations, uploaded by CI so a slow or flaky test can be identified
@@ -173,12 +228,14 @@ else
   COV_TOOL=(llvm-cov)
 fi
 
-echo "==> ${COV_TOOL[*]} report $BINARY"
+echo "==> ${COV_TOOL[*]} report $BINARY ${COVERAGE_OBJECT_ARGS[*]} ${COVERAGE_ARCH_ARGS[*]}"
 COVERAGE_OUTPUT=$(
   "${COV_TOOL[@]}" report "$BINARY" \
+    "${COVERAGE_OBJECT_ARGS[@]}" \
+    "${COVERAGE_ARCH_ARGS[@]}" \
     -instr-profile="$PROFDATA" \
-    --ignore-filename-regex='\.build/|Tests/' \
-    "$PACKAGE_ROOT"
+    --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
+    "${COVERAGE_SOURCE_PATHS[@]}"
 )
 echo "$COVERAGE_OUTPUT"
 
@@ -229,9 +286,11 @@ fi
 # llvm-cov builds support `export -format=lcov`).
 mkdir -p .build/coverage
 "${COV_TOOL[@]}" export "$BINARY" \
+  "${COVERAGE_OBJECT_ARGS[@]}" \
+  "${COVERAGE_ARCH_ARGS[@]}" \
   -instr-profile="$PROFDATA" \
-  --ignore-filename-regex='\.build/|Tests/' \
+  --ignore-filename-regex="$COVERAGE_IGNORE_REGEX" \
   -format=lcov \
-  "$PACKAGE_ROOT" >.build/coverage/lcov.info 2>/dev/null || true
+  "${COVERAGE_SOURCE_PATHS[@]}" >.build/coverage/lcov.info 2>/dev/null || true
 
 exit $FAIL
