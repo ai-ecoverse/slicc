@@ -13,6 +13,7 @@ final class TerminalViewModel: ObservableObject {
     typealias CancelCommand = @MainActor () -> Bool
 
     static let prompt = "slicc$ "
+    static let inputEchoBatchLimit = 4 * 1_024
     private static let transcriptLimit = 64 * 1_024
 
     let terminal = TerminalViewState()
@@ -118,7 +119,9 @@ final class TerminalViewModel: ObservableObject {
 
     func receiveInput(_ data: Data) {
         guard connectionAvailable else { return }
-        for byte in data { consume(byte) }
+        var echoBuffer = Data()
+        for byte in data { consume(byte, echoBuffer: &echoBuffer) }
+        flushEcho(&echoBuffer)
     }
 
     func handleResize(_ viewport: InMemoryTerminalViewport) {
@@ -136,7 +139,7 @@ final class TerminalViewModel: ObservableObject {
         if !cancelledClient { showPrompt() }
     }
 
-    private func consume(_ byte: UInt8) {
+    private func consume(_ byte: UInt8, echoBuffer: inout Data) {
         if isRunning {
             if byte == 0x03 { interrupt() } else { queuedInput.append(byte) }
             return
@@ -144,10 +147,13 @@ final class TerminalViewModel: ObservableObject {
         if consumeEscape(byte) { return }
         switch byte {
         case 0x03:
+            flushEcho(&echoBuffer)
             interrupt()
         case 0x08, 0x7F:
+            flushEcho(&echoBuffer)
             deleteBackward()
         case 0x0A, 0x0D:
+            flushEcho(&echoBuffer)
             submitInput()
         case 0x1B:
             escapeState = 1
@@ -156,11 +162,18 @@ final class TerminalViewModel: ObservableObject {
             if let text = String(data: pendingUTF8, encoding: .utf8) {
                 pendingUTF8.removeAll(keepingCapacity: true)
                 input.append(text)
-                emit(Data(text.utf8))
+                echoBuffer.append(contentsOf: text.utf8)
+                if echoBuffer.count >= Self.inputEchoBatchLimit { flushEcho(&echoBuffer) }
             }
         default:
             return
         }
+    }
+
+    private func flushEcho(_ buffer: inout Data) {
+        guard !buffer.isEmpty else { return }
+        emit(buffer)
+        buffer.removeAll(keepingCapacity: true)
     }
 
     private func consumeEscape(_ byte: UInt8) -> Bool {

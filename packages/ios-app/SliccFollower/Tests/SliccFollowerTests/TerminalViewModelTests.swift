@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import GhosttyTerminal
 import XCTest
@@ -134,6 +135,35 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertEqual(recorder.commands, ["echo first", "echo second"])
         XCTAssertTrue(model.accessibilityTranscript.contains("echo first"))
         XCTAssertTrue(model.accessibilityTranscript.contains("echo second"))
+        XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
+    }
+
+    func testLargePasteBatchesEchoPublishesAndPreservesCommand() async {
+        let recorder = Recorder()
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+        var transcriptPublishCount = 0
+        let subscription = model.$accessibilityTranscript.dropFirst().sink { _ in
+            transcriptPublishCount += 1
+        }
+        defer { subscription.cancel() }
+        let command = String(repeating: "large-paste-", count: 3_072)
+        let payload = Data(command.utf8)
+
+        model.receiveInput(payload)
+
+        let expectedBatchCount =
+            (payload.count + TerminalViewModel.inputEchoBatchLimit - 1)
+            / TerminalViewModel.inputEchoBatchLimit
+        XCTAssertEqual(transcriptPublishCount, expectedBatchCount)
+        XCTAssertEqual(model.transcriptData, payload)
+        XCTAssertEqual(model.accessibilityTranscript, command)
+
+        model.receiveInput(Data([0xE7, 0x95]))
+        model.receiveInput(Data([0x8C, 0x0D]))
+        await waitUntilIdle(model)
+
+        XCTAssertEqual(recorder.commands, [command + "界"])
         XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
     }
 
