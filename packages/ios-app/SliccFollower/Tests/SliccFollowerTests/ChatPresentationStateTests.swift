@@ -32,8 +32,17 @@ final class ChatPresentationStateTests: XCTestCase {
             )
         }
 
-        let host = UIHostingController(rootView: root(for: steps[0]))
-        render(host, step: steps[0])
+        let initialStep = steps[0]
+        let host = UIHostingController(rootView: root(for: initialStep))
+        let window = UIWindow(
+            frame: CGRect(x: 0, y: 0, width: initialStep.width, height: 768))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        render(window, host: host, step: initialStep)
         XCTAssertEqual(constructedOwners.count, 1, "ChatView must construct one shell owner")
         let owner = try XCTUnwrap(constructedOwners.first)
         let ownerIdentity = ObjectIdentifier(owner)
@@ -41,15 +50,17 @@ final class ChatPresentationStateTests: XCTestCase {
         owner.composerDraft = "Keep this unfinished thought"
         owner.transcriptPosition.scrollTo(id: "message-42", anchor: .center)
 
-        for step in steps {
+        for (index, step) in steps.enumerated() {
             XCTAssertEqual(
                 ShellLayout.mode(
                     horizontalSizeClass: step.sizeClass,
                     availableWidth: step.width),
                 step.mode,
                 "\(step.name) must exercise the expected adaptive branch")
-            host.rootView = root(for: step)
-            render(host, step: step)
+            if index > 0 {
+                host.rootView = root(for: step)
+                render(window, host: host, step: step)
+            }
 
             XCTAssertEqual(constructedOwners.count, 1, "\(step.name) must not construct branch state")
             XCTAssertEqual(ObjectIdentifier(constructedOwners[0]), ownerIdentity)
@@ -65,8 +76,15 @@ final class ChatPresentationStateTests: XCTestCase {
         }
     }
 
-    private func render(_ host: UIHostingController<AnyView>, step: LayoutStep) {
-        host.view.frame = CGRect(x: 0, y: 0, width: step.width, height: 768)
+    private func render(
+        _ window: UIWindow,
+        host: UIHostingController<AnyView>,
+        step: LayoutStep
+    ) {
+        window.frame = CGRect(x: 0, y: 0, width: step.width, height: 768)
+        host.view.frame = window.bounds
+        window.setNeedsLayout()
+        window.layoutIfNeeded()
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
     }
