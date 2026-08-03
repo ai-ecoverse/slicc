@@ -113,6 +113,10 @@ class AppState: ObservableObject {
     private(set) lazy var fsClient = FsClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
+    /// Single-flight client for commands running in the leader's virtual shell.
+    private(set) lazy var terminalClient = TerminalClient { [weak self] in
+        self?.sendToLeader($0) ?? false
+    }
     /// Follower-originated CDP for tab previews (#1865).
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
@@ -1011,10 +1015,7 @@ class AppState: ObservableObject {
             fsClient.handleResponse(requestId: requestId, response: response)
 
         case .execRequest, .execChunk, .execResponse, .execSignal:
-            // Protocol seam only. TerminalClient owns exec dispatch in the next
-            // implementation wave; keeping the cases explicit preserves this
-            // switch's exhaustiveness without adding UI behavior here.
-            break
+            handleExecMessage(msg)
 
         case .themeApply(let themeJson):
             applyLeaderTheme(themeJson)
@@ -1395,6 +1396,8 @@ class AppState: ObservableObject {
     func handleDisconnect(reason: String) {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
+        terminalClient.disconnect()
+
         // A stall that ends in a real disconnect must not leave the composer
         // wedged: the stall is over, the connection is what is broken now.
         isLeaderStalled = false
@@ -1458,6 +1461,7 @@ class AppState: ObservableObject {
     /// must survive transient WebRTC drops. Use `resetCDPState()` from
     /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
     private func tearDown() {
+        terminalClient.disconnect()
         connectTask?.cancel()
         connectTask = nil
         Task { await keepalive?.stop() }
@@ -1596,6 +1600,27 @@ extension AppState {
         if displayLevel == "max" { return (.xhigh, "max") }
         guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
         return (level, nil)
+    }
+}
+
+// MARK: - Terminal sync routing
+
+extension AppState {
+    private func handleExecMessage(_ message: LeaderToFollowerMessage) {
+        switch message {
+        case .execRequest(let requestId, _, _, _):
+            terminalClient.refuseLeaderRequest(requestId: requestId)
+        case .execChunk(let requestId, let stream, let data):
+            terminalClient.handleChunk(
+                requestId: requestId, stream: stream, base64Data: data)
+        case .execResponse(let requestId, let exitCode, let signal, let error):
+            terminalClient.handleResponse(
+                requestId: requestId, exitCode: exitCode, signal: signal, error: error)
+        case .execSignal:
+            return
+        default:
+            return
+        }
     }
 }
 

@@ -398,6 +398,10 @@ enum LeaderToFollowerMessage: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
+        if let remoteOperation = try Self.decodeRemoteOperation(type: type, from: container) {
+            self = remoteOperation
+            return
+        }
         switch type {
         case "snapshot":
             self = .snapshot(
@@ -492,35 +496,6 @@ enum LeaderToFollowerMessage: Codable {
                 targetId: try container.decode(String.self, forKey: .targetId),
                 name: try container.decode(String.self, forKey: .name),
                 detail: try container.decodeIfPresent(AnyCodable.self, forKey: .detail))
-        case "fs.request":
-            self = .fsRequest(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                request: try container.decode(TrayFsRequest.self, forKey: .request))
-        case "fs.response":
-            self = .fsResponse(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                response: try container.decode(TrayFsResponse.self, forKey: .response))
-        case "exec.request":
-            self = .execRequest(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                command: try container.decode(String.self, forKey: .command),
-                cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
-                env: try container.decodeIfPresent([String: String].self, forKey: .env))
-        case "exec.chunk":
-            self = .execChunk(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                stream: try container.decode(String.self, forKey: .stream),
-                data: try container.decode(String.self, forKey: .data))
-        case "exec.response":
-            self = .execResponse(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                exitCode: try container.decode(Int.self, forKey: .exitCode),
-                signal: try container.decodeIfPresent(String.self, forKey: .signal),
-                error: try container.decodeIfPresent(String.self, forKey: .error))
-        case "exec.signal":
-            self = .execSignal(
-                requestId: try container.decode(String.self, forKey: .requestId),
-                signal: try container.decode(String.self, forKey: .signal))
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
@@ -552,8 +527,47 @@ enum LeaderToFollowerMessage: Codable {
         }
     }
 
+    private static func decodeRemoteOperation(
+        type: String, from container: KeyedDecodingContainer<CodingKeys>
+    ) throws -> Self? {
+        switch type {
+        case "fs.request":
+            return .fsRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                request: try container.decode(TrayFsRequest.self, forKey: .request))
+        case "fs.response":
+            return .fsResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                response: try container.decode(TrayFsResponse.self, forKey: .response))
+        case "exec.request":
+            return .execRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                command: try container.decode(String.self, forKey: .command),
+                cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
+                env: try container.decodeIfPresent([String: String].self, forKey: .env))
+        case "exec.chunk":
+            return .execChunk(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                stream: try container.decode(String.self, forKey: .stream),
+                data: try container.decode(String.self, forKey: .data))
+        case "exec.response":
+            return .execResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                exitCode: try container.decode(Int.self, forKey: .exitCode),
+                signal: try container.decodeIfPresent(String.self, forKey: .signal),
+                error: try container.decodeIfPresent(String.self, forKey: .error))
+        case "exec.signal":
+            return .execSignal(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                signal: try container.decode(String.self, forKey: .signal))
+        default:
+            return nil
+        }
+    }
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if try encodeRemoteOperation(to: &container) { return }
         switch self {
         case .snapshot(let messages, let scoopJid):
             try container.encode("snapshot", forKey: .type)
@@ -642,6 +656,30 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode(targetId, forKey: .targetId)
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(detail, forKey: .detail)
+        case .fsRequest, .fsResponse, .execRequest, .execChunk, .execResponse, .execSignal:
+            return
+        case .themeApply(let themeJson):
+            try container.encode("theme.apply", forKey: .type)
+            try container.encodeIfPresent(themeJson, forKey: .themeJson)
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
+            try container.encode("hello", forKey: .type)
+            try container.encode(protocolVersion, forKey: .protocolVersion)
+            try container.encodeIfPresent(runtime, forKey: .runtime)
+            try container.encodeIfPresent(capabilities, forKey: .capabilities)
+            try container.encodeIfPresent(motd, forKey: .motd)
+        case .ping:
+            try container.encode("ping", forKey: .type)
+        case .pong:
+            try container.encode("pong", forKey: .type)
+        case .unknown(let type):
+            try container.encode(type, forKey: .type)
+        }
+    }
+
+    private func encodeRemoteOperation(
+        to container: inout KeyedEncodingContainer<CodingKeys>
+    ) throws -> Bool {
+        switch self {
         case .fsRequest(let requestId, let request):
             try container.encode("fs.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
@@ -671,22 +709,10 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("exec.signal", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(signal, forKey: .signal)
-        case .themeApply(let themeJson):
-            try container.encode("theme.apply", forKey: .type)
-            try container.encodeIfPresent(themeJson, forKey: .themeJson)
-        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
-            try container.encode("hello", forKey: .type)
-            try container.encode(protocolVersion, forKey: .protocolVersion)
-            try container.encodeIfPresent(runtime, forKey: .runtime)
-            try container.encodeIfPresent(capabilities, forKey: .capabilities)
-            try container.encodeIfPresent(motd, forKey: .motd)
-        case .ping:
-            try container.encode("ping", forKey: .type)
-        case .pong:
-            try container.encode("pong", forKey: .type)
-        case .unknown(let type):
-            try container.encode(type, forKey: .type)
+        default:
+            return false
         }
+        return true
     }
 }
 
@@ -912,6 +938,7 @@ enum FollowerToLeaderMessage: Codable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if try encodeRemoteOperation(to: &container) { return }
         switch self {
         case .userMessage(let text, let messageId, let steer, let attachments):
             try container.encode("user_message", forKey: .type)
@@ -989,6 +1016,28 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("tab.open.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
+        case .fsRequest, .fsResponse, .execRequest, .execChunk, .execResponse, .execSignal:
+            return
+        case .lick(let event):
+            try container.encode("lick", forKey: .type)
+            try container.encode(event, forKey: .event)
+        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
+            try container.encode("hello", forKey: .type)
+            try container.encode(protocolVersion, forKey: .protocolVersion)
+            try container.encodeIfPresent(runtime, forKey: .runtime)
+            try container.encodeIfPresent(capabilities, forKey: .capabilities)
+            try container.encodeIfPresent(motd, forKey: .motd)
+        case .ping:
+            try container.encode("ping", forKey: .type)
+        case .pong:
+            try container.encode("pong", forKey: .type)
+        }
+    }
+
+    private func encodeRemoteOperation(
+        to container: inout KeyedEncodingContainer<CodingKeys>
+    ) throws -> Bool {
+        switch self {
         case .fsRequest(let requestId, let targetRuntimeId, let request):
             try container.encode("fs.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
@@ -1019,19 +1068,9 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("exec.signal", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(signal, forKey: .signal)
-        case .lick(let event):
-            try container.encode("lick", forKey: .type)
-            try container.encode(event, forKey: .event)
-        case .hello(let protocolVersion, let runtime, let capabilities, let motd):
-            try container.encode("hello", forKey: .type)
-            try container.encode(protocolVersion, forKey: .protocolVersion)
-            try container.encodeIfPresent(runtime, forKey: .runtime)
-            try container.encodeIfPresent(capabilities, forKey: .capabilities)
-            try container.encodeIfPresent(motd, forKey: .motd)
-        case .ping:
-            try container.encode("ping", forKey: .type)
-        case .pong:
-            try container.encode("pong", forKey: .type)
+        default:
+            return false
         }
+        return true
     }
 }
