@@ -22,12 +22,16 @@ final class DockUITests: XCTestCase {
         XCTAssertTrue(
             placeholder.waitForExistence(timeout: 10),
             "the terminal surface asks for an active leader")
+        XCTAssertTrue(placeholder.isHittable)
 
         // Tapping the ACTIVE item collapses the workbench — a toggle, not a
         // nav stack (web dock parity).
         term.tap()
-        XCTAssertFalse(
-            placeholder.waitForExistence(timeout: 3),
+        let collapsed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == false"),
+            object: placeholder)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [collapsed], timeout: 3), .completed,
             "tap-active collapses back to chat")
     }
 
