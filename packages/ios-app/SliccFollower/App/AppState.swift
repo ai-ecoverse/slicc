@@ -977,12 +977,14 @@ class AppState: ObservableObject {
             // the browser surface renders them as preview cards (#1865).
             // Our own advertised targets and the leader's own SLICC page are
             // excluded — see `BrowserTargets`.
-            // `activeJoinUrl`, not `joinUrl`: an iCloud session dials a URL
-            // that never lands in the published field, and matching on the
-            // empty/stale one leaves the leader's own SLICC page in the cards.
+            // `activeJoinUrl`, never `joinUrl`: an iCloud session deliberately
+            // keeps its URL out of the published field (it carries the session
+            // secret), so matching on `joinUrl` left a launcher-published
+            // leader at 127.0.0.1 unrecognised and put its own SLICC page back
+            // in the cards. Falling back to `joinUrl` would be worse than
+            // nothing — a stale typed URL is not the one we dialled.
             remoteTargets = BrowserTargets.visible(
-                targets, ownRuntimeId: controllerId,
-                joinUrl: activeJoinUrl.isEmpty ? joinUrl : activeJoinUrl)
+                targets, ownRuntimeId: controllerId, joinUrl: activeJoinUrl)
 
         case .cdpResponse(
             let requestId, let result, let error, let chunkData, let chunkIndex,
