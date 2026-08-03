@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -18,14 +18,125 @@ function makeDeps(overrides: Partial<MonitorDeps> = {}): MonitorDeps {
     getOAuthProviders: () => [],
     getSessionStats: async () => null,
     getProcesses: async () => [],
+    getTrayInfo: () => ({ role: 'standalone', state: 'inactive' }),
+    getConnectedFollowers: () => [],
     ...overrides,
   };
 }
 
 describe('fetchMonitorData', () => {
-  it('returns all nine sections', async () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('returns all eleven sections', async () => {
     const sections = await fetchMonitorData(makeDeps());
-    expect(sections).toHaveLength(9);
+    expect(sections).toHaveLength(11);
+  });
+
+  it('shows standalone tray state and a clear followers empty state', async () => {
+    const sections = await fetchMonitorData(makeDeps());
+    const tray = sections.find((section) => section.id === 'tray')!;
+    const followers = sections.find((section) => section.id === 'followers')!;
+
+    expect(tray.rows[0]).toMatchObject({ name: 'Standalone', meta: 'inactive', status: 'idle' });
+    expect(followers).toMatchObject({ count: 0, rows: [], accent: 'cyan' });
+    expect(followers.emptyText).toContain('No followers connected yet');
+  });
+
+  it('shows exec and stalled followers with approved detail fields', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-08-03T10:10:00.000Z').getTime());
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getTrayInfo: () => ({
+          role: 'leader',
+          state: 'leader',
+          joinUrl: 'https://tray.example/join/token',
+          sessionId: 'tray-123456789',
+          workerBaseUrl: 'https://tray.example',
+        }),
+        getConnectedFollowers: () => [
+          {
+            runtimeId: 'follower-cli-1',
+            runtime: 'slicc-cli',
+            connectedAt: '2026-08-03T10:00:00.000Z',
+            floatType: 'unknown',
+            health: 'live',
+            peerState: 'connected',
+            exec: true,
+            motd: 'Remote build host',
+          },
+          {
+            runtimeId: 'follower-browser-1',
+            runtime: 'slicc-extension-offscreen',
+            connectedAt: '2026-08-03T10:05:00.000Z',
+            floatType: 'extension',
+            hostOrigin: 'https://host.example',
+            health: 'stalled',
+            peerState: 'connected',
+            cdp: true,
+          },
+        ],
+      })
+    );
+    const tray = sections.find((section) => section.id === 'tray')!;
+    const followers = sections.find((section) => section.id === 'followers')!;
+
+    expect(tray.rows[0]).toMatchObject({ name: 'Leader', status: 'active' });
+    expect(tray.rows[0].badges).toEqual(['join URL']);
+    expect(followers.meta).toBe('1 connected · 1 stalled');
+    expect(followers.rows[0]).toMatchObject({
+      name: 'CLI · cli-1',
+      sublabel: 'Remote build host',
+      badges: ['ssh'],
+      meta: 'connected 10m',
+      status: 'active',
+    });
+    expect(followers.rows[1]).toMatchObject({
+      name: 'Extension · browser-1',
+      sublabel: 'slicc-extension-offscreen · https://host.example',
+      badges: ['playwright'],
+      meta: 'stalled 5m',
+      status: 'warn',
+    });
+  });
+
+  it('shows connecting followers as idle', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getConnectedFollowers: () => [
+          {
+            runtimeId: 'follower-ios-1',
+            floatType: 'ios',
+            health: 'live',
+            peerState: 'connecting',
+          },
+        ],
+      })
+    );
+    const followers = sections.find((section) => section.id === 'followers')!;
+    expect(followers.count).toBe(0);
+    expect(followers.meta).toBe('1 connecting');
+    expect(followers.rows[0]).toMatchObject({
+      name: 'iOS · ios-1',
+      meta: 'connecting',
+      status: 'idle',
+    });
+  });
+
+  it('represents follower tray connection state without changing the follower placeholder', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getTrayInfo: () => ({
+          role: 'follower',
+          state: 'connected',
+          joinUrl: 'https://tray.example/join/token',
+          sessionId: 'tray-follower',
+          workerBaseUrl: 'https://tray.example',
+        }),
+      })
+    );
+    const tray = sections.find((section) => section.id === 'tray')!;
+    expect(tray.meta).toBe('follower · connected');
+    expect(tray.rows[0]).toMatchObject({ name: 'Follower', meta: 'connected', status: 'active' });
   });
 
   it('shows scoop rows with status', async () => {
@@ -68,9 +179,9 @@ describe('fetchMonitorData', () => {
     expect(cronSection.rows[0].meta).toContain('0 9 * * *');
   });
 
-  it('shows empty sections with count 0', async () => {
+  it('shows empty resource sections with count 0', async () => {
     const sections = await fetchMonitorData(makeDeps());
-    for (const section of sections) {
+    for (const section of sections.filter((section) => section.id !== 'tray')) {
       expect(section.count).toBe(0);
     }
   });

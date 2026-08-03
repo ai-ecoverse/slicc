@@ -73,6 +73,17 @@ export interface ConnectedFollowerInfo {
   floatType?: FloatType;
 }
 
+export interface FollowerDetails {
+  bootstrapId: string;
+  runtime?: string;
+  connectedAt?: string;
+  lastActivity: number;
+  floatType: FloatType;
+  hostOrigin?: string;
+  selectedScoopJid?: string;
+  health: 'live' | 'stalled';
+}
+
 const BROADCAST_ERROR_THROTTLE_MS = 60_000;
 
 export class FollowerRegistry {
@@ -205,6 +216,19 @@ export class FollowerRegistry {
 
   getBrowserCapableBootstrapIds(): Set<string> {
     return new Set(this.runtimeToBootstrap.values());
+  }
+
+  getFollowerDetails(): FollowerDetails[] {
+    return [...this.followers.values()].map((follower) => ({
+      bootstrapId: follower.bootstrapId,
+      runtime: follower.runtime,
+      connectedAt: follower.connectedAt,
+      lastActivity: follower.lastActivity,
+      floatType: follower.floatType,
+      hostOrigin: follower.hostOrigin,
+      selectedScoopJid: follower.selectedScoopJid,
+      health: follower.keepalive.isStalled ? 'stalled' : 'live',
+    }));
   }
 
   getConnectedFollowers(): ConnectedFollowerInfo[] {

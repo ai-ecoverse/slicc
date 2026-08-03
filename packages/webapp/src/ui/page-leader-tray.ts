@@ -41,7 +41,7 @@ import {
   type LeaderTrayRuntimeStatus,
 } from '../scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../scoops/tray-leader-sync.js';
-import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import { deriveFloatType, type FloatType, LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
 import type {
   RemoteTargetInfo,
@@ -178,10 +178,51 @@ export interface PageLeaderTrayHandle {
   readonly currentLeaderSync: LeaderSyncManager | null;
 }
 
+export interface PageLeaderFollowerState {
+  bootstrapId: string;
+  runtime?: string;
+  connectedAt?: string;
+  floatType?: FloatType;
+  hostOrigin?: string;
+  selectedScoopJid?: string;
+  health?: 'live' | 'stalled';
+  peerState: 'connecting' | 'connected';
+}
+
+export function getLeaderFollowerStates(
+  peers: Pick<LeaderTrayPeerManager, 'getPeers'>,
+  sync: Pick<LeaderSyncManager, 'getFollowerDetails'>
+): PageLeaderFollowerState[] {
+  const details = new Map(
+    sync.getFollowerDetails().map((follower) => [follower.bootstrapId, follower])
+  );
+  const states: PageLeaderFollowerState[] = [];
+  for (const peer of peers.getPeers()) {
+    const follower = details.get(peer.bootstrapId);
+    if (peer.state === 'connected' && !follower) continue;
+    states.push({
+      bootstrapId: peer.bootstrapId,
+      runtime: follower?.runtime ?? peer.runtime,
+      connectedAt: follower?.connectedAt ?? peer.connectedAt ?? undefined,
+      floatType: follower?.floatType ?? deriveFloatType(peer.runtime),
+      hostOrigin: follower?.hostOrigin,
+      selectedScoopJid: follower?.selectedScoopJid,
+      health: follower?.health,
+      peerState: peer.state,
+    });
+    details.delete(peer.bootstrapId);
+  }
+  for (const follower of details.values()) {
+    states.push({ ...follower, peerState: 'connected' });
+  }
+  return states;
+}
+
 /** --- Sync manager (top of the dependency chain — peers feeds it) --- */
 function buildSyncManager(
   options: StartPageLeaderTrayOptions,
-  getLeader: () => LeaderTrayManager
+  getLeader: () => LeaderTrayManager,
+  onFollowerCountChanged: () => void
 ): LeaderSyncManager {
   const syncOptions: LeaderSyncManagerOptions = {
     sendControl: (msg) => getLeader().sendControlMessage(msg),
@@ -196,7 +237,7 @@ function buildSyncManager(
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,
     onFollowerNewSession: options.onFollowerNewSession,
-    onFollowerCountChanged: options.onFollowerCountChanged,
+    onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     execInShell: options.execInShell,
     onCherryHostEvent: options.onCherryHostEvent,
@@ -223,10 +264,12 @@ function buildSyncManager(
  */
 function buildPeerManager(
   getLeader: () => LeaderTrayManager,
-  sync: LeaderSyncManager
+  sync: LeaderSyncManager,
+  onPeersChanged: () => void
 ): LeaderTrayPeerManager {
   return new LeaderTrayPeerManager({
     sendControlMessage: (message) => getLeader().sendControlMessage(message),
+    onPeersChanged,
     onPeerConnected: (peer, channel) => {
       log.info('Tray follower data channel opened', {
         controllerId: peer.controllerId,
@@ -471,12 +514,20 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   // Forward declaration so the peer manager can call `leader.sendControlMessage`
   // through the getter closure; the leader is constructed bottom-up after peers.
   let leader!: LeaderTrayManager;
+  let peers!: LeaderTrayPeerManager;
+  let sync!: LeaderSyncManager;
   const updateUrlBar = createUpdateUrlBar(options);
+  const notifyFollowerCountChanged = (): void => {
+    const count = getLeaderFollowerStates(peers, sync).filter(
+      (follower) => follower.peerState === 'connected'
+    ).length;
+    options.onFollowerCountChanged?.(count);
+  };
 
   // Forward declaration so sync can call leader.sendControlMessage through the getter
-  const sync = buildSyncManager(options, () => leader);
+  sync = buildSyncManager(options, () => leader, notifyFollowerCountChanged);
   options.browserAPI.setTrayTargetProvider(sync);
-  const peers = buildPeerManager(() => leader, sync);
+  peers = buildPeerManager(() => leader, sync, notifyFollowerCountChanged);
   leader = buildLeaderManager(options, peers, sync, fetchImpl, updateUrlBar, () => leader);
 
   // --- Agent event tap → broadcast to all followers. The helper owns

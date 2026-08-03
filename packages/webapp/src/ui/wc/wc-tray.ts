@@ -26,6 +26,7 @@ import {
 } from '../../scoops/tray-runtime-config.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
+  type ConnectedFollowerInfo,
   getConnectedFollowers,
   setConnectedFollowersGetter,
   setTrayResetter,
@@ -38,6 +39,7 @@ import { runLeaderExecInShell } from '../leader-exec-runner.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { type PageFollowerTrayHandle, startPageFollowerTray } from '../page-follower-tray.js';
 import {
+  getLeaderFollowerStates,
   type PageLeaderTrayHandle,
   type StartPageLeaderTrayOptions,
   startPageLeaderTray,
@@ -103,6 +105,27 @@ interface TrayRoleState {
   lockRelease: (() => void) | null;
 }
 
+export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): ConnectedFollowerInfo[] {
+  const execIds = handle.sync.getExecCapableBootstrapIds();
+  const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
+  const motds = handle.sync.getFollowerMotds();
+  return getLeaderFollowerStates(handle.peers, handle.sync).map((follower) => {
+    return {
+      runtimeId: canonicalRuntimeId(follower.bootstrapId),
+      runtime: follower.runtime,
+      connectedAt: follower.connectedAt,
+      floatType: follower.floatType,
+      hostOrigin: follower.hostOrigin,
+      selectedScoopJid: follower.selectedScoopJid,
+      health: follower.health,
+      peerState: follower.peerState,
+      exec: execIds.has(follower.bootstrapId),
+      cdp: cdpIds.has(follower.bootstrapId),
+      motd: motds.get(follower.bootstrapId),
+    };
+  });
+}
+
 function buildFollowerOptions(
   deps: WcTrayDeps,
   joinUrl: string
@@ -127,12 +150,23 @@ function buildFollowerOptions(
 }
 
 /** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. */
-function createLeaderOptionsFactory(
+export function createLeaderOptionsFactory(
   deps: WcTrayDeps,
   state: TrayRoleState,
   remoteCdpBridge: RemoteCdpPageBridge
 ): (workerBaseUrl: string) => StartPageLeaderTrayOptions {
   const { client, refs } = deps;
+  const refreshFollowerPresentation = (fallbackCount = 0): void => {
+    const followers = state.leader ? getLeaderConnectedFollowers(state.leader) : [];
+    const count = fallbackCount;
+    refs.floatbar.setAttribute(
+      'label',
+      count > 0
+        ? `tray · ${count} follower${count === 1 ? '' : 's'}`
+        : (deps.baseFloatLabel ?? 'standalone · live')
+    );
+    writeConnectedFollowersToShim(followers);
+  };
   return (workerBaseUrl) => ({
     workerBaseUrl,
     getMessages: () => deps.getController()?.getMessages() ?? [],
@@ -180,17 +214,7 @@ function createLeaderOptionsFactory(
         })
       );
     },
-    onFollowerCountChanged: (count) => {
-      refs.floatbar.setAttribute(
-        'label',
-        count > 0
-          ? `tray · ${count} follower${count === 1 ? '' : 's'}`
-          : (deps.baseFloatLabel ?? 'standalone · live')
-      );
-      // Mirror the live follower list into the shim so the standalone
-      // worker-side `host` command (no live getter) reflects it.
-      writeConnectedFollowersToShim(getConnectedFollowers());
-    },
+    onFollowerCountChanged: refreshFollowerPresentation,
     onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     onForwardedLick: (event) => client.sendForwardedLick(event),
     onCherryHostEvent: (runtimeId, name, detail) =>
@@ -257,19 +281,7 @@ function createLeaderHookSetup(
 ): { wireLeaderHooks(handle: PageLeaderTrayHandle): void; clearLeaderHooks(): void } {
   return {
     wireLeaderHooks: (handle) => {
-      setConnectedFollowersGetter(() => {
-        const execIds = handle.sync.getExecCapableBootstrapIds();
-        const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
-        const motds = handle.sync.getFollowerMotds();
-        return handle.peers.getPeers().map((p) => ({
-          runtimeId: canonicalRuntimeId(p.bootstrapId),
-          runtime: p.runtime,
-          connectedAt: p.connectedAt ?? undefined,
-          exec: execIds.has(p.bootstrapId),
-          cdp: cdpIds.has(p.bootstrapId),
-          motd: motds.get(p.bootstrapId),
-        }));
-      });
+      setConnectedFollowersGetter(() => getLeaderConnectedFollowers(handle));
       setTrayResetter(() => handle.reset());
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)
@@ -289,8 +301,8 @@ function createLeaderHookSetup(
         ?.setOnLocalProcessingChange((processing) =>
           handle.sync.broadcastStatus(processing ? 'processing' : 'ready')
         );
-      import('../theme-engine.js').then(
-        ({ setThemeChangeListener, getActiveThemeId, getActiveThemeJson }) => {
+      void import('../theme-engine.js')
+        .then(({ setThemeChangeListener, getActiveThemeId, getActiveThemeJson }) => {
           let debounceTimer: ReturnType<typeof setTimeout> | undefined;
           setThemeChangeListener((themeJson) => {
             if (getActiveThemeId() === '__preview') return;
@@ -301,8 +313,8 @@ function createLeaderHookSetup(
           // fires on the next change, but a follower joining a leader that
           // booted themed must receive the palette at bootstrap.
           handle.sync.broadcastTheme(getActiveThemeJson());
-        }
-      );
+        })
+        .catch((err) => deps.log.error('failed to install tray theme sync', err));
     },
     clearLeaderHooks: () => {
       setConnectedFollowersGetter(null);
@@ -313,9 +325,11 @@ function createLeaderHookSetup(
       deps.sprinkleManager.setSendToSprinkleHook(undefined);
       deps.sprinkleManager.setReloadHook(undefined);
       remoteCdpBridge.disposeAll();
-      import('../theme-engine.js').then(({ setThemeChangeListener }) => {
-        setThemeChangeListener(null);
-      });
+      void import('../theme-engine.js')
+        .then(({ setThemeChangeListener }) => {
+          setThemeChangeListener(null);
+        })
+        .catch((err) => deps.log.error('failed to clear tray theme sync', err));
     },
   };
 }

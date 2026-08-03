@@ -7,6 +7,7 @@ import {
   getFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
 import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
+import type { FloatType } from '../../scoops/tray-leader/follower-registry.js';
 import {
   getLeaderStatusWithFallback,
   type LeaderTrayRuntimeStatus,
@@ -21,6 +22,11 @@ export interface ConnectedFollowerInfo {
   runtimeId: string;
   runtime?: string;
   connectedAt?: string;
+  floatType?: FloatType;
+  hostOrigin?: string;
+  selectedScoopJid?: string;
+  health?: 'live' | 'stalled';
+  peerState?: 'connecting' | 'connected';
   /** True when the follower advertised `exec` capability (a `slicc … follow` CLI) — reach it with `ssh`. */
   exec?: boolean;
   /** True when the follower advertised browser targets — reach its tabs with `playwright-cli`. */

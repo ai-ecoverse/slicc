@@ -14,8 +14,17 @@ const SAMPLE_SECTIONS: MonitorSection[] = [
     id: 'scoops',
     label: 'Scoops',
     count: 2,
+    meta: '1 working',
+    accent: 'violet',
     rows: [
-      { name: 'sliccy (cone)', meta: 'processing', active: true },
+      {
+        name: 'sliccy (cone)',
+        meta: 'processing',
+        active: true,
+        icon: 'bot',
+        sublabel: 'Cone · primary workspace agent',
+        badges: ['browser', 'shell'],
+      },
       { name: 'researcher', meta: 'idle' },
     ],
   },
@@ -25,7 +34,13 @@ const SAMPLE_SECTIONS: MonitorSection[] = [
     count: 1,
     rows: [{ name: 'daily-backup', meta: '0 3 * * *', active: true }],
   },
-  { id: 'webhooks', label: 'Webhooks', count: 0, rows: [] },
+  {
+    id: 'webhooks',
+    label: 'Webhooks',
+    count: 0,
+    rows: [],
+    emptyText: 'Connect a webhook to receive external events.',
+  },
 ];
 
 describe('slicc-monitor', () => {
@@ -63,11 +78,26 @@ describe('slicc-monitor', () => {
     expect(rows[1].querySelector('.monitor-row__name')!.textContent).toBe('researcher');
   });
 
+  it('renders rich row icons, sublabels, and capability badges', () => {
+    const el = mount(SAMPLE_SECTIONS);
+    const row = el.querySelector('[data-section="scoops"] .monitor-row')!;
+    expect(row.tagName).toBe('LI');
+    expect(row.querySelector('.monitor-row__icon svg')).not.toBeNull();
+    expect(row.querySelector('.monitor-row__sublabel')!.textContent).toBe(
+      'Cone · primary workspace agent'
+    );
+    expect(
+      [...row.querySelectorAll('.monitor-row__badge')].map((badge) => badge.textContent)
+    ).toEqual(['browser', 'shell']);
+  });
+
   it('applies active dot class for active rows', () => {
     const el = mount(SAMPLE_SECTIONS);
-    const dots = el.querySelectorAll('[data-section="scoops"] .monitor-row__dot');
-    expect(dots[0].classList.contains('monitor-row__dot--active')).toBe(true);
-    expect(dots[1].classList.contains('monitor-row__dot--active')).toBe(false);
+    const states = el.querySelectorAll('[data-section="scoops"] .monitor-row__state');
+    expect(states[0].classList.contains('monitor-row__state--active')).toBe(true);
+    expect(states[0].textContent).toContain('Active');
+    expect(states[1].classList.contains('monitor-row__state--idle')).toBe(true);
+    expect(states[1].textContent).toContain('Idle');
   });
 
   it('applies error dot class for error rows', () => {
@@ -79,8 +109,23 @@ describe('slicc-monitor', () => {
         rows: [{ name: 'broken', meta: 'err', error: true }],
       },
     ]);
-    const dot = el.querySelector('.monitor-row__dot--error');
-    expect(dot).not.toBeNull();
+    const state = el.querySelector('.monitor-row__state--error');
+    expect(state).not.toBeNull();
+    expect(state!.textContent).toContain('Error');
+  });
+
+  it('renders explicit warning status ahead of legacy booleans', () => {
+    const el = mount([
+      {
+        id: 'warn',
+        label: 'Warnings',
+        count: 1,
+        rows: [{ name: 'stalled', meta: '2m', active: true, status: 'warn' }],
+      },
+    ]);
+    const row = el.querySelector('.monitor-row')!;
+    expect(row.getAttribute('data-status')).toBe('warn');
+    expect(row.querySelector('.monitor-row__state--warn')!.textContent).toContain('Warning');
   });
 
   it('marks empty sections with --empty modifier', () => {
@@ -89,6 +134,21 @@ describe('slicc-monitor', () => {
     expect(empty!.classList.contains('monitor-section--empty')).toBe(true);
     const notEmpty = el.querySelector('[data-section="scoops"]');
     expect(notEmpty!.classList.contains('monitor-section--empty')).toBe(false);
+  });
+
+  it('renders custom friendly empty-state copy', () => {
+    const el = mount(SAMPLE_SECTIONS);
+    const empty = el.querySelector('[data-section="webhooks"] .monitor-empty')!;
+    expect(empty.getAttribute('role')).toBe('status');
+    expect(empty.querySelector('.monitor-empty__title')!.textContent).toBe('No webhooks yet');
+    expect(empty.querySelector('.monitor-empty__text')!.textContent).toBe(
+      'Connect a webhook to receive external events.'
+    );
+  });
+
+  it('applies the section accent hook', () => {
+    const el = mount(SAMPLE_SECTIONS);
+    expect(el.querySelector('[data-section="scoops"]')!.getAttribute('data-accent')).toBe('violet');
   });
 
   it('shows count badges', () => {
@@ -101,18 +161,48 @@ describe('slicc-monitor', () => {
 
   it('renders a refresh button in toolbar', () => {
     const el = mount(SAMPLE_SECTIONS);
-    const btn = el.querySelector('.monitor-toolbar__refresh');
+    const btn = el.querySelector('.monitor-summary__refresh');
     expect(btn).not.toBeNull();
     expect(btn!.textContent).toContain('Refresh');
+    expect(btn!.getAttribute('aria-label')).toBe('Refresh monitor data');
   });
 
   it('dispatches slicc-monitor-refresh on refresh click', () => {
     const el = mount(SAMPLE_SECTIONS);
     const handler = vi.fn();
     el.addEventListener('slicc-monitor-refresh', handler);
-    const btn = el.querySelector<HTMLButtonElement>('.monitor-toolbar__refresh')!;
+    const btn = el.querySelector<HTMLButtonElement>('.monitor-summary__refresh')!;
     btn.click();
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('summarizes tracked, active, attention, and cost values', () => {
+    const el = mount([
+      ...SAMPLE_SECTIONS,
+      {
+        id: 'alerts',
+        label: 'Alerts',
+        count: 1,
+        rows: [{ name: 'stalled', meta: '2m', status: 'warn' }],
+      },
+      {
+        id: 'cost',
+        label: 'Cost',
+        count: 1,
+        meta: '$1.23 this session',
+        rows: [{ name: 'model', meta: '$1.23' }],
+      },
+    ]);
+    const metrics = [...el.querySelectorAll('.monitor-summary__metric')].map((metric) => ({
+      label: metric.querySelector('dt')!.textContent,
+      value: metric.querySelector('dd')!.textContent,
+    }));
+    expect(metrics).toEqual([
+      { label: 'Tracked', value: '4' },
+      { label: 'Active', value: '2' },
+      { label: 'Attention', value: '1' },
+      { label: 'Session cost', value: '$1.23 this session' },
+    ]);
   });
 
   it('collapses a section on header click and persists state', () => {
@@ -128,6 +218,7 @@ describe('slicc-monitor', () => {
     )!;
     expect(body!.hasAttribute('hidden')).toBe(true);
     expect(updatedHeader.getAttribute('aria-expanded')).toBe('false');
+    expect(updatedHeader.getAttribute('aria-controls')).toBe(body!.id);
     const stored = JSON.parse(localStorage.getItem('slicc_monitor_collapsed')!);
     expect(stored).toContain('scoops');
   });
@@ -166,6 +257,8 @@ describe('slicc-monitor', () => {
     const el = mount(SAMPLE_SECTIONS);
     const copy = el.sections;
     copy.push({ id: 'extra', label: 'X', count: 0, rows: [] });
+    copy[0].rows[0].badges!.push('mutated');
     expect(el.sections).toHaveLength(3);
+    expect(el.sections[0].rows[0].badges).toEqual(['browser', 'shell']);
   });
 });

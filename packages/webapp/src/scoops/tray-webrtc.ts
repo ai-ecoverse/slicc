@@ -96,6 +96,8 @@ export interface LeaderTrayPeerManagerOptions {
   sendControlMessage: (message: LeaderToWorkerControlMessage) => void;
   peerConnectionFactory?: TrayPeerConnectionFactory;
   dataChannelLabel?: string;
+  /** Called whenever the visible peer set or a peer's connecting/connected state changes. */
+  onPeersChanged?: () => void;
   onPeerConnected?: (peer: LeaderTrayPeerState, channel: TrayDataChannelLike) => void;
   /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
   onPeerDisconnected?: (bootstrapId: string, reason: string) => void;
@@ -187,6 +189,7 @@ export class LeaderTrayPeerManager {
       active.peer.close();
     }
     this.peers.clear();
+    this.options.onPeersChanged?.();
   }
 
   private async handleJoinRequested(message: FollowerJoinRequestedMessage): Promise<void> {
@@ -202,6 +205,7 @@ export class LeaderTrayPeerManager {
     };
     const channel = bindSctpLimit(peer.createDataChannel(this.dataChannelLabel), peer);
     this.peers.set(message.bootstrapId, { state, peer, channel });
+    this.options.onPeersChanged?.();
 
     peer.addEventListener('icecandidate', ({ candidate }) => {
       const normalized = normalizeIceCandidate(candidate);
@@ -242,6 +246,7 @@ export class LeaderTrayPeerManager {
       active.state.state = 'connected';
       active.state.connectedAt = new Date().toISOString();
       this.options.onPeerConnected?.({ ...active.state }, active.channel);
+      this.options.onPeersChanged?.();
     });
     channel.addEventListener('close', () => {
       const active = this.peers.get(message.bootstrapId);
@@ -292,6 +297,7 @@ export class LeaderTrayPeerManager {
     if (!active) return;
     active.peer.close();
     this.peers.delete(message.bootstrapId);
+    this.options.onPeersChanged?.();
     try {
       this.options.sendControlMessage({
         type: 'bootstrap.failed',

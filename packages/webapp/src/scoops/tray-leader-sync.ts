@@ -28,7 +28,9 @@ import type { LeaderSyncContext } from './tray-leader/context.js';
 import { FollowerDispatch } from './tray-leader/follower-dispatch.js';
 import {
   type ConnectedFollower,
+  deriveFloatType,
   type FloatType,
+  type FollowerDetails,
   FollowerRegistry,
   labelForFollower,
 } from './tray-leader/follower-registry.js';
@@ -52,7 +54,7 @@ import type { TrayDataChannelLike } from './tray-webrtc.js';
 const log = createLogger('tray-leader-sync');
 
 export type { FloatType, RemoteExecResult };
-export { isCherryTarget, labelForFollower, selectTeleportPool };
+export { deriveFloatType, isCherryTarget, labelForFollower, selectTeleportPool };
 
 export interface LeaderSyncManagerOptions {
   /** Get current chat messages for the active scoop. */
@@ -336,6 +338,10 @@ export class LeaderSyncManager {
 
   getFollowerMotds(): Map<string, string> {
     return this.followerRegistry.getFollowerMotds();
+  }
+
+  getFollowerDetails(): FollowerDetails[] {
+    return this.followerRegistry.getFollowerDetails();
   }
 
   setLocalTargets(targets: RemoteTargetInfo[]): void {
