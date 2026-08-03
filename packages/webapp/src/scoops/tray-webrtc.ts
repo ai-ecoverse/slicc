@@ -289,6 +289,10 @@ export class LeaderTrayPeerManager {
   private closeControllerPeers(controllerId: string): void {
     for (const [bootstrapId, active] of this.peers.entries()) {
       if (active.state.controllerId === controllerId) {
+        if (active.state.state === 'connected') {
+          this.options.onPeerDisconnected?.(bootstrapId, 'Controller superseded');
+          this.options.onPeerTransportClosed?.(bootstrapId, 'Controller superseded');
+        }
         active.peer.close();
         this.peers.delete(bootstrapId);
       }
