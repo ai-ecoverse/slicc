@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import type {
+  FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
+} from '../src/tray-sync-protocol.js';
 import {
   CHERRY_RUNTIME_TAG,
   isCherryHostEventMessage,
@@ -8,9 +12,55 @@ import {
 } from '../src/tray-sync-protocol.js';
 
 describe('tray-sync-protocol', () => {
-  it('exposes protocol version 4 and the cherry runtime tag', () => {
-    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(4);
+  it('exposes protocol version 5 and the cherry runtime tag', () => {
+    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(5);
     expect(CHERRY_RUNTIME_TAG).toBe('slicc-cherry');
+  });
+
+  it('includes model catalog and selection state in leader messages', () => {
+    const messages: LeaderToFollowerMessage[] = [
+      {
+        type: 'models.list',
+        models: [
+          {
+            providerName: 'Example Provider',
+            modelId: 'example:reasoner',
+            modelName: 'Reasoner',
+            reasoning: true,
+          },
+        ],
+      },
+      {
+        type: 'model.state',
+        state: {
+          activeModelId: 'example:reasoner',
+          scoopJid: 'scoop@example',
+          thinkingLevel: 'xhigh',
+          effortOverride: 'max',
+        },
+      },
+    ];
+
+    expect(messages.map((message) => message.type)).toEqual(['models.list', 'model.state']);
+  });
+
+  it('includes model catalog requests and model/thinking selection in follower messages', () => {
+    const messages: FollowerToLeaderMessage[] = [
+      { type: 'models.request' },
+      { type: 'model.select', modelId: 'example:reasoner' },
+      {
+        type: 'thinking.set',
+        scoopJid: 'scoop@example',
+        thinkingLevel: 'xhigh',
+        effortOverride: 'max',
+      },
+    ];
+
+    expect(messages.map((message) => message.type)).toEqual([
+      'models.request',
+      'model.select',
+      'thinking.set',
+    ]);
   });
 
   describe('isCherryHostEventMessage', () => {

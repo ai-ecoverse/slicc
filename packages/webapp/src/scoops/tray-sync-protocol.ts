@@ -50,10 +50,13 @@ export type {
   TrayFsRequest,
   TrayFsResponse,
   TrayFsResponseData,
+  TrayModelCatalogEntry,
+  TrayModelSelectionState,
   TraySyncCapabilities,
   TraySyncHelloMessage,
   TraySyncMessage,
   TrayTargetEntry,
+  TrayThinkingLevel,
 } from '@slicc/shared-ts';
 export {
   CHERRY_RUNTIME_TAG,

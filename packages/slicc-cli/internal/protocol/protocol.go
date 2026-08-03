@@ -8,7 +8,7 @@ package protocol
 import "encoding/json"
 
 // TraySyncProtocolVersion mirrors TRAY_SYNC_PROTOCOL_VERSION.
-const TraySyncProtocolVersion = 4
+const TraySyncProtocolVersion = 5
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"
