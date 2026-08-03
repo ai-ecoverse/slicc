@@ -16,6 +16,9 @@ struct InputBar: View {
     /// when the follower is viewing a different one, the streaming-send /
     /// steer affordance hides so an interrupt cannot hit the wrong turn.
     var steersActiveScoop: Bool = true
+    /// Push-to-talk controller owned above the adaptive shell branch so an
+    /// in-flight hold survives a live resize.
+    @ObservedObject var ptt: PttController
     /// Send the composed message: trimmed text + any staged attachments
     /// (nil rather than an empty array, matching the wire shape) + whether
     /// the turn was dictated, which arms the spoken reply.
@@ -28,11 +31,6 @@ struct InputBar: View {
     @FocusState private var isFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.palette) private var palette
-
-    /// Push-to-talk: holding the EMPTY composer dictates a message
-    /// (`PttController` owns the state machine; the engine is swappable so
-    /// UI tests script it via `-uiTestSpeechPermission`).
-    @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
 
     /// Photos staged for the next send (downscaled + base64 already).
     @State private var stagedAttachments: [MessageAttachment] = []
@@ -326,7 +324,7 @@ struct InputBar: View {
 
     /// The recognizer behind push-to-talk: a UI test's scripted fake when
     /// the launch arguments ask for one, Apple's on-device engine otherwise.
-    private static func makeDictationEngine() -> DictationEngine {
+    static func makeDictationEngine() -> DictationEngine {
         #if DEBUG
             if let scripted = UITestHooks.speechEngine() { return scripted }
         #endif
@@ -424,6 +422,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: true,
+                ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
                 onAbort: {}
             )
@@ -441,6 +440,7 @@ struct InputBar: View {
                 text: .constant("Hello world"),
                 isStreaming: true,
                 isConnected: true,
+                ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
                 onAbort: {}
             )
@@ -458,6 +458,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: false,
+                ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
                 onAbort: {}
             )

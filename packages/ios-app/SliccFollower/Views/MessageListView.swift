@@ -10,6 +10,23 @@ struct MessageListView: View {
     var toolUICards: [ToolUIPlaceholder] = []
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
+    /// Owned above ChatView's compact/regular branch so subtree replacement
+    /// restores the same viewport instead of jumping to the newest message.
+    @Binding var scrollPosition: ScrollPosition
+
+    init(
+        messages: [ChatMessage],
+        isStreaming: Bool,
+        toolUICards: [ToolUIPlaceholder] = [],
+        onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)? = nil,
+        scrollPosition: Binding<ScrollPosition>
+    ) {
+        self.messages = messages
+        self.isStreaming = isStreaming
+        self.toolUICards = toolUICards
+        self.onInlineSprinkleLick = onInlineSprinkleLick
+        _scrollPosition = scrollPosition
+    }
 
     @Environment(\.palette) private var palette
 
@@ -41,72 +58,65 @@ struct MessageListView: View {
     // MARK: - Message List
 
     private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(groupedMessages) { group in
-                        // Timestamp header
-                        Text(group.label)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(palette.ink.opacity(0.3))
-                            .padding(.top, 12)
-                            .padding(.bottom, 4)
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(groupedMessages) { group in
+                    // Timestamp header
+                    Text(group.label)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(palette.ink.opacity(0.3))
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
 
-                        ForEach(group.messages) { message in
-                            MessageBubble(
-                                message: message,
-                                onInlineSprinkleLick: onInlineSprinkleLick
-                            )
-                            .id(message.id)
-                            .padding(.horizontal, 12)
-                            // SwiftUI pushes an identifier down onto the row's
-                            // leaf elements rather than minting a container,
-                            // so every bubble, pill and tool button inside a
-                            // message carries this id. That is what lets UI
-                            // tests ask which messages are on screen without
-                            // matching on user-visible copy.
-                            .accessibilityIdentifier("message-\(message.id)")
-                        }
+                    ForEach(group.messages) { message in
+                        MessageBubble(
+                            message: message,
+                            onInlineSprinkleLick: onInlineSprinkleLick
+                        )
+                        .id(message.id)
+                        .padding(.horizontal, 12)
+                        // SwiftUI pushes an identifier down onto the row's
+                        // leaf elements rather than minting a container,
+                        // so every bubble, pill and tool button inside a
+                        // message carries this id. That is what lets UI
+                        // tests ask which messages are on screen without
+                        // matching on user-visible copy.
+                        .accessibilityIdentifier("message-\(message.id)")
                     }
-
-                    // Approval placeholders sit after the transcript, matching
-                    // the leader mounting them outside the message list.
-                    ForEach(toolUICards) { card in
-                        ToolUICardView(card: card)
-                            .padding(.horizontal, 12)
-                    }
-
-                    // Invisible anchor at bottom
-                    Color.clear
-                        .frame(height: 1)
-                        .id("bottom")
                 }
-                .padding(.vertical, 8)
+
+                // Approval placeholders sit after the transcript, matching
+                // the leader mounting them outside the message list.
+                ForEach(toolUICards) { card in
+                    ToolUICardView(card: card)
+                        .padding(.horizontal, 12)
+                }
+
+                // Invisible anchor at bottom
+                Color.clear
+                    .frame(height: 1)
+                    .id("bottom")
             }
-            .onChange(of: messages.count) { _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: toolUICards.count) { _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: messages.last?.content) { _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onAppear {
-                scrollToBottom(proxy: proxy, animated: false)
-            }
+            .scrollTargetLayout()
+            .padding(.vertical, 8)
+        }
+        .scrollPosition($scrollPosition)
+        .onChange(of: messages.count) { _, _ in
+            scrollToBottom()
+        }
+        .onChange(of: toolUICards.count) { _, _ in
+            scrollToBottom()
+        }
+        .onChange(of: messages.last?.content) { _, _ in
+            scrollToBottom()
         }
     }
 
     // MARK: - Scroll Helper
 
-    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
-        if animated {
-            withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo("bottom", anchor: .bottom)
-            }
-        } else {
-            proxy.scrollTo("bottom", anchor: .bottom)
+    private func scrollToBottom() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            scrollPosition.scrollTo(edge: .bottom)
         }
     }
 
@@ -179,6 +189,7 @@ private struct MessageGroup: Identifiable {
                 id: "2", role: .assistant, content: "Hi there! How can I help?",
                 timestamp: Date().timeIntervalSince1970 * 1000),
         ],
-        isStreaming: false
+        isStreaming: false,
+        scrollPosition: .constant(ScrollPosition(idType: String.self, edge: .bottom))
     )
 }
