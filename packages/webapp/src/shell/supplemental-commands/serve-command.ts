@@ -13,6 +13,8 @@ import {
 import { getLickManagerSurface } from './lick-surface.js';
 import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 
+const PERSISTENT_PREVIEW_RPC_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * `serve` — mint a worker-hosted preview URL for a VFS directory and
  * broadcast it to followers.
@@ -538,6 +540,11 @@ async function mintPreview(opts: MintOpts): Promise<MintPreviewResult> {
       'no leader tray available. ' +
         'Enable multi-browser sync via `host enable` or the avatar popover.'
     );
+  }
+  if (opts.ttlMs !== undefined) {
+    // A 50 MiB snapshot takes about seven minutes at 1 Mbps, and the page-side
+    // handler does not resolve until every R2 upload and finalization completes.
+    return rpc.call('tray-open-preview', opts, { timeoutMs: PERSISTENT_PREVIEW_RPC_TIMEOUT_MS });
   }
   return rpc.call('tray-open-preview', opts);
 }

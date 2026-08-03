@@ -644,6 +644,37 @@ describe('serve command (unified preview)', () => {
     );
   });
 
+  it('gives persistent preview uploads a ten-minute panel-RPC timeout', async () => {
+    const call = vi.fn().mockResolvedValue({
+      previewToken: 'persistent-token',
+      url: 'https://persistent.sliccy.now/index.html',
+      pushed: 0,
+    });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+    const vfs = {
+      walk: async function* () {
+        yield '/workspace/app/index.html';
+      },
+      readFile: vi.fn(async () => new TextEncoder().encode('<h1>ok</h1>')),
+    };
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+
+    const result = await createServeCommand(undefined, vfs as never).execute(
+      ['--ttl', '1d', '/workspace/app'],
+      ctx as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith(
+      'tray-open-preview',
+      expect.objectContaining({ ttlMs: 86_400_000 }),
+      { timeoutMs: 10 * 60_000 }
+    );
+  });
+
   it.each(['0d', '1.5d', '30', '1s', '-1d'])('rejects invalid --ttl value %s', async (ttl) => {
     const result = await createServeCommand().execute(
       ['--ttl', ttl, '/workspace/app'],
