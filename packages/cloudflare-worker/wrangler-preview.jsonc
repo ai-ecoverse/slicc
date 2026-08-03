@@ -3,6 +3,7 @@
   "main": "src/preview-worker.ts",
   "compatibility_date": "2024-12-01",
   "routes": [{ "pattern": "*.sliccy.now/*", "zone_name": "sliccy.now" }],
+  "r2_buckets": [{ "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }],
   "durable_objects": {
     "bindings": [
       {
@@ -17,6 +18,7 @@
     "staging": {
       "name": "slicc-preview-staging",
       "routes": [{ "pattern": "*.sliccy.dev/*", "zone_name": "sliccy.dev" }],
+      "r2_buckets": [{ "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }],
       "durable_objects": {
         "bindings": [
           {

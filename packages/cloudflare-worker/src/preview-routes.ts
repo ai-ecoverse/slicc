@@ -10,6 +10,10 @@
 // the DO is a plain class whose only production surface is `fetch(request)`.
 // See session-tray.ts dispatcher for the matching `/internal/preview/...` branches.
 
+import {
+  MAX_PREVIEW_FILE_BYTES,
+  normalizePreviewArchivePath,
+} from './persistent-preview-storage.js';
 import { jsonResponse } from './shared.js';
 
 interface TrayStub {
@@ -37,6 +41,7 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
     webhookId?: string;
     userHash?: string;
     quiet?: boolean;
+    ttlMs?: number;
   };
   try {
     body = (await request.json()) as {
@@ -48,6 +53,7 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
       webhookId?: string;
       userHash?: string;
       quiet?: boolean;
+      ttlMs?: number;
     };
   } catch {
     return jsonResponse({ error: 'invalid body' }, 400);
@@ -71,8 +77,86 @@ export async function handlePreviewMint(request: Request, trayStub: TrayStub): P
         webhookId: body.webhookId,
         userHash: body.userHash,
         quiet: body.quiet,
+        ttlMs: body.ttlMs,
         workerBaseUrl,
       }),
+    })
+  );
+}
+
+export async function handlePreviewUpload(
+  request: Request,
+  trayStub: TrayStub,
+  bucket: R2Bucket,
+  previewToken: string
+): Promise<Response> {
+  const uploadToken = extractBearer(request);
+  if (!uploadToken) return jsonResponse({ error: 'unauthorized' }, 401);
+  const relativePath = normalizePreviewArchivePath(
+    new URL(request.url).searchParams.get('path') ?? ''
+  );
+  if (!relativePath) return jsonResponse({ error: 'invalid preview file path' }, 400);
+  const bytes = await request.arrayBuffer();
+  if (bytes.byteLength > MAX_PREVIEW_FILE_BYTES) {
+    return jsonResponse({ error: 'preview file exceeds 25 MiB limit' }, 413);
+  }
+  const uploadBody: {
+    previewToken: string;
+    uploadToken: string;
+    relativePath: string;
+    size: number;
+    mime?: string;
+    etag?: string;
+    objectKey?: string;
+  } = { previewToken, uploadToken, relativePath, size: bytes.byteLength };
+  const authorized = await trayStub.fetch(
+    new Request('https://internal/internal/preview/upload-authorize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(uploadBody),
+    })
+  );
+  if (!authorized.ok) return authorized;
+  const { objectKey } = (await authorized.json()) as { objectKey: string };
+  const key = objectKey;
+  try {
+    const object = await bucket.put(key, bytes, {
+      httpMetadata: {
+        contentType: request.headers.get('content-type') ?? 'application/octet-stream',
+      },
+    });
+    uploadBody.mime = request.headers.get('content-type') ?? 'application/octet-stream';
+    uploadBody.etag = object.etag;
+    uploadBody.objectKey = objectKey;
+  } catch {
+    return jsonResponse({ error: 'persistent preview upload failed' }, 502);
+  }
+  const committed = await trayStub.fetch(
+    new Request('https://internal/internal/preview/upload-commit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(uploadBody),
+    })
+  );
+  if (!committed.ok) {
+    await bucket.delete(key).catch(() => {});
+    return committed;
+  }
+  return new Response(null, { status: 204 });
+}
+
+export async function handlePreviewFinalize(
+  request: Request,
+  trayStub: TrayStub,
+  previewToken: string
+): Promise<Response> {
+  const uploadToken = extractBearer(request);
+  if (!uploadToken) return jsonResponse({ error: 'unauthorized' }, 401);
+  return trayStub.fetch(
+    new Request('https://internal/internal/preview/finalize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previewToken, uploadToken }),
     })
   );
 }

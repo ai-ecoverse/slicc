@@ -5,7 +5,15 @@
  * `this`, so the durable object class keeps thin delegation wrappers.
  */
 
-import { jsonResponse, type PreviewRecord } from './shared.js';
+import {
+  MAX_PREVIEW_FILE_BYTES,
+  MAX_PREVIEW_FILES,
+  MAX_PREVIEW_TOTAL_BYTES,
+  MAX_PREVIEW_TTL_MS,
+  normalizePreviewArchivePath,
+  PREVIEW_ARCHIVE_PREFIX,
+} from './persistent-preview-storage.js';
+import { createCapabilityToken, jsonResponse, type PreviewRecord } from './shared.js';
 
 // ────────────────────────────────────────────────────────────────────────
 // Types
@@ -99,6 +107,10 @@ export interface PreviewDeps {
   sendToLeader(message: unknown): boolean;
   matchesToken(received: string, expected: string): boolean;
   pendingPreviews: Map<string, PreviewAssembler>;
+  now(): number;
+  archiveAvailable(): boolean;
+  deleteArchivePrefix(prefix: string): Promise<void>;
+  scheduleExpiry(timestamp: number | null): Promise<void>;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -165,6 +177,15 @@ export async function dispatchPreviewRoute(
   if (pathname === '/internal/preview/fetch' && method === 'POST') {
     return handlePreviewFetch(request, deps);
   }
+  if (pathname === '/internal/preview/upload-authorize' && method === 'POST') {
+    return handlePreviewUploadAuthorize(request, deps);
+  }
+  if (pathname === '/internal/preview/upload-commit' && method === 'POST') {
+    return handlePreviewUploadCommit(request, deps);
+  }
+  if (pathname === '/internal/preview/finalize' && method === 'POST') {
+    return handlePreviewFinalize(request, deps);
+  }
   if (pathname === '/internal/preview/emit' && method === 'POST') {
     return handlePreviewEmit(request, deps);
   }
@@ -185,7 +206,9 @@ async function handlePreviewMint(request: Request, deps: PreviewDeps): Promise<R
     bridge?: boolean;
     maxTabs?: number;
     webhookId?: string;
+    userHash?: string;
     quiet?: boolean;
+    ttlMs?: number;
   };
   await deps.loadTray();
   const tray = deps.getTray();
@@ -358,11 +381,99 @@ async function handlePreviewEmit(request: Request, deps: PreviewDeps): Promise<R
   return jsonResponse({ ok: true }, 200);
 }
 
+interface PreviewUploadBody {
+  previewToken: string;
+  uploadToken: string;
+  relativePath: string;
+  size: number;
+  mime?: string;
+  etag?: string;
+  objectKey?: string;
+}
+
+function previewRouteError(err: unknown): Response {
+  const status = (err as { status?: number }).status ?? 400;
+  return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, status);
+}
+
+async function handlePreviewUploadAuthorize(
+  request: Request,
+  deps: PreviewDeps
+): Promise<Response> {
+  try {
+    const body = (await request.json()) as PreviewUploadBody;
+    return jsonResponse(await authorizePreviewUpload(body, deps), 200);
+  } catch (err) {
+    return previewRouteError(err);
+  }
+}
+
+async function handlePreviewUploadCommit(request: Request, deps: PreviewDeps): Promise<Response> {
+  try {
+    const body = (await request.json()) as PreviewUploadBody;
+    await commitPreviewUpload(body, deps);
+    return jsonResponse({ uploaded: true }, 200);
+  } catch (err) {
+    return previewRouteError(err);
+  }
+}
+
+async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promise<Response> {
+  try {
+    const body = (await request.json()) as { previewToken: string; uploadToken: string };
+    return jsonResponse(await finalizePersistentPreview(body, deps), 200);
+  } catch (err) {
+    return previewRouteError(err);
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // CRUD operations
 // ────────────────────────────────────────────────────────────────────────
 
 const MAX_PREVIEWS_PER_TRAY = 10;
+
+function routeError(message: string, status = 400): Error {
+  return Object.assign(new Error(message), { status });
+}
+
+function isPersistent(record: PreviewRecord): boolean {
+  return record.mode === 'persistent';
+}
+
+function isReady(record: PreviewRecord): boolean {
+  return record.state === undefined || record.state === 'ready';
+}
+
+function isExpired(record: PreviewRecord, now: number): boolean {
+  return !!record.expiresAt && Date.parse(record.expiresAt) <= now;
+}
+
+async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
+  const tray = deps.getTray();
+  const expiries = Object.values(tray?.previews ?? {})
+    .filter(isPersistent)
+    .map((record) => Date.parse(record.expiresAt ?? ''))
+    .filter(Number.isFinite);
+  await deps.scheduleExpiry(expiries.length > 0 ? Math.min(...expiries) : null);
+}
+
+export async function expirePersistentPreviews(deps: PreviewDeps): Promise<void> {
+  await deps.loadTray();
+  const tray = deps.getTray();
+  if (!tray?.previews) return;
+  let changed = false;
+  for (const [token, record] of Object.entries(tray.previews)) {
+    if (!isPersistent(record) || !isExpired(record, deps.now())) continue;
+    if (record.archivePrefix) {
+      await deps.deleteArchivePrefix(record.archivePrefix).catch(() => {});
+    }
+    delete tray.previews[token];
+    changed = true;
+  }
+  if (changed) await deps.persistTray();
+  await scheduleNextPersistentExpiry(deps);
+}
 
 // Both are normalized absolute VFS paths and entryPath is guaranteed to be a
 // descendant of servedRoot (serve-command.ts's isSafeServeEntry rejects
@@ -371,9 +482,20 @@ const MAX_PREVIEWS_PER_TRAY = 10;
 // relative links inside the entry HTML resolving the same way they would
 // under `open`, matching preview-handler.ts's joinUnderRoot resolution for
 // every other path.
-function entryRelativeUrlPath(servedRoot: string, entryPath: string): string {
-  if (servedRoot === '/') return entryPath;
-  return entryPath.slice(servedRoot.length) || '/';
+function validatedEntryRelativePath(servedRoot: string, entryPath: string): string {
+  const validRoot =
+    servedRoot === '/' ||
+    (servedRoot.startsWith('/') && normalizePreviewArchivePath(servedRoot.slice(1)) !== null);
+  const rootPrefix = servedRoot === '/' ? '/' : `${servedRoot.replace(/\/$/, '')}/`;
+  const relativeCandidate = entryPath.startsWith(rootPrefix)
+    ? entryPath.slice(rootPrefix.length)
+    : entryPath.startsWith('/')
+      ? entryPath.slice(1)
+      : '';
+  if (!validRoot) throw routeError('invalid preview served root');
+  const relativePath = normalizePreviewArchivePath(relativeCandidate);
+  if (!relativePath) throw routeError('invalid preview entry path');
+  return relativePath;
 }
 
 export async function mintPreview(
@@ -388,9 +510,10 @@ export async function mintPreview(
     webhookId?: string;
     userHash?: string;
     quiet?: boolean;
+    ttlMs?: number;
   },
   deps: PreviewDeps
-): Promise<{ previewToken: string; url: string }> {
+): Promise<{ previewToken: string; url: string; uploadToken?: string }> {
   await deps.loadTray();
   const tray = deps.getTray();
   if (!tray) {
@@ -401,24 +524,55 @@ export async function mintPreview(
     throw new Error('Invalid controller capability');
   }
 
-  const { createCapabilityToken } = await import('./shared.js');
   const { buildPreviewUrl } = await import('@slicc/shared-ts');
 
   const previewToken = createCapabilityToken(tray.trayId, 10);
+  const entryRelativePath = validatedEntryRelativePath(req.servedRoot, req.entryPath);
+  const persistent = req.ttlMs !== undefined;
+  if (persistent) {
+    if (!Number.isSafeInteger(req.ttlMs) || req.ttlMs! <= 0) {
+      throw routeError('--ttl must be a positive duration', 400);
+    }
+    if (req.ttlMs! > MAX_PREVIEW_TTL_MS) {
+      throw routeError(
+        '--ttl cannot exceed 30d; longer retention requires a Sliccy Deluxe De-Enshittification plan.',
+        400
+      );
+    }
+    if (!deps.archiveAvailable()) throw routeError('persistent preview storage unavailable', 503);
+  }
+  const url = buildPreviewUrl(
+    req.workerBaseUrl,
+    previewToken,
+    `/${entryRelativePath}`,
+    req.userHash
+  );
+  const uploadToken = persistent ? createCapabilityToken(tray.trayId, 18) : undefined;
   const record: PreviewRecord = {
     previewToken,
     trayId: tray.trayId,
     servedRoot: req.servedRoot,
     entryPath: req.entryPath,
-    allowLive: req.allowLive,
+    allowLive: persistent ? false : req.allowLive,
     createdAt: deps.isoNow(),
     cacheVersion: 1,
-    bridge: req.bridge ?? false,
+    bridge: persistent ? false : (req.bridge ?? false),
     maxTabs: req.maxTabs ?? 20,
     webhookId: req.webhookId,
     userHash: req.userHash,
     quiet: req.quiet ?? false,
     announced: false,
+    url,
+    mode: persistent ? 'persistent' : 'live',
+    state: persistent ? 'pending' : 'ready',
+    expiresAt: persistent ? new Date(deps.now() + req.ttlMs!).toISOString() : undefined,
+    retentionMs: persistent ? req.ttlMs : undefined,
+    archivePrefix: persistent
+      ? `${PREVIEW_ARCHIVE_PREFIX}${tray.trayId}/${crypto.randomUUID()}/`
+      : undefined,
+    uploadToken,
+    uploadedFiles: persistent ? {} : undefined,
+    totalBytes: persistent ? 0 : undefined,
   };
 
   tray.previews ??= {};
@@ -430,14 +584,88 @@ export async function mintPreview(
   }
   tray.previews[previewToken] = record;
   await deps.persistTray();
+  if (persistent) await scheduleNextPersistentExpiry(deps);
+  return { previewToken, url, uploadToken };
+}
 
-  const url = buildPreviewUrl(
-    req.workerBaseUrl,
-    previewToken,
-    entryRelativeUrlPath(req.servedRoot, req.entryPath),
-    req.userHash
-  );
-  return { previewToken, url };
+async function persistentUploadRecord(
+  body: PreviewUploadBody,
+  deps: PreviewDeps
+): Promise<PreviewRecord> {
+  await deps.loadTray();
+  const record = deps.getTray()?.previews?.[body.previewToken];
+  if (!record || !isPersistent(record) || record.state !== 'pending') {
+    throw routeError('persistent preview is not accepting uploads', 404);
+  }
+  if (!record.uploadToken || !deps.matchesToken(body.uploadToken, record.uploadToken)) {
+    throw routeError('invalid upload capability', 403);
+  }
+  if (isExpired(record, deps.now())) throw routeError('persistent preview expired', 410);
+  return record;
+}
+
+export async function authorizePreviewUpload(
+  body: PreviewUploadBody,
+  deps: PreviewDeps
+): Promise<{ objectKey: string; relativePath: string }> {
+  const record = await persistentUploadRecord(body, deps);
+  const relativePath = normalizePreviewArchivePath(body.relativePath);
+  if (!relativePath) throw routeError('invalid preview file path');
+  if (!Number.isSafeInteger(body.size) || body.size < 0 || body.size > MAX_PREVIEW_FILE_BYTES) {
+    throw routeError('preview file exceeds 25 MiB limit', 413);
+  }
+  if (record.uploadedFiles?.[relativePath] !== undefined) {
+    throw routeError('duplicate preview file path', 409);
+  }
+  return { objectKey: `${record.archivePrefix}objects/${crypto.randomUUID()}`, relativePath };
+}
+
+export async function commitPreviewUpload(
+  body: PreviewUploadBody,
+  deps: PreviewDeps
+): Promise<void> {
+  const record = await persistentUploadRecord(body, deps);
+  const relativePath = normalizePreviewArchivePath(body.relativePath);
+  if (!relativePath) throw routeError('invalid preview file path');
+  const files = record.uploadedFiles ?? {};
+  if (files[relativePath] !== undefined) throw routeError('duplicate preview file path', 409);
+  if (Object.keys(files).length >= MAX_PREVIEW_FILES) {
+    throw routeError('persistent preview exceeds 1000 file limit', 413);
+  }
+  const nextTotal = (record.totalBytes ?? 0) + body.size;
+  if (nextTotal > MAX_PREVIEW_TOTAL_BYTES) {
+    throw routeError('persistent preview exceeds 50 MiB total limit', 413);
+  }
+  if (!body.mime || !body.etag) throw routeError('preview upload metadata missing');
+  if (!body.objectKey?.startsWith(`${record.archivePrefix}objects/`)) {
+    throw routeError('invalid preview object key');
+  }
+  files[relativePath] = {
+    key: body.objectKey,
+    size: body.size,
+    mime: body.mime,
+    etag: body.etag,
+  };
+  record.uploadedFiles = files;
+  record.totalBytes = nextTotal;
+  await deps.persistTray();
+}
+
+export async function finalizePersistentPreview(
+  body: { previewToken: string; uploadToken: string },
+  deps: PreviewDeps
+): Promise<{ previewToken: string; url: string }> {
+  const record = await persistentUploadRecord({ ...body, relativePath: '', size: 0 }, deps);
+  const entryPath = validatedEntryRelativePath(record.servedRoot, record.entryPath);
+  if (record.uploadedFiles?.[entryPath] === undefined) {
+    throw routeError('persistent preview entry file was not uploaded', 400);
+  }
+  record.state = 'ready';
+  record.expiresAt = new Date(deps.now() + record.retentionMs!).toISOString();
+  delete record.uploadToken;
+  await deps.persistTray();
+  await scheduleNextPersistentExpiry(deps);
+  return { previewToken: record.previewToken, url: record.url! };
 }
 
 export async function resolvePreview(
@@ -446,8 +674,17 @@ export async function resolvePreview(
 ): Promise<PreviewRecord | null> {
   await deps.loadTray();
   const tray = deps.getTray();
-  if (!tray || tray.expiredAt) return null;
-  return tray.previews?.[previewToken] ?? null;
+  if (!tray) return null;
+  const record = tray.previews?.[previewToken];
+  if (!record || !isReady(record)) return null;
+  if (isPersistent(record)) {
+    if (isExpired(record, deps.now())) {
+      await expirePersistentPreviews(deps);
+      return null;
+    }
+    return record;
+  }
+  return tray.expiredAt ? null : record;
 }
 
 export async function revokePreview(
@@ -460,9 +697,12 @@ export async function revokePreview(
     throw new Error('Tray not loaded');
   }
   if (!tray.previews?.[previewToken]) return { revoked: false };
-  const webhookId = tray.previews[previewToken].webhookId;
+  const record = tray.previews[previewToken];
+  const webhookId = record.webhookId;
+  if (record.archivePrefix) await deps.deleteArchivePrefix(record.archivePrefix).catch(() => {});
   delete tray.previews[previewToken];
   await deps.persistTray();
+  await scheduleNextPersistentExpiry(deps);
 
   deps.sendToLeader({ type: 'preview.revoked', previewToken });
   return { revoked: true, webhookId };
@@ -471,8 +711,12 @@ export async function revokePreview(
 export async function listPreviews(deps: PreviewDeps): Promise<PreviewRecord[]> {
   await deps.loadTray();
   const tray = deps.getTray();
-  if (!tray || tray.expiredAt) return [];
-  return Object.values(tray.previews ?? {});
+  if (!tray) return [];
+  await expirePersistentPreviews(deps);
+  return Object.values(tray.previews ?? {}).filter(
+    (record) =>
+      isReady(record) && (isPersistent(record) || (!tray.expiredAt && record.mode !== 'persistent'))
+  );
 }
 
 export function previewAnnouncementState(

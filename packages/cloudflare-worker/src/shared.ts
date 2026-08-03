@@ -51,6 +51,8 @@ export interface DurableObjectNamespaceLike {
 export interface DurableObjectStorageLike {
   get<T>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
+  setAlarm?(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm?(): Promise<void>;
 }
 
 export interface DurableObjectStateLike {
@@ -87,7 +89,8 @@ export interface LeaderRecord {
 /**
  * One record per active `serve` invocation (many per tray). Stored in the
  * SessionTrayDurableObject's `tray.previews` map (added to TrayRecord below).
- * Deleted on tray expiry OR on explicit `serve --stop` revoke.
+ * Live records die with the tray. Persistent records remain resolvable until
+ * their own expiry and store immutable file bytes in R2.
  */
 export interface PreviewRecord {
   previewToken: string; // unguessable: trayId.<20-byte-hex> per createCapabilityToken
@@ -103,6 +106,15 @@ export interface PreviewRecord {
   userHash?: string; // first 8 hex chars of SHA-256(providerId:userName); absent for anonymous
   quiet: boolean; // suppresses the preview's first-visit announcement
   announced: boolean; // durable per-preview first-visit latch
+  url?: string;
+  mode?: 'live' | 'persistent';
+  state?: 'pending' | 'ready';
+  expiresAt?: string;
+  retentionMs?: number;
+  archivePrefix?: string;
+  uploadToken?: string;
+  uploadedFiles?: Record<string, { key: string; size: number; mime: string; etag: string }>;
+  totalBytes?: number;
 }
 
 export interface TrayRecord {

@@ -16,9 +16,11 @@ import {
   type TurnIceServer,
   type WorkerToLeaderControlMessage,
 } from '@slicc/shared-ts';
+import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
   dispatchPreviewRoute,
+  expirePersistentPreviews,
   failAllPendingPreviews,
   handlePreviewPurge,
   listPreviews as listPreviewsImpl,
@@ -62,6 +64,7 @@ type TrayBootstrapEventInput =
 export interface SessionTrayEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
+  PREVIEW_STORAGE?: R2Bucket;
 }
 
 interface SessionTrayOptions {
@@ -109,6 +112,7 @@ export class SessionTrayDurableObject {
   private readonly fetchImpl: typeof fetch;
   private readonly turnKeyId: string | undefined;
   private readonly turnApiToken: string | undefined;
+  private readonly previewStorage: R2Bucket | undefined;
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
@@ -135,6 +139,7 @@ export class SessionTrayDurableObject {
     const typedEnv = (env && typeof env === 'object' ? env : {}) as SessionTrayEnv;
     this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
     this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
+    this.previewStorage = typedEnv.PREVIEW_STORAGE;
     this.webSocketPairFactory =
       options.webSocketPairFactory ??
       (() => {
@@ -1916,6 +1921,19 @@ export class SessionTrayDurableObject {
       sendToLeader: (msg) => this.sendToLeader(msg as WorkerToLeaderControlMessage),
       matchesToken: (r, e) => this.matchesToken(r, e),
       pendingPreviews: this.pendingPreviews,
+      now: () => this.now(),
+      archiveAvailable: () => this.previewStorage !== undefined,
+      deleteArchivePrefix: async (prefix) => {
+        if (!this.previewStorage) throw new Error('persistent preview storage unavailable');
+        await deletePreviewArchivePrefix(this.previewStorage, prefix);
+      },
+      scheduleExpiry: async (timestamp) => {
+        if (timestamp === null) {
+          await this.state.storage.deleteAlarm?.();
+        } else {
+          await this.state.storage.setAlarm?.(timestamp);
+        }
+      },
     };
   }
 
@@ -1947,7 +1965,8 @@ export class SessionTrayDurableObject {
     allowLive: boolean;
     workerBaseUrl: string;
     quiet?: boolean;
-  }): Promise<{ previewToken: string; url: string }> {
+    ttlMs?: number;
+  }): Promise<{ previewToken: string; url: string; uploadToken?: string }> {
     return mintPreviewImpl(req, this.previewDeps());
   }
 
@@ -1961,6 +1980,10 @@ export class SessionTrayDurableObject {
 
   async listPreviews(): Promise<PreviewRecord[]> {
     return listPreviewsImpl(this.previewDeps());
+  }
+
+  async alarm(): Promise<void> {
+    await expirePersistentPreviews(this.previewDeps());
   }
 
   private closeBridgeSocketsForPreview(previewToken: string): void {

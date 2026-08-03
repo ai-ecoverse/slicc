@@ -32,6 +32,8 @@ export interface MintPreviewOpts {
   quiet?: boolean;
   /** Webhook id (from pre-mint webhook creation for `--bridge`). Stored on the DO record. */
   webhookId?: string;
+  ttlMs?: number;
+  snapshotFiles?: Array<{ path: string; content: Uint8Array; mime: string }>;
 }
 
 export interface MintPreviewResult {
@@ -82,6 +84,8 @@ export interface PreviewOpListItem {
   entryPath: string;
   allowLive: boolean;
   createdAt: string;
+  mode?: 'live' | 'persistent';
+  expiresAt?: string;
 }
 
 export interface PreviewOpResult {

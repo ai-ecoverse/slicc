@@ -21,7 +21,17 @@ export interface MintArgs {
   webhookId?: string;
   userHash?: string;
   quiet?: boolean;
+  ttlMs?: number;
+  snapshotFiles?: PreviewSnapshotFile[];
 }
+
+export interface PreviewSnapshotFile {
+  path: string;
+  content: Uint8Array;
+  mime: string;
+}
+
+const PREVIEW_UPLOAD_CONCURRENCY = 4;
 
 export interface PreviewListItem {
   previewToken: string;
@@ -31,6 +41,41 @@ export interface PreviewListItem {
   allowLive: boolean;
   createdAt: string;
   userHash?: string;
+  mode?: 'live' | 'persistent';
+  expiresAt?: string;
+}
+
+async function workerError(prefix: string, response: Response): Promise<Error> {
+  try {
+    const body = (await response.clone().json()) as { error?: string };
+    if (body.error) return new Error(`${prefix}: ${body.error}`);
+  } catch {
+    // Fall through to the status-only error.
+  }
+  return new Error(`${prefix}: ${response.status}`);
+}
+
+async function uploadSnapshotFiles(
+  files: PreviewSnapshotFile[],
+  upload: (file: PreviewSnapshotFile) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    while (failure === undefined && next < files.length) {
+      const file = files[next++];
+      if (!file) continue;
+      try {
+        await upload(file);
+      } catch (err) {
+        failure = err;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PREVIEW_UPLOAD_CONCURRENCY, files.length) }, () => worker())
+  );
+  if (failure !== undefined) throw failure;
 }
 
 export async function mintPreviewViaWorker(
@@ -53,10 +98,50 @@ export async function mintPreviewViaWorker(
       webhookId: args.webhookId,
       userHash: args.userHash,
       quiet: args.quiet,
+      ttlMs: args.ttlMs,
     }),
   });
-  if (!res.ok) throw new Error(`Preview mint failed: ${res.status}`);
-  return res.json() as Promise<{ previewToken: string; url: string }>;
+  if (!res.ok) throw await workerError('Preview mint failed', res);
+  const minted = (await res.json()) as {
+    previewToken: string;
+    url: string;
+    uploadToken?: string;
+  };
+  if (args.ttlMs === undefined) return minted;
+  try {
+    if (!minted.uploadToken) throw new Error('Preview mint failed: upload capability missing');
+    await uploadSnapshotFiles(args.snapshotFiles ?? [], async (file) => {
+      const uploadUrl =
+        `${url}/${encodeURIComponent(minted.previewToken)}/file?path=` +
+        encodeURIComponent(file.path);
+      const upload = await fetchImpl(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${minted.uploadToken}`,
+          'Content-Type': file.mime,
+        },
+        body: new Uint8Array(file.content).buffer,
+      });
+      if (!upload.ok) throw await workerError(`Preview upload failed for ${file.path}`, upload);
+    });
+    const finalize = await fetchImpl(`${url}/${encodeURIComponent(minted.previewToken)}/finalize`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${minted.uploadToken}` },
+    });
+    if (!finalize.ok) throw await workerError('Preview finalize failed', finalize);
+    return (await finalize.json()) as { previewToken: string; url: string };
+  } catch (err) {
+    await revokePreviewViaWorker(
+      {
+        workerBaseUrl: args.workerBaseUrl,
+        trayId: args.trayId,
+        controllerToken: args.controllerToken,
+        previewToken: minted.previewToken,
+      },
+      fetchImpl
+    ).catch(() => {});
+    throw err;
+  }
 }
 
 export async function revokePreviewViaWorker(
@@ -77,7 +162,7 @@ export async function revokePreviewViaWorker(
     },
     body: JSON.stringify({ previewToken: args.previewToken }),
   });
-  if (!res.ok) throw new Error(`Preview revoke failed: ${res.status}`);
+  if (!res.ok) throw await workerError('Preview revoke failed', res);
   return res.json() as Promise<{ revoked: boolean; webhookId?: string }>;
 }
 
@@ -90,6 +175,6 @@ export async function listPreviewsViaWorker(
     method: 'GET',
     headers: { Authorization: `Bearer ${args.controllerToken}` },
   });
-  if (!res.ok) throw new Error(`Preview list failed: ${res.status}`);
+  if (!res.ok) throw await workerError('Preview list failed', res);
   return res.json() as Promise<{ previews: PreviewListItem[] }>;
 }

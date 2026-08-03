@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/index.js';
+import { getMimeType } from '../../core/mime-types.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import {
@@ -49,12 +50,13 @@ import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: serve [--entry <relative-path>] [--bridge | --no-bridge] [--max-tabs <n>] [--quiet] [--stop <token>] [--list] <directory>\n' +
+      'usage: serve [--entry <relative-path>] [--ttl <duration>] [--bridge | --no-bridge] [--max-tabs <n>] [--quiet] [--stop <token>] [--list] <directory>\n' +
       '       serve --logs [<token>] [--lines <n>]\n' +
       '       serve --truncate [<token>]\n\n' +
       '  Mint a worker-hosted preview URL for a VFS directory, broadcast it to\n' +
       "  all connected followers, and open it in the leader's browser.\n\n" +
       '  --entry      Override the entry file within the directory (default: index.html).\n' +
+      '  --ttl <d>    Publish an immutable snapshot for up to 30d (units: m, h, d, w).\n' +
       '  --bridge     Make every visitor tab a live, leader-driveable target and\n' +
       '               auto-provision a webhook for its window.slicc.emit() beacons.\n' +
       '  --no-bridge  Force the live bridge OFF even when followers are Cherry-attached.\n' +
@@ -86,6 +88,7 @@ interface ParsedServeArgs {
   lines?: number;
   maxTabs?: number;
   quiet: boolean;
+  ttlMs?: number;
   error?: string;
 }
 
@@ -132,11 +135,54 @@ function parseDiagnosticFlag(
   return undefined;
 }
 
+function parseTtlFlag(
+  arg: string,
+  nextArg: string | undefined,
+  state: ParsedServeArgs
+): ArgStepResult | undefined {
+  if (arg !== '--ttl' && !arg.startsWith('--ttl=')) return undefined;
+  const value = arg === '--ttl' ? nextArg : arg.slice('--ttl='.length);
+  if (!value) return { error: 'serve: missing value for --ttl\n' };
+  const match = /^([1-9][0-9]*)([mhdw])$/.exec(value);
+  if (!match) {
+    return { error: 'serve: --ttl must be a positive whole duration (m, h, d, or w)\n' };
+  }
+  const unitMs = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 } as const;
+  const ttlMs = Number(match[1]) * unitMs[match[2] as keyof typeof unitMs];
+  if (!Number.isSafeInteger(ttlMs)) {
+    return { error: 'serve: --ttl must be a positive whole duration (m, h, d, or w)\n' };
+  }
+  if (ttlMs > 30 * 86_400_000) {
+    return {
+      error:
+        'serve: --ttl cannot exceed 30d; longer retention requires a Sliccy Deluxe De-Enshittification plan.\n',
+    };
+  }
+  state.ttlMs = ttlMs;
+  return { skip: arg === '--ttl' ? 1 : 0 };
+}
+
+function parseToggleFlag(arg: string, state: ParsedServeArgs): ArgStepResult | undefined {
+  const field = {
+    '--bridge': 'bridge',
+    '--no-bridge': 'noBridge',
+    '--project': 'project',
+    '--quiet': 'quiet',
+  }[arg] as 'bridge' | 'noBridge' | 'project' | 'quiet' | undefined;
+  if (!field) return undefined;
+  state[field] = true;
+  return { skip: 0 };
+}
+
 function parseOneFlag(
   arg: string,
   nextArg: string | undefined,
   state: ParsedServeArgs
 ): ArgStepResult {
+  const ttl = parseTtlFlag(arg, nextArg, state);
+  if (ttl) return ttl;
+  const toggle = parseToggleFlag(arg, state);
+  if (toggle) return toggle;
   if (arg === '--entry') {
     if (!nextArg) return { error: 'serve: missing value for --entry\n' };
     state.entry = nextArg;
@@ -144,18 +190,6 @@ function parseOneFlag(
   }
   if (arg.startsWith('--entry=')) {
     state.entry = arg.slice('--entry='.length);
-    return { skip: 0 };
-  }
-  if (arg === '--bridge') {
-    state.bridge = true;
-    return { skip: 0 };
-  }
-  if (arg === '--no-bridge') {
-    state.noBridge = true;
-    return { skip: 0 };
-  }
-  if (arg === '--project') {
-    state.project = true;
     return { skip: 0 };
   }
   if (arg === '--stop') {
@@ -184,10 +218,6 @@ function parseOneFlag(
       return { error: 'serve: --max-tabs must be a positive integer\n' };
     }
     state.maxTabs = n;
-    return { skip: 0 };
-  }
-  if (arg === '--quiet') {
-    state.quiet = true;
     return { skip: 0 };
   }
   if (arg.startsWith('-')) {
@@ -338,10 +368,7 @@ async function listPreviews(): Promise<ServeResult> {
     if (previews.length === 0) {
       return { stdout: 'No active previews\n', stderr: '', exitCode: 0 };
     }
-    const lines = previews.map(
-      (p) => `  ${p.previewToken}  ${p.url}  ${p.servedRoot}  ${p.createdAt}\n`
-    );
-    return { stdout: `Active previews:\n${lines.join('')}`, stderr: '', exitCode: 0 };
+    return { stdout: formatPreviewList(previews), stderr: '', exitCode: 0 };
   }
   const rpc = getPanelRpcClient();
   if (!rpc) {
@@ -357,10 +384,24 @@ async function listPreviews(): Promise<ServeResult> {
   if (previews.length === 0) {
     return { stdout: 'No active previews\n', stderr: '', exitCode: 0 };
   }
+  return { stdout: formatPreviewList(previews), stderr: '', exitCode: 0 };
+}
+
+function formatPreviewList(
+  previews: Array<{
+    previewToken: string;
+    url: string;
+    servedRoot: string;
+    createdAt: string;
+    mode?: 'live' | 'persistent';
+    expiresAt?: string;
+  }>
+): string {
   const lines = previews.map(
-    (p) => `  ${p.previewToken}  ${p.url}  ${p.servedRoot}  ${p.createdAt}\n`
+    (preview) =>
+      `  ${preview.previewToken}  ${preview.mode ?? 'live'}  ${preview.expiresAt ?? '-'}  ${preview.url}  ${preview.servedRoot}  ${preview.createdAt}\n`
   );
-  return { stdout: `Active previews:\n${lines.join('')}`, stderr: '', exitCode: 0 };
+  return `Active previews:\n  TOKEN  MODE  EXPIRES  URL  ROOT  CREATED\n${lines.join('')}`;
 }
 
 const EMPTY_PREVIEW_LOG_MESSAGE =
@@ -445,6 +486,37 @@ interface MintOpts {
   maxTabs?: number;
   quiet?: boolean;
   webhookId?: string;
+  ttlMs?: number;
+  snapshotFiles?: Array<{ path: string; content: Uint8Array; mime: string }>;
+}
+
+const MAX_SNAPSHOT_FILES = 1_000;
+const MAX_SNAPSHOT_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_SNAPSHOT_TOTAL_BYTES = 50 * 1024 * 1024;
+
+async function collectSnapshotFiles(
+  vfs: VirtualFS,
+  servedRoot: string
+): Promise<Array<{ path: string; content: Uint8Array; mime: string }>> {
+  const files: Array<{ path: string; content: Uint8Array; mime: string }> = [];
+  let totalBytes = 0;
+  for await (const absolutePath of vfs.walk(servedRoot)) {
+    if (files.length >= MAX_SNAPSHOT_FILES) {
+      throw new Error('persistent preview exceeds 1000 file limit');
+    }
+    const raw = await vfs.readFile(absolutePath, { encoding: 'binary' });
+    const content = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
+    const relativePath = absolutePath.slice(servedRoot === '/' ? 1 : servedRoot.length + 1);
+    if (content.byteLength > MAX_SNAPSHOT_FILE_BYTES) {
+      throw new Error(`preview file exceeds 25 MiB limit: ${relativePath}`);
+    }
+    totalBytes += content.byteLength;
+    if (totalBytes > MAX_SNAPSHOT_TOTAL_BYTES) {
+      throw new Error('persistent preview exceeds 50 MiB total limit');
+    }
+    files.push({ path: relativePath, content, mime: getMimeType(relativePath) });
+  }
+  return files;
 }
 
 function withServeError(fn: () => Promise<ServeResult>): Promise<ServeResult> {
@@ -525,6 +597,7 @@ async function executeMint(
   entryPath: string,
   webhookId: string | undefined,
   deprecationNotice: string,
+  snapshotFiles: Array<{ path: string; content: Uint8Array; mime: string }> | undefined,
   browserAPI?: BrowserAPI
 ): Promise<ServeResult> {
   let result: MintPreviewResult;
@@ -533,10 +606,12 @@ async function executeMint(
       entryPath,
       servedRoot: fullDirectory,
       bridge: parsed.bridge,
-      noBridge: parsed.noBridge,
+      noBridge: parsed.ttlMs !== undefined || parsed.noBridge,
       maxTabs: parsed.maxTabs,
       quiet: parsed.quiet,
       webhookId,
+      ttlMs: parsed.ttlMs,
+      snapshotFiles,
     });
   } catch (err) {
     // Best-effort orphan cleanup — must NOT mask the original mint failure
@@ -567,27 +642,12 @@ async function executeMint(
   };
 }
 
-async function handleServeCommand(
-  args: string[],
-  ctx: import('just-bash').CommandContext,
-  browserAPI?: BrowserAPI
-): Promise<ServeResult> {
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-    return serveHelp();
-  }
-
-  const parsed = parseUnifiedArgs(args);
-  if (parsed.error) {
-    return { stdout: '', stderr: parsed.error, exitCode: 1 };
-  }
-
+async function handleServeOperation(parsed: ParsedServeArgs): Promise<ServeResult | undefined> {
   if (parsed.stop) {
     const stopToken = parsed.stop;
-    return await withServeError(() => stopPreview(stopToken));
+    return withServeError(() => stopPreview(stopToken));
   }
-  if (parsed.list) {
-    return await withServeError(() => listPreviews());
-  }
+  if (parsed.list) return withServeError(() => listPreviews());
   if (parsed.logs && parsed.truncate) {
     return {
       stdout: '',
@@ -600,22 +660,75 @@ async function handleServeCommand(
   }
   if (parsed.logs) {
     const previewToken = typeof parsed.logs === 'string' ? parsed.logs : undefined;
-    return await withServeError(() => previewLogs({ previewToken, lines: parsed.lines }));
+    return withServeError(() => previewLogs({ previewToken, lines: parsed.lines }));
   }
   if (parsed.truncate) {
     const previewToken = typeof parsed.truncate === 'string' ? parsed.truncate : undefined;
-    return await withServeError(() => truncatePreviewLogs(previewToken));
+    return withServeError(() => truncatePreviewLogs(previewToken));
   }
+  return undefined;
+}
+
+function validatePersistentOptions(parsed: ParsedServeArgs): ServeResult | undefined {
+  if (parsed.ttlMs !== undefined && parsed.bridge) {
+    return { stdout: '', stderr: 'serve: --ttl cannot be combined with --bridge\n', exitCode: 1 };
+  }
+  if (parsed.ttlMs !== undefined && parsed.maxTabs !== undefined) {
+    return { stdout: '', stderr: 'serve: --ttl cannot be combined with --max-tabs\n', exitCode: 1 };
+  }
+  return undefined;
+}
+
+async function snapshotForMint(
+  parsed: ParsedServeArgs,
+  vfs: VirtualFS | undefined,
+  fullDirectory: string
+): Promise<Array<{ path: string; content: Uint8Array; mime: string }> | undefined> {
+  if (parsed.ttlMs === undefined) return undefined;
+  if (!vfs) throw new Error('persistent snapshot filesystem unavailable');
+  return collectSnapshotFiles(vfs, fullDirectory);
+}
+
+async function handleServeCommand(
+  args: string[],
+  ctx: import('just-bash').CommandContext,
+  browserAPI?: BrowserAPI,
+  vfs?: VirtualFS
+): Promise<ServeResult> {
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    return serveHelp();
+  }
+
+  const parsed = parseUnifiedArgs(args);
+  if (parsed.error) {
+    return { stdout: '', stderr: parsed.error, exitCode: 1 };
+  }
+
+  const operation = await handleServeOperation(parsed);
+  if (operation) return operation;
 
   if (!parsed.directory) {
     return serveHelp();
   }
+  const persistentError = validatePersistentOptions(parsed);
+  if (persistentError) return persistentError;
 
   const validation = await validateServeTarget(parsed.directory, parsed.entry, ctx.fs, ctx.cwd);
   if (isValidationError(validation)) {
     return validation;
   }
   const { fullDirectory, entryPath } = validation;
+
+  let snapshotFiles: Array<{ path: string; content: Uint8Array; mime: string }> | undefined;
+  try {
+    snapshotFiles = await snapshotForMint(parsed, vfs, fullDirectory);
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `serve: ${err instanceof Error ? err.message : String(err)}\n`,
+      exitCode: 1,
+    };
+  }
 
   const deprecationNotice = parsed.project
     ? 'serve: --project is obsolete; ignored (root-absolute paths work natively under unified preview)\n'
@@ -633,10 +746,11 @@ async function handleServeCommand(
     entryPath,
     provision.webhookId,
     deprecationNotice,
+    snapshotFiles,
     browserAPI
   );
 }
 
-export function createServeCommand(browserAPI?: BrowserAPI, _vfs?: VirtualFS): Command {
-  return defineCommand('serve', (args, ctx) => handleServeCommand(args, ctx, browserAPI));
+export function createServeCommand(browserAPI?: BrowserAPI, vfs?: VirtualFS): Command {
+  return defineCommand('serve', (args, ctx) => handleServeCommand(args, ctx, browserAPI, vfs));
 }
