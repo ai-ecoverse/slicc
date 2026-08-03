@@ -49,7 +49,9 @@ final class CoreMotionSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
 /// Deterministic source for previews and tests.
 @MainActor
 final class FixedSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
-    let isDeviceMotionAvailable: Bool
+    var isDeviceMotionAvailable: Bool
+    private(set) var startCallCount = 0
+    private(set) var stopCallCount = 0
     private let attitude: SliccAgentAvatarAttitude
 
     init(
@@ -63,11 +65,14 @@ final class FixedSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
     func startDeviceMotionUpdates(
         _ handler: @escaping @MainActor (SliccAgentAvatarAttitude) -> Void
     ) {
+        startCallCount += 1
         guard isDeviceMotionAvailable else { return }
         handler(attitude)
     }
 
-    func stopDeviceMotionUpdates() {}
+    func stopDeviceMotionUpdates() {
+        stopCallCount += 1
+    }
 }
 
 /// Pure conversion from device attitude to the avatar geometry's pupil offset.
@@ -114,7 +119,7 @@ final class SliccAgentAvatarTiltController: ObservableObject {
     private let source: any SliccAgentAvatarTiltSource
     private let mapping: SliccAgentAvatarTiltMapping
     private var geometry: SliccAgentAvatarGeometry?
-    private var reduceMotion = false
+    private var motionDisabled = false
     private var isUpdating = false
 
     init(
@@ -125,10 +130,10 @@ final class SliccAgentAvatarTiltController: ObservableObject {
         self.mapping = mapping
     }
 
-    func update(geometry: SliccAgentAvatarGeometry, reduceMotion: Bool) {
+    func update(geometry: SliccAgentAvatarGeometry, motionDisabled: Bool) {
         self.geometry = geometry
-        self.reduceMotion = reduceMotion
-        guard geometry.eyes == .open, !reduceMotion, source.isDeviceMotionAvailable else {
+        self.motionDisabled = motionDisabled
+        guard geometry.eyes == .open, !motionDisabled, source.isDeviceMotionAvailable else {
             stopAndCenter()
             return
         }
@@ -148,7 +153,7 @@ final class SliccAgentAvatarTiltController: ObservableObject {
     private func receive(_ attitude: SliccAgentAvatarAttitude) {
         guard let geometry else { return }
         let target = mapping.pupilOffset(
-            for: attitude, geometry: geometry, reduceMotion: reduceMotion,
+            for: attitude, geometry: geometry, reduceMotion: motionDisabled,
             isDeviceMotionAvailable: source.isDeviceMotionAvailable)
         pupilOffset = mapping.smoothedOffset(from: pupilOffset, toward: target)
     }

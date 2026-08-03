@@ -10,21 +10,22 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 ## Layout
 
-| Path                                                                                                 | Purpose                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                     | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                                                    |
-| `SliccFollower/Models/SyncProtocol.swift`                                                            | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                                                              |
-| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`  | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture. See `docs/architecture.md`                                 |
-| `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                                                       |
-| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                         | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                                                           |
-| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                 |
-| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                                                     |
-| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                  | SwiftUI chat surface (`MessageListView` renders). `Models/MarkdownBlock.swift` parses fences, lists and GFM pipe tables for the bubbles                                                                           |
-| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`  | Renders `.shtml` sprinkle content received from the leader via `sprinkle.content`. Bridge calls (`lick`, `setState`, etc.) intercepted via `WKScriptMessageHandler` — VFS APIs are stubbed (graceful degradation) |
-| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`   | Phone IA (#1802): chat + 48pt dock rail (web order, tap-active collapses); workbench overlays chat. Icons are lucide `d` strings parsed by `Models/SVGPath.swift` — SF Symbols has no cone                        |
-| `SliccFollower/Views/TabsCarouselView.swift`                                                         | Carousel of locally hosted CDP target WKWebViews                                                                                                                                                                  |
-| Other views (`ChatView.swift`, `InputBar.swift`, `MessageBubble.swift`, `SettingsView.swift`, …)     | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                                                           |
-| `SliccFollower/Resources/Assets.xcassets`                                                            | App icon + asset catalog                                                                                                                                                                                          |
+| Path                                                                                                     | Purpose                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                         | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                    |
+| `SliccFollower/Models/SyncProtocol.swift`                                                                | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                              |
+| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`      | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture. See `docs/architecture.md` |
+| `SliccFollower/Sync/Keepalive.swift`                                                                     | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                       |
+| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                             | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                           |
+| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift`     | Signaling client + WebRTC peer/data-channel setup                                                                                                                                 |
+| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                                   | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                     |
+| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`                                            | SwiftUI chat surface. `MessageListView` is the active renderer                                                                                                                    |
+| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`      | Sprinkle rendering + `WKScriptMessageHandler` bridge; VFS APIs degrade gracefully                                                                                                 |
+| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`                           | Phone dock/workbench UI (#1802); unsupported leader surfaces show placeholders                                                                                                    |
+| `SliccFollower/Views/TabsCarouselView.swift`                                                             | Carousel of locally hosted CDP target WKWebViews                                                                                                                                  |
+| `SliccFollower/Models/SliccAgentAvatar*.swift`, `Views/{SliccAgentAvatarView,AvatarIsolationView}.swift` | Avatar geometry/motion, renderer, and screenshot fixture                                                                                                                          |
+| Other views (`ChatView.swift`, `InputBar.swift`, `MessageBubble.swift`, `SettingsView.swift`, …)         | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                           |
+| `SliccFollower/Resources/Assets.xcassets`                                                                | App icon + asset catalog                                                                                                                                                          |
 
 Plain SPM commands do nothing useful on a macOS host (`swift build` hits iOS-only frameworks; `Package.swift` declares no test target). Build and test go through the XcodeGen project on a simulator (see "Test + coverage").
 
@@ -121,19 +122,17 @@ when the locale supports it). Hooks: `-uiTestSpeechPermission`/
 `-uiTestSpeechScript` script the engine; `-uiTestPttStage` pins the
 overlay for screenshots.
 
-Release submits the transcript directly (`InputBar.submit(_:dictated:)`),
-never by writing the composer binding and re-reading it; an unsendable one
-stays in the composer as a draft rather than vanishing.
+## Agent Avatar
 
-Dictated turns speak their reply back, porting
-`webapp/src/speech/{dictation-priming,voice-reply}.ts`.
-`Models/DictationPriming.swift` appends the AI-only markers the model sees
-(🎙️ per turn, plus a one-time `◁…▷` note per session asking for speakable
-prose and a hidden `<!--lang:xx-->` marker); bubbles strip them at render
-time. `Models/VoiceReply.swift` counts dictated submissions — a count, not a
-flag, so queued turns stay balanced — and speaks that reply via
-`AVSpeechSynthesizer` behind the `SpeechSpeaking` seam. Typed turns stay
-silent, as does a reply whose declared language has no voice.
+`SliccAgentAvatarView` follows the web source of truth at
+`packages/webcomponents/src/switcher/slicc-agent-avatar.ts`. Its geometry-parity
+contract is `Models/SliccAgentAvatarGeometry.swift`; update both when the visible
+crop changes.
+
+`Models/SliccAgentAvatarTilt.swift` seams CoreMotion behind an injectable source;
+reduce-motion, unavailable hardware, and non-open eyes stop updates and center
+the pupils, while manual offsets bypass motion for fixtures.
+`-uiTestAvatarFixture` opens `AvatarIsolationView` for deterministic screenshots.
 
 ## Build
 

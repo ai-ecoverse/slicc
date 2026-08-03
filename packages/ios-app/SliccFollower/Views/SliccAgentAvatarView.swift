@@ -1,10 +1,30 @@
 import SwiftUI
 
 /// Static SwiftUI renderer for the web agent avatar's visible, tightly cropped shapes.
+@MainActor
 struct SliccAgentAvatarView: View {
     let avatar: SliccAgentAvatarGeometry
+    private let pupilOffsetOverride: SliccAgentAvatarGeometry.Point?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var tiltController: SliccAgentAvatarTiltController
+
+    init(
+        avatar: SliccAgentAvatarGeometry,
+        tiltSource: (any SliccAgentAvatarTiltSource)? = nil,
+        pupilOffset: SliccAgentAvatarGeometry.Point? = nil
+    ) {
+        self.avatar = avatar
+        pupilOffsetOverride = pupilOffset.map(avatar.clampedPupilOffset)
+        let source = tiltSource ?? CoreMotionSliccAgentAvatarTiltSource()
+        _tiltController = StateObject(
+            wrappedValue: SliccAgentAvatarTiltController(source: source))
+    }
+
+    private var pupilOffset: SliccAgentAvatarGeometry.Point {
+        guard !reduceMotion else { return .init(x: 0, y: 0) }
+        return pupilOffsetOverride ?? tiltController.pupilOffset
+    }
 
     private var agentColor: Color {
         guard let parsed = Color(hexToken: avatar.color) else {
@@ -28,6 +48,10 @@ struct SliccAgentAvatarView: View {
         .frame(width: avatar.sideLength, height: avatar.sideLength)
         .clipShape(RoundedRectangle(cornerRadius: avatar.tileCornerRadius))
         .accessibilityHidden(true)
+        .onAppear { synchronizeTilt() }
+        .onDisappear { tiltController.stopAndCenter() }
+        .onChange(of: reduceMotion) { _, _ in synchronizeTilt() }
+        .onChange(of: avatar) { _, _ in synchronizeTilt() }
     }
 
     @ViewBuilder
@@ -37,6 +61,7 @@ struct SliccAgentAvatarView: View {
             ForEach(Array(avatar.eyeCenters.enumerated()), id: \.offset) { index, center in
                 BlinkingAvatarEye(
                     avatar: avatar,
+                    pupilOffset: pupilOffset,
                     duration: index == 0 ? 3.4 : 4.6,
                     enabled: avatar.blink && !reduceMotion
                 )
@@ -50,6 +75,12 @@ struct SliccAgentAvatarView: View {
         case .none:
             EmptyView()
         }
+    }
+
+    private func synchronizeTilt() {
+        tiltController.update(
+            geometry: avatar,
+            motionDisabled: reduceMotion || pupilOffsetOverride != nil)
     }
 }
 
@@ -67,6 +98,7 @@ private struct EyeSurface: View {
 
 private struct BlinkingAvatarEye: View {
     let avatar: SliccAgentAvatarGeometry
+    let pupilOffset: SliccAgentAvatarGeometry.Point
     let duration: TimeInterval
     let enabled: Bool
 
@@ -88,13 +120,16 @@ private struct BlinkingAvatarEye: View {
     private var eye: some View {
         ZStack {
             EyeSurface(avatar: avatar)
-            Ellipse()
-                .fill(.black)
-                .frame(width: avatar.pupilRadius * 2, height: avatar.pupilRadius * 2)
-            Circle()
-                .fill(.white)
-                .frame(width: avatar.highlightRadius * 2, height: avatar.highlightRadius * 2)
-                .offset(x: avatar.highlightOffset.x, y: avatar.highlightOffset.y)
+            ZStack {
+                Ellipse()
+                    .fill(.black)
+                    .frame(width: avatar.pupilRadius * 2, height: avatar.pupilRadius * 2)
+                Circle()
+                    .fill(.white)
+                    .frame(width: avatar.highlightRadius * 2, height: avatar.highlightRadius * 2)
+                    .offset(x: avatar.highlightOffset.x, y: avatar.highlightOffset.y)
+            }
+            .offset(x: pupilOffset.x, y: pupilOffset.y)
         }
     }
 

@@ -21,6 +21,13 @@ import UIKit
             UserDefaults.standard.bool(forKey: "uiTestFixtureRoute")
         }
 
+        /// Route straight to the isolated avatar matrix. The value selects the
+        /// screenshot variant: `light-centered`, `light-offset`, `dark-centered`,
+        /// or `dark-offset`.
+        static var avatarFixtureVariant: String? {
+            UserDefaults.standard.string(forKey: "uiTestAvatarFixture")
+        }
+
         /// Force the connection banner into a given state. The stalled and
         /// gave-up states are otherwise only reachable by starving a real
         /// leader of pings or exhausting a real reconnect budget, neither of
