@@ -27,6 +27,32 @@ function extractBearer(request: Request): string | null {
   return token.length > 0 ? token : null;
 }
 
+class PreviewUploadTooLargeError extends Error {}
+
+async function readPreviewUploadBody(request: Request): Promise<ArrayBuffer> {
+  const reader = request.body?.getReader();
+  if (!reader) return new ArrayBuffer(0);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_PREVIEW_FILE_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new PreviewUploadTooLargeError();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
 export async function handlePreviewMint(request: Request, trayStub: TrayStub): Promise<Response> {
   const controllerToken = extractBearer(request);
   if (!controllerToken) {
@@ -96,8 +122,15 @@ export async function handlePreviewUpload(
     new URL(request.url).searchParams.get('path') ?? ''
   );
   if (!relativePath) return jsonResponse({ error: 'invalid preview file path' }, 400);
-  const bytes = await request.arrayBuffer();
-  if (bytes.byteLength > MAX_PREVIEW_FILE_BYTES) {
+  const contentLengthHeader = request.headers.get('content-length');
+  const declaredSize = contentLengthHeader === null ? null : Number(contentLengthHeader);
+  if (
+    contentLengthHeader !== null &&
+    (!/^[0-9]+$/.test(contentLengthHeader) || !Number.isSafeInteger(declaredSize))
+  ) {
+    return jsonResponse({ error: 'invalid content-length' }, 400);
+  }
+  if (declaredSize !== null && declaredSize > MAX_PREVIEW_FILE_BYTES) {
     return jsonResponse({ error: 'preview file exceeds 25 MiB limit' }, 413);
   }
   const uploadBody: {
@@ -108,7 +141,7 @@ export async function handlePreviewUpload(
     mime?: string;
     etag?: string;
     objectKey?: string;
-  } = { previewToken, uploadToken, relativePath, size: bytes.byteLength };
+  } = { previewToken, uploadToken, relativePath, size: declaredSize ?? 0 };
   const authorized = await trayStub.fetch(
     new Request('https://internal/internal/preview/upload-authorize', {
       method: 'POST',
@@ -118,6 +151,18 @@ export async function handlePreviewUpload(
   );
   if (!authorized.ok) return authorized;
   const { objectKey } = (await authorized.json()) as { objectKey: string };
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await readPreviewUploadBody(request);
+  } catch (err) {
+    return err instanceof PreviewUploadTooLargeError
+      ? jsonResponse({ error: 'preview file exceeds 25 MiB limit' }, 413)
+      : jsonResponse({ error: 'invalid upload body' }, 400);
+  }
+  if (declaredSize !== null && bytes.byteLength !== declaredSize) {
+    return jsonResponse({ error: 'content-length does not match upload body' }, 400);
+  }
+  uploadBody.size = bytes.byteLength;
   const key = objectKey;
   try {
     const object = await bucket.put(key, bytes, {

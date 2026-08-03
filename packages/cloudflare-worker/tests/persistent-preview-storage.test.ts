@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deletePreviewArchivePrefix,
+  MAX_PREVIEW_FILE_BYTES,
   normalizePreviewArchivePath,
   servePersistentPreview,
 } from '../src/persistent-preview-storage.js';
@@ -396,5 +397,72 @@ describe('persistent preview R2 serving', () => {
       'preview'
     );
     expect(finalized.status).toBe(200);
+  });
+
+  it('rejects an invalid upload capability before consuming its body', async () => {
+    const { bucket } = memoryBucket();
+    const request = new Request('https://www.sliccy.ai/file?path=index.html', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer invalid' },
+      body: 'untrusted bytes',
+    });
+    const stub = {
+      fetch: vi.fn(async () => Response.json({ error: 'invalid capability' }, { status: 403 })),
+    };
+
+    const response = await handlePreviewUpload(request, stub, bucket, 'preview');
+
+    expect(response.status).toBe(403);
+    expect(request.bodyUsed).toBe(false);
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it('rejects declared oversized uploads before authorization or buffering', async () => {
+    const { bucket } = memoryBucket();
+    const request = new Request('https://www.sliccy.ai/file?path=index.html', {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer upload',
+        'content-length': String(MAX_PREVIEW_FILE_BYTES + 1),
+      },
+      body: 'small body',
+    });
+    const stub = { fetch: vi.fn() };
+
+    const response = await handlePreviewUpload(request, stub, bucket, 'preview');
+
+    expect(response.status).toBe(413);
+    expect(request.bodyUsed).toBe(false);
+    expect(stub.fetch).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it('stops streaming an authorized upload after the file-size limit', async () => {
+    const { bucket } = memoryBucket();
+    const chunk = new Uint8Array(1024 * 1024);
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted++ <= 25) controller.enqueue(chunk);
+        else controller.close();
+      },
+    });
+    const request = new Request('https://www.sliccy.ai/file?path=index.html', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer upload' },
+      body,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const stub = {
+      fetch: vi.fn(async () =>
+        Response.json({ objectKey: 'previews/tray/snapshot/objects/oversized' })
+      ),
+    };
+
+    const response = await handlePreviewUpload(request, stub, bucket, 'preview');
+
+    expect(response.status).toBe(413);
+    expect(stub.fetch).toHaveBeenCalledTimes(1);
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 });
