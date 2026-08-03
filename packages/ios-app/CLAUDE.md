@@ -75,6 +75,7 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   `exists` and `walk` remain unsupported by the page proxy.
 - `hello`: sends `capabilities: { exec: false }` explicitly plus a device-derived `motd` for the leader's `ssh --list`. The leader's gate reads `peerCapabilities?.exec`, so absent and false behave alike — only one of them is a stated contract.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
+- Model/thinking controls: `Views/SettingsView.swift` selects from the leader's model catalog and changes thinking for the selected scoop. The thinking picker is shown only when the selected model is reasoning-capable.
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
 
 ### Licks (two envelopes, deliberately)
