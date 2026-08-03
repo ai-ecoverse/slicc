@@ -54,15 +54,15 @@ struct FrozenSessionsView: View {
                     .disabled(appState.newSessionInFlight)
                     .accessibilityLabel("New session")
                     .accessibilityIdentifier("new-session-button")
+                    .modifier(
+                        NewSessionDialog(
+                            isPresented: $showNewSessionDialog,
+                            onRequested: { dismiss() }))
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
-            .modifier(
-                NewSessionDialog(
-                    isPresented: $showNewSessionDialog,
-                    onRequested: { dismiss() }))
         }
         .onAppear { appState.loadFrozenSessions() }
         .onChange(of: appState.openFrozen?.entry.id) { _, opened in

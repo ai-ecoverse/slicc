@@ -3,7 +3,9 @@ import SwiftUI
 /// The `new_session` disposition dialog (#1799), shared by every entry
 /// point — the Past Sessions sheet's `New +` and the chat's top-control
 /// New chat button — so the save/skip/erase contract and the erase
-/// double-confirm stay single-sourced.
+/// double-confirm stay single-sourced. The first dialog's Cancel intentionally
+/// has no `.cancel` role: anchored popovers omit role-cancel actions, while a
+/// plain final action remains visible in every presentation style.
 struct NewSessionDialog: ViewModifier {
     @Binding var isPresented: Bool
     @EnvironmentObject var appState: AppState
@@ -31,7 +33,7 @@ struct NewSessionDialog: ViewModifier {
                     // destructive action from a slippable dialog.
                     confirmErase = true
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel") { isPresented = false }
             } message: {
                 Text("The current session is archived on the leader; Save also extracts memory.")
             }

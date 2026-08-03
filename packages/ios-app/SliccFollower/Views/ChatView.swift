@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import os
 
 /// Top-level container view with a NavigationSplitView whose sidebar lists
@@ -199,7 +200,6 @@ struct ConversationView: View {
             FrozenSessionsView()
                 .environmentObject(appState)
         }
-        .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))
         .onAppear {
             #if DEBUG
                 if UITestHooks.opensFrozenRail { showFrozenSessions = true }
@@ -268,6 +268,9 @@ struct ConversationView: View {
 
     private var newChatButton: some View {
         Button {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil)
             showNewSessionDialog = true
         } label: {
             if appState.newSessionInFlight {
@@ -287,6 +290,7 @@ struct ConversationView: View {
         )
         .accessibilityLabel("New chat")
         .accessibilityIdentifier("new-chat-button")
+        .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))
     }
 
     private var settingsButton: some View {
