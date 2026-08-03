@@ -465,7 +465,7 @@ struct FixtureConversationView: View {
 // MARK: - ScoopSwitcher
 
 /// The nav-bar cone/scoop switcher. Replaces the old full-width header row:
-/// the same identity (glyph + label + leader-active dot) in a nav-bar-sized
+/// the same identity (avatar + label + leader-active dot) in a nav-bar-sized
 /// control, and a menu that jumps straight to a scoop instead of cycling
 /// one chevron tap at a time. Swipe still cycles.
 struct ScoopSwitcher: View {
@@ -500,13 +500,13 @@ struct ScoopSwitcher: View {
         }
     }
 
-    /// Glyph + label + leader-active dot, sized to sit inside the nav bar.
+    /// Avatar + label + leader-active dot, sized to sit inside the nav bar.
     /// `.lineLimit(1)` plus a cap keeps a chatty `assistantLabel` from
     /// pushing the action cluster off the other edge.
     private var identityLabel: some View {
         HStack(spacing: 5) {
-            ConeScoopGlyph(isCone: appState.selectedScoop?.isCone ?? true, size: 17)
-                .foregroundStyle(palette.accent)
+            SliccAgentAvatarView(avatar: selectedAvatar)
+                .accessibilityHidden(true)
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(palette.ink)
@@ -527,6 +527,11 @@ struct ScoopSwitcher: View {
             }
         }
         .fixedSize()
+    }
+
+    private var selectedAvatar: SliccAgentAvatarGeometry {
+        appState.selectedScoop?.avatarGeometry(sideLength: 20)
+            ?? .init(type: .cone, color: "#D2691E", sideLength: 20)
     }
 
     /// The leader's active scoop is marked in the menu too — the dot on the
