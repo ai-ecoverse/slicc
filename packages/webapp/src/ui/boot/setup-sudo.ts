@@ -32,8 +32,10 @@ export async function setupSudoStandalone(_deps: SudoSetupDeps): Promise<void> {
 
 /**
  * Install the sudo responder on the side-panel realm. The offscreen
- * broker relays approval requests here, where `window.confirm` /
- * `window.prompt` are genuine, non-agent-scriptable native gestures.
+ * broker relays approval requests here, where `confirm` / `prompt` are
+ * genuine native gestures the agent's realms cannot answer. The responder
+ * captures those natives at module init so a later page-realm override of
+ * the globals can't self-approve — see `panel-responder.ts`.
  */
 export async function setupSudoExtension(_deps: SudoSetupDeps): Promise<void> {
   const { installPanelSudoResponder } = await import('../../sudo/index.js');

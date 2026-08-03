@@ -5,21 +5,52 @@
  * the offscreen broker's `sudo-request` envelope (see `extension-broker.ts`),
  * raises genuine native modals, and returns the decision:
  *
- *   1. `window.confirm` — allow vs deny (Cancel = deny, fail closed).
- *   2. on allow, a second `window.confirm` — "Always" vs just-this-once.
- *   3. on "Always", `window.prompt(message, suggestedPattern)` — the editable
+ *   1. `confirm` — allow vs deny (Cancel = deny, fail closed).
+ *   2. on allow, a second `confirm` — "Always" vs just-this-once.
+ *   3. on "Always", `prompt(message, suggestedPattern)` — the editable
  *      generalized pattern. Cancelling the prompt falls back to the suggested
  *      default rather than widening or denying.
  *
- * `window.confirm`/`window.prompt` are not scriptable by the offscreen agent,
- * so the decision can only come from a real human gesture. Any unexpected
- * shape or error denies.
+ * Native modals cannot be answered by the **offscreen agent** — the decision
+ * has to come from a real human gesture in this realm. That is the security
+ * property this responder rests on, and it is scoped precisely: it holds
+ * against the agent's own realm, NOT against arbitrary code running in THIS
+ * page realm. Page-realm JS can assign `globalThis.confirm = () => true`, at
+ * which point every subsequent approval self-answers — including the writes to
+ * `/etc/sudoers` that `matchPath` always gates and no `NOPASSWD` rule can
+ * override.
+ *
+ * Mitigation: the native `confirm`/`prompt` are captured ONCE at module
+ * evaluation (see `NATIVE_CONFIRM`/`NATIVE_PROMPT` below) and every call goes
+ * through the captured reference, never the live global. Module init happens
+ * during boot, before any dynamically registered UI component can run, so a
+ * later override of the global is inert here. This is defense-in-depth, not a
+ * hard boundary — code that runs in this realm before the module loads, or that
+ * patches the captured function's own prototype chain, is still out of scope;
+ * the trust model, not this capture, is the real boundary (same posture as
+ * `sprinkle-renderer.ts`'s sandbox note).
+ *
+ * Any unexpected shape or error denies.
  */
 
 import { createLogger } from '../core/logger.js';
 import { SUDO_REQUEST_TYPE, type SudoDecision, type SudoRequest } from './types.js';
 
 const log = createLogger('sudo-panel');
+
+/**
+ * The native modal functions, captured at module evaluation — BEFORE any
+ * dynamically registered panel/sprinkle code can reassign the globals. Bound to
+ * `globalThis` because `confirm`/`prompt` are `[[Call]]`-on-window intrinsics
+ * that throw an Illegal-invocation TypeError when invoked detached.
+ *
+ * `undefined` in a non-DOM realm (node tests, the kernel worker); callers fall
+ * back to a fail-closed deny, matching the "any unexpected shape denies" rule.
+ */
+const NATIVE_CONFIRM: ((message?: string) => boolean) | undefined =
+  typeof globalThis.confirm === 'function' ? globalThis.confirm.bind(globalThis) : undefined;
+const NATIVE_PROMPT: ((message?: string, defaultValue?: string) => string | null) | undefined =
+  typeof globalThis.prompt === 'function' ? globalThis.prompt.bind(globalThis) : undefined;
 
 /** DOM seams so tests can drive the responder without a real `window`. */
 export interface PanelResponderDeps {
@@ -43,8 +74,15 @@ interface ChromeOnMessage {
 
 /** Compute a decision from native modals for one request. Exported for tests. */
 export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = {}): SudoDecision {
-  const confirmFn = deps.confirm ?? ((m: string) => globalThis.confirm(m));
-  const promptFn = deps.prompt ?? ((m: string, d?: string) => globalThis.prompt(m, d));
+  // Injected seams win (tests); otherwise the module-init capture — NOT the
+  // live `globalThis.confirm`, which page-realm code can reassign. A realm with
+  // no native modal at all denies rather than silently allowing.
+  const confirmFn = deps.confirm ?? NATIVE_CONFIRM;
+  const promptFn = deps.prompt ?? NATIVE_PROMPT;
+  if (!confirmFn) {
+    log.warn('no native confirm available in this realm — denying');
+    return { decision: 'deny' };
+  }
 
   const label = `Approve ${req.kind}:\n\n${req.detail}\n\nOK = allow · Cancel = deny`;
   if (!confirmFn(label)) return { decision: 'deny' };
@@ -53,7 +91,10 @@ export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = 
   const alwaysLabel = `Always allow actions matching:\n\n${suggested}\n\nOK = always · Cancel = just this once`;
   if (!confirmFn(alwaysLabel)) return { decision: 'allow' };
 
-  const edited = promptFn('Edit the "Always" allow pattern:', suggested);
+  // No native prompt (or a cancelled one) keeps the SUGGESTED pattern rather
+  // than widening: the user already consented to "always" for this action, and
+  // the suggestion is the narrow generalization `suggest-pattern.ts` derived.
+  const edited = promptFn?.('Edit the "Always" allow pattern:', suggested);
   const pattern = edited && edited.trim().length > 0 ? edited.trim() : suggested;
   return { decision: 'always', pattern };
 }

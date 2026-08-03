@@ -3,8 +3,17 @@
  *
  * The broker is the trusted-realm channel that turns a sensitive-action
  * request into a genuine native human gesture (OS dialog in CLI/Electron,
- * `window.confirm`/`window.prompt` in the extension). The agent's code-exec
- * sandboxes can call `requestApproval` but can never fabricate the result.
+ * native `confirm`/`prompt` in the extension's panel realm). The agent's
+ * code-exec sandboxes can call `requestApproval` but can never fabricate the
+ * result.
+ *
+ * Scope of that guarantee: it holds against the AGENT's realms (kernel worker,
+ * offscreen document, JS realms) — not against arbitrary code running in the
+ * page/panel realm itself, which can reassign `globalThis.confirm`. The
+ * standalone/Electron path is stronger by construction (the dialog is raised by
+ * the node-server process, out of reach of page JS); the extension panel path
+ * mitigates by capturing the native modals at module init — see the
+ * `NATIVE_CONFIRM` note in `panel-responder.ts`.
  *
  * Enforcement (SudoFS, command guard, secret gates) is intentionally NOT wired
  * here yet — see the sibling tasks in the spec. This module ships the broker

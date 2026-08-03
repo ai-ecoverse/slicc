@@ -157,6 +157,35 @@ Brokers (`packages/webapp/src/sudo/`):
 All brokers **fail closed**: any transport error, malformed response, or missing
 gesture resolves to `deny`.
 
+#### Scope of the "unforgeable gesture" guarantee
+
+The native modal cannot be answered by **the agent's realms** (kernel worker,
+offscreen document, JS realms) — that is the property the browser-side brokers
+rest on. It is _not_ a guarantee against arbitrary code running in the **page /
+panel realm itself**: `globalThis.confirm` is a writable property, so page-realm
+JS could assign `() => true` and auto-answer every subsequent approval —
+including the writes to `/etc/sudoers` that `matchPath` always gates and no
+`NOPASSWD` rule can override.
+
+Two things narrow that gap:
+
+- **The CLI / Electron / swift-server path is stronger by construction.** The
+  dialog is raised by a separate process (`POST /api/sudo-approve` →
+  osascript / PowerShell / zenity / Electron), completely out of reach of page
+  JS. Prefer it wherever it exists.
+- **The browser path captures the natives at module init.**
+  `packages/webapp/src/sudo/panel-responder.ts` binds `confirm` / `prompt` once
+  at module evaluation (during boot, before any dynamically registered UI
+  component can run) and calls through the captured reference, never the live
+  global. A realm with no native modal denies rather than allowing. Regression
+  tests: `packages/webapp/tests/sudo/panel-responder-native-capture.test.ts`.
+
+This is defense-in-depth, not a hard boundary — code that runs before the module
+loads is still out of scope. As everywhere else in SLICC (see the sandbox note
+in `ui/sprinkle-renderer.ts`), **the trust model is the real boundary**; these
+measures keep an accidental or opportunistic override from silently defeating
+the gate.
+
 ### Cone-mediated approval (scoop → cone tools)
 
 When a non-cone scoop hits a sudoers gate, the request does NOT go to the human
