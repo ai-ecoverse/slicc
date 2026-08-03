@@ -10,8 +10,7 @@ struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @StateObject private var presentation = ChatPresentationState(
-        composerDraft: ChatView.seededComposerText())
+    @StateObject private var presentation: ChatPresentationState
     @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
     @State private var showSettings = false
     @State private var hasAppeared = false
@@ -23,6 +22,17 @@ struct ChatView: View {
     /// Mirror the rail to the leading edge (`-leftHandedDock` /
     /// Settings toggle) — reachability for left-handed use.
     @AppStorage("leftHandedDock") private var leftHandedDock = false
+
+    init() {
+        _presentation = StateObject(
+            wrappedValue: ChatPresentationState(composerDraft: Self.seededComposerText()))
+    }
+
+    /// Test seam for proving the shell, rather than either adaptive branch,
+    /// constructs and owns the presentation state.
+    init(presentation: @autoclosure @escaping () -> ChatPresentationState) {
+        _presentation = StateObject(wrappedValue: presentation())
+    }
 
     var body: some View {
         GeometryReader { geometry in

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 
 @testable import SliccFollower
@@ -5,16 +6,75 @@ import XCTest
 @MainActor
 final class ChatPresentationStateTests: XCTestCase {
 
-    func testSurfaceAndDraftSurviveBothLayoutTransitions() {
-        let state = ChatPresentationState()
-        state.activeSurface = .browser
-        state.composerDraft = "Keep this unfinished thought"
+    func testShellOwnerSurvivesMultitaskingLayoutTransitions() throws {
+        let steps: [LayoutStep] = [
+            .init(name: "Slide Over", sizeClass: .compact, width: 320, mode: .compactOverlay),
+            .init(name: "Split View at boundary", sizeClass: .regular, width: 560, mode: .compactOverlay),
+            .init(name: "Split View above boundary", sizeClass: .regular, width: 561, mode: .regularSplit),
+            .init(name: "Full Screen", sizeClass: .regular, width: 1_024, mode: .regularSplit),
+            .init(name: "Back above boundary", sizeClass: .regular, width: 561, mode: .regularSplit),
+            .init(name: "Back at boundary", sizeClass: .regular, width: 560, mode: .compactOverlay),
+            .init(name: "Back to Slide Over", sizeClass: .compact, width: 320, mode: .compactOverlay),
+        ]
+        var constructedOwners: [ChatPresentationState] = []
+        func makeState() -> ChatPresentationState {
+            let state = ChatPresentationState()
+            constructedOwners.append(state)
+            return state
+        }
+        let appState = AppState()
+        func root(for step: LayoutStep) -> AnyView {
+            AnyView(
+                ChatView(presentation: makeState())
+                    .environment(\.horizontalSizeClass, step.sizeClass)
+                    .environmentObject(appState)
+                    .frame(width: step.width, height: 768)
+            )
+        }
 
-        for mode in [ShellLayoutMode.regularSplit, .compactOverlay] {
-            XCTAssertEqual(state.activeSurface, .browser, "\(mode) must reuse shell state")
+        let host = UIHostingController(rootView: root(for: steps[0]))
+        render(host, step: steps[0])
+        XCTAssertEqual(constructedOwners.count, 1, "ChatView must construct one shell owner")
+        let owner = try XCTUnwrap(constructedOwners.first)
+        let ownerIdentity = ObjectIdentifier(owner)
+        owner.activeSurface = .browser
+        owner.composerDraft = "Keep this unfinished thought"
+        owner.transcriptPosition.scrollTo(id: "message-42", anchor: .center)
+
+        for step in steps {
             XCTAssertEqual(
-                state.composerDraft, "Keep this unfinished thought",
-                "\(mode) must reuse shell state")
+                ShellLayout.mode(
+                    horizontalSizeClass: step.sizeClass,
+                    availableWidth: step.width),
+                step.mode,
+                "\(step.name) must exercise the expected adaptive branch")
+            host.rootView = root(for: step)
+            render(host, step: step)
+
+            XCTAssertEqual(constructedOwners.count, 1, "\(step.name) must not construct branch state")
+            XCTAssertEqual(ObjectIdentifier(constructedOwners[0]), ownerIdentity)
+            XCTAssertEqual(owner.activeSurface, .browser, "\(step.name) lost the open surface")
+            XCTAssertEqual(
+                owner.composerDraft,
+                "Keep this unfinished thought",
+                "\(step.name) lost the composer draft")
+            XCTAssertEqual(
+                owner.transcriptPosition.viewID as? String,
+                "message-42",
+                "\(step.name) lost the transcript position")
         }
     }
+
+    private func render(_ host: UIHostingController<AnyView>, step: LayoutStep) {
+        host.view.frame = CGRect(x: 0, y: 0, width: step.width, height: 768)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+    }
+}
+
+private struct LayoutStep {
+    let name: String
+    let sizeClass: UserInterfaceSizeClass
+    let width: CGFloat
+    let mode: ShellLayoutMode
 }
