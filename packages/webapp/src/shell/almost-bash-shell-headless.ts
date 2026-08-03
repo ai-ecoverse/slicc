@@ -504,7 +504,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * custom commands. Idempotent; in-flight calls coalesce.
    */
   async syncJshCommands(): Promise<void> {
-    if (this.jshSyncInflight) {
+    if (this.jshSyncInflight !== null) {
       this.jshSyncDirty = true;
       return this.jshSyncInflight;
     }

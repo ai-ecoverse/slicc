@@ -1721,7 +1721,7 @@ export class Bridge implements KernelFacade {
       ...(msg.steer ? { steer: true as const } : {}),
     };
     await this.orchestrator?.handleMessage(channelMsg);
-    this.orchestrator?.createScoopTab(msg.scoopJid);
+    await this.orchestrator?.createScoopTab(msg.scoopJid);
   }
 
   /**

@@ -221,6 +221,7 @@ describe('ScoopMessageRouter re-entrancy guard', () => {
     });
 
     await expect(harness.router.handleMessage(makeMessage('cone', 0))).rejects.toThrow('boom');
+    // biome-ignore lint/nursery/noFloatingPromises: already awaited; biome 2.5.6 mis-infers the `??=` assignment as a nested promise and suggests `await await`
     await coalesced;
 
     expect(harness.sends.some((p) => p.includes('MSG_001'))).toBe(true);
