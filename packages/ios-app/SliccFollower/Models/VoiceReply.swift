@@ -214,6 +214,20 @@ protocol SpeechSpeaking {
 /// back to whatever was playing before.
 @MainActor
 final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelegate {
+    struct VoiceCandidate: Equatable {
+        enum Quality: Int {
+            case `default`
+            case enhanced
+            case premium
+        }
+
+        let identifier: String
+        let language: String
+        let quality: Quality
+    }
+
+    static let voiceIdentifierDefaultsKey = "speech.voiceIdentifier"
+
     /// Created on the first spoken reply, never at launch. Constructing a
     /// synthesizer wakes the system speech services on the main actor, and
     /// most sessions never dictate at all.
@@ -226,6 +240,10 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         if let lang, let voice = Self.voice(for: lang) {
             utterance.voice = voice
         }
+        // A small relative slowdown improves clarity across languages, while
+        // neutral pitch preserves each installed voice's designed prosody.
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.92
+        utterance.pitchMultiplier = 1.0
         let synthesizer = self.synthesizer ?? makeSynthesizer()
         // Barge-in: a new reply replaces the one still playing rather than
         // queueing behind it.
@@ -254,13 +272,71 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         return created
     }
 
-    /// An exact BCP-47 match first, then any voice sharing the base subtag —
-    /// a `de` reply should still speak in `de-DE`.
+    /// Enumerate on every lookup so newly installed voices are immediately
+    /// eligible without a stale cache after the system's voices-change event.
     private static func voice(for lang: String) -> AVSpeechSynthesisVoice? {
-        if let exact = AVSpeechSynthesisVoice(language: lang) { return exact }
-        let base = lang.split(separator: "-").first.map(String.init)?.lowercased() ?? lang
-        return AVSpeechSynthesisVoice.speechVoices().first {
-            $0.language.lowercased().split(separator: "-").first.map(String.init) == base
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+        let candidates = voices.map {
+            VoiceCandidate(
+                identifier: $0.identifier,
+                language: $0.language,
+                quality: quality(of: $0))
+        }
+        let preferredIdentifier = UserDefaults.standard.string(forKey: voiceIdentifierDefaultsKey)
+        guard
+            let selected = rankedVoice(
+                for: lang, preferredIdentifier: preferredIdentifier, from: candidates)
+        else { return nil }
+        return voices.first { $0.identifier == selected.identifier }
+    }
+
+    /// Select from supplied value types so ranking needs no live speech service.
+    /// A same-language user override wins first. Otherwise exact BCP-47 matches
+    /// precede base-subtag fallbacks, then quality ranks premium > enhanced >
+    /// default. Voice identifier is the stable final tiebreak.
+    static func rankedVoice(
+        for lang: String,
+        preferredIdentifier: String?,
+        from voices: [VoiceCandidate]
+    ) -> VoiceCandidate? {
+        let replyBase = baseLanguage(of: lang)
+        if let preferredIdentifier, !preferredIdentifier.isEmpty,
+            let preferred = voices.first(where: {
+                $0.identifier == preferredIdentifier && baseLanguage(of: $0.language) == replyBase
+            })
+        {
+            return preferred
+        }
+
+        let exact = voices.filter {
+            $0.language.caseInsensitiveCompare(lang) == .orderedSame
+        }
+        let matching: [VoiceCandidate]
+        if exact.isEmpty {
+            matching = voices.filter { baseLanguage(of: $0.language) == replyBase }
+        } else {
+            matching = exact
+        }
+        return matching.min {
+            if $0.quality != $1.quality { return $0.quality.rawValue > $1.quality.rawValue }
+            return $0.identifier < $1.identifier
+        }
+    }
+
+    private static func baseLanguage(of language: String) -> String {
+        language.split(separator: "-").first.map(String.init)?.lowercased() ?? language.lowercased()
+    }
+
+    private static func quality(of voice: AVSpeechSynthesisVoice) -> VoiceCandidate.Quality {
+        switch voice.quality {
+        case .premium:
+            return .premium
+        case .enhanced:
+            return .enhanced
+        case .default:
+            return .default
+        @unknown default:
+            return .default
         }
     }
 
