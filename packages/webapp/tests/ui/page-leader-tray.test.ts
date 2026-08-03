@@ -18,6 +18,7 @@
  *      subscription.
  */
 
+import type { TrayIceCandidate, TraySessionDescription } from '@slicc/shared-ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -26,7 +27,7 @@ import type {
   LeaderTrayWebSocket,
 } from '../../src/scoops/tray-leader.js';
 import type { FollowerToLeaderMessage } from '../../src/scoops/tray-sync-protocol.js';
-import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { TrayDataChannelLike, TrayPeerConnectionLike } from '../../src/scoops/tray-webrtc.js';
 import { startPageLeaderTray } from '../../src/ui/page-leader-tray.js';
 import type { AgentEvent } from '../../src/ui/types.js';
 
@@ -37,18 +38,66 @@ import type { AgentEvent } from '../../src/ui/types.js';
 class CapturingChannel implements TrayDataChannelLike {
   readyState = 'open';
   private messageListeners: Array<(event: { data: string }) => void> = [];
+  private openListeners: Array<() => void> = [];
+  private closeListeners: Array<() => void> = [];
   addEventListener(type: string, listener: (...args: never[]) => void): void {
     if (type === 'message') {
       this.messageListeners.push(listener as (event: { data: string }) => void);
+    } else if (type === 'open') {
+      this.openListeners.push(listener);
+    } else if (type === 'close') {
+      this.closeListeners.push(listener);
     }
   }
   send(): void {}
   close(): void {
+    if (this.readyState === 'closed') return;
     this.readyState = 'closed';
+    for (const listener of this.closeListeners) listener();
+  }
+  simulateOpen(): void {
+    this.readyState = 'open';
+    for (const listener of this.openListeners) listener();
   }
   simulate(msg: FollowerToLeaderMessage): void {
     const data = JSON.stringify(msg);
     for (const l of this.messageListeners) l({ data });
+  }
+}
+
+class ControllablePeer implements TrayPeerConnectionLike {
+  localDescription: TraySessionDescription | null = null;
+  connectionState = 'connected';
+  private stateListeners: Array<() => void> = [];
+
+  constructor(readonly channel: CapturingChannel) {}
+
+  createDataChannel(): TrayDataChannelLike {
+    return this.channel;
+  }
+  async createOffer(): Promise<TraySessionDescription> {
+    return { type: 'offer', sdp: 'leader-offer' };
+  }
+  async createAnswer(): Promise<TraySessionDescription> {
+    return { type: 'answer', sdp: 'leader-answer' };
+  }
+  async setLocalDescription(description: TraySessionDescription): Promise<void> {
+    this.localDescription = description;
+  }
+  async setRemoteDescription(): Promise<void> {}
+  async addIceCandidate(_candidate: TrayIceCandidate): Promise<void> {}
+  addEventListener(
+    type: 'icecandidate' | 'datachannel' | 'connectionstatechange',
+    listener: (...args: never[]) => void
+  ): void {
+    if (type === 'connectionstatechange') this.stateListeners.push(listener);
+  }
+  close(): void {
+    this.connectionState = 'closed';
+  }
+  simulateConnectionState(state: string): void {
+    this.connectionState = state;
+    for (const listener of this.stateListeners) listener();
   }
 }
 
@@ -181,6 +230,28 @@ function makeBaseOptions(overrides: {
   };
 }
 
+async function connectTestFollower(
+  handle: ReturnType<typeof startPageLeaderTray>,
+  sockets: FakeWebSocket[],
+  channel: CapturingChannel
+): Promise<void> {
+  await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(0));
+  sockets[0].dispatch('open', {});
+  sockets[0].dispatch('message', { data: JSON.stringify({ type: 'leader.connected' }) });
+  await handle.ready;
+  await handle.peers.handleControlMessage({
+    type: 'follower.join_requested',
+    trayId: 'tray-1',
+    controllerId: 'follower-1',
+    runtime: 'slicc-ios',
+    bootstrapId: 'bootstrap-1',
+    attempt: 1,
+    expiresAt: '2026-01-01T00:01:00.000Z',
+  });
+  channel.simulateOpen();
+  await vi.waitFor(() => expect(handle.sync.getFollowerDetails()).toHaveLength(1));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -203,6 +274,57 @@ describe('startPageLeaderTray', () => {
     const firstUrl = fetchImpl.mock.calls[0][0] as string;
     expect(firstUrl).toContain('tray.example.com');
 
+    handle.stop();
+  });
+
+  it('keeps a follower and its pooled shell during recoverable ICE disconnection', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const channel = new CapturingChannel();
+    const peer = new ControllablePeer(channel);
+    const closeExecShell = vi.fn();
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      closeExecShell,
+      _peerConnectionFactory: () => peer,
+    });
+    await connectTestFollower(handle, sockets, channel);
+
+    peer.simulateConnectionState('disconnected');
+
+    expect(handle.sync.getFollowerDetails()).toHaveLength(1);
+    expect(closeExecShell).not.toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('aborts a follower command and disposes its pooled shell when the channel closes', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const channel = new CapturingChannel();
+    const peer = new ControllablePeer(channel);
+    const closeExecShell = vi.fn();
+    let commandSignal: AbortSignal | undefined;
+    const execInShell: NonNullable<Parameters<typeof startPageLeaderTray>[0]['execInShell']> = (
+      _command,
+      options
+    ) =>
+      new Promise((resolve) => {
+        commandSignal = options.signal;
+        options.signal.addEventListener('abort', () => resolve({ exitCode: 130 }), { once: true });
+      });
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      execInShell,
+      closeExecShell,
+      _peerConnectionFactory: () => peer,
+    });
+    await connectTestFollower(handle, sockets, channel);
+    channel.simulate({ type: 'exec.request', requestId: 'exec-1', command: 'sleep 30' });
+    await vi.waitFor(() => expect(commandSignal).toBeDefined());
+
+    channel.close();
+
+    await vi.waitFor(() => expect(commandSignal?.aborted).toBe(true));
+    expect(closeExecShell).toHaveBeenCalledWith('bootstrap-1');
+    expect(handle.sync.getFollowerDetails()).toEqual([]);
     handle.stop();
   });
 

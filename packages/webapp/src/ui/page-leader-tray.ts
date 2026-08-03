@@ -48,7 +48,7 @@ import type {
   ScoopSummary,
   SprinkleSummary,
 } from '../scoops/tray-sync-protocol.js';
-import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
+import { LeaderTrayPeerManager, type TrayPeerConnectionFactory } from '../scoops/tray-webrtc.js';
 import type { AgentEvent } from './types.js';
 
 const log = createLogger('page-leader-tray');
@@ -147,6 +147,8 @@ export interface StartPageLeaderTrayOptions {
   _refreshIntervalMs?: number;
   /** @internal Override the state-driven scoop-list coalescing delay in ms (default 50). */
   _scoopBroadcastCoalesceMs?: number;
+  /** @internal Override the leader peer connection factory. */
+  _peerConnectionFactory?: TrayPeerConnectionFactory;
 }
 
 export interface PageLeaderTrayHandle {
@@ -276,9 +278,11 @@ function buildSyncManager(
 function buildPeerManager(
   getLeader: () => LeaderTrayManager,
   sync: LeaderSyncManager,
-  onPeersChanged: () => void
+  onPeersChanged: () => void,
+  peerConnectionFactory?: TrayPeerConnectionFactory
 ): LeaderTrayPeerManager {
   return new LeaderTrayPeerManager({
+    peerConnectionFactory,
     sendControlMessage: (message) => getLeader().sendControlMessage(message),
     onPeersChanged,
     onPeerConnected: (peer, channel) => {
@@ -295,6 +299,9 @@ function buildPeerManager(
     },
     onPeerDisconnected: (bootstrapId, reason) => {
       log.info('Tray follower disconnected', { bootstrapId, reason });
+    },
+    onPeerTransportClosed: (bootstrapId) => {
+      sync.removeFollower(bootstrapId);
     },
   });
 }
@@ -538,7 +545,12 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   // Forward declaration so sync can call leader.sendControlMessage through the getter
   sync = buildSyncManager(options, () => leader, notifyFollowerCountChanged);
   options.browserAPI.setTrayTargetProvider(sync);
-  peers = buildPeerManager(() => leader, sync, notifyFollowerCountChanged);
+  peers = buildPeerManager(
+    () => leader,
+    sync,
+    notifyFollowerCountChanged,
+    options._peerConnectionFactory
+  );
   leader = buildLeaderManager(options, peers, sync, fetchImpl, updateUrlBar, () => leader);
 
   // --- Agent event tap → broadcast to all followers. The helper owns
