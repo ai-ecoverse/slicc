@@ -15,13 +15,24 @@
  * covered by the class-level tests already.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StartPageFollowerTrayOptions } from '../../src/ui/page-follower-tray.js';
 import {
+  applyFollowerLeaderTheme,
   buildAdvertisedTargets,
   CHERRY_RUNTIME_TAG,
   startPageFollowerTray,
 } from '../../src/ui/page-follower-tray.js';
+
+const themeEngine = vi.hoisted(() => ({
+  importTheme: vi.fn(() => ({ id: 'leader-theme' })),
+  saveCustomTheme: vi.fn(),
+  setActiveTheme: vi.fn(),
+  clearActiveTheme: vi.fn(),
+  applyThemeOverrides: vi.fn(),
+}));
+
+vi.mock('../../src/ui/theme-engine.js', () => themeEngine);
 
 /**
  * Minimal `BrowserAPI`-shaped fake. The helper only references
@@ -62,6 +73,26 @@ function makeBaseOptions(): StartPageFollowerTrayOptions {
 }
 
 describe('startPageFollowerTray', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('applies and clears leader themes through the UI theme engine', async () => {
+    applyFollowerLeaderTheme('{"id":"leader-theme"}');
+
+    await vi.waitFor(() => expect(themeEngine.applyThemeOverrides).toHaveBeenCalledOnce());
+    expect(themeEngine.importTheme).toHaveBeenCalledWith('{"id":"leader-theme"}');
+    expect(themeEngine.saveCustomTheme).toHaveBeenCalledWith({ id: 'leader-theme' });
+    expect(themeEngine.setActiveTheme).toHaveBeenCalledWith('leader-theme');
+
+    vi.clearAllMocks();
+    applyFollowerLeaderTheme(null);
+
+    await vi.waitFor(() => expect(themeEngine.applyThemeOverrides).toHaveBeenCalledOnce());
+    expect(themeEngine.clearActiveTheme).toHaveBeenCalledOnce();
+    expect(themeEngine.importTheme).not.toHaveBeenCalled();
+  });
+
   it('returns a handle whose currentSync is null before any connection', () => {
     const opts = makeBaseOptions();
     const handle = startPageFollowerTray(opts);
@@ -89,6 +120,16 @@ describe('startPageFollowerTray', () => {
     const opts: StartPageFollowerTrayOptions = {
       ...makeBaseOptions(),
       onLeaderStalled: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
+  it('accepts model catalog and selection state callbacks', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      onModelsList: vi.fn(),
+      onModelState: vi.fn(),
     };
     const handle = startPageFollowerTray(opts);
     expect(() => handle.stop()).not.toThrow();

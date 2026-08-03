@@ -248,6 +248,20 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('theme handling', () => {
+    it('delegates theme.apply messages to the injected UI callback', () => {
+      const channel = new FakeChannel();
+      const onThemeApply = vi.fn();
+      new FollowerSyncManager(channel, { onThemeApply });
+
+      channel.simulateLeaderMessage({ type: 'theme.apply', themeJson: '{"id":"leader"}' });
+      channel.simulateLeaderMessage({ type: 'theme.apply', themeJson: null });
+
+      expect(onThemeApply).toHaveBeenNthCalledWith(1, '{"id":"leader"}');
+      expect(onThemeApply).toHaveBeenNthCalledWith(2, null);
+    });
+  });
+
   describe('snapshot handling', () => {
     it('calls onSnapshot callback with messages', () => {
       const channel = new FakeChannel();
@@ -412,6 +426,64 @@ describe('FollowerSyncManager', () => {
       channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'processing' });
 
       expect(onStatus).toHaveBeenCalledWith('processing');
+    });
+  });
+
+  describe('model and thinking sync', () => {
+    it('forwards model catalog and selection state broadcasts to callbacks', () => {
+      const channel = new FakeChannel();
+      const onModelsList = vi.fn();
+      const onModelState = vi.fn();
+      new FollowerSyncManager(channel, { onModelsList, onModelState });
+      const models = [
+        {
+          providerName: 'Anthropic',
+          modelId: 'anthropic:claude-sonnet-4-6',
+          modelName: 'Claude Sonnet 4.6',
+          reasoning: true,
+        },
+      ];
+      const state = {
+        activeModelId: 'anthropic:claude-sonnet-4-6',
+        scoopJid: 'cone-jid',
+        thinkingLevel: 'high' as const,
+      };
+
+      channel.simulateLeaderMessage({ type: 'models.list', models });
+      channel.simulateLeaderMessage({ type: 'model.state', state });
+
+      expect(onModelsList).toHaveBeenCalledWith(models);
+      expect(onModelState).toHaveBeenCalledWith(state);
+    });
+
+    it('sends model and thinking selections to the leader', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.selectModel('anthropic:claude-opus-4-8');
+      follower.setThinkingLevel('scoop-1', 'xhigh', 'max');
+
+      expect(channel.parseSent()).toEqual([
+        { type: 'model.select', modelId: 'anthropic:claude-opus-4-8' },
+        {
+          type: 'thinking.set',
+          scoopJid: 'scoop-1',
+          thinkingLevel: 'xhigh',
+          effortOverride: 'max',
+        },
+      ]);
+    });
+
+    it('requests models only after a v5+ leader hello', () => {
+      const legacyChannel = new FakeChannel();
+      new FollowerSyncManager(legacyChannel);
+      legacyChannel.simulateLeaderMessage({ type: 'hello', protocolVersion: 4 });
+      expect(legacyChannel.parseSent()).toEqual([]);
+
+      const currentChannel = new FakeChannel();
+      new FollowerSyncManager(currentChannel);
+      currentChannel.simulateLeaderMessage({ type: 'hello', protocolVersion: 5 });
+      expect(currentChannel.parseSent()).toEqual([{ type: 'models.request' }]);
     });
   });
 
@@ -746,7 +818,7 @@ describe('FollowerSyncManager', () => {
       const transport = follower.createRemoteTransport('leader', 'tab1');
 
       // Send a CDP command through the remote transport
-      transport.send('Page.navigate', { url: 'https://example.com' });
+      void transport.send('Page.navigate', { url: 'https://example.com' });
 
       const sent = channel.parseSent();
       expect(sent).toHaveLength(1);
@@ -2506,7 +2578,7 @@ describe('FollowerSyncManager', () => {
         runtime?: string;
       };
       expect(first.type).toBe('hello');
-      expect(first.protocolVersion).toBe(4);
+      expect(first.protocolVersion).toBe(5);
       expect(first.runtime).toBe('follower-1');
     });
 

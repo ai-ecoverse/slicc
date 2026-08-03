@@ -18,6 +18,7 @@ import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { prepareWcShell } from './wc-live.js';
 import { submittedSteer, submittedText } from './wc-shell.js';
 import {
@@ -316,6 +317,7 @@ export async function mountWcUiFollower(
     isCherry && prelude.cherryTransport
       ? { ...ALL_FEATURES_ENABLED, ...prelude.cherryTransport.features }
       : ALL_FEATURES_ENABLED;
+  const composerMeta = boot.refs.composerMeta;
   renderFollowerInertPanels(
     boot.refs.fileTree,
     boot.refs.termSurface,
@@ -542,7 +544,16 @@ export async function mountWcUiFollower(
 
   let followerSelectedScoop: string | null = null;
 
-  const follower = startPageFollowerTray({
+  let follower!: ReturnType<typeof startPageFollowerTray>;
+  const modelSurface = createFollowerModelSurface({
+    composerMeta,
+    getSync: () => follower.currentSync,
+    getSelectedScoopJid: () => followerSelectedScoop,
+    modelPickerEnabled: features.modelPicker,
+    getLockedEffortLevel: () => localStorage.getItem('slicc_locked_effort_level'),
+  });
+
+  follower = startPageFollowerTray({
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
     advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
@@ -576,6 +587,7 @@ export async function mountWcUiFollower(
     },
     onConnectionChange: (connected) => {
       setComposerState(connected, connected ? CONNECTED : CONNECTING);
+      if (!connected) modelSurface.reset();
       if (isCherry)
         prelude.cherryTransport?.emitSliccEventToHost(
           connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
@@ -591,6 +603,7 @@ export async function mountWcUiFollower(
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });
       setComposerState(false, GAVE_UP);
+      modelSurface.reset();
       // detachSync suppresses onConnectionChange(false) here - emit terminal.
       if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
     },
@@ -615,6 +628,8 @@ export async function mountWcUiFollower(
       boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
+    onModelsList: modelSurface.onModelsList,
+    onModelState: modelSurface.onModelState,
     ...(isCherry
       ? {
           onCherrySliccEvent: (name, detail) =>
