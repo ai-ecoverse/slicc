@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file covers the browser application in `packages/webapp/`. Keep extension-only behavior in `packages/chrome-extension/CLAUDE.md` and runtime/server details in the float-specific package guides.
+Browser app guide for `packages/webapp/`. Keep extension-only behavior in `packages/chrome-extension/CLAUDE.md` and runtime/server details in float-specific guides.
 
 ## Scope
 
@@ -169,12 +169,12 @@ See `docs/mounts.md`.
 
 Deep reference: `docs/approvals.md`.
 
-### Tray Sync (multi-browser leader/follower)
+### Tray
 
 | Module                 | Responsibility       |
 | ---------------------- | -------------------- |
 | `tray-leader-sync.ts`  | Façade + lifecycle   |
-| `context.ts`           | Shared dependencies  |
+| `context.ts`           | Dependencies         |
 | `follower-registry.ts` | Registry + keepalive |
 | `follower-dispatch.ts` | Exhaustive dispatch  |
 | `broadcast.ts`         | Snapshot + broadcast |
@@ -182,12 +182,15 @@ Deep reference: `docs/approvals.md`.
 | `fs-router.ts`         | Filesystem routing   |
 | `tab-router.ts`        | Tab-open routing     |
 | `remote-exec.ts`       | Remote execution     |
-| `transcript-export.ts` | Transcript streaming |
-| `preview-bridge.ts`    | Preview connections  |
+| `transcript-export.ts` | Transcript export    |
+| `preview-bridge.ts`    | Preview bridge       |
 | `cherry-router.ts`     | Cherry events        |
 | `teleport-pool.ts`     | Target selection     |
 
-See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
+Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; the dedicated
+`wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it.
+Cherry remains gated by `CherryFeatureSet.modelPicker`.
+See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 
 ### Core Agent
 
@@ -198,18 +201,15 @@ See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
 ### Feature Flags
 
-- Add: extend `FeatureFlagId` + `FEATURE_FLAGS` in `core/feature-flags.ts`, then add the same
-  string values to production and staging `wrangler.jsonc` `FEATURE_FLAGS`. User-toggleable flags
-  appear in the standalone **Experimental features…** avatar-menu dialog driven by `listFlags()`;
-  they do not belong in Account settings.
-- Boolean consumers use `isFeatureEnabled`/`coerceFeatureFlagValue` (`on`/`true`/`1`, trimmed and
-  case-insensitive). For user-toggleable flags, precedence where `overridableFloats` permits is
-  local → remote → bundled `floatDefaults`/`defaultValue`.
-- `experimental-settings` is worker-controlled (`userToggleable: false`): it independently gates
-  both the avatar-menu item and exported dialog, and local override attempts are ignored.
-- `setupFeatureFlagsForPage` selects the float and loads its isolated cache synchronously, then
-  lazy-loads a non-blocking `/api/flags?float=<float>` refresh. There is no live refresh; later
-  config requires reload.
+- Add IDs to `FeatureFlagId`/`FEATURE_FLAGS` in `core/feature-flags.ts` and both `wrangler.jsonc`
+  `FEATURE_FLAGS` lists. User-toggleable flags live in the standalone **Experimental features…**
+  avatar dialog (`listFlags()`), not Account settings.
+- Parse booleans with `isFeatureEnabled`/`coerceFeatureFlagValue` (trimmed, case-insensitive
+  `on`/`true`/`1`). When `overridableFloats` allows, precedence is local → remote → bundled defaults.
+- `experimental-settings` is worker-controlled (`userToggleable: false`); it gates the avatar item
+  and exported dialog, ignoring local overrides.
+- `setupFeatureFlagsForPage` loads the float's isolated cache synchronously, then starts a
+  non-blocking `/api/flags?float=<float>` refresh. Later config needs reload.
 
 ### Context Compaction
 

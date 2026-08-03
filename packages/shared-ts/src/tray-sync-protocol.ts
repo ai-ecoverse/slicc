@@ -2,12 +2,14 @@
  * Typed sync protocol for tray WebRTC data channels — canonical wire format.
  *
  * Leader → Follower: chat snapshots (single + chunked), streamed agent events,
- *   user-message echoes, scoop list, sprinkle list / content / updates,
+ *   user-message echoes, scoop list, model catalog + selection state,
+ *   sprinkle list / content / updates,
  *   federated CDP (request + response + event), federated tab.open and its
  *   reply pair, federated FS (request + response), liveness (ping/pong/status/error).
  *
  * Follower → Leader: user input, abort, snapshot/scoop selection requests,
- *   sprinkle refresh + content fetch + lick, target advertisement, federated
+ *   model catalog requests + model/thinking selection, sprinkle refresh +
+ *   content fetch + lick, target advertisement, federated
  *   CDP (request + response + event), federated tab.open and its reply pair,
  *   federated FS (request + response), ping/pong.
  *
@@ -52,7 +54,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 4;
+export const TRAY_SYNC_PROTOCOL_VERSION = 5;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -270,6 +272,13 @@ export type LeaderToFollowerMessage =
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }
+  /**
+   * Compact catalog rows normally remain below the 64 KiB CDP chunk threshold.
+   * A bespoke semantic chunk variant is unnecessary: the generic
+   * `TrayChunkFrame` layer frames and reassembles any oversize message.
+   */
+  | { type: 'models.list'; models: TrayModelCatalogEntry[] }
+  | { type: 'model.state'; state: TrayModelSelectionState }
   | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }
   | {
       type: 'sprinkle.content';
@@ -346,6 +355,14 @@ export type FollowerToLeaderMessage =
   | { type: 'new_session'; action: 'save' | 'skip' | 'erase' }
   | { type: 'request_snapshot'; scoopJid?: string }
   | { type: 'scoops.select'; scoopJid: string }
+  | { type: 'models.request' }
+  | { type: 'model.select'; modelId: string }
+  | {
+      type: 'thinking.set';
+      scoopJid: string;
+      thinkingLevel: TrayThinkingLevel;
+      effortOverride?: string;
+    }
   | { type: 'sprinkles.refresh' }
   | { type: 'sprinkle.fetch'; requestId: string; sprinkleName: string }
   | {
@@ -511,6 +528,35 @@ export interface TrayExecSignalMessage {
   type: 'exec.signal';
   requestId: string;
   signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL';
+}
+
+// ---------------------------------------------------------------------------
+// Model catalog / selection types
+// ---------------------------------------------------------------------------
+
+/** Thinking levels supported by the leader's per-scoop configuration. */
+export type TrayThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * One model a follower may select, using the provider-qualified picker id.
+ *
+ * Credential-free by construction: the wire shape contains only display and
+ * capability metadata — never an account id, user identity, avatar, key, or
+ * token. `modelId` has the `providerId:modelId` form used by the leader picker.
+ */
+export interface TrayModelCatalogEntry {
+  providerName: string;
+  modelId: string;
+  modelName: string;
+  reasoning: boolean;
+}
+
+/** The leader's global model selection and one scoop's thinking configuration. */
+export interface TrayModelSelectionState {
+  activeModelId: string;
+  scoopJid: string;
+  thinkingLevel?: TrayThinkingLevel;
+  effortOverride?: string;
 }
 
 // ---------------------------------------------------------------------------

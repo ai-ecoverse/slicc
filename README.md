@@ -131,7 +131,7 @@ SLICC can mirror itself across multiple browsers, even on other machines:
 2. **Second browser:** open the account dialog, click **Connect to another browser**, and paste the URL. The "How do I get the sync URL?" hint inside the dialog walks through the same steps.
 3. **Leaving the tray:** click the avatar on either browser to open the popover — the tray section now has a **Stop multi-browser sync** (leader) or **Disconnect from leader** (follower) action. From the terminal, `host leave` does the same thing; `host leave --leader <worker-url>` leaves the current role and becomes a leader on that worker.
 
-Both browsers must run the same SLICC version. Once connected, the sessions stay in sync in real time.
+Tray protocol changes are additive, so older browsers keep syncing while newer controls stay hidden until both peers support them. Once connected, the sessions stay in sync in real time. A follower can switch the leader's active model and adjust thinking for its selected scoop, while provider credentials remain on the leader.
 
 ### 6. Electron
 

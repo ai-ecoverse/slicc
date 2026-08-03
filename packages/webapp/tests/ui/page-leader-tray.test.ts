@@ -485,4 +485,20 @@ describe('startPageLeaderTray', () => {
 
     handle.stop();
   });
+
+  it('threads follower model callbacks into the sync manager', () => {
+    const { fetchImpl, webSocketFactory } = makeLeaderFetch();
+    const onFollowerModelSelect = vi.fn(() => true);
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      onFollowerModelSelect,
+    });
+    const channel = new CapturingChannel();
+    handle.sync.addFollower('b1', channel);
+
+    channel.simulate({ type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
+
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8');
+    handle.stop();
+  });
 });

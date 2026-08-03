@@ -335,6 +335,57 @@ describe('OffscreenClient', () => {
     await pending;
   });
 
+  it('awaits thinking acknowledgment and updates the cached scoop before resolving', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+          config: { thinkingLevel: 'off' },
+        },
+      ],
+    });
+    const pending = client.setScoopThinkingLevel('cone_1', 'xhigh', 'max');
+    const envelope = sentMessages[0] as { payload: any };
+
+    expect(envelope.payload).toMatchObject({
+      type: 'set-thinking-level',
+      scoopJid: 'cone_1',
+      level: 'xhigh',
+      effortOverride: 'max',
+    });
+    simulateMessage('offscreen', {
+      type: 'set-thinking-level-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_1',
+      level: 'xhigh',
+      effortOverride: 'max',
+      applied: true,
+    });
+
+    await expect(pending).resolves.toBe(true);
+    expect(client.getScoop('cone_1')?.config).toMatchObject({
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    });
+  });
+
+  it('bounds a thinking update when the worker does not acknowledge it', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = client.setScoopThinkingLevel('cone_1', 'xhigh', 'max');
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clear-chat resolves on timeout if no ack arrives', async () => {
     vi.useFakeTimers();
     try {

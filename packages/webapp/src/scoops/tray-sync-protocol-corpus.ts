@@ -254,6 +254,32 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       activeScoopJid: 'cone',
     },
   },
+  'models.list': {
+    ios: 'decoded',
+    message: {
+      type: 'models.list',
+      models: [
+        {
+          providerName: 'Example Provider',
+          modelId: 'example:reasoner',
+          modelName: 'Reasoner',
+          reasoning: true,
+        },
+      ],
+    },
+  },
+  'model.state': {
+    ios: 'decoded',
+    message: {
+      type: 'model.state',
+      state: {
+        activeModelId: 'example:reasoner',
+        scoopJid: 'cone',
+        thinkingLevel: 'xhigh',
+        effortOverride: 'max',
+      },
+    },
+  },
   'sprinkles.list': {
     ios: 'decoded',
     message: {
@@ -466,6 +492,20 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     message: { type: 'request_snapshot', scoopJid: 'cone' },
   },
   'scoops.select': { ios: 'decoded', message: { type: 'scoops.select', scoopJid: 'cone' } },
+  'models.request': { ios: 'decoded', message: { type: 'models.request' } },
+  'model.select': {
+    ios: 'decoded',
+    message: { type: 'model.select', modelId: 'example:reasoner' },
+  },
+  'thinking.set': {
+    ios: 'decoded',
+    message: {
+      type: 'thinking.set',
+      scoopJid: 'cone',
+      thinkingLevel: 'xhigh',
+      effortOverride: 'max',
+    },
+  },
   'sprinkles.refresh': { ios: 'decoded', message: { type: 'sprinkles.refresh' } },
   'sprinkle.fetch': {
     ios: 'decoded',

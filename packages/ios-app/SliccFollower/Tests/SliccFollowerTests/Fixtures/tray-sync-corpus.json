@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 4,
-  "leaderVariantCount": 37,
-  "followerVariantCount": 30,
+  "traySyncProtocolVersion": 5,
+  "leaderVariantCount": 39,
+  "followerVariantCount": 33,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -151,6 +151,34 @@
           "exec": true
         },
         "motd": "macOS 15 via node-server"
+      }
+    },
+    {
+      "type": "model.state",
+      "ios": "decoded",
+      "message": {
+        "type": "model.state",
+        "state": {
+          "activeModelId": "example:reasoner",
+          "scoopJid": "cone",
+          "thinkingLevel": "xhigh",
+          "effortOverride": "max"
+        }
+      }
+    },
+    {
+      "type": "models.list",
+      "ios": "decoded",
+      "message": {
+        "type": "models.list",
+        "models": [
+          {
+            "providerName": "Example Provider",
+            "modelId": "example:reasoner",
+            "modelName": "Reasoner",
+            "reasoning": true
+          }
+        ]
       }
     },
     {
@@ -570,6 +598,21 @@
       }
     },
     {
+      "type": "model.select",
+      "ios": "decoded",
+      "message": {
+        "type": "model.select",
+        "modelId": "example:reasoner"
+      }
+    },
+    {
+      "type": "models.request",
+      "ios": "decoded",
+      "message": {
+        "type": "models.request"
+      }
+    },
+    {
       "type": "new_session",
       "ios": "decoded",
       "message": {
@@ -677,6 +720,16 @@
           }
         ],
         "runtimeId": "slicc-ios"
+      }
+    },
+    {
+      "type": "thinking.set",
+      "ios": "decoded",
+      "message": {
+        "type": "thinking.set",
+        "scoopJid": "cone",
+        "thinkingLevel": "xhigh",
+        "effortOverride": "max"
       }
     },
     {

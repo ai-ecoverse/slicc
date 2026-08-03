@@ -6,6 +6,7 @@ import type {
   LeaderToFollowerMessage,
   ScoopSummary,
   SprinkleSummary,
+  TrayModelCatalogEntry,
 } from '../tray-sync-protocol.js';
 import { sendSnapshot } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
@@ -104,9 +105,19 @@ export class BroadcastManager {
     if (!follower) return;
 
     const { options } = this.context;
-    const targetJid = scoopJid ?? follower.selectedScoopJid ?? options.getScoopJid();
+    const activeJid = options.getScoopJid();
+    let targetJid = scoopJid ?? follower.selectedScoopJid ?? activeJid;
+    try {
+      const scoops = options.getScoops?.();
+      if (scoops && !scoops.some((scoop) => scoop.jid === targetJid)) targetJid = activeJid;
+    } catch (err) {
+      this.context.log.warn('getScoops failed while validating snapshot target', {
+        targetJid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     let messages: ChatMessage[];
-    if (options.getMessagesForScoop && targetJid !== options.getScoopJid()) {
+    if (options.getMessagesForScoop && targetJid !== activeJid) {
       try {
         messages = await Promise.resolve(options.getMessagesForScoop(targetJid));
       } catch (err) {
@@ -114,6 +125,7 @@ export class BroadcastManager {
           targetJid,
           error: err instanceof Error ? err.message : String(err),
         });
+        targetJid = activeJid;
         messages = options.getMessages();
       }
     } else {
@@ -133,6 +145,66 @@ export class BroadcastManager {
     if (this.context.followers.followers.size === 0) return;
     for (const bootstrapId of this.context.followers.followers.keys()) {
       void this.sendSnapshotToFollower(bootstrapId);
+    }
+  }
+
+  sendModelCatalogToFollower(bootstrapId: string): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower) return;
+    const models = this.buildModelCatalog();
+    if (!models) return;
+    follower.sync.send({ type: 'models.list', models });
+    this.sendModelStateToFollower(bootstrapId);
+  }
+
+  broadcastModelCatalog(): void {
+    if (this.context.followers.followers.size === 0) return;
+    const models = this.buildModelCatalog();
+    if (!models) return;
+    for (const follower of this.context.followers.followers.values()) {
+      follower.sync.send({ type: 'models.list', models });
+    }
+    this.broadcastModelState();
+  }
+
+  broadcastModelState(): void {
+    if (this.context.followers.followers.size === 0) return;
+    for (const bootstrapId of this.context.followers.followers.keys()) {
+      this.sendModelStateToFollower(bootstrapId);
+    }
+  }
+
+  private sendModelStateToFollower(bootstrapId: string): void {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    const getState = this.context.options.getModelSelectionState;
+    if (!follower || !getState) return;
+    const scoopJid = follower.selectedScoopJid ?? this.context.options.getScoopJid();
+    try {
+      follower.sync.send({ type: 'model.state', state: getState(scoopJid) });
+    } catch (err) {
+      this.context.log.warn('Failed to compute model selection state', {
+        bootstrapId,
+        scoopJid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private buildModelCatalog(): TrayModelCatalogEntry[] | null {
+    const getCatalog = this.context.options.getModelCatalog;
+    if (!getCatalog) return null;
+    try {
+      return getCatalog().map((model) => ({
+        providerName: model.providerName,
+        modelId: model.modelId,
+        modelName: model.modelName,
+        reasoning: model.reasoning === true,
+      }));
+    } catch (err) {
+      this.context.log.warn('Failed to compute model catalog', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
     }
   }
 

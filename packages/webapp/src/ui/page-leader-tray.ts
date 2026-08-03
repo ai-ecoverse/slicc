@@ -80,6 +80,10 @@ export interface StartPageLeaderTrayOptions {
   getScoopJid: LeaderSyncManagerOptions['getScoopJid'];
   getScoops?: () => ScoopSummary[];
   getSprinkles?: () => SprinkleSummary[];
+  getModelCatalog?: LeaderSyncManagerOptions['getModelCatalog'];
+  getModelSelectionState?: LeaderSyncManagerOptions['getModelSelectionState'];
+  onFollowerModelSelect?: LeaderSyncManagerOptions['onFollowerModelSelect'];
+  onFollowerThinkingSet?: LeaderSyncManagerOptions['onFollowerThinkingSet'];
   readSprinkleContent?: LeaderSyncManagerOptions['readSprinkleContent'];
   onSprinkleLick?: LeaderSyncManagerOptions['onSprinkleLick'];
   onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
@@ -231,6 +235,10 @@ function buildSyncManager(
     getScoopJid: options.getScoopJid,
     getScoops: options.getScoops,
     getSprinkles: options.getSprinkles,
+    getModelCatalog: options.getModelCatalog,
+    getModelSelectionState: options.getModelSelectionState,
+    onFollowerModelSelect: options.onFollowerModelSelect,
+    onFollowerThinkingSet: options.onFollowerThinkingSet,
     readSprinkleContent: options.readSprinkleContent,
     onSprinkleLick: options.onSprinkleLick,
     onForwardedLick: options.onForwardedLick,

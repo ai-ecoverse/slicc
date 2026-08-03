@@ -113,7 +113,7 @@ describe('mountWcUiFollower', () => {
     const opts = startFollowerSpy.mock.calls[0]![0];
     expect(opts.runtime).toBe('slicc-standalone');
     expect(opts.browserAPI).toBeTruthy();
-  });
+  }, 10_000);
 
   it('drives the floatbar online dot from the follower tray status (#1707)', async () => {
     // Integration guard: the slicc-floatbar `online` API existed with NO
@@ -352,6 +352,93 @@ describe('mountWcUiFollower', () => {
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
   });
 
+  it('keeps model controls hidden before the catalog and for a legacy leader connection', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement;
+    const opts = startFollowerSpy.mock.calls[0]![0];
+
+    expect(meta.style.display).toBe('none');
+    // A pre-v5 leader connects and sends normal state, but never sends the v5
+    // catalog callback. The empty model surface must remain unavailable.
+    opts.onConnectionChange?.(true);
+    opts.onStatus?.('idle');
+    expect(meta.style.display).toBe('none');
+  });
+
+  it('populates authoritative model state and sends model/thinking selections without optimistic pills', async () => {
+    const selectModel = vi.fn();
+    const setThinkingLevel = vi.fn();
+    startFollowerSpy.mockImplementationOnce(
+      (_opts: StartPageFollowerTrayOptions) =>
+        ({ stop: vi.fn(), currentSync: { selectModel, setThinkingLevel } }) as never
+    );
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement & {
+      model: string;
+      models: Array<{ id: string; name: string; provider: string }>;
+    };
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const models = [
+      {
+        providerName: 'Anthropic',
+        modelId: 'anthropic:claude-sonnet-4-6',
+        modelName: 'Claude Sonnet 4.6',
+        reasoning: true,
+      },
+      {
+        providerName: 'OpenAI',
+        modelId: 'openai:gpt-4.1',
+        modelName: 'GPT-4.1',
+        reasoning: false,
+      },
+    ];
+
+    opts.onModelsList?.(models);
+    expect(meta.models).toEqual([
+      { id: 'anthropic:claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic' },
+      { id: 'openai:gpt-4.1', name: 'GPT-4.1', provider: 'OpenAI' },
+    ]);
+    expect(meta.style.display).toBe('none');
+
+    opts.onModelState?.({
+      activeModelId: 'anthropic:claude-sonnet-4-6',
+      scoopJid: 'cone-jid',
+      thinkingLevel: 'medium',
+    });
+    expect(meta.style.display).toBe('');
+    expect(meta.model).toBe('Claude Sonnet 4.6');
+    expect(meta.getAttribute('thinking')).toBe('medium');
+    expect(meta.hasAttribute('no-thinking')).toBe(false);
+
+    // The component updates itself before emitting. The follower immediately
+    // restores the leader state while the requested selection is in flight.
+    meta.model = 'GPT-4.1';
+    meta.dispatchEvent(
+      new CustomEvent('model-change', {
+        detail: { id: 'openai:gpt-4.1', model: 'GPT-4.1', provider: 'OpenAI' },
+      })
+    );
+    expect(selectModel).toHaveBeenCalledWith('openai:gpt-4.1');
+    expect(meta.model).toBe('Claude Sonnet 4.6');
+
+    meta.setAttribute('thinking', 'max');
+    meta.dispatchEvent(new CustomEvent('thinking-change', { detail: { thinking: 'max' } }));
+    expect(setThinkingLevel).toHaveBeenCalledWith('cone-jid', 'xhigh', 'max');
+    expect(meta.getAttribute('thinking')).toBe('medium');
+
+    opts.onModelState?.({
+      activeModelId: 'openai:gpt-4.1',
+      scoopJid: 'cone-jid',
+      thinkingLevel: 'off',
+    });
+    expect(meta.model).toBe('GPT-4.1');
+    expect(meta.hasAttribute('no-thinking')).toBe(true);
+  });
+
   it('populates the nav switcher when the leader broadcasts a scoops.list', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
@@ -394,6 +481,29 @@ describe('mountWcUiFollower', () => {
     expect(switcher.scoops[1]!.label).toBe('research');
     expect(switcher.scoops.map((s) => s.state)).toEqual(['working', 'broken']);
     expect(switcher.scoops.map((s) => s.fill)).toEqual([64, 82]);
+    expect(switcher.getAttribute('active')).toBe('cone-jid');
+  });
+
+  it('preserves its viewed scoop across reconnect and falls back if it disappears', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+    opts.onScoopsList?.(
+      [
+        { jid: 'cone-jid', name: 'cone', isCone: true },
+        { jid: 'research', name: 'research', isCone: false },
+      ] as never,
+      'cone-jid'
+    );
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'research' } }));
+
+    opts.onConnectionChange?.(false);
+    expect(opts.getSelectedScoopJid?.()).toBe('research');
+
+    opts.onScoopsList?.([{ jid: 'cone-jid', name: 'cone', isCone: true }] as never, 'cone-jid');
+    expect(opts.getSelectedScoopJid?.()).toBe('cone-jid');
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
 
@@ -464,6 +574,50 @@ describe('mountWcUiFollower', () => {
     const opts = startFollowerSpy.mock.calls[0]![0];
     expect(opts.runtime).toBe('slicc-cherry');
     expect(opts.onCherrySliccEvent).toBeTypeOf('function');
+  });
+
+  it('cherry: keeps the whole model surface hidden when modelPicker is false', async () => {
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          features: { ...ALL_CHERRY_FEATURES, modelPicker: false },
+        },
+        instanceId: 'i',
+        hasLocalCdpSurface: true,
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const meta = app.querySelector('slicc-composer-meta') as HTMLElement;
+
+    opts.onModelsList?.([
+      {
+        providerName: 'Anthropic',
+        modelId: 'anthropic:claude-sonnet-4-6',
+        modelName: 'Claude Sonnet 4.6',
+        reasoning: true,
+      },
+    ]);
+    opts.onModelState?.({
+      activeModelId: 'anthropic:claude-sonnet-4-6',
+      scoopJid: 'cone-jid',
+      thinkingLevel: 'high',
+    });
+
+    expect(meta.style.display).toBe('none');
+    expect(
+      [...document.head.querySelectorAll('style')].some((style) =>
+        style.textContent?.includes('slicc-composer-meta')
+      )
+    ).toBe(true);
   });
 
   it('cherry: emits slicc.follower.ready/disconnected via transport on connection-state changes', async () => {

@@ -46,8 +46,11 @@ import {
   type TrayExecSignalMessage,
   type TrayFsRequest,
   type TrayFsResponse,
+  type TrayModelCatalogEntry,
+  type TrayModelSelectionState,
   type TraySyncChannel,
   type TrayTargetEntry,
+  type TrayThinkingLevel,
   unhandledProtocolMessage,
 } from './tray-sync-protocol.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
@@ -92,6 +95,12 @@ export interface FollowerSyncManagerOptions {
   onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
   /** Called when the leader sends an updated scoop list (nav bar / scoop picker). */
   onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
+  /** Called when a v5+ leader sends its credential-free selectable model catalog. */
+  onModelsList?: (models: TrayModelCatalogEntry[]) => void;
+  /** Called when a v5+ leader broadcasts the selected model and scoop thinking state. */
+  onModelState?: (state: TrayModelSelectionState) => void;
+  /** Called when the leader applies or clears its active theme. */
+  onThemeApply?: (themeJson: string | null) => void;
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
   /** Called when the leader signals that a sprinkle's content has been reloaded (file changed). */
@@ -376,8 +385,8 @@ export class FollowerSyncManager implements AgentHandle {
   // ---------------------------------------------------------------------------
 
   /** Request a fresh snapshot from the leader. */
-  requestSnapshot(): void {
-    this.sync.send({ type: 'request_snapshot' });
+  requestSnapshot(scoopJid?: string): void {
+    this.sync.send({ type: 'request_snapshot', ...(scoopJid ? { scoopJid } : {}) });
   }
 
   /**
@@ -393,6 +402,25 @@ export class FollowerSyncManager implements AgentHandle {
   /** Tell the leader to switch this follower's view to a different scoop. */
   selectScoop(scoopJid: string): void {
     this.sync.send({ type: 'scoops.select', scoopJid });
+  }
+
+  /** Ask a v5+ leader to send its model catalog and current selection state. */
+  requestModels(): void {
+    this.sync.send({ type: 'models.request' });
+  }
+
+  /** Ask the leader to change the global active model. */
+  selectModel(modelId: string): void {
+    this.sync.send({ type: 'model.select', modelId });
+  }
+
+  /** Ask the leader to change one scoop's thinking level. */
+  setThinkingLevel(
+    scoopJid: string,
+    thinkingLevel: TrayThinkingLevel,
+    effortOverride?: string
+  ): void {
+    this.sync.send({ type: 'thinking.set', scoopJid, thinkingLevel, effortOverride });
   }
 
   /** Get the latest snapshot received from the leader, if any. */
@@ -696,6 +724,7 @@ export class FollowerSyncManager implements AgentHandle {
     } else {
       log.info('Leader hello', { protocolVersion });
     }
+    if (protocolVersion >= 5) this.requestModels();
   }
 
   /** Log once when the leader's first message is not `hello` (ordered channel ⇒ legacy build). */
@@ -706,12 +735,17 @@ export class FollowerSyncManager implements AgentHandle {
     log.info('Leader sent no hello — legacy peer (pre-versioning build)');
   }
 
+  private handleThemeMessage(
+    message: LeaderToFollowerMessage
+  ): message is Extract<LeaderToFollowerMessage, { type: 'theme.apply' }> {
+    if (message.type !== 'theme.apply') return false;
+    this.applyLeaderTheme(message.themeJson);
+    return true;
+  }
+
   private handleLeaderMessage(message: LeaderToFollowerMessage): void {
     this.noteLegacyLeader(message.type);
-    if (message.type === 'theme.apply') {
-      this.applyLeaderTheme(message.themeJson);
-      return;
-    }
+    if (this.handleThemeMessage(message)) return;
     switch (message.type) {
       case 'snapshot':
         log.info('Snapshot received from leader', {
@@ -762,7 +796,7 @@ export class FollowerSyncManager implements AgentHandle {
 
       case 'cdp.request': {
         const { requestId, localTargetId, method, params, sessionId } = message;
-        this.executeLocalCDP(requestId, localTargetId, method, params, sessionId);
+        void this.executeLocalCDP(requestId, localTargetId, method, params, sessionId);
         break;
       }
       case 'cdp.response': {
@@ -778,7 +812,7 @@ export class FollowerSyncManager implements AgentHandle {
       // when an injected bridge channel might want preview-specific behavior.
       case 'tab.open':
       case 'preview.open': {
-        this.executeLocalTabOpen(message.requestId, message.url);
+        void this.executeLocalTabOpen(message.requestId, message.url);
         break;
       }
       case 'tab.opened': {
@@ -798,7 +832,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
       case 'fs.request': {
-        this.executeLocalFs(message.requestId, message.request);
+        void this.executeLocalFs(message.requestId, message.request);
         break;
       }
       case 'fs.response': {
@@ -809,7 +843,12 @@ export class FollowerSyncManager implements AgentHandle {
         this.handleScoopsList(message.scoops, message.activeScoopJid);
         break;
       }
-
+      case 'models.list':
+        this.options.onModelsList?.(message.models);
+        break;
+      case 'model.state':
+        this.options.onModelState?.(message.state);
+        break;
       case 'sprinkles.list':
         this.handleSprinklesList(message.sprinkles);
         break;
@@ -1069,26 +1108,7 @@ export class FollowerSyncManager implements AgentHandle {
   }
 
   private applyLeaderTheme(themeJson: string | null): void {
-    import('../ui/theme-engine.js')
-      .then(
-        ({
-          importTheme,
-          saveCustomTheme,
-          setActiveTheme,
-          clearActiveTheme,
-          applyThemeOverrides,
-        }) => {
-          if (!themeJson) {
-            clearActiveTheme();
-          } else {
-            const theme = importTheme(themeJson);
-            saveCustomTheme(theme);
-            setActiveTheme(theme.id);
-          }
-          applyThemeOverrides();
-        }
-      )
-      .catch((err) => log.error('Failed to apply leader theme', { err }));
+    this.options.onThemeApply?.(themeJson);
   }
 
   private emitEvent(event: AgentEvent): void {

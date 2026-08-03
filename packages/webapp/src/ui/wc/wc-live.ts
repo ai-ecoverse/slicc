@@ -52,12 +52,18 @@ import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
   LEADER_RUN_NEW_SESSION_EVENT,
   type LeaderRunNewSessionDetail,
 } from './leader-session-events.js';
 import { WcChatController } from './wc-chat-controller.js';
+import {
+  effortOverrideForAgent,
+  metaThinkingForScoop,
+  thinkingLevelForAgent,
+} from './wc-follower-model-surface.js';
 import type { MonitorTrayInfo } from './wc-monitor.js';
 import { scoopColor } from './wc-scoop-color.js';
 
@@ -85,30 +91,23 @@ import {
 } from './wc-shell.js';
 import { createWorkbenchActivator } from './wc-workbench.js';
 
-/**
- * Bridge the composer-meta thinking scale (`off…xhigh|max`) onto pi's
- * `ThinkingLevel` (`off|minimal|low|medium|high|xhigh`) and back. The
- * library's `max` caps at pi's `xhigh`; pi's `minimal` displays as `low`.
- */
-const PI_FROM_META: Readonly<Record<string, ThinkingLevel>> = {
-  off: 'off',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'xhigh',
-};
-const META_FROM_PI: Readonly<Record<string, string>> = {
-  off: 'off',
-  minimal: 'low',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-};
+export {
+  effortOverrideForAgent,
+  metaThinkingForScoop,
+  thinkingLevelForAgent,
+} from './wc-follower-model-surface.js';
 
-export function thinkingLevelForAgent(metaLevel: string | undefined): ThinkingLevel | undefined {
-  return metaLevel ? PI_FROM_META[metaLevel] : undefined;
+/** Persist a leader-local thinking change and notify followers only after its ack. */
+export async function applyLeaderLocalThinkingChange(
+  client: Pick<OffscreenClient, 'setScoopThinkingLevel'>,
+  scoopJid: string,
+  level: ThinkingLevel | undefined,
+  effortOverride?: string,
+  notify: () => void = notifyLeaderLocalModelStateChanged
+): Promise<boolean> {
+  const applied = await client.setScoopThinkingLevel(scoopJid, level, effortOverride);
+  if (applied) notify();
+  return applied;
 }
 
 /**
@@ -180,24 +179,6 @@ function getTrayMonitorInfo(storage: Pick<Storage, 'getItem'>): MonitorTrayInfo 
     // Storage can be unavailable in a sandboxed page; inactive tray display remains usable.
   }
   return { role: 'standalone', state: 'inactive', workerBaseUrl };
-}
-
-/**
- * Raw API effort override for levels that exceed pi-ai's ThinkingLevel range.
- * Returns `'max'` when the user picks Sprofondato (the UI's `max` level),
- * `undefined` otherwise — so the stream layer can inject `effort: 'max'`
- * directly into `output_config` without going through pi-ai's mapping.
- */
-export function effortOverrideForAgent(metaLevel: string | undefined): string | undefined {
-  return metaLevel === 'max' ? 'max' : undefined;
-}
-
-export function metaThinkingForScoop(
-  level: ThinkingLevel | undefined,
-  effortOverride?: string
-): string {
-  if (effortOverride === 'max') return 'max';
-  return (level && META_FROM_PI[level]) ?? 'off';
 }
 
 /**
@@ -1231,7 +1212,11 @@ function wireWcComposer(deps: {
     const level = thinkingLevelForAgent(metaLevel);
     const effort = effortOverrideForAgent(metaLevel);
     const selected = boot.getSelected();
-    if (selected && level) client.setScoopThinkingLevel(selected.jid, level, effort);
+    if (selected && level) {
+      void applyLeaderLocalThinkingChange(client, selected.jid, level, effort).catch((err) =>
+        log.warn('local thinking update failed', err)
+      );
+    }
   });
 
   return { getAttachStage: () => attachStage };

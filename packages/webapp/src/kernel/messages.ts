@@ -244,11 +244,22 @@ export type ExtensionThinkingLevel =
 
 export interface SetThinkingLevelMsg {
   type: 'set-thinking-level';
+  /** Correlates the persisted update with the panel-side request. */
+  requestId?: string;
   scoopJid: string;
   /** Undefined clears the override; the level falls back to default. */
   level?: ExtensionThinkingLevel;
   /** Raw API effort override retained for provider-specific stream mappings. */
   effortOverride?: string;
+}
+
+export interface SetThinkingLevelAckMsg {
+  type: 'set-thinking-level-ack';
+  requestId: string;
+  scoopJid: string;
+  level?: ExtensionThinkingLevel;
+  effortOverride?: string;
+  applied: boolean;
 }
 
 export interface PanelCdpCommandMsg {
@@ -1103,6 +1114,7 @@ export type OffscreenToPanelMessage =
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
   | ClearChatAckMsg
+  | SetThinkingLevelAckMsg
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg
   | FollowerSprinkleFetchResultMsg

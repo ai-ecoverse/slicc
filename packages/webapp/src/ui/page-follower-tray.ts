@@ -130,6 +130,10 @@ export interface StartPageFollowerTrayOptions {
    * no scoop switcher UI to update.
    */
   onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
+  /** Receive the leader's selectable model catalog. */
+  onModelsList?: FollowerSyncManagerOptions['onModelsList'];
+  /** Receive the leader's active model and selected-scoop thinking state. */
+  onModelState?: FollowerSyncManagerOptions['onModelState'];
   /**
    * Render the transcript-export approval dialog for a **headless** leader (the
    * hosted-leader / cloud float) that delegated the prompt to this follower.
@@ -168,6 +172,8 @@ export interface StartPageFollowerTrayOptions {
    * disables its composer + shows "Connecting to leader…" until `true`.
    */
   onConnectionChange?: (connected: boolean) => void;
+  /** Preserve the viewed scoop when a fresh reconnect sync requests its snapshot. */
+  getSelectedScoopJid?: () => string | null;
   /**
    * Called with `true` when the leader stops answering keepalive pings while
    * the data channel is still open, and `false` when it answers again. The
@@ -248,6 +254,24 @@ export interface PageFollowerTrayHandle {
   readonly currentSync: FollowerSyncManager | null;
 }
 
+/** Apply a leader theme from the UI layer without adding a scoops → UI import. */
+export function applyFollowerLeaderTheme(themeJson: string | null): void {
+  void import('./theme-engine.js')
+    .then(
+      ({ importTheme, saveCustomTheme, setActiveTheme, clearActiveTheme, applyThemeOverrides }) => {
+        if (!themeJson) {
+          clearActiveTheme();
+        } else {
+          const theme = importTheme(themeJson);
+          saveCustomTheme(theme);
+          setActiveTheme(theme.id);
+        }
+        applyThemeOverrides();
+      }
+    )
+    .catch((err) => log.error('Failed to apply leader theme', { err }));
+}
+
 /**
  * Construct + start the follower tray subsystem on the page. Returns a
  * handle that the caller can hold for shutdown.
@@ -305,6 +329,9 @@ export function startPageFollowerTray(
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
       onScoopsList: options.onScoopsList,
+      onModelsList: options.onModelsList,
+      onModelState: options.onModelState,
+      onThemeApply: applyFollowerLeaderTheme,
       onTranscriptExportApprovalRequest: options.onTranscriptExportApprovalRequest,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
@@ -369,7 +396,7 @@ export function startPageFollowerTray(
     options.setChatAgent(sync);
     options.onForwardingToggle?.(true);
     options.onConnectionChange?.(true);
-    sync.requestSnapshot();
+    sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
 
     if (options.advertisesCdpTargets !== false) {
       targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);

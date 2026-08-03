@@ -11,6 +11,7 @@ installWcDomStubs();
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
+  applyLeaderLocalThinkingChange,
   createWcLiveCallbacks,
   metaThinkingForScoop,
   parseProcStatLine,
@@ -38,6 +39,40 @@ function scoop(overrides: Partial<RegisteredScoop>): RegisteredScoop {
 }
 
 const cone = scoop({ jid: 'cone-1', name: 'sliccy', isCone: true, type: 'cone' });
+
+describe('leader-local thinking bridge', () => {
+  it('notifies only after a successful persistence ack', async () => {
+    let resolve!: (applied: boolean) => void;
+    const setScoopThinkingLevel = vi.fn(() => new Promise<boolean>((done) => (resolve = done)));
+    const notify = vi.fn();
+    const pending = applyLeaderLocalThinkingChange(
+      { setScoopThinkingLevel },
+      'cone-1',
+      'xhigh',
+      'max',
+      notify
+    );
+
+    expect(notify).not.toHaveBeenCalled();
+    resolve(true);
+    await expect(pending).resolves.toBe(true);
+    expect(notify).toHaveBeenCalledOnce();
+  });
+
+  it('does not notify when persistence returns false or times out', async () => {
+    const notify = vi.fn();
+    await expect(
+      applyLeaderLocalThinkingChange(
+        { setScoopThinkingLevel: vi.fn().mockResolvedValue(false) },
+        'cone-1',
+        'high',
+        undefined,
+        notify
+      )
+    ).resolves.toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
 
 describe('scoopColor / toSwitcherScoops', () => {
   it('gives the cone its fixed waffle color', () => {

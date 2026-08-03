@@ -25,6 +25,10 @@ import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
+import type {
+  TrayModelCatalogEntry,
+  TrayModelSelectionState,
+} from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
   type ConnectedFollowerInfo,
@@ -45,6 +49,13 @@ import {
   type StartPageLeaderTrayOptions,
   startPageLeaderTray,
 } from '../page-leader-tray.js';
+import {
+  getAccounts,
+  getAllAvailableModels,
+  getProviderConfig,
+  resolveCurrentModel,
+  setSelectedModelId,
+} from '../provider-settings.js';
 import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from '../runtime-identity.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
@@ -56,6 +67,7 @@ import {
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle } from '../types.js';
+import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from './leader-model-events.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
   LEADER_RUN_NEW_SESSION_EVENT,
@@ -63,6 +75,7 @@ import {
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
 
@@ -128,11 +141,117 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Conne
   });
 }
 
-function buildFollowerOptions(
+function modelCatalogForTray(): TrayModelCatalogEntry[] {
+  return getAllAvailableModels().flatMap((group) =>
+    group.models.map((model) => ({
+      providerName: group.providerName,
+      modelId: `${group.providerId}:${model.id}`,
+      modelName: model.name ?? model.id,
+      reasoning: model.reasoning === true,
+    }))
+  );
+}
+
+function currentQualifiedModelId(catalog: readonly TrayModelCatalogEntry[]): string {
+  const current = resolveCurrentModel();
+  const exact = catalog.find((entry) => entry.modelId === `${current.provider}:${current.id}`);
+  return (
+    exact?.modelId ??
+    catalog.find((entry) => entry.modelId.endsWith(`:${current.id}`))?.modelId ??
+    `${current.provider}:${current.id}`
+  );
+}
+
+async function refreshDynamicModelCatalogs(log: BootStageLogger): Promise<boolean> {
+  const refreshes = getAccounts()
+    .map((account) => getProviderConfig(account.providerId).refreshModels)
+    .filter((refresh): refresh is NonNullable<typeof refresh> => refresh !== undefined);
+  if (refreshes.length === 0) return false;
+  const results = await Promise.allSettled(refreshes.map((refresh) => refresh()));
+  for (const result of results) {
+    if (result.status === 'rejected')
+      log.warn('dynamic model catalog refresh failed', result.reason);
+  }
+  return true;
+}
+
+export function installLeaderModelCatalogRefresh(opts: {
+  window: Pick<Window, 'addEventListener'>;
+  getSync: () => Pick<PageLeaderTrayHandle['sync'], 'broadcastModelCatalog'> | null;
+  refreshDynamicCatalogs: () => Promise<boolean>;
+  log: BootStageLogger;
+  refreshTimeoutMs?: number;
+}): void {
+  opts.window.addEventListener('slicc:accounts-changed', () => {
+    opts.getSync()?.broadcastModelCatalog();
+    void withTimeout(opts.refreshDynamicCatalogs(), opts.refreshTimeoutMs ?? 5000)
+      .then((refreshed) => {
+        if (refreshed) opts.getSync()?.broadcastModelCatalog();
+      })
+      .catch((err) => opts.log.warn('dynamic model catalog refresh failed', err));
+  });
+}
+
+export function installLeaderModelStateBridge(opts: {
+  window: Pick<Window, 'addEventListener'>;
+  getSync: () => Pick<PageLeaderTrayHandle['sync'], 'broadcastModelState'> | null;
+}): void {
+  opts.window.addEventListener(LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT, () => {
+    opts.getSync()?.broadcastModelState();
+  });
+  opts.window.addEventListener('model-change', (event) => {
+    const detail = (event as CustomEvent<{ source?: 'follower' }>).detail;
+    if (detail?.source !== 'follower') opts.getSync()?.broadcastModelState();
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('dynamic model catalog refresh timed out')),
+      timeoutMs
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+export function buildFollowerOptions(
   deps: WcTrayDeps,
-  joinUrl: string
+  joinUrl: string,
+  getSync: () => PageFollowerTrayHandle['currentSync']
 ): Parameters<typeof startPageFollowerTray>[0] {
   const { browser, client, getController } = deps;
+  let selectedScoopJid: string | null = null;
+  const modelSurface = createFollowerModelSurface({
+    composerMeta: deps.refs.composerMeta,
+    getSync,
+    getSelectedScoopJid: () => selectedScoopJid,
+    interceptLocalHandlers: true,
+    getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
+  });
+  deps.refs.switcher.addEventListener(
+    'slicc-scoop-select',
+    (event) => {
+      const sync = getSync();
+      if (!sync) return;
+      event.stopImmediatePropagation();
+      const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (!scoopJid) return;
+      selectedScoopJid = scoopJid;
+      deps.refs.switcher.setAttribute('active', scoopJid);
+      sync.selectScoop(scoopJid);
+    },
+    { capture: true }
+  );
   return {
     joinUrl,
     onSnapshot: (messages) => getController()?.loadMessages(messages),
@@ -142,12 +261,23 @@ function buildFollowerOptions(
     setChatAgent: (agent) => getController()?.setAgent(agent),
     browserAPI: browser,
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
+    getSelectedScoopJid: () => selectedScoopJid,
+    onConnectionChange: (connected) => {
+      if (!connected) {
+        modelSurface.reset();
+      }
+    },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
     onScoopsList: (scoops, activeScoopJid) => {
+      if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
+        selectedScoopJid = activeScoopJid;
+      }
       deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
-      deps.refs.switcher.setAttribute('active', activeScoopJid);
+      deps.refs.switcher.setAttribute('active', selectedScoopJid);
     },
+    onModelsList: modelSurface.onModelsList,
+    onModelState: modelSurface.onModelState,
   };
 }
 
@@ -180,6 +310,41 @@ export function createLeaderOptionsFactory(
     getMessagesForScoop: (scoopJid) => client.getMessagesForScoop(scoopJid),
     getScoopJid: () => deps.getSelectedJid(),
     getScoops: () => toScoopSummaries(client.getScoops(), refs.switcher.scoops),
+    getModelCatalog: modelCatalogForTray,
+    getModelSelectionState: (scoopJid): TrayModelSelectionState => {
+      const catalog = modelCatalogForTray();
+      const config = client.getScoop(scoopJid)?.config;
+      return {
+        activeModelId: currentQualifiedModelId(catalog),
+        scoopJid,
+        thinkingLevel: config?.thinkingLevel === 'max' ? 'xhigh' : config?.thinkingLevel,
+        effortOverride:
+          config?.thinkingLevel === 'max'
+            ? (config.effortOverride ?? 'max')
+            : config?.effortOverride,
+      };
+    },
+    onFollowerModelSelect: (modelId) => {
+      const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
+      if (!entry) return false;
+      setSelectedModelId(entry.modelId);
+      refs.composerMeta.dispatchEvent(
+        new CustomEvent('model-change', {
+          bubbles: true,
+          composed: true,
+          detail: {
+            id: entry.modelId,
+            model: entry.modelName,
+            provider: entry.providerName,
+            source: 'follower',
+          },
+        })
+      );
+      refs.composerMeta.setAttribute('model', entry.modelName);
+      return true;
+    },
+    onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>
+      client.setScoopThinkingLevel(scoopJid, thinkingLevel, effortOverride),
     getSprinkles: () => {
       const opened = new Set(deps.sprinkleManager.opened());
       return deps.sprinkleManager.available().map((p) => ({
@@ -394,7 +559,9 @@ function startInitialRole(
   const storedJoinUrl = win.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
   const storedWorkerBaseUrl = win.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
   if (storedJoinUrl) {
-    state.follower = startPageFollowerTray(buildFollowerOptions(deps, storedJoinUrl));
+    state.follower = startPageFollowerTray(
+      buildFollowerOptions(deps, storedJoinUrl, () => state.follower?.currentSync ?? null)
+    );
   } else if (storedWorkerBaseUrl) {
     acquireAndStartLeader(
       storedWorkerBaseUrl,
@@ -473,7 +640,9 @@ function installRoleSwitchListeners(
       log.error('previous follower stop threw during tray-join switch', err);
     }
     try {
-      state.follower = startPageFollowerTray(buildFollowerOptions(deps, joinUrl));
+      state.follower = startPageFollowerTray(
+        buildFollowerOptions(deps, joinUrl, () => state.follower?.currentSync ?? null)
+      );
     } catch (err) {
       log.error('tray-join failed', err);
     }
@@ -514,6 +683,17 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     lockRelease: null,
   };
   const lockManager = getDefaultLockManager();
+
+  installLeaderModelCatalogRefresh({
+    window: win,
+    getSync: () => state.leader?.sync ?? null,
+    refreshDynamicCatalogs: () => refreshDynamicModelCatalogs(log),
+    log,
+  });
+  installLeaderModelStateBridge({
+    window: win,
+    getSync: () => state.leader?.sync ?? null,
+  });
 
   const remoteCdpPushChannel =
     typeof BroadcastChannel === 'function'

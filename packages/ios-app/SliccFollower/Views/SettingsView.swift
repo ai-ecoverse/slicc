@@ -2,6 +2,20 @@ import SliccTraySession
 import SwiftUI
 
 struct SettingsView: View {
+    private struct ThinkingOption: Identifiable {
+        let id: String
+        let label: String
+    }
+
+    private static let thinkingOptions = [
+        ThinkingOption(id: "off", label: "Off"),
+        ThinkingOption(id: "low", label: "Low"),
+        ThinkingOption(id: "medium", label: "Medium"),
+        ThinkingOption(id: "high", label: "High"),
+        ThinkingOption(id: "xhigh", label: "Extra High"),
+        ThinkingOption(id: "max", label: "Max"),
+    ]
+
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("joinUrl") private var storedJoinUrl: String = ""
@@ -29,6 +43,9 @@ struct SettingsView: View {
                 iCloudSessionsSection
                 connectionSection
                 if appState.connectionState == .connected {
+                    if appState.supportsModelControls {
+                        modelSection
+                    }
                     trayInfoSection
                 }
                 advancedSection
@@ -46,6 +63,7 @@ struct SettingsView: View {
                 if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
                     appState.joinUrlHistory = history
                 }
+                appState.refreshModels()
             }
             .task {
                 hasICloudIdentity = await Self.probeICloudIdentity()
@@ -67,6 +85,54 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Model Section
+
+    private var modelSection: some View {
+        Section {
+            if appState.modelCatalog.isEmpty {
+                LabeledContent(
+                    "Model",
+                    value: appState.modelSelectionState?.activeModelId ?? "Loading…")
+            } else {
+                Picker("Model", selection: modelSelection) {
+                    ForEach(appState.modelCatalog) { model in
+                        Text("\(model.modelName) · \(model.providerName)")
+                            .tag(model.modelId)
+                    }
+                }
+                .pickerStyle(.navigationLink)
+                .accessibilityIdentifier("model-picker")
+            }
+
+            if appState.activeModel?.reasoning == true {
+                Picker("Thinking", selection: thinkingSelection) {
+                    ForEach(Self.thinkingOptions) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+                .pickerStyle(.navigationLink)
+                .accessibilityIdentifier("thinking-picker")
+            }
+        } header: {
+            Text("Model & Thinking")
+        } footer: {
+            Text("Model selection is global. Thinking applies only to the currently selected scoop.")
+        }
+        .onAppear { appState.refreshModels() }
+    }
+
+    private var modelSelection: Binding<String> {
+        Binding(
+            get: { appState.modelSelectionState?.activeModelId ?? "" },
+            set: { appState.selectModel($0) })
+    }
+
+    private var thinkingSelection: Binding<String> {
+        Binding(
+            get: { appState.displayedThinkingLevel },
+            set: { appState.setThinkingLevel($0) })
     }
 
     // MARK: - iCloud Sessions Section
