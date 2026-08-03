@@ -170,6 +170,15 @@ Schema and resolution: `packages/webcomponents/src/panel/layout-schema.ts`
 strip on top, the sessions rail left, the tool rail right. A zone-only model cannot
 express them, because fr fractions have no way to say "44px".
 
+A single edge may carry **several** docks. They stack along that edge's cross axis in
+declaration order — a second `top` dock sits _below_ the first, not beside it — and
+each keeps its own thickness.
+
+Note what a dock spans: the full width (or height) of the layout, **outside** the
+zones. A `top` dock therefore crosses over both rails. A bar that should sit below
+the SLICC strip _and_ between the rails belongs in `zones.top`, not in a second
+`top` dock — that is the working area, which is exactly what the zones describe.
+
 **Zones** are the working area the docks leave over — five named regions in the sense
 of Java's `BorderLayout`:
 

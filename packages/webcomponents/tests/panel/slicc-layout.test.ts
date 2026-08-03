@@ -147,6 +147,99 @@ describe('slicc-layout', () => {
     });
   });
 
+  describe('several strips on one edge', () => {
+    it('STACKS a second top dock beneath the first, not beside it', () => {
+      // Collapsing every `edge: 'top'` spec into one container made the second dock
+      // a SIBLING of the first: a 180px status bar declared after the 36px scoop
+      // strip landed in the same row, sharing its height. Observed in a real
+      // session — the status panel appeared to the right of the price counter.
+      const layout = mount(['strip', 'status', 'chat']);
+      layout.setLayout(
+        doc({
+          docks: [
+            { edge: 'top', size: '36px', panels: ['strip'] },
+            { edge: 'top', size: '180px', panels: ['status'] },
+          ],
+          zones: { center: ['chat'] },
+        })
+      );
+
+      const strip = panelEl(layout, 'strip').getBoundingClientRect();
+      const status = panelEl(layout, 'status').getBoundingClientRect();
+      // Stacked: the status bar starts where the chrome strip ends.
+      expect(status.top).toBeCloseTo(strip.bottom, 0);
+      // Each keeps its OWN size — the later spec's `size` must not overwrite the
+      // earlier one, which is how a 36px strip became 180px tall.
+      expect(strip.height).toBeCloseTo(36, 0);
+      expect(status.height).toBeCloseTo(180, 0);
+      // Both span the full width rather than splitting one row between them.
+      expect(strip.width).toBeCloseTo(800, 0);
+      expect(status.width).toBeCloseTo(800, 0);
+    });
+
+    it('keeps the working area BELOW every top strip', () => {
+      const layout = mount(['strip', 'status', 'chat']);
+      layout.setLayout(
+        doc({
+          docks: [
+            { edge: 'top', size: '36px', panels: ['strip'] },
+            { edge: 'top', size: '180px', panels: ['status'] },
+          ],
+          zones: { center: ['chat'] },
+        })
+      );
+      const chat = panelEl(layout, 'chat').getBoundingClientRect();
+      expect(chat.top).toBeCloseTo(216, 0); // 36 + 180
+      expect(chat.height).toBeCloseTo(600 - 216, 0);
+    });
+
+    it('stacks side strips horizontally, in declaration order', () => {
+      const layout = mount(['railA', 'railB', 'chat']);
+      layout.setLayout(
+        doc({
+          docks: [
+            { edge: 'left', size: '44px', panels: ['railA'] },
+            { edge: 'left', size: '60px', panels: ['railB'] },
+          ],
+          zones: { center: ['chat'] },
+        })
+      );
+      const a = panelEl(layout, 'railA').getBoundingClientRect();
+      const b = panelEl(layout, 'railB').getBoundingClientRect();
+      expect(b.left).toBeCloseTo(a.right, 0);
+      expect(a.width).toBeCloseTo(44, 0);
+      expect(b.width).toBeCloseTo(60, 0);
+      expect(panelEl(layout, 'chat').getBoundingClientRect().left).toBeCloseTo(104, 0);
+    });
+
+    it('does not wrap a single strip in a stack — one spec, one element', () => {
+      const layout = mount(['strip', 'chat']);
+      layout.setLayout(
+        doc({
+          docks: [{ edge: 'top', size: '36px', panels: ['strip'] }],
+          zones: { center: ['chat'] },
+        })
+      );
+      expect(layout.querySelector('.slicc-layout__dockstack')).toBeNull();
+    });
+
+    it('skips an empty strip when stacking, reserving no space for it', () => {
+      const layout = mount(['strip', 'chat']);
+      layout.setLayout(
+        doc({
+          docks: [
+            { edge: 'top', size: '36px', panels: ['strip'] },
+            { edge: 'top', size: '180px', panels: ['nothing-here'] },
+          ],
+          zones: { center: ['chat'] },
+        })
+      );
+      // Only the populated strip renders, so chat starts at 36px — not 216px.
+      expect(panelEl(layout, 'chat').getBoundingClientRect().top).toBeCloseTo(36, 0);
+      expect(layout.querySelector('.slicc-layout__dockstack')).toBeNull();
+    });
+  });
+
   describe('the five zones', () => {
     // BorderLayout geometry: four edge bands around a filling center. These
     // replaced a set of split-tree tests — the tree could express more, but nothing

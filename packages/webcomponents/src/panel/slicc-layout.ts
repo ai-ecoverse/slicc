@@ -95,6 +95,18 @@ slicc-layout .slicc-layout__floating > * { pointer-events: auto; }
    the DOM (state, scroll position, a live terminal session) rather than being
    destroyed and rebuilt on every variant switch. */
 slicc-layout .slicc-layout__parking { display: none; }
+/* Several strips on one edge stack along that edge's cross axis, in declaration
+   order — a second \`top\` dock sits BELOW the first, not beside it. */
+slicc-layout .slicc-layout__dockstack {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+}
+slicc-layout .slicc-layout__dockstack--top,
+slicc-layout .slicc-layout__dockstack--bottom { flex-direction: column; }
+slicc-layout .slicc-layout__dockstack--left,
+slicc-layout .slicc-layout__dockstack--right { flex-direction: row; }
 /* The WORKING AREA: everything the docks left over, divided into the five zones.
    Top and bottom are full-width bands with left|center|right in the row between
    them — Java BorderLayout in nested flexbox. Because this box is nested inside what
@@ -401,11 +413,19 @@ export class SliccLayout extends HTMLElement {
     const specs = resolved.docks.filter((dock) => dock.edge === edge);
     if (specs.length === 0) return null;
 
-    const container = el('div', `slicc-layout__dock slicc-layout__dock--${edge}`);
-    container.dataset.edge = edge;
-    let any = false;
-
+    // ONE container per spec, not one per edge.
+    //
+    // Collapsing every `edge: 'top'` spec into a single element made a second top
+    // dock a SIBLING of the first: a 180px status bar declared after the 36px scoop
+    // strip landed beside the switcher in one row, sharing its height, instead of
+    // stacking beneath it. Each spec is its own strip — that is what "in order"
+    // means for `docks[]` — and the last spec's `size` also silently overwrote the
+    // first's, which is how a 36px chrome strip became 180px tall.
+    const built: HTMLElement[] = [];
     for (const spec of specs) {
+      const container = el('div', `slicc-layout__dock slicc-layout__dock--${edge}`);
+      container.dataset.edge = edge;
+      let any = false;
       for (const id of spec.panels) {
         const panel = pool.get(id);
         if (!panel || resolved.panels[id]?.visible === false) continue;
@@ -414,13 +434,23 @@ export class SliccLayout extends HTMLElement {
         placed.add(id);
         any = true;
       }
-      if (spec.size != null) container.style.flex = sizeToFlex(spec.size);
+      // A dock whose panels are all missing or hidden must not reserve space —
+      // otherwise hiding the last panel in a rail leaves an empty strip behind.
+      if (!any) continue;
+      container.style.flex = spec.size != null ? sizeToFlex(spec.size) : '0 0 auto';
+      built.push(container);
     }
-    // A dock whose panels are all missing or hidden must not reserve space —
-    // otherwise hiding the last panel in a rail leaves an empty strip behind.
-    if (!any) return null;
-    if (!container.style.flex) container.style.flex = '0 0 auto';
-    return container;
+    if (built.length === 0) return null;
+    if (built.length === 1) return built[0];
+
+    // Several strips on one edge stack along that edge's cross axis, in declaration
+    // order: `top`/`bottom` strips are full-width rows stacked vertically, `left`/
+    // `right` strips are full-height columns stacked horizontally.
+    const stack = el('div', `slicc-layout__dockstack slicc-layout__dockstack--${edge}`);
+    stack.dataset.edge = edge;
+    stack.append(...built);
+    stack.style.flex = '0 0 auto';
+    return stack;
   }
 
   /**

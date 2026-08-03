@@ -82,6 +82,37 @@ They sit inside the fixed chrome, so `top` is below the scoop/budget strip and
 `left`/`right` are inboard of the rails. A zone holds several panels at once, so
 placing two sprinkles in `left` puts them both there (stacked by default).
 
+### Writing a layout JSON by hand
+
+A layout document has two sections, and **you only ever write `zones`**:
+
+```jsonc
+{
+  "version": 1,
+  "id": "my-layout",
+  "base": {
+    // DO NOT AUTHOR. The fixed chrome — scoop/budget strip, both rails. Copy it
+    // verbatim from an existing document, or omit it to keep the shipped chrome.
+    "docks": [...],
+    // YOURS. Which panels go in which of the five zones.
+    "zones": {
+      "top": ["sprinkle:status-panel"],
+      "left": ["chat"],
+      "right": ["sprinkle:main-window"],
+      "sizes": { "top": "180px", "left": "40%" }
+    }
+  }
+}
+```
+
+A "status bar across the top, below the SLICC bar, between the rails" is
+`zones.top` — NOT a second `docks` entry with `edge: "top"`. `docks` is the app's
+own chrome; adding to it puts your panel in the same strip as the scoop switcher and
+the price counter. Reach for `zones` every time.
+
+Prefer `layout save` over hand-writing JSON: arrange the panels with `layout
+open`/`move`/`size`, then save. Hand-editing is for shipping a layout with a skill.
+
 The user can also rearrange by hand — there is no edit mode to enter. Hovering a
 panel reveals a grip in its top-left corner; grabbing it shows the five zones as a
 compass. Two kinds of seam drag to resize: between panels inside a zone, and
