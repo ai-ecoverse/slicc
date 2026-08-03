@@ -109,7 +109,11 @@ six-step flow and tri-state UI details.
   and cherry prompts can resolve 'this page'. The webapp's `CDPRouter` alone
   owns temporary follower-preview focus and restoration; the bridge applies
   every `Page.bringToFront` by activating the target tab and forwarding the
-  command, without trying to classify its origin.
+  command, without trying to classify its origin. Synthetic sessions keep the
+  `sessionId === targetId` convention and ref-count duplicate tab attachments;
+  disconnect and target close force-release them. A port claims debugger
+  ownership only when its dependency actually performs `chrome.debugger.attach`,
+  so cleanup cannot detach a pre-existing compatibility-path session.
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to
   `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
   and drives the tri-state UI over a `cherry-panel` Port.

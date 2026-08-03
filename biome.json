@@ -334,7 +334,6 @@
       "includes": [
         "packages/chrome-extension/capture-popup.js",
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/chrome-extension/src/service-worker.ts",
         "packages/cloudflare-worker/scripts/upload-assets-to-r2.mjs",
         "packages/node-server/src/index.ts",
         "packages/webapp/cloud/app.js",
@@ -377,7 +376,6 @@
     {
       "includes": [
         "packages/chrome-extension/src/fetch-proxy-shared.ts",
-        "packages/chrome-extension/src/service-worker.ts",
         "packages/webapp/providers/adobe.ts",
         "packages/webapp/src/cdp/browser-api.ts",
         "packages/webapp/src/cdp/synthetic-cdp-transport.ts",

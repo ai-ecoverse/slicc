@@ -61,6 +61,14 @@ reference counts keep that session and its debugger attachment alive until the
 last matching detach. Port disconnect and target close remain authoritative:
 they release the tab immediately regardless of its outstanding count.
 
+Debugger ownership is explicit across service-worker consumers. The attach
+dependency reports whether the bridge actually performed the underlying
+`chrome.debugger.attach`; a port records the tab as owned only in that case. If
+the legacy compatibility path already tracks the tab, the bridge can use that
+attachment but its detach, disconnect, and target-close cleanup never detach it.
+The compatibility message handler remains in the service worker, although no
+shipped extension context currently emits its `cdp-command` messages.
+
 ## Leader-Tab Lifecycle (Why No Startup Create)
 
 `chrome.storage.session` is wiped on browser restart, and the startup

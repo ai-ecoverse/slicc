@@ -73,8 +73,9 @@ export interface BridgeSwDeps {
     method: string,
     params: Record<string, unknown> | undefined
   ) => Promise<Record<string, unknown> | undefined>;
-  /** Attach the chrome.debugger to a tab, idempotent. */
-  attachDebugger: (tabId: number) => Promise<void>;
+  /** Attach chrome.debugger to a tab. Returns true only when this caller
+   *  performed the underlying attach and therefore owns the matching detach. */
+  attachDebugger: (tabId: number) => Promise<boolean>;
   /** Detach the chrome.debugger from a tab if attached. */
   detachDebugger: (tabId: number) => Promise<void>;
   /** chrome.debugger.sendCommand bound to `{ tabId }`. */
@@ -324,6 +325,7 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
     attachDebugger: async (tabId) => {
       await chrome.debugger.attach({ tabId }, '1.3');
+      return true;
     },
     detachDebugger: async (tabId) => {
       await chrome.debugger.detach({ tabId }).catch(() => {
@@ -436,10 +438,8 @@ export async function handleBridgePortConnect(
       state.unsubscribeEvents();
       state.unsubscribeEvents = null;
     }
-    // Detach debugger from tabs we own. Other paths in service-worker.ts
-    // own their own attachedTabs set; the SW deps' detachDebugger is wired
-    // to coordinate with that set so we never detach a tab still in use
-    // by the offscreen CDP proxy.
+    // Detach only tabs whose underlying debugger attachment this port created.
+    // A shared pre-existing attachment is usable by this port but never owned.
     for (const tabId of state.ownedTabs) {
       deps.detachDebugger(tabId).catch(() => {});
     }
@@ -667,8 +667,8 @@ async function cdpAttachToTarget(
     throw new Error(`Invalid targetId: ${targetId}`);
   }
   if (!state.ownedTabs.has(tabId)) {
-    await deps.attachDebugger(tabId);
-    state.ownedTabs.add(tabId);
+    const attachedByThisPort = await deps.attachDebugger(tabId);
+    if (attachedByThisPort) state.ownedTabs.add(tabId);
   }
   // sessionId === targetId so the leader can correlate without an extra
   // round-trip (matches the existing offscreen CDP proxy's convention).

@@ -309,7 +309,7 @@ async function adoptSingleLeaderTab(matches: ChromeTab[]): Promise<void> {
 }
 
 async function ensureLeaderTab(): Promise<void> {
-  if (leaderTabLock) return leaderTabLock;
+  if (leaderTabLock !== null) return leaderTabLock;
   leaderTabLock = (async () => {
     try {
       const matches = await queryLeaderTabs();
@@ -1432,18 +1432,18 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 // three-factor pin enforced inside `handleBridgePortConnect` (origin
 // allowlist + sender.tab.id === storedLeaderTabId + sender.frameId === 0).
 // `slicc_leader_tab_id` is owned by the sibling leader-tab task; absent →
-// pin fails closed. The deps here delegate attach/detach to the existing
-// `attachedTabs` accounting so the bridge and the offscreen CDP proxy never
-// trample each other, and route outbound commands through `maybeUnmaskCdpFrame`
+// pin fails closed. The deps here report whether the bridge actually performed
+// an attach, so it never claims or detaches a session already tracked by the
+// legacy offscreen compatibility path. Outbound commands route through `maybeUnmaskCdpFrame`
 // so raw CDP secrets MUST NEVER reach the leader tab.
 // ---------------------------------------------------------------------------
 
 const bridgeSwDeps = buildDefaultBridgeSwDeps({
   attachDebugger: async (tabId) => {
-    if (!attachedTabs.has(tabId)) {
-      await chrome.debugger.attach({ tabId }, '1.3');
-      attachedTabs.add(tabId);
-    }
+    if (attachedTabs.has(tabId)) return false;
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attachedTabs.add(tabId);
+    return true;
   },
   detachDebugger: async (tabId) => {
     if (!attachedTabs.has(tabId)) return;
@@ -1655,7 +1655,7 @@ function errMsg(err: unknown): string {
 }
 
 function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
@@ -1680,7 +1680,7 @@ function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse):
 function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): boolean {
   const text = getStringField(msg, 'text');
   if (text === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
@@ -1700,7 +1700,7 @@ function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): bo
 // `buildSecretsPipeline()` above so the offscreen's pipeline produces the
 // same masked values as the SW fetch-proxy pipeline.
 function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const sessionId = await readOrCreateSwSessionId();
       const persisted = await listSecretsWithValues(storageLocal);
@@ -1721,7 +1721,7 @@ function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendRe
 // the manifest grants it (MV3 quirk). Route the management ops through
 // the SW, which DOES have chrome.storage.
 function runSecretsList(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const entries = await listSecrets(storageLocal);
       sendResponse({ entries });
@@ -1738,7 +1738,7 @@ function runSecretsSet(msg: unknown, sendResponse: SendResponse): boolean {
   const value = getStringField(msg, 'value');
   const domains = getStringArrayField(msg, 'domains');
   if (name === undefined || value === undefined || domains === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       await setSecret(storageLocal, name, value, domains);
       sendResponse({ ok: true });
@@ -1753,7 +1753,7 @@ function runSecretsSet(msg: unknown, sendResponse: SendResponse): boolean {
 function runSecretsDelete(msg: unknown, sendResponse: SendResponse): boolean {
   const name = getStringField(msg, 'name');
   if (name === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       // Session secrets win over persisted on name collision (mirrors the
       // node-server endpoint), so they are also checked first on delete.
@@ -1798,7 +1798,7 @@ function runSecretsSessionList(_msg: unknown, sendResponse: SendResponse): boole
 function runSecretsPeek(msg: unknown, sendResponse: SendResponse): boolean {
   const name = getStringField(msg, 'name');
   if (name === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const sessionRec = sessionSecretStore.getRecord(name);
       if (sessionRec) {
@@ -1832,7 +1832,7 @@ function runSecretsSetDomains(msg: unknown, sendResponse: SendResponse): boolean
   const name = getStringField(msg, 'name');
   const domains = getStringArrayField(msg, 'domains');
   if (name === undefined || domains === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       if (sessionSecretStore.has(name)) {
         sessionSecretStore.setDomains(name, domains);
@@ -1882,7 +1882,7 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
   if (providerId === undefined) return false;
   const accessToken = getStringField(msg, 'accessToken');
   const domains = getStringField(msg, 'domains');
-  (async () => {
+  void (async () => {
     try {
       const maskedValue = await runMaskOauthTokenWrite(providerId, accessToken, domains);
       // We just wrote the secret above, so a missing entry here is NOT a
@@ -1913,7 +1913,7 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
 function runSecretsRedactExport(msg: unknown, sendResponse: SendResponse): boolean {
   const texts = getStringArrayField(msg, 'texts');
   if (texts === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();

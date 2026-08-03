@@ -65,7 +65,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
   const base: BridgeSwDeps = {
     readStoredLeaderTabId: async () => 42,
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
-    attachDebugger: vi.fn(async () => undefined),
+    attachDebugger: vi.fn(async () => true),
     detachDebugger: vi.fn(async () => undefined),
     sendDebuggerCommand: vi.fn(async (tabId, method, params) => {
       sent.push({ tabId, method, params });
