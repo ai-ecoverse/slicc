@@ -1,11 +1,9 @@
 import SwiftUI
 
-/// The workbench surface presented over the chat — the native analogue of
-/// the webapp's narrow-viewport full-bleed overlay (`slicc-shell.ts`
-/// ≤560px: `position: absolute; right: 48px; z-index: 5`), leaving only
-/// the dock rail beside it. Real views where the follower has one
-/// (browser tabs, sprinkles); an honest placeholder everywhere the
-/// surface lives on the leader — much better than a missing tab.
+/// The selected workbench surface. ChatView presents it over the conversation
+/// at compact width and beside the conversation at regular width. Real views
+/// appear where the follower has one (browser tabs, sprinkles); an honest
+/// placeholder appears everywhere the surface lives on the leader.
 struct WorkbenchHost: View {
     let surface: DockSurface
     /// Only `.term` outlives its presentation (see `TerminalView.isActive`);
