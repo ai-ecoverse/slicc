@@ -45,6 +45,7 @@ describe('service-worker CDP outgoing unmask', () => {
   let debuggerSendCommand: ReturnType<typeof vi.fn>;
   let tabsGet: ReturnType<typeof vi.fn>;
   let connectExternalListeners: Array<(port: FakePort) => void>;
+  let debuggerDetachListeners: Array<(source: { tabId: number }, reason: string) => void>;
   let debuggerAttached: boolean;
 
   const SESSION_ID = '11111111-2222-3333-4444-555555555555';
@@ -54,6 +55,7 @@ describe('service-worker CDP outgoing unmask', () => {
     messageListeners = [];
     runtimeSentMessages = [];
     connectExternalListeners = [];
+    debuggerDetachListeners = [];
     debuggerAttached = false;
     storageMap = {
       '_session.id': SESSION_ID,
@@ -140,7 +142,10 @@ describe('service-worker CDP outgoing unmask', () => {
         }),
         sendCommand: debuggerSendCommand,
         onEvent: { addListener: vi.fn() },
-        onDetach: { addListener: vi.fn() },
+        onDetach: {
+          addListener: (listener: (source: { tabId: number }, reason: string) => void) =>
+            debuggerDetachListeners.push(listener),
+        },
       },
       identity: { launchWebAuthFlow: vi.fn(), getRedirectURL: vi.fn() },
       notifications: { create: vi.fn(), onClicked: { addListener: vi.fn() } },
@@ -337,6 +342,72 @@ describe('service-worker CDP outgoing unmask', () => {
     port.receive({
       bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
       channelId: 'inverse-ownership-test',
+      kind: 'cdp.request',
+      id: 4,
+      method: 'Target.detachFromTarget',
+      params: { sessionId: String(TAB_ID) },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
+    expect(debuggerAttached).toBe(false);
+  });
+
+  it('reacquires a bridge debugger attachment after an external detach', async () => {
+    await import('../src/service-worker.js');
+    const port = makeBridgePort();
+    for (const listener of connectExternalListeners) listener(port);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'external-detach-test',
+      kind: 'handshake.hello',
+    });
+
+    const attachThroughBridge = (id: number): void => {
+      port.receive({
+        bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+        channelId: 'external-detach-test',
+        kind: 'cdp.request',
+        id,
+        method: 'Target.attachToTarget',
+        params: { targetId: String(TAB_ID) },
+      });
+    };
+
+    attachThroughBridge(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
+
+    debuggerAttached = false;
+    for (const listener of debuggerDetachListeners) {
+      listener({ tabId: TAB_ID }, 'canceled_by_user');
+    }
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'external-detach-test',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Runtime.evaluate',
+      params: { expression: '1 + 1' },
+      sessionId: String(TAB_ID),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(port.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 2,
+        error: expect.stringContaining('No tab attached'),
+      })
+    );
+
+    attachThroughBridge(3);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chrome.debugger.attach).toHaveBeenCalledTimes(2);
+    expect(debuggerAttached).toBe(true);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'external-detach-test',
       kind: 'cdp.request',
       id: 4,
       method: 'Target.detachFromTarget',

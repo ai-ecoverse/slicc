@@ -66,9 +66,12 @@ The first consumer to perform the underlying `chrome.debugger.attach` owns its
 matching detach. The other consumer may borrow the attachment, but releasing
 that borrowed reference never detaches the owner's session. This rule applies
 identically whether the bridge or legacy compatibility path attaches first;
-external detach and target close clear ownership authoritatively. The
-compatibility message handler remains in the service worker, although no shipped
-extension context currently emits its `cdp-command` messages.
+external detach and target close clear ownership authoritatively. An external
+detach also invalidates every live bridge Port's owned-tab, reference-count, and
+synthetic-session state, so the next attach performs a real
+`chrome.debugger.attach`. The compatibility message handler remains in the
+service worker, although no shipped extension context currently emits its
+`cdp-command` messages.
 
 ## Leader-Tab Lifecycle (Why No Startup Create)
 

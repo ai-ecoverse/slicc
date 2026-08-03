@@ -205,6 +205,23 @@ interface PortState {
  * broadcast (the leader has no in-page listener for that in thin mode).
  */
 const welcomedLeaderPorts = new Map<ChromeRuntimePort, string>();
+/** Per-port CDP state for live, welcomed leader connections. */
+const liveBridgePortStates = new Map<ChromeRuntimePort, PortState>();
+
+function invalidatePortDebuggerAttachment(state: PortState, tabId: number): void {
+  state.ownedTabs.delete(tabId);
+  state.attachRefCounts.delete(tabId);
+  for (const [sessionId, attachedTabId] of state.sessionToTab) {
+    if (attachedTabId === tabId) state.sessionToTab.delete(sessionId);
+  }
+}
+
+/** Drop stale per-port state after chrome reports an external debugger detach. */
+export function notifyBridgeDebuggerDetached(tabId: number): void {
+  for (const state of liveBridgePortStates.values()) {
+    invalidatePortDebuggerAttachment(state, tabId);
+  }
+}
 
 /**
  * Post an `extension.lick` envelope to every welcomed leader Port, each
@@ -288,6 +305,7 @@ export function postDiscoveryToWelcomedLeaderPorts(
 /** Test-only: clear the welcomed-port registry between cases. */
 export function __clearWelcomedLeaderPortsForTest(): void {
   welcomedLeaderPorts.clear();
+  liveBridgePortStates.clear();
 }
 
 /**
@@ -434,6 +452,7 @@ export async function handleBridgePortConnect(
     // Evict from the welcomed-port registry so we never post a lick to a dead
     // Port (no-op if the port never reached the welcome step).
     welcomedLeaderPorts.delete(port);
+    liveBridgePortStates.delete(port);
     if (state.unsubscribeEvents) {
       state.unsubscribeEvents();
       state.unsubscribeEvents = null;
@@ -530,6 +549,7 @@ async function handleBridgeMessage(
       return;
     }
     state.channelId = env.channelId;
+    liveBridgePortStates.set(port, state);
     // Start forwarding chrome.debugger events. Filter by tab id against
     // the per-port sessionToTab so we don't leak events from tabs another
     // port (or the offscreen path) is attached to.

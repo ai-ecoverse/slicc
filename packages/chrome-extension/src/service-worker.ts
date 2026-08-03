@@ -52,6 +52,7 @@ import {
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
   handleBridgePortConnect,
+  notifyBridgeDebuggerDetached,
   postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
@@ -1416,6 +1417,7 @@ chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string
       sessionToTab.delete(sessionId);
     }
   }
+  notifyBridgeDebuggerDetached(source.tabId);
 });
 
 // ---------------------------------------------------------------------------
