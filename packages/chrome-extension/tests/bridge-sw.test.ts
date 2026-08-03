@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -8,6 +8,7 @@ import {
   BRIDGE_ALLOWED_ORIGINS,
   type BridgeSwDeps,
   handleBridgePortConnect,
+  notifyBridgeDebuggerDetached,
   postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
@@ -65,7 +66,7 @@ function makeDeps(overrides: Partial<BridgeSwDeps> = {}): BridgeSwDeps {
   const base: BridgeSwDeps = {
     readStoredLeaderTabId: async () => 42,
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
-    attachDebugger: vi.fn(async () => undefined),
+    attachDebugger: vi.fn(async () => true),
     detachDebugger: vi.fn(async () => undefined),
     sendDebuggerCommand: vi.fn(async (tabId, method, params) => {
       sent.push({ tabId, method, params });
@@ -100,6 +101,48 @@ const goodSender: FakeSender = {
   tab: { id: 42 },
   frameId: 0,
 };
+
+async function connectWithAttachedTabs(deps: BridgeSwDeps, tabIds: number[]): Promise<FakePort> {
+  const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+  await handleBridgePortConnect(port as never, deps);
+  port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
+  for (const [index, tabId] of tabIds.entries()) {
+    port.receive({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: index + 1,
+      method: 'Target.attachToTarget',
+      params: { targetId: String(tabId) },
+    });
+  }
+  await flushMicrotasks();
+  return port;
+}
+
+async function bringToFront(port: FakePort, tabId: number, id: number): Promise<void> {
+  port.receive({
+    bridge: 1,
+    channelId: 'c',
+    kind: 'cdp.request',
+    id,
+    method: 'Page.bringToFront',
+    sessionId: String(tabId),
+  });
+  await flushMicrotasks();
+}
+
+async function sendCdpRequest(
+  port: FakePort,
+  id: number,
+  method: string,
+  params?: Record<string, unknown>,
+  sessionId?: string
+): Promise<unknown> {
+  port.receive({ bridge: 1, channelId: 'c', kind: 'cdp.request', id, method, params, sessionId });
+  await flush();
+  return port.posted.find((message) => (message as { id?: number }).id === id);
+}
 
 describe('validateBridgePin', () => {
   it('passes for an origin in the allowlist on the stored leader tab top frame', async () => {
@@ -282,6 +325,10 @@ describe('handleBridgePortConnect — pin gating', () => {
 });
 
 describe('handleBridgePortConnect — CDP pass-through', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('attaches a tab on Target.attachToTarget and pipes commands through chrome.debugger', async () => {
     const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
     const deps = makeDeps();
@@ -326,40 +373,101 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     });
   });
 
-  it('Page.bringToFront selects + focuses the tab AND still forwards to chrome.debugger', async () => {
-    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
+  it('preserves a live session when one of two attachments detaches', async () => {
     const deps = makeDeps();
-    await handleBridgePortConnect(port as never, deps);
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'handshake.hello',
-    });
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'cdp.request',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: '43' },
-    });
-    await flush();
+    const port = await connectWithAttachedTabs(deps, [42]);
 
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'cdp.request',
-      id: 2,
-      method: 'Page.bringToFront',
-      sessionId: '43',
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', {
+      targetId: '42',
+      flatten: true,
     });
-    await flush();
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    const commandResponse = await sendCdpRequest(
+      port,
+      4,
+      'Runtime.evaluate',
+      { expression: '1 + 1' },
+      '42'
+    );
+    expect(commandResponse).toMatchObject({ result: { ok: true, tabId: 42 } });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
 
-    // The real foregrounding: chrome.debugger's bringToFront can't switch the
-    // active tab, so the bridge selects + focuses it explicitly.
+  it('detaches exactly once when duplicate attachments are balanced to zero', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [42]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '42' });
+
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(42);
+
+    const releasedResponse = await sendCdpRequest(port, 5, 'Target.detachFromTarget', {
+      sessionId: '42',
+    });
+    expect(releasedResponse).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an unknown session detach as a no-op', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, []);
+
+    const response = await sendCdpRequest(port, 1, 'Target.detachFromTarget', {
+      sessionId: 'unknown',
+    });
+    expect(response).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
+  it('keeps a leader-originated Page.bringToFront permanently focused', async () => {
+    vi.useFakeTimers();
+    let activeTabId = 42;
+    const deps = makeDeps({
+      activateTab: vi.fn(async (tabId) => {
+        activeTabId = tabId;
+      }),
+    });
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    await bringToFront(port, 43, 2);
+
+    expect(activeTabId).toBe(43);
     expect(deps.activateTab).toHaveBeenCalledWith(43);
-    // …and the command is still forwarded (renderer-wake parity with standalone).
     expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.bringToFront', undefined);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(activeTabId).toBe(43);
+    expect(deps.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('activates the original tab for CDPRouter attach + bringToFront restoration', async () => {
+    let activeTabId = 42;
+    const deps = makeDeps({
+      activateTab: vi.fn(async (tabId) => {
+        activeTabId = tabId;
+      }),
+    });
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    await bringToFront(port, 43, 2);
+    expect(activeTabId).toBe(43);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 3,
+      method: 'Target.attachToTarget',
+      params: { targetId: '42', flatten: true },
+    });
+    await flushMicrotasks();
+    await bringToFront(port, 42, 4);
+
+    expect(activeTabId).toBe(42);
+    expect(deps.activateTab).toHaveBeenNthCalledWith(1, 43);
+    expect(deps.activateTab).toHaveBeenNthCalledWith(2, 42);
   });
 
   it('routes outbound CDP through maybeUnmaskCdpFrame (secrets stay SW-side)', async () => {
@@ -505,23 +613,45 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     expect(resp).toMatchObject({ error: expect.stringContaining('No tab attached') });
   });
 
-  it('detaches owned tabs and unsubscribes events on port disconnect', async () => {
+  it('notifies the leader when an external debugger detach invalidates its session', async () => {
     const deps = makeDeps();
-    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
-    await handleBridgePortConnect(port as never, deps);
-    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
-    port.receive({
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    notifyBridgeDebuggerDetached(43);
+
+    expect(port.posted).toContainEqual({
       bridge: 1,
       channelId: 'c',
-      kind: 'cdp.request',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: '43' },
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: '43', targetId: '43' },
     });
-    await flush();
+  });
+
+  it('detaches a multiply-referenced owned tab once on port disconnect', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
     port.triggerDisconnect();
     await flush();
     expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-releases a multiply-referenced tab when the target closes', async () => {
+    const removeTab = vi.fn(async () => undefined);
+    const deps = makeDeps({ removeTab });
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
+
+    const response = await sendCdpRequest(port, 3, 'Target.closeTarget', { targetId: '43' });
+    expect(response).toMatchObject({ result: { success: true } });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(removeTab).toHaveBeenCalledWith(43);
+
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '43' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
   });
 
   it('Target.getTargets returns a CDP-shaped target list', async () => {
@@ -975,4 +1105,8 @@ describe('handleBridgePortConnect — leader.join-url message', () => {
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
 }

@@ -73,8 +73,9 @@ export interface BridgeSwDeps {
     method: string,
     params: Record<string, unknown> | undefined
   ) => Promise<Record<string, unknown> | undefined>;
-  /** Attach the chrome.debugger to a tab, idempotent. */
-  attachDebugger: (tabId: number) => Promise<void>;
+  /** Attach chrome.debugger to a tab. Returns true only when this caller
+   *  performed the underlying attach and therefore owns the matching detach. */
+  attachDebugger: (tabId: number) => Promise<boolean>;
   /** Detach the chrome.debugger from a tab if attached. */
   detachDebugger: (tabId: number) => Promise<void>;
   /** chrome.debugger.sendCommand bound to `{ tabId }`. */
@@ -185,6 +186,8 @@ interface PortState {
   channelId: string | null;
   /** Synthetic sessionId → real chrome tab id. */
   sessionToTab: Map<string, number>;
+  /** Number of logical CDP attachments sharing each tab's synthetic session. */
+  attachRefCounts: Map<number, number>;
   /** Tabs we attached the debugger to from THIS port. Used so disconnect
    *  detaches only what we attached (other code paths may also attach). */
   ownedTabs: Set<number>;
@@ -202,6 +205,40 @@ interface PortState {
  * broadcast (the leader has no in-page listener for that in thin mode).
  */
 const welcomedLeaderPorts = new Map<ChromeRuntimePort, string>();
+/** Per-port CDP state for live, welcomed leader connections. */
+const liveBridgePortStates = new Map<ChromeRuntimePort, PortState>();
+
+function invalidatePortDebuggerAttachment(state: PortState, tabId: number): void {
+  state.ownedTabs.delete(tabId);
+  state.attachRefCounts.delete(tabId);
+  for (const [sessionId, attachedTabId] of state.sessionToTab) {
+    if (attachedTabId === tabId) state.sessionToTab.delete(sessionId);
+  }
+}
+
+/** Drop stale per-port state and notify clients after an external debugger detach. */
+export function notifyBridgeDebuggerDetached(tabId: number): void {
+  for (const [port, state] of liveBridgePortStates) {
+    const detachedSessionIds = [...state.sessionToTab]
+      .filter(([, attachedTabId]) => attachedTabId === tabId)
+      .map(([sessionId]) => sessionId);
+    invalidatePortDebuggerAttachment(state, tabId);
+    if (state.channelId === null) continue;
+    for (const sessionId of detachedSessionIds) {
+      try {
+        port.postMessage({
+          bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+          channelId: state.channelId,
+          kind: 'cdp.event',
+          method: 'Target.detachedFromTarget',
+          params: { sessionId, targetId: String(tabId) },
+        } satisfies ExtensionBridgeEnvelope);
+      } catch {
+        /* port disconnected; its onDisconnect will evict it */
+      }
+    }
+  }
+}
 
 /**
  * Post an `extension.lick` envelope to every welcomed leader Port, each
@@ -285,6 +322,7 @@ export function postDiscoveryToWelcomedLeaderPorts(
 /** Test-only: clear the welcomed-port registry between cases. */
 export function __clearWelcomedLeaderPortsForTest(): void {
   welcomedLeaderPorts.clear();
+  liveBridgePortStates.clear();
 }
 
 /**
@@ -322,6 +360,7 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
     maybeUnmaskCdpFrame: async (_tabId, _method, params) => params,
     attachDebugger: async (tabId) => {
       await chrome.debugger.attach({ tabId }, '1.3');
+      return true;
     },
     detachDebugger: async (tabId) => {
       await chrome.debugger.detach({ tabId }).catch(() => {
@@ -393,6 +432,7 @@ export async function handleBridgePortConnect(
   const state: PortState = {
     channelId: null,
     sessionToTab: new Map(),
+    attachRefCounts: new Map(),
     ownedTabs: new Set(),
     unsubscribeEvents: null,
   };
@@ -429,19 +469,19 @@ export async function handleBridgePortConnect(
     // Evict from the welcomed-port registry so we never post a lick to a dead
     // Port (no-op if the port never reached the welcome step).
     welcomedLeaderPorts.delete(port);
+    liveBridgePortStates.delete(port);
     if (state.unsubscribeEvents) {
       state.unsubscribeEvents();
       state.unsubscribeEvents = null;
     }
-    // Detach debugger from tabs we own. Other paths in service-worker.ts
-    // own their own attachedTabs set; the SW deps' detachDebugger is wired
-    // to coordinate with that set so we never detach a tab still in use
-    // by the offscreen CDP proxy.
+    // Detach only tabs whose underlying debugger attachment this port created.
+    // A shared pre-existing attachment is usable by this port but never owned.
     for (const tabId of state.ownedTabs) {
       deps.detachDebugger(tabId).catch(() => {});
     }
     state.ownedTabs.clear();
     state.sessionToTab.clear();
+    state.attachRefCounts.clear();
   });
 
   const pin = await validateBridgePin(port.sender, deps);
@@ -526,6 +566,7 @@ async function handleBridgeMessage(
       return;
     }
     state.channelId = env.channelId;
+    liveBridgePortStates.set(port, state);
     // Start forwarding chrome.debugger events. Filter by tab id against
     // the per-port sessionToTab so we don't leak events from tabs another
     // port (or the offscreen path) is attached to.
@@ -663,13 +704,14 @@ async function cdpAttachToTarget(
     throw new Error(`Invalid targetId: ${targetId}`);
   }
   if (!state.ownedTabs.has(tabId)) {
-    await deps.attachDebugger(tabId);
-    state.ownedTabs.add(tabId);
+    const attachedByThisPort = await deps.attachDebugger(tabId);
+    if (attachedByThisPort) state.ownedTabs.add(tabId);
   }
   // sessionId === targetId so the leader can correlate without an extra
   // round-trip (matches the existing offscreen CDP proxy's convention).
   const sessionId = targetId;
   state.sessionToTab.set(sessionId, tabId);
+  state.attachRefCounts.set(tabId, (state.attachRefCounts.get(tabId) ?? 0) + 1);
   return { sessionId };
 }
 
@@ -681,9 +723,18 @@ async function cdpDetachFromTarget(
   const sessionId = params['sessionId'] as string;
   const tabId = state.sessionToTab.get(sessionId);
   if (tabId === undefined) return {};
-  state.sessionToTab.delete(sessionId);
-  const stillReferenced = [...state.sessionToTab.values()].includes(tabId);
-  if (!stillReferenced && state.ownedTabs.has(tabId)) {
+
+  const nextRefCount = (state.attachRefCounts.get(tabId) ?? 1) - 1;
+  if (nextRefCount > 0) {
+    state.attachRefCounts.set(tabId, nextRefCount);
+    return {};
+  }
+
+  state.attachRefCounts.delete(tabId);
+  for (const [sid, attachedTabId] of state.sessionToTab) {
+    if (attachedTabId === tabId) state.sessionToTab.delete(sid);
+  }
+  if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
     await deps.detachDebugger(tabId);
   }
@@ -712,6 +763,7 @@ async function cdpCloseTarget(
   for (const [sid, tid] of state.sessionToTab) {
     if (tid === tabId) state.sessionToTab.delete(sid);
   }
+  state.attachRefCounts.delete(tabId);
   if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
     await deps.detachDebugger(tabId);

@@ -4,6 +4,14 @@ import type { FollowerToLeaderMessage } from '../tray-sync-protocol.js';
 import { reassembleCDPResponse, sendCDPResponse } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
 
+const FOLLOWER_PREVIEW_SETTLE_MS = 150;
+
+interface FocusTargetInfo {
+  targetId?: unknown;
+  type?: unknown;
+  active?: unknown;
+}
+
 /** Tracks a CDP request being routed through the leader. */
 export interface PendingCDPRoute {
   /** bootstrapId of the follower that originated the request */
@@ -26,6 +34,13 @@ export class CDPRouter {
   >();
   /** Active transports for the leader's BrowserAPI, keyed by runtimeId:localTargetId. */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
+  private previewOriginalTarget: Promise<string | null> | null = null;
+  private previewLastTargetId: string | null = null;
+  private previewGeneration = 0;
+  private previewSequence = 0;
+  private previewLatestSuccessfulSequence = 0;
+  private previewRequestsInFlight = 0;
+  private previewRestoreTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly context: LeaderSyncContext,
@@ -80,7 +95,10 @@ export class CDPRouter {
     }
 
     try {
-      const result = await transport.send(method, params, sessionId);
+      const result =
+        method === 'Page.bringToFront'
+          ? await this.executeFollowerBringToFront(transport, localTargetId, params, sessionId)
+          : await transport.send(method, params, sessionId);
       sendCDPResponse(follower.sync, requestId, result);
     } catch (err) {
       follower.sync.send({
@@ -88,6 +106,199 @@ export class CDPRouter {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  private async executeFollowerBringToFront(
+    transport: CDPTransport,
+    localTargetId: string,
+    params: Record<string, unknown> | undefined,
+    sessionId: string | undefined
+  ): Promise<Record<string, unknown>> {
+    const generation = this.previewGeneration;
+    const sequence = ++this.previewSequence;
+    this.previewRequestsInFlight++;
+    this.cancelPreviewRestore();
+    this.previewOriginalTarget ??= this.findFocusedTargetId(transport, localTargetId, sessionId);
+
+    try {
+      await this.previewOriginalTarget;
+      const result = await transport.send('Page.bringToFront', params, sessionId);
+      if (
+        generation === this.previewGeneration &&
+        sequence > this.previewLatestSuccessfulSequence
+      ) {
+        this.previewLatestSuccessfulSequence = sequence;
+        this.previewLastTargetId = localTargetId;
+      }
+      return result;
+    } finally {
+      if (generation === this.previewGeneration) {
+        this.previewRequestsInFlight--;
+        if (this.previewRequestsInFlight === 0 && this.previewLastTargetId === null) {
+          this.previewOriginalTarget = null;
+          this.previewLatestSuccessfulSequence = 0;
+        } else {
+          this.schedulePreviewRestore(transport);
+        }
+      }
+    }
+  }
+
+  /** Cancel pending follower-preview restoration without disabling future previews. */
+  resetPreviewFocus(): void {
+    this.cancelPreviewRestore();
+    this.previewGeneration++;
+    this.previewOriginalTarget = null;
+    this.previewLastTargetId = null;
+    this.previewLatestSuccessfulSequence = 0;
+    this.previewRequestsInFlight = 0;
+  }
+
+  private cancelPreviewRestore(): void {
+    if (this.previewRestoreTimer === null) return;
+    clearTimeout(this.previewRestoreTimer);
+    this.previewRestoreTimer = null;
+  }
+
+  private schedulePreviewRestore(transport: CDPTransport): void {
+    if (this.previewRequestsInFlight !== 0 || this.previewLastTargetId === null) return;
+    this.cancelPreviewRestore();
+    this.previewRestoreTimer = setTimeout(() => {
+      this.previewRestoreTimer = null;
+      void this.restorePreviewFocus(transport);
+    }, FOLLOWER_PREVIEW_SETTLE_MS);
+  }
+
+  private async restorePreviewFocus(transport: CDPTransport): Promise<void> {
+    const sequence = this.previewLatestSuccessfulSequence;
+    const originalTargetId = await this.previewOriginalTarget;
+    const previewTargetId = this.previewLastTargetId;
+    if (!originalTargetId || !previewTargetId || originalTargetId === previewTargetId) {
+      this.finishPreviewBurst(sequence);
+      return;
+    }
+
+    const focusedTargetId = await this.findFocusedTargetId(transport);
+    if (!this.previewRestoreIsCurrent(sequence)) {
+      this.schedulePreviewRestore(transport);
+      return;
+    }
+    if (focusedTargetId !== previewTargetId) {
+      this.finishPreviewBurst(sequence);
+      return;
+    }
+
+    try {
+      await this.bringTargetToFront(transport, originalTargetId, sequence);
+    } catch (err) {
+      this.context.log.debug('Follower preview focus restore skipped', {
+        targetId: originalTargetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.finishPreviewBurst(sequence);
+  }
+
+  private previewRestoreIsCurrent(sequence: number): boolean {
+    return sequence === this.previewLatestSuccessfulSequence && this.previewRequestsInFlight === 0;
+  }
+
+  private finishPreviewBurst(sequence: number): void {
+    if (!this.previewRestoreIsCurrent(sequence)) return;
+    this.cancelPreviewRestore();
+    this.previewOriginalTarget = null;
+    this.previewLastTargetId = null;
+    this.previewLatestSuccessfulSequence = 0;
+  }
+
+  private async bringTargetToFront(
+    transport: CDPTransport,
+    targetId: string,
+    sequence: number
+  ): Promise<void> {
+    const attached = await transport.send('Target.attachToTarget', {
+      targetId,
+      flatten: true,
+    });
+    const sessionId = attached['sessionId'];
+    if (typeof sessionId !== 'string') return;
+    try {
+      if (!this.previewRestoreIsCurrent(sequence)) return;
+      await transport.send('Page.bringToFront', {}, sessionId);
+    } finally {
+      try {
+        await transport.send('Target.detachFromTarget', { sessionId });
+      } catch {
+        // The target may close while focus is being restored.
+      }
+    }
+  }
+
+  private async findFocusedTargetId(
+    transport: CDPTransport,
+    reusableTargetId?: string,
+    reusableSessionId?: string
+  ): Promise<string | null> {
+    let targetInfos: FocusTargetInfo[];
+    try {
+      const result = await transport.send('Target.getTargets');
+      targetInfos = Array.isArray(result['targetInfos'])
+        ? (result['targetInfos'] as FocusTargetInfo[])
+        : [];
+    } catch {
+      return null;
+    }
+
+    const pages = targetInfos.filter(
+      (target): target is FocusTargetInfo & { targetId: string } =>
+        target.type === 'page' && typeof target.targetId === 'string'
+    );
+    const activeTarget = pages.find((target) => target.active === true);
+    if (activeTarget) return activeTarget.targetId;
+
+    for (const target of pages) {
+      const sessionId = target.targetId === reusableTargetId ? reusableSessionId : undefined;
+      if (await this.targetHasFocus(transport, target.targetId, sessionId)) {
+        return target.targetId;
+      }
+    }
+    return null;
+  }
+
+  private async targetHasFocus(
+    transport: CDPTransport,
+    targetId: string,
+    reusableSessionId?: string
+  ): Promise<boolean> {
+    let sessionId = reusableSessionId;
+    let detach = false;
+    try {
+      if (!sessionId) {
+        const attached = await transport.send('Target.attachToTarget', {
+          targetId,
+          flatten: true,
+        });
+        sessionId = typeof attached['sessionId'] === 'string' ? attached['sessionId'] : undefined;
+        detach = !!sessionId;
+      }
+      if (!sessionId) return false;
+      const evaluated = await transport.send(
+        'Runtime.evaluate',
+        { expression: 'document.hasFocus()', returnByValue: true },
+        sessionId
+      );
+      return (evaluated['result'] as { value?: unknown } | undefined)?.value === true;
+    } catch {
+      return false;
+    } finally {
+      if (detach && sessionId) {
+        try {
+          await transport.send('Target.detachFromTarget', { sessionId });
+        } catch {
+          // The target may disappear during the focus probe.
+        }
+      }
     }
   }
 

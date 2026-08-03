@@ -593,6 +593,22 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('bringToFront', () => {
+    it('keeps user-initiated foregrounding permanent', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        sessionId: 'sess-1',
+      });
+      await api.attachToPage('target-1');
+      (mockClient.send as ReturnType<typeof vi.fn>).mockClear();
+
+      await api.bringToFront();
+
+      expect(mockClient.send).toHaveBeenCalledTimes(1);
+      expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
+      expect(mockClient.send).not.toHaveBeenCalledWith('Target.getTargets');
+    });
+  });
+
   describe('screenshot', () => {
     beforeEach(async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });

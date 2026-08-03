@@ -279,6 +279,12 @@ export class ExtensionBridgeTransport extends CdpTransportBridge {
       this.cleanupHandshake();
       return;
     }
+    if (env.kind === 'cdp.event' && env.method === 'Target.detachedFromTarget') {
+      // The service worker lost chrome.debugger ownership. Dropping the Port
+      // makes BrowserAPI's existing reconnect path invalidate its cached session.
+      this.disconnect();
+      return;
+    }
     if (env.kind === 'extension.lick') {
       this.bridgeOpts.onLick?.(env);
     }

@@ -4,6 +4,7 @@ import type { AgentEvent } from '../../src/core/agent-types.js';
 import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
+import { CDPRouter } from '../../src/scoops/tray-leader/cdp-router.js';
 import {
   isCherryTarget,
   LeaderSyncManager,
@@ -500,6 +501,7 @@ describe('LeaderSyncManager', () => {
   });
 
   it('stop removes all followers', () => {
+    const resetPreviewFocus = vi.spyOn(CDPRouter.prototype, 'resetPreviewFocus');
     const { manager } = createManager();
     const ch1 = new FakeChannel();
     const ch2 = new FakeChannel();
@@ -511,6 +513,8 @@ describe('LeaderSyncManager', () => {
     expect(ch1.readyState).toBe('closed');
     expect(ch2.readyState).toBe('closed');
     expect(manager.hasFollowers).toBe(false);
+    expect(resetPreviewFocus).toHaveBeenCalledOnce();
+    resetPreviewFocus.mockRestore();
   });
 
   it('broadcasts user_message_echo to all followers', () => {

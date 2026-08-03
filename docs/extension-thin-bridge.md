@@ -40,6 +40,39 @@ The kernel bridge and its proxies now live entirely in the webapp package
 `packages/webapp/src/scoops/lick-manager-proxy.ts`); no code in this package
 is consumed by the webapp's kernel-worker or its crontask / webhook commands.
 
+### Temporary Focus for Follower Previews
+
+`chrome.debugger`'s `Page.bringToFront` wakes a background renderer but does
+not select its Chrome tab, so `bridge-sw.ts` calls `activateTab` before
+forwarding every such command. The bridge Port carries all leader CDP traffic,
+including permanent foregrounding, and therefore does not classify or restore
+focus itself.
+
+The webapp's `CDPRouter` is the single owner of temporary follower-preview
+focus. It recognizes follower-originated requests, reads the original target
+from `Target.getTargets` (whose extension shim marks the active tab), coalesces
+the preview burst, and restores by sending `Target.attachToTarget` followed by
+`Page.bringToFront` over the same bridge transport. The bridge activates that
+original tab exactly as it activated the preview tab.
+
+The bridge preserves its `sessionId === targetId` correlation convention, so
+multiple logical attachments to one tab share a synthetic session. Per-tab
+reference counts keep that session and its debugger attachment alive until the
+last matching detach. Port disconnect and target close remain authoritative:
+they release the tab immediately regardless of its outstanding count.
+
+Debugger ownership is explicit and symmetric across service-worker consumers.
+The first consumer to perform the underlying `chrome.debugger.attach` owns its
+matching detach. The other consumer may borrow the attachment, but releasing
+that borrowed reference never detaches the owner's session. This rule applies
+identically whether the bridge or legacy compatibility path attaches first;
+external detach and target close clear ownership authoritatively. An external
+detach also invalidates every live bridge Port's owned-tab, reference-count, and
+synthetic-session state, so the next attach performs a real
+`chrome.debugger.attach`. The compatibility message handler remains in the
+service worker, although no shipped extension context currently emits its
+`cdp-command` messages.
+
 ## Leader-Tab Lifecycle (Why No Startup Create)
 
 `chrome.storage.session` is wiped on browser restart, and the startup

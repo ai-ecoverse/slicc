@@ -10,6 +10,7 @@
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../../kernel/panel-rpc.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import { TabPersistenceGuard } from '../../scoops/tab-persistence-guard.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
   getFollowerTrayRuntimeStatus,
@@ -101,6 +102,7 @@ export interface WcTrayHandle {
 interface TrayRoleState {
   leader: PageLeaderTrayHandle | null;
   follower: PageFollowerTrayHandle | null;
+  persistenceGuard: TabPersistenceGuard;
   /** Release function for the current leader lock (null when no lock held). */
   lockRelease: (() => void) | null;
 }
@@ -159,6 +161,11 @@ export function createLeaderOptionsFactory(
   const refreshFollowerPresentation = (fallbackCount = 0): void => {
     const followers = state.leader ? getLeaderConnectedFollowers(state.leader) : [];
     const count = fallbackCount;
+    if (count > 0) {
+      state.persistenceGuard.activate();
+    } else {
+      state.persistenceGuard.deactivate();
+    }
     refs.floatbar.setAttribute(
       'label',
       count > 0
@@ -450,6 +457,7 @@ function installRoleSwitchListeners(
     const lockRelease = state.lockRelease;
     state.leader = null;
     state.lockRelease = null;
+    state.persistenceGuard.deactivate();
     clearLeaderHooks();
     const previousFollower = state.follower;
     state.follower = null;
@@ -480,6 +488,7 @@ function installRoleSwitchListeners(
   win.addEventListener(
     'beforeunload',
     () => {
+      state.persistenceGuard.deactivate();
       state.leader?.stop();
       state.follower?.stop();
       state.lockRelease?.();
@@ -498,7 +507,12 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   await loadSprinkleStyles();
 
   const { client, instanceId, window: win, log } = deps;
-  const state: TrayRoleState = { leader: null, follower: null, lockRelease: null };
+  const state: TrayRoleState = {
+    leader: null,
+    follower: null,
+    persistenceGuard: new TabPersistenceGuard(),
+    lockRelease: null,
+  };
   const lockManager = getDefaultLockManager();
 
   const remoteCdpPushChannel =
@@ -552,6 +566,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
         getLeader: () => state.leader,
         setLeader: (h) => {
           state.leader = h;
+          if (!h) state.persistenceGuard.deactivate();
         },
         getFollower: () => state.follower,
         setFollower: (h) => {

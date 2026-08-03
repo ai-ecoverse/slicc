@@ -52,6 +52,7 @@ import {
   BRIDGE_DEV_ORIGINS,
   buildDefaultBridgeSwDeps,
   handleBridgePortConnect,
+  notifyBridgeDebuggerDetached,
   postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
@@ -309,7 +310,7 @@ async function adoptSingleLeaderTab(matches: ChromeTab[]): Promise<void> {
 }
 
 async function ensureLeaderTab(): Promise<void> {
-  if (leaderTabLock) return leaderTabLock;
+  if (leaderTabLock !== null) return leaderTabLock;
   leaderTabLock = (async () => {
     try {
       const matches = await queryLeaderTabs();
@@ -847,10 +848,40 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 /** Maps synthetic sessionId → Chrome tab ID. */
 const sessionToTab = new Map<string, number>();
-/** Tracks which tab IDs we've attached the debugger to. */
-const attachedTabs = new Set<number>();
+type DebuggerAttachmentOwner = 'bridge' | 'legacy';
+/** Tracks which consumer performed each underlying debugger attachment. */
+const debuggerAttachmentOwners = new Map<number, DebuggerAttachmentOwner>();
 /** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
 const traySockets = new Map<number, WebSocket>();
+
+async function acquireDebuggerAttachment(
+  tabId: number,
+  owner: DebuggerAttachmentOwner
+): Promise<boolean> {
+  if (debuggerAttachmentOwners.has(tabId)) return false;
+  await chrome.debugger.attach({ tabId }, '1.3');
+  debuggerAttachmentOwners.set(tabId, owner);
+  return true;
+}
+
+async function releaseDebuggerAttachment(
+  tabId: number,
+  owner: DebuggerAttachmentOwner
+): Promise<void> {
+  if (debuggerAttachmentOwners.get(tabId) !== owner) return;
+  debuggerAttachmentOwners.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {
+    // Tab may already be closed
+  });
+}
+
+async function forceReleaseDebuggerAttachment(tabId: number): Promise<void> {
+  if (!debuggerAttachmentOwners.has(tabId)) return;
+  debuggerAttachmentOwners.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {
+    // Tab may already be closed
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Message relay
@@ -1176,7 +1207,7 @@ async function cdpGetTargets(): Promise<Record<string, unknown>> {
       type: 'page',
       title: tab.title ?? '',
       url: tab.url ?? '',
-      attached: attachedTabs.has(tab.id),
+      attached: debuggerAttachmentOwners.has(tab.id),
       active: activeTabIds.has(tab.id),
     }));
   return { targetInfos };
@@ -1191,10 +1222,7 @@ async function cdpAttachToTarget(
     throw new Error(`Invalid targetId: ${targetId}`);
   }
 
-  if (!attachedTabs.has(tabId)) {
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attachedTabs.add(tabId);
-  }
+  await acquireDebuggerAttachment(tabId, 'legacy');
 
   const sessionId = targetId;
   sessionToTab.set(sessionId, tabId);
@@ -1211,10 +1239,7 @@ async function cdpDetachFromTarget(
     sessionToTab.delete(sessionId);
     const stillReferenced = [...sessionToTab.values()].includes(tabId);
     if (!stillReferenced) {
-      attachedTabs.delete(tabId);
-      await chrome.debugger.detach({ tabId }).catch(() => {
-        // Tab may already be closed
-      });
+      await releaseDebuggerAttachment(tabId, 'legacy');
     }
   }
 
@@ -1239,12 +1264,7 @@ async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<s
   for (const [sid, tid] of sessionToTab) {
     if (tid === tabId) sessionToTab.delete(sid);
   }
-  if (attachedTabs.has(tabId)) {
-    attachedTabs.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {
-      // Tab may already be closed
-    });
-  }
+  await forceReleaseDebuggerAttachment(tabId);
 
   await chrome.tabs.remove(tabId);
   return { success: true };
@@ -1323,7 +1343,7 @@ async function cdpSendCommand(
 
 chrome.debugger.onEvent.addListener(
   (source: { tabId: number }, method: string, params?: Record<string, unknown>) => {
-    if (!attachedTabs.has(source.tabId)) return;
+    if (!debuggerAttachmentOwners.has(source.tabId)) return;
 
     // Find sessionId for this tabId
     let sessionId: string | undefined;
@@ -1391,12 +1411,13 @@ async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg>
 }
 
 chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string) => {
-  attachedTabs.delete(source.tabId);
+  debuggerAttachmentOwners.delete(source.tabId);
   for (const [sessionId, tabId] of sessionToTab) {
     if (tabId === source.tabId) {
       sessionToTab.delete(sessionId);
     }
   }
+  notifyBridgeDebuggerDetached(source.tabId);
 });
 
 // ---------------------------------------------------------------------------
@@ -1432,26 +1453,15 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 // three-factor pin enforced inside `handleBridgePortConnect` (origin
 // allowlist + sender.tab.id === storedLeaderTabId + sender.frameId === 0).
 // `slicc_leader_tab_id` is owned by the sibling leader-tab task; absent →
-// pin fails closed. The deps here delegate attach/detach to the existing
-// `attachedTabs` accounting so the bridge and the offscreen CDP proxy never
-// trample each other, and route outbound commands through `maybeUnmaskCdpFrame`
+// pin fails closed. The deps here report whether the bridge actually performed
+// an attach, so it never claims or detaches a session already tracked by the
+// legacy offscreen compatibility path. Outbound commands route through `maybeUnmaskCdpFrame`
 // so raw CDP secrets MUST NEVER reach the leader tab.
 // ---------------------------------------------------------------------------
 
 const bridgeSwDeps = buildDefaultBridgeSwDeps({
-  attachDebugger: async (tabId) => {
-    if (!attachedTabs.has(tabId)) {
-      await chrome.debugger.attach({ tabId }, '1.3');
-      attachedTabs.add(tabId);
-    }
-  },
-  detachDebugger: async (tabId) => {
-    if (!attachedTabs.has(tabId)) return;
-    attachedTabs.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {
-      /* tab may already be closed */
-    });
-  },
+  attachDebugger: (tabId) => acquireDebuggerAttachment(tabId, 'bridge'),
+  detachDebugger: (tabId) => releaseDebuggerAttachment(tabId, 'bridge'),
   sendDebuggerCommand: async (tabId, method, params) => {
     const result = await chrome.debugger.sendCommand({ tabId }, method, params);
     return result ?? {};
@@ -1655,7 +1665,7 @@ function errMsg(err: unknown): string {
 }
 
 function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
@@ -1680,7 +1690,7 @@ function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse):
 function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): boolean {
   const text = getStringField(msg, 'text');
   if (text === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
@@ -1700,7 +1710,7 @@ function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): bo
 // `buildSecretsPipeline()` above so the offscreen's pipeline produces the
 // same masked values as the SW fetch-proxy pipeline.
 function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const sessionId = await readOrCreateSwSessionId();
       const persisted = await listSecretsWithValues(storageLocal);
@@ -1721,7 +1731,7 @@ function runSecretsListWithValuesForPipeline(_msg: unknown, sendResponse: SendRe
 // the manifest grants it (MV3 quirk). Route the management ops through
 // the SW, which DOES have chrome.storage.
 function runSecretsList(_msg: unknown, sendResponse: SendResponse): boolean {
-  (async () => {
+  void (async () => {
     try {
       const entries = await listSecrets(storageLocal);
       sendResponse({ entries });
@@ -1738,7 +1748,7 @@ function runSecretsSet(msg: unknown, sendResponse: SendResponse): boolean {
   const value = getStringField(msg, 'value');
   const domains = getStringArrayField(msg, 'domains');
   if (name === undefined || value === undefined || domains === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       await setSecret(storageLocal, name, value, domains);
       sendResponse({ ok: true });
@@ -1753,7 +1763,7 @@ function runSecretsSet(msg: unknown, sendResponse: SendResponse): boolean {
 function runSecretsDelete(msg: unknown, sendResponse: SendResponse): boolean {
   const name = getStringField(msg, 'name');
   if (name === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       // Session secrets win over persisted on name collision (mirrors the
       // node-server endpoint), so they are also checked first on delete.
@@ -1798,7 +1808,7 @@ function runSecretsSessionList(_msg: unknown, sendResponse: SendResponse): boole
 function runSecretsPeek(msg: unknown, sendResponse: SendResponse): boolean {
   const name = getStringField(msg, 'name');
   if (name === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const sessionRec = sessionSecretStore.getRecord(name);
       if (sessionRec) {
@@ -1832,7 +1842,7 @@ function runSecretsSetDomains(msg: unknown, sendResponse: SendResponse): boolean
   const name = getStringField(msg, 'name');
   const domains = getStringArrayField(msg, 'domains');
   if (name === undefined || domains === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       if (sessionSecretStore.has(name)) {
         sessionSecretStore.setDomains(name, domains);
@@ -1882,7 +1892,7 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
   if (providerId === undefined) return false;
   const accessToken = getStringField(msg, 'accessToken');
   const domains = getStringField(msg, 'domains');
-  (async () => {
+  void (async () => {
     try {
       const maskedValue = await runMaskOauthTokenWrite(providerId, accessToken, domains);
       // We just wrote the secret above, so a missing entry here is NOT a
@@ -1913,7 +1923,7 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
 function runSecretsRedactExport(msg: unknown, sendResponse: SendResponse): boolean {
   const texts = getStringArrayField(msg, 'texts');
   if (texts === undefined) return false;
-  (async () => {
+  void (async () => {
     try {
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();

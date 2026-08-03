@@ -387,6 +387,7 @@ export class LeaderSyncManager {
   }
 
   stop(): void {
+    this.cdpRouter.resetPreviewFocus();
     for (const bootstrapId of [...this.followers.keys()]) {
       this.removeFollower(bootstrapId);
     }

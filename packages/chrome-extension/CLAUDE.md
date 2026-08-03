@@ -106,7 +106,17 @@ six-step flow and tri-state UI details.
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that
   pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the
   `lastFocusedWindow` active tab so `playwright list-tabs` shows `(active)`
-  and cherry prompts can resolve 'this page'.
+  and cherry prompts can resolve 'this page'. The webapp's `CDPRouter` alone
+  owns temporary follower-preview focus and restoration; the bridge applies
+  every `Page.bringToFront` by activating the target tab and forwarding the
+  command, without trying to classify its origin. Synthetic sessions keep the
+  `sessionId === targetId` convention and ref-count duplicate tab attachments;
+  disconnect and target close force-release them. Debugger ownership is shared
+  symmetrically with the legacy compatibility path: whichever consumer performs
+  `chrome.debugger.attach` owns the matching detach, while the borrowing consumer's
+  detach is a no-op. External detach clears every live bridge Port's tab, session,
+  and ref-count state and emits `Target.detachedFromTarget` so the hosted leader
+  invalidates its cached session before reattaching; target close also clears ownership.
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to
   `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
   and drives the tri-state UI over a `cherry-panel` Port.
