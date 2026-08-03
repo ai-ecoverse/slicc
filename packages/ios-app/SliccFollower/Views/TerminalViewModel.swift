@@ -34,6 +34,7 @@ final class TerminalViewModel: ObservableObject {
     private let cancelCommand: CancelCommand
     private var input = ""
     private var pendingUTF8 = Data()
+    private var queuedInput = Data()
     private var runTask: Task<Void, Never>?
     private var connectionAvailable = false
     private var didStart = false
@@ -88,6 +89,7 @@ final class TerminalViewModel: ObservableObject {
 
     func setConnectionAvailable(_ available: Bool) {
         connectionAvailable = available
+        if !available { queuedInput.removeAll(keepingCapacity: true) }
         if !available, isRunning {
             let cancelledClient = cancelCommand()
             runTask?.cancel()
@@ -127,6 +129,7 @@ final class TerminalViewModel: ObservableObject {
         guard connectionAvailable else { return }
         input = ""
         pendingUTF8.removeAll(keepingCapacity: true)
+        queuedInput.removeAll(keepingCapacity: true)
         emit(Data("^C\r\n".utf8))
         let cancelledClient = cancelCommand()
         runTask?.cancel()
@@ -134,6 +137,10 @@ final class TerminalViewModel: ObservableObject {
     }
 
     private func consume(_ byte: UInt8) {
+        if isRunning {
+            if byte == 0x03 { interrupt() } else { queuedInput.append(byte) }
+            return
+        }
         if consumeEscape(byte) { return }
         switch byte {
         case 0x03:
@@ -193,6 +200,7 @@ final class TerminalViewModel: ObservableObject {
         defer {
             isRunning = false
             runTask = nil
+            drainQueuedInput()
         }
         do {
             try Task.checkCancellation()
@@ -220,6 +228,13 @@ final class TerminalViewModel: ObservableObject {
             environment["LINES"] = String(viewport.rows)
         }
         return environment
+    }
+
+    private func drainQueuedInput() {
+        guard connectionAvailable, !queuedInput.isEmpty else { return }
+        let queued = queuedInput
+        queuedInput.removeAll(keepingCapacity: true)
+        receiveInput(queued)
     }
 
     private func writeLine(_ text: String) {

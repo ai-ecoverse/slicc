@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { TerminalSessionClient } from '../../src/kernel/terminal-session-client.js';
 import { LeaderExecSessionPool } from '../../src/ui/leader-exec-runner.js';
 import type { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
@@ -102,6 +103,7 @@ class FakeOffscreen {
 
 describe('LeaderExecSessionPool', () => {
   it('streams stdout/stderr blocks and returns the exit code', async () => {
+    const execSpy = vi.spyOn(TerminalSessionClient.prototype, 'exec');
     const client = new FakeOffscreen('auto');
     const pool = new LeaderExecSessionPool(client as unknown as OffscreenClient);
     const chunks: Array<[string, string]> = [];
@@ -114,7 +116,13 @@ describe('LeaderExecSessionPool', () => {
     expect(res.exitCode).toBe(7);
     expect(chunks).toContainEqual(['stdout', 'hi\n']);
     expect(chunks).toContainEqual(['stderr', 'warn\n']);
+    expect(execSpy).toHaveBeenCalledWith('echo hi', {
+      cwd: undefined,
+      env: undefined,
+      discardCapturedOutput: true,
+    });
     pool.close('follower-1');
+    execSpy.mockRestore();
   });
 
   it('forwards an abort to the session as a signal', async () => {

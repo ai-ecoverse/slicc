@@ -64,7 +64,11 @@ export class LeaderExecSessionPool {
       await entry.opened;
       opts.signal.addEventListener('abort', onAbort, { once: true });
       if (opts.signal.aborted) return { exitCode: 130 };
-      const result = await entry.session.exec(opts.command, { cwd: opts.cwd, env: opts.env });
+      const result = await entry.session.exec(opts.command, {
+        cwd: opts.cwd,
+        env: opts.env,
+        discardCapturedOutput: true,
+      });
       return { exitCode: result.exitCode };
     } catch (err) {
       this.close(opts.sessionId);

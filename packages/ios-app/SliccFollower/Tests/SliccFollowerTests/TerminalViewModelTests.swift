@@ -78,6 +78,20 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
     }
 
+    func testMultilinePasteRunsEveryCommandInOrder() async {
+        let recorder = Recorder()
+        let model = model(recorder)
+        model.setConnectionAvailable(true)
+
+        model.receiveInput(Data("echo first\necho second\n".utf8))
+        await waitUntilIdle(model)
+
+        XCTAssertEqual(recorder.commands, ["echo first", "echo second"])
+        XCTAssertTrue(model.accessibilityTranscript.contains("echo first"))
+        XCTAssertTrue(model.accessibilityTranscript.contains("echo second"))
+        XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
+    }
+
     func testOutputChunksReachTranscriptWithoutUtf8BoundaryCorruption() async {
         let recorder = Recorder()
         recorder.chunks = [

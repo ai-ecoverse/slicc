@@ -175,6 +175,24 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     ctx.dispose();
   });
 
+  it('can stream output without retaining it in the exec result', async () => {
+    const ctx = setupChannel();
+    const output = 'x'.repeat(128 * 1024);
+    ctx.shell.executeCommand.mockResolvedValue({ stdout: output, stderr: '', exitCode: 0 });
+    await ctx.client.open();
+
+    const result = await ctx.client.exec('large-output', { discardCapturedOutput: true });
+
+    expect(result).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    expect(
+      ctx.events
+        .filter((event) => event.type === 'terminal-output')
+        .map((event) => (event.type === 'terminal-output' ? event.data : ''))
+        .join('')
+    ).toBe(output);
+    ctx.dispose();
+  });
+
   it('applies per-exec cwd and env overrides before running a persistent shell command', async () => {
     const ctx = setupChannel();
     await ctx.client.open({ cwd: '/initial', env: { NAME: 'first' } });

@@ -62,6 +62,13 @@ export interface TerminalExecResult {
   exitCode: number;
 }
 
+export interface TerminalExecOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Stream through `onEvent` without retaining output in the result. Default false. */
+  discardCapturedOutput?: boolean;
+}
+
 export interface TerminalSessionTransport {
   sendRaw(message: TerminalControlMsg): void;
   onTerminalEvent(handler: (event: TerminalEventMsg) => void): () => void;
@@ -173,15 +180,13 @@ export class TerminalSessionClient {
    * concurrent exec per session, but the client still tracks ids
    * for future streaming-pty support).
    */
-  exec(
-    command: string,
-    opts: { cwd?: string; env?: Record<string, string> } = {}
-  ): Promise<TerminalExecResult> {
+  exec(command: string, opts: TerminalExecOptions = {}): Promise<TerminalExecResult> {
     const execId = `e${this.nextExecId++}`;
+    const { discardCapturedOutput = false, ...request } = opts;
     return new Promise((resolve) => {
       this.pending.set(execId, resolve);
-      this.buffers.set(execId, { stdout: '', stderr: '' });
-      this.send({ type: 'terminal-exec', sid: this.sid, execId, command, ...opts });
+      if (!discardCapturedOutput) this.buffers.set(execId, { stdout: '', stderr: '' });
+      this.send({ type: 'terminal-exec', sid: this.sid, execId, command, ...request });
     });
   }
 
