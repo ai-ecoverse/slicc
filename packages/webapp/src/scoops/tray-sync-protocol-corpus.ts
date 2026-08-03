@@ -388,10 +388,10 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       response: { ok: true, data: { type: 'void' } },
     },
   },
-  // Streaming remote exec is TS + Go CLI only — no OS shell on iOS, so its
-  // mirror decodes these leader→follower variants to `.unknown` (like fs.*).
+  // iOS mirrors the full exec wire surface for its leader-backed terminal.
+  // `capabilities.exec` remains false because the phone cannot serve OS exec.
   'exec.request': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: {
       type: 'exec.request',
       requestId: 'exec-1',
@@ -400,15 +400,15 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     },
   },
   'exec.chunk': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: { type: 'exec.chunk', requestId: 'exec-1', stream: 'stdout', data: 'aGVsbG8K' },
   },
   'exec.response': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: { type: 'exec.response', requestId: 'exec-1', exitCode: 0 },
   },
   'exec.signal': {
-    ios: 'unknown',
+    ios: 'decoded',
     message: { type: 'exec.signal', requestId: 'exec-1', signal: 'SIGINT' },
   },
   'cherry.slicc_event': {
@@ -608,22 +608,22 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       response: { ok: false, error: 'ENOENT', code: 'ENOENT' },
     },
   },
-  // Follower-originated streaming exec (the `slicc … exec` CLI) is TS + Go only;
-  // iOS never originates it, so its follower decoder throws (`undecodable`).
+  // iOS originates requests/signals for the leader-backed terminal and mirrors
+  // chunks/responses for protocol symmetry and corpus round-trip enforcement.
   'exec.request': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'exec.request', requestId: 'exec-2', command: 'ls -la' },
   },
   'exec.chunk': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'exec.chunk', requestId: 'exec-2', stream: 'stderr', data: 'ZXJyb3IK' },
   },
   'exec.response': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'exec.response', requestId: 'exec-2', exitCode: 1, error: 'boom' },
   },
   'exec.signal': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'exec.signal', requestId: 'exec-2', signal: 'SIGKILL' },
   },
   'cherry.host_event': {

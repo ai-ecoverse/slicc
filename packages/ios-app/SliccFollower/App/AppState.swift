@@ -1010,6 +1010,12 @@ class AppState: ObservableObject {
         case .fsResponse(let requestId, let response):
             fsClient.handleResponse(requestId: requestId, response: response)
 
+        case .execRequest, .execChunk, .execResponse, .execSignal:
+            // Protocol seam only. TerminalClient owns exec dispatch in the next
+            // implementation wave; keeping the cases explicit preserves this
+            // switch's exhaustiveness without adding UI behavior here.
+            break
+
         case .themeApply(let themeJson):
             applyLeaderTheme(themeJson)
 

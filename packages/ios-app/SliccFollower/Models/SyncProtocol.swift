@@ -308,7 +308,8 @@ var trayFollowerMotd: String {
 /// Implemented here: chat, scoops, model/thinking selection, sprinkles,
 /// control, leader-initiated CDP
 /// (`cdp.request`, `targets.registry`, `tab.open`), the cherry host-page
-/// event fan-out (`cherry.slicc_event`), and the `fs.*` pair. TS-only and
+/// event fan-out (`cherry.slicc_event`), the `fs.*` pair, and all four `exec.*`
+/// wire variants. TS-only and
 /// omitted from this enum: the leader→follower reply path for
 /// follower-originated requests (`cdp.response`,
 /// `cdp.event`, `tab.opened`, `tab.open.error`) — iOS never originates those
@@ -363,6 +364,10 @@ enum LeaderToFollowerMessage: Codable {
     case fsRequest(requestId: String, request: TrayFsRequest)
     /// Reply to a follower-originated `fs.request`, chunked for large reads.
     case fsResponse(requestId: String, response: TrayFsResponse)
+    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?)
+    case execChunk(requestId: String, stream: String, data: String)
+    case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
+    case execSignal(requestId: String, signal: String)
     /// Leader theme broadcast. iOS derives a native palette from `base` +
     /// `tokens` (raw `css` and per-component overrides are ignored — see
     /// `AppState.applyLeaderTheme`); `null` resets to the system scheme.
@@ -387,6 +392,7 @@ enum LeaderToFollowerMessage: Codable {
         case themeJson, protocolVersion, runtime
         case request, response
         case capabilities, motd
+        case command, cwd, env, stream, exitCode, signal
     }
 
     init(from decoder: Decoder) throws {
@@ -494,6 +500,27 @@ enum LeaderToFollowerMessage: Codable {
             self = .fsResponse(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 response: try container.decode(TrayFsResponse.self, forKey: .response))
+        case "exec.request":
+            self = .execRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                command: try container.decode(String.self, forKey: .command),
+                cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
+                env: try container.decodeIfPresent([String: String].self, forKey: .env))
+        case "exec.chunk":
+            self = .execChunk(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                stream: try container.decode(String.self, forKey: .stream),
+                data: try container.decode(String.self, forKey: .data))
+        case "exec.response":
+            self = .execResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                exitCode: try container.decode(Int.self, forKey: .exitCode),
+                signal: try container.decodeIfPresent(String.self, forKey: .signal),
+                error: try container.decodeIfPresent(String.self, forKey: .error))
+        case "exec.signal":
+            self = .execSignal(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                signal: try container.decode(String.self, forKey: .signal))
         case "theme.apply":
             self = .themeApply(
                 themeJson: try container.decodeIfPresent(String.self, forKey: .themeJson))
@@ -623,6 +650,27 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("fs.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
+        case .execRequest(let requestId, let command, let cwd, let env):
+            try container.encode("exec.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(command, forKey: .command)
+            try container.encodeIfPresent(cwd, forKey: .cwd)
+            try container.encodeIfPresent(env, forKey: .env)
+        case .execChunk(let requestId, let stream, let data):
+            try container.encode("exec.chunk", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(stream, forKey: .stream)
+            try container.encode(data, forKey: .data)
+        case .execResponse(let requestId, let exitCode, let signal, let error):
+            try container.encode("exec.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(exitCode, forKey: .exitCode)
+            try container.encodeIfPresent(signal, forKey: .signal)
+            try container.encodeIfPresent(error, forKey: .error)
+        case .execSignal(let requestId, let signal):
+            try container.encode("exec.signal", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(signal, forKey: .signal)
         case .themeApply(let themeJson):
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
@@ -649,7 +697,8 @@ enum LeaderToFollowerMessage: Codable {
 /// targets advertise, CDP/tab.open
 /// reply path back to the leader (`cdp.response`, `cdp.event`, `tab.opened`,
 /// `tab.openError`), and the `fs.*` pair — iOS originates `fs.request` against
-/// the leader's VFS and answers a leader-originated one with an error.
+/// the leader's VFS and answers a leader-originated one with an error, plus all
+/// four `exec.*` wire variants for the leader-backed terminal.
 /// TS-only and omitted: follower-originated `cdp.request`/`tab.open` (iOS only
 /// responds to leader-initiated requests, never originates). The `tab.openError` case is
 /// declared for protocol symmetry but `CDPBridge.handleTabOpen` always sends
@@ -706,6 +755,10 @@ enum FollowerToLeaderMessage: Codable {
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
     /// Answer to a leader-originated `fs.request`.
     case fsResponse(requestId: String, response: TrayFsResponse)
+    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?)
+    case execChunk(requestId: String, stream: String, data: String)
+    case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
+    case execSignal(requestId: String, signal: String)
     /// Generic lick envelope. The leader accepts only the types in
     /// `FORWARDABLE_TO_LEADER` (`navigate`, `discovery`) and rejects the rest,
     /// so `FollowerLickType` is narrowed to match. `sprinkle.lick` stays on its
@@ -727,6 +780,7 @@ enum FollowerToLeaderMessage: Codable {
         case method, params, sessionId, targetId, url
         case protocolVersion, runtime
         case targetRuntimeId, localTargetId, request, response
+        case command, cwd, env, stream, data, exitCode, signal
     }
 
     init(from decoder: Decoder) throws {
@@ -814,6 +868,27 @@ enum FollowerToLeaderMessage: Codable {
             self = .fsResponse(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 response: try container.decode(TrayFsResponse.self, forKey: .response))
+        case "exec.request":
+            self = .execRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                command: try container.decode(String.self, forKey: .command),
+                cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
+                env: try container.decodeIfPresent([String: String].self, forKey: .env))
+        case "exec.chunk":
+            self = .execChunk(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                stream: try container.decode(String.self, forKey: .stream),
+                data: try container.decode(String.self, forKey: .data))
+        case "exec.response":
+            self = .execResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                exitCode: try container.decode(Int.self, forKey: .exitCode),
+                signal: try container.decodeIfPresent(String.self, forKey: .signal),
+                error: try container.decodeIfPresent(String.self, forKey: .error))
+        case "exec.signal":
+            self = .execSignal(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                signal: try container.decode(String.self, forKey: .signal))
         case "lick":
             self = .lick(event: try container.decode(LickEvent.self, forKey: .event))
         case "hello":
@@ -923,6 +998,27 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode("fs.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
+        case .execRequest(let requestId, let command, let cwd, let env):
+            try container.encode("exec.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(command, forKey: .command)
+            try container.encodeIfPresent(cwd, forKey: .cwd)
+            try container.encodeIfPresent(env, forKey: .env)
+        case .execChunk(let requestId, let stream, let data):
+            try container.encode("exec.chunk", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(stream, forKey: .stream)
+            try container.encode(data, forKey: .data)
+        case .execResponse(let requestId, let exitCode, let signal, let error):
+            try container.encode("exec.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(exitCode, forKey: .exitCode)
+            try container.encodeIfPresent(signal, forKey: .signal)
+            try container.encodeIfPresent(error, forKey: .error)
+        case .execSignal(let requestId, let signal):
+            try container.encode("exec.signal", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(signal, forKey: .signal)
         case .lick(let event):
             try container.encode("lick", forKey: .type)
             try container.encode(event, forKey: .event)

@@ -332,4 +332,16 @@ final class SyncProtocolCorpusTests: XCTestCase {
             XCTAssertEqual(obj?["type"] as? String, type, "'\(type)' re-encoded with a different type tag")
         }
     }
+
+    func testDecodedFollowerMessagesReencodeWithSameType() throws {
+        let corpus = try loadCorpus()
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+        for (type, ios, messageData) in corpus.followerToLeader where ios == "decoded" {
+            let decoded = try decoder.decode(FollowerToLeaderMessage.self, from: messageData)
+            let reencoded = try encoder.encode(decoded)
+            let obj = try JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
+            XCTAssertEqual(obj?["type"] as? String, type, "'\(type)' re-encoded with a different type tag")
+        }
+    }
 }

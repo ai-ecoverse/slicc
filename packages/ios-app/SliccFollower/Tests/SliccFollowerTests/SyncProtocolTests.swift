@@ -7,6 +7,46 @@ import XCTest
 // via `xcodebuild test` on an iOS Simulator — `swift test` cannot run on a plain
 // macOS host because the package depends on an iOS-only WebRTC binary. The
 // golden-fixture corpus suite lives in SyncProtocolCorpusTests.swift.
+final class SyncProtocolExecTests: XCTestCase {
+    private let messages = [
+        """
+        {"type":"exec.request","requestId":"exec-1","command":"echo hello",\
+        "cwd":"/workspace","env":{"TERM":"xterm-256color"}}
+        """,
+        """
+        {"type":"exec.chunk","requestId":"exec-1","stream":"stdout","data":"aGVsbG8K"}
+        """,
+        """
+        {"type":"exec.response","requestId":"exec-1","exitCode":130,\
+        "signal":"SIGINT","error":"cancelled"}
+        """,
+        """
+        {"type":"exec.signal","requestId":"exec-1","signal":"SIGINT"}
+        """,
+    ]
+
+    func testLeaderToFollowerExecMessagesRoundTrip() throws {
+        for message in messages {
+            try assertRoundTrip(LeaderToFollowerMessage.self, json: message)
+        }
+    }
+
+    func testFollowerToLeaderExecMessagesRoundTrip() throws {
+        for message in messages {
+            try assertRoundTrip(FollowerToLeaderMessage.self, json: message)
+        }
+    }
+
+    private func assertRoundTrip<Message: Codable>(_ type: Message.Type, json: String) throws {
+        let source = Data(json.utf8)
+        let decoded = try JSONDecoder().decode(type, from: source)
+        let reencoded = try JSONEncoder().encode(decoded)
+        let expected = try XCTUnwrap(try JSONSerialization.jsonObject(with: source) as? NSDictionary)
+        let actual = try XCTUnwrap(try JSONSerialization.jsonObject(with: reencoded) as? NSDictionary)
+        XCTAssertEqual(actual, expected)
+    }
+}
+
 // MARK: - Task 8: Transcript export iOS safety
 
 /// Verify that export response messages from the leader do NOT tear down the

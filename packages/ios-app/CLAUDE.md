@@ -73,6 +73,11 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   supports reads plus `writeFile`/`mkdir`/`rm` everywhere except `/proc`;
   `exists` and `walk` remain unsupported by the page proxy.
 - `hello`: sends `capabilities: { exec: false }` explicitly plus a device-derived `motd` for the leader's `ssh --list`. The leader's gate reads `peerCapabilities?.exec`, so absent and false behave alike — only one of them is a stated contract.
+- Remote exec: iOS mirrors all four `exec.*` messages so its terminal can send
+  `exec.request`/`exec.signal` to the leader's virtual shell and consume
+  `exec.chunk`/`exec.response`. `capabilities.exec` stays false: it advertises
+  whether this follower can serve commands on its own OS, not whether it may
+  request execution from the leader.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
 - Model/thinking controls: `Views/SettingsView.swift` selects from the leader's model catalog and changes thinking for the selected scoop. The thinking picker is shown only when the selected model is reasoning-capable.
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
