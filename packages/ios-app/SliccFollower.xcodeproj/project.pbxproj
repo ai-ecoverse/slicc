@@ -111,12 +111,14 @@
 		C5E734A68251BBE47EBE506D /* NewSessionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EF3911627A88E5691B3949 /* NewSessionUITests.swift */; };
 		C9148ED833EA104C5F60800B /* DockRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58899461D44B42F512AD0645 /* DockRail.swift */; };
 		CA14A8C5DE0A027197214AEF /* LinkHeaderCorpusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 747034EA0B5B45B56875A5DD /* LinkHeaderCorpusTests.swift */; };
+		CB3927786EA8B1A8C504469D /* TerminalLineEndings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 955A92ECF3F67770059EF5A5 /* TerminalLineEndings.swift */; };
 		CB6A8F9EEAD1D4DAA552E0EC /* SyncProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BBC1002CE4D3E1D940352F4 /* SyncProtocolTests.swift */; };
 		CBD602492763F0ABCF40B586 /* AttachmentUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFCAA64AD099330D7C84B889 /* AttachmentUITests.swift */; };
 		CCD45A2DC9CD2D58A5CBCA0F /* HandoffLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = C81245702943C2EE38D8FD5E /* HandoffLink.swift */; };
 		D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */; };
 		D3441201E520337FA883076A /* SteerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26D6B6B896CB48304A39DAB8 /* SteerUITests.swift */; };
 		D493553CF88D9F88586D7E93 /* FsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12FDDE8F74ACEEEACDA73346 /* FsClient.swift */; };
+		D5089BD5C65737197270E64E /* TerminalLineEndingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49044DEA0E67369B54805BE5 /* TerminalLineEndingsTests.swift */; };
 		D64746441155B8987B3861BF /* TerminalViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8E6A8B63717540E230B11C9 /* TerminalViewModel.swift */; };
 		DFF9C499295115804C6CE6C1 /* SliccAgentAvatarTilt.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */; };
 		E568114F9C5022800E90127F /* CdpPreviewClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */; };
@@ -181,6 +183,7 @@
 		3FE6B46ECEC5C79FA6D986F9 /* CDPTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDPTarget.swift; sourceTree = "<group>"; };
 		434BBAD25E91BD0B7D626821 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		438577405ABBCA33F117862C /* SliccIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccIcons.swift; sourceTree = "<group>"; };
+		49044DEA0E67369B54805BE5 /* TerminalLineEndingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalLineEndingsTests.swift; sourceTree = "<group>"; };
 		496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpPreviewClientTests.swift; sourceTree = "<group>"; };
 		4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUICard.swift; sourceTree = "<group>"; };
 		4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraySignaling.swift; sourceTree = "<group>"; };
@@ -221,6 +224,7 @@
 		8D76B8F603084A6021B6DD6B /* KeepaliveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeepaliveTests.swift; sourceTree = "<group>"; };
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
+		955A92ECF3F67770059EF5A5 /* TerminalLineEndings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalLineEndings.swift; sourceTree = "<group>"; };
 		9572AB87A7ACEC6740682685 /* FrozenSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsTests.swift; sourceTree = "<group>"; };
 		9A73EE3E38934A8DE13AF2BD /* MemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryStore.swift; sourceTree = "<group>"; };
 		9AADA76C8F5B9002C98EBFC6 /* MemoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryUITests.swift; sourceTree = "<group>"; };
@@ -319,6 +323,7 @@
 				9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */,
 				3BBC1002CE4D3E1D940352F4 /* SyncProtocolTests.swift */,
 				D8BE50108EF2BB5BE17D889C /* TerminalClientTests.swift */,
+				49044DEA0E67369B54805BE5 /* TerminalLineEndingsTests.swift */,
 				6CD0912F66C04F41B9A20374 /* TerminalViewModelTests.swift */,
 				BF3C704861C906098707C875 /* ThemeEngineTests.swift */,
 				507969DA6DFEA7E053C53F32 /* ThemePaletteTests.swift */,
@@ -371,6 +376,7 @@
 				FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */,
 				0A51DB1BA99DAE89F21CF736 /* SVGPath.swift */,
 				618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */,
+				955A92ECF3F67770059EF5A5 /* TerminalLineEndings.swift */,
 				1572105F0B5819E4CC07BD84 /* ThemeEngine.swift */,
 				B3BE6D707649AD21C5912013 /* ThemePalette.swift */,
 				356386D299A1933A39CB972B /* TrayChunkFraming.swift */,
@@ -732,6 +738,7 @@
 				7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */,
 				58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */,
 				1865AE8BBF943F8EB482B9F1 /* TerminalClient.swift in Sources */,
+				CB3927786EA8B1A8C504469D /* TerminalLineEndings.swift in Sources */,
 				6E40C1DE1DC05489E409D045 /* TerminalView.swift in Sources */,
 				D64746441155B8987B3861BF /* TerminalViewModel.swift in Sources */,
 				506157D29E5CF93D59C26748 /* ThemeEngine.swift in Sources */,
@@ -797,6 +804,7 @@
 				F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */,
 				CB6A8F9EEAD1D4DAA552E0EC /* SyncProtocolTests.swift in Sources */,
 				8BC74CD5BEE3E940EE3EF2DD /* TerminalClientTests.swift in Sources */,
+				D5089BD5C65737197270E64E /* TerminalLineEndingsTests.swift in Sources */,
 				75773A9878974745A79914C8 /* TerminalViewModelTests.swift in Sources */,
 				9DF8A1F02E02C3662AC7E44E /* ThemeEngineTests.swift in Sources */,
 				C1CC6CC22FA5B076B8FF0A7F /* ThemePaletteTests.swift in Sources */,

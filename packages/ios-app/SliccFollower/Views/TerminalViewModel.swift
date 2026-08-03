@@ -40,6 +40,9 @@ final class TerminalViewModel: ObservableObject {
     private var isStarting = false
     private var escapeState = 0
     private var lastRenderedByte: UInt8?
+    /// Applied to everything the surface renders, so leader output that
+    /// arrives pipe-style (bare LF) does not stair-step down the screen.
+    private var lineEndings = TerminalLineEndings()
 
     init(runCommand: @escaping RunCommand, cancelCommand: @escaping CancelCommand) {
         self.runCommand = runCommand
@@ -234,8 +237,13 @@ final class TerminalViewModel: ObservableObject {
         emit(Data("\r\n".utf8))
     }
 
-    private func emit(_ data: Data) {
-        guard !data.isEmpty else { return }
+    private func emit(_ raw: Data) {
+        guard !raw.isEmpty else { return }
+        // Normalise at the single choke point rather than at the exec-chunk
+        // call site: the transcript and `lastRenderedByte` must agree with
+        // what the surface actually rendered, and locally written lines are
+        // already CRLF, so this is a no-op for them.
+        let data = lineEndings.normalize(raw)
         session.receive(data)
         transcriptData.append(data)
         if transcriptData.count > Self.transcriptLimit {
