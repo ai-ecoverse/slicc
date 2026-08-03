@@ -5,7 +5,7 @@ let package = Package(
     name: "SliccTraySession",
     // Both consumers: macOS for swift-launcher (Sliccstart), iOS for ios-app
     // (SliccFollower). Nothing here may import AppKit/UIKit.
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    platforms: [.macOS(.v14), .iOS("18.0")],
     products: [
         .library(
             name: "SliccTraySession",
