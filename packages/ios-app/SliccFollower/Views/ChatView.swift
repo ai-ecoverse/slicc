@@ -48,7 +48,7 @@ struct ChatView: View {
                     // same full-bleed overlay the web shell uses at ≤560px,
                     // so tap-active-to-collapse stays reachable.
                     if terminalWasOpened || activeSurface == .term {
-                        WorkbenchHost(surface: .term)
+                        WorkbenchHost(surface: .term, isActive: activeSurface == .term)
                             .opacity(activeSurface == .term ? 1 : 0)
                             .allowsHitTesting(activeSurface == .term)
                             .accessibilityHidden(activeSurface != .term)

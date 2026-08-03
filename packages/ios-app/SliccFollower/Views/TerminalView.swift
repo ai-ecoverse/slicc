@@ -4,6 +4,13 @@ import SwiftUI
 struct TerminalView: View {
     @StateObject private var model: TerminalViewModel
     let connectionAvailable: Bool
+    /// False while the terminal stays mounted behind another surface. The
+    /// view cannot be torn down (that would take the scrollback with it), so
+    /// everything it vends has to be withdrawn from assistive tech by hand:
+    /// SwiftUI's `.accessibilityHidden` on an ancestor does not reach into
+    /// the Ghostty `UIViewRepresentable`, leaving a phantom terminal that
+    /// VoiceOver can still swipe into from the chat.
+    let isActive: Bool
     let theme: SliccTheme?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -12,9 +19,11 @@ struct TerminalView: View {
     init(
         client: TerminalClient,
         connectionAvailable: Bool,
+        isActive: Bool,
         theme: SliccTheme?
     ) {
         self.connectionAvailable = connectionAvailable
+        self.isActive = isActive
         self.theme = theme
         #if DEBUG
             _model = StateObject(
@@ -35,7 +44,8 @@ struct TerminalView: View {
                     .accessibilityLabel("Terminal")
                     .accessibilityIdentifier("terminal-surface")
                     .accessibilityValue(model.accessibilityTranscript)
-                    .allowsHitTesting(connectionAvailable)
+                    .allowsHitTesting(connectionAvailable && isActive)
+                    .accessibilityHidden(!isActive)
 
                 Text(model.accessibilityTranscript)
                     .font(.system(size: 1))
@@ -44,8 +54,11 @@ struct TerminalView: View {
                     .frame(width: 1, height: 1)
                     .allowsHitTesting(false)
                     .accessibilityIdentifier("terminal-transcript")
+                    .accessibilityHidden(!isActive)
 
-                if !connectionAvailable {
+                // Unlike the surface, the placeholder holds no state worth
+                // preserving, so it is not rendered at all while collapsed.
+                if !connectionAvailable && isActive {
                     disconnectedPlaceholder
                 }
             }
