@@ -1343,7 +1343,7 @@ jobs:
           xcodebuild -resolvePackageDependencies \
             -project SliccFollower.xcodeproj \
             -scheme SliccFollower
-      - name: Build
+      - name: Build (iOS Simulator)
         run: |
           set -o pipefail
           cd packages/ios-app
@@ -1351,6 +1351,15 @@ jobs:
             -project SliccFollower.xcodeproj \
             -scheme SliccFollower \
             -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Build (iOS device)
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          xcodebuild build \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
       # Golden-fixture protocol corpus + unit tests. The shared coverage script
       # picks the simulator, runs `xcodebuild test` with coverage + parallel
