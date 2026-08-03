@@ -328,6 +328,54 @@ describe('startPageLeaderTray', () => {
     handle.stop();
   });
 
+  it('cleans up a connected follower when the same controller supersedes it', async () => {
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const channel = new CapturingChannel();
+    const replacementChannel = new CapturingChannel();
+    const peers = [new ControllablePeer(channel), new ControllablePeer(replacementChannel)];
+    const closeExecShell = vi.fn();
+    let commandSignal: AbortSignal | undefined;
+    const execInShell: NonNullable<Parameters<typeof startPageLeaderTray>[0]['execInShell']> = (
+      _command,
+      options
+    ) =>
+      new Promise((resolve) => {
+        commandSignal = options.signal;
+        options.signal.addEventListener('abort', () => resolve({ exitCode: 130 }), { once: true });
+      });
+    const handle = startPageLeaderTray({
+      ...makeBaseOptions({ fetchImpl, webSocketFactory, store }),
+      execInShell,
+      closeExecShell,
+      _peerConnectionFactory: () => {
+        const peer = peers.shift();
+        if (!peer) throw new Error('Unexpected peer creation');
+        return peer;
+      },
+    });
+    await connectTestFollower(handle, sockets, channel);
+    channel.simulate({ type: 'exec.request', requestId: 'exec-1', command: 'sleep 30' });
+    await vi.waitFor(() => expect(commandSignal).toBeDefined());
+
+    await handle.peers.handleControlMessage({
+      type: 'follower.join_requested',
+      trayId: 'tray-1',
+      controllerId: 'follower-1',
+      runtime: 'slicc-ios',
+      bootstrapId: 'bootstrap-2',
+      attempt: 2,
+      expiresAt: '2026-01-01T00:02:00.000Z',
+    });
+
+    await vi.waitFor(() => expect(commandSignal?.aborted).toBe(true));
+    expect(closeExecShell).toHaveBeenCalledWith('bootstrap-1');
+    expect(handle.sync.getFollowerDetails()).toEqual([]);
+    expect(handle.peers.getPeers()).toEqual([
+      expect.objectContaining({ bootstrapId: 'bootstrap-2', state: 'connecting' }),
+    ]);
+    handle.stop();
+  });
+
   it('coalesces state-driven scoop broadcasts without waiting for the refresh interval', async () => {
     const { fetchImpl, webSocketFactory } = makeLeaderFetch();
     const handle = startPageLeaderTray({
