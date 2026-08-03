@@ -10,29 +10,31 @@ This file covers the iOS follower app in `packages/ios-app/`.
 
 ## Layout
 
-| Path                                                                                                 | Purpose                                                                                                                 |
-| ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                     | App entry + central `@MainActor AppState`                                                                               |
-| `SliccFollower/Models/SyncProtocol.swift`                                                            | Partial `Codable` mirror of `packages/shared-ts/src/tray-sync-protocol.ts`                                              |
-| `SliccFollower/Models/ScoopStatus.swift`                                                             | View-independent scoop lifecycle and context-fullness presentation model                                                |
-| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`  | Chat/signaling types and transport chunk reassembly                                                                     |
-| `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                             |
-| `SliccFollower/Sync/TerminalClient.swift`                                                            | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and disconnect handling                  |
-| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                         | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement |
-| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                       |
-| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                           |
-| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                  | Adaptive chat shell; `ChatPresentationState` owns state above the compact/regular branch; Markdown via `MarkdownBlock`  |
-| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`  | Renders `.shtml`; intercepts bridge calls and stubs VFS APIs                                                            |
-| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`   | Phone IA (#1802): 48pt dock rail; workbench overlays chat. `Models/SVGPath.swift` parses lucide paths                   |
-| `SliccFollower/Views/TerminalView.swift`, `TerminalViewModel.swift`                                  | Persistent libghostty surface with line editing, theming, cancellation, and scrollback                                  |
-| `SliccFollower/{Models,Views}/*Avatar*.swift`                                                        | Avatar geometry/motion, renderer, and screenshot fixture                                                                |
-| Other views                                                                                          | Top-level shell + smaller UI fragments — not exhaustive                                                                 |
+| Path                                                                                                          | Purpose                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                              | App entry + central `@MainActor AppState`                                                                               |
+| `SliccTrayKit/Models/SyncProtocol.swift`                                                                     | Partial `Codable` mirror of `packages/shared-ts/src/tray-sync-protocol.ts`                                              |
+| `SliccFollower/Models/ScoopStatus.swift`                                                                      | View-independent scoop lifecycle and context-fullness presentation model                                                |
+| `SliccTrayKit/Models/{ChatMessage,TrayTypes,TrayChunkFraming}.swift`                                         | Chat/signaling types and transport chunk reassembly                                                                     |
+| `SliccFollower/Sync/Keepalive.swift`                                                                          | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                             |
+| `SliccFollower/Sync/TerminalClient.swift`                                                                     | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and disconnect handling                  |
+| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                                  | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement |
+| `SliccTrayKit/Networking/{TraySignaling,TrayFollowerConnector,WebRTCManager}.swift`                           | Signaling client + WebRTC peer/data-channel setup                                                                       |
+| `SliccTrayKit/FileProvider/`, `SliccFileProvider/`                                                           | Read-only Files.app provider for the leader VFS (kit logic + thin appex adapter)                                        |
+| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                                        | Hosts WKWebViews as CDP targets the leader can drive remotely                                                           |
+| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                           | Adaptive chat shell; `ChatPresentationState` owns state above the compact/regular branch; Markdown via `MarkdownBlock`  |
+| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`           | Renders `.shtml`; intercepts bridge calls and stubs VFS APIs                                                            |
+| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`            | Phone IA (#1802): 48pt dock rail; workbench overlays chat. `Models/SVGPath.swift` parses lucide paths                   |
+| `SliccFollower/Views/TerminalView.swift`, `TerminalViewModel.swift`                                           | Persistent libghostty surface with line editing, theming, cancellation, and scrollback                                  |
+| `SliccFollower/Views/TabsCarouselView.swift`                                                                  | Local CDP-target WKWebView carousel                                                                                     |
+| `SliccFollower/{Models,Views}/*Avatar*.swift`                                                                 | Avatar geometry/motion, renderer, and screenshot fixture                                                                |
+| Other views                                                                                                   | Top-level shell + smaller UI fragments — not exhaustive                                                                 |
 
 Plain SPM commands do nothing useful on a macOS host (`swift build` hits iOS-only frameworks; `Package.swift` declares no test target). Build and test go through the XcodeGen project on a simulator (see "Test + coverage").
 
 ## Protocol Mirror Invariant
 
-`Models/SyncProtocol.swift` mirrors a **subset** of the unions and payloads in
+`SliccTrayKit/Models/SyncProtocol.swift` mirrors a **subset** of the unions and payloads in
 `packages/shared-ts/src/tray-sync-protocol.ts`. The per-message matrix in
 `docs/architecture.md` is the cross-float source of truth. Three iOS-local facts:
 
@@ -71,7 +73,7 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   transport-only, `leaderError` the cone's.
 - Message dispatch: `handleDataChannelMessage(_ data: Data)` switch
 - Sprinkles: `refreshSprinkles()`, `fetchSprinkleContent(_:)` (chunk reassembly + waiter dedup), `sendSprinkleLick(_:body:targetScoop:)`, `handleSprinkleContent(...)`
-- Leader VFS: `Sync/FsClient.swift`. iOS is the _requester_ — `fs.request` with
+- Leader VFS: `SliccTrayKit/Sync/FsClient.swift`. iOS is the _requester_ — `fs.request` with
   `targetRuntimeId: "leader"` accesses the **leader's** files, and a
   leader-originated request gets an `ENOTSUP` reply rather than silence
   (`fs-router.ts` has no timeout, so a drop hangs its promise). The client owns
@@ -85,7 +87,7 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
 
 ### Licks (two envelopes, deliberately)
 
-`sprinkle.lick` keeps its own message: `sprinkle` is **not** in `FORWARDABLE_TO_LEADER`, so routing it through the generic `lick` would get it dropped with a warning. `Models/LickEvent.swift` therefore mirrors only the two types the leader accepts (`navigate`, `discovery`). Origin labels are stamped leader-side — `runtime: "slicc-ios"` already maps to "iOS follower".
+`sprinkle.lick` keeps its own message: `sprinkle` is **not** in `FORWARDABLE_TO_LEADER`, so routing it through the generic `lick` would get it dropped with a warning. `SliccTrayKit/Models/LickEvent.swift` therefore mirrors only the two types the leader accepts (`navigate`, `discovery`). Origin labels are stamped leader-side — `runtime: "slicc-ios"` already maps to "iOS follower".
 
 `navigate` licks carry handoff `Link` headers. With no CDP `Network` domain here, `CDPTarget.handoff` reads them off `WKNavigationResponse` (main frame only — an iframe must not instruct the cone). `Net/LinkHeader.swift` + `Net/HandoffLink.swift` mirror the TS parser and its branch/path allowlists against a shared corpus; a divergence is a shell-injection bug, not a formatting nit.
 
@@ -174,20 +176,42 @@ swiftlint lint                                   # SwiftLint (config inherits re
 
 ## Test + coverage
 
-The suite runs through `xcodebuild test` on a simulator. The shared coverage gate
-picks a simulator, enables coverage and on-failure retries, and enforces the
-`ios-app` floors in `coverage-thresholds.json`.
+The unit suite runs through `xcodebuild test` on a simulator. The shared coverage
+gate picks an iPhone from the runtime matching the simulator SDK, boots it, enables
+coverage and on-failure retries, and enforces the `ios-app` floors in
+`coverage-thresholds.json`. Do not pass `CODE_SIGNING_ALLOWED=NO` to simulator
+tests: XCTest requires the ad-hoc-signed app and test bundle to bootstrap. The
+unsigned override remains appropriate for the build-only command above.
 
 ```bash
 ./packages/dev-tools/tools/swift-coverage-check.sh \
   --xcodebuild SliccFollower packages/ios-app SliccFollower
 ```
 
-Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, and the timed
-`ios-app.xcresult`). Neither bundle is `parallelizable`: simulator clones race
-the UI runner into `Busy` or accessibility timeouts. Tests still run in random
-order, so they cannot share state. Coverage reads
-`SliccFollower.app/SliccFollower.debug.dylib`, where debug code and mappings live.
+Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`,
+`ios-app.xcresult` with per-test durations). The coverage gate passes
+`-only-testing:SliccFollowerTests`, so UI tests cannot turn a unit-coverage run
+into a test-host bootstrap failure. It also disables parallel simulator clones
+so tests that temporarily seed shared app state remain isolated.
+`randomExecutionOrder` still holds, so no test may depend on another's side
+effects. Coverage combines `SliccFollower.app/SliccFollower.debug.dylib` with
+every linked framework executable discovered under the app's `Frameworks/`
+directory, so `SliccTrayKit` and future extracted kits stay in the profile
+without name-specific wiring. Debug builds put the app's code and coverage
+mapping in the dylib, not the launcher stub beside it. Because this is the unit
+gate, SwiftUI/CDP/AppState orchestration stays with the separate UI-test gate
+rather than diluting unit coverage with unexecuted UI code.
+
+The gate also excludes `SliccFileProvider/`: the File Provider appex is never
+launched during a unit-test run, so it carries no coverage mapping and its
+sources would silently vanish from the report rather than register as zero.
+Wave 2 enumeration and write-back logic therefore lives in `SliccTrayKit`,
+where it is unit-testable and measured, while `SliccFileProvider` stays a thin
+`NSFileProvider` adapter. Do not add the appex binary to the coverage objects;
+it would report 0% and fail the gate for a structural reason. The current
+`ios-app` floors were calibrated on the older UI-inclusive basis, so they are
+not directly comparable to the new core-only numbers; the nightly ratchet will
+re-baseline them.
 
 ## Simulator QA path
 
@@ -197,9 +221,11 @@ Hand-running the app for exploratory QA (boot/build/install/launch, seeding
 
 ## UI tests (`SliccFollowerUITests`)
 
-A `bundle.ui-testing` target runs alongside the unit bundle in the `SliccFollower`
-scheme, so `swift-coverage-check.sh --xcodebuild` picks up both. No test needs a
-leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
+A `bundle.ui-testing` target remains in the `SliccFollower` scheme, but the unit
+coverage gate intentionally excludes it. Run it explicitly with
+`-only-testing:SliccFollowerUITests` when UI behavior changes, and gate it as a
+separate CI job so UI-runner infrastructure failures cannot suppress unit
+coverage. No test needs a leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
 **UI Fixture** route (`FixtureConversationView`) without a tap, and
 `-uiTestSessionsFixture/Empty YES` seed the iCloud sessions list from an
 in-memory backend. `-uiTestScoopStatusFixture` covers every lifecycle plus
@@ -221,9 +247,12 @@ ready` through the real dispatcher, proving settlement without `turn_end`.
   bottom-to-top and must be bounded.
 - **A red CI job names the test, not the reason.** The XCTAssert text lives only
   in the `test-timings-ios-app` xcresult the job uploads — read it with
-  `xcrun xcresulttool get test-results tests` before theorizing. These failures
-  are load-dependent races, so reproduce them locally under CPU contention with
-  `-test-iterations N -run-tests-until-failure`.
+  `xcrun xcresulttool get test-results tests` before theorizing. A host killed
+  before XCTest connects is not a load-dependent test flake: verify that the
+  selected runtime matches `xcrun --sdk iphonesimulator --show-sdk-version` and
+  that the test build did not pass `CODE_SIGNING_ALLOWED=NO`. A mismatched
+  prerelease runtime or unsigned simulator artifacts can both fail before any
+  test body executes.
 
 ## Linting
 

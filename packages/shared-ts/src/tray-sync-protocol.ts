@@ -13,7 +13,7 @@
  *   CDP (request + response + event), federated tab.open and its reply pair,
  *   federated FS (request + response), ping/pong.
  *
- * The iOS follower (`packages/ios-app/SliccFollower/Models/SyncProtocol.swift`)
+ * The iOS follower (`packages/ios-app/SliccTrayKit/Models/SyncProtocol.swift`)
  * mirrors a **subset** of this file: federated `fs.*` in both directions is
  * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT

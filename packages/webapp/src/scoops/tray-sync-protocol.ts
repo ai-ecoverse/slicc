@@ -4,7 +4,7 @@
  *
  * The message unions and payload types are canonical in
  * `@slicc/shared-ts/src/tray-sync-protocol.ts` (mirrored by the iOS follower
- * `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` — see
+ * `packages/ios-app/SliccTrayKit/Models/SyncProtocol.swift` — see
  * `packages/ios-app/CLAUDE.md` "Protocol Mirror Invariant" and the
  * golden-fixture corpus in `tray-sync-protocol-corpus.ts`). This module
  * re-exports them so webapp importers keep their scoops/-layer import site,
