@@ -5,6 +5,23 @@ import XCTest
 
 @MainActor
 final class TerminalClientTests: XCTestCase {
+    private actor ManualSleeper {
+        private var elapsed = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        func sleep() async throws {
+            if elapsed { return }
+            await withCheckedContinuation { waiter = $0 }
+            try Task.checkCancellation()
+        }
+
+        func elapse() {
+            elapsed = true
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
     private final class Wire {
         private(set) var sent: [FollowerToLeaderMessage] = []
         var sendSucceeds = true
@@ -33,8 +50,14 @@ final class TerminalClientTests: XCTestCase {
         }
     }
 
-    private func makeClient(wire: Wire) -> TerminalClient {
+    private func makeClient(
+        wire: Wire,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
+        }
+    ) -> TerminalClient {
         TerminalClient(
+            sleep: sleep,
             makeRequestId: { "req-1" },
             send: { wire.send($0) })
     }
@@ -89,6 +112,26 @@ final class TerminalClientTests: XCTestCase {
         XCTAssertFalse(client.isRunning)
     }
 
+    func testRetainedResultIsBoundedWhileStreamingReceivesFullOutput() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let output = Data(repeating: 0x41, count: TerminalClient.retainedOutputLimit + 37)
+        var streamed = Data()
+        let task = Task {
+            try await client.run(command: "large-output") { streamed.append($0.data) }
+        }
+        await waitForRun(client)
+
+        client.handleChunk(
+            requestId: "req-1", stream: "stdout", base64Data: encoded(output))
+        client.handleResponse(requestId: "req-1", exitCode: 0, signal: nil, error: nil)
+        let result = try await task.value
+
+        XCTAssertEqual(streamed, output)
+        XCTAssertEqual(result.stdout.count, TerminalClient.retainedOutputLimit)
+        XCTAssertEqual(result.stdout, Data(output.suffix(TerminalClient.retainedOutputLimit)))
+    }
+
     func testNonZeroExitIsAResult() async throws {
         let wire = Wire()
         let client = makeClient(wire: wire)
@@ -130,6 +173,25 @@ final class TerminalClientTests: XCTestCase {
         let result = try await task.value
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertFalse(client.isRunning)
+    }
+
+    func testDefaultCommandLifetimeIgnoresElapsedLegacyDeadline() async throws {
+        let wire = Wire()
+        let sleeper = ManualSleeper()
+        let client = makeClient(wire: wire, sleep: { _ in try await sleeper.sleep() })
+        let task = Task { try await client.run(command: "long-running build") }
+        await waitForRun(client)
+
+        await sleeper.elapse()
+        for _ in 0..<100 where client.isRunning {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(client.isRunning)
+        XCTAssertTrue(wire.signals.isEmpty)
+        client.handleResponse(requestId: "req-1", exitCode: 0, signal: nil, error: nil)
+        let result = try await task.value
+        XCTAssertEqual(result.exitCode, 0)
     }
 
     func testTaskCancellationSendsSigint() async {

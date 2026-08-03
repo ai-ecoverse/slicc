@@ -282,6 +282,7 @@ export class TerminalSessionHost {
     // a manager, we fall back to a fresh local controller.
     const abort = new AbortController();
     session.currentExec = abort;
+    session.shell.applySessionOverrides?.({ cwd: msg.cwd, env: msg.env });
     const proc = this.pm
       ? this.pm.spawn({
           kind: 'shell',

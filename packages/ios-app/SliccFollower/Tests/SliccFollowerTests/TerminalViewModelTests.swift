@@ -128,6 +128,27 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
     }
 
+    func testLeaderStallKeepsRunningCommandAlive() async {
+        let suspended = SuspendedRun()
+        let model = TerminalViewModel(
+            runCommand: { _, _, _ in try await suspended.run() },
+            cancelCommand: { suspended.cancel() }
+        )
+        model.setConnectionAvailable(true)
+        model.receiveInput(Data("long-running build\r".utf8))
+        for _ in 0..<100 where suspended.continuation == nil { await Task.yield() }
+
+        model.setConnectionAvailable(
+            WorkbenchHost.terminalConnectionAvailable(
+                connectionState: .connected, isLeaderStalled: true))
+        await Task.yield()
+
+        XCTAssertTrue(model.isRunning)
+        XCTAssertEqual(suspended.cancelCount, 0)
+        model.setConnectionAvailable(false)
+        await waitUntilIdle(model)
+    }
+
     func testDisconnectedInputDoesNotRunOrEcho() async {
         let recorder = Recorder()
         let model = model(recorder)

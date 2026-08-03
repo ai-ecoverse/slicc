@@ -7,11 +7,14 @@ import OSLog
 /// a String would corrupt a multibyte UTF-8 scalar split across chunk boundaries.
 @MainActor
 final class TerminalClient {
+    static let retainedOutputLimit = 64 * 1_024
+
     enum TerminalError: LocalizedError, Equatable {
         case alreadyRunning
         case cancelled
         case disconnected
         case malformedChunk
+        case timedOut
 
         var errorDescription: String? {
             switch self {
@@ -19,6 +22,7 @@ final class TerminalClient {
             case .cancelled: return "The terminal command was cancelled"
             case .disconnected: return "Disconnected from the leader"
             case .malformedChunk: return "The leader sent malformed terminal output"
+            case .timedOut: return "Timed out waiting for the terminal command"
             }
         }
     }
@@ -54,17 +58,28 @@ final class TerminalClient {
         let continuation: CheckedContinuation<RunResult, Error>
         let onChunk: (OutputChunk) -> Void
         var chunks: [OutputChunk] = []
+        var retainedBytes = 0
+        var deadlineTask: Task<Void, Never>?
     }
 
     private let send: (FollowerToLeaderMessage) -> Bool
+    private let deadline: TimeInterval?
+    private let sleep: @Sendable (UInt64) async throws -> Void
     private let makeRequestId: () -> String
     private let logger = Logger(subsystem: "ai.slicc.follower", category: "terminal")
     private var pending: Pending?
 
     init(
+        deadline: TimeInterval? = nil,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
+        },
         makeRequestId: @escaping () -> String = { UUID().uuidString },
         send: @escaping (FollowerToLeaderMessage) -> Bool
     ) {
+        precondition(deadline.map { $0 > 0 } ?? true, "deadline must be positive")
+        self.deadline = deadline
+        self.sleep = sleep
         self.makeRequestId = makeRequestId
         self.send = send
     }
@@ -102,7 +117,7 @@ final class TerminalClient {
             return
         }
         let chunk = OutputChunk(stream: outputStream, data: bytes)
-        active.chunks.append(chunk)
+        retain(chunk, in: &active)
         pending = active
         active.onChunk(chunk)
     }
@@ -158,7 +173,46 @@ final class TerminalClient {
                 fail(requestId, with: .disconnected)
                 return
             }
+            armDeadline(for: requestId)
             if Task.isCancelled { cancel(requestId: requestId) }
+        }
+    }
+
+    private func armDeadline(for requestId: String) {
+        guard let deadline, var active = pending, active.requestId == requestId else { return }
+        let nanoseconds = UInt64(deadline * 1_000_000_000)
+        active.deadlineTask = Task { @MainActor [weak self, sleep] in
+            try? await sleep(nanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.expire(requestId)
+        }
+        pending = active
+    }
+
+    private func expire(_ requestId: String) {
+        guard pending?.requestId == requestId else { return }
+        _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
+        fail(requestId, with: .timedOut)
+    }
+
+    private func retain(_ chunk: OutputChunk, in active: inout Pending) {
+        let data =
+            chunk.data.count > Self.retainedOutputLimit
+            ? Data(chunk.data.suffix(Self.retainedOutputLimit)) : chunk.data
+        active.chunks.append(OutputChunk(stream: chunk.stream, data: data))
+        active.retainedBytes += data.count
+        var excess = active.retainedBytes - Self.retainedOutputLimit
+        while excess > 0, let first = active.chunks.first {
+            if first.data.count <= excess {
+                excess -= first.data.count
+                active.retainedBytes -= first.data.count
+                active.chunks.removeFirst()
+            } else {
+                active.chunks[0] = OutputChunk(
+                    stream: first.stream, data: Data(first.data.dropFirst(excess)))
+                active.retainedBytes -= excess
+                excess = 0
+            }
         }
     }
 
@@ -184,6 +238,7 @@ final class TerminalClient {
     private func takePending(_ requestId: String) -> Pending? {
         guard let active = pending, active.requestId == requestId else { return nil }
         pending = nil
+        active.deadlineTask?.cancel()
         return active
     }
 }

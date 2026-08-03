@@ -88,6 +88,10 @@ export interface TerminalExecMsg {
   /** Unique id for the exec — echoed in the resulting `exit` event. */
   execId: string;
   command: string;
+  /** Optional cwd override applied to the persistent shell before this command. */
+  cwd?: string;
+  /** Optional env overrides merged into the persistent shell before this command. */
+  env?: Record<string, string>;
 }
 
 /**

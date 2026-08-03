@@ -31,7 +31,6 @@ import type {
   TerminalSessionId,
   TerminalStatusMsg,
 } from '../shell/terminal-protocol.js';
-import type { OffscreenClient } from '../ui/offscreen-client.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -46,7 +45,7 @@ export interface TerminalSessionClientOptions {
    * intentionally exposed so this class doesn't need to reach into
    * private internals.
    */
-  client: OffscreenClient;
+  client: TerminalSessionTransport;
   /** Session id. Caller-provided so panels can stamp meaningful values. */
   sid: TerminalSessionId;
   /**
@@ -63,8 +62,13 @@ export interface TerminalExecResult {
   exitCode: number;
 }
 
+export interface TerminalSessionTransport {
+  sendRaw(message: TerminalControlMsg): void;
+  onTerminalEvent(handler: (event: TerminalEventMsg) => void): () => void;
+}
+
 export class TerminalSessionClient {
-  private readonly client: OffscreenClient;
+  private readonly client: TerminalSessionTransport;
   private readonly sid: TerminalSessionId;
   private readonly onEvent: ((event: TerminalEventMsg) => void) | null;
   private nextExecId = 1;
@@ -169,12 +173,15 @@ export class TerminalSessionClient {
    * concurrent exec per session, but the client still tracks ids
    * for future streaming-pty support).
    */
-  exec(command: string): Promise<TerminalExecResult> {
+  exec(
+    command: string,
+    opts: { cwd?: string; env?: Record<string, string> } = {}
+  ): Promise<TerminalExecResult> {
     const execId = `e${this.nextExecId++}`;
     return new Promise((resolve) => {
       this.pending.set(execId, resolve);
       this.buffers.set(execId, { stdout: '', stderr: '' });
-      this.send({ type: 'terminal-exec', sid: this.sid, execId, command });
+      this.send({ type: 'terminal-exec', sid: this.sid, execId, command, ...opts });
     });
   }
 

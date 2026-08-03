@@ -11,6 +11,8 @@ interface TerminalEvent {
   state?: string;
   exitCode?: number;
   command?: string;
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 /**
@@ -69,11 +71,15 @@ class FakeOffscreen {
       this.lastExecId = msg.execId ?? '';
     } else if (msg.type === 'terminal-exec' && this.mode === 'stateful') {
       const state = this.states.get(msg.sid) ?? { cwd: '/', env: new Map<string, string>() };
+      if (msg.cwd !== undefined) state.cwd = msg.cwd;
+      for (const [name, value] of Object.entries(msg.env ?? {})) state.env.set(name, value);
       let stdout = '';
       if (msg.command === 'cd /tmp') state.cwd = '/tmp';
       else if (msg.command === 'pwd') stdout = `${state.cwd}\n`;
       else if (msg.command === 'export NAME=value') state.env.set('NAME', 'value');
-      else if (msg.command === 'echo $NAME') stdout = `${state.env.get('NAME') ?? ''}\n`;
+      else if (msg.command?.startsWith('echo $')) {
+        stdout = `${state.env.get(msg.command.slice('echo $'.length)) ?? ''}\n`;
+      }
       this.states.set(msg.sid, state);
       queueMicrotask(() => {
         if (stdout) {
@@ -134,10 +140,11 @@ describe('LeaderExecSessionPool', () => {
     const client = new FakeOffscreen('stateful');
     const pool = new LeaderExecSessionPool(client as unknown as OffscreenClient);
     const stdout: string[] = [];
-    const run = (command: string) =>
+    const run = (command: string, overrides: { cwd?: string; env?: Record<string, string> } = {}) =>
       pool.run({
         sessionId: 'ios-follower',
         command,
+        ...overrides,
         signal: new AbortController().signal,
         onChunk: (stream, data) => {
           if (stream === 'stdout') stdout.push(data);
@@ -148,8 +155,11 @@ describe('LeaderExecSessionPool', () => {
     await run('pwd');
     await run('export NAME=value');
     await run('echo $NAME');
+    await run('pwd', { cwd: '/workspace' });
+    await run('echo $COLUMNS', { env: { COLUMNS: '120', LINES: '40' } });
+    await run('echo $LINES');
 
-    expect(stdout).toEqual(['/tmp\n', 'value\n']);
+    expect(stdout).toEqual(['/tmp\n', 'value\n', '/workspace\n', '120\n', '40\n']);
     expect(client.sentTypes.filter((type) => type === 'terminal-open')).toHaveLength(1);
     pool.close('ios-follower');
     expect(client.sentTypes.filter((type) => type === 'terminal-close')).toHaveLength(1);

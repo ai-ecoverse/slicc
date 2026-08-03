@@ -33,14 +33,22 @@ struct WorkbenchHost: View {
             case .term:
                 TerminalView(
                     client: appState.terminalClient,
-                    connectionAvailable: appState.connectionState == .connected
-                        && !appState.isLeaderStalled,
+                    connectionAvailable: Self.terminalConnectionAvailable(
+                        connectionState: appState.connectionState,
+                        isLeaderStalled: appState.isLeaderStalled),
                     theme: appState.leaderTheme
                 )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.canvas)
+    }
+
+    static func terminalConnectionAvailable(
+        connectionState: ConnectionState,
+        isLeaderStalled _: Bool
+    ) -> Bool {
+        connectionState == .connected
     }
 
     @ViewBuilder

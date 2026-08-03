@@ -23,6 +23,7 @@ function tick(ms = 5): Promise<void> {
 }
 
 interface StubShell extends HeadlessShellLike {
+  applySessionOverrides: Mock<NonNullable<HeadlessShellLike['applySessionOverrides']>>;
   dispose: Mock<() => void>;
   executeCommand: Mock<HeadlessShellLike['executeCommand']>;
 }
@@ -54,6 +55,7 @@ function makeStubShell(opts?: {
     return { stdout, stderr, exitCode };
   });
   return {
+    applySessionOverrides: vi.fn(),
     dispose: vi.fn(),
     executeCommand,
     executeScriptFile: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
@@ -169,6 +171,24 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
       'echo hello',
       expect.any(AbortSignal),
       undefined
+    );
+    ctx.dispose();
+  });
+
+  it('applies per-exec cwd and env overrides before running a persistent shell command', async () => {
+    const ctx = setupChannel();
+    await ctx.client.open({ cwd: '/initial', env: { NAME: 'first' } });
+    await ctx.client.exec('pwd', {
+      cwd: '/workspace',
+      env: { NAME: 'second', COLUMNS: '120', LINES: '40' },
+    });
+
+    expect(ctx.shell.applySessionOverrides).toHaveBeenCalledWith({
+      cwd: '/workspace',
+      env: { NAME: 'second', COLUMNS: '120', LINES: '40' },
+    });
+    expect(ctx.shell.applySessionOverrides.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.shell.executeCommand.mock.invocationCallOrder[0]
     );
     ctx.dispose();
   });
