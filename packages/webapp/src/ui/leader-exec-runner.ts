@@ -4,11 +4,10 @@
  * arrive.
  *
  * The leader tray's `LeaderSyncManager.execInShell` option is wired to this in
- * `wc-tray.ts`. It opens a short-lived headless `TerminalSessionClient` against
- * the kernel-worker's `TerminalSessionHost` — the same streaming surface the
- * panel terminals use — so a CLI `exec` gets the leader's real shell environment
- * (VFS, secrets, mounts). `onEvent` relays each `terminal-output` block live, and
- * the resolved exit code closes the run.
+ * `wc-tray.ts`. It keeps one headless `TerminalSessionClient` per follower
+ * connection against the kernel-worker's `TerminalSessionHost`, preserving cwd
+ * and exported variables across submitted commands. Disconnect closes the
+ * matching pooled session.
  *
  * KNOWN LIMITATION: `TerminalSessionHost` today `await`s the whole
  * `executeCommand` and emits stdout/stderr only after the command finishes
@@ -24,11 +23,13 @@ import { TerminalSessionClient } from '../kernel/terminal-session-client.js';
 import type { TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { OffscreenClient } from './offscreen-client.js';
 
-let execSeq = 0;
+let sessionSeq = 0;
 
 /** Options for a single leader-side shell exec on behalf of a CLI follower. */
 export interface LeaderExecInShellOptions {
   command: string;
+  /** Stable identifier for one follower connection. */
+  sessionId: string;
   cwd?: string;
   env?: Record<string, string>;
   /** Aborting sends SIGINT to the running command. */
@@ -37,42 +38,68 @@ export interface LeaderExecInShellOptions {
   onChunk: (stream: 'stdout' | 'stderr', data: string) => void;
 }
 
-/**
- * Run `opts.command` in the leader's shell and resolve with the exit code.
- * Streams output through `opts.onChunk`. Never rejects — a failure to open the
- * session or run the command resolves with a non-zero exit and an `error`.
- */
-export async function runLeaderExecInShell(
-  client: OffscreenClient,
-  opts: LeaderExecInShellOptions
-): Promise<{ exitCode: number; error?: string }> {
-  const sid: TerminalSessionId = `ssh-exec-${++execSeq}-${Date.now()}`;
-  const session = new TerminalSessionClient({
-    client,
-    sid,
-    onEvent: (event) => {
-      if (event.type === 'terminal-output') opts.onChunk(event.stream, event.data);
-    },
-  });
-  const onAbort = (): void => session.signal('SIGINT');
-  try {
-    await session.open({ cwd: opts.cwd, env: opts.env });
-    // Register the abort listener BEFORE the aborted check so a race during
-    // open() can't be lost. If already aborted, return WITHOUT starting exec —
-    // signalling before `terminal-exec` would be dropped by the host (no active
-    // execution) and the command would then run uninterruptibly.
-    opts.signal.addEventListener('abort', onAbort, { once: true });
-    if (opts.signal.aborted) {
-      return { exitCode: 130 };
+interface LeaderExecSession {
+  session: TerminalSessionClient;
+  opened: Promise<void>;
+  onChunk?: LeaderExecInShellOptions['onChunk'];
+  running: boolean;
+}
+
+/** Owns the persistent virtual shells used by follower-originated exec requests. */
+export class LeaderExecSessionPool {
+  private readonly sessions = new Map<string, LeaderExecSession>();
+
+  constructor(private readonly client: OffscreenClient) {}
+
+  /** Run one command without closing the follower's shell afterward. */
+  async run(opts: LeaderExecInShellOptions): Promise<{ exitCode: number; error?: string }> {
+    const entry = this.getOrCreate(opts);
+    if (entry.running) {
+      return { exitCode: 1, error: 'another terminal command is already running' };
     }
-    const result = await session.exec(opts.command);
-    // stdout/stderr were already streamed via onEvent; only the exit matters.
-    return { exitCode: result.exitCode };
-  } catch (err) {
-    return { exitCode: 1, error: err instanceof Error ? err.message : String(err) };
-  } finally {
-    opts.signal.removeEventListener('abort', onAbort);
-    session.close();
-    session.dispose();
+    entry.running = true;
+    entry.onChunk = opts.onChunk;
+    const onAbort = (): void => entry.session.signal('SIGINT');
+    try {
+      await entry.opened;
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+      if (opts.signal.aborted) return { exitCode: 130 };
+      const result = await entry.session.exec(opts.command);
+      return { exitCode: result.exitCode };
+    } catch (err) {
+      this.close(opts.sessionId);
+      return { exitCode: 1, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      opts.signal.removeEventListener('abort', onAbort);
+      entry.onChunk = undefined;
+      entry.running = false;
+    }
+  }
+
+  /** Close and forget one follower's shell, including any in-flight command. */
+  close(sessionId: string): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    this.sessions.delete(sessionId);
+    entry.session.close();
+    entry.session.dispose();
+  }
+
+  private getOrCreate(opts: LeaderExecInShellOptions): LeaderExecSession {
+    const existing = this.sessions.get(opts.sessionId);
+    if (existing) return existing;
+    const sid: TerminalSessionId = `follower-exec-${++sessionSeq}-${Date.now()}`;
+    const entry = {} as LeaderExecSession;
+    entry.session = new TerminalSessionClient({
+      client: this.client,
+      sid,
+      onEvent: (event) => {
+        if (event.type === 'terminal-output') entry.onChunk?.(event.stream, event.data);
+      },
+    });
+    entry.opened = entry.session.open({ cwd: opts.cwd, env: opts.env });
+    entry.running = false;
+    this.sessions.set(opts.sessionId, entry);
+    return entry;
   }
 }

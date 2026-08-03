@@ -12,7 +12,6 @@ final class TerminalClient {
         case cancelled
         case disconnected
         case malformedChunk
-        case timedOut
 
         var errorDescription: String? {
             switch self {
@@ -20,7 +19,6 @@ final class TerminalClient {
             case .cancelled: return "The terminal command was cancelled"
             case .disconnected: return "Disconnected from the leader"
             case .malformedChunk: return "The leader sent malformed terminal output"
-            case .timedOut: return "Timed out waiting for the terminal command"
             }
         }
     }
@@ -51,29 +49,22 @@ final class TerminalClient {
         }
     }
 
-    static let defaultTimeout: TimeInterval = 30
-
     private struct Pending {
         let requestId: String
         let continuation: CheckedContinuation<RunResult, Error>
         let onChunk: (OutputChunk) -> Void
         var chunks: [OutputChunk] = []
-        var timeoutTask: Task<Void, Never>?
     }
 
     private let send: (FollowerToLeaderMessage) -> Bool
-    private let timeout: TimeInterval
     private let makeRequestId: () -> String
     private let logger = Logger(subsystem: "ai.slicc.follower", category: "terminal")
     private var pending: Pending?
 
     init(
-        timeout: TimeInterval = TerminalClient.defaultTimeout,
         makeRequestId: @escaping () -> String = { UUID().uuidString },
         send: @escaping (FollowerToLeaderMessage) -> Bool
     ) {
-        precondition(timeout > 0, "timeout must be positive")
-        self.timeout = timeout
         self.makeRequestId = makeRequestId
         self.send = send
     }
@@ -167,7 +158,6 @@ final class TerminalClient {
                 fail(requestId, with: .disconnected)
                 return
             }
-            armTimeout(for: requestId)
             if Task.isCancelled { cancel(requestId: requestId) }
         }
     }
@@ -178,23 +168,6 @@ final class TerminalClient {
         _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
         fail(requestId, with: .cancelled)
         return true
-    }
-
-    private func armTimeout(for requestId: String) {
-        guard var active = pending, active.requestId == requestId else { return }
-        let nanos = UInt64(timeout * 1_000_000_000)
-        active.timeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: nanos)
-            guard !Task.isCancelled else { return }
-            self?.expire(requestId)
-        }
-        pending = active
-    }
-
-    private func expire(_ requestId: String) {
-        guard pending?.requestId == requestId else { return }
-        _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
-        fail(requestId, with: .timedOut)
     }
 
     private func finish(_ requestId: String, with result: RunResult) {
@@ -211,7 +184,6 @@ final class TerminalClient {
     private func takePending(_ requestId: String) -> Pending? {
         guard let active = pending, active.requestId == requestId else { return nil }
         pending = nil
-        active.timeoutTask?.cancel()
         return active
     }
 }

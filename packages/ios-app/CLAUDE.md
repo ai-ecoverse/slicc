@@ -16,7 +16,7 @@ This file covers the iOS follower app in `packages/ios-app/`.
 | `SliccFollower/Models/SyncProtocol.swift` | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts` |
 | `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift` | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` frame + `TrayChunkReassembler`: below both unions, so no corpus fixture |
 | `SliccFollower/Sync/Keepalive.swift` | `DataChannelKeepalive` ping/pong actor (used by `AppState`) |
-| `SliccFollower/Sync/TerminalClient.swift` | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and timeouts |
+| `SliccFollower/Sync/TerminalClient.swift` | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and disconnect handling |
 | `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements` | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement |
 | `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup |
 | `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift` | Hosts WKWebViews as CDP targets the leader can drive remotely |
@@ -141,8 +141,10 @@ declared language has no voice.
 
 The Terminal tab uses libghostty's host-managed `InMemoryTerminalSession`,
 not an on-device process. Local editing sends complete commands through
-`TerminalClient`; Ctrl-C sends `SIGINT`. Output is buffered until completion,
-so interactive programs and incremental output are unsupported.
+`TerminalClient`; Ctrl-C sends `SIGINT`. The leader keeps one virtual shell per
+iOS follower connection, so cwd and exported variables survive across submitted
+lines. Commands have no fixed client deadline because leader output is buffered
+until completion; interactive programs and incremental output are unsupported.
 
 ## Agent Avatar
 

@@ -94,6 +94,8 @@ export interface StartPageLeaderTrayOptions {
   onRemoteTransportsCleaned?: LeaderSyncManagerOptions['onRemoteTransportsCleaned'];
   /** Run a CLI follower's `exec` in the leader's shell (streams output). */
   execInShell?: LeaderSyncManagerOptions['execInShell'];
+  /** Close a follower's persistent leader shell on disconnect. */
+  closeExecShell?: LeaderSyncManagerOptions['closeExecShell'];
 
   // --- Bridge hop to worker LickManager (replaces the pre-regression direct call) ---
   /**
@@ -248,6 +250,7 @@ function buildSyncManager(
     onFollowerCountChanged,
     onRemoteTransportsCleaned: options.onRemoteTransportsCleaned,
     execInShell: options.execInShell,
+    closeExecShell: options.closeExecShell,
     onCherryHostEvent: options.onCherryHostEvent,
     onPreviewLick: options.onPreviewLick,
     requestTranscriptExportApproval: options.requestTranscriptExportApproval,

@@ -154,22 +154,22 @@ export interface LeaderSyncManagerOptions {
    */
   sendControl: (msg: LeaderToWorkerControlMessage) => void;
   /**
-   * Run a shell command in the leader's own (virtual) shell on behalf of a CLI
-   * follower's `slicc … exec`. Streams output blocks through `onChunk` as they
-   * arrive and resolves with the process exit code. Optional — a leader float
-   * without a worker shell (or a test) leaves it unset, and any inbound
-   * `exec.request` is refused with an error `exec.response`. Wired page-side to
-   * a `TerminalSessionClient` by `wc-tray.ts`.
+   * Run a shell command in the leader's own virtual shell on behalf of a
+   * follower. `sessionId` is stable for that follower connection, allowing the
+   * page-side runner to preserve cwd and environment across requests.
    */
   execInShell?: (
     command: string,
     opts: {
+      sessionId: string;
       cwd?: string;
       env?: Record<string, string>;
       signal: AbortSignal;
       onChunk: (stream: 'stdout' | 'stderr', data: string) => void;
     }
   ) => Promise<{ exitCode: number; error?: string }>;
+  /** Close the persistent leader shell owned by a disconnected follower. */
+  closeExecShell?: (sessionId: string) => void;
   /**
    * Called when a follower requests a transcript export. The leader shows an
    * approval dialog and resolves true (allow) or false (deny). Derive follower

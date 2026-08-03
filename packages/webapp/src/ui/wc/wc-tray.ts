@@ -40,7 +40,7 @@ import {
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
-import { runLeaderExecInShell } from '../leader-exec-runner.js';
+import { LeaderExecSessionPool } from '../leader-exec-runner.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { type PageFollowerTrayHandle, startPageFollowerTray } from '../page-follower-tray.js';
 import {
@@ -304,6 +304,7 @@ export function createLeaderOptionsFactory(
     );
     writeConnectedFollowersToShim(followers);
   };
+  const execSessions = new LeaderExecSessionPool(client);
   return (workerBaseUrl) => ({
     workerBaseUrl,
     getMessages: () => deps.getController()?.getMessages() ?? [],
@@ -406,7 +407,8 @@ export function createLeaderOptionsFactory(
     // Run a CLI follower's `slicc … exec` in the leader's own shell, streaming
     // output back over the tray. Uses a headless terminal session against the
     // kernel worker (same surface as the panel terminals).
-    execInShell: (command, execOpts) => runLeaderExecInShell(client, { command, ...execOpts }),
+    execInShell: (command, execOpts) => execSessions.run({ command, ...execOpts }),
+    closeExecShell: (sessionId) => execSessions.close(sessionId),
     browserAPI: deps.browser,
     browserTransport: deps.realCdpTransport,
     // Lazy VFS proxy for preview.request and follower-originated fs.request

@@ -33,9 +33,9 @@ final class TerminalClientTests: XCTestCase {
         }
     }
 
-    private func makeClient(wire: Wire, timeout: TimeInterval = 5) -> TerminalClient {
+    private func makeClient(wire: Wire) -> TerminalClient {
         TerminalClient(
-            timeout: timeout, makeRequestId: { "req-1" },
+            makeRequestId: { "req-1" },
             send: { wire.send($0) })
     }
 
@@ -116,16 +116,19 @@ final class TerminalClientTests: XCTestCase {
         XCTAssertEqual(result.error, "exec is not supported on this leader")
     }
 
-    func testTimeoutSendsSigintAndFailsTheRun() async {
+    func testLongRunningCommandWaitsForLeaderResponseWithoutSignal() async throws {
         let wire = Wire()
-        let client = makeClient(wire: wire, timeout: 0.05)
-        let task = Task { try await client.run(command: "sleep forever") }
+        let client = makeClient(wire: wire)
+        let task = Task { try await client.run(command: "long-running build") }
         await waitForRun(client)
 
-        await assertThrows(.timedOut) { _ = try await task.value }
-        XCTAssertEqual(wire.signals.count, 1)
-        XCTAssertEqual(wire.signals.first?.requestId, "req-1")
-        XCTAssertEqual(wire.signals.first?.signal, "SIGINT")
+        try await Task.sleep(nanoseconds: 75_000_000)
+        XCTAssertTrue(client.isRunning)
+        XCTAssertTrue(wire.signals.isEmpty)
+
+        client.handleResponse(requestId: "req-1", exitCode: 0, signal: nil, error: nil)
+        let result = try await task.value
+        XCTAssertEqual(result.exitCode, 0)
         XCTAssertFalse(client.isRunning)
     }
 
@@ -144,12 +147,13 @@ final class TerminalClientTests: XCTestCase {
 
     func testDisconnectFailsInFlightRunImmediately() async {
         let wire = Wire()
-        let client = makeClient(wire: wire, timeout: 60)
+        let client = makeClient(wire: wire)
         let task = Task { try await client.run(command: "waiting") }
         await waitForRun(client)
 
         client.disconnect()
         await assertThrows(.disconnected) { _ = try await task.value }
+        XCTAssertTrue(wire.signals.isEmpty)
         XCTAssertFalse(client.isRunning)
     }
 
@@ -189,7 +193,7 @@ final class TerminalClientTests: XCTestCase {
     func testFailedSendFailsImmediately() async {
         let wire = Wire()
         wire.sendSucceeds = false
-        let client = makeClient(wire: wire, timeout: 60)
+        let client = makeClient(wire: wire)
 
         await assertThrows(.disconnected) {
             _ = try await client.run(command: "never sent")
