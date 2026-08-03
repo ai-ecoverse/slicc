@@ -289,5 +289,61 @@ describe('service-worker CDP outgoing unmask', () => {
     expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
     expect(chrome.debugger.detach).not.toHaveBeenCalled();
     expect(debuggerAttached).toBe(true);
+
+    await dispatchOffscreen({
+      type: 'cdp-command',
+      id: 4,
+      method: 'Target.detachFromTarget',
+      params: { sessionId: String(TAB_ID) },
+    });
+    expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
+    expect(debuggerAttached).toBe(false);
+  });
+
+  it('does not detach a bridge-owned debugger session when the legacy path releases it', async () => {
+    await import('../src/service-worker.js');
+    const port = makeBridgePort();
+    for (const listener of connectExternalListeners) listener(port);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'inverse-ownership-test',
+      kind: 'handshake.hello',
+    });
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'inverse-ownership-test',
+      kind: 'cdp.request',
+      id: 2,
+      method: 'Target.attachToTarget',
+      params: { targetId: String(TAB_ID) },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(debuggerAttached).toBe(true);
+    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
+
+    await attach();
+    await dispatchOffscreen({
+      type: 'cdp-command',
+      id: 3,
+      method: 'Target.detachFromTarget',
+      params: { sessionId: String(TAB_ID) },
+    });
+
+    expect(chrome.debugger.attach).toHaveBeenCalledTimes(1);
+    expect(chrome.debugger.detach).not.toHaveBeenCalled();
+    expect(debuggerAttached).toBe(true);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'inverse-ownership-test',
+      kind: 'cdp.request',
+      id: 4,
+      method: 'Target.detachFromTarget',
+      params: { sessionId: String(TAB_ID) },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chrome.debugger.detach).toHaveBeenCalledTimes(1);
+    expect(debuggerAttached).toBe(false);
   });
 });

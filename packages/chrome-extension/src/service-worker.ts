@@ -847,10 +847,40 @@ chrome.webRequest.onHeadersReceived.addListener(
 
 /** Maps synthetic sessionId → Chrome tab ID. */
 const sessionToTab = new Map<string, number>();
-/** Tracks which tab IDs we've attached the debugger to. */
-const attachedTabs = new Set<number>();
+type DebuggerAttachmentOwner = 'bridge' | 'legacy';
+/** Tracks which consumer performed each underlying debugger attachment. */
+const debuggerAttachmentOwners = new Map<number, DebuggerAttachmentOwner>();
 /** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
 const traySockets = new Map<number, WebSocket>();
+
+async function acquireDebuggerAttachment(
+  tabId: number,
+  owner: DebuggerAttachmentOwner
+): Promise<boolean> {
+  if (debuggerAttachmentOwners.has(tabId)) return false;
+  await chrome.debugger.attach({ tabId }, '1.3');
+  debuggerAttachmentOwners.set(tabId, owner);
+  return true;
+}
+
+async function releaseDebuggerAttachment(
+  tabId: number,
+  owner: DebuggerAttachmentOwner
+): Promise<void> {
+  if (debuggerAttachmentOwners.get(tabId) !== owner) return;
+  debuggerAttachmentOwners.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {
+    // Tab may already be closed
+  });
+}
+
+async function forceReleaseDebuggerAttachment(tabId: number): Promise<void> {
+  if (!debuggerAttachmentOwners.has(tabId)) return;
+  debuggerAttachmentOwners.delete(tabId);
+  await chrome.debugger.detach({ tabId }).catch(() => {
+    // Tab may already be closed
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Message relay
@@ -1176,7 +1206,7 @@ async function cdpGetTargets(): Promise<Record<string, unknown>> {
       type: 'page',
       title: tab.title ?? '',
       url: tab.url ?? '',
-      attached: attachedTabs.has(tab.id),
+      attached: debuggerAttachmentOwners.has(tab.id),
       active: activeTabIds.has(tab.id),
     }));
   return { targetInfos };
@@ -1191,10 +1221,7 @@ async function cdpAttachToTarget(
     throw new Error(`Invalid targetId: ${targetId}`);
   }
 
-  if (!attachedTabs.has(tabId)) {
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attachedTabs.add(tabId);
-  }
+  await acquireDebuggerAttachment(tabId, 'legacy');
 
   const sessionId = targetId;
   sessionToTab.set(sessionId, tabId);
@@ -1211,10 +1238,7 @@ async function cdpDetachFromTarget(
     sessionToTab.delete(sessionId);
     const stillReferenced = [...sessionToTab.values()].includes(tabId);
     if (!stillReferenced) {
-      attachedTabs.delete(tabId);
-      await chrome.debugger.detach({ tabId }).catch(() => {
-        // Tab may already be closed
-      });
+      await releaseDebuggerAttachment(tabId, 'legacy');
     }
   }
 
@@ -1239,12 +1263,7 @@ async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<s
   for (const [sid, tid] of sessionToTab) {
     if (tid === tabId) sessionToTab.delete(sid);
   }
-  if (attachedTabs.has(tabId)) {
-    attachedTabs.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {
-      // Tab may already be closed
-    });
-  }
+  await forceReleaseDebuggerAttachment(tabId);
 
   await chrome.tabs.remove(tabId);
   return { success: true };
@@ -1323,7 +1342,7 @@ async function cdpSendCommand(
 
 chrome.debugger.onEvent.addListener(
   (source: { tabId: number }, method: string, params?: Record<string, unknown>) => {
-    if (!attachedTabs.has(source.tabId)) return;
+    if (!debuggerAttachmentOwners.has(source.tabId)) return;
 
     // Find sessionId for this tabId
     let sessionId: string | undefined;
@@ -1391,7 +1410,7 @@ async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg>
 }
 
 chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string) => {
-  attachedTabs.delete(source.tabId);
+  debuggerAttachmentOwners.delete(source.tabId);
   for (const [sessionId, tabId] of sessionToTab) {
     if (tabId === source.tabId) {
       sessionToTab.delete(sessionId);
@@ -1439,19 +1458,8 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 // ---------------------------------------------------------------------------
 
 const bridgeSwDeps = buildDefaultBridgeSwDeps({
-  attachDebugger: async (tabId) => {
-    if (attachedTabs.has(tabId)) return false;
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attachedTabs.add(tabId);
-    return true;
-  },
-  detachDebugger: async (tabId) => {
-    if (!attachedTabs.has(tabId)) return;
-    attachedTabs.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {
-      /* tab may already be closed */
-    });
-  },
+  attachDebugger: (tabId) => acquireDebuggerAttachment(tabId, 'bridge'),
+  detachDebugger: (tabId) => releaseDebuggerAttachment(tabId, 'bridge'),
   sendDebuggerCommand: async (tabId, method, params) => {
     const result = await chrome.debugger.sendCommand({ tabId }, method, params);
     return result ?? {};
