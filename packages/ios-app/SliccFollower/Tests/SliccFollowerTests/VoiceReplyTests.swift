@@ -64,10 +64,20 @@ final class VoiceReplyTests: XCTestCase {
     }
 
     func testFirstFlagIsOneShotUntilReset() {
-        XCTAssertTrue(DictationPriming.consumeFirst())
-        XCTAssertFalse(DictationPriming.consumeFirst())
+        XCTAssertTrue(DictationPriming.isFirstPending)
+        DictationPriming.commitFirst()
+        XCTAssertFalse(DictationPriming.isFirstPending)
         DictationPriming.reset()
-        XCTAssertTrue(DictationPriming.consumeFirst(), "a fresh session re-arms the note")
+        XCTAssertTrue(DictationPriming.isFirstPending, "a fresh session re-arms the note")
+    }
+
+    func testPeekingTheFirstFlagDoesNotSpendIt() {
+        // A dictated send builds its marked text before it knows the send
+        // succeeded; only a delivered message may spend the priming note.
+        XCTAssertTrue(DictationPriming.isFirstPending)
+        XCTAssertTrue(DictationPriming.isFirstPending)
+        DictationPriming.commitFirst()
+        XCTAssertFalse(DictationPriming.isFirstPending)
     }
 
     // MARK: - Reply language marker
@@ -144,32 +154,89 @@ final class VoiceReplyTests: XCTestCase {
 
     // MARK: - The loop
 
-    func testOnlyDictatedTurnsAreSpoken() {
-        let speaker = FakeSpeaker()
-        let reply = VoiceReply(speaker: speaker)
+    /// Mark, bind and consume in the order the transport delivers them.
+    private func answer(
+        _ reply: VoiceReply, scoop: String, messageId: String
+    ) -> Bool {
+        reply.bindReply(scoopJid: scoop, messageId: messageId)
+        return reply.consumeSubmission(scoopJid: scoop, messageId: messageId)
+    }
 
-        XCTAssertFalse(reply.consumeSubmission(), "a typed turn is never voice-initiated")
-        reply.markSubmission()
-        XCTAssertTrue(reply.consumeSubmission())
-        XCTAssertFalse(reply.consumeSubmission(), "one mark answers exactly one turn")
+    func testOnlyDictatedTurnsAreSpoken() {
+        let reply = VoiceReply(speaker: FakeSpeaker())
+
+        XCTAssertFalse(
+            answer(reply, scoop: "cone", messageId: "m1"),
+            "a typed turn is never voice-initiated")
+        reply.markSubmission(scoopJid: "cone")
+        XCTAssertTrue(answer(reply, scoop: "cone", messageId: "m2"))
+        XCTAssertFalse(
+            answer(reply, scoop: "cone", messageId: "m3"),
+            "one mark answers exactly one turn")
     }
 
     func testQueuedDictatedTurnsStayBalanced() {
         let reply = VoiceReply(speaker: FakeSpeaker())
-        reply.markSubmission()
-        reply.markSubmission()
-        XCTAssertTrue(reply.consumeSubmission())
-        XCTAssertTrue(reply.consumeSubmission())
-        XCTAssertFalse(reply.consumeSubmission())
+        reply.markSubmission(scoopJid: "cone")
+        reply.markSubmission(scoopJid: "cone")
+        XCTAssertTrue(answer(reply, scoop: "cone", messageId: "m1"))
+        XCTAssertTrue(answer(reply, scoop: "cone", messageId: "m2"))
+        XCTAssertFalse(answer(reply, scoop: "cone", messageId: "m3"))
+    }
+
+    func testAReplyAlreadyStreamingCannotClaimALaterMark() {
+        // The typed turn opened its message BEFORE the user dictated, so its
+        // completion must not consume the dictated mark and read the wrong
+        // answer aloud while the dictated one stays silent.
+        let reply = VoiceReply(speaker: FakeSpeaker())
+        reply.bindReply(scoopJid: "cone", messageId: "typed")
+        reply.markSubmission(scoopJid: "cone")
+
+        XCTAssertFalse(
+            reply.consumeSubmission(scoopJid: "cone", messageId: "typed"),
+            "the in-flight typed reply predates the mark")
+        XCTAssertTrue(
+            answer(reply, scoop: "cone", messageId: "dictated"),
+            "the next message the scoop opens is the dictated answer")
+    }
+
+    func testAnotherScoopFinishingFirstDoesNotStealTheMark() {
+        let reply = VoiceReply(speaker: FakeSpeaker())
+        reply.markSubmission(scoopJid: "cone")
+
+        XCTAssertFalse(
+            answer(reply, scoop: "scoop-a", messageId: "m1"),
+            "a concurrent scoop's reply answers nothing the user dictated")
+        XCTAssertTrue(answer(reply, scoop: "cone", messageId: "m2"))
+    }
+
+    func testRollbackRetiresAMarkWhoseSendNeverLeft() {
+        let reply = VoiceReply(speaker: FakeSpeaker())
+        reply.markSubmission(scoopJid: "cone")
+        reply.rollbackSubmission(scoopJid: "cone")
+        XCTAssertFalse(
+            answer(reply, scoop: "cone", messageId: "m1"),
+            "an undelivered message will never be answered")
+    }
+
+    func testRollbackLeavesAnAlreadyBoundMarkAlone() {
+        // A failed send must retire ITS mark, not one already matched to a
+        // reply that is on its way.
+        let reply = VoiceReply(speaker: FakeSpeaker())
+        reply.markSubmission(scoopJid: "cone")
+        reply.bindReply(scoopJid: "cone", messageId: "inflight")
+        reply.rollbackSubmission(scoopJid: "cone")
+        XCTAssertTrue(reply.consumeSubmission(scoopJid: "cone", messageId: "inflight"))
     }
 
     func testResetDropsPendingMarksAndSilencesTheEngine() {
         let speaker = FakeSpeaker()
         let reply = VoiceReply(speaker: speaker)
-        reply.markSubmission()
+        reply.markSubmission(scoopJid: "cone")
         reply.reset()
         XCTAssertFalse(
-            reply.consumeSubmission(), "a stale mark must not speak the next session's reply")
+            answer(reply, scoop: "cone", messageId: "m1"),
+            "a stale mark must not speak the next session's reply")
         XCTAssertEqual(speaker.stops, 1)
     }
 

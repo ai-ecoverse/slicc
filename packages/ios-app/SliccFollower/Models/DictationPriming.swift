@@ -42,7 +42,7 @@ enum DictationPriming {
         options: .caseInsensitive)
 
     /// Append the dictation markers. Pure — callers drive the "is first?"
-    /// decision via ``consumeFirst()`` so this stays unit-testable.
+    /// decision via ``isFirstPending`` so this stays unit-testable.
     static func applyMarkers(_ text: String, isFirst: Bool) -> String {
         let base = text.hasSuffix(" ") ? text : "\(text) "
         return isFirst ? "\(base)\(micGlyph)\(primingNote)" : "\(base)\(micGlyph)"
@@ -78,12 +78,16 @@ enum DictationPriming {
 
     private static var firstPending = true
 
-    /// One-shot "is this the first dictated turn?" check. True ONCE per
-    /// session (until the next reset); every later dictated turn gets false.
-    static func consumeFirst() -> Bool {
-        guard firstPending else { return false }
+    /// Whether the next dictated turn still owes the priming note. Read-only
+    /// so a caller can build the marked text BEFORE it knows the send will
+    /// succeed; `commitFirst()` is what actually spends the flag.
+    static var isFirstPending: Bool { firstPending }
+
+    /// Spend the one-time flag. Called only once a dictated message has
+    /// actually reached the leader — a failed send must leave the note armed
+    /// for the next attempt, or the session silently loses its priming.
+    static func commitFirst() {
         firstPending = false
-        return true
     }
 
     /// Re-arm the flag so a fresh session sends the priming note again.

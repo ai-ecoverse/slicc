@@ -20,10 +20,26 @@ final class VoiceReply {
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "voice-reply")
     private let speaker: SpeechSpeaking
 
-    /// Tracked as a COUNT, not a flag: queued dictated turns each mark a
-    /// submission before any of them complete, and every completion must
-    /// balance its own mark so a later typed turn is not read aloud.
-    private var pendingCount = 0
+    /// One dictated submission awaiting its answer.
+    ///
+    /// The web tracks a bare count because a browser turn is strictly
+    /// sequential. The phone is not: scoops stream concurrently, and a
+    /// dictated turn can be queued while a TYPED turn is still streaming.
+    /// A count would then let the wrong reply consume the mark — the typed
+    /// answer gets read aloud and the dictated one stays silent. Each mark
+    /// therefore names the scoop it was sent to, and binds to a specific
+    /// assistant message as soon as that scoop opens its next one.
+    private struct PendingReply {
+        let scoopJid: String
+        /// nil until the answering `message_start` arrives.
+        var messageId: String?
+    }
+
+    private var pending: [PendingReply] = []
+
+    /// A runaway leader that never completes a turn must not grow this
+    /// without bound; the oldest mark is dropped rather than retained.
+    private static let maxPending = 8
 
     /// The engine is injectable so the coordination is testable without a
     /// live audio session; it defaults lazily because `AVSpeechSpeaker` is
@@ -32,23 +48,54 @@ final class VoiceReply {
         self.speaker = speaker ?? AVSpeechSpeaker()
     }
 
-    /// A dictated submission just went out — the next reply should be spoken.
-    func markSubmission() {
-        pendingCount += 1
-        logger.notice("dictated turn marked (\(self.pendingCount, privacy: .public) pending)")
+    /// A dictated submission just went out to `scoopJid` — its answer should
+    /// be spoken.
+    func markSubmission(scoopJid: String) {
+        pending.append(PendingReply(scoopJid: scoopJid, messageId: nil))
+        if pending.count > Self.maxPending { pending.removeFirst() }
+        logger.notice("dictated turn marked (\(self.pending.count, privacy: .public) pending)")
     }
 
-    /// Whether the completing turn was voice-initiated, decrementing when so.
-    func consumeSubmission() -> Bool {
-        guard pendingCount > 0 else { return false }
-        pendingCount -= 1
+    /// Bind the oldest unbound mark for `scoopJid` to the assistant message
+    /// that just opened. The first message a scoop starts after a dictated
+    /// submission IS its answer, which is what separates it from a typed
+    /// turn that was already streaming when the dictation went out.
+    func bindReply(scoopJid: String, messageId: String) {
+        guard
+            let idx = pending.firstIndex(where: {
+                $0.scoopJid == scoopJid && $0.messageId == nil
+            })
+        else { return }
+        pending[idx].messageId = messageId
+    }
+
+    /// Whether the completing message answers a dictated turn, retiring the
+    /// mark when it does. Only a BOUND mark matches, so a reply that was
+    /// already in flight when the user dictated can never claim it.
+    func consumeSubmission(scoopJid: String, messageId: String) -> Bool {
+        guard
+            let idx = pending.firstIndex(where: {
+                $0.scoopJid == scoopJid && $0.messageId == messageId
+            })
+        else { return false }
+        pending.remove(at: idx)
         return true
+    }
+
+    /// Drop the most recent mark — the send it was armed for never left.
+    func rollbackSubmission(scoopJid: String) {
+        guard
+            let idx = pending.lastIndex(where: {
+                $0.scoopJid == scoopJid && $0.messageId == nil
+            })
+        else { return }
+        pending.remove(at: idx)
     }
 
     /// Drop every pending mark — a disconnect or a new session must not let
     /// a stale mark speak the first reply of the next conversation.
     func reset() {
-        pendingCount = 0
+        pending.removeAll()
         speaker.stop()
     }
 

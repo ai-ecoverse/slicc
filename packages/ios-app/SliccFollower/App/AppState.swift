@@ -391,12 +391,17 @@ class AppState: ObservableObject {
         // with no caption); only an entirely empty send is dropped.
         guard !trimmed.isEmpty || attached != nil else { return }
 
+        // The dictation scoop is resolved up front: the mark has to name the
+        // scoop the message goes to, and the same value is used to undo it.
+        let dictationScoop = selectedScoopJid ?? ""
         if dictated {
             // Markers are stored AND sent, as the webapp does, so replay and
             // compaction keep the context; bubbles strip them at render time.
+            // The first-turn flag is only PEEKED here — a send that never
+            // reaches the leader must not burn the one-time priming note.
             trimmed = DictationPriming.applyMarkers(
-                trimmed, isFirst: DictationPriming.consumeFirst())
-            VoiceReply.shared.markSubmission()
+                trimmed, isFirst: DictationPriming.isFirstPending)
+            VoiceReply.shared.markSubmission(scoopJid: dictationScoop)
         }
 
         let messageId = UUID().uuidString
@@ -425,6 +430,13 @@ class AppState: ObservableObject {
         #endif
         if !sendToLeader(msg), !hermeticallyConnected {
             markUndelivered(messageId)
+            // Nothing left, so nothing will answer: retire the mark and keep
+            // the priming note armed. Otherwise a reconnect (which runs
+            // `handleDisconnect`, not the user-only `disconnect()`) would
+            // carry the stale mark forward and speak an unrelated reply.
+            if dictated { VoiceReply.shared.rollbackSubmission(scoopJid: dictationScoop) }
+        } else if dictated {
+            DictationPriming.commitFirst()
         }
     }
 
@@ -965,8 +977,12 @@ class AppState: ObservableObject {
             // the browser surface renders them as preview cards (#1865).
             // Our own advertised targets and the leader's own SLICC page are
             // excluded — see `BrowserTargets`.
+            // `activeJoinUrl`, not `joinUrl`: an iCloud session dials a URL
+            // that never lands in the published field, and matching on the
+            // empty/stale one leaves the leader's own SLICC page in the cards.
             remoteTargets = BrowserTargets.visible(
-                targets, ownRuntimeId: controllerId, joinUrl: joinUrl)
+                targets, ownRuntimeId: controllerId,
+                joinUrl: activeJoinUrl.isEmpty ? joinUrl : activeJoinUrl)
 
         case .cdpResponse(
             let requestId, let result, let error, let chunkData, let chunkIndex,
@@ -1038,10 +1054,15 @@ class AppState: ObservableObject {
     /// double hook safe: whichever event lands first is the only one that
     /// speaks. The consume happens even for a background scoop so marks and
     /// turns stay balanced; only a visible reply is read aloud.
-    private func speakIfDictated(_ content: String, isVisible: Bool) {
-        guard VoiceReply.shared.consumeSubmission(), isVisible else { return }
+    private func speakIfDictated(
+        _ message: ChatMessage, scoopJid: String, isVisible: Bool
+    ) {
+        guard
+            VoiceReply.shared.consumeSubmission(scoopJid: scoopJid, messageId: message.id),
+            isVisible
+        else { return }
         logger.notice("speaking the reply to a dictated turn")
-        VoiceReply.shared.speakReply(markdown: content)
+        VoiceReply.shared.speakReply(markdown: message.content)
     }
 
     // MARK: - CDP advertise timer
@@ -1111,6 +1132,11 @@ class AppState: ObservableObject {
         if newSessionInFlight && chatMessages.isEmpty {
             newSessionInFlight = false
             newSessionTimeout?.cancel()
+            // A new session in place keeps the connection but starts a new
+            // conversation, so it re-arms the one-time priming note and drops
+            // marks whose replies belong to the transcript just cleared.
+            VoiceReply.shared.reset()
+            DictationPriming.reset()
         }
         messagesByScoop[scoopJid] = chatMessages
         // A snapshot is the leader re-describing the world. Any approval
@@ -1134,6 +1160,9 @@ class AppState: ObservableObject {
         switch event {
         case .messageStart(let messageId):
             logger.info("Agent event: message_start id=\(messageId) scoop=\(scoopJid)")
+            // The first message this scoop opens after a dictated submission
+            // is that submission's answer — bind before any reply completes.
+            VoiceReply.shared.bindReply(scoopJid: scoopJid, messageId: messageId)
             let newMsg = ChatMessage(
                 id: messageId,
                 role: .assistant,
@@ -1172,7 +1201,7 @@ class AppState: ObservableObject {
                     cancelPendingMessagesFlush()
                     messages = buffer
                 }
-                speakIfDictated(buffer[idx].content, isVisible: isVisible)
+                speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
@@ -1215,7 +1244,7 @@ class AppState: ObservableObject {
                     isStreaming = false
                     streamingMessageId = nil
                 }
-                speakIfDictated(buffer[idx].content, isVisible: isVisible)
+                speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
             }
 
         case .error(let error):
