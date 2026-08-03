@@ -192,8 +192,12 @@ describe('WC tray connected follower mapping', () => {
     const state = {
       leader: handle,
       follower: null,
+      persistenceGuard: {
+        activate: vi.fn(),
+        deactivate: vi.fn(),
+      },
       lockRelease: null,
-    } as Parameters<typeof createLeaderOptionsFactory>[1];
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[1];
     const options = createLeaderOptionsFactory(
       deps,
       state,
