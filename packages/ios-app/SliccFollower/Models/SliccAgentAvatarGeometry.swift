@@ -93,3 +93,13 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         }
     }
 }
+
+extension ScoopSummary {
+    func avatarGeometry(sideLength: Double = 26) -> SliccAgentAvatarGeometry {
+        let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
+        // Mirrors DEFAULT_COLOR in slicc-agent-avatar.ts; ScoopSummary carries no color.
+        let color = isCone ? "#D2691E" : "#FFB6C1"
+        return .init(
+            type: type, color: color, eyes: .open, fill: fill ?? 0, sideLength: sideLength)
+    }
+}
