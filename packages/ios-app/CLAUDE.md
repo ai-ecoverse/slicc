@@ -136,15 +136,13 @@ silent, as does a reply whose declared language has no voice.
 
 ## Agent Avatar
 
-`SliccAgentAvatarView` follows the web source of truth at
-`packages/webcomponents/src/switcher/slicc-agent-avatar.ts`. Its geometry-parity
-contract is `Models/SliccAgentAvatarGeometry.swift`; update both when the visible
-crop changes.
-
-`Models/SliccAgentAvatarTilt.swift` seams CoreMotion behind an injectable source;
-reduce-motion, unavailable hardware, and non-open eyes stop updates and center
-the pupils, while manual offsets bypass motion for fixtures.
-`-uiTestAvatarFixture` opens `AvatarIsolationView` for deterministic screenshots.
+`SliccAgentAvatarView` follows `webcomponents/src/switcher/slicc-agent-avatar.ts`;
+`Models/SliccAgentAvatarGeometry.swift` is its parity contract. `ScoopSwitcher`
+maps the selected `ScoopSummary` to web defaults and renders a 20pt nav-bar avatar;
+menu rows stay textual because custom shapes do not render there. The decorative
+avatar is accessibility-hidden beside its label. `Models/SliccAgentAvatarTilt.swift`
+seams CoreMotion; disappearance, reduce-motion, unavailable hardware, and closed
+eyes stop updates and center pupils. `-uiTestAvatarFixture` renders screenshots.
 
 ## Build
 

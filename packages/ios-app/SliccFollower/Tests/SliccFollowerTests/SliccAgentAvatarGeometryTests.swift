@@ -58,6 +58,29 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.sideLength, 0)
     }
 
+    func testScoopSummaryMapsTypeFillEyesAndWebDefaultColors() {
+        let cone = scoopSummary(isCone: true, fill: 42).avatarGeometry(sideLength: 22)
+        let scoop = scoopSummary(isCone: false, fill: 82).avatarGeometry(sideLength: 24)
+
+        XCTAssertEqual(cone.type, .cone)
+        XCTAssertEqual(cone.color, "#D2691E")
+        XCTAssertEqual(cone.eyes, .open)
+        XCTAssertEqual(cone.fill, 42)
+        XCTAssertEqual(cone.sideLength, 22)
+        XCTAssertEqual(scoop.type, .scoop)
+        XCTAssertEqual(scoop.color, "#FFB6C1")
+        XCTAssertEqual(scoop.eyes, .open)
+        XCTAssertEqual(scoop.fill, 82)
+        XCTAssertEqual(scoop.sideLength, 24)
+    }
+
+    func testScoopSummaryNilFillMapsToZero() {
+        let geometry = scoopSummary(isCone: false, fill: nil).avatarGeometry()
+
+        XCTAssertEqual(geometry.fill, 0)
+        XCTAssertFalse(geometry.fill.isNaN)
+    }
+
     func testZeroTiltCentersPupils() {
         let offset = tiltMapping.pupilOffset(
             for: .zero, geometry: tiltGeometry, reduceMotion: false,
@@ -176,5 +199,13 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
 
     private var tiltMapping: SliccAgentAvatarTiltMapping {
         .init()
+    }
+
+    private func scoopSummary(isCone: Bool, fill: Double?) -> ScoopSummary {
+        .init(
+            jid: isCone ? "cone" : "reviewer", name: isCone ? "sliccy" : "reviewer",
+            folder: isCone ? "/workspace" : "/scoops/reviewer", isCone: isCone,
+            assistantLabel: isCone ? "Sliccy" : "Reviewer", trigger: nil, state: nil,
+            fill: fill)
     }
 }
