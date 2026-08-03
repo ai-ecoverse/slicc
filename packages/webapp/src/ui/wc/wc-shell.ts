@@ -28,6 +28,7 @@ import {
 import '../styles/fonts.css';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
+import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
 
 // Side-effect import registers every element composed below.
@@ -71,6 +72,20 @@ export interface WcShellOptions {
 /** Element handles the boot modes wire their behavior onto. */
 export interface WcShellRefs {
   frame: HTMLElement;
+  /**
+   * The clamped container every layout-owned element renders inside — a CSS
+   * stacking context (`isolation:isolate`), so no panel descendant can paint
+   * above `trustedLayer` no matter what `z-index` it sets. See
+   * `trusted-layer.ts` (H2).
+   */
+  panelHost: HTMLElement;
+  /**
+   * The spoof-proof top layer: fixed chrome (the avatar strip) and every
+   * approval/permission overlay. A later sibling of `panelHost`, so it always
+   * composites above it. Mount into it via `mountTrusted`, never
+   * `document.body.append`.
+   */
+  trustedLayer: HTMLElement;
   /** The WebGL background field (`<slicc-shader>`, one of three programs). */
   shader: HTMLElement;
   /** The chat column (`<slicc-chatpane>`) — `position:relative` so it can host
@@ -168,6 +183,9 @@ const CSS = [
   'padding:8px 12px;border:1px solid var(--line);border-radius:14px;',
   'background:var(--canvas);color:var(--txt-2);font-size:12px;line-height:1.4;}',
   '.wcui-backpressure[hidden]{display:none;}',
+  // H2 — the panel host / trusted layer split. See `trusted-layer.ts` for why
+  // this is a stacking context rather than a z-index.
+  TRUSTED_LAYER_CSS,
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -450,11 +468,23 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
-  frame.append(shader, freezer, appCol);
+
+  // H2 — everything layout-owned goes inside `panelHost` (a stacking context,
+  // so no descendant can paint above it); `trustedLayer` is a LATER sibling and
+  // therefore always composites on top. Approval/consent chrome mounts there
+  // via `mountTrusted`. The layer is empty at this point: the fixed avatar
+  // strip moves into it when the nav is panelized (Phase 3) — establishing the
+  // split now means approval surfaces have somewhere trustworthy to land, and
+  // panels are already clamped before any dynamic panel can register.
+  const { panelHost, trustedLayer } = buildTrustedLayers(document);
+  panelHost.append(shader, freezer, appCol);
+  frame.append(panelHost, trustedLayer);
   root.replaceChildren(frame);
 
   return {
     frame,
+    panelHost,
+    trustedLayer,
     shader,
     chatPane: pane,
     thread,

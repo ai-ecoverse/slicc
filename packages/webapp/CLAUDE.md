@@ -156,36 +156,28 @@ See `docs/mounts.md`.
 
 - Paths: `shell/sudo/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate),
   `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).
-- `SudoManager` (`sudo/sudo-manager.ts`) — per-float policy store. Constructed in
+- `SudoManager` (`sudo/sudo-manager.ts`) — per-float policy store, constructed in
   `Orchestrator.init()` once the shared VFS + `FsWatcher` exist; seeds and live-reloads
-  `/etc/sudoers` and `/etc/sudoers.d/*` so edits and "Always" grants take effect without
-  restart.
+  `/etc/sudoers` + `/etc/sudoers.d/*`, so edits and "Always" grants apply without restart.
 - Wiring: `scoop-context.ts` wraps the agent's FS once with `createSudoFs`; that single
   handle backs both file tools and shell. Panel terminal is intentionally NOT gated.
 - Brokers are float-specific (`createSudoBroker`): extension-delegate relays via the hosted
-  leader tab page; standalone/Electron POSTs `/api/sudo-approve`.
+  leader tab; standalone/Electron POSTs `/api/sudo-approve`.
 - Self-protection: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval,
   hardcoded in `matchPath` regardless of policy.
+- "Agent can't self-approve" does NOT cover page-realm code (which can reassign
+  `globalThis.confirm`): `sudo/panel-responder.ts` captures the natives at module init;
+  approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`.
 
 Deep reference: `docs/approvals.md`.
 
 ### Tray
 
-| Module                 | Responsibility       |
-| ---------------------- | -------------------- |
-| `tray-leader-sync.ts`  | Façade + lifecycle   |
-| `context.ts`           | Dependencies         |
-| `follower-registry.ts` | Registry + keepalive |
-| `follower-dispatch.ts` | Exhaustive dispatch  |
-| `broadcast.ts`         | Snapshot + broadcast |
-| `cdp-router.ts`        | CDP routing          |
-| `fs-router.ts`         | Filesystem routing   |
-| `tab-router.ts`        | Tab-open routing     |
-| `remote-exec.ts`       | Remote execution     |
-| `transcript-export.ts` | Transcript export    |
-| `preview-bridge.ts`    | Preview bridge       |
-| `cherry-router.ts`     | Cherry events        |
-| `teleport-pool.ts`     | Target selection     |
+Modules in `scoops/` — `tray-leader-sync.ts` (façade + lifecycle), `context.ts` (shared
+deps), `follower-registry.ts` (registry + keepalive), `follower-dispatch.ts` (exhaustive
+dispatch), `broadcast.ts` (snapshot + broadcast), `cdp-router.ts`, `fs-router.ts`,
+`tab-router.ts`, `remote-exec.ts`, `transcript-export.ts` (streaming), `preview-bridge.ts`
+(connections), `cherry-router.ts` (events), `teleport-pool.ts` (target selection).
 
 Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; the dedicated
 `wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it.
