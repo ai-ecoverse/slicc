@@ -44,7 +44,7 @@
   --ui: "adobe-clean", "Inter", system-ui, sans-serif;
   --mono: "Source Code Pro", "JetBrains Mono", ui-monospace, monospace;
   --shadow-pane: rgba(10, 10, 10, 0.06) 0 8px 26px -10px;
-  --barh: 44px;
+  --barh: 36px;
   --ctl-h: 30px;
 }
 

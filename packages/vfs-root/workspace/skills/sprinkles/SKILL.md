@@ -51,6 +51,27 @@ If you genuinely need multi-column UI, do all of the following:
 
 For dashboards with many widgets, prefer a vertical stack of `.sprinkle-card` blocks over a grid. The card stack is responsive by default and looks good in both rail and full-screen.
 
+## Arranging multiple sprinkles with `layout`
+
+The `layout` shell command controls how the workbench arranges panels, independent of what's inside each sprinkle:
+
+```bash
+layout set <focus|split|dashboard|dev|stage|demo|editor>   # switch preset (default: focus, today's single-panel UI)
+layout edit                                    # alias for `layout set editor` — opens the GUI drag-drop dock editor
+layout slot <slot> <surface-id>                # explicitly place a panel/sprinkle in a named grid slot
+layout chat <left|right|hidden|NN%>            # position/size the chat pane
+layout list                                    # list presets
+layout reset                                   # back to focus
+```
+
+`split` shows chat + one panel 50/50; `dashboard` is a 2×2 grid of panels; `dev` stacks two panels; `stage` puts chat on the side with one big panel. Opening sprinkles auto-fills the active layout's slots in order — you don't need to call `layout slot` unless you want to override placement. On a narrow viewport (extension side panel, ≤560px) multi-slot layouts collapse back to showing one panel at a time, so still design each sprinkle single-column-safe per the table above. A skill's frontmatter MAY declare `layout: <preset>` as sugar for `layout set <preset>`, but auto-execution on skill load isn't wired yet — issue the `layout` command directly when you want a specific arrangement.
+
+The `demo` preset adds a full-width top status-bar region (chat 30% left / sprinkle 70% right, dock full-height right) — place a sprinkle there with `layout set demo` + `layout slot topbar sprinkle:<name>`.
+
+`layout set editor` (or `layout edit`) opens the GUI drag-drop dock editor for arranging sprinkles into 5 fixed zones (top/left/middle/right/bottom) by hand — useful when you want the human to lay out several open sprinkles themselves rather than relying on auto-fill. In this mode chat itself is just another panel in the tree: it starts in the `left` zone, can be dragged to any zone and resized alongside sprinkles, but is non-closable. Tool panels (files/terminal/memory/monitor) open too — clicking a tool's dock icon shows it on the right, one at a time, and clicking it again closes it so the layout reclaims the space. The arrangement — including chat's placement — persists per profile across reloads, and leaving editor mode restores the normal chat pane.
+
+In `demo` (and any future shell-grid preset), the main region docks panels IDE-style instead of the usual show-one takeover: opening Files/terminal/memory/monitor or another sprinkle adds it as its own resizable region beside what's already open, so opening a tool panel won't hide your sprinkle. Closing a docked panel undocks it and the rest reflow; the seams (including the chat↔main split) are user-draggable. The other presets (`focus`/`split`/`dashboard`/`dev`/`stage`) are unaffected.
+
 ## Creating a sprinkle
 
 1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle.

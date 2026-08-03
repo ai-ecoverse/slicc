@@ -227,6 +227,59 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('serializes options.layout as JSON in the handshake.welcome envelope', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; layout?: string }[] = [];
+    const layout = {
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: null,
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+      locked: true,
+    };
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      layout,
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.testReceive({
+      cherry: 2,
+      channelId: 'ch-layout',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.layout).toBe(JSON.stringify(layout));
+    handle.destroy();
+  });
+
+  it('omits layout from the welcome envelope when options.layout is undefined', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; layout?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.testReceive({
+      cherry: 2,
+      channelId: 'ch-no-layout',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.layout).toBeUndefined();
+    handle.destroy();
+  });
+
   it('includes effortLevel in the welcome envelope when the option is set', async () => {
     const container = document.createElement('div');
     const posted: { kind?: string; effortLevel?: string }[] = [];

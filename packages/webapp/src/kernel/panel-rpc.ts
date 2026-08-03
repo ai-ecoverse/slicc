@@ -39,6 +39,11 @@
  */
 
 import type { OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
+import type {
+  DockTreeSpecLike,
+  DockZoneName,
+  SurfaceSizeSpecLike,
+} from '../core/dock-tree-spec.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 import type { SudoDecision, SudoRequest } from '../sudo/types.js';
@@ -549,6 +554,22 @@ export type PanelRpcRequest =
   | {
       op: 'theme-apply';
       payload: { themeJson?: string; action: 'apply' | 'reset' };
+    }
+  | {
+      // Apply a layout change (preset switch, chat zone move, or reset)
+      // from the worker-side `layout` shell command to the page-side
+      // dock-tree. The payload shape structurally mirrors `LayoutApplyMsg`
+      // in `shell/supplemental-commands/layout-command.ts` (the pure
+      // `parseLayoutArgs` seam that builds it).
+      op: 'layout-apply';
+      payload:
+        | { kind: 'set'; tree: DockTreeSpecLike }
+        | { kind: 'chat'; zone: DockZoneName }
+        | { kind: 'open'; surfaceId: string; zone: DockZoneName }
+        | { kind: 'close'; surfaceId: string }
+        | { kind: 'move'; surfaceId: string; zone: DockZoneName }
+        | { kind: 'size'; surfaceId: string; size: SurfaceSizeSpecLike }
+        | { kind: 'reset' };
     };
 
 export interface PanelRpcResults {
@@ -672,6 +693,7 @@ export interface PanelRpcResults {
   'secrets-bridge': { response: unknown };
   'mount-sign-and-forward': { response: SignAndForwardReply };
   'theme-apply': { applied: string | null };
+  'layout-apply': { applied: true };
 }
 
 /**

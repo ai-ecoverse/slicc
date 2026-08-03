@@ -58,6 +58,7 @@ mountSlicc({
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
+  layout, // DockTreeSpec-shaped object — optional pushed layout, typically with locked: true (serialized in handshake welcome)
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
   uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (follower renders UI but advertises no CDP target)
@@ -107,6 +108,18 @@ disableShader?, components? }`) that the SDK serializes as JSON in the
   This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
   out via a themed `url(...)`) without requiring the host page itself to be
   trusted.
+- `layout` accepts a `DockTreeSpec`-shaped value (structurally typed as
+  `unknown` — no cross-package import of `@slicc/webcomponents`'
+  `slicc-dock-tree.ts`) that the SDK serializes as JSON in the handshake
+  welcome. The follower loads it via `dockTree.setTree(...)` on boot, in place
+  of its own persisted/default layout — static, like `theme`; there is no
+  runtime re-layout. Set `locked: true` (tree-wide, or on individual
+  leaves/splits) so the follower's own UI can't drag/resize/close what was
+  pushed — see `docs/layouts.md`'s Locking section for the full model. Applied
+  directly by `wc-follower.ts`, never through `wireDockTreePersistence` (which
+  the follower never wires at all), so a locked layout is never persisted or
+  drifted client-side. The `examples/host.html` harness includes a custom-JSON
+  textarea for manual testing.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

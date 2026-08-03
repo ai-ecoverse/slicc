@@ -36,6 +36,7 @@ import { createImgcatCommand } from './imgcat-command.js';
 import { createIpkCommand } from './ipk-command.js';
 import { createIpxCommand } from './ipx-command.js';
 import { createKillCommand } from './kill-command.js';
+import { createLayoutCommand } from './layout-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
 import { createMcpCommand } from './mcp-command.js';
@@ -226,6 +227,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createLayoutCommand(),
     createUsbCommand(),
     createHidCommand(),
     createSerialCommand(),

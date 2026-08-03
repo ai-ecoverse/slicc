@@ -27,13 +27,11 @@ import '../primitives/slicc-floatbar.js';
 import '../shell/slicc-chatpane.js';
 import '../shell/slicc-shell.js';
 import '../switcher/slicc-agent-tabs.js';
+import '../workbench/slicc-dock-tree.js';
 import '../workbench/slicc-file-tree.js';
 import '../workbench/slicc-surface.js';
-import '../workbench/slicc-tab-bar.js';
 import '../workbench/slicc-terminal.js';
-import '../workbench/slicc-workbench-body.js';
-import '../workbench/slicc-workbench-header.js';
-import '../workbench/slicc-workbench-pane.js';
+import type { SliccDockTree } from '../workbench/slicc-dock-tree.js';
 
 // Eye-state matrix demonstrating the nav rule: ONLY the cone's eyes track the
 // cursor. The scoops below render `open` (idle — static open eyes, not tracking),
@@ -284,20 +282,14 @@ function chatpane(narrow: boolean): HTMLElement {
   return pane;
 }
 
-/** The right workbench: tab bar + a file-tree / terminal surface. */
-function workbench(open: boolean): HTMLElement {
-  const wb = el('slicc-workbench-pane', open ? { open: '' } : {});
-  const header = el('slicc-workbench-header');
-  const tabs = el('slicc-tab-bar') as HTMLElement & { tabs?: unknown };
-  (tabs as { tabs?: unknown }).tabs = [
-    { id: 'files', label: 'files', kind: 'tool' },
-    { id: 'term', label: 'terminal', kind: 'tool' },
-    { id: 'hero', label: 'Hero studio', kind: 'sprinkle', closable: true },
-  ];
-  (tabs as { active?: string }).active = 'term';
-  header.append(tabs);
+/**
+ * The dock-tree — the sole layout host: chat (composed by the caller into
+ * `zones.left`), files, terminal, and a "Hero studio" sprinkle, each an
+ * independent leaf.
+ */
+function workbenchTree(open: boolean): SliccDockTree {
+  const dockTree = el('slicc-dock-tree') as SliccDockTree;
 
-  const body = el('slicc-workbench-body', { active: 'term' });
   const fileSurface = el('slicc-surface', { 'surface-id': 'files', layout: 'flex' });
   const tree = el('slicc-file-tree') as HTMLElement & { items?: unknown };
   (tree as { items?: unknown }).items = [
@@ -310,7 +302,7 @@ function workbench(open: boolean): HTMLElement {
   (tree as { selected?: string }).selected = 'hero.tsx';
   fileSurface.append(tree);
 
-  const termSurface = el('slicc-surface', { 'surface-id': 'term', layout: 'flex', active: '' });
+  const termSurface = el('slicc-surface', { 'surface-id': 'term', layout: 'flex' });
   const term = el('slicc-terminal') as HTMLElement & { writeln?: (s: string) => void };
   // Pre-populate after connect (xterm needs to be in the DOM first).
   queueMicrotask(() => {
@@ -321,9 +313,13 @@ function workbench(open: boolean): HTMLElement {
   });
   termSurface.append(term);
 
-  body.append(fileSurface, termSurface);
-  wb.append(header, body);
-  return wb;
+  dockTree.append(fileSurface, termSurface);
+  if (open) {
+    queueMicrotask(() => {
+      dockTree.placeSurface('term', 'right');
+    });
+  }
+  return dockTree;
 }
 
 /** An initial preview state to enter on render (scoop chip or frozen session). */
@@ -337,6 +333,37 @@ interface AppOpts {
   freezer: boolean;
   /** Optional preview state to enter immediately (scoop-preview / freezer-preview). */
   preview?: AppPreview;
+}
+
+/**
+ * Build the `<slicc-shell>`: the dock-tree (chat pinned as a leaf, plus the
+ * showcase's fake sprinkle surfaces) beside the dock rail. Returns the shell
+ * plus the chat pane reference (`app()` swaps its thread/composer for the
+ * preview controller).
+ */
+function buildShell(workbenchOpen: boolean): { shell: HTMLElement; pane: HTMLElement } {
+  const shell = el('slicc-shell');
+  const pane = chatpane(workbenchOpen);
+  pane.style.background = 'transparent';
+  const dockTree = workbenchTree(workbenchOpen);
+  // Chat is a pinned dock-tree leaf, exactly like the live shell.
+  const chatSurface = el('slicc-surface', { 'surface-id': 'chat', layout: 'flex' });
+  chatSurface.append(pane);
+  dockTree.append(chatSurface);
+  dockTree.setPinned(['chat']);
+  dockTree.placeSurface('chat', 'left');
+  // Dock rail: sprinkles at the top, the Browser/Files/Terminal/Memory system
+  // tools pinned at the BOTTOM (system-tools) — the prototype/legacy placement.
+  const dock = el('slicc-dock', {
+    'system-tools': '',
+    active: workbenchOpen ? 'term' : '',
+  }) as HTMLElement & { items?: unknown };
+  (dock as { items?: unknown }).items = [
+    { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
+    { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--cyan)' },
+  ];
+  shell.append(dockTree, dock);
+  return { shell, pane };
 }
 
 /**
@@ -387,20 +414,7 @@ function app(opts: AppOpts): HTMLElement {
     '@media (max-width:560px){.sc-appcol{padding-left:44px;}}';
   frame.append(responsive);
 
-  const shell = el('slicc-shell', opts.workbench ? { open: '' } : {});
-  const pane = chatpane(opts.workbench);
-  pane.style.background = 'transparent';
-  // Dock rail: sprinkles at the top, the Browser/Files/Terminal/Memory system
-  // tools pinned at the BOTTOM (system-tools) — the prototype/legacy placement.
-  const dock = el('slicc-dock', {
-    'system-tools': '',
-    active: opts.workbench ? 'term' : '',
-  }) as HTMLElement & { items?: unknown };
-  (dock as { items?: unknown }).items = [
-    { id: 'hero', icon: 'sparkles', label: 'Hero studio', kind: 'sprinkle', hue: 'var(--violet)' },
-    { id: 'palette', icon: 'palette', label: 'palette', kind: 'sprinkle', hue: 'var(--cyan)' },
-  ];
-  shell.append(pane, workbench(opts.workbench), dock);
+  const { shell, pane } = buildShell(opts.workbench);
 
   appCol.append(topnav(), shell);
   frame.append(appCol);

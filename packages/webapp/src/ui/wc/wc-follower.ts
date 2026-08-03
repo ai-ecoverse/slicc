@@ -306,6 +306,18 @@ export async function mountWcUiFollower(
   if (isCherry && prelude.cherryTransport?.theme) {
     applyCherryTheme(prelude.cherryTransport.theme);
   }
+  // A host-pushed layout replaces `mountWcShell`'s chat-only default
+  // wholesale. Applied directly, like theme — never through
+  // `wireDockTreePersistence` (never wired for followers at all), so a
+  // locked Cherry layout is never persisted or drifted client-side.
+  if (isCherry && prelude.cherryTransport?.layout) {
+    try {
+      const tree = JSON.parse(prelude.cherryTransport.layout);
+      (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(tree);
+    } catch (err) {
+      log.warn('follower: host-pushed layout was not valid JSON — keeping the default', err);
+    }
+  }
   // No kernel worker in follower mode → the Files/Terminal/Memory panels are
   // inert. Swap them for an explanatory placeholder instead of an empty panel.
   // For cherry followers, respect the host's feature toggles; for regular followers,

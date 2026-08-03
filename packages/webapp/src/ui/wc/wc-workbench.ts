@@ -113,18 +113,29 @@ export interface WcWorkbenchDeps {
   log: { error(message: string, ...data: unknown[]): void };
 }
 
+/** Per-panel lifecycle handle returned by {@link createWorkbenchActivator}. */
+export interface WorkbenchActivator {
+  /** Open (or re-open) a panel — starts its poller / mounts its content. */
+  activate(surfaceId: string): void;
+  /** Panel left the tree (closed/removed) — stops its poller, if any. */
+  deactivate(surfaceId: string): void;
+}
+
 /**
- * Lazy workbench activation: the file tree and memory rows populate on
- * (re-)activation of their surfaces; the terminal mounts once on first
- * `term` activation. The file tree also auto-refreshes every 3 s while
- * its surface is active. Returns the activation handler so callers wire it to
- * dock/tab selection.
+ * Independent workbench panel lifecycle: since every tool panel is now its
+ * own permanently-mounted, independently open/closeable dock-tree leaf (no
+ * more show-one swapping), each panel's poller runs only while THAT panel is
+ * open — activating one panel never stops another's. The file tree
+ * auto-refreshes every 3 s and the monitor every 5 s while open; the terminal
+ * mounts once on first `term` activation and is never torn down (matches the
+ * old show-one behavior — the worker-shell session persists regardless of
+ * panel visibility). Memory has no poller: it refreshes once per activation.
  */
-export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: string) => void {
+export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
   let terminalMounted = false;
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
-  let monitorTimer: ReturnType<typeof setInterval> | null = null;
-  let refreshPending = false;
+  let filesRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let filesRefreshPending = false;
   let fileActionsWired = false;
 
   const refreshFileTree = (): void => {
@@ -147,66 +158,74 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): (surfaceId: str
       .catch((err) => deps.log.error('WC file tree refresh failed', err));
   };
 
-  const stopRefresh = (): void => {
-    refreshPending = false;
-    if (refreshTimer != null) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-    }
-    if (monitorTimer != null) {
-      clearInterval(monitorTimer);
-      monitorTimer = null;
+  const stopFilesRefresh = (): void => {
+    filesRefreshPending = false;
+    if (filesRefreshTimer != null) {
+      clearInterval(filesRefreshTimer);
+      filesRefreshTimer = null;
     }
   };
 
-  return (surfaceId: string): void => {
-    if (surfaceId === 'files') {
-      stopRefresh();
-      refreshPending = true;
-      deps.onKernelReady(() => {
-        if (!refreshPending) return;
-        refreshPending = false;
-        refreshFileTree();
-        refreshTimer = setInterval(refreshFileTree, 3000);
-      });
-      return;
+  const stopMonitorRefresh = (): void => {
+    if (monitorRefreshTimer != null) {
+      clearInterval(monitorRefreshTimer);
+      monitorRefreshTimer = null;
     }
-    stopRefresh();
-    if (surfaceId === 'memory') {
-      void deps
-        .openFs()
-        .then(async (fs) => {
-          const rows = await buildMemoryRows(fs);
-          if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
-          else deps.memoryHost.replaceChildren(...rows);
-        })
-        .catch((err) => deps.log.error('WC memory refresh failed', err));
-      return;
-    }
-    if (surfaceId === 'monitor') {
-      if (monitorTimer != null) clearInterval(monitorTimer);
-      const refreshMonitor = (): void => {
-        void (async () => {
-          try {
-            const sections = await fetchMonitorData(deps.getMonitorDeps());
-            deps.monitor.sections = sections;
-          } catch (err) {
-            deps.log.error('WC monitor refresh failed', err);
-          }
-        })();
-      };
-      // Listen for refresh button clicks
-      deps.monitor.addEventListener('slicc-monitor-refresh', refreshMonitor);
-      refreshMonitor();
-      monitorTimer = setInterval(refreshMonitor, 5000);
-      return;
-    }
-    if (surfaceId === 'term' && !terminalMounted) {
-      terminalMounted = true;
-      deps.mountTerminal(deps.termSurface).catch((err) => {
-        terminalMounted = false;
-        deps.log.error('WC terminal mount failed', err);
-      });
-    }
+  };
+
+  const refreshMonitor = (): void => {
+    void (async () => {
+      try {
+        const sections = await fetchMonitorData(deps.getMonitorDeps());
+        deps.monitor.sections = sections;
+      } catch (err) {
+        deps.log.error('WC monitor refresh failed', err);
+      }
+    })();
+  };
+  deps.monitor.addEventListener('slicc-monitor-refresh', refreshMonitor);
+
+  return {
+    activate(surfaceId: string): void {
+      if (surfaceId === 'files') {
+        stopFilesRefresh();
+        filesRefreshPending = true;
+        deps.onKernelReady(() => {
+          if (!filesRefreshPending) return;
+          filesRefreshPending = false;
+          refreshFileTree();
+          filesRefreshTimer = setInterval(refreshFileTree, 3000);
+        });
+        return;
+      }
+      if (surfaceId === 'memory') {
+        void deps
+          .openFs()
+          .then(async (fs) => {
+            const rows = await buildMemoryRows(fs);
+            if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
+            else deps.memoryHost.replaceChildren(...rows);
+          })
+          .catch((err) => deps.log.error('WC memory refresh failed', err));
+        return;
+      }
+      if (surfaceId === 'monitor') {
+        stopMonitorRefresh();
+        refreshMonitor();
+        monitorRefreshTimer = setInterval(refreshMonitor, 5000);
+        return;
+      }
+      if (surfaceId === 'term' && !terminalMounted) {
+        terminalMounted = true;
+        deps.mountTerminal(deps.termSurface).catch((err) => {
+          terminalMounted = false;
+          deps.log.error('WC terminal mount failed', err);
+        });
+      }
+    },
+    deactivate(surfaceId: string): void {
+      if (surfaceId === 'files') stopFilesRefresh();
+      else if (surfaceId === 'monitor') stopMonitorRefresh();
+    },
   };
 }

@@ -390,27 +390,28 @@ describe('URL state sync (live boot)', () => {
     clearUrlParams();
   });
 
-  it('re-fires the surface activator for a pre-attach URL workspace restore', () => {
+  it('re-fires the surface activator for every tool panel already placed in the restored dock-tree', () => {
     clearUrlParams();
     const root = document.createElement('div');
     document.body.appendChild(root);
     const boot = prepareWcShell(root, 'test · wc');
 
-    // The shell's connect-time `ws` restore opened the workbench before any
-    // activator existed (it is only assigned during attach).
-    boot.refs.shell.setAttribute('open', '');
-    boot.refs.workbenchBody.setAttribute('active', 'files');
+    // A restored/persisted dock-tree may already contain tool-panel leaves
+    // before any activator exists (it is only assigned during attach).
+    (
+      boot.refs.dockTree as unknown as { placeSurface(id: string, zone: string): void }
+    ).placeSurface('files', 'right');
     const activate = vi.fn();
-    boot.setActivateSurface(activate);
+    boot.setActivateSurface({ activate, deactivate: vi.fn() });
     // The re-fire is gated behind kernel ready (VFS RPCs need the worker).
     expect(activate).not.toHaveBeenCalled();
     boot.wiring.notifyReady?.();
     expect(activate).toHaveBeenCalledWith('files');
 
-    // Without a restored surface the assignment stays passive.
-    boot.refs.shell.removeAttribute('open');
+    // Without any tool panel placed, the assignment stays passive.
+    (boot.refs.dockTree as unknown as { removeSurface(id: string): void }).removeSurface('files');
     const idle = vi.fn();
-    boot.setActivateSurface(idle);
+    boot.setActivateSurface({ activate: idle, deactivate: vi.fn() });
     boot.wiring.notifyReady?.();
     expect(idle).not.toHaveBeenCalled();
   });

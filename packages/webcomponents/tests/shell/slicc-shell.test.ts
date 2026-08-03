@@ -1,18 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SliccShell } from '../../src/shell/slicc-shell.js';
 // Composed children (by tag) — import so they are registered when tests run.
-import '../../src/shell/slicc-chatpane.js';
 import '../../src/dock/slicc-dock.js';
-import '../../src/workbench/slicc-workbench-pane.js';
+import '../../src/workbench/slicc-dock-tree.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
-function mountShell(open = false): SliccShell {
+function mountShell(): SliccShell {
   const shell = document.createElement('slicc-shell');
-  if (open) shell.setAttribute('open', '');
-  shell.innerHTML =
-    '<slicc-chatpane></slicc-chatpane>' +
-    '<slicc-workbench-pane></slicc-workbench-pane>' +
-    '<slicc-dock></slicc-dock>';
+  shell.innerHTML = '<slicc-dock-tree></slicc-dock-tree>' + '<slicc-dock></slicc-dock>';
   document.body.appendChild(shell);
   return shell as SliccShell;
 }
@@ -29,23 +24,6 @@ describe('slicc-shell', () => {
     expect(mountShell().shadowRoot).toBeNull();
   });
 
-  it('overlays the workbench full-bleed (not a side-by-side split) at narrow / sidebar widths', () => {
-    mountShell(true);
-    // The scoped stylesheet carries an @media (max-width: 560px) block whose
-    // workbench rule switches the pane to an absolute overlay — a viewport this
-    // thin (an extension side panel) cannot host a chat | workbench split.
-    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
-    const media = Array.from(sheet?.cssRules ?? []).find(
-      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
-    );
-    expect(media).toBeDefined();
-    const wb = Array.from((media as CSSMediaRule).cssRules).find(
-      (r): r is CSSStyleRule =>
-        r instanceof CSSStyleRule && r.selectorText.includes('slicc-workbench-pane')
-    );
-    expect(wb?.style.position).toBe('absolute');
-  });
-
   it('pins the dock to a full 48px basis so the rail is flush to the edge (no bare strip)', () => {
     mountShell();
     // Regression: the shell rule outranks the dock's own `flex: 0 0 48px`, so an
@@ -53,276 +31,25 @@ describe('slicc-shell', () => {
     // bare-shader strip down the right edge.
     const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
     const dockRule = Array.from(sheet?.cssRules ?? []).find(
-      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('slicc-dock')
+      (r): r is CSSStyleRule => r instanceof CSSStyleRule && r.selectorText.includes('slicc-dock,')
     );
     expect(dockRule?.style.flexBasis).toBe('48px');
   });
 
-  it('exposes its three regions by getter', () => {
+  it('exposes its two regions by getter', () => {
     const shell = mountShell();
-    expect(shell.chatpane?.tagName.toLowerCase()).toBe('slicc-chatpane');
-    expect(shell.workbench?.tagName.toLowerCase()).toBe('slicc-workbench-pane');
+    expect(shell.dockTree?.tagName.toLowerCase()).toBe('slicc-dock-tree');
     expect(shell.dock?.tagName.toLowerCase()).toBe('slicc-dock');
   });
 
-  it('reflects open between attribute and property and forwards to children', () => {
-    const shell = mountShell();
-    expect(shell.open).toBe(false);
-    shell.open = true;
-    expect(shell.hasAttribute('open')).toBe(true);
-    expect(shell.chatpane?.hasAttribute('narrow')).toBe(true);
-    expect(shell.workbench?.hasAttribute('open')).toBe(true);
-    shell.open = false;
-    expect(shell.chatpane?.hasAttribute('narrow')).toBe(false);
-    expect(shell.workbench?.hasAttribute('open')).toBe(false);
-  });
-
-  it('select() opens the workbench and emits slicc-shell-select', () => {
-    const shell = mountShell();
-    let detail: { id: string } | null = null;
-    shell.addEventListener('slicc-shell-select', (e) => {
-      detail = (e as CustomEvent).detail;
-    });
-    shell.select('files');
-    expect(shell.open).toBe(true);
-    expect(shell.chatpane?.hasAttribute('narrow')).toBe(true);
-    expect(detail).toEqual({ id: 'files' });
-  });
-
-  it('collapse() closes the workbench and emits slicc-shell-collapse', () => {
-    const shell = mountShell(true);
-    let collapsed = false;
-    shell.addEventListener('slicc-shell-collapse', () => {
-      collapsed = true;
-    });
-    shell.collapse();
-    expect(shell.open).toBe(false);
-    expect(shell.workbench?.hasAttribute('open')).toBe(false);
-    expect(collapsed).toBe(true);
-  });
-
-  it('reacts to a bubbling dock-select event by selecting that surface', () => {
-    const shell = mountShell();
-    const selected: string[] = [];
-    shell.addEventListener('slicc-shell-select', (e) =>
-      selected.push((e as CustomEvent).detail.id)
-    );
-    shell.dock?.dispatchEvent(
-      new CustomEvent('dock-select', { detail: { id: 'terminal' }, bubbles: true, composed: true })
-    );
-    expect(shell.open).toBe(true);
-    expect(selected).toEqual(['terminal']);
-  });
-
-  it('animates the split with the prototype width transition', () => {
-    const shell = mountShell();
-    const cs = getComputedStyle(shell.chatpane as Element);
-    expect(cs.transitionProperty).toContain('width');
-    expect(cs.transitionDuration).toContain('0.38s');
-  });
-
-  it('cleans up its dock listeners on disconnect', () => {
-    const shell = mountShell();
-    shell.remove();
-    let fired = false;
-    shell.addEventListener('slicc-shell-select', () => {
-      fired = true;
-    });
-    shell.dock?.dispatchEvent(
-      new CustomEvent('dock-select', { detail: { id: 'x' }, bubbles: true })
-    );
-    expect(fired).toBe(false);
-  });
-
-  // ── Resize divider ──────────────────────────────────────────────────
-
-  it('inserts a resize divider between the chatpane and workbench on connect', () => {
-    const shell = mountShell();
-    const divider = shell.querySelector(':scope > .slicc-shell__divider');
-    expect(divider).not.toBeNull();
-    expect(divider?.getAttribute('role')).toBe('separator');
-    // Divider sits between chatpane and workbench in DOM order.
-    expect(divider?.previousElementSibling?.tagName.toLowerCase()).toBe('slicc-chatpane');
-    expect(divider?.nextElementSibling?.tagName.toLowerCase()).toBe('slicc-workbench-pane');
-  });
-
-  it('uses a CSS custom property for the chat width when open', () => {
-    mountShell(true);
+  it('gives the dock-tree the remaining flex space', () => {
+    mountShell();
     const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
-    const openRule = Array.from(sheet?.cssRules ?? []).find(
+    const treeRule = Array.from(sheet?.cssRules ?? []).find(
       (r): r is CSSStyleRule =>
-        r instanceof CSSStyleRule &&
-        r.selectorText.includes('[open]') &&
-        r.selectorText.includes('slicc-chatpane')
+        r instanceof CSSStyleRule && r.selectorText.includes('slicc-dock-tree')
     );
-    // The open width must reference the --slicc-chat-w custom property.
-    expect(openRule?.style.width).toContain('--slicc-chat-w');
-  });
-
-  it('removes the resize divider on disconnect', () => {
-    const shell = mountShell();
-    const divider = shell.querySelector(':scope > .slicc-shell__divider');
-    expect(divider).not.toBeNull();
-    shell.remove();
-    expect(shell.querySelector(':scope > .slicc-shell__divider')).toBeNull();
-  });
-
-  it('hides the resize divider on narrow viewports via CSS', () => {
-    mountShell(true);
-    const sheet = (document.getElementById('slicc-shell-style') as HTMLStyleElement).sheet;
-    const media = Array.from(sheet?.cssRules ?? []).find(
-      (r): r is CSSMediaRule => r instanceof CSSMediaRule && r.conditionText.includes('560px')
-    );
-    expect(media).toBeDefined();
-    const dividerRule = Array.from((media as CSSMediaRule).cssRules).find(
-      (r): r is CSSStyleRule =>
-        r instanceof CSSStyleRule && r.selectorText.includes('slicc-shell__divider')
-    );
-    expect(dividerRule).toBeDefined();
-    expect(dividerRule?.style.display).toBe('none');
-  });
-
-  it('sets --slicc-chat-w on pointer drag and persists to localStorage', () => {
-    const shell = mountShell(true);
-    const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
-    expect(divider).not.toBeNull();
-
-    // Stub getBoundingClientRect so the fraction math is deterministic.
-    vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
-      left: 0,
-      top: 0,
-      width: 1000,
-      height: 600,
-      right: 1000,
-      bottom: 600,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-
-    // Simulate pointerdown → pointermove → pointerup
-    divider.dispatchEvent(
-      new PointerEvent('pointerdown', {
-        clientX: 340,
-        clientY: 300,
-        pointerId: 1,
-        button: 0,
-        bubbles: true,
-      })
-    );
-    expect(shell.hasAttribute('dragging')).toBe(true);
-
-    divider.dispatchEvent(
-      new PointerEvent('pointermove', {
-        clientX: 500,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-      })
-    );
-    expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('50.0%');
-
-    divider.dispatchEvent(
-      new PointerEvent('pointerup', {
-        clientX: 500,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-      })
-    );
-    expect(shell.hasAttribute('dragging')).toBe(false);
-    expect(localStorage.getItem('slicc-shell-chat-w')).toBe('50.0%');
-
-    // Clean up
-    localStorage.removeItem('slicc-shell-chat-w');
-  });
-
-  it('clamps the drag fraction between 20% and 80%', () => {
-    const shell = mountShell(true);
-    const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
-    vi.spyOn(shell, 'getBoundingClientRect').mockReturnValue({
-      left: 0,
-      top: 0,
-      width: 1000,
-      height: 600,
-      right: 1000,
-      bottom: 600,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
-
-    divider.dispatchEvent(
-      new PointerEvent('pointerdown', {
-        clientX: 500,
-        clientY: 300,
-        pointerId: 1,
-        button: 0,
-        bubbles: true,
-      })
-    );
-
-    // Drag far left — should clamp to 20%
-    divider.dispatchEvent(
-      new PointerEvent('pointermove', {
-        clientX: 50,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-      })
-    );
-    expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('20.0%');
-
-    // Drag far right — should clamp to 80%
-    divider.dispatchEvent(
-      new PointerEvent('pointermove', {
-        clientX: 950,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-      })
-    );
-    expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('80.0%');
-
-    divider.dispatchEvent(
-      new PointerEvent('pointerup', {
-        clientX: 950,
-        clientY: 300,
-        pointerId: 1,
-        bubbles: true,
-      })
-    );
-    localStorage.removeItem('slicc-shell-chat-w');
-  });
-
-  it('double-click resets --slicc-chat-w and clears localStorage', () => {
-    const shell = mountShell(true);
-    const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
-
-    // Set a custom width first
-    shell.style.setProperty('--slicc-chat-w', '60%');
-    localStorage.setItem('slicc-shell-chat-w', '60%');
-
-    divider.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-
-    expect(shell.style.getPropertyValue('--slicc-chat-w')).toBe('');
-    expect(localStorage.getItem('slicc-shell-chat-w')).toBeNull();
-  });
-
-  it('ignores non-primary button on pointerdown', () => {
-    const shell = mountShell(true);
-    const divider = shell.querySelector(':scope > .slicc-shell__divider') as HTMLElement;
-
-    // Right-click (button 2) should not start a drag
-    divider.dispatchEvent(
-      new PointerEvent('pointerdown', {
-        clientX: 400,
-        clientY: 300,
-        pointerId: 1,
-        button: 2,
-        bubbles: true,
-      })
-    );
-    expect(shell.hasAttribute('dragging')).toBe(false);
+    // Chromium's CSSOM normalizes the unitless 0 flex-basis to "0px".
+    expect(treeRule?.style.flex).toBe('1 1 0px');
   });
 });

@@ -239,6 +239,7 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - `ui/wc/` map: `wc-live.ts`, `wc-shell.ts`, `wc-chat-controller.ts`, `wc-message-view.ts`,
   `wc-tray.ts`, `wc-sprinkles.ts`, `wc-nav.ts`, `wc-workbench.ts`, `wc-freezer.ts`,
   `wc-memory.ts`, `wc-extension.ts`.
+- **Layouts**: `layout` command + dock-tree — `docs/layouts.md`.
 - **URL state**: `ctx` (active context, pushed — back/forward walks contexts), `at` (scroll
   position, debounced replace), `ws` (open workspace surface). No global URL state manager;
   the host only routes.

@@ -9,6 +9,7 @@
  * Skills provide instructions that the agent can follow.
  */
 
+import { getPreset } from '../core/dock-tree-spec.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { SkillDiscoverySource } from '../skills/index.js';
@@ -110,6 +111,10 @@ export interface SkillMetadata {
   name: string;
   description: string;
   allowedTools?: string[];
+  /** Optional layout preset name (see `ui/wc/layout-spec.ts`) declared by the skill. */
+  layout?: string;
+  /** Optional theme preset name declared alongside `layout`. */
+  theme?: string;
 }
 
 export interface Skill {
@@ -168,10 +173,40 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
       case 'allowed-tools':
         metadata.allowedTools = trimmedValue.split(',').map((t) => t.trim());
         break;
+      case 'layout':
+        metadata.layout = trimmedValue;
+        break;
+      case 'theme':
+        metadata.theme = trimmedValue;
+        break;
     }
   }
 
   return { metadata, body };
+}
+
+/**
+ * Sugar: a skill may declare `layout:` (and optionally `theme:`) in its
+ * SKILL.md frontmatter. This is a pure mapping from frontmatter to the
+ * equivalent `layout set <name>` shell command — it does not execute
+ * anything itself. Unknown presets are ignored (skill authors can't crash
+ * the shell). Precedence: a skill sets the INITIAL layout; user/agent
+ * commands issued afterward override it.
+ *
+ * Follow-up (not yet wired): `loadSkills` is a pure async loader with no
+ * shell connection, so there is no clean seam here to auto-run the
+ * resulting command on skill load/activation. A future caller that already
+ * runs shell setup when a skill activates (e.g. a skill-activation hook)
+ * should call this function and execute the returned command via the
+ * shell.
+ */
+export function layoutCommandForSkill(frontmatter: {
+  layout?: string;
+  theme?: string;
+}): string | null {
+  const name = frontmatter.layout;
+  if (!name || !getPreset(name)) return null;
+  return `layout set ${name}`;
 }
 
 /**

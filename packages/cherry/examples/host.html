@@ -141,6 +141,20 @@
         <span class="hint">Paste a SliccTheme object (id, name, base, tokens, css?, components?).</span>
       </div>
       <div class="row">
+        <label for="layoutJson">layout JSON</label>
+        <textarea
+          id="layoutJson"
+          rows="6"
+          style="flex:1;min-width:280px;font-family:ui-monospace,monospace;font-size:12px;"
+          placeholder='{"zones":{"top":null,"left":{"type":"leaf","surfaceId":"chat"},"middle":null,"right":null,"bottom":null},"rowFr":{"top":1,"center":1,"bottom":1},"colFr":{"left":1,"middle":1,"right":1},"locked":true}'
+        ></textarea>
+        <span class="hint"
+          >Paste a DockTreeSpec (see `@slicc/webcomponents`' `slicc-dock-tree.ts`). Set
+          <code>locked: true</code> so the follower can't drag/resize/close it. Applied once at
+          mount, in place of the follower's own persisted/default layout.</span
+        >
+      </div>
+      <div class="row">
         <label for="evtName">send event</label>
         <input id="evtName" type="text" placeholder="event name (e.g. checkout-done)" />
         <input id="evtDetail" type="text" placeholder='detail JSON (optional, e.g. {"id":7})' />
@@ -325,14 +339,25 @@
         } else if (themeId !== 'none') {
           theme = THEME_PRESETS[themeId];
         }
+        let layout;
+        const layoutRaw = document.getElementById('layoutJson').value.trim();
+        if (layoutRaw) {
+          try {
+            layout = JSON.parse(layoutRaw);
+          } catch (err) {
+            log('layout JSON is invalid — ignoring:', err.message);
+          }
+        }
         log('features', features);
         if (theme) log('theme', theme.name || theme.id || '(custom)');
+        if (layout) log('layout', layout);
         handle = mountSlicc({
           container: document.getElementById('mount'),
           sliccOrigin,
           capabilities: { navigate: true, screenshot, openUrl: true },
           features,
           theme,
+          layout,
           joinToken,
           hooks: {
             onSliccEvent: (name, detail) => log('onSliccEvent', name, detail ?? {}),

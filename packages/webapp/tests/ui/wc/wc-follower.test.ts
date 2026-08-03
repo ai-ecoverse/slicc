@@ -853,6 +853,82 @@ describe('mountWcUiFollower', () => {
     expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
+  it('cherry: loads a host-pushed layout via dockTree.setTree, and a locked leaf in it rejects removeSurface (follower UI cannot close what the host pushed)', async () => {
+    const pushedTree = {
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: { type: 'leaf', surfaceId: 'files', locked: true },
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify(pushedTree),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+      removeSurface(id: string): void;
+    };
+    expect(dockTree.getSurfaceIds()).toEqual(expect.arrayContaining(['chat', 'files']));
+
+    // Locked, not just pinned: the follower's own UI cannot remove it either.
+    dockTree.removeSurface('files');
+    expect(dockTree.getSurfaceIds()).toContain('files');
+
+    // A locked leaf renders no move button — nothing to drag.
+    const filesTile = [...dockTree.querySelectorAll('.dock-tree__tile')].find((tile) =>
+      tile.querySelector('[surface-id="files"]')
+    );
+    expect(filesTile?.querySelector('.dock-tree__tile-move')).toBeNull();
+  });
+
+  it('cherry: falls back to the default layout when the pushed layout is invalid JSON', async () => {
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: '{not json',
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await expect(
+      mountWcUiFollower(app, { stage: () => {} } as never, 'cherry')
+    ).resolves.not.toThrow();
+    const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+    };
+    // Boot never threw and the default chat placement still applied.
+    expect(dockTree.getSurfaceIds()).toContain('chat');
+  });
+
   // Regression (#1706): a hosted-tab follower has no local CDP bridge, so it
   // must not advertise — regardless of `ui-only`, which is a cherry-only
   // parameter. The pre-fix gate (`isCherry && ui-only=1`) evaluated false here

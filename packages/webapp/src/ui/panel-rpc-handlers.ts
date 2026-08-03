@@ -218,6 +218,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildSecretsBridgeHandler(),
     ...buildMountBridgeHandler(),
     ...buildThemeHandler(),
+    ...buildLayoutHandler(),
   };
 }
 
@@ -1726,4 +1727,23 @@ function buildThemeHandler() {
       return { applied: null };
     },
   };
+}
+
+// Parity note: this handler set is installed page-side ONLY via
+// `setupStandalonePanelRpc` ← `wireWcTray` ← `wc-live.ts` (gated on
+// `options.standalone && options.instanceId`). The extension's kernel
+// worker + orchestrator run in the hosted-leader tab, which boots through
+// `mountWcUiLive` (runtimeMode `hosted-leader`, standalone opts + instanceId
+// set) — so the `layout` command reaches this handler by the SAME path as
+// standalone. Extension parity is therefore automatic (no separate install).
+function buildLayoutHandler() {
+  return {
+    'layout-apply': async (
+      msg: import('../shell/supplemental-commands/layout-command.js').LayoutApplyMsg
+    ) => {
+      const { getLayoutApplier } = await import('./wc/layout-apply-registry.js');
+      getLayoutApplier()?.(msg);
+      return { applied: true };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
 }

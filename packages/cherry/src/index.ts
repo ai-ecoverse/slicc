@@ -98,6 +98,15 @@ export interface MountSliccOptions {
    */
   theme?: SliccTheme;
   /**
+   * Optional dock-tree layout to push into the follower in place of its own
+   * persisted/default layout. Structurally typed (not imported from
+   * `@slicc/webcomponents` — this SDK ships independently) as a
+   * `DockTreeSpec`-shaped value; serialized as JSON in the handshake welcome,
+   * applied once at boot. Set `locked: true` (tree-wide, or on individual
+   * leaves/splits) so the follower's own UI can't drag/resize/close it.
+   */
+  layout?: unknown;
+  /**
    * Existing tray/session join URL the leader was provisioned with. Required:
    * the host (or its backend) supplies a ready join URL and the follower embeds
    * against it. Cone creation/provisioning from the SDK is not yet supported.

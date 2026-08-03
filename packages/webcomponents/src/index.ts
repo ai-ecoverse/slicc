@@ -159,6 +159,14 @@ export { SliccScoopOverflow } from './switcher/slicc-scoop-overflow.js';
 export { SliccTheme } from './theme/slicc-theme.js';
 export { SliccThemeToggle } from './theme/slicc-theme-toggle.js';
 export * from './theme/tokens.js';
+export {
+  CHAT_SURFACE_ID,
+  type DockNode,
+  type DockTreeSpec,
+  labelForSurface,
+  SliccDockTree,
+  type ZoneName,
+} from './workbench/slicc-dock-tree.js';
 export { SliccFileTree } from './workbench/slicc-file-tree.js';
 export {
   type MonitorAccent,
@@ -171,6 +179,4 @@ export { SliccSurface } from './workbench/slicc-surface.js';
 export { SliccTab } from './workbench/slicc-tab.js';
 export { SliccTabBar } from './workbench/slicc-tab-bar.js';
 export { SliccTerminal } from './workbench/slicc-terminal.js';
-export { SliccWorkbenchBody } from './workbench/slicc-workbench-body.js';
 export { SliccWorkbenchHeader } from './workbench/slicc-workbench-header.js';
-export { SliccWorkbenchPane } from './workbench/slicc-workbench-pane.js';

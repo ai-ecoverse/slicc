@@ -5,57 +5,56 @@ import '../chat/slicc-user-message.js';
 import '../composer/slicc-composer.js';
 import '../composer/slicc-input-card.js';
 import '../dock/slicc-dock.js';
-import '../workbench/slicc-workbench-pane.js';
+import '../workbench/slicc-dock-tree.js';
+import '../workbench/slicc-surface.js';
 import './slicc-chatpane.js';
 import './slicc-shell.js';
 
-interface ShellArgs {
-  open: boolean;
-  chatWidth?: string;
-}
-
-function app(open: boolean, chatWidth?: string): HTMLElement {
+function app(): HTMLElement {
   const frame = document.createElement('div');
   frame.style.cssText =
     'display:flex;flex-direction:column;height:560px;width:980px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg);';
 
   const shell = document.createElement('slicc-shell');
-  if (open) shell.setAttribute('open', '');
-  if (chatWidth) shell.style.setProperty('--slicc-chat-w', chatWidth);
+  const dockTree = document.createElement('slicc-dock-tree');
 
-  // Chat pane
+  // Chat is a pinned dock-tree leaf, exactly like the live shell.
+  const chatSurface = document.createElement('slicc-surface');
+  chatSurface.setAttribute('surface-id', 'chat');
+  chatSurface.setAttribute('layout', 'flex');
   const pane = document.createElement('slicc-chatpane');
   const thread = document.createElement('slicc-chat-thread');
   const u = document.createElement('slicc-user-message');
-  u.textContent = 'Open the workbench and show the file tree.';
+  u.textContent = 'Open the files panel and show the file tree.';
   const a = document.createElement('slicc-agent-message');
-  a.innerHTML = '<p>Sure — toggling the workbench pane open.</p>';
+  a.innerHTML = '<p>Sure — dragging the files panel into the tree.</p>';
   thread.append(u, a);
   const composer = document.createElement('slicc-composer');
   composer.innerHTML = '<slicc-input-card></slicc-input-card>';
   pane.append(thread, composer);
+  chatSurface.append(pane);
+  dockTree.append(chatSurface);
+  (dockTree as unknown as { setPinned(ids: string[]): void }).setPinned(['chat']);
+  (dockTree as unknown as { placeSurface(id: string, zone: string): void }).placeSurface(
+    'chat',
+    'left'
+  );
 
-  // Workbench + dock
-  const workbench = document.createElement('slicc-workbench-pane');
   const dock = document.createElement('slicc-dock');
-
-  shell.append(pane, workbench, dock);
+  shell.append(dockTree, dock);
   frame.appendChild(shell);
   return frame;
 }
 
-const meta: Meta<ShellArgs> = {
+const meta: Meta = {
   title: 'Shell/Split Shell',
   component: 'slicc-shell',
   tags: ['autodocs'],
-  render: ({ open, chatWidth }) => app(open, chatWidth),
+  render: () => app(),
 };
 
 export default meta;
-type Story = StoryObj<ShellArgs>;
+type Story = StoryObj;
 
-export const Collapsed: Story = { args: { open: false } };
-export const Open: Story = { args: { open: true } };
-
-/** Chat widened to 60% — demonstrates the resize split via `--slicc-chat-w`. */
-export const CustomSplit: Story = { args: { open: true, chatWidth: '60%' } };
+/** The dock-tree + dock rail, chat pinned as the sole starting leaf. */
+export const Default: Story = {};

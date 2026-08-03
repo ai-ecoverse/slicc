@@ -159,8 +159,8 @@ describe('slicc-nav', () => {
     document.body.appendChild(el);
     const cs = getComputedStyle(el);
 
-    // Fixed bar height from --barh (44px).
-    expect(cs.height).toBe('44px');
+    // Fixed bar height from --barh (36px).
+    expect(cs.height).toBe('36px');
     // Prototype padding: 0 vertical, 24px horizontal.
     expect(cs.paddingTop).toBe('0px');
     expect(cs.paddingLeft).toBe('24px');

@@ -69,6 +69,14 @@ function buildWelcomeEnvelope(
       console.warn('[cherry] options.theme is not JSON-serializable — sending no theme', err);
     }
   }
+  let layoutJson: string | undefined;
+  if (options.layout) {
+    try {
+      layoutJson = JSON.stringify(options.layout);
+    } catch (err) {
+      console.warn('[cherry] options.layout is not JSON-serializable — sending no layout', err);
+    }
+  }
   return {
     cherry: CHERRY_PROTOCOL_VERSION,
     channelId: newChannelId,
@@ -76,6 +84,7 @@ function buildWelcomeEnvelope(
     joinUrl: options.joinToken,
     features: resolvedFeatures,
     ...(themeJson ? { theme: themeJson } : {}),
+    ...(layoutJson ? { layout: layoutJson } : {}),
     ...(options.effortLevel ? { effortLevel: options.effortLevel } : {}),
   };
 }

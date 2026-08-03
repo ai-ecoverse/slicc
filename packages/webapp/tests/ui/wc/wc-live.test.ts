@@ -4,15 +4,18 @@
  * callback factory, driven entirely with fakes (no worker, no CDP).
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
+import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import {
   applyLeaderLocalThinkingChange,
   createWcLiveCallbacks,
+  DEFAULT_DOCK_TREE_ON_BOOT,
+  DOCK_TREE_STORAGE_KEY,
   metaThinkingForScoop,
   parseProcStatLine,
   prepareWcShell,
@@ -20,9 +23,14 @@ import {
   thinkingLevelForAgent,
   toSwitcherScoops,
   type WcLiveWiring,
+  wireDockTreePersistence,
   wireWcChipTips,
 } from '../../../src/ui/wc/wc-live.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
+
+function fakeLog(): BootStageLogger {
+  return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as BootStageLogger;
+}
 
 function scoop(overrides: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -602,5 +610,138 @@ describe('parseProcStatLine', () => {
     ].join('\n');
     expect(parseProcStatLine(oldBuggyStatusDump)).not.toBe('running');
     expect(parseProcStatLine(oldBuggyStatusDump)).toBe('unknown');
+  });
+});
+
+// Fake dockTree ref for the persistence tests: a plain div carrying a
+// `setTree` spy — enough to drive `wireDockTreePersistence` without pulling
+// in the real `@slicc/webcomponents` element.
+function makeDockTreeRef(): HTMLElement & { setTree: ReturnType<typeof vi.fn> } {
+  return Object.assign(document.createElement('div'), { setTree: vi.fn() });
+}
+
+describe('wireDockTreePersistence', () => {
+  beforeEach(() => {
+    localStorage.removeItem(DOCK_TREE_STORAGE_KEY);
+  });
+
+  it('boot restore seeds the default tree (a chat leaf in `left`, nothing else) when nothing is persisted', () => {
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+
+    wireDockTreePersistence(refs, fakeLog());
+
+    expect(dockTree.setTree).toHaveBeenCalledTimes(1);
+    expect(dockTree.setTree).toHaveBeenCalledWith(DEFAULT_DOCK_TREE_ON_BOOT);
+  });
+
+  it('DEFAULT_DOCK_TREE_ON_BOOT contains only a chat leaf in the left zone — tool panels start closed', () => {
+    expect(DEFAULT_DOCK_TREE_ON_BOOT.zones.left).toEqual({ type: 'leaf', surfaceId: 'chat' });
+    expect(DEFAULT_DOCK_TREE_ON_BOOT.zones.top).toBeNull();
+    expect(DEFAULT_DOCK_TREE_ON_BOOT.zones.middle).toBeNull();
+    expect(DEFAULT_DOCK_TREE_ON_BOOT.zones.right).toBeNull();
+    expect(DEFAULT_DOCK_TREE_ON_BOOT.zones.bottom).toBeNull();
+  });
+
+  it('boot restore parses and applies a persisted tree via setTree', () => {
+    const persisted = {
+      zones: {
+        top: null,
+        left: null,
+        middle: { type: 'leaf', surfaceId: 'sprinkle:hero' },
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    localStorage.setItem(DOCK_TREE_STORAGE_KEY, JSON.stringify(persisted));
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+
+    wireDockTreePersistence(refs, fakeLog());
+
+    expect(dockTree.setTree).toHaveBeenCalledWith(persisted);
+  });
+
+  it('falls back to the default tree when the persisted value is corrupt JSON (best-effort)', () => {
+    localStorage.setItem(DOCK_TREE_STORAGE_KEY, '{not json');
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+    const log = fakeLog();
+    const warn = vi.spyOn(log, 'warn');
+
+    expect(() => wireDockTreePersistence(refs, log)).not.toThrow();
+    expect(warn).toHaveBeenCalled();
+    expect(dockTree.setTree).toHaveBeenCalledWith(DEFAULT_DOCK_TREE_ON_BOOT);
+  });
+
+  it('a dock-tree-change event persists the new tree to localStorage', () => {
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+    wireDockTreePersistence(refs, fakeLog());
+    const tree = { zones: {}, rowFr: {}, colFr: {} };
+
+    dockTree.dispatchEvent(
+      new CustomEvent('dock-tree-change', { detail: { tree }, bubbles: true })
+    );
+
+    expect(JSON.parse(localStorage.getItem(DOCK_TREE_STORAGE_KEY) ?? 'null')).toEqual(tree);
+  });
+
+  it('a dock-tree-resize event also persists the new tree to localStorage', () => {
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+    wireDockTreePersistence(refs, fakeLog());
+    const tree = { zones: {}, rowFr: { top: 1.4, center: 1, bottom: 0.6 }, colFr: {} };
+
+    dockTree.dispatchEvent(
+      new CustomEvent('dock-tree-resize', { detail: { tree }, bubbles: true })
+    );
+
+    expect(JSON.parse(localStorage.getItem(DOCK_TREE_STORAGE_KEY) ?? 'null')).toEqual(tree);
+  });
+
+  it('a persist write failure (e.g. quota) is swallowed — best-effort, never throws', () => {
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+    wireDockTreePersistence(refs, fakeLog());
+    const original = localStorage.setItem;
+    localStorage.setItem = () => {
+      throw new Error('quota exceeded');
+    };
+    try {
+      expect(() =>
+        dockTree.dispatchEvent(
+          new CustomEvent('dock-tree-change', { detail: { tree: {} }, bubbles: true })
+        )
+      ).not.toThrow();
+    } finally {
+      localStorage.setItem = original;
+    }
+  });
+
+  it('restoring a persisted tree via setTree does not trigger a persist write back to localStorage (no persist loop)', () => {
+    const persisted = {
+      zones: {
+        top: null,
+        left: null,
+        middle: { type: 'leaf', surfaceId: 'sprinkle:hero' },
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    localStorage.setItem(DOCK_TREE_STORAGE_KEY, JSON.stringify(persisted));
+    const dockTree = makeDockTreeRef();
+    const refs = { dockTree } as unknown as WcShellRefs;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+
+    wireDockTreePersistence(refs, fakeLog());
+
+    expect(dockTree.setTree).toHaveBeenCalledWith(persisted);
+    expect(setItemSpy).not.toHaveBeenCalled();
+    setItemSpy.mockRestore();
   });
 });
