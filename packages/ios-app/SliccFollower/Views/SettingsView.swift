@@ -1,5 +1,69 @@
+import AVFoundation
 import SliccTraySession
 import SwiftUI
+
+struct SpeechVoiceOption: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let language: String
+    let qualityLabel: String
+    let qualityRank: Int
+
+    init(_ voice: AVSpeechSynthesisVoice) {
+        id = voice.identifier
+        name = voice.name
+        language = voice.language
+        qualityLabel = Self.qualityLabel(for: voice.quality)
+        qualityRank = Self.qualityRank(for: voice.quality)
+    }
+
+    init(id: String, name: String, language: String, qualityLabel: String, qualityRank: Int) {
+        self.id = id
+        self.name = name
+        self.language = language
+        self.qualityLabel = qualityLabel
+        self.qualityRank = qualityRank
+    }
+
+    var label: String { "\(name) · \(qualityLabel)" }
+
+    static func matchingCurrentLanguage(
+        _ options: [SpeechVoiceOption], localeIdentifier: String
+    ) -> [SpeechVoiceOption] {
+        guard let currentLanguage = baseLanguage(of: localeIdentifier) else { return [] }
+        return options.filter { baseLanguage(of: $0.language) == currentLanguage }
+            .sorted {
+                let nameOrder = $0.name.localizedCaseInsensitiveCompare($1.name)
+                if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+                if $0.qualityRank != $1.qualityRank { return $0.qualityRank > $1.qualityRank }
+                return $0.id < $1.id
+            }
+    }
+
+    static func qualityLabel(for quality: AVSpeechSynthesisVoiceQuality) -> String {
+        switch quality {
+        case .premium: "Premium"
+        case .enhanced: "Enhanced"
+        default: "Default"
+        }
+    }
+
+    static func qualityRank(for quality: AVSpeechSynthesisVoiceQuality) -> Int {
+        switch quality {
+        case .premium: 2
+        case .enhanced: 1
+        default: 0
+        }
+    }
+
+    static func validSelection(_ selection: String, among options: [SpeechVoiceOption]) -> String {
+        selection.isEmpty || options.contains(where: { $0.id == selection }) ? selection : ""
+    }
+
+    private static func baseLanguage(of identifier: String) -> String? {
+        Locale(identifier: identifier).language.languageCode?.identifier.lowercased()
+    }
+}
 
 struct SettingsView: View {
     private struct ThinkingOption: Identifiable {
@@ -41,6 +105,7 @@ struct SettingsView: View {
             Form {
                 iCloudSessionsSection
                 connectionSection
+                speechSection
                 if appState.connectionState == .connected {
                     if appState.supportsModelControls {
                         modelSection
@@ -364,6 +429,12 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Speech Section
+
+    private var speechSection: some View {
+        SpeechSettingsSection()
+    }
+
     // MARK: - Tray Info Section
 
     private var trayInfoSection: some View {
@@ -418,6 +489,50 @@ struct SettingsView: View {
         } header: {
             Text("Advanced")
         }
+    }
+}
+
+private struct SpeechSettingsSection: View {
+    @AppStorage("speech.voiceIdentifier") private var voiceIdentifier = ""
+    @State private var voiceOptions: [SpeechVoiceOption] = []
+
+    var body: some View {
+        Section {
+            Picker("Voice", selection: $voiceIdentifier) {
+                Text("Automatic")
+                    .tag("")
+                    .accessibilityIdentifier("speech-voice-automatic")
+                ForEach(voiceOptions) { option in
+                    Text(option.label)
+                        .tag(option.id)
+                        .accessibilityIdentifier("speech-voice-option-\(option.id)")
+                }
+            }
+            .accessibilityIdentifier("speech-voice-picker")
+
+            Text(
+                "Install higher-quality voices in iOS Settings → Accessibility → Spoken Content → Voices."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("speech-voice-install-guidance")
+        } header: {
+            Text("Speech")
+        }
+        .onAppear(perform: refreshVoices)
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)
+        ) { _ in
+            refreshVoices()
+        }
+    }
+
+    private func refreshVoices() {
+        let installed = AVSpeechSynthesisVoice.speechVoices().map(SpeechVoiceOption.init)
+        voiceOptions = SpeechVoiceOption.matchingCurrentLanguage(
+            installed, localeIdentifier: Locale.current.identifier)
+        voiceIdentifier = SpeechVoiceOption.validSelection(voiceIdentifier, among: voiceOptions)
     }
 }
 
