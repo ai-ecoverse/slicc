@@ -121,9 +121,9 @@ class AppState: ObservableObject {
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
-    /// What the leader advertised on `hello`. Decoded and kept so the field is
-    /// inspectable rather than dropped; nothing gates on it yet.
-    private(set) var leaderCapabilities: TraySyncCapabilities?
+    /// What the leader advertised on `hello`. Published because negotiated
+    /// capabilities gate follower surfaces such as the leader-backed Terminal.
+    @Published private(set) var leaderCapabilities: TraySyncCapabilities?
     private(set) var leaderMotd: String?
     /// Payload identities of handoffs already forwarded this session, so a
     /// site emitting the same `Link` on every page produces one lick rather
@@ -724,6 +724,8 @@ class AppState: ObservableObject {
         connectionState = .connected
         connectedSince = Date()
         leaderProtocolVersion = nil
+        leaderCapabilities = nil
+        leaderMotd = nil
         modelCatalog = []
         modelSelectionState = nil
 
@@ -1037,8 +1039,6 @@ class AppState: ObservableObject {
     private func handleLeaderHello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?
     ) {
-        // Kept rather than dropped. Nothing reads them yet, but a decoded
-        // field that goes nowhere is the drift `theme.apply` already shipped.
         leaderCapabilities = capabilities
         leaderMotd = motd
         leaderProtocolVersion = protocolVersion

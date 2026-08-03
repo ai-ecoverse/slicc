@@ -194,17 +194,31 @@ final class TerminalClientTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
     }
 
-    func testTaskCancellationSendsSigint() async {
+    func testTaskCancellationWaitsForLeaderAcknowledgementBeforeNextRun() async {
         let wire = Wire()
         let client = makeClient(wire: wire)
         let task = Task { try await client.run(command: "long-running") }
         await waitForRun(client)
 
         task.cancel()
-        await assertThrows(.cancelled) { _ = try await task.value }
+        await Task.yield()
         XCTAssertEqual(wire.signals.count, 1)
         XCTAssertEqual(wire.signals.first?.signal, "SIGINT")
+        XCTAssertTrue(client.isRunning)
+        await assertThrows(.alreadyRunning) {
+            _ = try await client.run(command: "too-early")
+        }
+
+        client.handleResponse(
+            requestId: "req-1", exitCode: 130, signal: "SIGINT", error: "cancelled")
+        await assertThrows(.cancelled) { _ = try await task.value }
         XCTAssertFalse(client.isRunning)
+
+        let next = Task { try await client.run(command: "after-ack") }
+        await waitForRun(client)
+        client.handleResponse(requestId: "req-1", exitCode: 0, signal: nil, error: nil)
+        let result = try? await next.value
+        XCTAssertEqual(result?.exitCode, 0)
     }
 
     func testDisconnectFailsInFlightRunImmediately() async {
@@ -282,6 +296,9 @@ final class TerminalClientTests: XCTestCase {
 
         client.handleChunk(
             requestId: "req-1", stream: "stdout", base64Data: "not base64")
+        XCTAssertTrue(client.isRunning)
+        XCTAssertEqual(wire.signals.count, 1)
+        client.handleResponse(requestId: "req-1", exitCode: 130, signal: "SIGINT", error: nil)
         await assertThrows(.malformedChunk) { _ = try await task.value }
     }
 

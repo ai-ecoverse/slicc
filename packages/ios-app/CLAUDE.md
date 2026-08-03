@@ -141,10 +141,13 @@ declared language has no voice.
 
 The Terminal tab uses libghostty's host-managed `InMemoryTerminalSession`,
 not an on-device process. Local editing sends complete commands through
-`TerminalClient`; Ctrl-C sends `SIGINT`. The leader keeps one virtual shell per
-iOS follower connection, so cwd and exported variables survive across submitted
-lines. Commands have no fixed client deadline because leader output is buffered
-until completion; interactive programs and incremental output are unsupported.
+`TerminalClient`; the tab stays unavailable until the leader advertises
+`hello.capabilities.exec`. Ctrl-C sends `SIGINT`, but keeps the prompt closed until
+the matching `exec.response` confirms the persistent shell is idle. The leader
+keeps one virtual shell per iOS follower connection, so cwd and exported variables
+survive across submitted lines. Commands have no fixed client deadline because
+leader output is buffered until completion; interactive programs and incremental
+output are unsupported.
 
 ## Agent Avatar
 

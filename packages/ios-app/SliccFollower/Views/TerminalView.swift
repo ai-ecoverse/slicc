@@ -61,6 +61,7 @@ struct TerminalView: View {
                         .foregroundStyle(Color.clear)
                         .frame(width: 1, height: 1)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                         .accessibilityIdentifier("terminal-transcript")
                 }
 

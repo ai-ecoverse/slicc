@@ -3,6 +3,28 @@ import XCTest
 
 @testable import SliccFollower
 
+final class SyncProtocolHelloTests: XCTestCase {
+    func testLeaderExecCapabilityDecodesAndLegacyOmissionStaysNil() throws {
+        let capable = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(
+                #"{"type":"hello","protocolVersion":5,"capabilities":{"exec":true}}"#.utf8))
+        guard case .hello(_, _, let capabilities, _) = capable else {
+            return XCTFail("expected hello")
+        }
+        XCTAssertEqual(capabilities?.exec, true)
+
+        let legacy = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(#"{"type":"hello","protocolVersion":5}"#.utf8))
+        guard case .hello(_, _, let legacyCapabilities, _) = legacy else {
+            return XCTFail("expected legacy hello")
+        }
+        XCTAssertNil(legacyCapabilities)
+        XCTAssertFalse(trayFollowerCapabilities.exec)
+    }
+}
+
 // Compiled into the `SliccFollowerTests` bundle (see project.yml) and run in CI
 // via `xcodebuild test` on an iOS Simulator — `swift test` cannot run on a plain
 // macOS host because the package depends on an iOS-only WebRTC binary. The

@@ -60,6 +60,8 @@ final class TerminalClient {
         var chunks: [OutputChunk] = []
         var retainedBytes = 0
         var deadlineTask: Task<Void, Never>?
+        var completionError: TerminalError?
+        var interruptSent = false
     }
 
     private let send: (FollowerToLeaderMessage) -> Bool
@@ -112,8 +114,7 @@ final class TerminalClient {
         guard let outputStream = Stream(rawValue: stream),
             let bytes = Data(base64Encoded: base64Data)
         else {
-            _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
-            fail(requestId, with: .malformedChunk)
+            requestInterrupt(requestId: requestId, completionError: .malformedChunk)
             return
         }
         let chunk = OutputChunk(stream: outputStream, data: bytes)
@@ -126,13 +127,18 @@ final class TerminalClient {
     /// results, not transport failures, so callers retain any preceding output.
     func handleResponse(requestId: String, exitCode: Int, signal: String?, error: String?) {
         guard let active = pending, active.requestId == requestId else { return }
+        if let completionError = active.completionError {
+            fail(requestId, with: completionError)
+            return
+        }
         finish(
             requestId,
             with: RunResult(
                 chunks: active.chunks, exitCode: exitCode, signal: signal, error: error))
     }
 
-    /// Interrupt the active leader command and finish the local waiter.
+    /// Interrupt the active leader command. The local waiter stays pending until
+    /// the matching response confirms the persistent leader shell is idle.
     @discardableResult
     func cancel() -> Bool {
         guard let requestId = pending?.requestId else { return false }
@@ -190,9 +196,7 @@ final class TerminalClient {
     }
 
     private func expire(_ requestId: String) {
-        guard pending?.requestId == requestId else { return }
-        _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
-        fail(requestId, with: .timedOut)
+        requestInterrupt(requestId: requestId, completionError: .timedOut)
     }
 
     private func retain(_ chunk: OutputChunk, in active: inout Pending) {
@@ -218,9 +222,26 @@ final class TerminalClient {
 
     @discardableResult
     private func cancel(requestId: String) -> Bool {
-        guard pending?.requestId == requestId else { return false }
-        _ = send(.execSignal(requestId: requestId, signal: "SIGINT"))
-        fail(requestId, with: .cancelled)
+        requestInterrupt(requestId: requestId, completionError: .cancelled)
+    }
+
+    @discardableResult
+    private func requestInterrupt(
+        requestId: String, completionError: TerminalError
+    ) -> Bool {
+        guard var active = pending, active.requestId == requestId else { return false }
+        if active.completionError == nil { active.completionError = completionError }
+        active.deadlineTask?.cancel()
+        guard !active.interruptSent else {
+            pending = active
+            return true
+        }
+        active.interruptSent = true
+        pending = active
+        guard send(.execSignal(requestId: requestId, signal: "SIGINT")) else {
+            fail(requestId, with: .disconnected)
+            return false
+        }
         return true
     }
 

@@ -282,7 +282,7 @@ struct TrayChunkFrame: Codable {
 /// Mirrors `TraySyncCapabilities`. Advertised on `hello` so the leader can
 /// route capability-gated work.
 struct TraySyncCapabilities: Codable, Equatable {
-    /// This peer can run OS shell commands via `exec.request`.
+    /// This peer accepts commands via `exec.request`.
     ///
     /// Always false here, stated rather than implied. iOS has no OS shell, and
     /// the leader gates remote exec on `peerCapabilities?.exec`
@@ -373,9 +373,8 @@ enum LeaderToFollowerMessage: Codable {
     /// `AppState.applyLeaderTheme`); `null` resets to the system scheme.
     case themeApply(themeJson: String?)
     /// Additive version handshake (`hello`) — both sides send it first.
-    /// `capabilities` and `motd` are decoded for parity; nothing on iOS
-    /// consumes them yet, but dropping them silently is the drift class that
-    /// `theme.apply` already demonstrated.
+    /// `capabilities` gates leader-backed surfaces such as Terminal; `motd` is
+    /// retained for protocol parity.
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
     case ping

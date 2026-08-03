@@ -269,7 +269,11 @@ export class LeaderSyncManager {
   ): void {
     const { sync } = this.followerRegistry.addFollower(bootstrapId, channel, meta);
 
-    sync.send({ type: 'hello', protocolVersion: TRAY_SYNC_PROTOCOL_VERSION });
+    sync.send({
+      type: 'hello',
+      protocolVersion: TRAY_SYNC_PROTOCOL_VERSION,
+      capabilities: { exec: this.options.execInShell !== undefined },
+    });
     void this.broadcast.sendSnapshotToFollower(bootstrapId);
     this.broadcast.sendScoopsListToFollower(bootstrapId);
     this.broadcast.sendModelCatalogToFollower(bootstrapId);

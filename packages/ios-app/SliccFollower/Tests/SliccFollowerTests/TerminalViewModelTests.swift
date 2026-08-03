@@ -28,17 +28,31 @@ final class TerminalViewModelTests: XCTestCase {
     private final class SuspendedRun {
         var continuation: CheckedContinuation<TerminalClient.RunResult, Error>?
         var cancelCount = 0
+        var runCount = 0
 
         func run() async throws -> TerminalClient.RunResult {
-            try await withCheckedThrowingContinuation { continuation = $0 }
+            runCount += 1
+            return try await withCheckedThrowingContinuation { continuation = $0 }
         }
 
         func cancel() -> Bool {
-            guard let continuation else { return false }
-            self.continuation = nil
+            guard continuation != nil else { return false }
             cancelCount += 1
-            continuation.resume(throwing: TerminalClient.TerminalError.cancelled)
             return true
+        }
+
+        func acknowledgeCancellation() {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(throwing: TerminalClient.TerminalError.cancelled)
+        }
+
+        func complete() {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(
+                returning: TerminalClient.RunResult(
+                    chunks: [], exitCode: 0, signal: nil, error: nil))
         }
     }
 
@@ -122,7 +136,7 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertTrue(model.accessibilityTranscript.contains("[exit 127]"))
     }
 
-    func testCtrlCCancelsRunningCommandAndRestoresPrompt() async {
+    func testCtrlCQueuesNextCommandUntilLeaderAcknowledgesCancellation() async {
         let suspended = SuspendedRun()
         let model = TerminalViewModel(
             runCommand: { _, _, _ in try await suspended.run() },
@@ -135,10 +149,23 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertNotNil(suspended.continuation)
 
         model.receiveInput(Data([0x03]))
-        await waitUntilIdle(model)
+        model.receiveInput(Data("echo after\r".utf8))
+        await Task.yield()
 
         XCTAssertEqual(suspended.cancelCount, 1)
+        XCTAssertEqual(suspended.runCount, 1)
+        XCTAssertTrue(model.isRunning)
         XCTAssertTrue(model.accessibilityTranscript.contains("^C"))
+        XCTAssertFalse(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
+
+        suspended.acknowledgeCancellation()
+        for _ in 0..<100 where suspended.runCount < 2 { await Task.yield() }
+        XCTAssertEqual(suspended.runCount, 2)
+        XCTAssertTrue(model.isRunning)
+
+        suspended.complete()
+        await waitUntilIdle(model)
+        XCTAssertTrue(model.accessibilityTranscript.contains("echo after"))
         XCTAssertTrue(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
     }
 
@@ -154,7 +181,8 @@ final class TerminalViewModelTests: XCTestCase {
 
         model.setConnectionAvailable(
             WorkbenchHost.terminalConnectionAvailable(
-                connectionState: .connected, isLeaderStalled: true))
+                connectionState: .connected, isLeaderStalled: true,
+                leaderCapabilities: TraySyncCapabilities(exec: true)))
         await Task.yield()
 
         XCTAssertTrue(model.isRunning)
@@ -187,6 +215,21 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertFalse(
             TerminalView.shouldShowRunningBar(
                 isRunning: false, connectionAvailable: true, isActive: true))
+    }
+
+    func testTerminalAvailabilityRequiresLeaderExecCapability() {
+        XCTAssertTrue(
+            WorkbenchHost.terminalConnectionAvailable(
+                connectionState: .connected, isLeaderStalled: false,
+                leaderCapabilities: TraySyncCapabilities(exec: true)))
+        XCTAssertFalse(
+            WorkbenchHost.terminalConnectionAvailable(
+                connectionState: .connected, isLeaderStalled: false,
+                leaderCapabilities: TraySyncCapabilities(exec: false)))
+        XCTAssertFalse(
+            WorkbenchHost.terminalConnectionAvailable(
+                connectionState: .connected, isLeaderStalled: false,
+                leaderCapabilities: nil))
     }
 
     func testTerminalAccessibilityRequiresConnectionAndActiveSurface() {

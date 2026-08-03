@@ -39,7 +39,8 @@ struct WorkbenchHost: View {
                     client: appState.terminalClient,
                     connectionAvailable: Self.terminalConnectionAvailable(
                         connectionState: appState.connectionState,
-                        isLeaderStalled: appState.isLeaderStalled),
+                        isLeaderStalled: appState.isLeaderStalled,
+                        leaderCapabilities: terminalLeaderCapabilities),
                     isActive: isActive,
                     theme: appState.leaderTheme
                 )
@@ -51,9 +52,19 @@ struct WorkbenchHost: View {
 
     static func terminalConnectionAvailable(
         connectionState: ConnectionState,
-        isLeaderStalled _: Bool
+        isLeaderStalled _: Bool,
+        leaderCapabilities: TraySyncCapabilities?
     ) -> Bool {
-        connectionState == .connected
+        connectionState == .connected && leaderCapabilities?.exec == true
+    }
+
+    private var terminalLeaderCapabilities: TraySyncCapabilities? {
+        #if DEBUG
+            if UITestHooks.terminalFixtureEnabled {
+                return TraySyncCapabilities(exec: true)
+            }
+        #endif
+        return appState.leaderCapabilities
     }
 
     @ViewBuilder

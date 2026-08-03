@@ -18,23 +18,20 @@ final class TerminalUITests: XCTestCase {
         let surface = app.descendants(matching: .any)["terminal-surface"]
         XCTAssertTrue(surface.waitForExistence(timeout: 60), "the Ghostty surface renders")
 
-        let transcript = app.staticTexts["terminal-transcript"]
-        let prompt = NSPredicate(format: "label CONTAINS %@", "slicc$ ")
-        expectation(for: prompt, evaluatedWith: transcript)
+        let prompt = NSPredicate(format: "value CONTAINS %@", "slicc$ ")
+        expectation(for: prompt, evaluatedWith: surface)
         waitForExpectations(timeout: 10)
 
         app.buttons["dock-files"].tap()
         let surfaceHidden = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: surface)
-        let transcriptHidden = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"), object: transcript)
         XCTAssertEqual(
-            XCTWaiter.wait(for: [surfaceHidden, transcriptHidden], timeout: 3), .completed,
+            XCTWaiter.wait(for: [surfaceHidden], timeout: 3), .completed,
             "collapsed terminal leaves are withdrawn from accessibility")
 
         app.buttons["dock-term"].tap()
         XCTAssertTrue(surface.waitForExistence(timeout: 10))
-        XCTAssertTrue(prompt.evaluate(with: transcript), "scrollback survives the tab switch")
+        XCTAssertTrue(prompt.evaluate(with: surface), "scrollback survives the tab switch")
     }
 
     func testDisconnectedPlaceholderCoversTerminal() {
@@ -52,6 +49,5 @@ final class TerminalUITests: XCTestCase {
             "a disconnected terminal asks for an active leader")
         XCTAssertTrue(placeholder.isHittable)
         XCTAssertFalse(app.descendants(matching: .any)["terminal-surface"].exists)
-        XCTAssertFalse(app.staticTexts["terminal-transcript"].exists)
     }
 }
