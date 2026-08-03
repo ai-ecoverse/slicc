@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
@@ -249,6 +250,46 @@ describe('ExtensionBridgeTransport', () => {
 
     expect(port.disconnected).toBe(true);
     expect(transport.state).toBe('disconnected');
+  });
+
+  it('makes BrowserAPI reacquire the same target session after external debugger detach', async () => {
+    const api = new BrowserAPI(transport);
+    const firstAttach = api.attachToPage('9');
+    await Promise.resolve();
+    const firstChannelId = lastChannelId(port);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: firstChannelId,
+      kind: 'handshake.welcome',
+    });
+    await replyToCdpRequest(port, 'Target.attachToTarget', { sessionId: '9' });
+    await replyToCdpRequest(port, 'Page.enable', {});
+    await expect(firstAttach).resolves.toBe('9');
+
+    const firstPort = port;
+    firstPort.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: firstChannelId,
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: '9', targetId: '9' },
+    });
+
+    const secondPort = nextPort();
+    const secondAttach = api.attachToPage('9');
+    await Promise.resolve();
+    const secondChannelId = lastChannelId(secondPort);
+    secondPort.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: secondChannelId,
+      kind: 'handshake.welcome',
+    });
+    await replyToCdpRequest(secondPort, 'Target.attachToTarget', { sessionId: '9' });
+    await replyToCdpRequest(secondPort, 'Page.enable', {});
+
+    await expect(secondAttach).resolves.toBe('9');
+    expect(cdpRequests(firstPort, 'Target.attachToTarget')).toHaveLength(1);
+    expect(cdpRequests(secondPort, 'Target.attachToTarget')).toHaveLength(1);
   });
 
   it('ignores envelopes whose channelId does not match', async () => {
@@ -517,4 +558,30 @@ async function connect(t: ExtensionBridgeTransport, port: FakePort): Promise<str
   });
   await p;
   return channelId;
+}
+
+function cdpRequests(port: FakePort, method: string): Array<{ id: number }> {
+  return port.posted.filter(
+    (message): message is { id: number } & Record<string, unknown> =>
+      typeof message === 'object' &&
+      message !== null &&
+      (message as { kind?: string }).kind === 'cdp.request' &&
+      (message as { method?: string }).method === method
+  );
+}
+
+async function replyToCdpRequest(
+  port: FakePort,
+  method: string,
+  result: Record<string, unknown>
+): Promise<void> {
+  await vi.waitFor(() => expect(cdpRequests(port, method)).toHaveLength(1));
+  const request = cdpRequests(port, method)[0];
+  port.receive({
+    bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+    channelId: lastChannelId(port),
+    kind: 'cdp.response',
+    id: request.id,
+    result,
+  });
 }
