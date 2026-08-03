@@ -7,18 +7,32 @@ protocol FileProviderFSConnection: FileProviderFSClient {
 }
 
 @MainActor
+protocol FileProviderTrayConnector: AnyObject {
+    var delegate: TrayFollowerConnectorDelegate? { get set }
+    func start() async throws
+    func stop()
+}
+
+extension TrayFollowerConnector: FileProviderTrayConnector {}
+
+@MainActor
 public final class FileProviderFSClientPool: FileProviderFSClient {
     typealias ConnectionBuilder = (TrayCredentials) async throws -> FileProviderFSConnection
+
+    private struct ConnectionAttempt {
+        let id: UUID
+        var waiters: [CheckedContinuation<FileProviderFSConnection, Error>]
+        var connectionTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+    }
 
     private let loadCredentials: () -> TrayCredentials?
     private let buildConnection: ConnectionBuilder
     private let connectionTimeout: TimeInterval
     private let idleTimeout: TimeInterval
     private var connection: FileProviderFSConnection?
-    private var connectionTask: Task<Void, Never>?
-    private var timeoutTask: Task<Void, Never>?
+    private var attempt: ConnectionAttempt?
     private var idleTask: Task<Void, Never>?
-    private var waiters: [CheckedContinuation<FileProviderFSConnection, Error>] = []
 
     public convenience init(
         connectionTimeout: TimeInterval = 12, idleTimeout: TimeInterval = 10
@@ -65,13 +79,13 @@ public final class FileProviderFSClientPool: FileProviderFSClient {
     public func disconnect() {
         idleTask?.cancel()
         idleTask = nil
-        connectionTask?.cancel()
-        connectionTask = nil
-        timeoutTask?.cancel()
-        timeoutTask = nil
+        attempt?.connectionTask?.cancel()
+        attempt?.timeoutTask?.cancel()
+        let waiters = attempt?.waiters ?? []
+        attempt = nil
         connection?.disconnect()
         connection = nil
-        finishWaiters(.failure(VFSProviderError.serverUnreachable))
+        resume(waiters, with: .failure(VFSProviderError.serverUnreachable))
     }
 
     private func connectedClient() async throws -> FileProviderFSConnection {
@@ -80,47 +94,62 @@ public final class FileProviderFSClientPool: FileProviderFSClient {
             throw VFSProviderError.missingCredentials
         }
         return try await withCheckedThrowingContinuation { continuation in
-            waiters.append(continuation)
-            guard connectionTask == nil else { return }
+            if attempt != nil {
+                attempt?.waiters.append(continuation)
+                return
+            }
 
-            connectionTask = Task { [weak self, buildConnection] in
+            let id = UUID()
+            attempt = ConnectionAttempt(
+                id: id, waiters: [continuation], connectionTask: nil, timeoutTask: nil)
+            let connectionTask = Task { [weak self, buildConnection] in
                 do {
                     let connection = try await buildConnection(credentials)
-                    guard !Task.isCancelled else {
-                        connection.disconnect()
-                        return
-                    }
-                    self?.connection = connection
-                    self?.finishWaiters(.success(connection))
-                } catch is CancellationError {
-                    self?.finishWaiters(.failure(VFSProviderError.serverUnreachable))
+                    self?.finishAttempt(id, with: .success(connection))
                 } catch {
-                    self?.finishWaiters(.failure(error))
+                    self?.finishAttempt(id, with: .failure(error))
                 }
             }
             let connectionTimeout = self.connectionTimeout
-            timeoutTask = Task { [weak self] in
+            let timeoutTask = Task { [weak self] in
                 do {
                     try await Task.sleep(
                         nanoseconds: UInt64(connectionTimeout * 1_000_000_000))
                 } catch {
                     return
                 }
-                guard let self, self.connection == nil else { return }
-                self.connectionTask?.cancel()
-                self.connectionTask = nil
-                self.finishWaiters(.failure(VFSProviderError.serverUnreachable))
+                self?.timeoutAttempt(id)
             }
+            attempt?.connectionTask = connectionTask
+            attempt?.timeoutTask = timeoutTask
         }
     }
 
-    private func finishWaiters(_ result: Result<FileProviderFSConnection, Error>) {
-        timeoutTask?.cancel()
-        timeoutTask = nil
-        connectionTask = nil
-        let pending = waiters
-        waiters.removeAll()
-        for waiter in pending { waiter.resume(with: result) }
+    private func finishAttempt(
+        _ id: UUID, with result: Result<FileProviderFSConnection, Error>
+    ) {
+        guard let current = attempt, current.id == id else {
+            if case .success(let staleConnection) = result { staleConnection.disconnect() }
+            return
+        }
+        current.timeoutTask?.cancel()
+        attempt = nil
+        if case .success(let connection) = result { self.connection = connection }
+        resume(current.waiters, with: result)
+    }
+
+    private func timeoutAttempt(_ id: UUID) {
+        guard let current = attempt, current.id == id else { return }
+        current.connectionTask?.cancel()
+        attempt = nil
+        resume(current.waiters, with: .failure(VFSProviderError.serverUnreachable))
+    }
+
+    private func resume(
+        _ waiters: [CheckedContinuation<FileProviderFSConnection, Error>],
+        with result: Result<FileProviderFSConnection, Error>
+    ) {
+        for waiter in waiters { waiter.resume(with: result) }
     }
 
     private func scheduleIdleDisconnect() {
@@ -139,8 +168,8 @@ public final class FileProviderFSClientPool: FileProviderFSClient {
 }
 
 @MainActor
-private final class TrayFileProviderConnection: NSObject, FileProviderFSConnection {
-    private let connector: TrayFollowerConnector
+final class TrayFileProviderConnection: NSObject, FileProviderFSConnection {
+    private let connector: FileProviderTrayConnector
     private lazy var fsClient = FsClient(timeout: 20) { [weak self] message in
         self?.send(message) ?? false
     }
@@ -150,6 +179,12 @@ private final class TrayFileProviderConnection: NSObject, FileProviderFSConnecti
 
     private init(joinURL: URL) {
         connector = TrayFollowerConnector(joinUrl: joinURL)
+        super.init()
+        connector.delegate = self
+    }
+
+    init(connector: FileProviderTrayConnector) {
+        self.connector = connector
         super.init()
         connector.delegate = self
     }
@@ -180,7 +215,7 @@ private final class TrayFileProviderConnection: NSObject, FileProviderFSConnecti
         resumeConnect(.failure(VFSProviderError.serverUnreachable))
     }
 
-    private func start() async throws {
+    func start() async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 connectContinuation = continuation

@@ -98,14 +98,7 @@ final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderRepli
         for containerItemIdentifier: NSFileProviderItemIdentifier,
         request: NSFileProviderRequest
     ) throws -> NSFileProviderEnumerator {
-        if containerItemIdentifier != .workingSet {
-            do {
-                _ = try VFSItemIdentity.path(for: containerItemIdentifier)
-            } catch {
-                throw VFSProviderErrorMapper.map(error)
-            }
-        }
-        return LeaderVFSEnumerator(provider: provider, container: containerItemIdentifier)
+        try provider.enumerator(for: containerItemIdentifier)
     }
 
     private func progress(for task: Task<Void, Never>) -> Progress {
