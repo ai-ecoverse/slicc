@@ -375,10 +375,15 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-report-webapp
+          # Playwright resolves both the HTML reporter's `outputFolder` and the
+          # per-test `outputDir` against the nearest package root walked up from
+          # the config file, i.e. `packages/webapp/` (the config sits at
+          # `packages/webapp/tests/e2e/`). That is where `playwright-report/`
+          # (HTML index + trace zips) and `test-results/` (screenshots, videos,
+          # per-test artifacts) land — verified locally.
           path: |
             packages/webapp/playwright-report/
             packages/webapp/test-results/
-            packages/webapp/tests/e2e/test-results/
           if-no-files-found: ignore
       - name: Upload wrangler logs
         # wrangler writes structured startup + request logs to

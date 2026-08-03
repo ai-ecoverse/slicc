@@ -131,7 +131,17 @@ export default defineConfig({
   ],
   use: {
     baseURL: LEADER_ORIGIN,
+    // Record traces on the retried attempt so the CI `Upload Playwright
+    // artifacts` step has something to hand a reviewer. `on-first-retry`
+    // matches `retries: 2` below: the initial attempt runs bare (no perf
+    // cost on a green run) and any retry writes a full trace + screenshots.
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
+  // HTML reporter feeds the `playwright-report/` upload path; `list` keeps
+  // the CI stdout log readable. Without an HTML reporter the report dir is
+  // never written and the CI artifact would be empty.
+  reporter: process.env['CI'] ? [['html', { open: 'never' }], ['list']] : [['list']],
   // Keep one worker because fake-LLM fixture state and browser-driven scenarios
   // are process-global. The agent-driven Chrome itself is a dedicated webServer
   // process, so retries can restart Playwright's worker without replacing CDP.
