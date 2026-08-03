@@ -91,6 +91,16 @@ export default defineConfig({
       // tail, then the first Playwright navigate hits `ERR_CONNECTION_REFUSED`
       // if any of the tail steps crash or drop the listener. `/status` runs the
       // worker's `fetch` handler, so a 200 proves workerd is fully warm.
+      //
+      // Two invariants this probe depends on — a future refactor that breaks
+      // either will silently regress the gate back to bind-time semantics:
+      //   1. `packages/cloudflare-worker/wrangler.jsonc` sets
+      //      `assets.run_worker_first: true` so `/status` reaches the worker's
+      //      `fetch` handler and is not intercepted by the ASSETS binding or
+      //      the SPA fallback.
+      //   2. `packages/cloudflare-worker/src/index.ts` `/status` handler
+      //      returns `200` with `Cache-Control: no-store`, so Playwright's
+      //      `url:` probe never gets a cached response mid-startup.
       url: `${LEADER_ORIGIN}/status`,
       reuseExistingServer: !process.env['CI'],
       // wrangler's first cold start (workerd bring-up) can exceed Playwright's
