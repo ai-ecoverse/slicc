@@ -16,12 +16,14 @@ This file covers the iOS follower app in `packages/ios-app/`.
 | `SliccFollower/Models/SyncProtocol.swift`                                                            | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                              |
 | `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`  | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture. See `docs/architecture.md` |
 | `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                       |
+| `SliccFollower/Sync/TerminalClient.swift`                                                            | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and timeouts                                                                                       |
 | `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                         | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                           |
 | `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                                                                                 |
 | `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                     |
 | `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                  | SwiftUI chat surface (`MessageListView` renders). `Models/MarkdownBlock.swift` parses fences, lists and GFM pipe tables for the bubbles                                           |
 | `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`  | Renders leader `sprinkle.content`; `WKScriptMessageHandler` intercepts bridge calls; VFS APIs are stubbed for graceful degradation                                                |
 | `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`   | Phone IA (#1802): 48pt dock rail; workbench overlays chat. `Models/SVGPath.swift` parses lucide `d` strings; SF Symbols has no cone                                               |
+| `SliccFollower/Views/TerminalView.swift`, `TerminalViewModel.swift`                                  | Persistent libghostty surface with local line editing, theming, cancellation, and scrollback                                                                                      |
 | `SliccFollower/{Models,Views}/*Avatar*.swift`                                                        | Avatar geometry/motion, renderer, and screenshot fixture                                                                                                                          |
 | Other views (`ChatView.swift`, `InputBar.swift`, `MessageBubble.swift`, `SettingsView.swift`, …)     | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                           |
 
@@ -29,10 +31,13 @@ Plain SPM commands do nothing useful on a macOS host (`swift build` hits iOS-onl
 
 ## Protocol Mirror Invariant
 
-`Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts` (unions + payload types; the webapp re-exports them from `packages/webapp/src/scoops/tray-sync-protocol.ts`). The per-message matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" is the source of truth for which side speaks what, including everything still TS-only — keep it there rather than duplicating it here. Two iOS-local facts it does not carry:
+`Models/SyncProtocol.swift` mirrors a **subset** of the unions and payloads in
+`packages/shared-ts/src/tray-sync-protocol.ts`. The per-message matrix in
+`docs/architecture.md` is the cross-float source of truth. Three iOS-local facts:
 
 - `preview.open` routes through `CDPBridge.handleTabOpen` (the URL is the worker-hosted preview the leader's `serve` minted) and acks with `tab.opened`.
 - iOS never originates a transcript export, so it is never asked to approve one: the leader's prompt decodes to `.unknown` and the reply is `undecodable` in the corpus.
+- iOS mirrors all four `exec.*` messages in both unions. Terminal originates requests/signals and consumes chunks/responses; leader requests get an unsupported response. `capabilities.exec` remains false because the phone has no OS shell.
 
 Both union doc-comments state the omissions explicitly; `// MARK: -` boundaries are the stable anchors, not line numbers.
 
@@ -72,12 +77,7 @@ Both followers implement sprinkle rendering. iOS is the longer-deployed referenc
   the deadline and all-or-nothing reassembly the leader lacks. The live leader
   supports reads plus `writeFile`/`mkdir`/`rm` everywhere except `/proc`;
   `exists` and `walk` remain unsupported by the page proxy.
-- `hello`: sends `capabilities: { exec: false }` explicitly plus a device-derived `motd` for the leader's `ssh --list`. The leader's gate reads `peerCapabilities?.exec`, so absent and false behave alike — only one of them is a stated contract.
-- Remote exec: iOS mirrors all four `exec.*` messages so its terminal can send
-  `exec.request`/`exec.signal` to the leader's virtual shell and consume
-  `exec.chunk`/`exec.response`. `capabilities.exec` stays false: it advertises
-  whether this follower can serve commands on its own OS, not whether it may
-  request execution from the leader.
+- `hello`: explicitly sends `exec: false` plus a device `motd`; the phone may request leader exec but cannot serve OS commands.
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + flush throttling
 - Model/thinking controls: `Views/SettingsView.swift` selects from the leader's model catalog and changes thinking for the selected scoop. The thinking picker is shown only when the selected model is reasoning-capable.
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
@@ -122,23 +122,27 @@ ice-blue banner replaces the composer. Hooks: `-uiTestFrozenFixture/Empty`.
 Holding the EMPTY composer dictates a `user_message` (no protocol change).
 `Models/PttController.swift` ports `<slicc-composer>`'s gesture;
 `Models/Dictation.swift` seams the engine (`SFSpeechRecognizer`, on-device
-when the locale supports it). Hooks: `-uiTestSpeechPermission`/
-`-uiTestSpeechScript` script the engine; `-uiTestPttStage` pins the
-overlay for screenshots.
+where the locale allows). Hooks: `-uiTestSpeechPermission`/
+`-uiTestSpeechScript` script the engine, `-uiTestPttStage` pins the overlay.
 
 Release submits the transcript directly (`InputBar.submit(_:dictated:)`),
-never by writing the composer binding and re-reading it; an unsendable one
-stays in the composer as a draft rather than vanishing.
+never via the composer binding; an unsendable one stays as a draft.
 
 Dictated turns speak their reply back, porting
 `webapp/src/speech/{dictation-priming,voice-reply}.ts`.
-`Models/DictationPriming.swift` appends the AI-only markers the model sees
-(🎙️ per turn, plus a one-time `◁…▷` note per session asking for speakable
-prose and a hidden `<!--lang:xx-->` marker); bubbles strip them at render
-time. `Models/VoiceReply.swift` counts dictated submissions — a count, not a
-flag, so queued turns stay balanced — and speaks that reply via
-`AVSpeechSynthesizer` behind the `SpeechSpeaking` seam. Typed turns stay
-silent, as does a reply whose declared language has no voice.
+`Models/DictationPriming.swift` appends the AI-only markers (🎙️ per turn, a
+one-time `◁…▷` note, a hidden `<!--lang:xx-->`); bubbles strip them at render
+time. `Models/VoiceReply.swift` binds each dictated submission to the scoop
+and message that answers it, then speaks via `AVSpeechSynthesizer` behind the
+`SpeechSpeaking` seam. Typed turns stay silent, as does a reply whose
+declared language has no voice.
+
+## Terminal
+
+The Terminal tab uses libghostty's host-managed `InMemoryTerminalSession`,
+not an on-device process. Local editing sends complete commands through
+`TerminalClient`; Ctrl-C sends `SIGINT`. Output is buffered until completion,
+so interactive programs and incremental output are unsupported.
 
 ## Agent Avatar
 
@@ -258,3 +262,4 @@ the skip message.
 - `packages/webapp/src/scoops/tray-follower-sync.ts` — browser follower
 - `packages/webapp/src/ui/sprinkle-follower-controller.ts` — browser follower's page-side sprinkle renderer (mirrors `SprinkleWebView` behavior)
 - `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" — cross-float overview
+- `docs/ios-simulator-qa.md` — live-leader simulator QA
