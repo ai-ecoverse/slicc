@@ -19,58 +19,92 @@ struct RemoteTabCard: View {
     @State private var preview: PreviewState = .loading
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(palette.field)
-                switch preview {
-                case .loading:
-                    ProgressView()
-                case .image(let image):
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .accessibilityIdentifier("remote-preview-\(target.targetId)")
-                case .unavailable(let reason):
-                    VStack(spacing: 6) {
-                        Image(systemName: "rectangle.on.rectangle.slash")
-                            .foregroundStyle(palette.inkTertiary)
-                        Text(reason)
-                            .font(.caption2)
-                            .foregroundStyle(palette.inkSecondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 8)
-                    }
-                }
-            }
-            .frame(height: 140)
+        ZStack(alignment: .bottomLeading) {
+            thumbnail
+            // A scrim, not a caption bar: the label reads over the darkest
+            // part of the shot instead of stealing a strip of it, and the
+            // gradient guarantees contrast whatever the page looks like.
+            LinearGradient(
+                colors: [.black.opacity(0), .black.opacity(0.55), .black.opacity(0.82)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 72)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
+            caption
+        }
+        .frame(height: 156)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(palette.line, lineWidth: 0.5)
+        )
+        .task(id: target.targetId) { await capture() }
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(target.title.isEmpty ? "Untitled tab" : target.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                    .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(target.runtimeId == "leader" ? "leader" : target.runtimeId)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(palette.accent.opacity(0.15))
-                        .foregroundStyle(palette.accent)
-                        .clipShape(Capsule())
-                    Text(target.url)
+    @ViewBuilder
+    private var thumbnail: some View {
+        ZStack {
+            Rectangle().fill(palette.field)
+            switch preview {
+            case .loading:
+                ProgressView()
+            case .image(let image):
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .accessibilityIdentifier("remote-preview-\(target.targetId)")
+            case .unavailable(let reason):
+                VStack(spacing: 6) {
+                    Image(systemName: "rectangle.on.rectangle.slash")
+                        .foregroundStyle(palette.inkTertiary)
+                    Text(reason)
                         .font(.caption2)
                         .foregroundStyle(palette.inkSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
                 }
+                // Above the scrim's darkest band, so the reason stays legible.
+                .padding(.bottom, 56)
             }
         }
-        .padding(10)
-        .background(palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .task(id: target.targetId) { await capture() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
+    /// Title + origin only. The full URL was the noisiest thing on the card
+    /// and never fit; the host is what identifies a tab at a glance.
+    private var caption: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(target.title.isEmpty ? "Untitled tab" : target.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            HStack(spacing: 5) {
+                Text(target.runtimeId == "leader" ? "leader" : target.runtimeId)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.white.opacity(0.22))
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+                Text(Self.displayHost(target.url))
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 9)
+    }
+
+    /// Host without the `www.` noise; falls back to the raw string for
+    /// `about:blank` and friends, which have no host at all.
+    static func displayHost(_ url: String) -> String {
+        guard let host = URLComponents(string: url)?.host, !host.isEmpty else { return url }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private func capture() async {

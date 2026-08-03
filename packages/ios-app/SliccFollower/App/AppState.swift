@@ -1049,9 +1049,10 @@ class AppState: ObservableObject {
         case .targetsRegistry(let targets):
             // Tabs the tray federates elsewhere (leader + other followers);
             // the browser surface renders them as preview cards (#1865).
-            // Our own advertised targets are excluded — they are the live
-            // local carousel.
-            remoteTargets = targets.filter { $0.runtimeId != controllerId }
+            // Our own advertised targets and the leader's own SLICC page are
+            // excluded — see `BrowserTargets`.
+            remoteTargets = BrowserTargets.visible(
+                targets, ownRuntimeId: controllerId, joinUrl: joinUrl)
 
         case .cdpResponse(
             let requestId, let result, let error, let chunkData, let chunkIndex,

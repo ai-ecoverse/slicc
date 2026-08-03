@@ -210,15 +210,18 @@ struct TabsCarouselView: View {
         HStack(spacing: 8) {
             Image(systemName: "globe")
                 .foregroundStyle(.blue)
+            // Title over origin, not title over full URL: a phone-width
+            // header cannot show a real URL and the truncated middle of one
+            // is unreadable noise.
             VStack(alignment: .leading, spacing: 1) {
                 Text(target.title.isEmpty ? "Untitled" : target.title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                Text(target.url)
-                    .font(.system(size: 11, design: .monospaced))
+                Text(RemoteTabCard.displayHost(target.url))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
             }
             Spacer()
             Button {

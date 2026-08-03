@@ -5,9 +5,6 @@ import Foundation
 /// plus the pinned system tools, in prototype order.
 enum DockSurface: Hashable {
     case sprinkle(name: String)
-    /// The always-present `New +` launcher. Sprinkles are authored on the
-    /// leader, so on a follower this opens an honest placeholder.
-    case newSprinkle
     case browser
     case files
     case term
@@ -25,22 +22,22 @@ struct DockItem: Identifiable, Hashable {
 }
 
 /// Pure builders so the rail's order is unit-testable: sprinkle launchers
-/// at the top, then `New +`; the pinned tools anchor the bottom after a
-/// spacer + divider (the view owns those two).
+/// at the top; the pinned tools anchor the bottom after a spacer + divider
+/// (the view owns those two).
+///
+/// There is no `New +` launcher: sprinkles are authored on the leader, so
+/// the button could only ever open a placeholder — a rail entry that does
+/// nothing costs a tap target and teaches the wrong affordance.
 enum DockModel {
     static func sprinkleItems(_ sprinkles: [SprinkleSummary]) -> [DockItem] {
         sprinkles.map { sprinkle in
             DockItem(
                 id: "sprinkle-\(sprinkle.name)",
                 surface: .sprinkle(name: sprinkle.name),
-                systemImage: "sparkles",
+                systemImage: SliccIcons.sprinkle(iconSpec: sprinkle.icon),
                 label: sprinkle.title
             )
-        } + [
-            DockItem(
-                id: "new", surface: .newSprinkle, systemImage: "plus",
-                label: "New sprinkle")
-        ]
+        }
     }
 
     /// The pinned system tools, in the web dock's exact order.
@@ -62,8 +59,6 @@ enum DockModel {
         switch surface {
         case .sprinkle, .browser, .monitor, .memory, .files:
             return nil
-        case .newSprinkle:
-            return "Sprinkles are authored on the leader. Ask the cone to scoop one up — it appears here when the leader registers it."
         case .term:
             return "The shell runs on the leader. A follower has no local terminal - drive the session through chat."
         }

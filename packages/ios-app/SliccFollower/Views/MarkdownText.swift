@@ -3,7 +3,11 @@ import SwiftUI
 // MARK: - MarkdownText
 
 /// Renders markdown content as styled SwiftUI views.
-/// Handles fenced code blocks specially since AttributedString(markdown:) doesn't support them well.
+///
+/// The block grammar lives in `MarkdownBlockParser`; this view only paints
+/// it. `AttributedString(markdown:)` is used for inline spans only — it
+/// cannot render fenced code, tables or lists, which is why those are
+/// recognised as blocks first.
 struct MarkdownText: View {
     @Environment(\.palette) private var palette
 
@@ -11,9 +15,9 @@ struct MarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                switch segment {
-                case .text(let text):
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .paragraph(let text):
                     markdownTextView(text)
                 case .heading(let level, let text):
                     headingView(level: level, text: text)
@@ -21,169 +25,44 @@ struct MarkdownText: View {
                     blockquoteView(text: text)
                 case .codeBlock(let lang, let code):
                     codeBlockView(language: lang, code: code)
+                case .list(let list):
+                    listView(list)
+                case .table(let table):
+                    tableView(table)
+                case .thematicBreak:
+                    Rectangle()
+                        .fill(palette.line)
+                        .frame(height: 1)
+                        .padding(.vertical, 2)
                 }
             }
         }
     }
 
-    // MARK: - Segment Parsing
+    private var blocks: [MarkdownBlock] { MarkdownBlockParser.parse(content) }
 
-    private enum Segment {
-        case text(String)
-        case heading(level: Int, text: String)
-        case blockquote(String)
-        case codeBlock(language: String?, code: String)
+    // MARK: - Inline Text Rendering
+
+    /// The one place inline markdown is parsed. Everything block-level hands
+    /// its body through here so **bold**, `code` and links behave the same
+    /// in a paragraph, a heading, a list item and a table cell.
+    private func inlineText(_ text: String) -> Text {
+        guard
+            let attributed = try? AttributedString(
+                markdown: text,
+                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else {
+            return Text(text)
+        }
+        return Text(styledForInlineCode(attributed))
     }
-
-    private var segments: [Segment] {
-        var result: [Segment] = []
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        var currentText: [String] = []
-        var inCodeBlock = false
-        var codeLines: [String] = []
-        var codeLang: String?
-        var quoteLines: [String] = []
-
-        func flushText() {
-            let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !joined.isEmpty { result.append(.text(joined)) }
-            currentText = []
-        }
-        func flushQuote() {
-            guard !quoteLines.isEmpty else { return }
-            // Strip the leading `>` (and optional single space) from each line.
-            let body = quoteLines.map { line -> String in
-                var s = line
-                if s.hasPrefix(">") { s.removeFirst() }
-                if s.hasPrefix(" ") { s.removeFirst() }
-                return s
-            }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !body.isEmpty { result.append(.blockquote(body)) }
-            quoteLines = []
-        }
-
-        for line in lines {
-            if !inCodeBlock && line.hasPrefix("```") {
-                flushQuote()
-                flushText()
-                inCodeBlock = true
-                let langStr = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                codeLang = langStr.isEmpty ? nil : langStr
-                codeLines = []
-            } else if inCodeBlock && line.hasPrefix("```") {
-                result.append(.codeBlock(language: codeLang, code: codeLines.joined(separator: "\n")))
-                inCodeBlock = false
-                codeLines = []
-                codeLang = nil
-            } else if inCodeBlock {
-                codeLines.append(line)
-            } else if let heading = parseAtxHeading(line) {
-                flushQuote()
-                flushText()
-                result.append(.heading(level: heading.level, text: heading.text))
-            } else if line.hasPrefix(">") {
-                flushText()
-                quoteLines.append(line)
-            } else {
-                flushQuote()
-                currentText.append(line)
-            }
-        }
-
-        // Flush remaining
-        if inCodeBlock {
-            // Unclosed code block — render as code anyway
-            result.append(.codeBlock(language: codeLang, code: codeLines.joined(separator: "\n")))
-        } else {
-            flushQuote()
-            flushText()
-        }
-
-        return result
-    }
-
-    /// Parse a leading `# … ######` ATX heading. Returns nil for lines that
-    /// aren't headings (so callers fall through to plain text).
-    ///
-    /// Follows CommonMark's ATX-heading rules:
-    /// - 0-3 leading spaces are allowed (4+ → indented code block, not heading).
-    /// - The opening `#` run must be followed by whitespace or end-of-line.
-    /// - A trailing `#` run is only treated as a closing sequence when it's
-    ///   preceded by whitespace; e.g. `# C#` keeps the `#` as part of the
-    ///   title, while `# Heading ##` strips the closing `##`.
-    private func parseAtxHeading(_ line: String) -> (level: Int, text: String)? {
-        // Allow up to 3 leading spaces. 4+ leading spaces is an indented
-        // code block in CommonMark, never a heading.
-        var leadingSpaces = 0
-        var cursor = line.startIndex
-        while cursor < line.endIndex, line[cursor] == " ", leadingSpaces < 4 {
-            leadingSpaces += 1
-            cursor = line.index(after: cursor)
-        }
-        guard leadingSpaces < 4 else { return nil }
-        let trimmed = line[cursor...]
-        guard trimmed.first == "#" else { return nil }
-        var level = 0
-        var i = trimmed.startIndex
-        while i < trimmed.endIndex, trimmed[i] == "#", level < 6 {
-            level += 1
-            i = trimmed.index(after: i)
-        }
-        // Must be followed by whitespace or end-of-line for it to be a heading.
-        guard level >= 1 else { return nil }
-        if i == trimmed.endIndex { return (level, "") }
-        guard trimmed[i] == " " || trimmed[i] == "\t" else { return nil }
-        let rawText = String(trimmed[i...])
-        // Strip trailing whitespace first.
-        var endIdx = rawText.endIndex
-        while endIdx > rawText.startIndex,
-            rawText[rawText.index(before: endIdx)] == " "
-                || rawText[rawText.index(before: endIdx)] == "\t"
-        {
-            endIdx = rawText.index(before: endIdx)
-        }
-        // Walk back over a trailing run of `#`. Only treat it as a closing
-        // sequence if the character before the run is whitespace (or the
-        // entire body is hashes). Otherwise keep them — `# C#` should not
-        // become `# C`.
-        var hashStart = endIdx
-        while hashStart > rawText.startIndex,
-            rawText[rawText.index(before: hashStart)] == "#"
-        {
-            hashStart = rawText.index(before: hashStart)
-        }
-        let hadTrailingHashes = hashStart < endIdx
-        let bodyEnd: String.Index
-        if hadTrailingHashes,
-            hashStart == rawText.startIndex
-                || rawText[rawText.index(before: hashStart)] == " "
-                || rawText[rawText.index(before: hashStart)] == "\t"
-        {
-            bodyEnd = hashStart
-        } else {
-            bodyEnd = endIdx
-        }
-        let final = String(rawText[rawText.startIndex..<bodyEnd]).trimmingCharacters(in: .whitespaces)
-        return (level, final)
-    }
-
-    // MARK: - Text Rendering
 
     @ViewBuilder
     private func markdownTextView(_ text: String) -> some View {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(styledForInlineCode(attributed))
-                .font(.system(size: 15))
-                .foregroundStyle(palette.ink.opacity(0.9))
-                .tint(palette.accent)
-        } else {
-            Text(text)
-                .font(.system(size: 15))
-                .foregroundStyle(palette.ink.opacity(0.9))
-        }
+        inlineText(text)
+            .font(.system(size: 15))
+            .foregroundStyle(palette.ink.opacity(0.9))
+            .tint(palette.accent)
     }
 
     /// Apply the assistant-bubble inline-code style: white@10 background,
@@ -214,18 +93,9 @@ struct MarkdownText: View {
             }
         }()
         let weight: Font.Weight = level <= 2 ? .bold : .semibold
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(styledForInlineCode(attributed))
-                .font(.system(size: size, weight: weight))
-                .foregroundStyle(palette.ink)
-        } else {
-            Text(text)
-                .font(.system(size: size, weight: weight))
-                .foregroundStyle(palette.ink)
-        }
+        inlineText(text)
+            .font(.system(size: size, weight: weight))
+            .foregroundStyle(palette.ink)
     }
 
     // MARK: - Blockquote Rendering
@@ -238,21 +108,91 @@ struct MarkdownText: View {
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(palette.ink.opacity(0.20))
                 .frame(width: 3)
-            Group {
-                if let attributed = try? AttributedString(
-                    markdown: text,
-                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-                ) {
-                    Text(styledForInlineCode(attributed))
-                } else {
-                    Text(text)
-                }
-            }
-            .font(.system(size: 15))
-            .foregroundStyle(palette.ink.opacity(0.65))
-            .italic()
+            inlineText(text)
+                .font(.system(size: 15))
+                .foregroundStyle(palette.ink.opacity(0.65))
+                .italic()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - List Rendering
+
+    /// Bullets and numbers get their own gutter so wrapped lines hang under
+    /// the text, not under the marker. Nesting indents by depth.
+    private func listView(_ list: MarkdownList) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(list.items.enumerated()), id: \.offset) { _, item in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(item.marker)
+                        .font(
+                            .system(
+                                size: 15, weight: list.ordered ? .medium : .regular)
+                        )
+                        .monospacedDigit()
+                        .foregroundStyle(palette.ink.opacity(0.55))
+                        .frame(minWidth: list.ordered ? 22 : 12, alignment: .trailing)
+                    inlineText(item.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(palette.ink.opacity(0.9))
+                        .tint(palette.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.leading, CGFloat(item.depth) * 16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Table Rendering
+
+    /// Pipe tables scroll horizontally rather than compressing: a 4-column
+    /// comparison squeezed into a phone's width is unreadable, and the
+    /// leader emits those routinely.
+    private func tableView(_ table: MarkdownTable) -> some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
+                        tableCell(
+                            cell, alignment: table.alignments[safe: column] ?? .leading,
+                            isHeader: true, zebra: false)
+                    }
+                }
+                Rectangle()
+                    .fill(palette.line)
+                    .frame(height: 1)
+                    .gridCellColumns(max(table.columnCount, 1))
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
+                            tableCell(
+                                cell, alignment: table.alignments[safe: column] ?? .leading,
+                                isHeader: false, zebra: !rowIndex.isMultiple(of: 2))
+                        }
+                    }
+                }
+            }
+        }
+        .background(palette.field)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(palette.line, lineWidth: 1)
+        )
+    }
+
+    private func tableCell(
+        _ text: String, alignment: MarkdownTable.Alignment, isHeader: Bool, zebra: Bool
+    ) -> some View {
+        inlineText(text)
+            .font(.system(size: 13, weight: isHeader ? .semibold : .regular))
+            .foregroundStyle(palette.ink.opacity(isHeader ? 1.0 : 0.85))
+            .multilineTextAlignment(alignment.textAlignment)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(minWidth: 56, maxWidth: 220, alignment: alignment.frameAlignment)
+            .background(zebra ? palette.ink.opacity(0.04) : .clear)
     }
 
     // MARK: - Code Block Rendering
@@ -280,6 +220,35 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.field)
         .cornerRadius(8)
+    }
+}
+
+// MARK: - Alignment bridging
+
+extension MarkdownTable.Alignment {
+    var textAlignment: TextAlignment {
+        switch self {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    var frameAlignment: Alignment {
+        switch self {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+}
+
+extension Array {
+    /// Bounds-checked subscript. A malformed table can carry more cells than
+    /// the delimiter row declared alignments for; a crash there would take
+    /// the whole transcript down.
+    fileprivate subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 
@@ -319,6 +288,11 @@ func styledInlineCode(
 
                 This is **bold** and *italic* and `inline code`.
 
+                | Lens | Reach | Price |
+                |------|:-----:|------:|
+                | Leica 100-400 | 800mm-eq | €750-1.010 |
+                | OM 100-400 | 800mm-eq | €650-850 |
+
                 ```swift
                 func hello() {
                     print("Hello, world!")
@@ -327,7 +301,11 @@ func styledInlineCode(
 
                 - Item one
                 - Item two
-                - Item three
+                  - Nested item
+                1. First
+                2. Second
+
+                ---
 
                 Some more text with a [link](https://example.com).
                 """

@@ -222,7 +222,7 @@ import UIKit
         }
 
         /// Open a workbench surface on launch
-        /// (`-uiTestOpenDockSurface term|files|memory|monitor|browser|new`)
+        /// (`-uiTestOpenDockSurface term|files|memory|monitor|browser`)
         /// so screenshots and UI tests reach the dock overlay without taps.
         static func opensDockSurface() -> DockSurface? {
             switch UserDefaults.standard.string(forKey: "uiTestOpenDockSurface") {
@@ -231,7 +231,6 @@ import UIKit
             case "term": return .term
             case "memory": return .memory
             case "monitor": return .monitor
-            case "new": return .newSprinkle
             default: return nil
             }
         }
