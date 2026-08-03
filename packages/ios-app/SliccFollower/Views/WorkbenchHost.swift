@@ -30,7 +30,7 @@ struct WorkbenchHost: View {
                 MemoryView()
             case .files:
                 FilesView()
-            case .newSprinkle, .term:
+            case .term:
                 placeholder(DockModel.placeholderText(for: surface) ?? "")
             }
         }

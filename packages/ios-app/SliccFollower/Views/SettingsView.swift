@@ -10,6 +10,17 @@ struct SettingsView: View {
     /// without it, `Date()` in `body` is only sampled on unrelated redraws and
     /// a row crossing the 12h TTL would stay enabled indefinitely.
     @State private var now = Date()
+    /// Set when the user asks THIS sheet to connect, so the auto-dismiss only
+    /// fires for a connection they just started here. Opening Settings while
+    /// a background reconnect happens to land must not yank the sheet away.
+    @State private var awaitingConnect = false
+    /// Whether this device has an iCloud identity, or nil while unknown.
+    ///
+    /// `FileManager.ubiquityIdentityToken` reaches the iCloud daemon and can
+    /// block; reading it inside `body` put that call on the main thread on
+    /// every single layout pass of the sheet. It is sampled once, off the
+    /// main actor, and the answer cannot change while the sheet is open.
+    @State private var hasICloudIdentity: Bool?
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -36,8 +47,24 @@ struct SettingsView: View {
                     appState.joinUrlHistory = history
                 }
             }
+            .task {
+                hasICloudIdentity = await Self.probeICloudIdentity()
+            }
             .onChange(of: appState.joinUrl) { _, newValue in
                 storedJoinUrl = newValue
+            }
+            // Connecting is the reason the sheet was opened; once it lands,
+            // the settings form is in the way of the conversation.
+            .onChange(of: appState.connectionState) { _, state in
+                guard awaitingConnect else { return }
+                if state == .connected {
+                    awaitingConnect = false
+                    dismiss()
+                } else if state == .disconnected || state == .failed || state == .gaveUp {
+                    // The attempt resolved without connecting — stay put so
+                    // the error is readable and the URL can be corrected.
+                    awaitingConnect = false
+                }
             }
         }
     }
@@ -64,7 +91,9 @@ struct SettingsView: View {
             Text("iCloud Sessions")
         } footer: {
             Text(
-                "Leaders started with Sliccstart on this Apple ID appear here automatically. Others (cloud, another Apple ID) still join via a pasted Join URL below."
+                "Leaders started with Sliccstart on this Apple ID appear here "
+                    + "automatically. Others (cloud, another Apple ID) still join via a "
+                    + "pasted Join URL below."
             )
         }
         .onAppear {
@@ -82,6 +111,7 @@ struct SettingsView: View {
                 appState.sessionStore.reload()
                 return
             }
+            awaitingConnect = true
             appState.connectToDiscoveredSession(joinUrl: session.joinUrl)
         } label: {
             HStack {
@@ -106,8 +136,11 @@ struct SettingsView: View {
     }
 
     private var sessionsEmptyState: some View {
+        // `hasICloudIdentity` is sampled off the main actor (see its
+        // declaration); until it answers, assume iCloud is fine so the row
+        // cannot flash "iCloud is unavailable" at someone who is signed in.
         let reason = ICloudSessionList.emptyReason(
-            hasICloudIdentity: FileManager.default.ubiquityIdentityToken != nil
+            hasICloudIdentity: hasICloudIdentity ?? true
         )
         return HStack(spacing: 10) {
             Image(systemName: reason == .iCloudUnavailable ? "icloud.slash" : "icloud")
@@ -121,6 +154,14 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("icloud-sessions-empty")
+    }
+
+    /// Off the main actor: the token read can block on the iCloud daemon,
+    /// and nothing about the sheet needs it synchronously.
+    private static func probeICloudIdentity() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            FileManager.default.ubiquityIdentityToken != nil
+        }.value
     }
 
     // MARK: - Connection Section
@@ -215,6 +256,7 @@ struct SettingsView: View {
                 }
             } else {
                 Button {
+                    awaitingConnect = true
                     appState.connect()
                 } label: {
                     HStack {

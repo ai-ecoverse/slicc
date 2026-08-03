@@ -150,6 +150,9 @@ struct ConversationView: View {
     @Binding var showFrozenSessions: Bool
     @State private var inputText = ChatView.seededComposerText()
     @State private var showNewSessionDialog = false
+    /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
+    /// reachable edge.
+    @AppStorage("leftHandedDock") private var leftHandedDock = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,13 +165,6 @@ struct ConversationView: View {
             )
             .animation(.easeInOut(duration: 0.3), value: appState.connectionState)
             .animation(.easeInOut(duration: 0.3), value: appState.isLeaderStalled)
-
-            // Scoop indicator + tap-to-cycle.
-            if appState.scoops.count > 1 {
-                ScoopHeaderView()
-                    .padding(.vertical, 6)
-                    .background(palette.canvas.opacity(0.85))
-            }
 
             if let frozen = appState.openFrozen {
                 // Read-only view of an archived session. The live transcript
@@ -188,67 +184,16 @@ struct ConversationView: View {
             }
         }
         .background(palette.canvas)
-        .navigationTitle(
-            appState.openFrozen?.entry.title
-                ?? appState.selectedScoop?.assistantLabel ?? "SLICC"
-        )
+        // The live session identifies itself through the compact switcher in
+        // the corner, not through a nav title — two copies of the same scoop
+        // label stacked on top of each other is what the full-width scoop
+        // header used to cost.
+        .navigationTitle(appState.openFrozen?.entry.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
-            // While frozen, the top-left Back returns to the LIVE session —
-            // the system back (which pops to the sidebar) is hidden so there
-            // is exactly one back affordance and it does what it looks like.
-            if appState.openFrozen != nil {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { appState.closeFrozenSession() }) {
-                        Image(systemName: "chevron.backward")
-                            .foregroundStyle(palette.ink.opacity(0.7))
-                    }
-                    .accessibilityLabel("Back to live session")
-                    .accessibilityIdentifier("frozen-back")
-                }
-            }
-            // The rail button hides while a frozen session is open — the
-            // snowflake would only offer more of what is already on screen.
-            if appState.openFrozen == nil {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    // New chat lives beside the snowflake and gear (the
-                    // top control cluster owns session-level actions; the
-                    // dock rail owns workbench surfaces).
-                    Button(action: { showNewSessionDialog = true }) {
-                        if appState.newSessionInFlight {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "square.and.pencil")
-                                .foregroundStyle(palette.ink.opacity(0.7))
-                        }
-                    }
-                    // Gated like the composer: with no usable leader the
-                    // request would silently vanish (requestNewSession
-                    // returns when the channel cannot be written).
-                    .disabled(
-                        appState.newSessionInFlight
-                            || appState.connectionState != .connected
-                            || appState.isLeaderStalled
-                    )
-                    .accessibilityLabel("New chat")
-                    .accessibilityIdentifier("new-chat-button")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showFrozenSessions = true }) {
-                        Image(systemName: "snowflake")
-                            .foregroundStyle(palette.ink.opacity(0.7))
-                    }
-                    .accessibilityLabel("Past Sessions")
-                    .accessibilityIdentifier("frozen-rail-button")
-                }
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showSettings = true }) {
-                    Image(systemName: "gearshape")
-                        .foregroundStyle(palette.ink.opacity(0.7))
-                }
-            }
+            identityGroup
+            sessionControls
         }
         .sheet(isPresented: $showFrozenSessions) {
             FrozenSessionsView()
@@ -265,6 +210,105 @@ struct ConversationView: View {
                 }
             #endif
         }
+    }
+
+    // MARK: - Toolbar
+
+    /// The rail's edge is the reachable one, so both nav-bar clusters follow
+    /// it: identity opposite the rail, session actions on the rail's side.
+    private var identityPlacement: ToolbarItemPlacement {
+        leftHandedDock ? .topBarTrailing : .topBarLeading
+    }
+    private var controlsPlacement: ToolbarItemPlacement {
+        leftHandedDock ? .topBarLeading : .topBarTrailing
+    }
+
+    /// Who you are talking to: the frozen back button, or the compact
+    /// cone/scoop switcher that replaced the full-width header row.
+    @ToolbarContentBuilder
+    private var identityGroup: some ToolbarContent {
+        ToolbarItem(placement: identityPlacement) {
+            if appState.openFrozen != nil {
+                // While frozen, Back returns to the LIVE session — the system
+                // back (which pops to the sidebar) is hidden so there is
+                // exactly one back affordance and it does what it looks like.
+                Button {
+                    appState.closeFrozenSession()
+                } label: {
+                    Image(systemName: "chevron.backward")
+                        .foregroundStyle(palette.ink.opacity(0.7))
+                }
+                .accessibilityLabel("Back to live session")
+                .accessibilityIdentifier("frozen-back")
+            } else {
+                ScoopSwitcher()
+            }
+        }
+    }
+
+    /// Session-level actions. `settings` sits in the middle of the cluster in
+    /// both handedness modes; the outer two mirror so New chat — the most
+    /// frequent of the three — stays nearest the holding hand's edge.
+    @ToolbarContentBuilder
+    private var sessionControls: some ToolbarContent {
+        ToolbarItemGroup(placement: controlsPlacement) {
+            if appState.openFrozen != nil {
+                settingsButton
+            } else if leftHandedDock {
+                newChatButton
+                settingsButton
+                frozenSessionsButton
+            } else {
+                frozenSessionsButton
+                settingsButton
+                newChatButton
+            }
+        }
+    }
+
+    private var newChatButton: some View {
+        Button {
+            showNewSessionDialog = true
+        } label: {
+            if appState.newSessionInFlight {
+                ProgressView()
+            } else {
+                Image(systemName: "square.and.pencil")
+                    .foregroundStyle(palette.ink.opacity(0.7))
+            }
+        }
+        // Gated like the composer: with no usable leader the request would
+        // silently vanish (requestNewSession returns when the channel cannot
+        // be written).
+        .disabled(
+            appState.newSessionInFlight
+                || appState.connectionState != .connected
+                || appState.isLeaderStalled
+        )
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("new-chat-button")
+    }
+
+    private var settingsButton: some View {
+        Button {
+            showSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .foregroundStyle(palette.ink.opacity(0.7))
+        }
+        .accessibilityLabel("Settings")
+        .accessibilityIdentifier("settings-button")
+    }
+
+    private var frozenSessionsButton: some View {
+        Button {
+            showFrozenSessions = true
+        } label: {
+            Image(systemName: "snowflake")
+                .foregroundStyle(palette.ink.opacity(0.7))
+        }
+        .accessibilityLabel("Past Sessions")
+        .accessibilityIdentifier("frozen-rail-button")
     }
 
     @ViewBuilder
@@ -291,8 +335,9 @@ struct ConversationView: View {
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
                 steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                onSend: { text, attachments in
-                    appState.sendMessage(text, attachments: attachments)
+                onSend: { text, attachments, dictated in
+                    appState.sendMessage(
+                        text, attachments: attachments, dictated: dictated)
                     inputText = ""
                 },
                 onAbort: {
@@ -413,60 +458,80 @@ struct FixtureConversationView: View {
     }
 }
 
-// MARK: - ScoopHeaderView
+// MARK: - ScoopSwitcher
 
-/// Slim header showing the currently-viewed scoop with chevron buttons for
-/// manual prev/next switching (in addition to swipe gestures).
-struct ScoopHeaderView: View {
+/// The nav-bar cone/scoop switcher. Replaces the old full-width header row:
+/// the same identity (glyph + label + leader-active dot) in a nav-bar-sized
+/// control, and a menu that jumps straight to a scoop instead of cycling
+/// one chevron tap at a time. Swipe still cycles.
+struct ScoopSwitcher: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                appState.swipeToPreviousScoop()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .foregroundStyle(palette.ink.opacity(0.6))
-            }
-
-            Spacer()
-
-            HStack(spacing: 6) {
-                Image(
-                    systemName: appState.selectedScoop?.isCone == true
-                        ? "cup.and.saucer.fill"
-                        : "circle.grid.2x2"
-                )
-                .foregroundStyle(.purple)
-                Text(appState.selectedScoop?.assistantLabel ?? "—")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-                if let active = appState.leaderActiveScoopJid,
-                    active == appState.selectedScoopJid
-                {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
+        if appState.scoops.count > 1 {
+            Menu {
+                ForEach(appState.scoops) { scoop in
+                    Button {
+                        appState.selectScoop(jid: scoop.jid)
+                    } label: {
+                        // A menu row can only draw `Image`/`Text`, never a
+                        // custom Shape, so the lucide cone cannot appear
+                        // here — the row says cone or scoop in words instead.
+                        Label(
+                            menuTitle(for: scoop),
+                            systemImage: scoop.jid == appState.selectedScoopJid
+                                ? "checkmark" : "circle")
+                    }
+                    .accessibilityIdentifier("scoop-switch-\(scoop.jid)")
                 }
-            }
-
-            Spacer()
-
-            Button {
-                appState.swipeToNextScoop()
             } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .foregroundStyle(palette.ink.opacity(0.6))
+                identityLabel
+            }
+            .accessibilityLabel("Switch scoop")
+            .accessibilityIdentifier("scoop-switcher")
+        } else {
+            identityLabel
+                .accessibilityIdentifier("scoop-switcher")
+        }
+    }
+
+    /// Glyph + label + leader-active dot, sized to sit inside the nav bar.
+    /// `.lineLimit(1)` plus a cap keeps a chatty `assistantLabel` from
+    /// pushing the action cluster off the other edge.
+    private var identityLabel: some View {
+        HStack(spacing: 5) {
+            ConeScoopGlyph(isCone: appState.selectedScoop?.isCone ?? true, size: 17)
+                .foregroundStyle(palette.accent)
+            Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(palette.ink)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 140, alignment: .leading)
+            if appState.leaderActiveScoopJid != nil,
+                appState.leaderActiveScoopJid == appState.selectedScoopJid
+            {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 6, height: 6)
+            }
+            if appState.scoops.count > 1 {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.ink.opacity(0.5))
             }
         }
-        .padding(.horizontal, 14)
+        .fixedSize()
+    }
+
+    /// The leader's active scoop is marked in the menu too — the dot on the
+    /// closed control only speaks about the one you are looking at.
+    private func menuTitle(for scoop: ScoopSummary) -> String {
+        let kind = scoop.isCone ? "cone" : "scoop"
+        return scoop.jid == appState.leaderActiveScoopJid
+            ? "\(scoop.assistantLabel) · \(kind) · active"
+            : "\(scoop.assistantLabel) · \(kind)"
     }
 }
 
