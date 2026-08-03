@@ -10,22 +10,22 @@ This file covers the iOS follower app in `packages/ios-app/`.
 
 ## Layout
 
-| Path                                                                                                 | Purpose                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                     | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                    |
-| `SliccFollower/Models/SyncProtocol.swift`                                                            | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts`                                                              |
-| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`  | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` transport frame + `TrayChunkReassembler`: below both unions, so no corpus fixture. See `docs/architecture.md` |
-| `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                                                                                       |
-| `SliccFollower/Sync/TerminalClient.swift`                                                            | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and timeouts                                                                                       |
-| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                         | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                           |
-| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                                                                                 |
-| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                     |
-| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                  | SwiftUI chat surface (`MessageListView` renders). `Models/MarkdownBlock.swift` parses fences, lists and GFM pipe tables for the bubbles                                           |
-| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`  | Renders leader `sprinkle.content`; `WKScriptMessageHandler` intercepts bridge calls; VFS APIs are stubbed for graceful degradation                                                |
-| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`   | Phone IA (#1802): 48pt dock rail; workbench overlays chat. `Models/SVGPath.swift` parses lucide `d` strings; SF Symbols has no cone                                               |
-| `SliccFollower/Views/TerminalView.swift`, `TerminalViewModel.swift`                                  | Persistent libghostty surface with local line editing, theming, cancellation, and scrollback                                                                                      |
-| `SliccFollower/{Models,Views}/*Avatar*.swift`                                                        | Avatar geometry/motion, renderer, and screenshot fixture                                                                                                                          |
-| Other views (`ChatView.swift`, `InputBar.swift`, `MessageBubble.swift`, `SettingsView.swift`, …)     | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                           |
+| Path | Purpose |
+| --- | --- |
+| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift` | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring) |
+| `SliccFollower/Models/SyncProtocol.swift` | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/shared-ts/src/tray-sync-protocol.ts` |
+| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift` | Chat + signaling data types. `TrayChunkFraming` holds the `__chunk` frame + `TrayChunkReassembler`: below both unions, so no corpus fixture |
+| `SliccFollower/Sync/Keepalive.swift` | `DataChannelKeepalive` ping/pong actor (used by `AppState`) |
+| `SliccFollower/Sync/TerminalClient.swift` | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and timeouts |
+| `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements` | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement |
+| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup |
+| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift` | Hosts WKWebViews as CDP targets the leader can drive remotely |
+| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift` | SwiftUI chat surface (`MessageListView` renders). `Models/MarkdownBlock.swift` parses fences, lists and GFM pipe tables for the bubbles |
+| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift` | Renders `.shtml` from `sprinkle.content`. Bridge calls intercepted via `WKScriptMessageHandler`; VFS APIs stubbed |
+| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift` | Phone IA (#1802): 48pt dock rail; workbench overlays chat. `Models/SVGPath.swift` parses lucide paths |
+| `SliccFollower/Views/TerminalView.swift`, `TerminalViewModel.swift` | Persistent libghostty surface with line editing, theming, cancellation, and scrollback |
+| `SliccFollower/{Models,Views}/*Avatar*.swift` | Avatar geometry/motion, renderer, and screenshot fixture |
+| Other views | Top-level shell + smaller UI fragments — not exhaustive |
 
 Plain SPM commands do nothing useful on a macOS host (`swift build` hits iOS-only frameworks; `Package.swift` declares no test target). Build and test go through the XcodeGen project on a simulator (see "Test + coverage").
 
