@@ -7,13 +7,19 @@
  * worker via `script_name` in wrangler.jsonc.
  */
 
+import { servePersistentPreview } from './persistent-preview-storage.js';
 import { handleBridgeRoute, injectBridge } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
-import { type DurableObjectNamespaceLike, parseCapabilityToken } from './shared.js';
+import {
+  type DurableObjectNamespaceLike,
+  type PreviewRecord,
+  parseCapabilityToken,
+} from './shared.js';
 
 interface PreviewWorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
+  PREVIEW_STORAGE: R2Bucket;
 }
 
 export default {
@@ -41,15 +47,11 @@ export default {
     if (resolveRes.status !== 200) {
       return new Response('Preview not found', { status: 404 });
     }
-    const record = (await resolveRes.json()) as {
-      servedRoot: string;
-      entryPath: string;
-      allowLive: boolean;
-      cacheVersion: number;
-      bridge: boolean;
-      maxTabs: number;
-      webhookId?: string;
-    };
+    const record = (await resolveRes.json()) as PreviewRecord;
+
+    if (record.mode === 'persistent') {
+      return servePersistentPreview(request, url, record, env.PREVIEW_STORAGE);
+    }
 
     // Bridge routes (bootstrap JS / emit / WS) are served only for bridged previews.
     const bridged = await handleBridgeRoute(request, url, env, previewToken, record.bridge);

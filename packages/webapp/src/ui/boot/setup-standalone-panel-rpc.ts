@@ -158,17 +158,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         // abort to SIGINT on the follower, which is the Ctrl+C path.
         execAborters.get(execToken)?.abort();
       },
-      // Worker-side `serve` mints via the page-side leader's controllerToken.
-      // Extension uses the in-realm `setPreviewMinter` hook instead.
-      mintPreview: async ({
-        entryPath,
-        servedRoot,
-        bridge,
-        noBridge,
-        maxTabs,
-        quiet,
-        webhookId,
-      }) => {
+      mintPreview: async (opts) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');
         const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
@@ -182,25 +172,27 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
         const hasCherryFollower = sync
           .getConnectedFollowers()
           .some((f) => f.runtime === CHERRY_RUNTIME_TAG);
-        const effectiveAllowLive = !noBridge && (bridge || hasCherryFollower);
-        const effectiveBridge = !noBridge && bridge;
+        const effectiveAllowLive = !opts.noBridge && (opts.bridge || hasCherryFollower);
+        const effectiveBridge = !opts.noBridge && opts.bridge;
         const userHash = await computeUserHash();
         const { url, previewToken } = await mintPreviewViaWorker({
           workerBaseUrl: session.workerBaseUrl,
           trayId: session.trayId,
           controllerToken,
-          servedRoot,
-          entryPath,
+          servedRoot: opts.servedRoot,
+          entryPath: opts.entryPath,
           allowLive: effectiveAllowLive,
           bridge: effectiveBridge,
-          maxTabs,
-          webhookId,
+          maxTabs: opts.maxTabs,
+          webhookId: opts.webhookId,
           userHash,
-          quiet: quiet ?? false,
+          quiet: opts.quiet ?? false,
+          ttlMs: opts.ttlMs,
+          snapshotFiles: opts.snapshotFiles,
         });
         // Get title from entryPath basename, or 'Preview' if empty
-        const title = entryPath ? (entryPath.split('/').pop() ?? 'Preview') : 'Preview';
-        sync.registerMintedPreview(previewToken, { url, title, quiet: quiet ?? false });
+        const title = opts.entryPath ? (opts.entryPath.split('/').pop() ?? 'Preview') : 'Preview';
+        sync.registerMintedPreview(previewToken, { url, title, quiet: opts.quiet ?? false });
         sync.broadcastPreviewOpen(url);
         return { url, pushed: sync.getConnectedFollowers().length, previewToken };
       },

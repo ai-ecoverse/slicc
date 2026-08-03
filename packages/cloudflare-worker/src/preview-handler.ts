@@ -17,10 +17,11 @@
 // `stub.fetch('https://internal/internal/preview/fetch', …)`.
 
 import type { WorkerEnv } from './index.js';
+import { servePersistentPreview } from './persistent-preview-storage.js';
 import { handleBridgeRoute, injectBridge } from './preview-bridge-routes.js';
 import { cachedPreviewFetch } from './preview-cache.js';
 import { previewTokenFromHost } from './preview-host.js';
-import { parseCapabilityToken } from './shared.js';
+import { type PreviewRecord, parseCapabilityToken } from './shared.js';
 
 export async function handlePreviewRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url);
@@ -47,13 +48,11 @@ export async function handlePreviewRequest(request: Request, env: WorkerEnv): Pr
   if (resolveRes.status !== 200) {
     return new Response('Not found', { status: 404 });
   }
-  const record = (await resolveRes.json()) as {
-    servedRoot: string;
-    entryPath: string;
-    allowLive: boolean;
-    cacheVersion: number;
-    bridge: boolean;
-  };
+  const record = (await resolveRes.json()) as PreviewRecord;
+
+  if (record.mode === 'persistent') {
+    return servePersistentPreview(request, url, record, env.PREVIEW_STORAGE);
+  }
 
   // Bridge routes (bootstrap JS / emit / WS) are served only for bridged previews.
   const bridged = await handleBridgeRoute(request, url, env, previewToken, record.bridge);

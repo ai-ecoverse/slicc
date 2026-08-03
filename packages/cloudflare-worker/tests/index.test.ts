@@ -1219,6 +1219,8 @@ describe('tray worker skeleton', () => {
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'POST /api/tray/:trayId/preview',
+        'PUT /api/tray/:trayId/preview/:previewToken/file',
+        'POST /api/tray/:trayId/preview/:previewToken/finalize',
         'POST /api/tray/:trayId/preview/stop',
         'GET /api/tray/:trayId/previews',
         'POST /api/tray/:trayId/supersede',

@@ -193,6 +193,8 @@ export type PanelRpcRequest =
         maxTabs?: number;
         quiet?: boolean;
         webhookId?: string;
+        ttlMs?: number;
+        snapshotFiles?: Array<{ path: string; content: Uint8Array; mime: string }>;
       };
     }
   | {
@@ -587,6 +589,8 @@ export interface PanelRpcResults {
       entryPath: string;
       allowLive: boolean;
       createdAt: string;
+      mode?: 'live' | 'persistent';
+      expiresAt?: string;
     }>;
   };
   'tray-preview-logs': {

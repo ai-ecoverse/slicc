@@ -62,6 +62,112 @@ describe('mintPreviewViaWorker', () => {
       )
     ).rejects.toThrow(/403/);
   });
+
+  it('uploads snapshot bytes and finalizes a persistent preview', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            previewToken: 'preview-token',
+            uploadToken: 'upload-token',
+            url: 'https://preview.sliccy.now/index.html',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            previewToken: 'preview-token',
+            url: 'https://preview.sliccy.now/index.html',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+
+    const result = await mintPreviewViaWorker(
+      {
+        workerBaseUrl: 'https://www.sliccy.ai',
+        trayId: 'tray1',
+        controllerToken: 'controller-token',
+        servedRoot: '/workspace/app',
+        entryPath: '/workspace/app/index.html',
+        allowLive: false,
+        ttlMs: 86_400_000,
+        snapshotFiles: [
+          { path: 'index.html', content: new TextEncoder().encode('hello'), mime: 'text/html' },
+        ],
+      },
+      fetchMock
+    );
+
+    expect(result.previewToken).toBe('preview-token');
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://www.sliccy.ai/api/tray/tray1/preview/preview-token/file?path=index.html',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer upload-token',
+          'Content-Type': 'text/html',
+        }),
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'https://www.sliccy.ai/api/tray/tray1/preview/preview-token/finalize',
+      expect.objectContaining({ method: 'POST' })
+    );
+  });
+
+  it('revokes a pending preview after an upload failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            previewToken: 'preview-token',
+            uploadToken: 'upload-token',
+            url: 'https://preview.sliccy.now/',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'R2 unavailable' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ revoked: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+
+    await expect(
+      mintPreviewViaWorker(
+        {
+          workerBaseUrl: 'https://www.sliccy.ai',
+          trayId: 'tray1',
+          controllerToken: 'controller-token',
+          servedRoot: '/workspace/app',
+          entryPath: '/workspace/app/index.html',
+          allowLive: false,
+          ttlMs: 60_000,
+          snapshotFiles: [{ path: 'index.html', content: new Uint8Array([1]), mime: 'text/html' }],
+        },
+        fetchMock
+      )
+    ).rejects.toThrow('Preview upload failed for index.html: R2 unavailable');
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://www.sliccy.ai/api/tray/tray1/preview/stop',
+      expect.objectContaining({ body: JSON.stringify({ previewToken: 'preview-token' }) })
+    );
+  });
 });
 
 describe('revokePreviewViaWorker', () => {

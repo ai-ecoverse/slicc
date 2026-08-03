@@ -34,9 +34,11 @@ import {
 import { handlePreviewRequest } from './preview-handler.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
+  handlePreviewFinalize,
   handlePreviewList,
   handlePreviewMint,
   handlePreviewStop,
+  handlePreviewUpload,
   handleTraySupersede,
 } from './preview-routes.js';
 import { buildRelResponse } from './rel-docs.js';
@@ -57,6 +59,7 @@ export interface WorkerEnv {
   CLOUD_SESSIONS: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
   ASSET_ARCHIVE: R2Bucket;
+  PREVIEW_STORAGE: R2Bucket;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
@@ -567,6 +570,8 @@ const ROUTES_INDEX_BODY = {
     'GET|POST /controller/:token',
     'POST /webhook/:token/:webhookId',
     'POST /api/tray/:trayId/preview',
+    'PUT /api/tray/:trayId/preview/:previewToken/file',
+    'POST /api/tray/:trayId/preview/:previewToken/finalize',
     'POST /api/tray/:trayId/preview/stop',
     'GET /api/tray/:trayId/previews',
     'POST /api/tray/:trayId/supersede',
@@ -854,6 +859,18 @@ async function tryHandleCapabilityRoutes(
   if (previewMintMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewMintMatch[1]));
     return handlePreviewMint(request, stub);
+  }
+  const previewUploadMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview\/([^/]+)\/file$/);
+  if (previewUploadMatch && request.method === 'PUT') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewUploadMatch[1]));
+    return handlePreviewUpload(request, stub, env.PREVIEW_STORAGE, previewUploadMatch[2]);
+  }
+  const previewFinalizeMatch = url.pathname.match(
+    /^\/api\/tray\/([^/]+)\/preview\/([^/]+)\/finalize$/
+  );
+  if (previewFinalizeMatch && request.method === 'POST') {
+    const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewFinalizeMatch[1]));
+    return handlePreviewFinalize(request, stub, previewFinalizeMatch[2]);
   }
   const previewStopMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/preview\/stop$/);
   if (previewStopMatch && request.method === 'POST') {

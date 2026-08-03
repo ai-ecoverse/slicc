@@ -604,4 +604,124 @@ describe('serve command (unified preview)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Preview list failed: 502');
   });
+
+  it('publishes a 30d immutable snapshot with relative paths and MIME types', async () => {
+    const minter = vi.fn().mockResolvedValue({
+      previewToken: 'persistent-token',
+      url: 'https://persistent.sliccy.now/index.html',
+      pushed: 0,
+    });
+    setPreviewMinter(minter);
+    const vfs = {
+      walk: async function* () {
+        yield '/workspace/app/index.html';
+        yield '/workspace/app/assets/logo.png';
+      },
+      readFile: vi.fn(async (path: string) =>
+        path.endsWith('.png') ? new Uint8Array([1, 2, 3]) : new TextEncoder().encode('<h1>ok</h1>')
+      ),
+    };
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+
+    const result = await createServeCommand(undefined, vfs as never).execute(
+      ['--ttl', '30d', '/workspace/app'],
+      ctx as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(minter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        noBridge: true,
+        snapshotFiles: [
+          expect.objectContaining({ path: 'index.html', mime: 'text/html' }),
+          expect.objectContaining({ path: 'assets/logo.png', mime: 'image/png' }),
+        ],
+      })
+    );
+  });
+
+  it('gives persistent preview uploads a ten-minute panel-RPC timeout', async () => {
+    const call = vi.fn().mockResolvedValue({
+      previewToken: 'persistent-token',
+      url: 'https://persistent.sliccy.now/index.html',
+      pushed: 0,
+    });
+    (globalThis as Record<string, unknown>).__slicc_panelRpc = { call, dispose: () => {} };
+    const vfs = {
+      walk: async function* () {
+        yield '/workspace/app/index.html';
+      },
+      readFile: vi.fn(async () => new TextEncoder().encode('<h1>ok</h1>')),
+    };
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+
+    const result = await createServeCommand(undefined, vfs as never).execute(
+      ['--ttl', '1d', '/workspace/app'],
+      ctx as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith(
+      'tray-open-preview',
+      expect.objectContaining({ ttlMs: 86_400_000 }),
+      { timeoutMs: 10 * 60_000 }
+    );
+  });
+
+  it.each(['0d', '1.5d', '30', '1s', '-1d'])('rejects invalid --ttl value %s', async (ttl) => {
+    const result = await createServeCommand().execute(
+      ['--ttl', ttl, '/workspace/app'],
+      {} as never
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--ttl must be a positive whole duration');
+  });
+
+  it('rejects retention above 30d with the Deluxe error before walking', async () => {
+    const result = await createServeCommand().execute(['--ttl=5w', '/workspace/app'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      'serve: --ttl cannot exceed 30d; longer retention requires a Sliccy Deluxe De-Enshittification plan.\n'
+    );
+  });
+
+  it.each(['--bridge', '--max-tabs=2'])('rejects --ttl combined with %s', async (flag) => {
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+    const result = await createServeCommand().execute(
+      ['--ttl=1d', flag, '/workspace/app'],
+      ctx as never
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`--ttl cannot be combined with ${flag.split('=')[0]}`);
+  });
+
+  it('shows preview mode and expiry in --list output', async () => {
+    setPreviewOp(async () => ({
+      previews: [
+        {
+          previewToken: 'persistent-token',
+          url: 'https://persistent.sliccy.now/',
+          servedRoot: '/workspace/app',
+          entryPath: '/workspace/app/index.html',
+          allowLive: false,
+          createdAt: '2026-08-03T00:00:00.000Z',
+          mode: 'persistent',
+          expiresAt: '2026-08-10T00:00:00.000Z',
+        },
+      ],
+    }));
+    const result = await createServeCommand().execute(['--list'], {} as never);
+    expect(result.stdout).toContain('TOKEN  MODE  EXPIRES');
+    expect(result.stdout).toContain('persistent  2026-08-10T00:00:00.000Z');
+  });
 });

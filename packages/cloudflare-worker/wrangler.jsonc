@@ -17,7 +17,10 @@
     "run_worker_first": true,
     "not_found_handling": "single-page-application"
   },
-  "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive" }],
+  "r2_buckets": [
+    { "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive" },
+    { "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }
+  ],
   // Surfaces the deployed Worker version ID on `GET /status` so a post-deploy
   // curl can prove which build is serving traffic. Absent in `wrangler dev`.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
@@ -90,7 +93,10 @@
         "run_worker_first": true,
         "not_found_handling": "single-page-application"
       },
-      "r2_buckets": [{ "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive-staging" }],
+      "r2_buckets": [
+        { "binding": "ASSET_ARCHIVE", "bucket_name": "slicc-asset-archive-staging" },
+        { "binding": "PREVIEW_STORAGE", "bucket_name": "sliccy-now-basic-storage" }
+      ],
       "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "routes": [],
       "vars": {

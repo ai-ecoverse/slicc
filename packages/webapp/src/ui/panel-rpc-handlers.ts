@@ -70,6 +70,8 @@ export interface StandalonePanelRpcHandlerOptions {
     maxTabs?: number;
     quiet?: boolean;
     webhookId?: string;
+    ttlMs?: number;
+    snapshotFiles?: Array<{ path: string; content: Uint8Array; mime: string }>;
   }) => Promise<{ url: string; pushed: number; previewToken: string }>;
   /**
    * Revoke a previously-minted preview token. Wired by
