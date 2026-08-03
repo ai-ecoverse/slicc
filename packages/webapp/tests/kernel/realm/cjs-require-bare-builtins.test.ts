@@ -583,6 +583,21 @@ describe('node:stream shim', () => {
     expect(out.stdout.trim()).toBe('true\nended a,b');
   });
 
+  it('pipes to process.stdout without throwing when the source ends', async () => {
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const { Readable } = require('node:stream');
+       const r = new Readable();
+       r.pipe(process.stdout);
+       r.emit('data', 'piped');
+       r.emit('end');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stderr).toBe('');
+    expect(out.stdout).toBe('piped');
+  });
+
   it('destroy emits close once for each stream type', async () => {
     const ctx = makeCtx();
     const out = await runCode(

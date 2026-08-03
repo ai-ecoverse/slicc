@@ -140,7 +140,8 @@ they throw an error naming the async escape hatch instead.
 
 `env`, `cwd()`, `exit(code?)` (throws `NodeExitError` to unwind the stack),
 `stdout`, `stderr`, `stdin`, and `argv` (with a non-enumerable
-`argv.parseFlags()` helper).
+`argv.parseFlags()` helper). `stdout` and `stderr` accept `write()` and a no-op
+`end()`, so they can be used as stream pipe destinations.
 
 **Not available:** `platform`, `arch`, `version`, `pid`, `on()`,
 `nextTick()`, `hrtime`. (Source: `createProcessShim` in
