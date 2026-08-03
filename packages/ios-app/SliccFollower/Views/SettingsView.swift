@@ -14,6 +14,13 @@ struct SettingsView: View {
     /// fires for a connection they just started here. Opening Settings while
     /// a background reconnect happens to land must not yank the sheet away.
     @State private var awaitingConnect = false
+    /// Whether this device has an iCloud identity, or nil while unknown.
+    ///
+    /// `FileManager.ubiquityIdentityToken` reaches the iCloud daemon and can
+    /// block; reading it inside `body` put that call on the main thread on
+    /// every single layout pass of the sheet. It is sampled once, off the
+    /// main actor, and the answer cannot change while the sheet is open.
+    @State private var hasICloudIdentity: Bool?
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -39,6 +46,9 @@ struct SettingsView: View {
                 if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
                     appState.joinUrlHistory = history
                 }
+            }
+            .task {
+                hasICloudIdentity = await Self.probeICloudIdentity()
             }
             .onChange(of: appState.joinUrl) { _, newValue in
                 storedJoinUrl = newValue
@@ -126,8 +136,11 @@ struct SettingsView: View {
     }
 
     private var sessionsEmptyState: some View {
+        // `hasICloudIdentity` is sampled off the main actor (see its
+        // declaration); until it answers, assume iCloud is fine so the row
+        // cannot flash "iCloud is unavailable" at someone who is signed in.
         let reason = ICloudSessionList.emptyReason(
-            hasICloudIdentity: FileManager.default.ubiquityIdentityToken != nil
+            hasICloudIdentity: hasICloudIdentity ?? true
         )
         return HStack(spacing: 10) {
             Image(systemName: reason == .iCloudUnavailable ? "icloud.slash" : "icloud")
@@ -141,6 +154,14 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("icloud-sessions-empty")
+    }
+
+    /// Off the main actor: the token read can block on the iCloud daemon,
+    /// and nothing about the sheet needs it synchronously.
+    private static func probeICloudIdentity() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            FileManager.default.ubiquityIdentityToken != nil
+        }.value
     }
 
     // MARK: - Connection Section
