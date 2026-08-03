@@ -1,9 +1,10 @@
 /**
  * `layout` — manage the workbench UI layout: switch presets, open/close/move
  * a panel (chat, a tool panel, or a sprinkle) into a zone, resize a placed
- * panel by pixel or percent, reset. `layout edit` is a friendly alias for
- * `layout set focus` (the dock-tree editor is now the only layout system —
- * there is no separate "editor mode" to enter). This is the agent-facing
+ * panel by pixel or percent, reset. There is NO edit mode to enter: panels are
+ * always rearrangeable, by the user (grab a panel's move button, which reveals
+ * every position it can take) or by this command. `layout edit` remains only as
+ * a backwards-compatible alias for `layout set focus`. This is the agent-facing
  * surface for arranging panels programmatically — `open`/`close`/`move`/
  * `size` are thin wrappers over `<slicc-dock-tree>`'s own
  * `placeSurface`/`removeSurface`/`moveSurfaceToZone`/`setSurfaceSize`.
@@ -69,7 +70,18 @@ export type LayoutApplyMsg =
   | { kind: 'close'; surfaceId: string }
   | { kind: 'move'; surfaceId: string; zone: DockZoneName }
   | { kind: 'size'; surfaceId: string; size: SurfaceSizeSpecLike }
-  | { kind: 'reset' };
+  | { kind: 'reset' }
+  // Layout-document verbs (Phase 4). `load` takes a saved-layout name OR a
+  // shipped preset name — the page resolves which, since only it can read the
+  // VFS and the registry. `save` persists the CURRENT arrangement, which only
+  // the page knows, so the worker just forwards the intent.
+  | { kind: 'load'; name: string }
+  | { kind: 'save'; name: string; protected: boolean }
+  | { kind: 'delete'; name: string }
+  | { kind: 'docs' }
+  | { kind: 'panels' }
+  | { kind: 'show'; panelId: string }
+  | { kind: 'hide'; panelId: string };
 
 const SIZE_USAGE = 'usage: layout size <surfaceId> [--width <px|percent>] [--height <px|percent>]';
 
@@ -151,9 +163,44 @@ function parseSize(rest: string[]): LayoutApplyMsg | { error: string } {
   return { kind: 'size', surfaceId: normalizeSurfaceId(surfaceId), size };
 }
 
+/** `layout save <name> [--protected]` — persist the current arrangement. */
+function parseSave(rest: string[]): LayoutApplyMsg | { error: string } {
+  const name = rest[0];
+  if (!name || name.startsWith('--')) {
+    return { error: 'usage: layout save <name> [--protected]' };
+  }
+  if (!/^[\w.-]+$/.test(name)) {
+    // The name becomes a filename; refuse separators rather than silently
+    // writing outside the layouts directory.
+    return { error: `invalid layout name "${name}" (use letters, digits, . _ -)` };
+  }
+  const flags = rest.slice(1);
+  const unknown = flags.find((f) => f !== '--protected');
+  if (unknown) return { error: `layout save: unknown flag "${unknown}"` };
+  return { kind: 'save', name, protected: flags.includes('--protected') };
+}
+
+function parseNamed(kind: 'load' | 'delete', rest: string[]): LayoutApplyMsg | { error: string } {
+  const name = rest[0];
+  if (!name) return { error: `usage: layout ${kind} <name>` };
+  return kind === 'load' ? { kind: 'load', name } : { kind: 'delete', name };
+}
+
+function parsePanelToggle(
+  kind: 'show' | 'hide',
+  rest: string[]
+): LayoutApplyMsg | { error: string } {
+  const panelId = rest[0];
+  if (!panelId) return { error: `usage: layout ${kind} <panelId>` };
+  return kind === 'show'
+    ? { kind: 'show', panelId: normalizeSurfaceId(panelId) }
+    : { kind: 'hide', panelId: normalizeSurfaceId(panelId) };
+}
+
 function parseEdit(): LayoutApplyMsg | { error: string } {
-  // Friendly alias: `layout edit` === `layout set focus` — the dock-tree is
-  // always active, so there is no separate editor mode to enter.
+  // Backwards-compatible alias only: `layout edit` === `layout set focus`. There
+  // is no editor mode — moving and resizing are always available, so a verb that
+  // "enters editing" has nothing to turn on.
   const preset = getPreset(DEFAULT_LAYOUT);
   if (!preset) return { error: 'default layout unavailable' };
   return { kind: 'set', tree: preset.tree };
@@ -179,8 +226,25 @@ export function parseLayoutArgs(args: string[]): LayoutApplyMsg | { error: strin
       return { kind: 'reset' };
     case 'edit':
       return parseEdit();
+    case 'load':
+      return parseNamed('load', rest);
+    case 'save':
+      return parseSave(rest);
+    case 'delete':
+      return parseNamed('delete', rest);
+    case 'docs':
+      return { kind: 'docs' };
+    case 'panels':
+      return { kind: 'panels' };
+    case 'show':
+      return parsePanelToggle('show', rest);
+    case 'hide':
+      return parsePanelToggle('hide', rest);
     default:
-      return { error: 'usage: layout <set|edit|chat|open|close|move|size|list|reset>' };
+      return {
+        error:
+          'usage: layout <set|edit|chat|open|close|move|size|show|hide|load|save|delete|docs|panels|list|reset>',
+      };
   }
 }
 
@@ -202,8 +266,20 @@ export function createLayoutCommand(): Command {
       return { stdout: '', stderr: 'layout: UI is unavailable in this environment\n', exitCode: 1 };
     }
     try {
-      await panelRpc.call('layout-apply', parsed);
-      return { stdout: '', stderr: '', exitCode: 0 };
+      const result = await panelRpc.call('layout-apply', parsed);
+      // Read-only/report verbs (`docs`, `panels`, `save`) come back with text to
+      // print: only the page can enumerate the VFS, the registry, or report where
+      // a save landed. A verb the page could not carry out reports `applied:
+      // false` with a reason rather than silently succeeding.
+      if (result && result.applied === false) {
+        return {
+          stdout: '',
+          stderr: `layout: ${result.error ?? 'could not apply layout'}\n`,
+          exitCode: 1,
+        };
+      }
+      const output = result?.output;
+      return { stdout: output ? `${output.replace(/\n*$/, '')}\n` : '', stderr: '', exitCode: 0 };
     } catch (err) {
       return { stdout: '', stderr: `layout: ${(err as Error).message}\n`, exitCode: 1 };
     }

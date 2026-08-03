@@ -46,6 +46,24 @@ const STYLE = `
   font-family: var(--ui);
 }
 .slicc-freezer[open] { width: 260px; }
+/* In-flow mode, for when the rail is a docked panel rather than a viewport
+   overlay. The default is \`position:fixed\` because the rail predates the panel
+   system: it floated over the app column, which reserved space for it via a
+   \`--rail-w\` padding. As a panel it must instead occupy real layout space, so
+   the layout engine can size it and its expand/collapse pushes siblings rather
+   than sliding over them. \`height:100%\` replaces the viewport-anchored
+   \`top/bottom:0\`, and the z-index is dropped so it can't lift itself out of
+   the panel host's stacking order. */
+.slicc-freezer[docked] {
+  position: relative;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  height: 100%;
+  z-index: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 .dark .slicc-freezer,
 [data-theme="dark"] .slicc-freezer { box-shadow: rgba(0, 0, 0, .35) 1px 0 14px -4px; }
 
@@ -227,6 +245,9 @@ declare global {
  *
  * @attr open - boolean; expands the rail (260px) vs. collapsed (44px). Reflected.
  * @attr ctx - boolean; ice-blue accent while a freezer context is active.
+ * @attr docked - boolean; render in-flow (as a docked panel) instead of as a
+ *   viewport-fixed overlay. Set by the layout engine when the rail is placed as a
+ *   panel; without it the rail keeps its historical `position:fixed` behavior.
  * @attr search-placeholder - placeholder text for the search input.
  * @csspart freezer - the host aside (carries `part="freezer"`)
  * @csspart header - the `.fzh` header band

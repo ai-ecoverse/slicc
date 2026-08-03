@@ -98,12 +98,44 @@ export interface MountSliccOptions {
    */
   theme?: SliccTheme;
   /**
-   * Optional dock-tree layout to push into the follower in place of its own
-   * persisted/default layout. Structurally typed (not imported from
-   * `@slicc/webcomponents` — this SDK ships independently) as a
-   * `DockTreeSpec`-shaped value; serialized as JSON in the handshake welcome,
-   * applied once at boot. Set `locked: true` (tree-wide, or on individual
-   * leaves/splits) so the follower's own UI can't drag/resize/close it.
+   * Optional layout to push into the follower in place of its own
+   * persisted/default one. Serialized as JSON in the handshake welcome and
+   * applied once at boot — static, like `theme`; there is no runtime re-layout.
+   *
+   * Structurally typed (not imported from `@slicc/webcomponents` — this SDK
+   * ships independently), and the follower accepts EITHER shape:
+   *
+   *  - a **`LayoutDocument`** (has `base`) — the panel system: docked edges, a
+   *    recursive `center` tree, and `floating` panels. Every piece of SLICC
+   *    chrome is a panel here, so this can place or omit the rails, the scoop
+   *    switcher and the runtime bar, not just the workbench.
+   *  - a **`DockTreeSpec`** (has `zones`) — the older five-zone model, still
+   *    honored so a vendored SDK from before the panel system keeps working.
+   *
+   * Set `locked: true` — tree-wide, or per panel via
+   * `panels: { chat: { locked: true } }` — so the end user cannot drag, resize
+   * or close what you pushed. A locked panel renders no move handle at all.
+   * Per-panel `movable`/`resizable`/`hideable` allow finer control (e.g. allow
+   * resizing but forbid closing).
+   *
+   * A pushed layout is never persisted client-side: the follower applies it
+   * without a filesystem, so it cannot drift and `layout save` inside an embed
+   * reports that it needs one rather than writing your arrangement into the
+   * user's profile.
+   *
+   * @example
+   * mountSlicc({
+   *   layout: {
+   *     version: 1,
+   *     id: 'embed',
+   *     locked: true,
+   *     base: {
+   *       docks: [{ edge: 'top', size: '36px', panels: ['floatbar'] }],
+   *       center: { split: 'row', sizes: [2, 1],
+   *                 children: [{ panel: 'chat' }, { panel: 'sprinkle:progress' }] },
+   *     },
+   *   },
+   * });
    */
   layout?: unknown;
   /**

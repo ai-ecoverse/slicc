@@ -48,6 +48,21 @@ export const SUDOERS_D_DIR = '/etc/sudoers.d';
 /** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
 const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
 
+/**
+ * Protected layout directory (self-protected for writes).
+ *
+ * Layout documents that must not change without the user's say-so live here —
+ * an embedder-pushed arrangement, or a layout the user wants pinned. Agent
+ * writes require approval exactly like `/etc/sudoers`, and no `NOPASSWD` rule
+ * can grant them.
+ *
+ * Freely agent-writable layouts live at `/workspace/layouts/` instead, which is
+ * the normal path: SLICC does not prompt for ordinary agent work, so saving and
+ * loading layouts is ungated by default. This directory is the opt-in exception
+ * for the arrangements where that isn't wanted.
+ */
+export const PROTECTED_LAYOUTS_DIR = '/etc/slicc/layouts';
+
 /** Construct the canonical per-scoop sudoers path for `folder`. */
 export function scoopSudoersPath(folder: string): string {
   return `/scoops/${folder}/etc/sudoers`;
@@ -263,14 +278,17 @@ function isSelfProtectedWrite(normalized: string): boolean {
     normalized === SUDOERS_FILE ||
     normalized === SUDOERS_D_DIR ||
     normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
-    SCOOP_SUDOERS_RE.test(normalized)
+    SCOOP_SUDOERS_RE.test(normalized) ||
+    normalized === PROTECTED_LAYOUTS_DIR ||
+    normalized.startsWith(`${PROTECTED_LAYOUTS_DIR}/`)
   );
 }
 
 /**
  * Match a read/write to `path` against the policy. Writes to `/etc/sudoers`,
- * anything under `/etc/sudoers.d/`, or any per-scoop sudoers file
- * (`/scoops/<folder>/etc/sudoers`) ALWAYS require approval, regardless of
+ * anything under `/etc/sudoers.d/`, any per-scoop sudoers file
+ * (`/scoops/<folder>/etc/sudoers`), or anything under `/etc/slicc/layouts/`
+ * ALWAYS require approval, regardless of
  * configuration — `NOPASSWD` cannot override the invariant, even though a
  * scoop's sudoers sits inside its own writable tree. Reads of those files
  * are allowed (visudo-style) and fall through to normal matching.

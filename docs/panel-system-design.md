@@ -55,10 +55,42 @@ interface PanelMeta {
   minHeight?: number;
   /** Fixed-size chrome (rails, strips) opt out of fractional sizing. */
   preferredSize?: string; // e.g. "44px", "30%", "3fr"
+  /** Docked (takes layout space) vs floating (paints above). See Presentation. */
+  presentation?: 'docked' | 'floating';
+  /** Edge a floating panel pins to. */
+  anchor?: 'top' | 'right' | 'bottom' | 'left' | 'center';
   /** Rendering realm. Built-ins are 'main'; see Trust model. */
   realm?: 'main' | 'sandboxed';
 }
 ```
+
+### Presentation: docked vs floating
+
+Two separate concerns that are easy to conflate:
+
+- **"Collapsed by default"** is about _membership_: a panel simply is not in the
+  layout tree until opened. Already how tool panels behave — `layout open files
+right` / a dock-rail click places them, collapse removes them. Nothing to do
+  with stacking.
+- **Presentation** is about _how an open panel occupies space_:
+  - `docked` (default) — a real cell in the tree. Takes space, siblings reflow,
+    can be drag-split and resized against them.
+  - `floating` — painted above the docked panels without reflowing them. For
+    glanceable panels (a monitor you check rather than work in) and for narrow
+    viewports where docking would crush the chat.
+
+Docked stays the default for the tool panels: a floating terminal covering the
+chat you are reading is worse than a docked one, you cannot drag-split against
+something that is not in the tree, and those panels only just became real
+resizable leaves. `presentation` is per-panel-type (via `panelMeta`) AND
+per-placement (a layout override wins), so a `dashboard` layout can dock the
+monitor while `focus` floats it.
+
+**A floating panel stacks inside `.wcui-panel-host`, never in `document.body`.**
+Its `z-index: 1` orders it against its docked siblings only — the panel host is
+a stacking context (H2), so a floating panel can never rise above the trusted
+layer and occlude an approval dialog. Regression-tested in
+`packages/webcomponents/tests/shell/trusted-layer-stacking.test.ts`.
 
 `<slicc-surface>` (today's `surface-id` + visibility wrapper) is the direct
 ancestor of this idea and is absorbed into it — `SliccPanel` is what
@@ -79,7 +111,25 @@ The registry is what the "add panel" menu lists and what a layout JSON
 references by id. An id in a layout with no registry entry renders as an empty
 placeholder rather than failing the whole layout.
 
-## Layout JSON
+## Layout JSON ✅ (implemented)
+
+Schema and resolution: `packages/webcomponents/src/panel/layout-schema.ts`
+(DOM-free, so the kernel-worker-side `layout` command can import it).
+Rendering: `<slicc-layout>` in `packages/webcomponents/src/panel/slicc-layout.ts`,
+built **alongside** `<slicc-dock-tree>` so the shipping shell keeps working until
+Phase 3 switches over.
+
+Two behaviors worth knowing, both deliberate:
+
+- **Variants replace a section, they do not deep-merge it.** A variant supplying
+  `center` replaces it outright; omitting it keeps the previous value; `center: []`
+  /`docks: []` explicitly clears. Deep-merging two recursive split trees has no
+  intuitive semantics (what is a 2-child row merged into a 3-child col?), whereas
+  "the narrow layout declares its own center" reads obviously. `panels` overrides
+  DO merge per id, since those are flat key/value.
+- **Unplaced panels are parked, not destroyed.** They stay in the DOM offstage, so
+  a panel keeps its scroll position, its live terminal session, its loaded file
+  tree across variant switches. Rebuilding would lose all of that.
 
 Docked edges + a flexible recursive center. This shape is chosen over today's
 5-zone fr-only tree because rails and strips are **fixed sizes** (44px, 36px)
@@ -148,14 +198,20 @@ variant, deep-merged over `base`.
 `when` predicates: `minWidth` / `maxWidth` / `minHeight` / `maxHeight` /
 `platform` (`web` | `ios` | `extension` | `electron`) / `orientation`.
 
-**iOS note.** `packages/ios-app` is native SwiftUI and cannot render web
-components at all. The schema is therefore deliberately **declarative and
-platform-neutral** — it describes intent (edges, order, splits, visibility,
-priority) not CSS. A native renderer can interpret `docks`/`center`/`visible`
-into SwiftUI containers and simply ignore panel ids it has no native
-implementation for. Making the iOS follower actually consume this is **out of
-scope** for the first implementation; the schema just must not preclude it. No
-CSS strings, no web-only units beyond `px`/`%`/`fr` leak into the document.
+**Scope: web only.** `platform` covers `web` / `extension` / `electron`. iOS is
+explicitly **out of scope** — `packages/ios-app` is native SwiftUI and cannot
+render web components at all, so a shared layout would need a whole native
+renderer, which is not being built.
+
+The schema nonetheless stays declarative (edges, order, splits, visibility,
+sizes — no CSS strings, no web-only units beyond `px`/`%`/`fr`), because that is
+simply the cleaner document format; it happens to leave the door open to a native
+interpreter later, but nothing here is designed around that possibility and no
+work is planned for it.
+
+Resolution is against the **host element's box**, not the window's, so a layout
+nested in a narrow container (extension side panel, Cherry embed) responds to the
+space it actually has.
 
 ## Locking — two orthogonal layers
 

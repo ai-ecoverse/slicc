@@ -20,6 +20,7 @@ import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { prepareWcShell } from './wc-live.js';
+import type { WcShellRefs } from './wc-shell.js';
 import { submittedSteer, submittedText } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
@@ -245,6 +246,43 @@ export function followerAdvertisesCdpTargets(
   return hasLocalCdpSurface && !uiOnly;
 }
 
+/**
+ * Apply a host-pushed panel `LayoutDocument` to a cherry follower.
+ *
+ * Panelizes the follower's shell and loads the document, deliberately WITHOUT a
+ * VFS: a pushed layout is applied once at boot and must never be persisted or
+ * drifted client-side (the same reason the dock-tree path bypasses
+ * `wireDockTreePersistence`). Omitting the filesystem makes that structural —
+ * `layout save` in an embed reports "needs a filesystem" instead of quietly
+ * writing the embedder's arrangement into the user's profile.
+ *
+ * A `locked: true` document (tree-wide, or per-panel) is what stops the end user
+ * rearranging what the embedder pushed; the layout engine reflects it onto every
+ * placed panel.
+ */
+async function applyPushedLayoutDocument(
+  boot: { refs: WcShellRefs },
+  doc: unknown,
+  log: BootStageLogger
+): Promise<void> {
+  const [{ parseLayoutDocument }, { panelizeShell }] = await Promise.all([
+    import('@slicc/webcomponents/panel/layout-schema'),
+    import('./panelize-shell.js'),
+  ]);
+  const parsed = parseLayoutDocument(doc);
+  if ('error' in parsed) {
+    log.warn('follower: host-pushed layout failed validation — keeping the default', {
+      error: parsed.error,
+    });
+    return;
+  }
+  panelizeShell(boot.refs, parsed);
+  log.info('follower: applied host-pushed layout document', {
+    id: parsed.id,
+    locked: parsed.locked === true,
+  });
+}
+
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: follower boot has sequential setup steps
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: follower boot has sequential setup steps
 export async function mountWcUiFollower(
@@ -312,8 +350,17 @@ export async function mountWcUiFollower(
   // locked Cherry layout is never persisted or drifted client-side.
   if (isCherry && prelude.cherryTransport?.layout) {
     try {
-      const tree = JSON.parse(prelude.cherryTransport.layout);
-      (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(tree);
+      const pushed = JSON.parse(prelude.cherryTransport.layout);
+      // A host may push EITHER shape: the panel-system `LayoutDocument` (has
+      // `base`) or the older `DockTreeSpec` (has `zones`). Embedders vendor the
+      // SDK and upgrade on their own schedule, so both have to keep working —
+      // sniffing the shape is cheaper and less brittle than a version field the
+      // older hosts never sent.
+      if (pushed && typeof pushed === 'object' && 'base' in pushed) {
+        await applyPushedLayoutDocument(boot, pushed, log);
+      } else {
+        (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(pushed);
+      }
     } catch (err) {
       log.warn('follower: host-pushed layout was not valid JSON — keeping the default', err);
     }

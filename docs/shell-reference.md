@@ -287,8 +287,8 @@ imgcat screenshot.png
 # Schedule a cron job
 crontask add "daily-backup" "0 2 * * *" backup-scoop "Backup all files"
 
-# Switch the dock-tree to a two-panel 50/50 layout (default is "focus")
-layout set split
+# Reset the dock-tree to the shipped arrangement (`focus` is the only preset)
+layout set focus
 
 # Open the files panel alongside whatever's already there, then drag it onto
 # another tile's edge to split, or its center to stack (drag the tile's

@@ -108,18 +108,18 @@ disableShader?, components? }`) that the SDK serializes as JSON in the
   This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
   out via a themed `url(...)`) without requiring the host page itself to be
   trusted.
-- `layout` accepts a `DockTreeSpec`-shaped value (structurally typed as
-  `unknown` — no cross-package import of `@slicc/webcomponents`'
-  `slicc-dock-tree.ts`) that the SDK serializes as JSON in the handshake
-  welcome. The follower loads it via `dockTree.setTree(...)` on boot, in place
-  of its own persisted/default layout — static, like `theme`; there is no
-  runtime re-layout. Set `locked: true` (tree-wide, or on individual
-  leaves/splits) so the follower's own UI can't drag/resize/close what was
-  pushed — see `docs/layouts.md`'s Locking section for the full model. Applied
-  directly by `wc-follower.ts`, never through `wireDockTreePersistence` (which
-  the follower never wires at all), so a locked layout is never persisted or
-  drifted client-side. The `examples/host.html` harness includes a custom-JSON
-  textarea for manual testing.
+- `layout` pushes an arrangement into the follower, serialized as JSON in the
+  handshake welcome and applied ONCE at boot — static, like `theme`. Structurally
+  typed as `unknown` (this SDK ships independently, so no cross-package import).
+  `wc-follower.ts` accepts EITHER shape, sniffed on the object: a `LayoutDocument`
+  (has `base`) or the older `DockTreeSpec` (has `zones`) — embedders vendor the SDK
+  and upgrade on their own schedule, so a version field older hosts never sent
+  would be more brittle than sniffing. See `docs/layouts.md`.
+  Set `locked: true` — tree-wide or per panel — so the user can't rearrange what was
+  pushed. Applied WITHOUT a filesystem, so it can't persist or drift, and `layout
+save` in an embed reports it needs one rather than writing your arrangement into
+  the user's profile. An invalid document falls back to the default.
+  `examples/host.html` has a custom-JSON textarea for testing.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

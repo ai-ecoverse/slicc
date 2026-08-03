@@ -3,7 +3,7 @@ import { layoutCommandForSkill } from '../../src/scoops/skills.js';
 
 describe('layoutCommandForSkill', () => {
   it('returns a layout set command for a known preset', () => {
-    expect(layoutCommandForSkill({ layout: 'dashboard' })).toBe('layout set dashboard');
+    expect(layoutCommandForSkill({ layout: 'focus' })).toBe('layout set focus');
   });
   it('ignores unknown presets', () => {
     expect(layoutCommandForSkill({ layout: 'bogus' })).toBeNull();

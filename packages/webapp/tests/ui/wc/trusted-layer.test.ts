@@ -42,6 +42,16 @@ describe('the clamp invariants (H2)', () => {
     expect(TRUSTED_LAYER_CSS).toContain('isolation:isolate');
   });
 
+  it('sizes the panel host by absolute inset, not flex — a block frame would collapse it to 0px', () => {
+    // Regression: the host was `flex:1 1 auto`, but `.wcui-frame` is
+    // `display:block`, so the host resolved to ZERO height and every panel
+    // inside it silently collapsed (measured 0px in a real browser — the layout
+    // rendered "successfully" and was invisible). Absolute inset makes the host
+    // fill the frame regardless of the frame's display mode.
+    expect(TRUSTED_LAYER_CSS).toContain(`.${PANEL_HOST_CLASS}{position:absolute;inset:0;`);
+    expect(TRUSTED_LAYER_CSS).not.toContain('flex:1 1 auto');
+  });
+
   it('does NOT give the trusted layer a z-index (ordering is sibling order, not a number race)', () => {
     // A z-index here would invite the arms race the stacking context avoids:
     // a panel can always add another nine, but it cannot escape its context.

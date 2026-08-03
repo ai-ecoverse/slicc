@@ -180,6 +180,16 @@ interface DockItemDescriptor {
 export interface WcSprinkleZoneToolPanelHooks {
   onToolPanelActivate?: (id: string) => void;
   onToolPanelDeactivate?: (id: string) => void;
+  /**
+   * Where a newly created sprinkle surface should be hosted, and how it gets
+   * placed. Set by `panelizeShell`, which REMOVES the dock-tree this class
+   * otherwise appends to — without this, every sprinkle surface was created into
+   * a detached element and could never render (the reported "I can't see the
+   * sprinkles"). Absent in the classic shell, which keeps the dock-tree path.
+   */
+  hostSprinkleSurface?: (surfaceId: string, surface: HTMLElement) => void;
+  /** Remove a sprinkle's panel from the panelized layout. */
+  removeSprinkleSurface?: (surfaceId: string) => void;
 }
 
 /** Tab/surface/dock bookkeeping behind `SprinkleManagerCallbacks`. The dock-tree is the only layout system — every panel (chat, tool panels, sprinkles) is a permanent, independent tree leaf. */
@@ -320,12 +330,17 @@ export class WcSprinkleZone {
 
   #add(name: string, title: string, element: HTMLElement, options?: SprinkleAddOptions): void {
     const id = sprinkleSurfaceId(name);
+    const host = this.#toolPanelHooks.hostSprinkleSurface;
     let surface = this.#surfaces.get(name);
+    const isNew = !surface;
     if (!surface) {
       surface = document.createElement('slicc-surface');
       surface.setAttribute('surface-id', id);
       surface.setAttribute('layout', 'flex');
-      (this.#refs.dockTree as unknown as HTMLElement | undefined)?.append(surface);
+      // Panelized shells supply a host: the dock-tree this used to append to has
+      // been removed, so appending there would leave the surface detached and
+      // invisible forever.
+      if (!host) (this.#refs.dockTree as unknown as HTMLElement | undefined)?.append(surface);
       this.#surfaces.set(name, surface);
     }
     surface.replaceChildren(element);
@@ -334,6 +349,11 @@ export class WcSprinkleZone {
     // Track open order (deterministic re-place on `applyLayout`).
     if (!this.#openOrder.includes(name)) this.#openOrder.push(name);
 
+    if (host) {
+      // The host owns both mounting and placement in the panel layout.
+      if (isNew) host(id, surface);
+      return;
+    }
     // A new leaf lands in the default zone unless a drag or a restored/
     // persisted tree already placed it (`placeSurface` no-ops on a
     // duplicate surfaceId).
@@ -351,6 +371,10 @@ export class WcSprinkleZone {
     const oi = this.#openOrder.indexOf(name);
     if (oi >= 0) this.#openOrder.splice(oi, 1);
     this.#sync();
+    if (this.#toolPanelHooks.removeSprinkleSurface) {
+      this.#toolPanelHooks.removeSprinkleSurface(id);
+      return;
+    }
     (this.#refs.dockTree as unknown as DockTreeLike | undefined)?.removeSurface(id);
   }
 
@@ -415,6 +439,9 @@ export interface WireWcSprinklesDeps {
   onToolPanelActivate?: (id: string) => void;
   /** A fixed tool panel's leaf was removed from the tree (closed) — stop its poller. */
   onToolPanelDeactivate?: (id: string) => void;
+  /** Panelized shells host sprinkle surfaces themselves — see the zone's hooks. */
+  hostSprinkleSurface?: (surfaceId: string, surface: HTMLElement) => void;
+  removeSprinkleSurface?: (surfaceId: string) => void;
   log: BootStageLogger;
 }
 
@@ -446,9 +473,16 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     onAttachImage,
     onToolPanelActivate,
     onToolPanelDeactivate,
+    hostSprinkleSurface,
+    removeSprinkleSurface,
     log,
   } = deps;
-  const zone = new WcSprinkleZone(refs, { onToolPanelActivate, onToolPanelDeactivate });
+  const zone = new WcSprinkleZone(refs, {
+    onToolPanelActivate,
+    onToolPanelDeactivate,
+    hostSprinkleSurface,
+    removeSprinkleSurface,
+  });
   const { loadSprinkleStyles } = await import('../legacy-styles.js');
   await loadSprinkleStyles();
 

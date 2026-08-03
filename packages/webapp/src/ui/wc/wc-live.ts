@@ -1657,11 +1657,20 @@ export function attachWcClient(
     .catch(() => undefined);
   const { refs } = boot;
   boot.setClient(client);
-  // GUI drag-drop dock-tree layout editor: restore any persisted tree (or
-  // seed the default) and wire future mutations back to storage. Runs
-  // regardless of the currently-active layout — the dock-tree element is
-  // always mounted (hidden until a `tree: true` layout activates it).
-  wireDockTreePersistence(refs, log);
+  // Panel system (Phase 3), opt-in via `?panels=1` while it lands: re-parents the
+  // shell's chrome into `<slicc-layout>` panels. Behind a flag so the default
+  // boot is untouched until layout documents load (Phase 4) — and so it can be
+  // exercised in a real browser without every float switching at once. Runs
+  // BEFORE `wireDockTreePersistence` so the dock-tree it would restore into is
+  // already superseded.
+  const panelsRequested = new URLSearchParams(location.search).get('panels') === '1';
+  if (!panelsRequested) {
+    // GUI drag-drop dock-tree layout editor: restore any persisted tree (or
+    // seed the default) and wire future mutations back to storage. Runs
+    // regardless of the currently-active layout — the dock-tree element is
+    // always mounted (hidden until a `tree: true` layout activates it).
+    wireDockTreePersistence(refs, log);
+  }
   // Turn-finished hooks: the suggested composer placeholder (assigned by
   // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
@@ -1857,6 +1866,28 @@ export function attachWcClient(
     log,
   });
   boot.setActivateSurface(workbenchActivator);
+
+  // Panel system (Phase 3/4), opt-in via `?panels=1` while it lands: re-parents
+  // the shell's chrome into `<slicc-layout>` panels. Behind a flag so the default
+  // boot is untouched, and so it can be exercised in a real browser without every
+  // float switching at once.
+  //
+  // Placed after `workbenchActivator` exists because panelization takes over the
+  // dock rail's clicks (the dock-tree it used to drive is gone), and opening a
+  // tool panel must still start its poller / lazy-mount — otherwise the terminal
+  // opens with no session, which is exactly what happened before this was wired.
+  // The VFS arrives later via `attachFs` (see the `openVfs()` block below).
+  if (panelsRequested) {
+    void import('./panelize-shell.js')
+      .then(({ panelizeShell }) =>
+        panelizeShell(refs, undefined, undefined, {
+          onToolPanelActivate: (id) => workbenchActivator.activate(id),
+          onToolPanelDeactivate: (id) => workbenchActivator.deactivate(id),
+        })
+      )
+      .catch((err) => log.error('panelize failed — keeping the classic shell', err));
+  }
+
   // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {
     const dock = refs.dock as HTMLElement & {
@@ -1906,6 +1937,10 @@ export function attachWcClient(
   void openVfs()
     .then(async ({ reader, writer }) => {
       const { createRemoteSprinkleVfs } = await import('../../kernel/remote-sprinkle-vfs.js');
+      // Resolved before `wireWcSprinkles` so its sprinkle-hosting hooks can be
+      // wired at construction: a panelized shell must host sprinkle surfaces
+      // itself (see `hostSprinkleSurface`).
+      const panelizedForSprinkles = (await import('./panelize-shell.js')).getPanelizedShell();
       const { wireWcSprinkles } = await import('./wc-sprinkles.js');
       const sprinkles = await wireWcSprinkles({
         refs,
@@ -1915,6 +1950,15 @@ export function attachWcClient(
         onAttachImage: makeSprinkleAttachImage(composer, log),
         onToolPanelActivate: (id) => workbenchActivator.activate(id),
         onToolPanelDeactivate: (id) => workbenchActivator.deactivate(id),
+        // Panelized shells host sprinkle surfaces themselves: the dock-tree
+        // `WcSprinkleZone` would otherwise append to is gone, so a new sprinkle
+        // would be created detached and never render.
+        hostSprinkleSurface: panelizedForSprinkles
+          ? (surfaceId, surface) => panelizedForSprinkles.hostSprinkleSurface(surfaceId, surface)
+          : undefined,
+        removeSprinkleSurface: panelizedForSprinkles
+          ? (surfaceId) => panelizedForSprinkles.removeSprinkleSurface(surfaceId)
+          : undefined,
         log,
       });
       // The wire-up-time discovery/restore races the worker's VfsRpcHost
@@ -1926,9 +1970,26 @@ export function attachWcClient(
       // `applyLayout`. This shared boot path covers BOTH floats — standalone
       // (wc-live's own boot) and extension (`wc-extension.ts` reuses
       // `attachWcClient`).
-      const { setLayoutApplier } = await import('./layout-apply-registry.js');
-      const { applyLayout } = await import('./apply-layout.js');
-      setLayoutApplier((msg) => applyLayout(sprinkles.zone, msg));
+      const { getPanelizedShell } = await import('./panelize-shell.js');
+      const panelized = getPanelizedShell();
+      if (panelized) {
+        // Panels are running: hand it the VFS so the document verbs
+        // (`load`/`save`/`docs`) and the add-panel menu's saved-layout list work,
+        // and register agent-authored panels now that a filesystem exists.
+        // Crucially, do NOT install the dock-tree applier below — it would
+        // overwrite the panel applier `panelizeShell` already registered and
+        // silently route every `layout` command to the wrong engine.
+        const sprinkleFs = createRemoteSprinkleVfs({ reader, writer });
+        panelized.attachFs(sprinkleFs);
+        const { registerAgentPanels } = await import('./agent-panels.js');
+        await registerAgentPanels(sprinkleFs).catch((err) =>
+          log.warn('agent panel discovery failed', err)
+        );
+      } else {
+        const { setLayoutApplier } = await import('./layout-apply-registry.js');
+        const { applyLayout } = await import('./apply-layout.js');
+        setLayoutApplier((msg) => applyLayout(sprinkles.zone, msg));
+      }
       if (options.standalone && options.instanceId) {
         const { wireWcTray } = await import('./wc-tray.js');
         const zoneCallbacks = sprinkles.zone.callbacks();

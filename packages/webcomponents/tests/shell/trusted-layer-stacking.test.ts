@@ -130,3 +130,23 @@ describe('trusted layer stacking (real browser)', () => {
     expect(document.elementFromPoint(250, 250)?.id).toBe('trusted');
   });
 });
+
+describe('floating panels stay under the trusted layer', () => {
+  it('a floating panel cannot occlude trusted chrome', () => {
+    // `presentation="floating"` lifts a panel above its docked siblings, but it
+    // lives INSIDE the panel host — so the H2 clamp still applies. This is the
+    // cross-feature invariant: "floating" must never mean "floating over an
+    // approval dialog".
+    const { host, layer } = buildLayers();
+    box(layer, 'trusted');
+
+    const floating = document.createElement('div');
+    floating.id = 'floating-panel';
+    // Mirrors the [presentation="floating"] rule in slicc-panel.ts.
+    floating.style.cssText =
+      'position:absolute;z-index:1;top:200px;left:200px;width:100px;height:100px;';
+    host.appendChild(floating);
+
+    expect(document.elementFromPoint(250, 250)?.id).toBe('trusted');
+  });
+});

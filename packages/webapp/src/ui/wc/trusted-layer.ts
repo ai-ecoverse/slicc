@@ -59,14 +59,22 @@ export const TRUSTED_LAYER_CLASS = 'wcui-trusted-layer';
  * injected separately so there is exactly one place that owns frame layout.
  *
  * `isolation:isolate` on the panel host is the load-bearing declaration — see
- * the module doc. `position:relative` + `min-height:0` keep it a normal flex
- * child of the frame; `pointer-events:none` on the trusted layer with `auto`
- * restored on its children lets clicks fall through the empty regions of the
- * layer to the panels underneath (the layer spans the frame, but only its
- * actual chrome should be interactive).
+ * the module doc. `pointer-events:none` on the trusted layer with `auto` restored
+ * on its children lets clicks fall through the empty regions of the layer to the
+ * panels underneath (the layer spans the frame, but only its actual chrome should
+ * be interactive).
+ *
+ * The host is sized by ABSOLUTE INSET rather than `flex:1`. It sits inside
+ * `.wcui-frame`, which is `display:block` — so a flex-item height would resolve
+ * to zero and silently collapse every panel inside it (measured: the whole layout
+ * came out 0px tall). `position:absolute; inset:0` inside the frame's
+ * `position:relative` box gives it the frame's full height regardless of whether
+ * the frame is block or flex, which also keeps it robust if the frame's display
+ * mode changes again. Same treatment for the trusted layer, which already used
+ * inset.
  */
 export const TRUSTED_LAYER_CSS = [
-  `.${PANEL_HOST_CLASS}{position:relative;isolation:isolate;flex:1 1 auto;`,
+  `.${PANEL_HOST_CLASS}{position:absolute;inset:0;isolation:isolate;`,
   'display:flex;flex-direction:column;min-width:0;min-height:0;}',
   `.${TRUSTED_LAYER_CLASS}{position:absolute;inset:0;pointer-events:none;`,
   // No z-index: ordering against the panel host comes from sibling order, and

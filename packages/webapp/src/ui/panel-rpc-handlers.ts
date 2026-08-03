@@ -1742,8 +1742,12 @@ function buildLayoutHandler() {
       msg: import('../shell/supplemental-commands/layout-command.js').LayoutApplyMsg
     ) => {
       const { getLayoutApplier } = await import('./wc/layout-apply-registry.js');
-      getLayoutApplier()?.(msg);
-      return { applied: true };
+      const applier = getLayoutApplier();
+      if (!applier) return { applied: false, error: 'no layout is mounted' };
+      // Document verbs answer with text/errors the shell prints; the older
+      // dock-tree verbs return nothing, which still means "applied".
+      const result = await applier(msg);
+      return result ?? { applied: true };
     },
   } satisfies Partial<PanelRpcHandlers>;
 }

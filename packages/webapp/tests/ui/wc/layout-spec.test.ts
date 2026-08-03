@@ -22,26 +22,17 @@ describe('layout-spec', () => {
     expect(focus.tree.zones.left).toEqual({ type: 'leaf', surfaceId: 'chat' });
   });
 
-  it('dashboard has a populated middle zone alongside chat', () => {
-    const d = LAYOUT_PRESETS.dashboard;
-    expect(surfaceIds(d.tree)).toContain('chat');
-    expect(d.tree.zones.left).toEqual({ type: 'leaf', surfaceId: 'chat' });
-    expect(d.tree.colFr.middle).toBeGreaterThan(d.tree.colFr.left);
+  it('ships exactly ONE preset — arrangements are the user’s to save', () => {
+    // `focus` is both the default and the whole shipped set. Canned arrangements
+    // beyond the boot shape are saved layouts, not app-guessed presets.
+    expect(Object.keys(LAYOUT_PRESETS)).toEqual(['focus']);
   });
 
-  it('getPreset returns null for unknown names', () => {
+  it('getPreset returns null for anything else, including the removed presets', () => {
     expect(getPreset('nope')).toBeNull();
-    expect(getPreset('stage')?.name).toBe('stage');
-  });
-
-  it('stage places chat on the right', () => {
-    expect(LAYOUT_PRESETS.stage.tree.zones.right).toEqual({ type: 'leaf', surfaceId: 'chat' });
-    expect(LAYOUT_PRESETS.stage.tree.zones.left).toBeNull();
-  });
-
-  it('demo and editor are no longer valid preset names (both removed modes)', () => {
-    expect(getPreset('demo')).toBeNull();
-    expect(getPreset('editor')).toBeNull();
+    for (const gone of ['split', 'dashboard', 'dev', 'stage', 'demo', 'editor']) {
+      expect(getPreset(gone)).toBeNull();
+    }
   });
 
   it('every preset name is reachable via getPreset', () => {

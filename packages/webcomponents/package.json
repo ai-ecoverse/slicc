@@ -18,6 +18,22 @@
       "types": "./src/internal/icons.ts",
       "default": "./src/internal/icons.ts"
     },
+    "./panel/center-ops": {
+      "types": "./src/panel/center-ops.ts",
+      "default": "./src/panel/center-ops.ts"
+    },
+    "./panel/layout-schema": {
+      "types": "./src/panel/layout-schema.ts",
+      "default": "./src/panel/layout-schema.ts"
+    },
+    "./panel/meta": {
+      "types": "./src/panel/panel-meta.ts",
+      "default": "./src/panel/panel-meta.ts"
+    },
+    "./panel/registry": {
+      "types": "./src/panel/panel-registry.ts",
+      "default": "./src/panel/panel-registry.ts"
+    },
     "./memory/synthetic-fixture": {
       "types": "./src/memory/synthetic-memory-fixture.ts",
       "default": "./src/memory/synthetic-memory-fixture.ts"

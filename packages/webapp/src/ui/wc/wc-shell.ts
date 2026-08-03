@@ -445,7 +445,9 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   wireDockExternalDragToTree(dock, dockTree);
 
   // The freezer rail reserves its width via `--rail-w` on the app column so
-  // the nav + shell slide (not overlap) when the rail expands.
+  // the nav + shell slide (not overlap) when the rail expands. Only meaningful
+  // while the rail is a viewport-fixed overlay; as a docked panel it occupies
+  // real layout space and the engine sizes it (see `panelizeShell`).
   freezer.addEventListener('freezer-toggle', (event) => {
     const open = (event as CustomEvent<{ open?: boolean }>).detail?.open === true;
     appCol.style.setProperty('--rail-w', open ? '260px' : '44px');

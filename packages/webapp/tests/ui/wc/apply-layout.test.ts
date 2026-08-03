@@ -27,8 +27,15 @@ function zoneSpies(zone: WcSprinkleZone) {
 describe('applyLayout', () => {
   it('set loads the tree into the zone', () => {
     const zone = fakeZone();
-    applyLayout(zone, { kind: 'set', tree: LAYOUT_PRESETS.stage.tree });
-    expect(zoneSpies(zone).applyLayout).toHaveBeenCalledWith(LAYOUT_PRESETS.stage.tree);
+    // A literal tree, not a shipped preset: `focus` is the only one SLICC ships, and
+    // this asserts the pass-through rather than any particular shape.
+    const tree = {
+      zones: { top: null, left: null, middle: null, right: null, bottom: null },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    applyLayout(zone, { kind: 'set', tree });
+    expect(zoneSpies(zone).applyLayout).toHaveBeenCalledWith(tree);
   });
 
   it('reset applies the focus preset', () => {

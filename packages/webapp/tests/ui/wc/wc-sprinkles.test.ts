@@ -379,9 +379,9 @@ describe('WcSprinkleZone applyLayout / placeSurface / moveSurfaceToZone', () => 
     zone.callbacks().addSprinkle('hero', 'Hero', document.createElement('div'));
     treeSpies(refs).placeSurface.mockClear();
 
-    zone.applyLayout(LAYOUT_PRESETS.stage.tree);
+    zone.applyLayout(LAYOUT_PRESETS.focus.tree);
 
-    expect(treeSpies(refs).setTree).toHaveBeenCalledWith(LAYOUT_PRESETS.stage.tree);
+    expect(treeSpies(refs).setTree).toHaveBeenCalledWith(LAYOUT_PRESETS.focus.tree);
     expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
   });
 

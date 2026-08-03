@@ -51,26 +51,73 @@ If you genuinely need multi-column UI, do all of the following:
 
 For dashboards with many widgets, prefer a vertical stack of `.sprinkle-card` blocks over a grid. The card stack is responsive by default and looks good in both rail and full-screen.
 
-## Arranging multiple sprinkles with `layout`
+## Arranging panels with `layout`
 
-The `layout` shell command controls how the workbench arranges panels, independent of what's inside each sprinkle:
+The `layout` shell command arranges panels, independent of what's inside each one.
+Every panel is the same kind of thing: chat, each tool panel, and each sprinkle.
 
 ```bash
-layout set <focus|split|dashboard|dev|stage|demo|editor>   # switch preset (default: focus, today's single-panel UI)
-layout edit                                    # alias for `layout set editor` — opens the GUI drag-drop dock editor
-layout slot <slot> <surface-id>                # explicitly place a panel/sprinkle in a named grid slot
-layout chat <left|right|hidden|NN%>            # position/size the chat pane
-layout list                                    # list presets
-layout reset                                   # back to focus
+layout list                         # shipped presets (there is one: the default)
+layout set <preset>                 # reset to a shipped arrangement
+layout save <name>                  # save the CURRENT arrangement as JSON
+layout load <name>                  # load a saved layout or the shipped default
+layout open <surfaceId> <zone>      # place a panel (zone: top|left|middle|right|bottom)
+layout move <surfaceId> <zone>      # relocate a placed panel
+layout close <surfaceId>            # remove it (chat is pinned; it can move, never close)
+layout size <surfaceId> [--width <px|%>] [--height <px|%>]   # exact, pixel-perfect
+layout chat <zone>                  # move the chat panel
+layout reset                        # back to the default
 ```
 
-`split` shows chat + one panel 50/50; `dashboard` is a 2×2 grid of panels; `dev` stacks two panels; `stage` puts chat on the side with one big panel. Opening sprinkles auto-fills the active layout's slots in order — you don't need to call `layout slot` unless you want to override placement. On a narrow viewport (extension side panel, ≤560px) multi-slot layouts collapse back to showing one panel at a time, so still design each sprinkle single-column-safe per the table above. A skill's frontmatter MAY declare `layout: <preset>` as sugar for `layout set <preset>`, but auto-execution on skill load isn't wired yet — issue the `layout` command directly when you want a specific arrangement.
+SLICC ships exactly ONE arrangement (the default). To give a skill its own layout,
+arrange the panels and `layout save <name>` — do not expect named presets beyond the
+default to exist.
 
-The `demo` preset adds a full-width top status-bar region (chat 30% left / sprinkle 70% right, dock full-height right) — place a sprinkle there with `layout set demo` + `layout slot topbar sprinkle:<name>`.
+Opening a sprinkle auto-places it, so `layout open` is only for overriding that.
+`layout size` is the programmatic counterpart to a user dragging a divider — use it
+when you want an exact size rather than a proportion.
 
-`layout set editor` (or `layout edit`) opens the GUI drag-drop dock editor for arranging sprinkles into 5 fixed zones (top/left/middle/right/bottom) by hand — useful when you want the human to lay out several open sprinkles themselves rather than relying on auto-fill. In this mode chat itself is just another panel in the tree: it starts in the `left` zone, can be dragged to any zone and resized alongside sprinkles, but is non-closable. Tool panels (files/terminal/memory/monitor) open too — clicking a tool's dock icon shows it on the right, one at a time, and clicking it again closes it so the layout reclaims the space. The arrangement — including chat's placement — persists per profile across reloads, and leaving editor mode restores the normal chat pane.
+The five zones are `top`, `left`, `center`, `right`, `bottom` — Java `BorderLayout`.
+They sit inside the fixed chrome, so `top` is below the scoop/budget strip and
+`left`/`right` are inboard of the rails. A zone holds several panels at once, so
+placing two sprinkles in `left` puts them both there (stacked by default).
 
-In `demo` (and any future shell-grid preset), the main region docks panels IDE-style instead of the usual show-one takeover: opening Files/terminal/memory/monitor or another sprinkle adds it as its own resizable region beside what's already open, so opening a tool panel won't hide your sprinkle. Closing a docked panel undocks it and the rest reflow; the seams (including the chat↔main split) are user-draggable. The other presets (`focus`/`split`/`dashboard`/`dev`/`stage`) are unaffected.
+The user can also rearrange by hand — there is no edit mode to enter. Hovering a
+panel reveals a grip in its top-left corner; grabbing it shows the five zones as a
+compass. Two kinds of seam drag to resize: between panels inside a zone, and
+between the zones themselves. Their arrangement
+persists across reloads, so do NOT re-issue `layout` commands to "restore" a layout
+you set earlier — you would be overwriting what they did.
+
+On a narrow viewport (extension side panel, iOS, ≤700px) multi-panel arrangements
+collapse to chat alone, so still design each sprinkle single-column-safe per the
+table above.
+
+## Are panels always sprinkles?
+
+No — but a sprinkle is the only kind YOU can create, and that is the intended path.
+
+| Kind            | Who makes it     | How                                                            |
+| --------------- | ---------------- | -------------------------------------------------------------- |
+| Sprinkle panel  | you              | write `.shtml`, `sprinkle open <name>` — this section          |
+| Built-in panel  | ships with SLICC | chat, both rails, the top strip, files/terminal/memory/monitor |
+| Layout document | you              | JSON naming which panels go where; `layout save`/`load`        |
+
+So: to add UI, write a sprinkle. To rearrange existing UI, write a layout document
+or issue `layout` commands. There is no third mechanism, and no need for one — a
+sprinkle is a full HTML document with a bridge, which covers what a custom panel
+would.
+
+A sprinkle IS tied to a scoop, and that is deliberate: whoever creates one owns it
+for its lifetime and handles its lick events (see "Handling lick events" below).
+A layout document is not tied to anything — it only names panel ids.
+
+### Shipping UI with a skill
+
+A layout document saved under `/workspace/layouts/<name>.json` can be loaded with
+`layout load <name>`, so a skill can ship both its sprinkles and the arrangement
+that presents them. Write the sprinkles, open them, arrange, then `layout save
+<name>` to capture what is on screen.
 
 ## Creating a sprinkle
 

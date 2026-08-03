@@ -12,7 +12,26 @@
 
 import type { LayoutApplyMsg } from '../../shell/supplemental-commands/layout-command.js';
 
-export type LayoutApplier = (msg: LayoutApplyMsg) => void;
+/**
+ * What the page reports back for one verb.
+ *
+ * The dock-tree verbs are fire-and-forget, but the layout-DOCUMENT verbs
+ * (`docs`/`panels`/`save`/`load`) have to return text or an error: only the page
+ * can read the VFS, the panel registry, or the arrangement on screen.
+ */
+export interface LayoutApplyResult {
+  applied: boolean;
+  output?: string;
+  error?: string;
+}
+
+/**
+ * `void` keeps the original fire-and-forget shape valid, so the existing
+ * dock-tree applier needs no change; document-aware appliers return a result.
+ */
+export type LayoutApplier = (
+  msg: LayoutApplyMsg
+) => void | LayoutApplyResult | Promise<LayoutApplyResult | void>;
 
 let layoutApplier: LayoutApplier | null = null;
 

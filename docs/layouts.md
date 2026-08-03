@@ -1,84 +1,522 @@
 # Layouts
 
-`<slicc-dock-tree>` (`packages/webcomponents/src/workbench/slicc-dock-tree.ts`) is the **sole layout system**. There is no separate "editor mode," fixed-grid mode, or IDE-panel-dock mode — the dock-tree is always mounted, always full-span, and every panel (chat, the four fixed tool panels, and every sprinkle) is an independent, permanently-composed leaf. Any panel can be dragged, resized, or closed at any time.
+Every visible piece of SLICC chrome is a **panel** — movable, resizable,
+hideable, and describable in JSON — except one fixed avatar strip. Layouts are
+documents you can save, load, ship in a skill, or push into an embed.
+
+Two systems coexist during the migration:
+
+| System                                     | Status                                          |
+| ------------------------------------------ | ----------------------------------------------- |
+| `<slicc-layout>` + `SliccPanel` (panels)   | current; opt in with `?panels=1`                |
+| `<slicc-dock-tree>` (five zones, surfaces) | still the default boot; superseded, not removed |
+
+Both are documented here — the dock-tree section is what a default install runs
+today. Design rationale and the trust model:
+[`panel-system-design.md`](panel-system-design.md).
+
+---
+
+## The panel system
+
+### What is fixed vs. a panel
+
+Only the **avatar strip** (top-right: the avatar menu and the add-panel `+`) is
+fixed. It renders in the **trusted layer** — a sibling of the panel host that no
+panel can paint over (see Trusted layer below). Everything else is a panel:
+
+| Panel id                                            | Wraps                                           |
+| --------------------------------------------------- | ----------------------------------------------- |
+| `chat`                                              | `<slicc-chatpane>`                              |
+| `sessions-rail`                                     | `<slicc-freezer>` (gets `docked` to go in-flow) |
+| `dock-rail`                                         | `<slicc-dock>`                                  |
+| `scoop-switcher`                                    | `<slicc-scoop-switcher>`                        |
+| `floatbar`                                          | `<slicc-floatbar>` (npx-live + $/h)             |
+| `files` / `term` / `memory` / `monitor` / `browser` | the tool surfaces                               |
+| `sprinkle:<name>`                                   | a discovered `.shtml` sprinkle                  |
+
+### `SliccPanel`
+
+`packages/webcomponents/src/panel/slicc-panel.ts`. The base class every panel
+extends; it owns identity, visibility, lock state, and lifecycle, and nothing
+about content.
+
+- `panelId` — prefers the `panel-id` attribute, falls back to the subclass's
+  static `panelMeta.id`, so one class can back many ids (every sprinkle panel
+  shares an implementation).
+- `visible` — the inverse of the native `hidden` attribute, so hiding carries a11y
+  semantics for free. **Panels default to VISIBLE**, the opposite of the older
+  `<slicc-surface>` (hidden until `[active]`): a surface was one of a show-one
+  stack, whereas a panel is _placed_ by the layout — if it's in the tree it
+  renders.
+- `locked` — blocks user rearrangement; a locked panel renders no move handle.
+- `presentation` / `anchor` — see Docked vs floating.
+- `onPanelShow` / `onPanelHide` / `onPanelResize` — so a panel starts and stops
+  its own pollers instead of the host tracking them. The `ResizeObserver` is only
+  created when a subclass actually implements `onPanelResize`.
+
+Panels are light-DOM hosts (the repo convention for layout/slotting elements), and
+the shared stylesheet keys on a `data-slicc-panel` marker rather than the tag —
+one rule set has to cover subclasses whose tags don't exist when the CSS is
+written.
+
+`panelMeta` and its pure helpers live in `panel-meta.ts`, importable with **no
+DOM** via `@slicc/webcomponents/panel/meta`.
+
+### Panel registry
+
+`panel-registry.ts` (DOM-free, `@slicc/webcomponents/panel/registry`) maps a
+layout's panel id to something that can render it. Three sources: `builtin`
+(bundled), `sprinkle` (discovered `.shtml`), `agent` (authored at runtime).
+
+A duplicate id **replaces** and returns `false` rather than throwing or being
+ignored — every caller is a legitimate re-registration path (HMR, sprinkle
+discovery's `resync`, the agent rewriting a panel it just authored). Throwing
+would break boot; ignoring would leave a stale implementation live after an edit.
+
+`panelRegistryEvents` fires `panel-registry-change`, so a live add-panel menu
+re-renders when VFS-backed discovery lands after first paint.
+
+### Docked vs floating
+
+Two things that are easy to conflate:
+
+- **"Collapsed by default"** is about _membership_: a panel simply isn't in the
+  layout until opened. That's how tool panels behave — the dock rail places and
+  removes them. Nothing to do with stacking.
+- **Presentation** is about _how an open panel occupies space_:
+  - `docked` (default) — a real cell: takes space, siblings reflow, can be split
+    and resized against them.
+  - `floating` — painted above the docked panels without reflowing them. For
+    glanceable panels and narrow viewports.
+
+Docked is the default for tool panels: a floating terminal covering the chat
+you're reading is worse than a docked one, and you can't split against something
+that isn't in the tree. `presentation` is settable per panel type (`panelMeta`)
+and per placement (a layout override wins), so one document can dock the monitor
+while another floats it.
+
+A floating panel stacks **inside** the panel host with `z-index: 1`, never in
+`document.body` — so it can never rise above the trusted layer.
+
+## Layout documents
+
+Schema and resolution: `packages/webcomponents/src/panel/layout-schema.ts`
+(DOM-free — the kernel-worker `layout` command imports it).
+
+```jsonc
+{
+  "version": 1,
+  "id": "my-dashboard",
+  "title": "My dashboard",
+  "locked": false,
+  "base": {
+    // The FIXED CHROME. Not resizable, not rearrangeable — visible or not.
+    "docks": [
+      { "edge": "top", "size": "36px", "panels": ["scoop-switcher", "floatbar"] },
+      { "edge": "left", "size": "44px", "panels": ["sessions-rail"] },
+      { "edge": "right", "size": "48px", "panels": ["dock-rail"] },
+    ],
+    // The WORKING AREA the docks leave over, as five BorderLayout regions.
+    "zones": {
+      "top": ["status"],
+      "left": ["chat", "files"], // two panels in one zone
+      "center": ["term"],
+      "right": [],
+      "bottom": [],
+      "axes": { "left": "row" }, // side by side rather than stacked
+      "sizes": { "top": "80px", "left": "40%" }, // center takes the rest
+      "locked": ["top"],
+    },
+    "floating": [{ "panel": "monitor", "anchor": "right", "width": "320px" }],
+  },
+  "panels": {
+    "sessions-rail": { "movable": false, "resizable": false },
+    "files": { "visible": false, "size": 2 }, // weight within its zone
+  },
+  "variants": [{ "when": { "maxWidth": 700 }, "docks": [], "zones": { "center": ["chat"] } }],
+}
+```
+
+### Two layers: docks, then zones
+
+**Docks** are the fixed chrome pinned to an edge at an exact size: the scoop/budget
+strip on top, the sessions rail left, the tool rail right. A zone-only model cannot
+express them, because fr fractions have no way to say "44px".
+
+**Zones** are the working area the docks leave over — five named regions in the sense
+of Java's `BorderLayout`:
+
+```text
+┌─────────────────────────────────────┐  ← docked strip (scoops, budget)
+├──┬───────────────────────────────┬──┤
+│  │             TOP               │  │
+│  ├─────┬──────────────────┬──────┤  │
+│  │LEFT │     CENTER       │RIGHT │  │
+│  ├─────┴──────────────────┴──────┤  │
+│  │            BOTTOM             │  │
+└──┴───────────────────────────────┴──┘
+   ↑ sessions rail        tool rail ↑
+```
+
+Because the zones live inside what the docks did not take, `top` is **below** the
+scoop strip and `left`/`right` are **inboard of** the rails — the chrome and the
+zones can never overlap. `center` takes whatever the edge zones leave, so an
+arrangement cannot end up with a gap.
+
+**A zone holds any number of panels**, laid out along its `axis` — so two panels can
+sit side by side in `left`, or stacked, and the document picks which. Defaults suit
+each zone's shape: the wide bands (`top`/`bottom`) run in a row, the tall ones
+(`left`/`right`/`center`) stack. Panels within a zone are resizable against each
+other; their weights live in `panels[id].size`, since a zone's own `sizes` entry is
+its _thickness_ against the other zones — a different axis and a different question.
+
+This replaced a recursive split tree. The tree could express arrangements the zones
+cannot, but not ones a user could aim at: rearranging meant picking one of five
+positions relative to some particular panel, multiplied by every panel on screen.
+Five named zones is the whole vocabulary, however much is open.
+
+Documents saved before the zone model still render — a `center` tree is flattened
+into the `center` zone (`zonesFromCenter`), and the first hand-drag migrates the
+document rather than refusing to move. Everything lands in the center deliberately:
+the tree's geometry has no faithful five-zone equivalent, and inventing one would
+silently rearrange a saved layout.
+
+A panel referenced in no zone is **not mounted** — tool panels start closed, as
+before, and open into `right`.
+
+### Responsive variants
+
+`variants[]` re-resolve on host resize (rAF-debounced, and skipped entirely when
+the matched variant set didn't change, so resizing within a breakpoint doesn't
+churn DOM). `when` accepts `minWidth`/`maxWidth`/`minHeight`/`maxHeight`/
+`orientation`/`platform` (`web`/`extension`/`electron`); all present predicates
+must hold.
+
+Resolution runs against the **host element's box**, not the window's, so a layout
+nested in a narrow container (extension side panel, Cherry embed) responds to the
+space it actually has.
+
+**Variants replace a section, they do not deep-merge it.** Supplying `center`
+replaces it outright; omitting it keeps the previous value; `[]` explicitly
+clears. Deep-merging two recursive split trees has no intuitive semantics (what is
+a 2-child row merged into a 3-child col?), whereas "the narrow layout declares its
+own center" reads obviously. `panels` overrides _do_ merge per id — flat
+key/value, unambiguous.
+
+Scope is web only. iOS is out: the follower is native SwiftUI and would need a
+whole native renderer.
+
+### Unplaced panels are parked, not destroyed
+
+A panel the current arrangement doesn't place stays in the DOM offstage, so it
+keeps its scroll position, live terminal session and loaded file tree across
+variant switches. `getPlacedPanelIds()` reports what actually **rendered**, not
+merely what the document mentions.
+
+## Saving and loading
+
+| Path                        | Agent writes                                   |
+| --------------------------- | ---------------------------------------------- |
+| `/workspace/layouts/*.json` | free — the normal path                         |
+| `/etc/slicc/layouts/*.json` | require user approval (sudoers self-protected) |
+
+The free path is the default because SLICC doesn't prompt for ordinary agent work
+— writing a sprinkle or running a shell command is ungated, so saving a layout
+should be too. The protected root is the opt-in exception for arrangements that
+shouldn't change without your say-so; it's enforced in `matchPath`
+(`shell/sudo/sudoers.ts`) where **no `NOPASSWD` rule can override it**, the same
+invariant as `/etc/sudoers`. Reads are never gated, so loading a pinned layout at
+boot never prompts.
+
+A **user layout shadows a protected one of the same name**, so you can override a
+shipped or pinned layout locally without write access to the protected copy. A
+corrupt document is skipped with a warning rather than failing the listing.
+
+A skill ships layouts by writing them into either root — discovery lists both, so
+"load an app including its UI" needs no registration step.
+
+Saving persists the **document**, not the resolved arrangement: resolution is
+viewport-dependent, so saving the resolved form would freeze whichever breakpoint
+happened to be active and discard every other variant.
+
+### From the UI
+
+The panels menu (the `layout-dashboard` button beside the avatar) is the single
+surface for all of it — the same menu that adds and removes panels and sprinkles:
+
+- **Save layout as…** prompts for a name and writes
+  `/workspace/layouts/<name>.json`. The free root, not the sudo-gated one: this is
+  the user saving their own arrangement, which needs no approval.
+- Every saved document and shipped preset is listed; clicking one loads it.
+- Saved documents carry a hover-revealed delete button. Presets do not — they are
+  read-only.
+
+The name is sanitized (`sanitizeLayoutName`) before it becomes a path: it is
+lowercased, reduced to `[a-z0-9._-]`, and capped at 64 characters. That is a
+security boundary, not tidiness — the name becomes
+`/workspace/layouts/<name>.json`, so an unsanitized `../../etc/sudoers` would
+escape the layouts directory entirely. A name that reduces to nothing saves nothing
+rather than inventing one.
+
+The prompt is the NATIVE `prompt`, captured at module init — the same measure
+`sudo/panel-responder.ts` takes. Page-realm code (a sprinkle, an agent-authored
+panel) can reassign `globalThis.prompt`, and this names a file that gets written, so
+a later reassignment must not be able to intercept it. With no `prompt` available at
+all (a worker, a headless run) saving declines rather than guessing a name.
+
+### From the shell
+
+`layout save <name> [--protected]`, `layout load <name>`, `layout delete <name>`,
+`layout docs`. See the `layout` command section below.
+
+## Agent-authored panels
+
+A directory under `/workspace/panels/<name>/` with a `panel.json` manifest
+(`id`, `title`, optional `icon`/`entry`/`minWidth`/`presentation`/`anchor`).
+Discovered at boot; a malformed manifest is skipped with a warning so one typo
+doesn't hide the rest.
+
+**Not gated, scanned, or signed** — deliberately. The agent already writes files
+and runs shell commands without prompting, so a panel grants it no capability it
+lacks; an approval prompt on top of an ungated shell would be theater, and
+prompting for "make me a panel" would make the feature unusable. Static analysis
+was considered and rejected as a _gate_: it's trivially defeated in JS
+(`globalThis[atob(…)]`, `new Function(fetched)`) and manufactures false
+confidence. Third-party panels distributed between users are a different threat
+and out of scope — that wants a dedicated sandbox origin (issue #1717 option C),
+not scanning.
+
+They register as `sandboxed` sources. A main-realm registration is possible (the
+CSP permits it) but would place freshly written code beside the tray channel and
+stored credentials for no functional gain.
+
+## Locking — two orthogonal layers
+
+Different mechanisms with different subjects; neither substitutes for the other.
+
+**Runtime lock (restricts the USER).** `locked: true` document-wide, or per panel
+via `panels: { chat: { locked: true } }`; `movable`/`resizable`/`hideable` give
+finer control. A locked panel renders no move handle at all. Inherited _down_ — a
+locked dock or split locks its contents, locking one panel never affects a
+sibling. This is what a Cherry embedder sets.
+
+**Sudo-gated files (restricts the AGENT).** The `/etc/slicc/layouts/` root above.
+
+## Cherry: pushing a layout into an embed
+
+```ts
+mountSlicc({
+  layout: {
+    version: 1,
+    id: 'embed',
+    locked: true,
+    base: {
+      docks: [{ edge: 'top', size: '36px', panels: ['floatbar'] }],
+      center: {
+        split: 'row',
+        sizes: [2, 1],
+        children: [{ panel: 'chat' }, { panel: 'sprinkle:progress' }],
+      },
+    },
+  },
+});
+```
+
+Serialized into `handshake.welcome.layout` and applied once at boot — static, like
+`theme`. The follower accepts **either** shape: a `LayoutDocument` (has `base`) or
+the older `DockTreeSpec` (has `zones`), since embedders vendor the SDK and upgrade
+on their own schedule.
+
+A pushed layout is applied **without a filesystem**, so it can never be persisted
+or drifted client-side, and `layout save` inside an embed reports that it needs one
+rather than writing the embedder's arrangement into the user's profile. An invalid
+document is ignored in favor of the default rather than rendering half-broken.
+
+## Trusted layer (spoof-proofing)
+
+`packages/webapp/src/ui/wc/trusted-layer.ts`. Panels render inside
+`.wcui-panel-host`, which establishes a CSS **stacking context**
+(`isolation: isolate`); `.wcui-trusted-layer` is a later sibling and therefore
+always paints above it, needing no `z-index` of its own.
+
+This is a stacking context rather than a "big z-index" precisely because the latter
+is an arms race a panel wins by adding a nine. Inside the host, the largest
+`z-index` any descendant can reach is still ordered _within_ that context —
+verified in a real browser: a panel at `z-index: 2147483647` loses to trusted
+chrome that sets none.
+
+`mountTrusted()` **throws** rather than falling back to `document.body`, because a
+silent fallback would render approval chrome a panel could occlude — the exact case
+this prevents. It protects against _visual_ spoofing and occlusion, not DOM access;
+guarding that needs realm isolation.
 
 ## The `layout` shell command
 
-`packages/webapp/src/shell/supplemental-commands/layout-command.ts` (kernel worker, no DOM) is the **agent-facing surface** for arranging panels programmatically — not just the five canned presets. It parses `set|chat|open|close|move|size|list|reset|edit` into a `LayoutApplyMsg` and forwards it to the page over the `layout-apply` panel-RPC op:
+Panel verbs (when `?panels=1` is active):
 
-- `layout set <name>` — load a named preset's tree wholesale (see Presets below).
-- `layout chat <zone>` — move the pinned `chat` leaf to `top`/`left`/`middle`/`right`/`bottom` without touching anything else.
-- `layout open <surfaceId> <zone>` — place a surface into a zone alongside whatever's already there (no-op if `surfaceId` is already placed anywhere) — the agent-driven equivalent of clicking a tool's dock icon or dragging a sprinkle in from the rail.
-- `layout close <surfaceId>` — remove a surface from wherever it sits (no-op if absent/pinned/locked). Its inverse.
-- `layout move <surfaceId> <zone>` — generalizes `layout chat <zone>` to any surface: detaches it from wherever it sits (even pinned) and makes it that zone's sole leaf.
-- `layout size <surfaceId> [--width <px|percent>] [--height <px|percent>]` — resize a placed leaf to an exact pixel or percent (0–100) of its current sibling group, on whichever axis(es) that leaf actually has a lever for; a no-op axis (e.g. width on a top/bottom zone root, which always spans full width) is silently ignored. See `setSurfaceSize` below.
-- `layout reset` — reload the default (`focus`) preset.
-- `layout edit` — friendly alias for `layout set focus` (there's no separate "editor mode" to enter; this exists for muscle-memory from when one did).
-- `layout list` — print the preset names and the default.
+| Command                            | Effect                                            |
+| ---------------------------------- | ------------------------------------------------- |
+| `layout load <name>`               | load a saved document, else a shipped preset      |
+| `layout save <name> [--protected]` | persist the current document                      |
+| `layout delete <name>`             | remove a saved document (either root)             |
+| `layout docs`                      | list saved documents + presets, marking protected |
+| `layout panels`                    | list every registered panel, `*` = placed         |
+| `layout show <panelId>`            | place / reveal a panel                            |
+| `layout hide <panelId>`            | hide a panel                                      |
 
-`surfaceId` accepts `chat`, a tool-panel id (`files`/`term`/`memory`/`monitor`), a full `sprinkle:<name>` id, or a bare sprinkle name — `open`/`close`/`move`/`size` auto-prefix a bare name that isn't `chat`/a tool-panel id to `sprinkle:<name>` (`normalizeSurfaceId` in `layout-command.ts`).
+**There is exactly one shipped document: `default`** — the arrangement SLICC boots
+with (chat in `center`, the three locked docks, and a narrow-viewport variant that
+drops both rails below 700px). Canned arrangements beyond it are the user's to make
+and save, not the app's to guess; `layout save <name>` and the panels menu cover
+that, and a skill ships its own layout as a document.
 
-`packages/webapp/src/ui/wc/apply-layout.ts:applyLayout(zone, msg)` is the page-side counterpart: `set`/`reset` call `WcSprinkleZone.applyLayout(tree)` (`wc-sprinkles.ts`), `chat`/`move` call `WcSprinkleZone.moveSurfaceToZone`, `open`/`close` call `placeSurface`/`removeSurface`, `size` calls `setSurfaceSize`.
+A saved document of the same name SHADOWS the shipped one, so saving your own
+`default` overrides the boot arrangement without touching it.
 
-## Presets
+`show`/`hide` edit the **document**, not the element's `hidden` attribute, so the
+change survives the next re-render and is saveable.
 
-`packages/webapp/src/ui/wc/layout-spec.ts` — `LAYOUT_PRESETS: Record<string, NamedDockTreeSpec>`, each a `{ name, tree: DockTreeSpecLike }`. `focus` is the default (chat alone, `left`, single column — matches the original fixed shell's shape). `split` (chat 50/50), `dashboard` (chat narrow-left, a populated `middle`), `dev` (chat + a `bottom` split of files/terminal), `stage` (chat on the `right`). Presets only declare content for zones they want pre-populated — dropping a second panel into an already-populated zone splits it live, same as any drag-drop arrangement; there's no way to pre-draw an _unpopulated_ multi-panel grid in this model.
+Dock-tree verbs (`set`/`chat`/`open`/`close`/`move`/`size`/`reset`/`edit`) target
+the older engine and are documented in
+[`shell-reference.md`](shell-reference.md); against a panel layout they report
+which verbs to use instead rather than silently doing nothing.
 
-## The dock-tree model
+## The dock-tree (current default)
 
-`SliccDockTree`'s `DockTreeSpec` is a fixed skeleton of 5 zones (`ZoneName`: `top`/`left`/`middle`/`right`/`bottom`), each holding a recursive `DockNode` — a `leaf` (one surface) or a `split` (`dir: 'row' | 'col'`, children + relative `sizes`). A zone whose node is `null` collapses entirely in normal rendering.
+Still what a default install boots. `<slicc-dock-tree>` is a fixed skeleton of 5
+zones (`top`/`left`/`middle`/`right`/`bottom`), each holding a recursive `DockNode`
+— a `leaf` (one surface) or a `split` (`row`/`col` with relative `sizes`). A zone
+whose node is `null` collapses entirely.
 
-- **`setTree(spec | null)` / `getTree()`** — full serialization, including sizes.
-- **`placeSurface(surfaceId, zone)`** — programmatic placement; empty zone becomes the leaf, non-empty gets it appended as a `col` split. No-op if `surfaceId` is already anywhere in the tree.
-- **`removeSurface(surfaceId)`** — inverse of `placeSurface`; no-op if absent, if pinned, or if locked.
-- **`moveSurfaceToZone(surfaceId, zone)`** — detaches-then-reinserts, bypassing the pinned-leaf guard `removeSurface` has (needed for `chat`, since it's pinned).
-- **`setSurfaceSize(surfaceId, size)`** — resize the leaf holding `surfaceId` to an exact width/height, in pixels or as a percent (0–100) of its current sibling group; the agent-facing counterpart to dragging a divider by hand (see `#sizeAxesFor`/`#applyAxisSize` in `slicc-dock-tree.ts`). A leaf inside a `split` sizes against that split's `sizes[]` (width if `dir==='row'`, height if `dir==='col'`); a bare zone-root leaf sizes against the skeleton `colFr`/`rowFr` weights — a center-zone (`left`/`middle`/`right`) root's "height" (there being no per-zone height in the skeleton) maps to `rowFr.center`, the lever shared by the whole center row. Every other sibling in the affected group keeps its own weight, so only the targeted leaf's share changes. No-ops (returns `false`) when `surfaceId` isn't placed, is `locked`, or the axis has nothing to size against (a lone shown block). Fires `dock-tree-resize` when it actually changes something.
-- **`beginExternalDrag(surfaceId, pointerId?)`** — lets a drag that started outside the component (a dock-rail launcher chip) enter the same drag state machine as an internal drag.
-- **`setPinned(surfaceIds)`** — marks leaves non-removable (runtime-only, never serialized).
+- `setTree(spec | null)` / `getTree()` — full serialization including sizes.
+- `placeSurface(surfaceId, zone)` / `removeSurface(surfaceId)`.
+- `moveSurfaceToZone(surfaceId, zone)` — detaches then reinserts, bypassing the
+  pinned guard `removeSurface` has (needed for `chat`).
+- `setSurfaceSize(surfaceId, size)` — px/percent resize of any leaf.
+- `beginExternalDrag(surfaceId, pointerId?)` — lets a dock-rail chip drag enter
+  the same state machine.
+- `setPinned(surfaceIds)` — non-removable leaves (runtime-only, never serialized).
 
-## Chat and tool panels are permanent, independent leaves
+Drag-drop: every unlocked leaf reveals a `.dock-tree__tile-move` button on hover
+over its top-left corner; hovering another tile computes a `DropRegion`
+(`n`/`s`/`e`/`w`/`center`) and splits accordingly.
 
-`wc-shell.ts`'s `mountWcShell` composes every panel directly into the dock-tree at boot — there is no shared "workbench body" or "tools" leaf:
+Resize: every divider is pointer-drag-resizable, clamped to 2% of the dragged
+pair's combined weight — the same floor `setSurfaceSize` enforces, so dragging can
+reach whatever a command can. Pointer capture is held on the **host**, not the
+divider: the divider is rebuilt on every `pointermove`, and a captured element
+removed from the DOM implicitly loses capture, which previously left drags stuck
+resizing after mouseup.
 
-- **Chat**: `CHAT_SURFACE_ID = 'chat'` (exported by `slicc-dock-tree.ts`; redeclared, not imported, in `wc-sprinkles.ts` — see that file for the no-runtime-dependency rationale). The live `<slicc-chatpane>` is composed into a `<slicc-surface surface-id="chat">` leaf at boot, `setPinned(['chat'])` so `removeSurface('chat')` can never orphan it, and `placeSurface('chat', 'left')` as the design-time-preview default (live floats immediately overwrite this via `wireDockTreePersistence`'s restored-or-default tree, so it's a no-op there).
-- **Tool panels** (`files`/`term`/`memory`/`monitor`): each is its own `<slicc-surface>`, composed into the tree at boot but **not placed anywhere** — they start closed, exactly like a sprinkle. `WcSprinkleZone.placeSurface`/`removeSurface` themselves fire `onToolPanelActivate`/`onToolPanelDeactivate` for a tool-panel id (starts/stops its poller/lazy-mount, see Workbench activator below) — so a dock-rail click (`wireWcSprinkles`'s `slicc-dock-select` listener calling `zone.placeSurface(DEFAULT_TOOL_ZONE, id)`, `DEFAULT_TOOL_ZONE = 'right'`) and an agent-driven `layout open`/`layout close` (routed through the same zone methods via `apply-layout.ts`) get identical lifecycle — clicking the dock icon isn't a separate code path from the shell command. Clicking the active tool's icon emits `slicc-dock-collapse`, which calls `zone.removeSurface(id)`.
-- **Sprinkles**: `WcSprinkleZone.#add` composes a `<slicc-surface surface-id="sprinkle:<name>">` leaf and calls `placeSurface(id, DEFAULT_TREE_ZONE)` (`DEFAULT_TREE_ZONE = 'middle'`) unless a drag or a restored tree already placed it.
-- **Browser**: a `<slicc-surface surface-id="browser">` fallback pane is always composed for floats that never wire the full-screen tab-switcher overlay (see `WcShellRefs.overlaySurfaces`); a leader that claims `browser` for its overlay leaves this pane inert but present.
+Persistence: `wireDockTreePersistence` restores from
+`localStorage['slicc-dock-tree:default']` (falling back to
+`DEFAULT_DOCK_TREE_ON_BOOT`) and persists on `dock-tree-change` /
+`dock-tree-resize`.
 
-## Workbench activator (independent per-panel lifecycle)
+## Fixed chrome: the rails and the top bar
 
-`packages/webapp/src/ui/wc/wc-workbench.ts`'s `createWorkbenchActivator` returns a `WorkbenchActivator { activate(surfaceId), deactivate(surfaceId) }` — since every tool panel is now its own permanently-mounted, independently open/closeable leaf (no more show-one swapping), each panel's poller runs only while THAT panel is open:
+The two rails and the top bar are **not resizable and never share space**. A rail
+is a strip of icons at one intrinsic width; the top bar is a `--barh`-high row.
+Stretching either can only produce a broken-looking gap, so their only
+configurability is _visible or not_ — hiding one collapses its dock entirely.
 
-- `files` — `activate` starts a 3s VFS refresh poll; `deactivate` stops it.
-- `monitor` — `activate` starts a 5s refresh poll; `deactivate` stops it.
-- `memory` — refreshes once per `activate`; no poller.
-- `term` — mounts the worker-shell terminal once on first `activate` and never tears it down (the session persists regardless of panel visibility, matching the old show-one behavior).
+Their size is pinned on the PANEL, not left to the dock's `size`. Marking a dock
+`locked` only stops a **user** dragging it; a document (a preset, a saved layout, a
+Cherry push) could still set `size: '400px'` and widen the icon strip into an empty
+band. Pinning makes the width a property of the rail, so no document can get it
+wrong. The shipped docks are also `locked` in the default document, so the intent
+travels with a saved or pushed layout.
 
-`wc-live.ts` wires `onToolPanelActivate`/`onToolPanelDeactivate` (passed into `wireWcSprinkles`) straight to the activator's `activate`/`deactivate`. `boot.setActivateSurface(activator)` also replays `activate` for every tool panel already placed in the dock-tree at attach time (a restored/persisted tree may already contain tool leaves before the activator exists).
+The sessions rail is the exception to a fixed number: it owns its own
+collapsed↔expanded width (44px ↔ 260px) and animates between them, so the panel
+follows the component rather than overriding it.
 
-## Locking (Cherry-pushed fixed layouts)
+## Rearranging and resizing by hand
 
-`DockTreeSpec.locked` (tree-wide) and `DockNode.locked` (per-leaf or per-split, inherited DOWN to every descendant — locking a split locks all its children, but locking a leaf never affects siblings) block drag, resize, and `removeSurface` for the affected node(s). Computed by `computeLocked(root, target, treeLocked)` walking from a zone root down to the target, ORing every ancestor's `locked`. A locked leaf renders no move button at all — there's nothing to click, matching "cannot drag" literally. Separate from `setPinned` (which only blocks `removeSurface`, for non-embedding cases like chat) — locking blocks everything.
+There is **no edit mode**. Nothing is toggled on first; a panel is always movable
+and resizable, so there is no state to enter or leave.
 
-Used by embedders (e.g. Cherry) to push a fixed, unmovable arrangement into a follower — see `packages/webapp/CLAUDE.md`'s Layouts section and `packages/cherry/CLAUDE.md` for the `mountSlicc({ layout })` wire path.
+**Move.** Hovering a panel reveals a grip in its top-left corner — no permanent
+title bar. Grabbing it shows the **five destinations** as a compass over the working
+area: TOP, LEFT, CENTER, RIGHT, BOTTOM. Moving onto one highlights it; releasing puts
+the panel in that zone. Dropping onto a zone's _area_ rather than its badge works
+too, so a coarse drop is fine.
 
-## Move / drag-drop interaction
+The compass is positioned from the working area's box, not the layout's, so the
+badges sit inside the fixed chrome — where a badge appears is where the panel lands.
+The badges are the actual hit targets, so what commits is what was aimed at.
 
-Every unlocked leaf's tile reveals a `.dock-tree__tile-move` button on hover over its top-left corner (`opacity:0` → `1`, mirrors `slicc-file-tree.ts`'s hover-reveal action-button pattern, built with `iconEl('grip-vertical', …)` — no visible title bar). Dragging it and hovering another tile computes a `DropRegion` (`n`/`s`/`e`/`w`/`center`) and splits accordingly on drop: `e`/`w` → `row` split (side-by-side), `n`/`s`/`center` → `col` split (stacked). Dropping on an empty zone placeholder places the leaf as that zone's root. Dropping on the dragged tile itself, on a locked tile, or nowhere valid, cancels cleanly with no event.
+A panel joins a zone that already has panels rather than replacing them, which is how
+"two panels on the left" is reached by hand.
 
-A `pointerdown` on a dock-rail sprinkle launcher chip (`wireDockExternalDragToTree` in `wc-shell.ts`) arms `beginExternalDrag(surfaceId, pointerId)` instead of click-opening it — a plain click still degrades cleanly since `beginExternalDrag` never calls `preventDefault`/`stopPropagation`.
+**Resize.** Two kinds of seam, both 6px:
 
-## Resize
+| Seam  | Between                                     | Writes                      | Floor          |
+| ----- | ------------------------------------------- | --------------------------- | -------------- |
+| Panel | adjacent panels in one zone, along its axis | `panels[id].size` (weights) | 2% of the pair |
+| Zone  | adjacent zones — the fainter hairline       | `zones.sizes[zone]` (px)    | 48px           |
 
-Every skeleton divider (between shown top/center/bottom blocks, and between shown left/middle/right zones) and every in-zone split divider is pointer-drag-resizable, moving `fr` weight (or a split's `sizes`) between adjacent slots, clamped to 2% of the dragged pair's own combined weight (`MIN_FRACTION` in `slicc-dock-tree.ts`) — the same floor `setSurfaceSize` enforces, so dragging by hand can always reach whatever a `layout size --height 2%` call can, and vice versa. A divider adjacent to a locked participant doesn't render.
+A ZONE seam drags a zone's thickness against its neighbours. It writes **pixels**,
+not a weight, because that is what a zone thickness is here: `sizeToFlex` turns px
+into a fixed basis that neither grows nor shrinks, whereas a weight would make an
+edge band rubber-band as the window resized — the opposite of what a rail-like zone
+wants. Only the edge zone is written; `center` is the remainder by definition and
+absorbs the difference.
 
-Pointer capture for a divider drag is held on the dock-tree host element itself, not the divider — the divider gets torn down and rebuilt by `#render()` on every `pointermove`, and a captured element that's removed from the DOM implicitly loses capture (per spec), which would otherwise leave the drag's `pointerup` delivery unreliable and the `window`-level `pointermove` listener stuck firing indefinitely on mouse movement alone, held button or not.
+Its clamp reserves room for **every** other element in the run, not just the
+immediate neighbour: a fixed zone reserves its actual width (it will not shrink to
+make room) and the flexible one reserves only the floor. Reserving a single floor let
+a hard drag crush the center to 0px, because the opposite zone's width and the seams'
+own gutters went unaccounted for.
 
-## Persistence
+A PANEL seam moves weight between two panels inside one zone. Weights start from
+measured geometry, so a zone becomes resizable on the first drag without sizes
+authored up front.
 
-`wireDockTreePersistence(refs, log)` (`wc-live.ts`) is the **sole seed/restore source** for the dock-tree's content: on attach it reads the persisted tree from `localStorage['slicc-dock-tree:default']` (`DOCK_TREE_STORAGE_KEY`; `default` stands in for a real per-profile key until profiles ship) and calls `dockTree.setTree(...)`, falling back to `DEFAULT_DOCK_TREE_ON_BOOT` (a chat leaf in `left`, nothing else — tool panels start closed) on a missing/corrupt value. It then listens for `dock-tree-change` (drag-drop / `placeSurface` / `removeSurface` mutations) and `dock-tree-resize` (divider drags) and persists `detail.tree` on each. `setTree` never itself emits a change event, so restore can never loop back into a persist write. Runs for BOTH floats (standalone and extension) via `attachWcClient`.
+A seam is omitted beside an empty zone — it takes no space, so the seam would sit
+against nothing and drag a thickness nobody can see — and whenever either neighbour
+is locked, since the drag moves space between the two of them.
 
-## Known gaps (documented follow-ups, not yet wired)
+The move grip is absent in three cases, because there would be nothing for it to do:
 
-- No dedicated bottom-docked terminal region beyond what a user drags there manually.
-- No multi-profile layout storage (`DOCK_TREE_STORAGE_KEY` is single-profile).
+| Case                             | Why                                                    |
+| -------------------------------- | ------------------------------------------------------ |
+| A locked panel or locked zone    | Lock means lock — a disabled button is worse than none |
+| A docked panel (rail, top strip) | Fixed chrome: one correct position, one correct size   |
+| Under a document-wide `locked`   | What a Cherry embedder sets                            |
+
+### What a gesture writes
+
+Both edit the DOCUMENT and re-render from it, so the result is what `getLayout()`
+serializes and what a save round-trips. They edit whichever arrangement the current
+environment actually renders — a matched variant, if one supplies the working area,
+else `base`. Editing `base` while a narrow variant is on screen would land the change
+somewhere invisible and the drag would appear to snap back.
+
+`slicc-layout-change` fires with `reason: 'rearrange'` or `'resize'`. A resize fires
+ONCE, on release; the per-frame re-render is silent, since a persisting listener
+would otherwise write ~60 times per drag.
+
+Pointer capture for a resize goes on the HOST, not the divider: each frame rebuilds
+the divider, and a captured element removed from the DOM loses capture per spec —
+which once left a resize stuck to a free-moving mouse because `pointerup` was never
+delivered.
+
+### Persistence
+
+`panelize-shell.ts` stores the document under `slicc-panel-layout:default` on those
+two reasons only, and restores it on the next boot in place of the boot document.
+Other reasons are the layout reacting to something already reproducible from what is
+stored — persisting a `viewport` change would freeze a transient breakpoint as if
+the user had chosen it. A corrupt or schema-rejected entry falls back to the shipped
+default rather than failing the boot.
+
+## Known gaps
+
+- The panel system is behind `?panels=1`; the dock-tree is still the default boot.
+- No gesture for moving a panel INTO a dock, or for turning a docked panel into a
+  floating one. Documents and the `layout` command express both.
+- Panels have no explicit order within a zone beyond append order.
+- No per-profile layout storage (`slicc-panel-layout:default`, like
+  `DOCK_TREE_STORAGE_KEY`, is single-profile).

@@ -901,6 +901,78 @@ describe('mountWcUiFollower', () => {
     expect(filesTile?.querySelector('.dock-tree__tile-move')).toBeNull();
   });
 
+  it('cherry: accepts a host-pushed panel LayoutDocument, locked so the user cannot rearrange it', async () => {
+    // Embedders vendor the SDK and upgrade on their own schedule, so the
+    // follower sniffs the shape: `base` → panel document, `zones` → dock-tree.
+    // Both keep working.
+    const pushedDoc = {
+      version: 1,
+      id: 'embed',
+      locked: true,
+      base: {
+        docks: [{ edge: 'top', size: '36px', panels: ['floatbar'] }],
+        center: { panel: 'chat' },
+      },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify(pushedDoc),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    // Panelized: a `<slicc-layout>` replaced the dock-tree shell.
+    const layout = app.querySelector('slicc-layout') as HTMLElement & {
+      getLayout(): { id: string; locked?: boolean };
+      isLocked(id: string): boolean;
+    };
+    expect(layout).not.toBeNull();
+    expect(layout.getLayout().id).toBe('embed');
+    // Tree-wide lock reaches every placed panel, so the end user can't rearrange
+    // what the embedder pushed.
+    expect(layout.isLocked('chat')).toBe(true);
+    expect(app.querySelector('slicc-panel[panel-id="chat"]')?.hasAttribute('locked')).toBe(true);
+  });
+
+  it('cherry: ignores a pushed document that fails schema validation, keeping the default', async () => {
+    // `base` present (so it takes the document path) but no id/version — must
+    // degrade rather than render a half-broken arrangement.
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify({ base: { center: { panel: 'chat' } } }),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    // Not panelized — the classic shell stands.
+    expect(app.querySelector('slicc-layout')).toBeNull();
+    expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
+  });
+
   it('cherry: falls back to the default layout when the pushed layout is invalid JSON', async () => {
     vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
       setupStandalonePrelude: vi.fn(async () => ({

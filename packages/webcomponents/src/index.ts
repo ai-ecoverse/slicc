@@ -121,6 +121,66 @@ export {
   type UsbPermissionProvider,
 } from './overlay/slicc-permissions.js';
 export { SliccTooltip } from './overlay/slicc-tooltip.js';
+export { liveArrangement } from './panel/center-ops.js';
+export {
+  type Arrangement,
+  type CenterNode,
+  cloneLayout,
+  DEFAULT_ZONE_AXIS,
+  type DockEdge,
+  type DockSpec,
+  emptyLayout,
+  type FloatingSpec,
+  isPanelLocked,
+  isSplitNode,
+  LAYOUT_SCHEMA_VERSION,
+  type LayoutDocument,
+  type LayoutEnvironment,
+  type LayoutVariant,
+  layoutPanelIds,
+  moveToZone,
+  type PanelOverride,
+  parseLayoutDocument,
+  type ResolvedLayout,
+  removeFromZones,
+  resolveLayout,
+  type SplitDirection,
+  sizeToFlex,
+  type VariantCondition,
+  variantMatches,
+  walkCenter,
+  ZONE_NAMES,
+  type ZoneName,
+  type ZonesSpec,
+  zoneAxis,
+  zoneOfPanel,
+  zonesFromCenter,
+} from './panel/layout-schema.js';
+export {
+  getPanel,
+  hasPanel,
+  listPanels,
+  listPanelsByOrigin,
+  type PanelRegistration,
+  type PanelRegistryChangeDetail,
+  type PanelSource,
+  panelRegistryEvents,
+  registerPanel,
+  registerPanelElement,
+  unregisterPanel,
+} from './panel/panel-registry.js';
+export { type LayoutChangeDetail, SliccLayout } from './panel/slicc-layout.js';
+export {
+  isPanelAnchor,
+  PANEL_MARKER_ATTR,
+  type PanelAnchor,
+  type PanelMeta,
+  type PanelPresentation,
+  type PanelSize,
+  type PanelVisibilityDetail,
+  panelMetaOf,
+  SliccPanel,
+} from './panel/slicc-panel.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export {
@@ -165,7 +225,9 @@ export {
   type DockTreeSpec,
   labelForSurface,
   SliccDockTree,
-  type ZoneName,
+  // Aliased: the panel system exports the plain `ZoneName` now. This is the
+  // dock-tree's own zone vocabulary, which happens to use the same five words.
+  type ZoneName as DockZoneName,
 } from './workbench/slicc-dock-tree.js';
 export { SliccFileTree } from './workbench/slicc-file-tree.js';
 export {

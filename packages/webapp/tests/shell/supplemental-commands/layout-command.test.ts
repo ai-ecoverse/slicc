@@ -4,8 +4,8 @@ import { LAYOUT_PRESETS } from '../../../src/ui/wc/layout-spec.js';
 
 describe('parseLayoutArgs', () => {
   it('set <preset> resolves to the preset tree', () => {
-    const r = parseLayoutArgs(['set', 'dashboard']);
-    expect(r).toEqual({ kind: 'set', tree: LAYOUT_PRESETS.dashboard.tree });
+    const r = parseLayoutArgs(['set', 'focus']);
+    expect(r).toEqual({ kind: 'set', tree: LAYOUT_PRESETS.focus.tree });
   });
 
   it('unknown preset is an error', () => {
@@ -100,6 +100,72 @@ describe('parseLayoutArgs', () => {
     it('move requires a valid zone', () => {
       const r = parseLayoutArgs(['move', 'weather', 'nope']);
       expect('error' in r && r.error).toMatch(/usage: layout move/i);
+    });
+  });
+
+  describe('layout-document verbs', () => {
+    it('load takes a name (saved layout or preset — the page resolves which)', () => {
+      expect(parseLayoutArgs(['load', 'my-dashboard'])).toEqual({
+        kind: 'load',
+        name: 'my-dashboard',
+      });
+      expect('error' in parseLayoutArgs(['load'])).toBe(true);
+    });
+
+    it('save defaults to the freely-writable root', () => {
+      expect(parseLayoutArgs(['save', 'mine'])).toEqual({
+        kind: 'save',
+        name: 'mine',
+        protected: false,
+      });
+    });
+
+    it('save --protected targets the sudo-gated root', () => {
+      expect(parseLayoutArgs(['save', 'pinned', '--protected'])).toEqual({
+        kind: 'save',
+        name: 'pinned',
+        protected: true,
+      });
+    });
+
+    it('save rejects a name that would escape the layouts directory', () => {
+      // The name becomes a filename; a separator would write elsewhere entirely.
+      for (const bad of ['../escape', 'a/b', '/etc/passwd', 'we ird']) {
+        const r = parseLayoutArgs(['save', bad]);
+        expect('error' in r && r.error).toMatch(/invalid layout name/i);
+      }
+    });
+
+    it('save requires a name and rejects unknown flags', () => {
+      expect('error' in parseLayoutArgs(['save'])).toBe(true);
+      expect('error' in parseLayoutArgs(['save', '--protected'])).toBe(true);
+      const r = parseLayoutArgs(['save', 'mine', '--force']);
+      expect('error' in r && r.error).toMatch(/unknown flag/i);
+    });
+
+    it('delete takes a name', () => {
+      expect(parseLayoutArgs(['delete', 'old'])).toEqual({ kind: 'delete', name: 'old' });
+      expect('error' in parseLayoutArgs(['delete'])).toBe(true);
+    });
+
+    it('docs and panels take no arguments', () => {
+      expect(parseLayoutArgs(['docs'])).toEqual({ kind: 'docs' });
+      expect(parseLayoutArgs(['panels'])).toEqual({ kind: 'panels' });
+    });
+
+    it('show/hide normalize a bare sprinkle name like the other verbs', () => {
+      expect(parseLayoutArgs(['show', 'weather'])).toEqual({
+        kind: 'show',
+        panelId: 'sprinkle:weather',
+      });
+      expect(parseLayoutArgs(['hide', 'files'])).toEqual({ kind: 'hide', panelId: 'files' });
+      expect('error' in parseLayoutArgs(['show'])).toBe(true);
+      expect('error' in parseLayoutArgs(['hide'])).toBe(true);
+    });
+
+    it('the usage line advertises the document verbs', () => {
+      const r = parseLayoutArgs(['bogus']);
+      expect('error' in r && r.error).toMatch(/load\|save\|delete\|docs\|panels/);
     });
   });
 
