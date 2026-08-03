@@ -42,11 +42,11 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT.
 - `proc-mount.ts` — read-only procfs-shaped view at `/proc` (scoop-invisible, not persisted).
   `cat /proc/<pid>/{status,cmdline,cwd,stat}` works from any panel terminal.
-- `realm/` — hard-killable runner. `runInRealm({ kind: 'js' | 'py', … })` spawns a
-  per-task `DedicatedWorker`; SIGKILL → `worker.terminate()`, exit 137. **JS realms always
-  run in the kernel worker via `createJsWorkerRealm()` → `js-realm-shared.ts`, in every
-  float.** Kernel-side `realm-host` proxies `vfs` / `exec` / `fetch` RPC. The extension
-  iframe realm path (`createIframeRealm`) is fully removed.
+- `realm/` — hard-killable runner. `runInRealm()` spawns a per-task `DedicatedWorker`;
+  SIGKILL terminates it with exit 137. JS always runs in the kernel worker through
+  `createJsWorkerRealm()` → `js-realm-shared.ts`; `realm-host` proxies `vfs` / `exec` /
+  `fetch`. Pure-JS helpers and Node shims live in `realm/helpers/`, behind the
+  `js-realm-helpers.ts` compatibility barrel. No extension iframe realm remains.
 - `realm/sync-{xhr,fs-*,exec-*}.ts` + `ui/sync-fs-sw-handler.ts` — synchronous
   `readFileSync`/`writeFileSync` and `child_process.execSync`/`execFileSync`/`spawnSync`
   for realm scripts, over one blocking sync-XHR transport (`synchronify`) and one
