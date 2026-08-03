@@ -93,4 +93,36 @@ final class ModelProtocolTests: XCTestCase {
                         thinkingLevel: .minimal, effortOverride: nil))))
         XCTAssertEqual(state.displayedThinkingLevel, "low")
     }
+
+    @MainActor
+    func testReconnectSnapshotRequestPreservesViewedScoop() throws {
+        let state = AppState()
+        state.selectedScoopJid = "research"
+
+        let data = try JSONEncoder().encode(state.snapshotRequestForConnection())
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["type"] as? String, "request_snapshot")
+        XCTAssertEqual(object["scoopJid"] as? String, "research")
+    }
+
+    @MainActor
+    func testMissingPreservedScoopFallsBackToActive() throws {
+        let state = AppState()
+        state.selectedScoopJid = "removed-scoop"
+        state.handleDataChannelMessage(
+            try JSONEncoder().encode(
+                LeaderToFollowerMessage.scoopsList(
+                    scoops: [
+                        ScoopSummary(
+                            jid: "cone", name: "cone", folder: "/workspace", isCone: true,
+                            assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+                        ScoopSummary(
+                            jid: "active", name: "active", folder: "/scoops/active",
+                            isCone: false, assistantLabel: "active", trigger: nil, state: nil,
+                            fill: nil),
+                    ], activeScoopJid: "active")))
+
+        XCTAssertEqual(state.selectedScoopJid, "active")
+    }
 }

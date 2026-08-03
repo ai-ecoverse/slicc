@@ -53,6 +53,7 @@ import {
   getAllAvailableModels,
   getProviderConfig,
   resolveCurrentModel,
+  setSelectedModelId,
 } from '../provider-settings.js';
 import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from '../runtime-identity.js';
@@ -65,6 +66,7 @@ import {
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle } from '../types.js';
+import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from './leader-model-events.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
   LEADER_RUN_NEW_SESSION_EVENT,
@@ -188,6 +190,19 @@ export function installLeaderModelCatalogRefresh(opts: {
   });
 }
 
+export function installLeaderModelStateBridge(opts: {
+  window: Pick<Window, 'addEventListener'>;
+  getSync: () => Pick<PageLeaderTrayHandle['sync'], 'broadcastModelState'> | null;
+}): void {
+  opts.window.addEventListener(LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT, () => {
+    opts.getSync()?.broadcastModelState();
+  });
+  opts.window.addEventListener('model-change', (event) => {
+    const detail = (event as CustomEvent<{ source?: 'follower' }>).detail;
+    if (detail?.source !== 'follower') opts.getSync()?.broadcastModelState();
+  });
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
@@ -244,16 +259,18 @@ export function buildFollowerOptions(
     setChatAgent: (agent) => getController()?.setAgent(agent),
     browserAPI: browser,
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
+    getSelectedScoopJid: () => selectedScoopJid,
     onConnectionChange: (connected) => {
       if (!connected) {
-        selectedScoopJid = null;
         modelSurface.reset();
       }
     },
     addSprinkle: (name, title, element) => deps.addSprinkle(name, title, element),
     removeSprinkle: (name) => deps.removeSprinkle(name),
     onScoopsList: (scoops, activeScoopJid) => {
-      selectedScoopJid ??= activeScoopJid;
+      if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
+        selectedScoopJid = activeScoopJid;
+      }
       deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
     },
@@ -303,11 +320,17 @@ export function createLeaderOptionsFactory(
     onFollowerModelSelect: (modelId) => {
       const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
       if (!entry) return false;
+      setSelectedModelId(entry.modelId);
       refs.composerMeta.dispatchEvent(
         new CustomEvent('model-change', {
           bubbles: true,
           composed: true,
-          detail: { id: entry.modelId, model: entry.modelName, provider: entry.providerName },
+          detail: {
+            id: entry.modelId,
+            model: entry.modelName,
+            provider: entry.providerName,
+            source: 'follower',
+          },
         })
       );
       refs.composerMeta.setAttribute('model', entry.modelName);
@@ -652,6 +675,10 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     getSync: () => state.leader?.sync ?? null,
     refreshDynamicCatalogs: () => refreshDynamicModelCatalogs(log),
     log,
+  });
+  installLeaderModelStateBridge({
+    window: win,
+    getSync: () => state.leader?.sync ?? null,
   });
 
   const remoteCdpPushChannel =

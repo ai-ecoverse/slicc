@@ -172,6 +172,8 @@ export interface StartPageFollowerTrayOptions {
    * disables its composer + shows "Connecting to leader…" until `true`.
    */
   onConnectionChange?: (connected: boolean) => void;
+  /** Preserve the viewed scoop when a fresh reconnect sync requests its snapshot. */
+  getSelectedScoopJid?: () => string | null;
   /**
    * Called with `true` when the leader stops answering keepalive pings while
    * the data channel is still open, and `false` when it answers again. The
@@ -394,7 +396,7 @@ export function startPageFollowerTray(
     options.setChatAgent(sync);
     options.onForwardingToggle?.(true);
     options.onConnectionChange?.(true);
-    sync.requestSnapshot();
+    sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
 
     if (options.advertisesCdpTargets !== false) {
       targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);

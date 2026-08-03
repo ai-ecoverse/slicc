@@ -785,8 +785,9 @@ class AppState: ObservableObject {
                 capabilities: trayFollowerCapabilities,
                 motd: trayFollowerMotd))
 
-        // Request initial snapshot.
-        sendToLeader(.requestSnapshot(scoopJid: nil))
+        // Request the preserved view so the fresh leader follower record
+        // re-registers it before thinking changes can target that scoop.
+        sendToLeader(snapshotRequestForConnection())
     }
 
     /// Called from WebRTCBridge when data arrives on the channel.
@@ -881,14 +882,20 @@ class AppState: ObservableObject {
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
-            // First time we hear about scoops: select the cone (or the active one) for viewing.
-            if selectedScoopJid == nil {
+            // Select initially, or fall back when a preserved scoop disappeared.
+            let preservedScoopExists =
+                selectedScoopJid.map { selected in
+                    scoops.contains(where: { $0.jid == selected })
+                } ?? false
+            if selectedScoopJid == nil || !preservedScoopExists {
+                let hadMissingSelection = selectedScoopJid != nil
                 let cone = scoops.first(where: { $0.isCone })
-                let initial = cone?.jid ?? activeScoopJid
+                let initial = hadMissingSelection ? activeScoopJid : (cone?.jid ?? activeScoopJid)
                 if !initial.isEmpty {
                     selectedScoopJid = initial
-                    // Pull buffered messages for this scoop if we haven't yet.
-                    if messagesByScoop[initial] == nil {
+                    // Re-register a missing preserved selection even when its
+                    // active-scoop messages are already cached locally.
+                    if hadMissingSelection || messagesByScoop[initial] == nil {
                         sendToLeader(.scoopsSelect(scoopJid: initial))
                     } else {
                         messages = messagesByScoop[initial] ?? []
@@ -1478,6 +1485,11 @@ class AppState: ObservableObject {
 // MARK: - Scoop / Model / Thinking Selection
 
 extension AppState {
+    /// Snapshot request sent on every fresh data channel, preserving the viewed scoop.
+    func snapshotRequestForConnection() -> FollowerToLeaderMessage {
+        .requestSnapshot(scoopJid: selectedScoopJid)
+    }
+
     /// Select a specific scoop to view. Independent of the leader's selection.
     func selectScoop(jid: String) {
         guard jid != selectedScoopJid else { return }

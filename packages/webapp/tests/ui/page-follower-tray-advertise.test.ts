@@ -27,6 +27,7 @@ import { startPageFollowerTray } from '../../src/ui/page-follower-tray.js';
 let capturedOnConnected: ((conn: unknown) => void) | null = null;
 let capturedSyncCallbacks: { onTargetsChanged?: () => void } | null = null;
 let mockAdvertiseTargets: ReturnType<typeof vi.fn>;
+let requestSnapshotSpies: ReturnType<typeof vi.fn>[];
 
 // Mock the reconnect layer: capture `onConnected`, return an inert handle so the
 // helper's pre-connection state is unchanged until we invoke `onConnected`.
@@ -50,7 +51,9 @@ vi.mock('../../src/scoops/tray-follower-sync.js', () => {
   ) {
     capturedSyncCallbacks = callbacks;
     this['advertiseTargets'] = mockAdvertiseTargets;
-    this['requestSnapshot'] = vi.fn();
+    const requestSnapshot = vi.fn();
+    requestSnapshotSpies.push(requestSnapshot);
+    this['requestSnapshot'] = requestSnapshot;
     this['close'] = vi.fn();
   });
   return { FollowerSyncManager };
@@ -88,6 +91,7 @@ describe('startPageFollowerTray CDP advertise suppression', () => {
     capturedOnConnected = null;
     capturedSyncCallbacks = null;
     mockAdvertiseTargets = vi.fn();
+    requestSnapshotSpies = [];
   });
 
   it('advertisesCdpTargets=false: interval path does NOT call advertiseTargets', async () => {
@@ -128,6 +132,23 @@ describe('startPageFollowerTray CDP advertise suppression', () => {
     expect(opts.setChatAgent).toHaveBeenCalledTimes(1);
     const syncArg = (opts.setChatAgent as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(syncArg.requestSnapshot).toHaveBeenCalledTimes(1);
+    handle.stop();
+  });
+
+  it('requests the preserved scoop on every fresh reconnect sync', () => {
+    const opts = {
+      ...makeBaseOptions(),
+      advertisesCdpTargets: false,
+      getSelectedScoopJid: () => 'research',
+    };
+    const handle = startPageFollowerTray(opts);
+
+    capturedOnConnected!(fakeConnection());
+    capturedOnConnected!({ ...fakeConnection(), bootstrapId: 'boot-2' });
+
+    expect(requestSnapshotSpies).toHaveLength(2);
+    expect(requestSnapshotSpies[0]).toHaveBeenCalledWith('research');
+    expect(requestSnapshotSpies[1]).toHaveBeenCalledWith('research');
     handle.stop();
   });
 

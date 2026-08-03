@@ -593,6 +593,7 @@ export async function mountWcUiFollower(
           connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
         );
     },
+    getSelectedScoopJid: () => followerSelectedScoop,
     // A stall keeps the composer usable-looking but disabled, so a message
     // typed while the leader is catching up can't be silently dropped. No
     // cherry host event: the host contract is connected/disconnected, and a
@@ -625,6 +626,9 @@ export async function mountWcUiFollower(
       else log.warn('follower sprinkle open() of a local path is unavailable', { path });
     },
     onScoopsList: (scoops, activeScoopJid) => {
+      if (followerSelectedScoop && !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
+        followerSelectedScoop = activeScoopJid;
+      }
       boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },

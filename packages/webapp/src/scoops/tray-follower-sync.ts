@@ -385,8 +385,8 @@ export class FollowerSyncManager implements AgentHandle {
   // ---------------------------------------------------------------------------
 
   /** Request a fresh snapshot from the leader. */
-  requestSnapshot(): void {
-    this.sync.send({ type: 'request_snapshot' });
+  requestSnapshot(scoopJid?: string): void {
+    this.sync.send({ type: 'request_snapshot', ...(scoopJid ? { scoopJid } : {}) });
   }
 
   /**

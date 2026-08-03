@@ -52,6 +52,7 @@ import { isLickChannel } from '../lick-channels.js';
 import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
+import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
   LEADER_RUN_NEW_SESSION_EVENT,
@@ -95,6 +96,19 @@ export {
   metaThinkingForScoop,
   thinkingLevelForAgent,
 } from './wc-follower-model-surface.js';
+
+/** Persist a leader-local thinking change and notify followers only after its ack. */
+export async function applyLeaderLocalThinkingChange(
+  client: Pick<OffscreenClient, 'setScoopThinkingLevel'>,
+  scoopJid: string,
+  level: ThinkingLevel | undefined,
+  effortOverride?: string,
+  notify: () => void = notifyLeaderLocalModelStateChanged
+): Promise<boolean> {
+  const applied = await client.setScoopThinkingLevel(scoopJid, level, effortOverride);
+  if (applied) notify();
+  return applied;
+}
 
 /**
  * Maps proc-mount.ts's single-letter process state code back to the word
@@ -1198,7 +1212,11 @@ function wireWcComposer(deps: {
     const level = thinkingLevelForAgent(metaLevel);
     const effort = effortOverrideForAgent(metaLevel);
     const selected = boot.getSelected();
-    if (selected && level) void client.setScoopThinkingLevel(selected.jid, level, effort);
+    if (selected && level) {
+      void applyLeaderLocalThinkingChange(client, selected.jid, level, effort).catch((err) =>
+        log.warn('local thinking update failed', err)
+      );
+    }
   });
 
   return { getAttachStage: () => attachStage };

@@ -105,9 +105,19 @@ export class BroadcastManager {
     if (!follower) return;
 
     const { options } = this.context;
-    const targetJid = scoopJid ?? follower.selectedScoopJid ?? options.getScoopJid();
+    const activeJid = options.getScoopJid();
+    let targetJid = scoopJid ?? follower.selectedScoopJid ?? activeJid;
+    try {
+      const scoops = options.getScoops?.();
+      if (scoops && !scoops.some((scoop) => scoop.jid === targetJid)) targetJid = activeJid;
+    } catch (err) {
+      this.context.log.warn('getScoops failed while validating snapshot target', {
+        targetJid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     let messages: ChatMessage[];
-    if (options.getMessagesForScoop && targetJid !== options.getScoopJid()) {
+    if (options.getMessagesForScoop && targetJid !== activeJid) {
       try {
         messages = await Promise.resolve(options.getMessagesForScoop(targetJid));
       } catch (err) {
@@ -115,6 +125,7 @@ export class BroadcastManager {
           targetJid,
           error: err instanceof Error ? err.message : String(err),
         });
+        targetJid = activeJid;
         messages = options.getMessages();
       }
     } else {

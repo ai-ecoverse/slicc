@@ -529,6 +529,15 @@ describe('FollowerSyncManager', () => {
       const sent = channel.parseSent();
       expect(sent).toEqual([{ type: 'request_snapshot' }]);
     });
+
+    it('requests a preserved scoop for reconnect registration', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.requestSnapshot('research');
+
+      expect(channel.parseSent()).toEqual([{ type: 'request_snapshot', scoopJid: 'research' }]);
+    });
   });
 
   describe('requestNewSession', () => {

@@ -484,6 +484,29 @@ describe('mountWcUiFollower', () => {
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
 
+  it('preserves its viewed scoop across reconnect and falls back if it disappears', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+    opts.onScoopsList?.(
+      [
+        { jid: 'cone-jid', name: 'cone', isCone: true },
+        { jid: 'research', name: 'research', isCone: false },
+      ] as never,
+      'cone-jid'
+    );
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'research' } }));
+
+    opts.onConnectionChange?.(false);
+    expect(opts.getSelectedScoopJid?.()).toBe('research');
+
+    opts.onScoopsList?.([{ jid: 'cone-jid', name: 'cone', isCone: true }] as never, 'cone-jid');
+    expect(opts.getSelectedScoopJid?.()).toBe('cone-jid');
+    expect(switcher.getAttribute('active')).toBe('cone-jid');
+  });
+
   it('shows a terminal "reload to retry" state when the tray gives up', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

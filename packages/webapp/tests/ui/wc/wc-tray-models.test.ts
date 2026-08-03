@@ -2,9 +2,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
+import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from '../../../src/ui/wc/leader-model-events.js';
 import {
   buildFollowerOptions,
   installLeaderModelCatalogRefresh,
+  installLeaderModelStateBridge,
 } from '../../../src/ui/wc/wc-tray.js';
 
 describe('role-switch follower model controls', () => {
@@ -67,6 +69,55 @@ describe('role-switch follower model controls', () => {
     expect(selectModel).toHaveBeenCalledWith('anthropic:claude-sonnet-4-6');
     expect(setThinkingLevel).toHaveBeenCalledWith('cone', 'xhigh', 'max');
     expect(selectScoop).toHaveBeenCalledWith('research');
+  });
+
+  it('preserves the viewed scoop across transient disconnect and falls back when it disappears', () => {
+    const composerMeta = document.createElement('div');
+    const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
+    const options = buildFollowerOptions(
+      {
+        refs: { composerMeta, switcher },
+        browser: {},
+        client: { sendSetFollowerForwarding: vi.fn() },
+        window: { localStorage: { getItem: vi.fn(() => null) } },
+        getController: () => null,
+        addSprinkle: vi.fn(),
+        removeSprinkle: vi.fn(),
+      } as never,
+      'https://tray.example/join/token',
+      () => ({ selectScoop: vi.fn() }) as never
+    );
+
+    options.onScoopsList?.(
+      [
+        { jid: 'cone', name: 'cone', isCone: true },
+        { jid: 'research', name: 'research', isCone: false },
+      ] as never,
+      'cone'
+    );
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'research' } }));
+    options.onConnectionChange?.(false);
+    expect(options.getSelectedScoopJid?.()).toBe('research');
+
+    options.onScoopsList?.([{ jid: 'cone', name: 'cone', isCone: true }] as never, 'cone');
+    expect(options.getSelectedScoopJid?.()).toBe('cone');
+    expect(switcher.getAttribute('active')).toBe('cone');
+  });
+});
+
+describe('leader-local model state bridge', () => {
+  it('broadcasts local model and post-ack thinking changes but not follower model picks', () => {
+    const windowTarget = new EventTarget();
+    const broadcastModelState = vi.fn();
+    installLeaderModelStateBridge({
+      window: windowTarget as never,
+      getSync: () => ({ broadcastModelState }),
+    });
+
+    windowTarget.dispatchEvent(new Event(LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT));
+    windowTarget.dispatchEvent(new CustomEvent('model-change'));
+    windowTarget.dispatchEvent(new CustomEvent('model-change', { detail: { source: 'follower' } }));
+    expect(broadcastModelState).toHaveBeenCalledTimes(2);
   });
 });
 
