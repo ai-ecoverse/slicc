@@ -1,13 +1,14 @@
 /**
  * Monitor surface for the WC workbench: read-only dashboard of all resources
- * managed by SLICC — scoops, cron tasks, webhooks, mounts, MCP servers,
- * and OAuth accounts.
+ * managed by SLICC — tray connections, followers, scoops, cron tasks,
+ * webhooks, mounts, MCP servers, and OAuth accounts.
  */
 
 import type { MonitorSection } from '@slicc/webcomponents';
 import type { MountTableEntry } from '../../fs/mount-table-store.js';
 import type { CronTaskEntry, WebhookEntry } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import type { ConnectedFollowerInfo } from '../../shell/supplemental-commands/host-command.js';
 
 /**
  * A persisted mount entry, augmented with the permission state as of the
@@ -40,6 +41,15 @@ export interface OAuthProviderEntry {
   valid?: boolean;
 }
 
+export interface MonitorTrayInfo {
+  role: 'leader' | 'follower' | 'standalone';
+  state: 'inactive' | 'connecting' | 'connected' | 'leader' | 'reconnecting' | 'error';
+  joinUrl?: string | null;
+  sessionId?: string | null;
+  workerBaseUrl?: string | null;
+  stalled?: boolean;
+}
+
 export interface MonitorDeps {
   getScoops(): RegisteredScoop[];
   isProcessing(jid: string): boolean;
@@ -54,6 +64,122 @@ export interface MonitorDeps {
     scoops: { name: string; cost: number }[];
   } | null>;
   getProcesses(): Promise<{ pid: number; argv: string; status: string }[]>;
+  getTrayInfo(): MonitorTrayInfo;
+  getConnectedFollowers(): ConnectedFollowerInfo[];
+}
+
+function shortId(runtimeId: string): string {
+  const unprefixed = runtimeId.replace(/^follower-/, '');
+  return unprefixed.length > 12 ? `${unprefixed.slice(0, 8)}…` : unprefixed;
+}
+
+function followerTypeLabel(follower: ConnectedFollowerInfo): string {
+  if (follower.floatType === 'ios') return 'iOS';
+  if (follower.floatType === 'electron') return 'Electron';
+  if (follower.floatType === 'extension') return 'Extension';
+  if (follower.floatType === 'standalone') return 'Standalone';
+  return follower.runtime?.includes('cli') ? 'CLI' : 'Follower';
+}
+
+function followerIcon(follower: ConnectedFollowerInfo): string {
+  if (follower.floatType === 'ios') return 'smartphone';
+  if (follower.floatType === 'electron' || follower.floatType === 'standalone') return 'monitor';
+  if (follower.floatType === 'extension') return 'blocks';
+  return follower.runtime?.includes('cli') ? 'terminal' : 'radio';
+}
+
+function elapsedSince(connectedAt?: string): string | null {
+  if (!connectedAt) return null;
+  const timestamp = new Date(connectedAt).getTime();
+  if (!Number.isFinite(timestamp)) return null;
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
+}
+
+function followerStatus(follower: ConnectedFollowerInfo): 'active' | 'warn' | 'idle' {
+  if (follower.health === 'stalled') return 'warn';
+  if (follower.peerState === 'connecting') return 'idle';
+  if (follower.peerState === 'connected' && follower.health === 'live') return 'active';
+  return 'idle';
+}
+
+function followerMeta(follower: ConnectedFollowerInfo): string {
+  const state =
+    follower.health === 'stalled'
+      ? 'stalled'
+      : follower.peerState === 'connecting'
+        ? 'connecting'
+        : 'connected';
+  const age = elapsedSince(follower.connectedAt);
+  return age ? `${state} ${age}` : state;
+}
+
+export function buildFollowersSection(followers: ConnectedFollowerInfo[]): MonitorSection {
+  const stalled = followers.filter((follower) => follower.health === 'stalled').length;
+  const connecting = followers.filter(
+    (follower) => follower.health !== 'stalled' && follower.peerState === 'connecting'
+  ).length;
+  const connected = followers.length - stalled - connecting;
+  const summary = [
+    connected > 0 ? `${connected} connected` : '',
+    connecting > 0 ? `${connecting} connecting` : '',
+    stalled > 0 ? `${stalled} stalled` : '',
+  ].filter(Boolean);
+  return {
+    id: 'followers',
+    label: 'Followers',
+    count: followers.filter((follower) => follower.peerState === 'connected').length,
+    meta: summary.join(' · ') || undefined,
+    accent: 'cyan',
+    emptyText: 'No followers connected yet. Pair a phone, tablet, or CLI follower to this tray.',
+    rows: followers.map((follower) => {
+      const detail = follower.motd ?? follower.runtime ?? 'Connected follower';
+      const sublabel = follower.hostOrigin ? `${detail} · ${follower.hostOrigin}` : detail;
+      const badges = [follower.exec ? 'ssh' : '', follower.cdp ? 'playwright' : ''].filter(Boolean);
+      return {
+        name: `${followerTypeLabel(follower)} · ${shortId(follower.runtimeId)}`,
+        sublabel,
+        meta: followerMeta(follower),
+        icon: followerIcon(follower),
+        badges,
+        status: followerStatus(follower),
+      };
+    }),
+  };
+}
+
+function buildTraySection(tray: MonitorTrayInfo): MonitorSection {
+  const state = tray.stalled ? 'stalled' : tray.state === 'leader' ? 'connected' : tray.state;
+  const status =
+    tray.stalled || tray.state === 'reconnecting'
+      ? 'warn'
+      : tray.state === 'error'
+        ? 'error'
+        : tray.state === 'leader' || tray.state === 'connected'
+          ? 'active'
+          : 'idle';
+  const session = tray.sessionId ? `Session ${shortId(tray.sessionId)}` : null;
+  const worker = tray.workerBaseUrl ? `Worker · ${tray.workerBaseUrl}` : null;
+  return {
+    id: 'tray',
+    label: 'Tray',
+    count: 1,
+    meta: `${tray.role} · ${state}`,
+    accent: 'waffle',
+    rows: [
+      {
+        name: tray.role[0].toUpperCase() + tray.role.slice(1),
+        sublabel: [session, worker].filter(Boolean).join(' · ') || 'No tray session',
+        meta: state,
+        icon: tray.role === 'follower' ? 'radio' : 'cloud',
+        badges: tray.joinUrl ? ['join URL'] : [],
+        status,
+      },
+    ],
+  };
 }
 
 /**
@@ -62,6 +188,8 @@ export interface MonitorDeps {
  */
 export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSection[]> {
   const scoops = deps.getScoops();
+  const tray = deps.getTrayInfo();
+  const followers = deps.getConnectedFollowers();
   const [cronTasks, webhooks, mounts, mcpServers, sessionStats, processes] = await Promise.all([
     deps.getCronTasks().catch(() => [] as CronTaskEntry[]),
     deps.getWebhooks().catch(() => [] as WebhookEntry[]),
@@ -74,6 +202,8 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
   const mcpEntries = Object.entries(mcpServers);
 
   const sections: MonitorSection[] = [
+    buildTraySection(tray),
+    buildFollowersSection(followers),
     {
       id: 'cost',
       label: 'Cost',

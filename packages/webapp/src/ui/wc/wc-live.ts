@@ -27,8 +27,16 @@ import {
 } from '../../providers/account-store.js';
 import { SessionStore as UiSessionStore } from '../../scoops/chat-session-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
-import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
+import { getFollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
+import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
+import {
+  hasStoredTrayJoinUrl,
+  normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrlValue,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import { getConnectedFollowers } from '../../shell/supplemental-commands/host-command.js';
 import { registerTranscriptExportService } from '../../transcript/export-provider.js';
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
@@ -50,6 +58,7 @@ import {
   type LeaderRunNewSessionDetail,
 } from './leader-session-events.js';
 import { WcChatController } from './wc-chat-controller.js';
+import type { MonitorTrayInfo } from './wc-monitor.js';
 import { scoopColor } from './wc-scoop-color.js';
 
 export { scoopColor } from './wc-scoop-color.js';
@@ -138,6 +147,39 @@ const PROC_STATE_LETTER_TO_WORD: Record<string, string> = {
 export function parseProcStatLine(statLine: string): string {
   const stateLetter = statLine.trim().split(' ')[2] ?? '';
   return PROC_STATE_LETTER_TO_WORD[stateLetter] ?? 'unknown';
+}
+
+function getTrayMonitorInfo(storage: Pick<Storage, 'getItem'>): MonitorTrayInfo {
+  const follower = getFollowerTrayRuntimeStatus();
+  if (follower.state !== 'inactive') {
+    return {
+      role: 'follower',
+      state: follower.state,
+      joinUrl: follower.joinUrl,
+      sessionId: follower.trayId,
+      workerBaseUrl: parseTrayJoinUrlValue(follower.joinUrl)?.workerBaseUrl ?? null,
+      stalled: follower.stalled,
+    };
+  }
+
+  const leader = getLeaderTrayRuntimeStatus();
+  if (leader.state !== 'inactive') {
+    return {
+      role: 'leader',
+      state: leader.state,
+      joinUrl: leader.session?.joinUrl,
+      sessionId: leader.session?.trayId,
+      workerBaseUrl: leader.session?.workerBaseUrl,
+    };
+  }
+
+  let workerBaseUrl: string | null = null;
+  try {
+    workerBaseUrl = normalizeTrayWorkerBaseUrl(storage.getItem(TRAY_WORKER_STORAGE_KEY));
+  } catch {
+    // Storage can be unavailable in a sandboxed page; inactive tray display remains usable.
+  }
+  return { role: 'standalone', state: 'inactive', workerBaseUrl };
 }
 
 /**
@@ -1728,6 +1770,8 @@ export function attachWcClient(
             return [];
           }
         },
+        getTrayInfo: () => getTrayMonitorInfo(window.localStorage),
+        getConnectedFollowers,
       }),
       mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
       insertReference: (path: string) => {
