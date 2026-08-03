@@ -216,10 +216,27 @@ function invalidatePortDebuggerAttachment(state: PortState, tabId: number): void
   }
 }
 
-/** Drop stale per-port state after chrome reports an external debugger detach. */
+/** Drop stale per-port state and notify clients after an external debugger detach. */
 export function notifyBridgeDebuggerDetached(tabId: number): void {
-  for (const state of liveBridgePortStates.values()) {
+  for (const [port, state] of liveBridgePortStates) {
+    const detachedSessionIds = [...state.sessionToTab]
+      .filter(([, attachedTabId]) => attachedTabId === tabId)
+      .map(([sessionId]) => sessionId);
     invalidatePortDebuggerAttachment(state, tabId);
+    if (state.channelId === null) continue;
+    for (const sessionId of detachedSessionIds) {
+      try {
+        port.postMessage({
+          bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+          channelId: state.channelId,
+          kind: 'cdp.event',
+          method: 'Target.detachedFromTarget',
+          params: { sessionId, targetId: String(tabId) },
+        } satisfies ExtensionBridgeEnvelope);
+      } catch {
+        /* port disconnected; its onDisconnect will evict it */
+      }
+    }
   }
 }
 

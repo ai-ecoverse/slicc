@@ -236,6 +236,21 @@ describe('ExtensionBridgeTransport', () => {
     expect(received).toEqual([{ timestamp: 123, sessionId: 'sess-9' }]);
   });
 
+  it('disconnects after an external debugger detach so the client reacquires its session', async () => {
+    const channelId = await connect(transport, port);
+
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId,
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: 'sess-9', targetId: '9' },
+    });
+
+    expect(port.disconnected).toBe(true);
+    expect(transport.state).toBe('disconnected');
+  });
+
   it('ignores envelopes whose channelId does not match', async () => {
     await connect(transport, port);
     const received: Array<Record<string, unknown>> = [];

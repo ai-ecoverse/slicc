@@ -115,8 +115,8 @@ six-step flow and tri-state UI details.
   symmetrically with the legacy compatibility path: whichever consumer performs
   `chrome.debugger.attach` owns the matching detach, while the borrowing consumer's
   detach is a no-op. External detach clears every live bridge Port's tab, session,
-  and ref-count state so a later attach reacquires the debugger; target close also
-  clears ownership authoritatively.
+  and ref-count state and emits `Target.detachedFromTarget` so the hosted leader
+  invalidates its cached session before reattaching; target close also clears ownership.
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to
   `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
   and drives the tri-state UI over a `cherry-panel` Port.

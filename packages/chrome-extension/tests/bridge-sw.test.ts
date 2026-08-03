@@ -8,6 +8,7 @@ import {
   BRIDGE_ALLOWED_ORIGINS,
   type BridgeSwDeps,
   handleBridgePortConnect,
+  notifyBridgeDebuggerDetached,
   postDiscoveryToWelcomedLeaderPorts,
   postLickToWelcomedLeaderPorts,
   postOpenSettingsToWelcomedLeaderPorts,
@@ -610,6 +611,21 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
         (m as { id?: number }).id === 1
     );
     expect(resp).toMatchObject({ error: expect.stringContaining('No tab attached') });
+  });
+
+  it('notifies the leader when an external debugger detach invalidates its session', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    notifyBridgeDebuggerDetached(43);
+
+    expect(port.posted).toContainEqual({
+      bridge: 1,
+      channelId: 'c',
+      kind: 'cdp.event',
+      method: 'Target.detachedFromTarget',
+      params: { sessionId: '43', targetId: '43' },
+    });
   });
 
   it('detaches a multiply-referenced owned tab once on port disconnect', async () => {
