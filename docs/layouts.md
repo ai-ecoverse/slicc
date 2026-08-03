@@ -8,12 +8,38 @@ Two systems coexist during the migration:
 
 | System                                     | Status                                          |
 | ------------------------------------------ | ----------------------------------------------- |
-| `<slicc-layout>` + `SliccPanel` (panels)   | current; opt in with `?panels=1`                |
+| `<slicc-layout>` + `SliccPanel` (panels)   | current; behind the `panel-layouts` flag        |
 | `<slicc-dock-tree>` (five zones, surfaces) | still the default boot; superseded, not removed |
 
 Both are documented here — the dock-tree section is what a default install runs
 today. Design rationale and the trust model:
 [`panel-system-design.md`](panel-system-design.md).
+
+## Enabling the panel system
+
+The panel system is gated by the **`panel-layouts` feature flag**, which ships
+`off`. Three ways to turn it on, in precedence order (see
+`packages/webapp/src/core/feature-flags.ts`):
+
+1. **Per browser, by the user** — the flag is `userToggleable`, so it appears as
+   "Panel layouts" in the **Experimental features…** dialog off the avatar menu.
+   That dialog is itself gated by `experimental-settings`, which the worker sets
+   `on` for `standalone` and `off` for `cherry` — so the toggle is visible in a
+   normal install and hidden inside an embed.
+2. **Per environment, by the worker** — `FEATURE_FLAGS` in the cloudflare-worker's
+   `wrangler.jsonc` (both the production and staging blocks). Flipping it there
+   needs no release, but takes effect on the next page load: flag hydration is
+   read once at boot and has no live refresh.
+3. **Bundled default** — `defaultValue: 'off'` in the flag definition.
+
+There is deliberately **no URL parameter**. An earlier `?panels=1` was removed when
+the flag landed: two switches for one boolean meant a bookmarked URL could
+contradict the user's own setting, with nothing in the UI to explain why.
+
+The gate is uniform across every float, including a Cherry embed that pushes its
+own `LayoutDocument` — one answer to "are panels on here". A host pushing a layout
+while the flag is off gets the default shell and a logged warning, not a partial
+application.
 
 ---
 
@@ -353,7 +379,7 @@ guarding that needs realm isolation.
 
 ## The `layout` shell command
 
-Panel verbs (when `?panels=1` is active):
+Panel verbs (when the `panel-layouts` flag is on):
 
 | Command                            | Effect                                            |
 | ---------------------------------- | ------------------------------------------------- |
@@ -514,7 +540,8 @@ default rather than failing the boot.
 
 ## Known gaps
 
-- The panel system is behind `?panels=1`; the dock-tree is still the default boot.
+- The panel system is behind the `panel-layouts` feature flag, off by default; the
+  dock-tree is still the shipping boot. See "Enabling the panel system" above.
 - No gesture for moving a panel INTO a dock, or for turning a docked panel into a
   floating one. Documents and the `layout` command express both.
 - Panels have no explicit order within a zone beyond append order.

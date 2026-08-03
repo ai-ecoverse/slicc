@@ -26,7 +26,7 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 
 ## Panel system (`src/panel/`)
 
-**`SliccPanel` + `<slicc-layout>` are the layout API going forward**; `slicc-dock-tree` (below) is the shipping default until the webapp flips `?panels=1` on. Full model, locking, and the Cherry wire path: `docs/layouts.md`; rationale: `docs/panel-system-design.md`.
+**`SliccPanel` + `<slicc-layout>` are the layout API going forward**; `slicc-dock-tree` (below) is the shipping default until the `panel-layouts` flag flips on. Full model, locking, and the Cherry wire path: `docs/layouts.md`; rationale: `docs/panel-system-design.md`.
 
 - **`SliccPanel`** (`panel/slicc-panel.ts`) — base class for every panel (chat, both rails, the switcher, the floatbar, each tool panel, each sprinkle). Owns identity (`panelId`, falling back to static `panelMeta.id` so one class backs many ids), `visible` (inverse of native `hidden`, so a11y comes free), `locked`, `presentation`/`anchor`, and `onPanelShow`/`onPanelHide`/`onPanelResize` lifecycle. Light DOM; the shared stylesheet keys on a `data-slicc-panel` marker rather than the tag, because one rule set must cover runtime-registered subclasses. **Panels default to VISIBLE** — the opposite polarity from `<slicc-surface>`, since a panel is placed by the layout rather than being one of a show-one stack.
 - **`panel-meta.ts`** — `PanelMeta`/`PanelSize`/`PanelPresentation` + `panelMetaOf`. DOM-free, exported as `@slicc/webcomponents/panel/meta` so the webapp and kernel worker can import metadata without the barrel (which registers every component and needs `CSSStyleSheet`).

@@ -8,6 +8,7 @@
  */
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import {
@@ -1657,13 +1658,16 @@ export function attachWcClient(
     .catch(() => undefined);
   const { refs } = boot;
   boot.setClient(client);
-  // Panel system (Phase 3), opt-in via `?panels=1` while it lands: re-parents the
-  // shell's chrome into `<slicc-layout>` panels. Behind a flag so the default
-  // boot is untouched until layout documents load (Phase 4) — and so it can be
-  // exercised in a real browser without every float switching at once. Runs
-  // BEFORE `wireDockTreePersistence` so the dock-tree it would restore into is
-  // already superseded.
-  const panelsRequested = new URLSearchParams(location.search).get('panels') === '1';
+  // Panel system: re-parents the shell's chrome into `<slicc-layout>` panels.
+  // Gated by the `panel-layouts` feature flag (off by default) rather than a URL
+  // param, so there is ONE source of truth — a query flag would let a bookmarked
+  // URL contradict the user's own setting with nothing in the UI explaining why.
+  // Resolved once at boot: the flag mechanism has no live refresh, and switching
+  // layout engines mid-session would strand the panels already mounted.
+  //
+  // Read BEFORE `wireDockTreePersistence` so the dock-tree it would restore into
+  // is already superseded when panels are on.
+  const panelsRequested = isFeatureEnabled('panel-layouts');
   if (!panelsRequested) {
     // GUI drag-drop dock-tree layout editor: restore any persisted tree (or
     // seed the default) and wire future mutations back to storage. Runs
@@ -1867,10 +1871,7 @@ export function attachWcClient(
   });
   boot.setActivateSurface(workbenchActivator);
 
-  // Panel system (Phase 3/4), opt-in via `?panels=1` while it lands: re-parents
-  // the shell's chrome into `<slicc-layout>` panels. Behind a flag so the default
-  // boot is untouched, and so it can be exercised in a real browser without every
-  // float switching at once.
+  // Panelize when `panel-layouts` is on (see the flag read above).
   //
   // Placed after `workbenchActivator` exists because panelization takes over the
   // dock rail's clicks (the dock-tree it used to drive is gone), and opening a

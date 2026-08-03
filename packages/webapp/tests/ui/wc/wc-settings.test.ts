@@ -14,6 +14,7 @@ installWcDomStubs();
 import {
   FEATURE_FLAG_STORAGE_KEY,
   initFeatureFlags,
+  isFeatureEnabled,
   setFeatureFlagOverride,
 } from '../../../src/core/feature-flags.js';
 import {
@@ -45,6 +46,10 @@ function findTimestampToggle(dialog: HTMLElement): HTMLInputElement | null {
 
 function findExperimentalToggle(dialog: HTMLElement): HTMLInputElement | null {
   return dialog.querySelector('#wcset-feature-experimental-settings');
+}
+
+function findPanelLayoutsToggle(dialog: HTMLElement): HTMLInputElement | null {
+  return dialog.querySelector('#wcset-feature-panel-layouts');
 }
 
 const log = { error: vi.fn() };
@@ -253,15 +258,35 @@ describe('showWcSettings', () => {
 });
 
 describe('showExperimentalSettings', () => {
-  it('shows an honest empty state when no user-toggleable flags exist', async () => {
+  it('lists each user-toggleable flag, and never the worker-controlled gate', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const result = showExperimentalSettings(log);
     const dialog = await openDialog();
 
     expect(dialog.getAttribute('heading')).toBe('Experimental');
-    expect(dialog.textContent).toContain('No experimental features are available right now.');
+    // `panel-layouts` is toggleable, so it gets a row — the dialog is driven by
+    // `listFlags()`, with no per-flag UI code.
+    expect(findPanelLayoutsToggle(dialog)).not.toBeNull();
+    expect(dialog.textContent).toContain('Panel layouts');
+    // `experimental-settings` gates this dialog and is NOT toggleable, so it must
+    // never offer a switch that would let a user lock themselves out of it.
     expect(findExperimentalToggle(dialog)).toBeNull();
 
+    clickDone(dialog);
+    await result;
+  });
+
+  it('persists a panel-layouts toggle, so panels survive the next boot', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+    const toggle = findPanelLayoutsToggle(dialog) as HTMLInputElement;
+
+    expect(toggle.checked).toBe(false); // ships off
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    expect(isFeatureEnabled('panel-layouts')).toBe(true);
     clickDone(dialog);
     await result;
   });
@@ -293,9 +318,9 @@ describe('showExperimentalSettings', () => {
 
     const reopenedResult = showExperimentalSettings(log);
     const reopenedDialog = await openDialog();
-    expect(reopenedDialog.textContent).toContain(
-      'No experimental features are available right now.'
-    );
+    // The local `off` override was ignored, so the dialog still opens and renders.
+    expect(reopenedDialog.getAttribute('heading')).toBe('Experimental');
+    expect(findPanelLayoutsToggle(reopenedDialog)).not.toBeNull();
     clickDone(reopenedDialog);
     await reopenedResult;
   });

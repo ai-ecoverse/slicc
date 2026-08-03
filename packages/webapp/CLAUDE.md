@@ -226,7 +226,7 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - `ui/wc/` map: `wc-live`, `wc-shell`, `wc-chat-controller`, `wc-message-view`, `wc-tray`,
   `wc-sprinkles`, `wc-nav`, `wc-workbench`, `wc-freezer`, `wc-memory`, `wc-extension`; panels in
   `panelize-shell`, `builtin-panels`, `panel-visibility`, `layout-store`, `agent-panels`, `add-panel-menu`.
-- **Layouts** (`docs/layouts.md`): all chrome is a `SliccPanel` in `<slicc-layout>` except the fixed avatar strip (trusted layer). Opt in via `?panels=1`. `panelize-shell.ts` RE-PARENTS what `mountWcShell` built, so `WcShellRefs` stays valid. Documents save to `/workspace/layouts/` (free) or `/etc/slicc/layouts/` (gated). `setPanelVisible` must add an unplaced panel but never duplicate a placed one; `sanitizeLayoutName` guards the path a name becomes.
+- **Layouts** (`docs/layouts.md`): all chrome is a `SliccPanel` in `<slicc-layout>` except the fixed avatar strip (trusted layer). Behind the `panel-layouts` flag. `panelize-shell.ts` RE-PARENTS what `mountWcShell` built, so `WcShellRefs` stays valid. Documents save to `/workspace/layouts/` (free) or `/etc/slicc/layouts/` (gated). `setPanelVisible` must add an unplaced panel but never duplicate a placed one; `sanitizeLayoutName` guards the path a name becomes.
 - **URL state**: `ctx` (active context, pushed), `at` (scroll pos, debounced replace),
   `ws` (open workspace surface). No global manager; the host only routes.
 - **Cherry `?cherry=1`** (`main-cherry.ts`): builds `CherryHostTransport` against

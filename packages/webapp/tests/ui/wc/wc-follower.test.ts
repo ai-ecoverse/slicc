@@ -880,6 +880,12 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
@@ -929,6 +935,12 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
@@ -944,6 +956,38 @@ describe('mountWcUiFollower', () => {
     // what the embedder pushed.
     expect(layout.isLocked('chat')).toBe(true);
     expect(app.querySelector('slicc-panel[panel-id="chat"]')?.hasAttribute('locked')).toBe(true);
+  });
+
+  it('cherry: IGNORES a pushed layout while the panel-layouts flag is off', async () => {
+    // The gate is uniform across floats — an embed is not an exception. A host that
+    // pushes a document with the flag off gets the default shell and a warning,
+    // never a half-applied arrangement.
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify({
+            version: 1,
+            id: 'embed',
+            base: { center: { panel: 'chat' } },
+          }),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // No `initFeatureFlags` call: the flag falls back to its bundled `off`.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    expect(app.querySelector('slicc-layout')).toBeNull();
+    expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
   });
 
   it('cherry: ignores a pushed document that fails schema validation, keeping the default', async () => {
@@ -964,6 +1008,12 @@ describe('mountWcUiFollower', () => {
       })),
     }));
     vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');

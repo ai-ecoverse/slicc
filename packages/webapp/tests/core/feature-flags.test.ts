@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('feature flag registry', () => {
-  it('lists the experimental settings string flag', () => {
+  it('lists the registered flags', () => {
     expect(listFlags()).toEqual([
       expect.objectContaining({
         id: 'experimental-settings',
@@ -45,8 +45,32 @@ describe('feature flag registry', () => {
         defaultValue: 'on',
         userToggleable: false,
       }),
+      expect.objectContaining({
+        id: 'panel-layouts',
+        label: 'Panel layouts',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
+  });
+
+  it('gates panel layouts OFF by default on every float', () => {
+    // Uniform across floats — no `floatDefaults` — so there is one answer to
+    // "are panels on here", including inside a Cherry embed that pushes a layout.
+    for (const float of [
+      'standalone',
+      'extension',
+      'electron-overlay',
+      'cherry',
+      'follower',
+    ] as const) {
+      expect(resolveFlagValue('panel-layouts', float)).toBe('off');
+    }
+  });
+
+  it('lets the USER turn panel layouts on — it is toggleable, unlike the settings gate', () => {
+    expect(resolveFlagValue('panel-layouts', 'standalone', { 'panel-layouts': 'on' })).toBe('on');
   });
 
   it('uses float-aware bundled defaults', () => {
@@ -85,6 +109,7 @@ describe('feature flag registry', () => {
   it('resolves central value before the bundled default', () => {
     expect(resolveFlags('standalone', { 'experimental-settings': 'off' })).toEqual({
       'experimental-settings': 'off',
+      'panel-layouts': 'off',
     });
     expect(
       resolveFlags(
@@ -92,7 +117,7 @@ describe('feature flag registry', () => {
         { 'experimental-settings': 'off' },
         { 'experimental-settings': 'on' }
       )
-    ).toEqual({ 'experimental-settings': 'off' });
+    ).toEqual({ 'experimental-settings': 'off', 'panel-layouts': 'off' });
   });
 
   it('round-trips string overrides through one localStorage key', () => {

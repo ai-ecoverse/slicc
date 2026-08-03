@@ -1,5 +1,6 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
+import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { createLogger } from '../../core/logger.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
@@ -348,7 +349,13 @@ export async function mountWcUiFollower(
   // wholesale. Applied directly, like theme — never through
   // `wireDockTreePersistence` (never wired for followers at all), so a
   // locked Cherry layout is never persisted or drifted client-side.
-  if (isCherry && prelude.cherryTransport?.layout) {
+  // Gated by `panel-layouts` like every other float: the feature is new and no
+  // embedder depends on it yet, so one uniform answer to "are panels on here" beats
+  // an API-shaped exception. A host that pushes a document while the flag is off
+  // gets the default shell and a warning, not a silent half-application.
+  if (isCherry && prelude.cherryTransport?.layout && !isFeatureEnabled('panel-layouts')) {
+    log.warn('follower: ignoring host-pushed layout — the panel-layouts flag is off');
+  } else if (isCherry && prelude.cherryTransport?.layout) {
     try {
       const pushed = JSON.parse(prelude.cherryTransport.layout);
       // A host may push EITHER shape: the panel-system `LayoutDocument` (has
