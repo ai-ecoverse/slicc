@@ -43,13 +43,17 @@ is consumed by the webapp's kernel-worker or its crontask / webhook commands.
 ### Temporary Focus for Follower Previews
 
 `chrome.debugger`'s `Page.bringToFront` wakes a background renderer but does
-not select its Chrome tab, so `bridge-sw.ts` also calls `activateTab`. For
-follower-driven previews this is a temporary borrow: the bridge captures the
-active tab before the first activation, coalesces a burst behind a 150 ms
-settle window, and restores the original through `activateTab` once the burst
-ends. It skips restoration when the user selected another tab or the original
-tab closed. Per-Port generation guards ignore stale async completions, restore
-errors stay contained, and disconnect clears the pending timer.
+not select its Chrome tab, so `bridge-sw.ts` calls `activateTab` before
+forwarding every such command. The bridge Port carries all leader CDP traffic,
+including permanent foregrounding, and therefore does not classify or restore
+focus itself.
+
+The webapp's `CDPRouter` is the single owner of temporary follower-preview
+focus. It recognizes follower-originated requests, reads the original target
+from `Target.getTargets` (whose extension shim marks the active tab), coalesces
+the preview burst, and restores by sending `Target.attachToTarget` followed by
+`Page.bringToFront` over the same bridge transport. The bridge activates that
+original tab exactly as it activated the preview tab.
 
 ## Leader-Tab Lifecycle (Why No Startup Create)
 

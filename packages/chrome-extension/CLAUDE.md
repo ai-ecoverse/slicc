@@ -106,10 +106,10 @@ six-step flow and tri-state UI details.
 - `src/bridge-sw.ts` — `externally_connectable` Port handler that
   pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the
   `lastFocusedWindow` active tab so `playwright list-tabs` shows `(active)`
-  and cherry prompts can resolve 'this page'. Follower-preview
-  `Page.bringToFront` calls temporarily activate the target tab, coalesce for
-  150 ms, then restore the previously active tab unless the user switched tabs
-  or the original tab disappeared; Port teardown cancels pending restoration.
+  and cherry prompts can resolve 'this page'. The webapp's `CDPRouter` alone
+  owns temporary follower-preview focus and restoration; the bridge applies
+  every `Page.bringToFront` by activating the target tab and forwarding the
+  command, without trying to classify its origin.
 - `src/sidepanel-entry.ts` — side-panel host controller (bundled to
   `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
   and drives the tri-state UI over a `cherry-panel` Port.

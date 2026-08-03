@@ -360,48 +360,29 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     });
   });
 
-  it('Page.bringToFront selects + focuses the tab AND still forwards to chrome.debugger', async () => {
-    vi.useFakeTimers();
-    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
-    const deps = makeDeps();
-    await handleBridgePortConnect(port as never, deps);
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'handshake.hello',
-    });
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'cdp.request',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: '43' },
-    });
-    await flushMicrotasks();
-
-    port.receive({
-      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
-      channelId: 'bridge-abc',
-      kind: 'cdp.request',
-      id: 2,
-      method: 'Page.bringToFront',
-      sessionId: '43',
-    });
-    await flushMicrotasks();
-
-    // The real foregrounding: chrome.debugger's bringToFront can't switch the
-    // active tab, so the bridge selects + focuses it explicitly.
-    expect(deps.activateTab).toHaveBeenCalledWith(43);
-    // …and the command is still forwarded (renderer-wake parity with standalone).
-    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.bringToFront', undefined);
-  });
-
-  it('borrows the preview tab then restores the previously active tab', async () => {
+  it('keeps a leader-originated Page.bringToFront permanently focused', async () => {
     vi.useFakeTimers();
     let activeTabId = 42;
     const deps = makeDeps({
-      queryActiveTabId: vi.fn(async () => activeTabId),
+      activateTab: vi.fn(async (tabId) => {
+        activeTabId = tabId;
+      }),
+    });
+    const port = await connectWithAttachedTabs(deps, [43]);
+
+    await bringToFront(port, 43, 2);
+
+    expect(activeTabId).toBe(43);
+    expect(deps.activateTab).toHaveBeenCalledWith(43);
+    expect(deps.sendDebuggerCommand).toHaveBeenCalledWith(43, 'Page.bringToFront', undefined);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(activeTabId).toBe(43);
+    expect(deps.activateTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('activates the original tab for CDPRouter attach + bringToFront restoration', async () => {
+    let activeTabId = 42;
+    const deps = makeDeps({
       activateTab: vi.fn(async (tabId) => {
         activeTabId = tabId;
       }),
@@ -411,148 +392,20 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     await bringToFront(port, 43, 2);
     expect(activeTabId).toBe(43);
 
-    await vi.advanceTimersByTimeAsync(150);
+    port.receive({
+      bridge: EXTENSION_BRIDGE_PROTOCOL_VERSION,
+      channelId: 'c',
+      kind: 'cdp.request',
+      id: 3,
+      method: 'Target.attachToTarget',
+      params: { targetId: '42', flatten: true },
+    });
+    await flushMicrotasks();
+    await bringToFront(port, 42, 4);
+
     expect(activeTabId).toBe(42);
     expect(deps.activateTab).toHaveBeenNthCalledWith(1, 43);
     expect(deps.activateTab).toHaveBeenNthCalledWith(2, 42);
-  });
-
-  it('coalesces a preview burst into one restoration', async () => {
-    vi.useFakeTimers();
-    let activeTabId = 42;
-    const deps = makeDeps({
-      queryActiveTabId: async () => activeTabId,
-      activateTab: vi.fn(async (tabId) => {
-        activeTabId = tabId;
-      }),
-    });
-    const port = await connectWithAttachedTabs(deps, [43, 44]);
-
-    await bringToFront(port, 43, 3);
-    await vi.advanceTimersByTimeAsync(100);
-    await bringToFront(port, 44, 4);
-    await vi.advanceTimersByTimeAsync(149);
-    expect(activeTabId).toBe(44);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(activeTabId).toBe(42);
-    expect(deps.activateTab).toHaveBeenCalledTimes(3);
-    expect(deps.activateTab).toHaveBeenLastCalledWith(42);
-  });
-
-  it('does not restore when the user switches tabs during the settle window', async () => {
-    vi.useFakeTimers();
-    let activeTabId = 42;
-    const deps = makeDeps({
-      queryActiveTabId: async () => activeTabId,
-      activateTab: vi.fn(async (tabId) => {
-        activeTabId = tabId;
-      }),
-    });
-    const port = await connectWithAttachedTabs(deps, [43]);
-
-    await bringToFront(port, 43, 2);
-    activeTabId = 44;
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(activeTabId).toBe(44);
-    expect(deps.activateTab).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not restore when the previously active tab vanished', async () => {
-    vi.useFakeTimers();
-    let activeTabId = 42;
-    const existingTabs = new Set([42, 43]);
-    const deps = makeDeps({
-      queryActiveTabId: async () => activeTabId,
-      getTab: async (tabId) =>
-        existingTabs.has(tabId) ? { id: tabId, title: 't', url: 'https://example.com' } : undefined,
-      activateTab: vi.fn(async (tabId) => {
-        activeTabId = tabId;
-      }),
-    });
-    const port = await connectWithAttachedTabs(deps, [43]);
-
-    await bringToFront(port, 43, 2);
-    existingTabs.delete(42);
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(activeTabId).toBe(43);
-    expect(deps.activateTab).toHaveBeenCalledTimes(1);
-  });
-
-  it('cancels a pending restoration when the bridge port disconnects', async () => {
-    vi.useFakeTimers();
-    let activeTabId = 42;
-    const deps = makeDeps({
-      queryActiveTabId: async () => activeTabId,
-      activateTab: vi.fn(async (tabId) => {
-        activeTabId = tabId;
-      }),
-    });
-    const port = await connectWithAttachedTabs(deps, [43]);
-
-    await bringToFront(port, 43, 2);
-    port.triggerDisconnect();
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(activeTabId).toBe(43);
-    expect(deps.activateTab).toHaveBeenCalledTimes(1);
-  });
-
-  it('ignores an in-flight preview completion after the bridge port disconnects', async () => {
-    vi.useFakeTimers();
-    let resolveOriginal: ((tabId: number) => void) | undefined;
-    const originalTab = new Promise<number>((resolve) => {
-      resolveOriginal = resolve;
-    });
-    let activeTabId = 42;
-    const deps = makeDeps({
-      queryActiveTabId: vi.fn(() => originalTab),
-      activateTab: vi.fn(async (tabId) => {
-        activeTabId = tabId;
-      }),
-    });
-    const port = await connectWithAttachedTabs(deps, [43]);
-
-    const bringPromise = bringToFront(port, 43, 2);
-    port.triggerDisconnect();
-    resolveOriginal?.(42);
-    await bringPromise;
-    await vi.runAllTimersAsync();
-
-    expect(activeTabId).toBe(43);
-    expect(deps.activateTab).toHaveBeenCalledTimes(1);
-  });
-
-  it('contains a failed restoration and remains reusable for the next burst', async () => {
-    vi.useFakeTimers();
-    let activeTabId = 42;
-    let failRestore = true;
-    const deps = makeDeps({
-      queryActiveTabId: async () => activeTabId,
-      activateTab: vi.fn(async (tabId) => {
-        if (tabId === 42 && failRestore) throw new Error('tab activation failed');
-        activeTabId = tabId;
-      }),
-    });
-    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
-    const port = await connectWithAttachedTabs(deps, [43]);
-
-    await bringToFront(port, 43, 2);
-    await vi.advanceTimersByTimeAsync(150);
-    expect(activeTabId).toBe(43);
-    expect(debugSpy).toHaveBeenCalledWith(
-      '[slicc-bridge-sw] follower preview focus restore skipped',
-      expect.objectContaining({ tabId: 42, error: 'tab activation failed' })
-    );
-
-    activeTabId = 42;
-    failRestore = false;
-    await bringToFront(port, 43, 3);
-    await vi.advanceTimersByTimeAsync(150);
-    expect(activeTabId).toBe(42);
-    debugSpy.mockRestore();
   });
 
   it('routes outbound CDP through maybeUnmaskCdpFrame (secrets stay SW-side)', async () => {
