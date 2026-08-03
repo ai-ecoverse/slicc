@@ -41,6 +41,8 @@ import {
 /** Storage key the sibling leader-tab task writes after pinning the leader. */
 const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
 
+const FOLLOWER_PREVIEW_SETTLE_MS = 150;
+
 /** Origin allowlist for the bridge Port. Externally_connectable also gates
  *  this at the manifest level, but enforcing in code is defense-in-depth and
  *  makes test injection straightforward. Hosted origin comes from
@@ -190,6 +192,13 @@ interface PortState {
   ownedTabs: Set<number>;
   /** Unsubscribe from chrome.debugger.onEvent when the port closes. */
   unsubscribeEvents: (() => void) | null;
+  previewOriginalTab: Promise<number | undefined> | null;
+  previewLastTabId: number | null;
+  previewGeneration: number;
+  previewSequence: number;
+  previewLatestSuccessfulSequence: number;
+  previewRequestsInFlight: number;
+  previewRestoreTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -395,6 +404,13 @@ export async function handleBridgePortConnect(
     sessionToTab: new Map(),
     ownedTabs: new Set(),
     unsubscribeEvents: null,
+    previewOriginalTab: null,
+    previewLastTabId: null,
+    previewGeneration: 0,
+    previewSequence: 0,
+    previewLatestSuccessfulSequence: 0,
+    previewRequestsInFlight: 0,
+    previewRestoreTimer: null,
   };
 
   // The leader-side ExtensionBridgeTransport posts its `handshake.hello`
@@ -426,6 +442,7 @@ export async function handleBridgePortConnect(
   });
 
   port.onDisconnect.addListener(() => {
+    resetPreviewFocus(state);
     // Evict from the welcomed-port registry so we never post a lick to a dead
     // Port (no-op if the port never reached the welcome step).
     welcomedLeaderPorts.delete(port);
@@ -628,10 +645,116 @@ async function dispatchCdpCommand(
   // silent no-op in the extension). Select + focus the tab explicitly, then still
   // forward the command so renderer-wake parity is preserved.
   if (method === 'Page.bringToFront') {
-    await deps.activateTab(tabId);
+    return executeFollowerBringToFront(tabId, params, state, deps);
   }
   const effectiveParams = await deps.maybeUnmaskCdpFrame(tabId, method, params);
   return deps.sendDebuggerCommand(tabId, method, effectiveParams);
+}
+
+async function executeFollowerBringToFront(
+  tabId: number,
+  params: Record<string, unknown> | undefined,
+  state: PortState,
+  deps: BridgeSwDeps
+): Promise<Record<string, unknown>> {
+  const generation = state.previewGeneration;
+  const sequence = ++state.previewSequence;
+  state.previewRequestsInFlight++;
+  cancelPreviewRestore(state);
+  state.previewOriginalTab ??= deps.queryActiveTabId().catch(() => undefined);
+
+  try {
+    await state.previewOriginalTab;
+    await deps.activateTab(tabId);
+    if (
+      generation === state.previewGeneration &&
+      sequence > state.previewLatestSuccessfulSequence
+    ) {
+      state.previewLatestSuccessfulSequence = sequence;
+      state.previewLastTabId = tabId;
+    }
+    const effectiveParams = await deps.maybeUnmaskCdpFrame(tabId, 'Page.bringToFront', params);
+    return await deps.sendDebuggerCommand(tabId, 'Page.bringToFront', effectiveParams);
+  } finally {
+    if (generation === state.previewGeneration) {
+      state.previewRequestsInFlight--;
+      if (state.previewRequestsInFlight === 0 && state.previewLastTabId === null) {
+        state.previewOriginalTab = null;
+        state.previewLatestSuccessfulSequence = 0;
+      } else {
+        schedulePreviewRestore(state, deps);
+      }
+    }
+  }
+}
+
+function resetPreviewFocus(state: PortState): void {
+  cancelPreviewRestore(state);
+  state.previewGeneration++;
+  state.previewOriginalTab = null;
+  state.previewLastTabId = null;
+  state.previewLatestSuccessfulSequence = 0;
+  state.previewRequestsInFlight = 0;
+}
+
+function cancelPreviewRestore(state: PortState): void {
+  if (state.previewRestoreTimer === null) return;
+  clearTimeout(state.previewRestoreTimer);
+  state.previewRestoreTimer = null;
+}
+
+function schedulePreviewRestore(state: PortState, deps: BridgeSwDeps): void {
+  if (state.previewRequestsInFlight !== 0 || state.previewLastTabId === null) return;
+  cancelPreviewRestore(state);
+  state.previewRestoreTimer = setTimeout(() => {
+    state.previewRestoreTimer = null;
+    void restorePreviewFocus(state, deps);
+  }, FOLLOWER_PREVIEW_SETTLE_MS);
+}
+
+async function restorePreviewFocus(state: PortState, deps: BridgeSwDeps): Promise<void> {
+  const sequence = state.previewLatestSuccessfulSequence;
+  const originalTabId = await state.previewOriginalTab;
+  const previewTabId = state.previewLastTabId;
+  if (!originalTabId || !previewTabId || originalTabId === previewTabId) {
+    finishPreviewBurst(state, sequence);
+    return;
+  }
+
+  const [originalTab, activeTabId] = await Promise.all([
+    deps.getTab(originalTabId).catch(() => undefined),
+    deps.queryActiveTabId().catch(() => undefined),
+  ]);
+  if (!previewRestoreIsCurrent(state, sequence)) {
+    schedulePreviewRestore(state, deps);
+    return;
+  }
+  if (!originalTab || activeTabId !== previewTabId) {
+    finishPreviewBurst(state, sequence);
+    return;
+  }
+
+  try {
+    await deps.activateTab(originalTabId);
+  } catch (err) {
+    console.debug('[slicc-bridge-sw] follower preview focus restore skipped', {
+      tabId: originalTabId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  finishPreviewBurst(state, sequence);
+}
+
+function previewRestoreIsCurrent(state: PortState, sequence: number): boolean {
+  return sequence === state.previewLatestSuccessfulSequence && state.previewRequestsInFlight === 0;
+}
+
+function finishPreviewBurst(state: PortState, sequence: number): void {
+  if (!previewRestoreIsCurrent(state, sequence)) return;
+  cancelPreviewRestore(state);
+  state.previewOriginalTab = null;
+  state.previewLastTabId = null;
+  state.previewLatestSuccessfulSequence = 0;
 }
 
 async function cdpGetTargets(

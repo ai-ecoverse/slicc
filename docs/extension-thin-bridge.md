@@ -40,6 +40,17 @@ The kernel bridge and its proxies now live entirely in the webapp package
 `packages/webapp/src/scoops/lick-manager-proxy.ts`); no code in this package
 is consumed by the webapp's kernel-worker or its crontask / webhook commands.
 
+### Temporary Focus for Follower Previews
+
+`chrome.debugger`'s `Page.bringToFront` wakes a background renderer but does
+not select its Chrome tab, so `bridge-sw.ts` also calls `activateTab`. For
+follower-driven previews this is a temporary borrow: the bridge captures the
+active tab before the first activation, coalesces a burst behind a 150 ms
+settle window, and restores the original through `activateTab` once the burst
+ends. It skips restoration when the user selected another tab or the original
+tab closed. Per-Port generation guards ignore stale async completions, restore
+errors stay contained, and disconnect clears the pending timer.
+
 ## Leader-Tab Lifecycle (Why No Startup Create)
 
 `chrome.storage.session` is wiped on browser restart, and the startup
