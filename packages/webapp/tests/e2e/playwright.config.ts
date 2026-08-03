@@ -85,7 +85,13 @@ export default defineConfig({
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
       // CI `webapp` job builds it before the E2E step.
       command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1`,
-      port: WRANGLER_PORT,
+      // Gate readiness on a real HTTP 200 from `/status`, NOT a bare TCP probe.
+      // workerd's `dev` process binds the listen socket well before the worker
+      // module + DO stubs finish loading; a `port:` probe passes during that
+      // tail, then the first Playwright navigate hits `ERR_CONNECTION_REFUSED`
+      // if any of the tail steps crash or drop the listener. `/status` runs the
+      // worker's `fetch` handler, so a 200 proves workerd is fully warm.
+      url: `${LEADER_ORIGIN}/status`,
       reuseExistingServer: !process.env['CI'],
       // wrangler's first cold start (workerd bring-up) can exceed Playwright's
       // 60s default in CI.
