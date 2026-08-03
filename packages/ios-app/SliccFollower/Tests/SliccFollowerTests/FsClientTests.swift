@@ -92,6 +92,60 @@ final class FsClientTests: XCTestCase {
         XCTAssertEqual(client.inFlightCount, 0, "a settled request must leave the pending map")
     }
 
+    func testUnchunkedBinaryReadDecodesExactBase64Bytes() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let expected = Data([0, 1, 2, 127, 128, 254, 255])
+        let task = Task { try await client.readBinaryFile("/bytes.bin") }
+        await waitForInFlight(client)
+
+        client.handleResponse(
+            requestId: wire.requestId()!,
+            response: .success(
+                .file(content: expected.base64EncodedString(), encoding: .base64)))
+
+        let result = try await task.value
+        XCTAssertEqual(result, expected)
+    }
+
+    func testChunkedBinaryReadReassemblesBase64BeforeDecoding() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let expected = Data((0..<257).map { UInt8($0 % 251) })
+        let base64 = expected.base64EncodedString()
+        let split = base64.index(base64.startIndex, offsetBy: 73)
+        let chunks = [String(base64[..<split]), String(base64[split...])]
+        let task = Task { try await client.readBinaryFile("/chunked.bin") }
+        await waitForInFlight(client)
+        let id = wire.requestId()!
+
+        for index in chunks.indices.reversed() {
+            client.handleResponse(
+                requestId: id,
+                response: TrayFsResponse(
+                    ok: true, data: .file(content: chunks[index], encoding: .base64),
+                    chunkIndex: index, totalChunks: chunks.count))
+        }
+
+        let result = try await task.value
+        XCTAssertEqual(result, expected)
+    }
+
+    func testBinaryReadRejectsMalformedBase64() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let task = Task { try await client.readBinaryFile("/broken.bin") }
+        await waitForInFlight(client)
+
+        client.handleResponse(
+            requestId: wire.requestId()!,
+            response: .success(.file(content: "not valid base64 !!!", encoding: .base64)))
+
+        await assertThrowsFsError(.malformedChunking("binary read was not valid base64")) {
+            _ = try await task.value
+        }
+    }
+
     func testReadDirDecodesEntries() async throws {
         let wire = Wire()
         let client = makeClient(wire: wire)

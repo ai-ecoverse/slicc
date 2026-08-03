@@ -188,6 +188,15 @@ public final class LeaderVFSProvider {
         return try await refreshDirectory(allowedPath(for: container))
     }
 
+    public func enumerator(for container: NSFileProviderItemIdentifier) throws -> LeaderVFSEnumerator {
+        do {
+            if container != .workingSet { _ = try allowedPath(for: container) }
+            return LeaderVFSEnumerator(provider: self, container: container)
+        } catch {
+            throw VFSProviderErrorMapper.map(error)
+        }
+    }
+
     public func fetchContents(for identifier: NSFileProviderItemIdentifier) async throws
         -> (Data, LeaderVFSItem)
     {
@@ -204,7 +213,9 @@ public final class LeaderVFSProvider {
 
     public func changes(from syncAnchor: NSFileProviderSyncAnchor) async throws -> LeaderVFSChangeSet {
         let requested = Self.decode(anchor: syncAnchor)
-        for path in knownDirectories.sorted() { _ = try await refreshDirectory(path) }
+        for path in knownDirectories.sorted() where knownDirectories.contains(path) {
+            _ = try await refreshDirectory(path)
+        }
 
         var updated: [NSFileProviderItemIdentifier: LeaderVFSItem] = [:]
         var deleted = Set<NSFileProviderItemIdentifier>()
@@ -245,11 +256,7 @@ public final class LeaderVFSProvider {
         let oldPaths = childrenByDirectory[path] ?? []
         let freshPaths = Set(freshItems.map(\.path))
         let deletedPaths = oldPaths.subtracting(freshPaths)
-        let deleted = deletedPaths.compactMap { itemsByPath[$0]?.itemIdentifier }
-        for deletedPath in deletedPaths {
-            itemsByPath.removeValue(forKey: deletedPath)
-            knownDirectories.remove(deletedPath)
-        }
+        let deleted = deletedPaths.flatMap { purgeSubtree(root: $0) }
         var updated: [LeaderVFSItem] = []
         for item in freshItems {
             if itemsByPath[item.path]?.itemVersion != item.itemVersion { updated.append(item) }
@@ -258,6 +265,18 @@ public final class LeaderVFSProvider {
         childrenByDirectory[path] = freshPaths
         record(updated: updated, deleted: deleted)
         return freshItems.sorted { $0.filename.localizedStandardCompare($1.filename) == .orderedAscending }
+    }
+
+    private func purgeSubtree(root: String) -> [NSFileProviderItemIdentifier] {
+        let prefix = root + "/"
+        let stalePaths = itemsByPath.keys.filter { $0 == root || $0.hasPrefix(prefix) }
+        let deleted = stalePaths.compactMap { itemsByPath[$0]?.itemIdentifier }
+        for stalePath in stalePaths { itemsByPath.removeValue(forKey: stalePath) }
+        knownDirectories = knownDirectories.filter { $0 != root && !$0.hasPrefix(prefix) }
+        childrenByDirectory = childrenByDirectory.filter { key, _ in
+            key != root && !key.hasPrefix(prefix)
+        }
+        return deleted
     }
 
     private func fsStat(_ path: String) async throws -> TrayFsStat {
