@@ -2,14 +2,14 @@ import SwiftUI
 import UIKit
 import os
 
-/// Top-level container view with a NavigationSplitView whose sidebar lists
-/// chat with the dock rail beside it — the webapp's narrow-viewport IA
-/// (`slicc-shell.ts` ≤560px): chat is the app, workbench surfaces overlay
-/// it full-bleed, and only the 48pt dock stays tappable. There is no
-/// sidebar and no split view on a phone.
+/// Top-level adaptive shell. Compact width preserves the webapp's narrow IA:
+/// chat is the app, workbench surfaces overlay it full-bleed, and only the
+/// 48pt dock stays tappable. Regular width keeps chat visible beside the
+/// selected workbench surface.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// The open workbench surface; nil is the collapsed (chat-only) state.
@@ -27,41 +27,15 @@ struct ChatView: View {
     @AppStorage("leftHandedDock") private var leftHandedDock = false
 
     var body: some View {
-        // The rail sits BESIDE the navigation stack, not inside it: a rail
-        // under the navigation bar collides with the bar's chrome (the
-        // leading title in left-handed mode, the trailing controls in
-        // right-handed). Outside, the bar spans only the chat column.
-        HStack(spacing: 0) {
-            if leftHandedDock {
-                dockRail
-            }
-            NavigationStack {
-                ZStack {
-                    if fixtureMode {
-                        FixtureConversationView()
-                    } else {
-                        ConversationView(
-                            showSettings: $showSettings,
-                            showFrozenSessions: $showFrozenSessions)
-                    }
-                    // The workbench covers the chat, not the rail — the
-                    // same full-bleed overlay the web shell uses at ≤560px,
-                    // so tap-active-to-collapse stays reachable.
-                    if terminalWasOpened || activeSurface == .term {
-                        WorkbenchHost(surface: .term, isActive: activeSurface == .term)
-                            .opacity(activeSurface == .term ? 1 : 0)
-                            .allowsHitTesting(activeSurface == .term)
-                            .accessibilityHidden(activeSurface != .term)
-                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
-                    }
-                    if let surface = activeSurface, surface != .term {
-                        WorkbenchHost(surface: surface)
-                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
-                    }
-                }
-            }
-            if !leftHandedDock {
-                dockRail
+        GeometryReader { geometry in
+            switch ShellLayout.mode(
+                horizontalSizeClass: horizontalSizeClass,
+                availableWidth: geometry.size.width
+            ) {
+            case .compactOverlay:
+                compactShell
+            case .regularSplit:
+                regularShell
             }
         }
         // A leader theme pins the scheme to its base; unthemed follows the
@@ -112,6 +86,114 @@ struct ChatView: View {
         .onChange(of: activeSurface) { surface in
             if surface == .term { terminalWasOpened = true }
         }
+    }
+
+    /// The phone shell stays structurally unchanged: the rail remains outside
+    /// the navigation stack while the workbench overlays only the conversation.
+    private var compactShell: some View {
+        // The rail sits BESIDE the navigation stack, not inside it: a rail
+        // under the navigation bar collides with the bar's chrome (the
+        // leading title in left-handed mode, the trailing controls in
+        // right-handed). Outside, the bar spans only the chat column.
+        HStack(spacing: 0) {
+            if leftHandedDock {
+                dockRail
+            }
+            NavigationStack {
+                ZStack {
+                    if fixtureMode {
+                        FixtureConversationView()
+                    } else {
+                        ConversationView(
+                            showSettings: $showSettings,
+                            showFrozenSessions: $showFrozenSessions)
+                    }
+                    // The workbench covers the chat, not the rail — the
+                    // same full-bleed overlay the web shell uses at ≤560px,
+                    // so tap-active-to-collapse stays reachable.
+                    if terminalWasOpened || activeSurface == .term {
+                        WorkbenchHost(surface: .term, isActive: activeSurface == .term)
+                            .opacity(activeSurface == .term ? 1 : 0)
+                            .allowsHitTesting(activeSurface == .term)
+                            .accessibilityHidden(activeSurface != .term)
+                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+                    }
+                    if let surface = activeSurface, surface != .term {
+                        WorkbenchHost(surface: surface)
+                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+                    }
+                }
+            }
+            if !leftHandedDock {
+                dockRail
+            }
+        }
+    }
+
+    /// Regular width mirrors the dock and its workbench around a persistent
+    /// conversation column. With no selected surface, conversation fills the
+    /// space beside the rail.
+    private var regularShell: some View {
+        HStack(spacing: 0) {
+            if leftHandedDock {
+                dockRail
+                regularWorkbench
+            }
+
+            conversation
+
+            if !leftHandedDock {
+                regularWorkbench
+                dockRail
+            }
+        }
+    }
+
+    private var conversation: some View {
+        NavigationStack {
+            if fixtureMode {
+                FixtureConversationView()
+            } else {
+                ConversationView(
+                    showSettings: $showSettings,
+                    showFrozenSessions: $showFrozenSessions)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var regularWorkbench: some View {
+        if activeSurface != nil {
+            if leftHandedDock {
+                workbench
+                Divider()
+            } else {
+                Divider()
+                workbench
+            }
+        }
+    }
+
+    /// Stacked rather than switched, so moving between surfaces does not take
+    /// the Ghostty view out of the window and destroy the terminal's
+    /// scrollback (the compact shell keeps it for the same reason). Collapsing
+    /// the column entirely still tears it down: an invisible full-width
+    /// workbench cannot be expressed in a side-by-side layout.
+    private var workbench: some View {
+        ZStack {
+            if terminalWasOpened || activeSurface == .term {
+                WorkbenchHost(surface: .term, isActive: activeSurface == .term)
+                    .opacity(activeSurface == .term ? 1 : 0)
+                    .allowsHitTesting(activeSurface == .term)
+                    .accessibilityHidden(activeSurface != .term)
+            }
+            if let surface = activeSurface, surface != .term {
+                WorkbenchHost(surface: surface)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.move(edge: leftHandedDock ? .leading : .trailing))
     }
 
     private var dockRail: some View {
