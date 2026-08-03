@@ -19,9 +19,9 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 | `SliccFollower/Models/ICloudSessionList.swift`, `SliccFollower.entitlements`                         | iCloud tray-session discovery: presentation logic over `SliccTraySession` (see "iCloud Sessions") + the KVS entitlement                                                                                           |
 | `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                 |
 | `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                                                     |
-| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`                                        | SwiftUI chat surface. `MessageListView` is the active renderer                                                                                                                                                    |
+| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MarkdownText.swift`                  | SwiftUI chat surface (`MessageListView` renders). `Models/MarkdownBlock.swift` parses fences, lists and GFM pipe tables for the bubbles                                                                           |
 | `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleDetailView.swift`  | Renders `.shtml` sprinkle content received from the leader via `sprinkle.content`. Bridge calls (`lick`, `setState`, etc.) intercepted via `WKScriptMessageHandler` — VFS APIs are stubbed (graceful degradation) |
-| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`                       | Phone IA (#1802): chat + 48pt dock rail (web order, tap-active collapses); workbench overlays chat, leader-only surfaces get honest placeholders. No sidebar                                                      |
+| `SliccFollower/Views/DockModel.swift`, `DockRail.swift`, `WorkbenchHost.swift`, `LucideIcon.swift`   | Phone IA (#1802): chat + 48pt dock rail (web order, tap-active collapses); workbench overlays chat. Icons are lucide `d` strings parsed by `Models/SVGPath.swift` — SF Symbols has no cone                        |
 | `SliccFollower/Views/TabsCarouselView.swift`                                                         | Carousel of locally hosted CDP target WKWebViews                                                                                                                                                                  |
 | Other views (`ChatView.swift`, `InputBar.swift`, `MessageBubble.swift`, `SettingsView.swift`, …)     | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                                                           |
 | `SliccFollower/Resources/Assets.xcassets`                                                            | App icon + asset catalog                                                                                                                                                                                          |
@@ -120,6 +120,20 @@ Holding the EMPTY composer dictates a `user_message` (no protocol change).
 when the locale supports it). Hooks: `-uiTestSpeechPermission`/
 `-uiTestSpeechScript` script the engine; `-uiTestPttStage` pins the
 overlay for screenshots.
+
+Release submits the transcript directly (`InputBar.submit(_:dictated:)`),
+never by writing the composer binding and re-reading it; an unsendable one
+stays in the composer as a draft rather than vanishing.
+
+Dictated turns speak their reply back, porting
+`webapp/src/speech/{dictation-priming,voice-reply}.ts`.
+`Models/DictationPriming.swift` appends the AI-only markers the model sees
+(🎙️ per turn, plus a one-time `◁…▷` note per session asking for speakable
+prose and a hidden `<!--lang:xx-->` marker); bubbles strip them at render
+time. `Models/VoiceReply.swift` counts dictated submissions — a count, not a
+flag, so queued turns stay balanced — and speaks that reply via
+`AVSpeechSynthesizer` behind the `SpeechSpeaking` seam. Typed turns stay
+silent, as does a reply whose declared language has no voice.
 
 ## Build
 

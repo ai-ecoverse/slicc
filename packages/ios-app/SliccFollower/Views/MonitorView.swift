@@ -53,7 +53,7 @@ struct MonitorView: View {
             }
             ForEach(appState.scoops) { scoop in
                 HStack {
-                    Image(systemName: scoop.isCone ? "crown" : "cup.and.saucer")
+                    ConeScoopGlyph(isCone: scoop.isCone, size: 17)
                         .foregroundStyle(palette.inkSecondary)
                     VStack(alignment: .leading) {
                         Text(scoop.name)

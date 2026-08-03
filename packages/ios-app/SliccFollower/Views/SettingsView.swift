@@ -10,6 +10,10 @@ struct SettingsView: View {
     /// without it, `Date()` in `body` is only sampled on unrelated redraws and
     /// a row crossing the 12h TTL would stay enabled indefinitely.
     @State private var now = Date()
+    /// Set when the user asks THIS sheet to connect, so the auto-dismiss only
+    /// fires for a connection they just started here. Opening Settings while
+    /// a background reconnect happens to land must not yank the sheet away.
+    @State private var awaitingConnect = false
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -39,6 +43,19 @@ struct SettingsView: View {
             .onChange(of: appState.joinUrl) { _, newValue in
                 storedJoinUrl = newValue
             }
+            // Connecting is the reason the sheet was opened; once it lands,
+            // the settings form is in the way of the conversation.
+            .onChange(of: appState.connectionState) { _, state in
+                guard awaitingConnect else { return }
+                if state == .connected {
+                    awaitingConnect = false
+                    dismiss()
+                } else if state == .disconnected || state == .failed || state == .gaveUp {
+                    // The attempt resolved without connecting — stay put so
+                    // the error is readable and the URL can be corrected.
+                    awaitingConnect = false
+                }
+            }
         }
     }
 
@@ -64,7 +81,9 @@ struct SettingsView: View {
             Text("iCloud Sessions")
         } footer: {
             Text(
-                "Leaders started with Sliccstart on this Apple ID appear here automatically. Others (cloud, another Apple ID) still join via a pasted Join URL below."
+                "Leaders started with Sliccstart on this Apple ID appear here "
+                    + "automatically. Others (cloud, another Apple ID) still join via a "
+                    + "pasted Join URL below."
             )
         }
         .onAppear {
@@ -82,6 +101,7 @@ struct SettingsView: View {
                 appState.sessionStore.reload()
                 return
             }
+            awaitingConnect = true
             appState.connectToDiscoveredSession(joinUrl: session.joinUrl)
         } label: {
             HStack {
@@ -215,6 +235,7 @@ struct SettingsView: View {
                 }
             } else {
                 Button {
+                    awaitingConnect = true
                     appState.connect()
                 } label: {
                     HStack {

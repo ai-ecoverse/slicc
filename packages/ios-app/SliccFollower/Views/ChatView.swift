@@ -335,8 +335,9 @@ struct ConversationView: View {
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
                 steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                onSend: { text, attachments in
-                    appState.sendMessage(text, attachments: attachments)
+                onSend: { text, attachments, dictated in
+                    appState.sendMessage(
+                        text, attachments: attachments, dictated: dictated)
                     inputText = ""
                 },
                 onAbort: {
@@ -474,10 +475,13 @@ struct ScoopSwitcher: View {
                     Button {
                         appState.selectScoop(jid: scoop.jid)
                     } label: {
+                        // A menu row can only draw `Image`/`Text`, never a
+                        // custom Shape, so the lucide cone cannot appear
+                        // here — the row says cone or scoop in words instead.
                         Label(
                             menuTitle(for: scoop),
                             systemImage: scoop.jid == appState.selectedScoopJid
-                                ? "checkmark" : Self.glyph(isCone: scoop.isCone))
+                                ? "checkmark" : "circle")
                     }
                     .accessibilityIdentifier("scoop-switch-\(scoop.jid)")
                 }
@@ -497,8 +501,7 @@ struct ScoopSwitcher: View {
     /// pushing the action cluster off the other edge.
     private var identityLabel: some View {
         HStack(spacing: 5) {
-            Image(systemName: Self.glyph(isCone: appState.selectedScoop?.isCone ?? true))
-                .font(.system(size: 13, weight: .semibold))
+            ConeScoopGlyph(isCone: appState.selectedScoop?.isCone ?? true, size: 17)
                 .foregroundStyle(palette.accent)
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
                 .font(.system(size: 15, weight: .semibold))
@@ -525,13 +528,10 @@ struct ScoopSwitcher: View {
     /// The leader's active scoop is marked in the menu too — the dot on the
     /// closed control only speaks about the one you are looking at.
     private func menuTitle(for scoop: ScoopSummary) -> String {
-        scoop.jid == appState.leaderActiveScoopJid
-            ? "\(scoop.assistantLabel) · active"
-            : scoop.assistantLabel
-    }
-
-    private static func glyph(isCone: Bool) -> String {
-        isCone ? "cup.and.saucer.fill" : "circle.grid.2x2"
+        let kind = scoop.isCone ? "cone" : "scoop"
+        return scoop.jid == appState.leaderActiveScoopJid
+            ? "\(scoop.assistantLabel) · \(kind) · active"
+            : "\(scoop.assistantLabel) · \(kind)"
     }
 }
 

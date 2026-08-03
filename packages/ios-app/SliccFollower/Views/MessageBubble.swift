@@ -61,8 +61,15 @@ struct MessageBubble: View {
             VStack(alignment: .leading, spacing: 6) {
                 if let source = message.source, source != "cone" {
                     HStack(spacing: 4) {
-                        Image(systemName: SliccIcons.messageSource(message))
-                            .font(.system(size: 10))
+                        // A lick carries its channel glyph; anything else
+                        // attributed to a non-cone source is a scoop, which
+                        // gets the lucide bowl the web rail uses.
+                        if message.channel?.isEmpty == false {
+                            Image(systemName: SliccIcons.messageSource(message))
+                                .font(.system(size: 10))
+                        } else {
+                            ConeScoopGlyph(isCone: false, size: 11)
+                        }
                         Text(source)
                             .font(.system(size: 11, weight: .medium))
                     }
@@ -82,14 +89,18 @@ struct MessageBubble: View {
     /// doesn't accidentally become a heading inside a chat bubble.
     @ViewBuilder
     private var userBubbleText: some View {
+        // Dictated turns carry AI-only markers (🎙️ and the one-time ◁…▷
+        // priming note) in the stored text; the bubble is the one place
+        // that hides them again.
+        let body = DictationPriming.stripMarkers(message.content)
         if let attributed = try? AttributedString(
-            markdown: message.content,
+            markdown: body,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             Text(styleUserBubbleCode(attributed))
                 .tint(palette.bubbleText)
         } else {
-            Text(message.content)
+            Text(body)
         }
     }
 
@@ -109,7 +120,10 @@ struct MessageBubble: View {
 
     @ViewBuilder
     private var assistantBody: some View {
-        let extracted = extractInlineSprinkles(from: message.content)
+        // The agent declares its reply language in a hidden HTML comment so
+        // the spoken reply can pick a voice; it must never reach the bubble.
+        let extracted = extractInlineSprinkles(
+            from: DictationPriming.stripReplyLangMarker(message.content))
         VStack(alignment: .leading, spacing: 8) {
             if !extracted.cleaned.isEmpty || extracted.fragments.isEmpty {
                 renderInlineContent(cleaned: extracted.cleaned, fragments: extracted.fragments)

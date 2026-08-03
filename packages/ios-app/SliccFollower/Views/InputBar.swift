@@ -1,6 +1,9 @@
+import OSLog
 import PhotosUI
 import SwiftUI
 import UIKit
+
+private let logger = Logger(subsystem: "com.sliccy.follower", category: "composer")
 
 struct InputBar: View {
     @Binding var text: String
@@ -14,8 +17,9 @@ struct InputBar: View {
     /// steer affordance hides so an interrupt cannot hit the wrong turn.
     var steersActiveScoop: Bool = true
     /// Send the composed message: trimmed text + any staged attachments
-    /// (nil rather than an empty array, matching the wire shape).
-    let onSend: (String, [MessageAttachment]?) -> Void
+    /// (nil rather than an empty array, matching the wire shape) + whether
+    /// the turn was dictated, which arms the spoken reply.
+    let onSend: (String, [MessageAttachment]?, Bool) -> Void
     let onAbort: () -> Void
     /// Send interrupting the running turn (`user_message.steer`). Only
     /// reachable while streaming, via the long-press menu on send.
@@ -125,9 +129,16 @@ struct InputBar: View {
             switch event.kind {
             case .commit(let transcript):
                 // The gesture only arms on an empty composer, so the
-                // transcript IS the message — reuse the exact send path.
-                text = transcript
-                sendIfPossible()
+                // transcript IS the message — submit it directly instead of
+                // writing `text` and re-reading it through the binding, which
+                // made the send depend on when SwiftUI published the write.
+                // If the leader turned unsendable mid-hold, fall back to
+                // leaving the words in the composer: dictation that cannot
+                // be delivered must not evaporate.
+                if !submit(transcript, dictated: true) {
+                    logger.notice("dictation not sent — composer unavailable; kept as draft")
+                    text = transcript
+                }
             case .quickTap:
                 // Restore the native behavior the surface intercepted: a
                 // plain tap places the caret.
@@ -357,7 +368,9 @@ struct InputBar: View {
             .transition(.scale.combined(with: .opacity))
             .padding(.bottom, 2)
         } else {
-            Button(action: { sendIfPossible() }) {
+            Button {
+                sendIfPossible()
+            } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 30))
                     .foregroundStyle(canSend ? palette.accent : palette.inkTertiary.opacity(0.6))
@@ -372,11 +385,21 @@ struct InputBar: View {
     // MARK: - Actions
 
     private func sendIfPossible() {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend else { return }
-        onSend(trimmed, stagedAttachments.isEmpty ? nil : stagedAttachments)
+        _ = submit(text, dictated: false)
+    }
+
+    /// The one send path. Takes the body explicitly so push-to-talk can
+    /// submit a transcript the composer binding has not published yet, and
+    /// reports whether the message actually went out so a caller holding the
+    /// only copy of it can decide what to do when it did not.
+    @discardableResult
+    private func submit(_ body: String, dictated: Bool) -> Bool {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isComposable, !trimmed.isEmpty || !stagedAttachments.isEmpty else { return false }
+        onSend(trimmed, stagedAttachments.isEmpty ? nil : stagedAttachments, dictated)
         text = ""
         stagedAttachments = []
+        return true
     }
 
     private func steerIfPossible() {
@@ -401,7 +424,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: true,
-                onSend: { _, _ in },
+                onSend: { _, _, _ in },
                 onAbort: {}
             )
         }
@@ -418,7 +441,7 @@ struct InputBar: View {
                 text: .constant("Hello world"),
                 isStreaming: true,
                 isConnected: true,
-                onSend: { _, _ in },
+                onSend: { _, _, _ in },
                 onAbort: {}
             )
         }
@@ -435,7 +458,7 @@ struct InputBar: View {
                 text: .constant(""),
                 isStreaming: false,
                 isConnected: false,
-                onSend: { _, _ in },
+                onSend: { _, _, _ in },
                 onAbort: {}
             )
         }

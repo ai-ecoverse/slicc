@@ -242,21 +242,6 @@ class AppState: ObservableObject {
 
     // MARK: - Frozen sessions (freezer rail)
 
-    /// How the frozen-session list was (or failed to be) produced.
-    enum FrozenListState: Equatable {
-        case idle
-        case loading
-        /// `rebuilt` means /sessions/index.json was corrupt and the list came
-        /// from a /sessions directory scan instead.
-        case loaded(rebuilt: Bool)
-        case failed(String)
-    }
-
-    struct OpenFrozenSession {
-        let entry: FrozenSessionIndexEntry
-        let archive: ParsedFrozenArchive
-    }
-
     /// Single-flight guard for `new_session`: the leader runs its own
     /// guard, but the phone must not queue a second request while a save
     /// (the slow, LLM-enriched path) is in flight. Cleared when the
@@ -274,91 +259,6 @@ class AppState: ObservableObject {
     /// replaced by the frozen banner for the duration.
     @Published var openFrozen: OpenFrozenSession?
     @Published var frozenOpenError: String?
-
-    /// Load `/sessions/index.json` from the leader's VFS. A corrupt index
-    /// self-heals from a `/sessions` directory scan; a missing sessions dir
-    /// is an empty rail, not an error.
-    func loadFrozenSessions() {
-        #if DEBUG
-            if let fixture = UITestHooks.frozenFixture() {
-                frozenSessions = fixture
-                frozenListState = .loaded(rebuilt: false)
-                return
-            }
-        #endif
-        guard connectionState == .connected else {
-            // The snowflake is always reachable; a stale list from a previous
-            // leader — or an eternal spinner from `.idle` — must not be.
-            frozenSessions = []
-            frozenListState = .failed("Connect to a leader to browse its past sessions.")
-            return
-        }
-        frozenListState = .loading
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let raw = try await self.fsClient.readFile(FrozenSessionIndex.indexPath)
-                if let entries = FrozenSessionIndex.parse(indexJson: raw) {
-                    self.frozenSessions = entries
-                    self.frozenListState = .loaded(rebuilt: false)
-                    return
-                }
-                // Corrupt or partially written index — rebuild from a scan.
-                try await self.rebuildFrozenList()
-            } catch {
-                // Missing index but present archives is the same self-heal
-                // path; a missing directory degrades to an empty rail.
-                do {
-                    try await self.rebuildFrozenList()
-                } catch {
-                    self.frozenSessions = []
-                    self.frozenListState = .loaded(rebuilt: false)
-                }
-            }
-        }
-    }
-
-    private func rebuildFrozenList() async throws {
-        let entries = try await fsClient.readDir(FrozenSessionIndex.sessionsDir)
-        frozenSessions = FrozenSessionIndex.rebuild(from: entries)
-        frozenListState = .loaded(rebuilt: true)
-    }
-
-    /// Open one archive read-only. Never logs the content; parse failures
-    /// surface on `frozenOpenError`.
-    func openFrozenSession(_ entry: FrozenSessionIndexEntry) {
-        frozenOpenError = nil
-        #if DEBUG
-            if let markdown = UITestHooks.frozenArchiveFixture(for: entry) {
-                openFrozen = OpenFrozenSession(
-                    entry: entry,
-                    archive: FrozenArchiveParser.withFallbackTimestamps(
-                        FrozenArchiveParser.parse(markdown: markdown),
-                        frozenAt: entry.frozenDate))
-                return
-            }
-        #endif
-        frozenOpeningId = entry.id
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { self.frozenOpeningId = nil }
-            do {
-                let markdown = try await self.fsClient.readFile(entry.path)
-                self.openFrozen = OpenFrozenSession(
-                    entry: entry,
-                    archive: FrozenArchiveParser.withFallbackTimestamps(
-                        FrozenArchiveParser.parse(markdown: markdown),
-                        frozenAt: entry.frozenDate))
-            } catch {
-                self.frozenOpenError =
-                    "Could not read “\(entry.title)” — it may have been removed on the leader."
-            }
-        }
-    }
-
-    func closeFrozenSession() {
-        openFrozen = nil
-    }
 
     /// Ask the leader to start a new chat. The phone never clears
     /// optimistically — the leader broadcasts the cleared snapshot and
@@ -427,6 +327,11 @@ class AppState: ObservableObject {
         connectedSince = nil
         isStreaming = false
         streamingMessageId = nil
+        // A reply that never arrived must not leave a mark behind to speak
+        // the first turn of whatever session comes next; the fresh session
+        // also re-arms the one-time dictation priming note.
+        VoiceReply.shared.reset()
+        DictationPriming.reset()
         scoops = []
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
@@ -477,13 +382,22 @@ class AppState: ObservableObject {
     /// queueing behind it — the phone's equivalent of the desktop's
     /// Cmd+Enter.
     func sendMessage(
-        _ text: String, steer: Bool = false, attachments: [MessageAttachment]? = nil
+        _ text: String, steer: Bool = false, attachments: [MessageAttachment]? = nil,
+        dictated: Bool = false
     ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attached = (attachments?.isEmpty == false) ? attachments : nil
         // A pure-attachment message is legal (the web composer sends photos
         // with no caption); only an entirely empty send is dropped.
         guard !trimmed.isEmpty || attached != nil else { return }
+
+        if dictated {
+            // Markers are stored AND sent, as the webapp does, so replay and
+            // compaction keep the context; bubbles strip them at render time.
+            trimmed = DictationPriming.applyMarkers(
+                trimmed, isFirst: DictationPriming.consumeFirst())
+            VoiceReply.shared.markSubmission()
+        }
 
         let messageId = UUID().uuidString
         let message = ChatMessage(
@@ -1284,6 +1198,11 @@ class AppState: ObservableObject {
                     messages = buffer
                     isStreaming = false
                     streamingMessageId = nil
+                }
+                // Consume unconditionally, even for a background scoop, so
+                // marks and turns stay balanced; only speak what is on screen.
+                if VoiceReply.shared.consumeSubmission(), isVisible {
+                    VoiceReply.shared.speakReply(markdown: buffer[idx].content)
                 }
             }
 

@@ -19,19 +19,13 @@ struct RemoteTabCard: View {
     @State private var preview: PreviewState = .loading
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .bottom) {
             thumbnail
-            // A scrim, not a caption bar: the label reads over the darkest
-            // part of the shot instead of stealing a strip of it, and the
-            // gradient guarantees contrast whatever the page looks like.
-            LinearGradient(
-                colors: [.black.opacity(0), .black.opacity(0.55), .black.opacity(0.82)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 72)
-            .frame(maxHeight: .infinity, alignment: .bottom)
-            .allowsHitTesting(false)
+            // A material bar, not a gradient scrim. A translucent scrim's
+            // contrast is whatever the page underneath happens to be, and a
+            // screenshot of a light page swallowed the caption entirely.
+            // Material stays legible over any backdrop and still shows the
+            // shot through it.
             caption
         }
         .frame(height: 156)
@@ -65,8 +59,8 @@ struct RemoteTabCard: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
                 }
-                // Above the scrim's darkest band, so the reason stays legible.
-                .padding(.bottom, 56)
+                // Clear of the caption bar, so the reason stays readable.
+                .padding(.bottom, 48)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -75,29 +69,34 @@ struct RemoteTabCard: View {
 
     /// Title + origin only. The full URL was the noisiest thing on the card
     /// and never fit; the host is what identifies a tab at a glance.
+    ///
+    /// `.primary` / `.secondary` over material are vibrant styles — the
+    /// system keeps them legible against whatever the blurred screenshot
+    /// behind them looks like, which a hand-picked white never could.
     private var caption: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(target.title.isEmpty ? "Untitled tab" : target.title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             HStack(spacing: 5) {
                 Text(target.runtimeId == "leader" ? "leader" : target.runtimeId)
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(.white.opacity(0.22))
-                    .foregroundStyle(.white)
-                    .clipShape(Capsule())
+                    .background(.quaternary, in: Capsule())
+                    .foregroundStyle(.secondary)
                 Text(Self.displayHost(target.url))
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.bottom, 9)
+        .padding(.vertical, 7)
+        .background(.regularMaterial)
     }
 
     /// Host without the `www.` noise; falls back to the raw string for
