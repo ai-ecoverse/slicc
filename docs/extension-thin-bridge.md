@@ -55,6 +55,12 @@ the preview burst, and restores by sending `Target.attachToTarget` followed by
 `Page.bringToFront` over the same bridge transport. The bridge activates that
 original tab exactly as it activated the preview tab.
 
+The bridge preserves its `sessionId === targetId` correlation convention, so
+multiple logical attachments to one tab share a synthetic session. Per-tab
+reference counts keep that session and its debugger attachment alive until the
+last matching detach. Port disconnect and target close remain authoritative:
+they release the tab immediately regardless of its outstanding count.
+
 ## Leader-Tab Lifecycle (Why No Startup Create)
 
 `chrome.storage.session` is wiped on browser restart, and the startup

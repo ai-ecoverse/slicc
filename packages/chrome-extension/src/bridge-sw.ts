@@ -185,6 +185,8 @@ interface PortState {
   channelId: string | null;
   /** Synthetic sessionId → real chrome tab id. */
   sessionToTab: Map<string, number>;
+  /** Number of logical CDP attachments sharing each tab's synthetic session. */
+  attachRefCounts: Map<number, number>;
   /** Tabs we attached the debugger to from THIS port. Used so disconnect
    *  detaches only what we attached (other code paths may also attach). */
   ownedTabs: Set<number>;
@@ -393,6 +395,7 @@ export async function handleBridgePortConnect(
   const state: PortState = {
     channelId: null,
     sessionToTab: new Map(),
+    attachRefCounts: new Map(),
     ownedTabs: new Set(),
     unsubscribeEvents: null,
   };
@@ -442,6 +445,7 @@ export async function handleBridgePortConnect(
     }
     state.ownedTabs.clear();
     state.sessionToTab.clear();
+    state.attachRefCounts.clear();
   });
 
   const pin = await validateBridgePin(port.sender, deps);
@@ -670,6 +674,7 @@ async function cdpAttachToTarget(
   // round-trip (matches the existing offscreen CDP proxy's convention).
   const sessionId = targetId;
   state.sessionToTab.set(sessionId, tabId);
+  state.attachRefCounts.set(tabId, (state.attachRefCounts.get(tabId) ?? 0) + 1);
   return { sessionId };
 }
 
@@ -681,9 +686,18 @@ async function cdpDetachFromTarget(
   const sessionId = params['sessionId'] as string;
   const tabId = state.sessionToTab.get(sessionId);
   if (tabId === undefined) return {};
-  state.sessionToTab.delete(sessionId);
-  const stillReferenced = [...state.sessionToTab.values()].includes(tabId);
-  if (!stillReferenced && state.ownedTabs.has(tabId)) {
+
+  const nextRefCount = (state.attachRefCounts.get(tabId) ?? 1) - 1;
+  if (nextRefCount > 0) {
+    state.attachRefCounts.set(tabId, nextRefCount);
+    return {};
+  }
+
+  state.attachRefCounts.delete(tabId);
+  for (const [sid, attachedTabId] of state.sessionToTab) {
+    if (attachedTabId === tabId) state.sessionToTab.delete(sid);
+  }
+  if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
     await deps.detachDebugger(tabId);
   }
@@ -712,6 +726,7 @@ async function cdpCloseTarget(
   for (const [sid, tid] of state.sessionToTab) {
     if (tid === tabId) state.sessionToTab.delete(sid);
   }
+  state.attachRefCounts.delete(tabId);
   if (state.ownedTabs.has(tabId)) {
     state.ownedTabs.delete(tabId);
     await deps.detachDebugger(tabId);

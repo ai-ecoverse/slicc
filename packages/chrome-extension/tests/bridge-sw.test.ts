@@ -131,6 +131,18 @@ async function bringToFront(port: FakePort, tabId: number, id: number): Promise<
   await flushMicrotasks();
 }
 
+async function sendCdpRequest(
+  port: FakePort,
+  id: number,
+  method: string,
+  params?: Record<string, unknown>,
+  sessionId?: string
+): Promise<unknown> {
+  port.receive({ bridge: 1, channelId: 'c', kind: 'cdp.request', id, method, params, sessionId });
+  await flush();
+  return port.posted.find((message) => (message as { id?: number }).id === id);
+}
+
 describe('validateBridgePin', () => {
   it('passes for an origin in the allowlist on the stored leader tab top frame', async () => {
     const r = await validateBridgePin(goodSender as never, {
@@ -360,6 +372,55 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     });
   });
 
+  it('preserves a live session when one of two attachments detaches', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [42]);
+
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', {
+      targetId: '42',
+      flatten: true,
+    });
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    const commandResponse = await sendCdpRequest(
+      port,
+      4,
+      'Runtime.evaluate',
+      { expression: '1 + 1' },
+      '42'
+    );
+    expect(commandResponse).toMatchObject({ result: { ok: true, tabId: 42 } });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
+  it('detaches exactly once when duplicate attachments are balanced to zero', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, [42]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '42' });
+
+    await sendCdpRequest(port, 3, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '42' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(42);
+
+    const releasedResponse = await sendCdpRequest(port, 5, 'Target.detachFromTarget', {
+      sessionId: '42',
+    });
+    expect(releasedResponse).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats an unknown session detach as a no-op', async () => {
+    const deps = makeDeps();
+    const port = await connectWithAttachedTabs(deps, []);
+
+    const response = await sendCdpRequest(port, 1, 'Target.detachFromTarget', {
+      sessionId: 'unknown',
+    });
+    expect(response).toMatchObject({ result: {} });
+    expect(deps.detachDebugger).not.toHaveBeenCalled();
+  });
+
   it('keeps a leader-originated Page.bringToFront permanently focused', async () => {
     vi.useFakeTimers();
     let activeTabId = 42;
@@ -551,23 +612,30 @@ describe('handleBridgePortConnect — CDP pass-through', () => {
     expect(resp).toMatchObject({ error: expect.stringContaining('No tab attached') });
   });
 
-  it('detaches owned tabs and unsubscribes events on port disconnect', async () => {
+  it('detaches a multiply-referenced owned tab once on port disconnect', async () => {
     const deps = makeDeps();
-    const port = makePort(EXTENSION_BRIDGE_PORT_NAME, goodSender);
-    await handleBridgePortConnect(port as never, deps);
-    port.receive({ bridge: 1, channelId: 'c', kind: 'handshake.hello' });
-    port.receive({
-      bridge: 1,
-      channelId: 'c',
-      kind: 'cdp.request',
-      id: 1,
-      method: 'Target.attachToTarget',
-      params: { targetId: '43' },
-    });
-    await flush();
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
     port.triggerDisconnect();
     await flush();
     expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+  });
+
+  it('force-releases a multiply-referenced tab when the target closes', async () => {
+    const removeTab = vi.fn(async () => undefined);
+    const deps = makeDeps({ removeTab });
+    const port = await connectWithAttachedTabs(deps, [43]);
+    await sendCdpRequest(port, 2, 'Target.attachToTarget', { targetId: '43' });
+
+    const response = await sendCdpRequest(port, 3, 'Target.closeTarget', { targetId: '43' });
+    expect(response).toMatchObject({ result: { success: true } });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
+    expect(deps.detachDebugger).toHaveBeenCalledWith(43);
+    expect(removeTab).toHaveBeenCalledWith(43);
+
+    await sendCdpRequest(port, 4, 'Target.detachFromTarget', { sessionId: '43' });
+    expect(deps.detachDebugger).toHaveBeenCalledTimes(1);
   });
 
   it('Target.getTargets returns a CDP-shaped target list', async () => {
