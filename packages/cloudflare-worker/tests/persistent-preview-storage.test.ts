@@ -15,6 +15,7 @@ import {
   mintPreview,
   type PreviewDeps,
   resolvePreview,
+  revokePreview,
 } from '../src/session-tray-preview.js';
 import type { PreviewRecord, TrayRecord } from '../src/shared.js';
 import { FakeDurableObjectState } from './fake-do-state.js';
@@ -160,6 +161,67 @@ describe('persistent preview publication', () => {
     advance(60_000);
     await expirePersistentPreviews(deps);
     expect(deleted).toEqual([prefix]);
+    expect(tray.previews?.[minted.previewToken]).toBeUndefined();
+  });
+
+  it('retains an expired cleanup tombstone and retries failed R2 deletion', async () => {
+    const { deps, tray, alarms, advance } = previewDeps();
+    const deletePrefix = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('R2 unavailable'))
+      .mockResolvedValueOnce(undefined);
+    deps.deleteArchivePrefix = deletePrefix;
+    const minted = await mintPreview(
+      {
+        controllerToken: 'controller',
+        servedRoot: '/site',
+        entryPath: '/site/index.html',
+        allowLive: false,
+        workerBaseUrl: 'https://www.sliccy.ai',
+        ttlMs: 60_000,
+      },
+      deps
+    );
+
+    advance(60_000);
+    await expirePersistentPreviews(deps);
+    expect(tray.previews?.[minted.previewToken]).toMatchObject({ state: 'cleanup' });
+    expect(await resolvePreview(minted.previewToken, deps)).toBeNull();
+    expect(alarms.at(-1)).toBe(Date.parse('2026-08-03T00:02:00.000Z'));
+
+    advance(60_000);
+    await expirePersistentPreviews(deps);
+    expect(deletePrefix).toHaveBeenCalledTimes(2);
+    expect(tray.previews?.[minted.previewToken]).toBeUndefined();
+  });
+
+  it('hides a revoked preview while retrying failed R2 deletion', async () => {
+    const { deps, tray, alarms, advance } = previewDeps();
+    const deletePrefix = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('R2 unavailable'))
+      .mockResolvedValueOnce(undefined);
+    deps.deleteArchivePrefix = deletePrefix;
+    const minted = await mintPreview(
+      {
+        controllerToken: 'controller',
+        servedRoot: '/site',
+        entryPath: '/site/index.html',
+        allowLive: false,
+        workerBaseUrl: 'https://www.sliccy.ai',
+        ttlMs: 60_000,
+      },
+      deps
+    );
+
+    await expect(revokePreview(minted.previewToken, deps)).resolves.toEqual({ revoked: true });
+    expect(tray.previews?.[minted.previewToken]).toMatchObject({ state: 'cleanup' });
+    expect(await resolvePreview(minted.previewToken, deps)).toBeNull();
+    expect(alarms.at(-1)).toBe(Date.parse('2026-08-03T00:01:00.000Z'));
+
+    advance(60_000);
+    await expirePersistentPreviews(deps);
+    expect(deletePrefix).toHaveBeenCalledTimes(2);
     expect(tray.previews?.[minted.previewToken]).toBeUndefined();
   });
 

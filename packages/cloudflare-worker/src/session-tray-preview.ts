@@ -432,6 +432,7 @@ async function handlePreviewFinalize(request: Request, deps: PreviewDeps): Promi
 // ────────────────────────────────────────────────────────────────────────
 
 const MAX_PREVIEWS_PER_TRAY = 10;
+const PREVIEW_CLEANUP_RETRY_MS = 60_000;
 
 function routeError(message: string, status = 400): Error {
   return Object.assign(new Error(message), { status });
@@ -447,6 +448,19 @@ function isReady(record: PreviewRecord): boolean {
 
 function isExpired(record: PreviewRecord, now: number): boolean {
   return !!record.expiresAt && Date.parse(record.expiresAt) <= now;
+}
+
+async function deletePersistentArchive(record: PreviewRecord, deps: PreviewDeps): Promise<boolean> {
+  if (!record.archivePrefix) return true;
+  try {
+    await deps.deleteArchivePrefix(record.archivePrefix);
+    return true;
+  } catch {
+    record.state = 'cleanup';
+    record.expiresAt = new Date(deps.now() + PREVIEW_CLEANUP_RETRY_MS).toISOString();
+    delete record.uploadToken;
+    return false;
+  }
 }
 
 async function scheduleNextPersistentExpiry(deps: PreviewDeps): Promise<void> {
@@ -465,10 +479,7 @@ export async function expirePersistentPreviews(deps: PreviewDeps): Promise<void>
   let changed = false;
   for (const [token, record] of Object.entries(tray.previews)) {
     if (!isPersistent(record) || !isExpired(record, deps.now())) continue;
-    if (record.archivePrefix) {
-      await deps.deleteArchivePrefix(record.archivePrefix).catch(() => {});
-    }
-    delete tray.previews[token];
+    if (await deletePersistentArchive(record, deps)) delete tray.previews[token];
     changed = true;
   }
   if (changed) await deps.persistTray();
@@ -699,8 +710,7 @@ export async function revokePreview(
   if (!tray.previews?.[previewToken]) return { revoked: false };
   const record = tray.previews[previewToken];
   const webhookId = record.webhookId;
-  if (record.archivePrefix) await deps.deleteArchivePrefix(record.archivePrefix).catch(() => {});
-  delete tray.previews[previewToken];
+  if (await deletePersistentArchive(record, deps)) delete tray.previews[previewToken];
   await deps.persistTray();
   await scheduleNextPersistentExpiry(deps);
 

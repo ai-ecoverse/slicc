@@ -108,7 +108,7 @@ export interface PreviewRecord {
   announced: boolean; // durable per-preview first-visit latch
   url?: string;
   mode?: 'live' | 'persistent';
-  state?: 'pending' | 'ready';
+  state?: 'pending' | 'ready' | 'cleanup';
   expiresAt?: string;
   retentionMs?: number;
   archivePrefix?: string;
