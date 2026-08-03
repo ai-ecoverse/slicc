@@ -123,11 +123,13 @@
 		DFF9C499295115804C6CE6C1 /* SliccAgentAvatarTilt.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */; };
 		E568114F9C5022800E90127F /* CdpPreviewClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */; };
 		E60E295D09FF005492A64FB5 /* TrayChunkFraming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 356386D299A1933A39CB972B /* TrayChunkFraming.swift */; };
+		E6AE9D960C36AC71ED33D18E /* ShellLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D0D10C06C0CEBBC57634AA /* ShellLayout.swift */; };
 		EDCEBDF62330D1775F1B4EE2 /* LinkHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB9ADA61005F3F96BE8CDE2 /* LinkHeader.swift */; };
 		F13E566C40F05F6F3ED297BD /* SliccAgentAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80C9AA05D0F49F7E284BEC5 /* SliccAgentAvatarView.swift */; };
 		F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */; };
 		F5B6044724F8133C934A5143 /* LickEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF41895CF5F76A1CD2B671E /* LickEvent.swift */; };
 		F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */; };
+		FA28410D2D764BBA8EF08E0E /* ShellLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B99AEB1D5213A4F05B3D1D0 /* ShellLayoutTests.swift */; };
 		FA619188A03965E77BE27A09 /* FilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83613696C70A0EF218A19B6D /* FilesUITests.swift */; };
 		FAC7347D5CB648E85CEACBCF /* TerminalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2510ED24DEED53DF7825A362 /* TerminalUITests.swift */; };
 		FBC5D9F3A8263FCAE3C6C6C5 /* NewSessionMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A16A253ACC35EEB12798224E /* NewSessionMessageTests.swift */; };
@@ -168,6 +170,7 @@
 		224A81FCF4ECFA8EA4157E42 /* link-header-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "link-header-corpus.json"; sourceTree = "<group>"; };
 		2510ED24DEED53DF7825A362 /* TerminalUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalUITests.swift; sourceTree = "<group>"; };
 		26D6B6B896CB48304A39DAB8 /* SteerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerUITests.swift; sourceTree = "<group>"; };
+		28D0D10C06C0CEBBC57634AA /* ShellLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLayout.swift; sourceTree = "<group>"; };
 		29562677500C7380445B16B9 /* NewSessionDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionDialog.swift; sourceTree = "<group>"; };
 		2D69F96CFDFB32CC8A815552 /* BrowserTargetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTargetsTests.swift; sourceTree = "<group>"; };
 		2D75B552EEAA18730A8843B9 /* MarkdownBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlock.swift; sourceTree = "<group>"; };
@@ -221,6 +224,7 @@
 		8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PttControllerTests.swift; sourceTree = "<group>"; };
 		88219CD0B963530C38CE40FB /* SliccFollowerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SliccFollowerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8859CA5D8E4C5BB29158CCF3 /* ModelProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProtocolTests.swift; sourceTree = "<group>"; };
+		8B99AEB1D5213A4F05B3D1D0 /* ShellLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellLayoutTests.swift; sourceTree = "<group>"; };
 		8D76B8F603084A6021B6DD6B /* KeepaliveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeepaliveTests.swift; sourceTree = "<group>"; };
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
@@ -317,6 +321,7 @@
 				8859CA5D8E4C5BB29158CCF3 /* ModelProtocolTests.swift */,
 				A16A253ACC35EEB12798224E /* NewSessionMessageTests.swift */,
 				8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */,
+				8B99AEB1D5213A4F05B3D1D0 /* ShellLayoutTests.swift */,
 				5A30A613A67EAAAA1298638B /* SliccAgentAvatarGeometryTests.swift */,
 				066BAF2F283227600FB92506 /* SteerMessageTests.swift */,
 				695356CA7F082C3287CFB228 /* SVGPathTests.swift */,
@@ -458,6 +463,7 @@
 				37C4F68634F8E70BBC83002C /* PttOverlayView.swift */,
 				841A713C553168F264F8D4DE /* RemoteTabCard.swift */,
 				F0A069AA812629AC5FE70AC9 /* SettingsView.swift */,
+				28D0D10C06C0CEBBC57634AA /* ShellLayout.swift */,
 				E80C9AA05D0F49F7E284BEC5 /* SliccAgentAvatarView.swift */,
 				438577405ABBCA33F117862C /* SliccIcons.swift */,
 				7BF55967F5396E597EE34125 /* SprinkleDetailView.swift */,
@@ -728,6 +734,7 @@
 				1C51604116AA20BE57F33B46 /* RemoteTabCard.swift in Sources */,
 				1B1D78732EE937BE2DBF2C05 /* SVGPath.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
+				E6AE9D960C36AC71ED33D18E /* ShellLayout.swift in Sources */,
 				47960F08DC8B7DD9E31F586B /* SliccAgentAvatarGeometry.swift in Sources */,
 				DFF9C499295115804C6CE6C1 /* SliccAgentAvatarTilt.swift in Sources */,
 				F13E566C40F05F6F3ED297BD /* SliccAgentAvatarView.swift in Sources */,
@@ -799,6 +806,7 @@
 				FBC5D9F3A8263FCAE3C6C6C5 /* NewSessionMessageTests.swift in Sources */,
 				9C28D445499995ADA861D75F /* PttControllerTests.swift in Sources */,
 				7782C370E6882C97EB6FC236 /* SVGPathTests.swift in Sources */,
+				FA28410D2D764BBA8EF08E0E /* ShellLayoutTests.swift in Sources */,
 				941662107E886C9BA55F2658 /* SliccAgentAvatarGeometryTests.swift in Sources */,
 				9ECC362CC8EBA3629542A6E7 /* SteerMessageTests.swift in Sources */,
 				F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */,
@@ -840,6 +848,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Hold the message field to dictate a message with your voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Dictated audio is transcribed on this device when possible to fill the message field.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -852,7 +861,7 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -943,7 +952,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -968,6 +977,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Hold the message field to dictate a message with your voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Dictated audio is transcribed on this device when possible to fill the message field.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -980,7 +990,7 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -1037,7 +1047,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 1.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
