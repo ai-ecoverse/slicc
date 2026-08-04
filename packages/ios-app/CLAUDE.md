@@ -58,10 +58,13 @@ Model TS follower features on `AppState`:
 ### Transcript swipe arbitration
 
 Nested horizontal transcript content owns a drag while it can still scroll in
-that direction; scoop navigation (and frozen-session dismissal) takes over only
-at the edge the drag pulls away from. Sample the edge at drag start, before the
-inner scroller moves. A `simultaneousGesture` preserves vertical scrolling but
-does not choose a horizontal winner, so it is not sufficient by itself.
+that direction; scoop navigation or frozen dismissal takes over only at the edge
+the drag pulls away from (right at leading, left at trailing). Freeze edge state
+at drag start. Capture must tolerate either inner/outer callback order, and an
+unknown context in a guarded region fails closed. Edge math uses the effective
+viewport, including both 8pt expansions from negative horizontal padding.
+Ordinary transcript navigation and vertical scrolling stay unchanged. Because
+the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
 ### Licks
 
