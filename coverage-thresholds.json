@@ -40,10 +40,10 @@
       ]
     },
     "chrome-extension": {
-      "lines": 81,
-      "statements": 81,
-      "functions": 73,
-      "branches": 69,
+      "lines": 85,
+      "statements": 84,
+      "functions": 76,
+      "branches": 72,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -150,9 +150,9 @@
       "regions": 83
     },
     "ios-app": {
-      "lines": 59,
-      "functions": 46,
-      "regions": 50
+      "lines": 66,
+      "functions": 58,
+      "regions": 59
     }
   }
 }
