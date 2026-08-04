@@ -314,6 +314,7 @@ struct ConversationView: View {
             }
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleTranscriptSwipe)
         .background(palette.canvas)
         // The live session identifies itself through the compact switcher in
         // the corner, not through a nav title — two copies of the same scoop
@@ -574,6 +575,7 @@ struct FixtureConversationView: View {
                 onAction: handleFixtureSwipe)
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleFixtureSwipe)
         .background(palette.canvas)
         .navigationTitle("UI Fixture")
         .navigationBarTitleDisplayMode(.inline)
@@ -610,19 +612,14 @@ extension View {
         state: HorizontalScrollGestureState,
         onAction: @escaping (SwipeArbiter.Action) -> Void
     ) -> some View {
-        let transcript = coordinateSpace(name: state.coordinateSpaceName)
-        if #available(iOS 18.0, *) {
-            transcript.gesture(
-                TranscriptSwipeGesture(gestureState: state, onAction: onAction))
-        } else {
-            transcript.simultaneousGesture(
+        coordinateSpace(name: state.coordinateSpaceName)
+            .simultaneousGesture(
                 arbitratedScoopSwipeGesture(state: state, onAction: onAction))
-        }
     }
 }
 
-/// iOS 17 fallback; iOS 18+ uses `TranscriptSwipeGesture` so nested scroll
-/// gestures can opt into simultaneous recognition through UIKit's delegate.
+/// Parent observer for ordinary transcript content. On iOS 18+, guarded
+/// descendants resolve their own handoff through UIKit's delegate.
 private func arbitratedScoopSwipeGesture(
     state: HorizontalScrollGestureState,
     onAction: @escaping (SwipeArbiter.Action) -> Void
@@ -636,7 +633,11 @@ private func arbitratedScoopSwipeGesture(
     }
     .onEnded { value in
         let origin = state.endOuterGesture()
-        onAction(SwipeArbiter.action(for: value.translation, origin: origin))
+        if #available(iOS 18.0, *) {
+            onAction(SwipeArbiter.outerAction(for: value.translation, origin: origin))
+        } else {
+            onAction(SwipeArbiter.action(for: value.translation, origin: origin))
+        }
     }
 }
 

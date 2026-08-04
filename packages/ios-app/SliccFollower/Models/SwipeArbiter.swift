@@ -72,4 +72,14 @@ struct SwipeArbiter {
         return .previous
     }
 
+    /// On iOS 18+, guarded descendants resolve their own handoff through a
+    /// UIKit recognizer. The transcript observer handles ordinary content only.
+    static func outerAction(
+        for translation: CGSize,
+        origin: DragOrigin
+    ) -> Action {
+        guard origin == .ordinaryContent else { return .none }
+        return action(for: translation, origin: origin)
+    }
+
 }

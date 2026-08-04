@@ -92,10 +92,19 @@ private struct HorizontalScrollGestureStateKey: EnvironmentKey {
     static let defaultValue = HorizontalScrollGestureState()
 }
 
+private struct HorizontalScrollActionKey: EnvironmentKey {
+    static let defaultValue: (SwipeArbiter.Action) -> Void = { _ in }
+}
+
 extension EnvironmentValues {
     var horizontalScrollGestureState: HorizontalScrollGestureState {
         get { self[HorizontalScrollGestureStateKey.self] }
         set { self[HorizontalScrollGestureStateKey.self] = newValue }
+    }
+
+    var horizontalScrollAction: (SwipeArbiter.Action) -> Void {
+        get { self[HorizontalScrollActionKey.self] }
+        set { self[HorizontalScrollActionKey.self] = newValue }
     }
 }
 
@@ -127,6 +136,7 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
     let showsIndicators: Bool
 
     @Environment(\.horizontalScrollGestureState) private var gestureState
+    @Environment(\.horizontalScrollAction) private var horizontalScrollAction
     @State private var scrollCoordinateSpaceName = UUID()
     @State private var regionID = UUID()
     @State private var metrics = HorizontalScrollMetrics()
@@ -134,8 +144,9 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
     @State private var regionFrame = CGRect.null
     @State private var touchActive = false
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        ScrollView(.horizontal, showsIndicators: showsIndicators) {
+        let scroller = ScrollView(.horizontal, showsIndicators: showsIndicators) {
             content.background {
                 GeometryReader { proxy in
                     Color.clear.preference(
@@ -174,8 +185,17 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
             regionFrame = newFrame
             publishRegion(metrics: metrics, viewportWidth: viewportWidth, frame: newFrame)
         }
-        .simultaneousGesture(touchDownGesture)
         .onDisappear { gestureState.removeRegion(id: regionID) }
+
+        if #available(iOS 18.0, *) {
+            scroller.gesture(
+                GuardedScrollSwipeGesture(
+                    gestureState: gestureState,
+                    scrollContext: scrollContext,
+                    onAction: horizontalScrollAction))
+        } else {
+            scroller.simultaneousGesture(touchDownGesture)
+        }
     }
 
     private var touchDownGesture: some Gesture {
@@ -215,19 +235,28 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
     private func effectiveViewportWidth(_ measuredWidth: CGFloat) -> CGFloat {
         measuredWidth + HorizontalScrollGestureState.horizontalTouchSlop * 2
     }
+
+    private var scrollContext: SwipeArbiter.ScrollContext {
+        SwipeArbiter.ScrollContext(
+            offset: metrics.offset,
+            contentWidth: metrics.contentWidth,
+            viewportWidth: effectiveViewportWidth(viewportWidth))
+    }
 }
 
-/// UIKit observer used because iOS 26 no longer makes a descendant SwiftUI
-/// gesture simultaneous with an ancestor gesture. SwiftUI installs this
-/// recognizer in its own gesture graph, where the delegate can explicitly
-/// cooperate with nested scroll views.
+/// UIKit observer installed directly on guarded scrollers because iOS 26 no
+/// longer makes their SwiftUI gestures simultaneous with ancestor gestures.
 @available(iOS 18.0, *)
-struct TranscriptSwipeGesture: UIGestureRecognizerRepresentable {
+private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
     let gestureState: HorizontalScrollGestureState
+    let scrollContext: SwipeArbiter.ScrollContext
     let onAction: (SwipeArbiter.Action) -> Void
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator(gestureState: gestureState, onAction: onAction)
+        Coordinator(
+            gestureState: gestureState,
+            scrollContext: scrollContext,
+            onAction: onAction)
     }
 
     func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
@@ -244,7 +273,9 @@ struct TranscriptSwipeGesture: UIGestureRecognizerRepresentable {
         context: Context
     ) {
         context.coordinator.update(
-            gestureState: gestureState, onAction: onAction)
+            gestureState: gestureState,
+            scrollContext: scrollContext,
+            onAction: onAction)
     }
 
     func handleUIGestureRecognizerAction(
@@ -256,22 +287,28 @@ struct TranscriptSwipeGesture: UIGestureRecognizerRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         private var gestureState: HorizontalScrollGestureState
+        private var scrollContext: SwipeArbiter.ScrollContext
         private var onAction: (SwipeArbiter.Action) -> Void
         private var startLocation: CGPoint?
+        private var capturedContext: SwipeArbiter.ScrollContext?
 
         init(
             gestureState: HorizontalScrollGestureState,
+            scrollContext: SwipeArbiter.ScrollContext,
             onAction: @escaping (SwipeArbiter.Action) -> Void
         ) {
             self.gestureState = gestureState
+            self.scrollContext = scrollContext
             self.onAction = onAction
         }
 
         func update(
             gestureState: HorizontalScrollGestureState,
+            scrollContext: SwipeArbiter.ScrollContext,
             onAction: @escaping (SwipeArbiter.Action) -> Void
         ) {
             self.gestureState = gestureState
+            self.scrollContext = scrollContext
             self.onAction = onAction
         }
 
@@ -288,21 +325,24 @@ struct TranscriptSwipeGesture: UIGestureRecognizerRepresentable {
             switch gesture.state {
             case .began:
                 startLocation = location
-                gestureState.beginOuterGesture(at: location)
+                capturedContext = scrollContext
+                gestureState.beginInnerGesture(context: scrollContext)
             case .ended:
-                guard let startLocation else { return }
+                guard let startLocation, let capturedContext else { return }
                 self.startLocation = nil
-                let origin = gestureState.endOuterGesture()
+                self.capturedContext = nil
+                gestureState.endInnerGesture()
                 onAction(
                     SwipeArbiter.action(
                         for: CGSize(
                             width: location.x - startLocation.x,
                             height: location.y - startLocation.y),
-                        origin: origin))
+                        origin: .guardedContent(capturedContext)))
             case .cancelled, .failed:
                 guard startLocation != nil else { return }
                 startLocation = nil
-                _ = gestureState.endOuterGesture()
+                capturedContext = nil
+                gestureState.endInnerGesture()
             default:
                 break
             }
