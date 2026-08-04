@@ -218,43 +218,46 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
 }
 
 /// UIKit observer used because iOS 26 no longer makes a descendant SwiftUI
-/// gesture simultaneous with an ancestor gesture. The recognizer is installed
-/// on the hosting ancestor and explicitly cooperates with nested scroll views.
-struct TranscriptSwipeGestureBridge: UIViewRepresentable {
+/// gesture simultaneous with an ancestor gesture. SwiftUI installs this
+/// recognizer in its own gesture graph, where the delegate can explicitly
+/// cooperate with nested scroll views.
+@available(iOS 18.0, *)
+struct TranscriptSwipeGesture: UIGestureRecognizerRepresentable {
     let gestureState: HorizontalScrollGestureState
     let onAction: (SwipeArbiter.Action) -> Void
 
-    func makeCoordinator() -> Coordinator {
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
         Coordinator(gestureState: gestureState, onAction: onAction)
     }
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        context.coordinator.update(
-            markerView: view, gestureState: gestureState, onAction: onAction)
-        DispatchQueue.main.async { context.coordinator.installIfPossible() }
-        return view
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let gesture = UILongPressGestureRecognizer()
+        gesture.minimumPressDuration = 0
+        gesture.allowableMovement = .greatestFiniteMagnitude
+        gesture.cancelsTouchesInView = false
+        gesture.delegate = context.coordinator
+        return gesture
     }
 
-    func updateUIView(_ view: UIView, context: Context) {
+    func updateUIGestureRecognizer(
+        _ gestureRecognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
         context.coordinator.update(
-            markerView: view, gestureState: gestureState, onAction: onAction)
-        DispatchQueue.main.async { context.coordinator.installIfPossible() }
+            gestureState: gestureState, onAction: onAction)
     }
 
-    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
-        coordinator.uninstall()
+    func handleUIGestureRecognizerAction(
+        _ gestureRecognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
+        context.coordinator.handle(gestureRecognizer)
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        private weak var markerView: UIView?
-        private weak var installedView: UIView?
         private var gestureState: HorizontalScrollGestureState
         private var onAction: (SwipeArbiter.Action) -> Void
-        private var panGesture: UIPanGestureRecognizer?
-        private var tracksCurrentGesture = false
+        private var startLocation: CGPoint?
 
         init(
             gestureState: HorizontalScrollGestureState,
@@ -265,37 +268,11 @@ struct TranscriptSwipeGestureBridge: UIViewRepresentable {
         }
 
         func update(
-            markerView: UIView,
             gestureState: HorizontalScrollGestureState,
             onAction: @escaping (SwipeArbiter.Action) -> Void
         ) {
-            self.markerView = markerView
             self.gestureState = gestureState
             self.onAction = onAction
-        }
-
-        func installIfPossible() {
-            guard let markerView, let target = hostingAncestor(of: markerView) else { return }
-            guard installedView !== target else { return }
-            uninstall()
-            let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-            pan.cancelsTouchesInView = false
-            pan.delegate = self
-            target.addGestureRecognizer(pan)
-            installedView = target
-            panGesture = pan
-        }
-
-        func uninstall() {
-            if let panGesture { installedView?.removeGestureRecognizer(panGesture) }
-            panGesture = nil
-            installedView = nil
-            tracksCurrentGesture = false
-        }
-
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let markerView else { return false }
-            return markerView.bounds.contains(gestureRecognizer.location(in: markerView))
         }
 
         func gestureRecognizer(
@@ -305,36 +282,30 @@ struct TranscriptSwipeGestureBridge: UIViewRepresentable {
             true
         }
 
-        @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-            guard let markerView else { return }
+        func handle(_ gesture: UILongPressGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let location = gesture.location(in: view)
             switch gesture.state {
             case .began:
-                tracksCurrentGesture = true
-                gestureState.beginOuterGesture(at: gesture.location(in: markerView))
+                startLocation = location
+                gestureState.beginOuterGesture(at: location)
             case .ended:
-                guard tracksCurrentGesture else { return }
-                tracksCurrentGesture = false
-                let point = gesture.translation(in: markerView)
+                guard let startLocation else { return }
+                self.startLocation = nil
                 let origin = gestureState.endOuterGesture()
                 onAction(
                     SwipeArbiter.action(
-                        for: CGSize(width: point.x, height: point.y),
+                        for: CGSize(
+                            width: location.x - startLocation.x,
+                            height: location.y - startLocation.y),
                         origin: origin))
             case .cancelled, .failed:
-                guard tracksCurrentGesture else { return }
-                tracksCurrentGesture = false
+                guard startLocation != nil else { return }
+                startLocation = nil
                 _ = gestureState.endOuterGesture()
             default:
                 break
             }
-        }
-
-        private func hostingAncestor(of view: UIView) -> UIView? {
-            var candidate = view.superview
-            while let parent = candidate?.superview, !(parent is UIWindow) {
-                candidate = parent
-            }
-            return candidate
         }
     }
 }

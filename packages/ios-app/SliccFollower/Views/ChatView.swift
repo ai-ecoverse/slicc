@@ -305,12 +305,9 @@ struct ConversationView: View {
                     onInlineSprinkleLick: { _, _ in },
                     scrollPosition: $transcriptPosition
                 )
-                .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
-                .background {
-                    TranscriptSwipeGestureBridge(
-                        gestureState: horizontalScrollGestureState,
-                        onAction: handleTranscriptSwipe)
-                }
+                .transcriptSwipeGesture(
+                    state: horizontalScrollGestureState,
+                    onAction: handleTranscriptSwipe)
                 FrozenSessionBanner()
             } else {
                 liveConversation
@@ -460,12 +457,9 @@ struct ConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
-            .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
-            .background {
-                TranscriptSwipeGestureBridge(
-                    gestureState: horizontalScrollGestureState,
-                    onAction: handleTranscriptSwipe)
-            }
+            .transcriptSwipeGesture(
+                state: horizontalScrollGestureState,
+                onAction: handleTranscriptSwipe)
 
             InputBar(
                 text: $inputText,
@@ -575,12 +569,9 @@ struct FixtureConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
-            .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
-            .background {
-                TranscriptSwipeGestureBridge(
-                    gestureState: horizontalScrollGestureState,
-                    onAction: handleFixtureSwipe)
-            }
+            .transcriptSwipeGesture(
+                state: horizontalScrollGestureState,
+                onAction: handleFixtureSwipe)
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
         .background(palette.canvas)
@@ -610,6 +601,42 @@ struct FixtureConversationView: View {
         case .none:
             break
         }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func transcriptSwipeGesture(
+        state: HorizontalScrollGestureState,
+        onAction: @escaping (SwipeArbiter.Action) -> Void
+    ) -> some View {
+        let transcript = coordinateSpace(name: state.coordinateSpaceName)
+        if #available(iOS 18.0, *) {
+            transcript.gesture(
+                TranscriptSwipeGesture(gestureState: state, onAction: onAction))
+        } else {
+            transcript.simultaneousGesture(
+                arbitratedScoopSwipeGesture(state: state, onAction: onAction))
+        }
+    }
+}
+
+/// iOS 17 fallback; iOS 18+ uses `TranscriptSwipeGesture` so nested scroll
+/// gestures can opt into simultaneous recognition through UIKit's delegate.
+private func arbitratedScoopSwipeGesture(
+    state: HorizontalScrollGestureState,
+    onAction: @escaping (SwipeArbiter.Action) -> Void
+) -> some Gesture {
+    DragGesture(
+        minimumDistance: SwipeArbiter.gestureMinimumDistance,
+        coordinateSpace: .named(state.coordinateSpaceName)
+    )
+    .onChanged { value in
+        state.beginOuterGesture(at: value.startLocation)
+    }
+    .onEnded { value in
+        let origin = state.endOuterGesture()
+        onAction(SwipeArbiter.action(for: value.translation, origin: origin))
     }
 }
 
