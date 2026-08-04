@@ -604,9 +604,9 @@ struct FixtureConversationView: View {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder
-    func transcriptSwipeGesture(
+    fileprivate func transcriptSwipeGesture(
         state: HorizontalScrollGestureState,
         onAction: @escaping (SwipeArbiter.Action) -> Void
     ) -> some View {
