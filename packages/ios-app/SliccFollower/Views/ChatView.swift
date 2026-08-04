@@ -92,6 +92,9 @@ struct ChatView: View {
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
                 }
+                if UITestHooks.scriptCompletedTurn(into: appState) {
+                    return
+                }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
                     return

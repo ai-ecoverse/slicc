@@ -208,6 +208,8 @@ in-memory backend (fixture URLs dial `127.0.0.1:1`, failing hermetically). `UITe
 must not carry a flag that skips the connection path. The failure-state test
 dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
 `Connection Failed` arrives in seconds.
+`-uiTestCompletedTurn YES` feeds `message_start` + `content_done` through the
+real data-channel dispatcher, proving the composer settles without `turn_end`.
 
 - **Put accessibility identifiers on leaves.** SwiftUI pushes one onto a
   container's leaves instead of minting a container, so an identifier on a

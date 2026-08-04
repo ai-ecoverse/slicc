@@ -2,7 +2,7 @@ import XCTest
 
 /// The send-while-streaming affordance: absent when no turn runs, present
 /// (with the "Interrupt & send" long-press menu) while one does. Driven by
-/// the `-uiTestConnectionState streaming` hook — no leader involved.
+/// DEBUG launch hooks — no leader involved.
 final class SteerUITests: XCTestCase {
 
     override func setUp() {
@@ -56,5 +56,23 @@ final class SteerUITests: XCTestCase {
         XCTAssertFalse(
             app.buttons["send-while-streaming"].exists,
             "The streaming send affordance must not exist while idle")
+    }
+
+    func testContentDoneRestoresIdleComposerWithoutTurnEnd() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-joinUrl", "", "-uiTestCompletedTurn", "YES",
+            "-uiTestComposerText", "follow up",
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 60))
+        let idleSend = app.buttons["composer-send"]
+        XCTAssertTrue(
+            idleSend.waitForExistence(timeout: 10),
+            "content_done should restore the idle send control without turn_end")
+        XCTAssertFalse(
+            app.buttons["send-while-streaming"].exists,
+            "A completed turn must not retain the streaming send affordance")
     }
 }

@@ -76,15 +76,15 @@ final class AppStateStreamingTests: XCTestCase {
     func testBackgroundContentDoneDoesNotSettleVisibleTurn() throws {
         let state = AppState()
         state.selectedScoopJid = "cone"
-        try send(.messageStart(messageId: "visible"), scoopJid: "cone", to: state)
-        try send(.messageStart(messageId: "background"), scoopJid: "scoop", to: state)
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try send(.messageStart(messageId: "reply"), scoopJid: "scoop", to: state)
 
         try send(
-            .contentDone(messageId: "background", model: nil, usage: nil),
+            .contentDone(messageId: "reply", model: nil, usage: nil),
             scoopJid: "scoop", to: state)
 
         XCTAssertTrue(state.isStreaming)
-        XCTAssertEqual(state.streamingMessageId, "visible")
+        XCTAssertEqual(state.streamingMessageId, "reply")
     }
 
     @MainActor
