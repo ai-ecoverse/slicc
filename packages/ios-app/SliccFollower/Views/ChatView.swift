@@ -621,15 +621,18 @@ struct ScoopSwitcher: View {
                             systemImage: scoop.jid == appState.selectedScoopJid
                                 ? "checkmark" : "circle")
                     }
+                    .accessibilityLabel(menuTitle(for: scoop))
                     .accessibilityIdentifier("scoop-switch-\(scoop.jid)")
                 }
             } label: {
                 identityLabel
             }
-            .accessibilityLabel("Switch scoop")
+            .accessibilityLabel(selectedAccessibilityLabel)
+            .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
         } else {
             identityLabel
+                .accessibilityLabel(selectedAccessibilityLabel)
                 .accessibilityIdentifier("scoop-switcher")
         }
     }
@@ -639,8 +642,7 @@ struct ScoopSwitcher: View {
     /// pushing the action cluster off the other edge.
     private var identityLabel: some View {
         HStack(spacing: 5) {
-            SliccAgentAvatarView(avatar: selectedAvatar)
-                .accessibilityHidden(true)
+            ScoopStatusAvatar(avatar: selectedAvatar, status: selectedStatus)
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(palette.ink)
@@ -668,13 +670,131 @@ struct ScoopSwitcher: View {
             ?? .init(type: .cone, color: "#D2691E", sideLength: 20)
     }
 
+    private var selectedStatus: ScoopStatus {
+        appState.selectedScoop?.status ?? ScoopStatus(state: nil, fill: nil)
+    }
+
+    private var selectedAccessibilityLabel: String {
+        selectedStatus.accessibilityPhrase(
+            label: appState.selectedScoop?.assistantLabel ?? "SLICC")
+    }
+
     /// The leader's active scoop is marked in the menu too — the dot on the
-    /// closed control only speaks about the one you are looking at.
+    /// closed control only speaks about the one you are looking at. State and
+    /// fullness stay textual because native Menu rows cannot host the ring.
     private func menuTitle(for scoop: ScoopSummary) -> String {
         let kind = scoop.isCone ? "cone" : "scoop"
+        let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
         return scoop.jid == appState.leaderActiveScoopJid
-            ? "\(scoop.assistantLabel) · \(kind) · active"
-            : "\(scoop.assistantLabel) · \(kind)"
+            ? "\(status) · \(kind) · active"
+            : "\(status) · \(kind)"
+    }
+}
+
+/// The closed switcher uses a native circular Gauge around the existing avatar
+/// plus an SF Symbol lifecycle badge. This deliberately adapts, rather than
+/// copies, the web glyph + eyes treatment: a ring preserves the numeric context
+/// reading at nav-bar scale and follows platform conventions, while the badge
+/// keeps lifecycle recognizable without asking color or motion to carry meaning.
+private struct ScoopStatusAvatar: View {
+    let avatar: SliccAgentAvatarGeometry
+    let status: ScoopStatus
+
+    @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+
+    private var reduceMotion: Bool {
+        #if DEBUG
+            systemReduceMotion || UITestHooks.reducesMotion
+        #else
+            systemReduceMotion
+        #endif
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            fullnessTreatment
+            SliccAgentAvatarView(avatar: avatar)
+                .accessibilityHidden(true)
+                .frame(width: 20, height: 20)
+                .position(x: 14, y: 14)
+            lifecycleTreatment
+                .offset(x: 2, y: 2)
+        }
+        .frame(width: 30, height: 30)
+    }
+
+    @ViewBuilder
+    private var fullnessTreatment: some View {
+        if let fullness = status.fullness {
+            Gauge(value: fullness, in: 0...100) {
+                Text("Context fullness")
+            }
+            .gaugeStyle(.accessoryCircularCapacity)
+            .tint(status.isNearLimit ? palette.accent : palette.inkSecondary)
+            .labelsHidden()
+            .frame(width: 28, height: 28)
+            .accessibilityLabel("Context fullness")
+            .accessibilityValue("\(Int(fullness.rounded())) percent")
+            .accessibilityIdentifier(
+                status.isNearLimit ? "scoop-fullness-near-limit" : "scoop-fullness-normal")
+        } else {
+            Circle()
+                .stroke(
+                    palette.inkTertiary,
+                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2, 2])
+                )
+                .frame(width: 28, height: 28)
+                .accessibilityLabel("Context fullness unknown")
+                .accessibilityIdentifier("scoop-fullness-unknown")
+        }
+    }
+
+    @ViewBuilder
+    private var lifecycleTreatment: some View {
+        if status.lifecycle == .working || status.lifecycle == .initializing {
+            TimelineView(
+                .animation(minimumInterval: 1.0 / 12.0, paused: reduceMotion)
+            ) { context in
+                lifecycleBadge
+                    .opacity(reduceMotion ? 1 : pulseOpacity(at: context.date))
+            }
+        } else {
+            lifecycleBadge
+        }
+    }
+
+    private var lifecycleBadge: some View {
+        Image(systemName: lifecycleSymbol)
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(lifecycleColor)
+            .frame(width: 12, height: 12)
+            .background(Circle().fill(palette.surface))
+            .accessibilityLabel("Lifecycle \(status.lifecycle.rawValue)")
+            .accessibilityIdentifier("scoop-lifecycle-\(status.lifecycle.rawValue)")
+    }
+
+    private var lifecycleSymbol: String {
+        switch status.lifecycle {
+        case .working: "bolt.fill"
+        case .broken: "exclamationmark.triangle.fill"
+        case .initializing: "ellipsis"
+        case .idle: "pause.fill"
+        case .unknown: "questionmark"
+        }
+    }
+
+    private var lifecycleColor: Color {
+        switch status.lifecycle {
+        case .working, .initializing: palette.accent
+        case .broken: palette.ink
+        case .idle, .unknown: palette.inkTertiary
+        }
+    }
+
+    private func pulseOpacity(at date: Date) -> Double {
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2)
+        return 0.65 + 0.35 * abs(cos(phase * .pi / 1.2))
     }
 }
 
@@ -684,4 +804,37 @@ struct ScoopSwitcher: View {
     ChatView()
         .preferredColorScheme(.dark)
         .environmentObject(AppState())
+}
+
+#Preview("Scoop status treatments") {
+    ScoopStatusTreatmentPreview()
+        .preferredColorScheme(.dark)
+}
+
+private struct ScoopStatusTreatmentPreview: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(ScoopLifecycle.allCases, id: \.rawValue) { lifecycle in
+                VStack(spacing: 5) {
+                    ScoopStatusAvatar(
+                        avatar: .init(type: .scoop, color: "#FFB6C1", sideLength: 20),
+                        status: previewStatus(for: lifecycle)
+                    )
+                    Text(lifecycle.rawValue)
+                        .font(.caption2)
+                }
+            }
+        }
+        .padding()
+    }
+
+    private func previewStatus(for lifecycle: ScoopLifecycle) -> ScoopStatus {
+        switch lifecycle {
+        case .working: ScoopStatus(state: lifecycle.rawValue, fill: 42)
+        case .broken: ScoopStatus(state: lifecycle.rawValue, fill: 82)
+        case .initializing: ScoopStatus(state: lifecycle.rawValue, fill: 12)
+        case .idle: ScoopStatus(state: lifecycle.rawValue, fill: 0)
+        case .unknown: ScoopStatus(state: nil, fill: nil)
+        }
+    }
 }

@@ -14,6 +14,7 @@ This file covers the iOS follower app in `packages/ios-app/`.
 | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                     | App entry + central `@MainActor AppState`                                                                               |
 | `SliccFollower/Models/SyncProtocol.swift`                                                            | Partial `Codable` mirror of `packages/shared-ts/src/tray-sync-protocol.ts`                                              |
+| `SliccFollower/Models/ScoopStatus.swift`                                                             | View-independent scoop lifecycle and context-fullness presentation model                                                |
 | `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`, `Models/TrayChunkFraming.swift`  | Chat/signaling types and transport chunk reassembly                                                                     |
 | `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor (used by `AppState`)                                                             |
 | `SliccFollower/Sync/TerminalClient.swift`                                                            | Single-flight `exec.*` client for the leader shell, byte output, cancellation, and disconnect handling                  |
@@ -201,19 +202,18 @@ scheme, so `swift-coverage-check.sh --xcodebuild` picks up both. No test needs a
 leader: the `-uiTestFixtureRoute YES` launch argument reaches the leaderless
 **UI Fixture** route (`FixtureConversationView`) without a tap, and
 `-uiTestSessionsFixture/Empty YES` seed the iCloud sessions list from an
-in-memory backend (fixture URLs dial `127.0.0.1:1`, failing hermetically). `UITestHooks`
-(`App/UITestHooks.swift`) reads it and is `#if DEBUG` only — a shipped binary
+in-memory backend. `-uiTestScoopStatusFixture` covers every lifecycle plus
+low/near-limit/absent fill; `-uiTestReduceMotion` keeps the fullness cue static.
+`UITestHooks` (`App/UITestHooks.swift`) reads them and is `#if DEBUG` only — a shipped binary
 must not carry a flag that skips the connection path. The failure-state test
 dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
 `Connection Failed` arrives in seconds.
 `-uiTestCompletedTurn YES` feeds `message_start` + `content_done` + `status:
 ready` through the real dispatcher, proving settlement without `turn_end`.
 
-- **Put accessibility identifiers on leaves.** SwiftUI pushes one onto a
-  container's leaves instead of minting a container, so an identifier on a
-  `VStack` yields tagged leaves and no `otherElements` match — and
-  `.accessibilityElement(children: .contain)` suppresses that propagation rather
-  than fixing it. Every leaf in a message row carries `message-<id>`.
+- **Put accessibility identifiers on leaves.** SwiftUI propagates a container id
+  to leaves; `.accessibilityElement(children: .contain)` suppresses rather than
+  fixes that behavior. Every message-row leaf carries `message-<id>`.
 - **Row ids alone are blind.** Because every leaf carries `message-<id>`, a row
   still matches when its specialized renderer is gone. A new fixture variant
   also needs a `variantMarkers` string only that renderer can emit.

@@ -185,6 +185,13 @@ class AppState: ObservableObject {
         if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
             joinUrlHistory = history
         }
+        #if DEBUG
+            if let fixtureScoops = UITestHooks.scoopStatusFixture() {
+                scoops = fixtureScoops
+                selectedScoopJid = fixtureScoops.first?.jid
+                leaderActiveScoopJid = fixtureScoops.first?.jid
+            }
+        #endif
     }
 
     // MARK: - Private Networking / Sync

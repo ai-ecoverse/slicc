@@ -129,10 +129,13 @@
 		E8F341988A6006B0132BFD61 /* ChatPresentationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072D67E727EF4751A1F46665 /* ChatPresentationStateTests.swift */; };
 		EDCEBDF62330D1775F1B4EE2 /* LinkHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB9ADA61005F3F96BE8CDE2 /* LinkHeader.swift */; };
 		F13E566C40F05F6F3ED297BD /* SliccAgentAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80C9AA05D0F49F7E284BEC5 /* SliccAgentAvatarView.swift */; };
+		F266887FC83BB1D23A4D0441 /* ScoopStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD1AA2BFCF961C6F3372B78 /* ScoopStatus.swift */; };
+		F2C8373CBF5775D4189C7B82 /* ScoopStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E209029F63F2427997E161 /* ScoopStatusTests.swift */; };
 		F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */; };
 		F5B6044724F8133C934A5143 /* LickEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF41895CF5F76A1CD2B671E /* LickEvent.swift */; };
 		F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */; };
 		FA28410D2D764BBA8EF08E0E /* ShellLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B99AEB1D5213A4F05B3D1D0 /* ShellLayoutTests.swift */; };
+		F95870EFC1D01FEEBA2FA80F /* ScoopStatusUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7B6364A38EB8C2C30749907 /* ScoopStatusUITests.swift */; };
 		FA619188A03965E77BE27A09 /* FilesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83613696C70A0EF218A19B6D /* FilesUITests.swift */; };
 		FAC7347D5CB648E85CEACBCF /* TerminalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2510ED24DEED53DF7825A362 /* TerminalUITests.swift */; };
 		FBC5D9F3A8263FCAE3C6C6C5 /* NewSessionMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A16A253ACC35EEB12798224E /* NewSessionMessageTests.swift */; };
@@ -167,6 +170,7 @@
 		0A51DB1BA99DAE89F21CF736 /* SVGPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGPath.swift; sourceTree = "<group>"; };
 		11B186EDFDE184DC8B3215C4 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		12FDDE8F74ACEEEACDA73346 /* FsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FsClient.swift; sourceTree = "<group>"; };
+		13E209029F63F2427997E161 /* ScoopStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoopStatusTests.swift; sourceTree = "<group>"; };
 		1572105F0B5819E4CC07BD84 /* ThemeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEngine.swift; sourceTree = "<group>"; };
 		18BF55CBA000161C54E4770C /* CdpPreviewClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpPreviewClient.swift; sourceTree = "<group>"; };
 		1F2EECDCB4AF899D3071D13C /* InlineSprinkleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineSprinkleView.swift; sourceTree = "<group>"; };
@@ -248,6 +252,7 @@
 		B3BE6D707649AD21C5912013 /* ThemePalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePalette.swift; sourceTree = "<group>"; };
 		B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		B6BD423A10DF2C2C310F3689 /* RemoteTabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTabUITests.swift; sourceTree = "<group>"; };
+		B7B6364A38EB8C2C30749907 /* ScoopStatusUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoopStatusUITests.swift; sourceTree = "<group>"; };
 		BBB646EF0D0006D1A43F527D /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		BBE0A7D88487F7712E451646 /* CDPBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDPBridge.swift; sourceTree = "<group>"; };
 		BDA931BF1BE121985E2FB3EE /* Keepalive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keepalive.swift; sourceTree = "<group>"; };
@@ -286,6 +291,7 @@
 		F9555BBF8AC72C74630432D1 /* theme-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "theme-vectors.json"; sourceTree = "<group>"; };
 		FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccAgentAvatarTilt.swift; sourceTree = "<group>"; };
 		FC17E730D500B3482A2952ED /* AppStateStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateStreamingTests.swift; sourceTree = "<group>"; };
+		FAD1AA2BFCF961C6F3372B78 /* ScoopStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoopStatus.swift; sourceTree = "<group>"; };
 		FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRouteUITests.swift; sourceTree = "<group>"; };
 		FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tray-sync-corpus.json"; sourceTree = "<group>"; };
 		FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateDelivery.swift; sourceTree = "<group>"; };
@@ -330,6 +336,7 @@
 				A16A253ACC35EEB12798224E /* NewSessionMessageTests.swift */,
 				8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */,
 				8B99AEB1D5213A4F05B3D1D0 /* ShellLayoutTests.swift */,
+				13E209029F63F2427997E161 /* ScoopStatusTests.swift */,
 				5A30A613A67EAAAA1298638B /* SliccAgentAvatarGeometryTests.swift */,
 				066BAF2F283227600FB92506 /* SteerMessageTests.swift */,
 				695356CA7F082C3287CFB228 /* SVGPathTests.swift */,
@@ -386,6 +393,7 @@
 				2D75B552EEAA18730A8843B9 /* MarkdownBlock.swift */,
 				9A73EE3E38934A8DE13AF2BD /* MemoryStore.swift */,
 				5F779D2634D4AED6D1AEDA07 /* PttController.swift */,
+				FAD1AA2BFCF961C6F3372B78 /* ScoopStatus.swift */,
 				9EF40B2C78468173C75F958F /* SliccAgentAvatarGeometry.swift */,
 				FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */,
 				0A51DB1BA99DAE89F21CF736 /* SVGPath.swift */,
@@ -439,6 +447,7 @@
 				E7EF3911627A88E5691B3949 /* NewSessionUITests.swift */,
 				075FA82F3967B4E37A76C59A /* PttUITests.swift */,
 				B6BD423A10DF2C2C310F3689 /* RemoteTabUITests.swift */,
+				B7B6364A38EB8C2C30749907 /* ScoopStatusUITests.swift */,
 				26D6B6B896CB48304A39DAB8 /* SteerUITests.swift */,
 				2510ED24DEED53DF7825A362 /* TerminalUITests.swift */,
 			);
@@ -743,6 +752,7 @@
 				68FA70C9EC1A7C1137CC277D /* PttOverlayView.swift in Sources */,
 				1C51604116AA20BE57F33B46 /* RemoteTabCard.swift in Sources */,
 				1B1D78732EE937BE2DBF2C05 /* SVGPath.swift in Sources */,
+				F266887FC83BB1D23A4D0441 /* ScoopStatus.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
 				E6AE9D960C36AC71ED33D18E /* ShellLayout.swift in Sources */,
 				47960F08DC8B7DD9E31F586B /* SliccAgentAvatarGeometry.swift in Sources */,
@@ -790,6 +800,7 @@
 				C5E734A68251BBE47EBE506D /* NewSessionUITests.swift in Sources */,
 				41FD9C8701A419C994CF2704 /* PttUITests.swift in Sources */,
 				726B3A4A70B54A313E5BF3A1 /* RemoteTabUITests.swift in Sources */,
+				F95870EFC1D01FEEBA2FA80F /* ScoopStatusUITests.swift in Sources */,
 				D3441201E520337FA883076A /* SteerUITests.swift in Sources */,
 				FAC7347D5CB648E85CEACBCF /* TerminalUITests.swift in Sources */,
 			);
@@ -819,6 +830,7 @@
 				9C28D445499995ADA861D75F /* PttControllerTests.swift in Sources */,
 				7782C370E6882C97EB6FC236 /* SVGPathTests.swift in Sources */,
 				FA28410D2D764BBA8EF08E0E /* ShellLayoutTests.swift in Sources */,
+				F2C8373CBF5775D4189C7B82 /* ScoopStatusTests.swift in Sources */,
 				941662107E886C9BA55F2658 /* SliccAgentAvatarGeometryTests.swift in Sources */,
 				9ECC362CC8EBA3629542A6E7 /* SteerMessageTests.swift in Sources */,
 				F908DA74A70E1C7F16EC6AD8 /* SyncProtocolCorpusTests.swift in Sources */,

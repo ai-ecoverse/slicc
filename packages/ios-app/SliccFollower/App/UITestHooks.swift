@@ -28,6 +28,42 @@ import UIKit
             UserDefaults.standard.string(forKey: "uiTestAvatarFixture")
         }
 
+        /// Seed the scoop switcher with every lifecycle treatment plus low,
+        /// near-limit, and fully absent status values. The fixture is consumed
+        /// by `AppState` before the first view renders, so no leader is needed.
+        static func scoopStatusFixture() -> [ScoopSummary]? {
+            guard UserDefaults.standard.bool(forKey: "uiTestScoopStatusFixture") else {
+                return nil
+            }
+            return [
+                scoop(jid: "fixture-working", label: "Working Scoop", state: "working", fill: 64),
+                scoop(jid: "fixture-broken", label: "Broken Scoop", state: "broken", fill: 82),
+                scoop(
+                    jid: "fixture-initializing", label: "Initializing Scoop",
+                    state: "initializing", fill: 12),
+                scoop(jid: "fixture-idle", label: "Idle Scoop", state: "idle", fill: 0),
+                scoop(
+                    jid: "fixture-near-limit", label: "Near Limit Scoop", state: "idle",
+                    fill: 95),
+                scoop(jid: "fixture-low-fill", label: "Low Fill Scoop", state: "idle", fill: 5),
+                scoop(jid: "fixture-unknown", label: "Unknown Scoop", state: nil, fill: nil),
+            ]
+        }
+
+        /// Deterministically expose the system Reduce Motion environment to UI
+        /// tests without changing a shared simulator's persistent settings.
+        static var reducesMotion: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestReduceMotion")
+        }
+
+        private static func scoop(
+            jid: String, label: String, state: String?, fill: Double?
+        ) -> ScoopSummary {
+            ScoopSummary(
+                jid: jid, name: jid, folder: "/scoops/\(jid)", isCone: false,
+                assistantLabel: label, trigger: nil, state: state, fill: fill)
+        }
+
         /// Force the connection banner into a given state. The stalled and
         /// gave-up states are otherwise only reachable by starving a real
         /// leader of pings or exhausting a real reconnect budget, neither of
