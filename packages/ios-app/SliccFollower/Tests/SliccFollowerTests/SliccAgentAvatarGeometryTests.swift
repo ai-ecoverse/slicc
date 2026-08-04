@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 @MainActor
 private final class ManuallyEmittingAvatarTiltSource: SliccAgentAvatarTiltSource {

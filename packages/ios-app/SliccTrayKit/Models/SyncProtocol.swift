@@ -177,27 +177,46 @@ public struct SprinkleSummary: Codable, Identifiable, Hashable {
 /// Thinking levels accepted by the leader's per-scoop configuration. The UI's
 /// `max` choice is represented on the wire as `.xhigh` plus
 /// `effortOverride: "max"`, matching the browser follower.
-enum TrayThinkingLevel: String, Codable, CaseIterable {
+public enum TrayThinkingLevel: String, Codable, CaseIterable {
     case off, minimal, low, medium, high, xhigh
 }
 
 /// Credential-free model metadata advertised by the leader. Provider account
 /// identity, keys, and tokens are deliberately absent from this wire shape.
-struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
-    let providerName: String
-    let modelId: String
-    let modelName: String
-    let reasoning: Bool
+public struct TrayModelCatalogEntry: Codable, Identifiable, Hashable {
+    public let providerName: String
+    public let modelId: String
+    public let modelName: String
+    public let reasoning: Bool
 
-    var id: String { modelId }
+    public var id: String { modelId }
+
+    public init(providerName: String, modelId: String, modelName: String, reasoning: Bool) {
+        self.providerName = providerName
+        self.modelId = modelId
+        self.modelName = modelName
+        self.reasoning = reasoning
+    }
 }
 
 /// The global model selection plus thinking configuration for one scoop.
-struct TrayModelSelectionState: Codable, Equatable {
-    let activeModelId: String
-    let scoopJid: String
-    let thinkingLevel: TrayThinkingLevel?
-    let effortOverride: String?
+public struct TrayModelSelectionState: Codable, Equatable {
+    public let activeModelId: String
+    public let scoopJid: String
+    public let thinkingLevel: TrayThinkingLevel?
+    public let effortOverride: String?
+
+    public init(
+        activeModelId: String,
+        scoopJid: String,
+        thinkingLevel: TrayThinkingLevel?,
+        effortOverride: String?
+    ) {
+        self.activeModelId = activeModelId
+        self.scoopJid = scoopJid
+        self.thinkingLevel = thinkingLevel
+        self.effortOverride = effortOverride
+    }
 }
 
 // MARK: - TrayTargetEntry / RemoteTargetInfo

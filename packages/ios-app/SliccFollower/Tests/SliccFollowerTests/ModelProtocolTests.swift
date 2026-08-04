@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 final class ModelProtocolTests: XCTestCase {
     func testCatalogCarriesOnlyCredentialFreeMetadata() throws {
