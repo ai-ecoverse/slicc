@@ -276,6 +276,7 @@ struct ConversationView: View {
     @Binding var transcriptPosition: ScrollPosition
     @ObservedObject var ptt: PttController
     @State private var showNewSessionDialog = false
+    @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
     /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
     /// reachable edge.
     @AppStorage("leftHandedDock") private var leftHandedDock = false
@@ -304,12 +305,16 @@ struct ConversationView: View {
                     onInlineSprinkleLick: { _, _ in },
                     scrollPosition: $transcriptPosition
                 )
-                .simultaneousGesture(frozenDismissGesture)
+                .transcriptSwipeGesture(
+                    state: horizontalScrollGestureState,
+                    onAction: handleTranscriptSwipe)
                 FrozenSessionBanner()
             } else {
                 liveConversation
             }
         }
+        .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleTranscriptSwipe)
         .background(palette.canvas)
         // The live session identifies itself through the compact switcher in
         // the corner, not through a nav title — two copies of the same scoop
@@ -453,9 +458,9 @@ struct ConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
-            // simultaneousGesture so the inner ScrollView keeps vertical scrolling;
-            // we only react to mostly-horizontal flicks (filtered in onEnded).
-            .simultaneousGesture(swipeGesture)
+            .transcriptSwipeGesture(
+                state: horizontalScrollGestureState,
+                onAction: handleTranscriptSwipe)
 
             InputBar(
                 text: $inputText,
@@ -484,36 +489,19 @@ struct ConversationView: View {
         }
     }
 
-    /// Right swipe anywhere on a frozen transcript dismisses back to live —
-    /// the same filter as the scoop swipe (mostly-horizontal flicks only) so
-    /// vertical scrolling stays untouched.
-    private var frozenDismissGesture: some Gesture {
-        DragGesture(minimumDistance: 40, coordinateSpace: .local)
-            .onEnded { value in
-                let horizontal = value.translation.width
-                let vertical = value.translation.height
-                guard abs(horizontal) > abs(vertical) * 1.5 else { return }
-                if horizontal > 60 {
-                    appState.closeFrozenSession()
-                }
-            }
-    }
-
-    /// Horizontal drag gesture that routes to AppState's swipe handlers.
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 40, coordinateSpace: .local)
-            .onEnded { value in
-                let horizontal = value.translation.width
-                let vertical = value.translation.height
-                guard abs(horizontal) > abs(vertical) * 1.5 else { return }
-                if horizontal < -60 {
-                    // Swipe left → next scoop
-                    appState.swipeToNextScoop()
-                } else if horizontal > 60 {
-                    // Swipe right → previous scoop (cone fallback)
-                    appState.swipeToPreviousScoop()
-                }
-            }
+    private func handleTranscriptSwipe(_ action: SwipeArbiter.Action) {
+        if appState.openFrozen != nil {
+            if action == .previous { appState.closeFrozenSession() }
+            return
+        }
+        switch action {
+        case .next:
+            appState.swipeToNextScoop()
+        case .previous:
+            appState.swipeToPreviousScoop()
+        case .none:
+            break
+        }
     }
 }
 
@@ -528,6 +516,8 @@ struct FixtureConversationView: View {
     @Binding var transcriptPosition: ScrollPosition
     @State private var messages: [ChatMessage] = ChatFixture.makeMessages()
     @State private var lastLick: String?
+    @State private var selectedFixtureScoop = 1
+    @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
     private static let log = Logger(subsystem: "com.slicc.follower", category: "Fixture")
 
     var body: some View {
@@ -542,15 +532,23 @@ struct FixtureConversationView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 } else {
-                    Text("UI Fixture — synthetic session")
-                        .font(.caption)
-                        .foregroundStyle(palette.ink.opacity(0.7))
-                        .accessibilityIdentifier("fixture-header")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("UI Fixture — synthetic session")
+                            .font(.caption)
+                            .foregroundStyle(palette.ink.opacity(0.7))
+                            .accessibilityIdentifier("fixture-header")
+                        Text("Fixture scoop \(selectedFixtureScoop)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(palette.ink.opacity(0.55))
+                            .accessibilityIdentifier("fixture-scoop-selection")
+                            .accessibilityValue(horizontalScrollGestureState.swipeDiagnostic)
+                    }
                 }
                 Spacer()
                 Button("Reload") {
                     messages = ChatFixture.makeMessages()
                     lastLick = nil
+                    selectedFixtureScoop = 1
                 }
                 .font(.caption)
                 .buttonStyle(.bordered)
@@ -573,7 +571,12 @@ struct FixtureConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
+            .transcriptSwipeGesture(
+                state: horizontalScrollGestureState,
+                onAction: handleFixtureSwipe)
         }
+        .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleFixtureSwipe)
         .background(palette.canvas)
         .navigationTitle("UI Fixture")
         .navigationBarTitleDisplayMode(.inline)
@@ -590,6 +593,52 @@ struct FixtureConversationView: View {
         }()
         if let target { return "\(action) (→\(target))" }
         return action
+    }
+
+    private func handleFixtureSwipe(_ action: SwipeArbiter.Action) {
+        switch action {
+        case .next:
+            selectedFixtureScoop = min(selectedFixtureScoop + 1, 3)
+        case .previous:
+            selectedFixtureScoop = max(selectedFixtureScoop - 1, 1)
+        case .none:
+            break
+        }
+    }
+}
+
+extension View {
+    @ViewBuilder
+    fileprivate func transcriptSwipeGesture(
+        state: HorizontalScrollGestureState,
+        onAction: @escaping (SwipeArbiter.Action) -> Void
+    ) -> some View {
+        coordinateSpace(name: state.coordinateSpaceName)
+            .simultaneousGesture(
+                arbitratedScoopSwipeGesture(state: state, onAction: onAction))
+    }
+}
+
+/// Parent observer for ordinary transcript content. On iOS 18+, guarded
+/// descendants resolve their own handoff through UIKit's delegate.
+private func arbitratedScoopSwipeGesture(
+    state: HorizontalScrollGestureState,
+    onAction: @escaping (SwipeArbiter.Action) -> Void
+) -> some Gesture {
+    DragGesture(
+        minimumDistance: SwipeArbiter.gestureMinimumDistance,
+        coordinateSpace: .named(state.coordinateSpaceName)
+    )
+    .onChanged { value in
+        state.beginOuterGesture(at: value.startLocation)
+    }
+    .onEnded { value in
+        let origin = state.endOuterGesture()
+        if #available(iOS 18.0, *) {
+            onAction(SwipeArbiter.outerAction(for: value.translation, origin: origin))
+        } else {
+            onAction(SwipeArbiter.action(for: value.translation, origin: origin))
+        }
     }
 }
 

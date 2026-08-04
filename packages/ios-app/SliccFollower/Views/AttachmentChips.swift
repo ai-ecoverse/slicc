@@ -23,15 +23,14 @@ struct AttachmentChips: View {
     var body: some View {
         // `flex-wrap: wrap` on the web. A horizontal scroller is the closest
         // native equivalent that never truncates a long attachment list.
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                ForEach(attachments) { attachment in
-                    chip(attachment)
-                }
+        HStack(spacing: 6) {
+            Spacer(minLength: 0)
+            ForEach(attachments) { attachment in
+                chip(attachment)
             }
-            .padding(.horizontal, 4)
         }
+        .padding(.horizontal, 4)
+        .horizontalScrollGuard(showsIndicators: false)
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 

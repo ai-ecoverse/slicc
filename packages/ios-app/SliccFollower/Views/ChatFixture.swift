@@ -78,9 +78,7 @@ enum ChatFixture {
                     A fenced code block:
 
                     ```swift
-                    func loadFixture() -> [ChatMessage] {
-                        return ChatFixture.makeMessages()
-                    }
+                    let SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER = ChatFixture.makeMessages()
                     ```
 
                     > Blockquotes should feel quieter than regular text.

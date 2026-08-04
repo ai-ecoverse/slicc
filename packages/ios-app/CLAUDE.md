@@ -55,6 +55,22 @@ Model TS follower features on `AppState`:
 - `hello` sends `exec: false` + device `motd`
 - Multi-scoop buffers, model/thinking controls, agent events
 
+### Transcript swipe arbitration
+
+Nested horizontal transcript content owns a drag while it can still scroll in
+that direction; scoop navigation or frozen dismissal takes over only at the edge
+the drag pulls away from (right at leading, left at trailing). Freeze edge state
+at drag start. Capture must tolerate either inner/outer callback order, and an
+unknown context in a guarded region fails closed. Edge math uses the effective
+viewport, including both 8pt expansions from negative horizontal padding.
+On iOS 18+, content inside each guarded scroller uses
+`UIGestureRecognizerRepresentable` to resolve its own handoff; iOS 26 no longer
+makes a descendant SwiftUI gesture simultaneous with an ancestor gesture. The
+recognizer snapshots live backing-`UIScrollView` metrics at touch-down. The
+parent handles ordinary content and iOS 17 keeps the SwiftUI geometry path.
+Ordinary transcript navigation and vertical scrolling stay unchanged. Because
+the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
+
 ### Licks
 
 `sprinkle.lick` is its own message (`sprinkle` is not `FORWARDABLE_TO_LEADER`). `LickEvent` mirrors only `navigate` and `discovery`. `navigate` handoffs come from `WKNavigationResponse` Link headers (main frame only).
