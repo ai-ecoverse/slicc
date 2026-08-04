@@ -3,6 +3,26 @@ import XCTest
 @testable import SliccFollower
 
 @MainActor
+private final class ManuallyEmittingAvatarTiltSource: SliccAgentAvatarTiltSource {
+    var isDeviceMotionAvailable = true
+    private var handler: (@MainActor (SliccAgentAvatarAttitude) -> Void)?
+
+    func startDeviceMotionUpdates(
+        _ handler: @escaping @MainActor (SliccAgentAvatarAttitude) -> Void
+    ) {
+        self.handler = handler
+    }
+
+    func stopDeviceMotionUpdates() {
+        handler = nil
+    }
+
+    func emit(_ attitude: SliccAgentAvatarAttitude) {
+        handler?(attitude)
+    }
+}
+
+@MainActor
 final class SliccAgentAvatarGeometryTests: XCTestCase {
     private let accuracy = 0.000_001
 
@@ -58,20 +78,43 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.sideLength, 0)
     }
 
-    func testScoopSummaryMapsTypeFillEyesAndWebDefaultColors() {
+    func testScoopSummaryMapsTypeFillAndBrowserPaletteColors() {
         let cone = scoopSummary(isCone: true, fill: 42).avatarGeometry(sideLength: 22)
-        let scoop = scoopSummary(isCone: false, fill: 82).avatarGeometry(sideLength: 24)
+        let reviewer = scoopSummary(isCone: false, name: "reviewer", fill: 82).avatarGeometry(
+            sideLength: 24)
+        let coder = scoopSummary(isCone: false, name: "coder", fill: 64).avatarGeometry()
+        let rocket = scoopSummary(isCone: false, name: "🚀", fill: 12).avatarGeometry()
+        let pileOfPoo = scoopSummary(isCone: false, name: "💩", fill: 12).avatarGeometry()
 
         XCTAssertEqual(cone.type, .cone)
-        XCTAssertEqual(cone.color, "#D2691E")
+        XCTAssertEqual(cone.color, "#b07823")
         XCTAssertEqual(cone.eyes, .open)
         XCTAssertEqual(cone.fill, 42)
         XCTAssertEqual(cone.sideLength, 22)
-        XCTAssertEqual(scoop.type, .scoop)
-        XCTAssertEqual(scoop.color, "#FFB6C1")
-        XCTAssertEqual(scoop.eyes, .open)
-        XCTAssertEqual(scoop.fill, 82)
-        XCTAssertEqual(scoop.sideLength, 24)
+        XCTAssertEqual(reviewer.type, .scoop)
+        XCTAssertEqual(reviewer.color, "#ef4444")
+        XCTAssertEqual(reviewer.fill, 82)
+        XCTAssertEqual(reviewer.sideLength, 24)
+        XCTAssertEqual(coder.color, "#10b981")
+        XCTAssertEqual(rocket.color, "#8b5cf6")
+        XCTAssertEqual(pileOfPoo.color, "#8b5cf6")
+        XCTAssertNotEqual(reviewer.color, coder.color)
+    }
+
+    func testScoopSummaryMapsEveryLifecycleState() {
+        let cases: [(String?, SliccAgentAvatarGeometry.EyeState, Bool)] = [
+            (nil, .open, false),
+            ("idle", .open, false),
+            ("working", .open, true),
+            ("broken", .dead, false),
+            ("initializing", .none, false),
+        ]
+
+        for (state, eyes, blink) in cases {
+            let geometry = scoopSummary(isCone: false, state: state, fill: 50).avatarGeometry()
+            XCTAssertEqual(geometry.eyes, eyes, "Unexpected eyes for state \(state ?? "absent")")
+            XCTAssertEqual(geometry.blink, blink, "Unexpected blink for state \(state ?? "absent")")
+        }
     }
 
     func testScoopSummaryNilFillMapsToZero() {
@@ -98,13 +141,32 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
             hypot(offset.x, offset.y), tiltGeometry.maxPupilTravel, accuracy: accuracy)
     }
 
-    func testTiltDirectionSignsMatchScreenCoordinates() {
+    func testPortraitTiltOutputPreservesScreenCoordinateMapping() {
         let offset = tiltMapping.pupilOffset(
             for: .init(roll: 0.1, pitch: 0.2), geometry: tiltGeometry,
             reduceMotion: false, isDeviceMotionAvailable: true)
+        let scale = tiltGeometry.maxPupilTravel / SliccAgentAvatarTiltMapping.defaultFullTravelTilt
 
-        XCTAssertGreaterThan(offset.x, 0)
-        XCTAssertLessThan(offset.y, 0)
+        XCTAssertEqual(offset.x, 0.1 * scale, accuracy: accuracy)
+        XCTAssertEqual(offset.y, -0.2 * scale, accuracy: accuracy)
+    }
+
+    func testLandscapeOrientationsSwapAxesWithOppositeSigns() {
+        let attitude = SliccAgentAvatarAttitude(roll: 0.1, pitch: 0.2)
+        let portrait = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .portrait)
+        let landscapeLeft = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .landscapeLeft)
+        let landscapeRight = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .landscapeRight)
+
+        XCTAssertEqual(landscapeLeft.x, portrait.y, accuracy: accuracy)
+        XCTAssertEqual(landscapeLeft.y, -portrait.x, accuracy: accuracy)
+        XCTAssertEqual(landscapeRight.x, -portrait.y, accuracy: accuracy)
+        XCTAssertEqual(landscapeRight.y, portrait.x, accuracy: accuracy)
     }
 
     func testReducedMotionAndUnavailableMotionCenterPupils() {
@@ -142,6 +204,39 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         controller.update(geometry: tiltGeometry, motionDisabled: false)
 
         XCTAssertEqual(source.startCallCount, 1)
+    }
+
+    func testTiltControllerReadsInjectedOrientationForEveryMotionSample() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var orientation = SliccAgentAvatarInterfaceOrientation.portrait
+        var orientationReadCount = 0
+        let controller = SliccAgentAvatarTiltController(
+            source: source,
+            interfaceOrientation: {
+                orientationReadCount += 1
+                return orientation
+            })
+        let attitude = SliccAgentAvatarAttitude(roll: 0.1, pitch: 0.2)
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+
+        source.emit(attitude)
+        let portraitTarget = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .portrait)
+        let portraitOffset = tiltMapping.smoothedOffset(
+            from: .init(x: 0, y: 0), toward: portraitTarget)
+        XCTAssertEqual(controller.pupilOffset, portraitOffset)
+        XCTAssertEqual(orientationReadCount, 1)
+
+        orientation = .landscapeRight
+        source.emit(attitude)
+        let landscapeTarget = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .landscapeRight)
+        let landscapeOffset = tiltMapping.smoothedOffset(
+            from: portraitOffset, toward: landscapeTarget)
+        XCTAssertEqual(controller.pupilOffset, landscapeOffset)
+        XCTAssertEqual(orientationReadCount, 2)
     }
 
     func testTiltControllerMotionDisabledStopsAndCenters() {
@@ -201,11 +296,14 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         .init()
     }
 
-    private func scoopSummary(isCone: Bool, fill: Double?) -> ScoopSummary {
-        .init(
-            jid: isCone ? "cone" : "reviewer", name: isCone ? "sliccy" : "reviewer",
-            folder: isCone ? "/workspace" : "/scoops/reviewer", isCone: isCone,
-            assistantLabel: isCone ? "Sliccy" : "Reviewer", trigger: nil, state: nil,
+    private func scoopSummary(
+        isCone: Bool, name: String? = nil, state: String? = nil, fill: Double?
+    ) -> ScoopSummary {
+        let scoopName = name ?? (isCone ? "sliccy" : "reviewer")
+        return .init(
+            jid: isCone ? "cone" : scoopName, name: scoopName,
+            folder: isCone ? "/workspace" : "/scoops/\(scoopName)", isCone: isCone,
+            assistantLabel: isCone ? "Sliccy" : "Reviewer", trigger: nil, state: state,
             fill: fill)
     }
 }

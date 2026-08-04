@@ -97,9 +97,30 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
 extension ScoopSummary {
     func avatarGeometry(sideLength: Double = 26) -> SliccAgentAvatarGeometry {
         let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
-        // Mirrors DEFAULT_COLOR in slicc-agent-avatar.ts; ScoopSummary carries no color.
-        let color = isCone ? "#D2691E" : "#FFB6C1"
+        let state = state ?? "idle"
+        let eyes: SliccAgentAvatarGeometry.EyeState
+        switch state {
+        case "broken": eyes = .dead
+        case "initializing": eyes = .none
+        default: eyes = .open
+        }
         return .init(
-            type: type, color: color, eyes: .open, fill: fill ?? 0, sideLength: sideLength)
+            type: type, color: avatarColor, eyes: eyes, fill: fill ?? 0,
+            blink: state == "working", sideLength: sideLength)
+    }
+
+    /// Mirrors `scoopColor`: JS iterates scalars, while `charCodeAt(0)` deliberately
+    /// hashes only each scalar's first UTF-16 unit (dropping an astral low surrogate).
+    private var avatarColor: String {
+        if isCone { return "#b07823" }
+        let palette = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"]
+        let hash = name.unicodeScalars.reduce(UInt32.zero) { hash, scalar in
+            let firstCodeUnit: UInt32 =
+                scalar.value <= 0xFFFF
+                ? scalar.value
+                : 0xD800 + ((scalar.value - 0x10000) >> 10)
+            return hash &* 31 &+ firstCodeUnit
+        }
+        return palette[Int(hash % UInt32(palette.count))]
     }
 }

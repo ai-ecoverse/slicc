@@ -153,11 +153,12 @@ output are unsupported.
 
 `SliccAgentAvatarView` follows `webcomponents/src/switcher/slicc-agent-avatar.ts`;
 `Models/SliccAgentAvatarGeometry.swift` is its parity contract. `ScoopSwitcher`
-maps the selected `ScoopSummary` to web defaults and renders a 20pt nav-bar avatar;
+maps the selected `ScoopSummary` like `toFollowerSwitcherScoops` into a 20pt avatar;
 menu rows stay textual because custom shapes do not render there. The decorative
 avatar is accessibility-hidden beside its label. `Models/SliccAgentAvatarTilt.swift`
-seams CoreMotion; disappearance, reduce-motion, unavailable hardware, and closed
-eyes stop updates and center pupils. `-uiTestAvatarFixture` renders screenshots.
+seams CoreMotion with orientation-aware screen axes; disappearance, reduce-motion,
+unavailable hardware, and closed eyes stop updates and center pupils.
+`-uiTestAvatarFixture` renders screenshots.
 
 ## Build
 
