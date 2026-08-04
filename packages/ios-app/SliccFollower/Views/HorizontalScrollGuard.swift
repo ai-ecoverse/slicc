@@ -147,15 +147,15 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         let scroller = ScrollView(.horizontal, showsIndicators: showsIndicators) {
-            content.background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: HorizontalScrollMetricsKey.self,
-                        value: HorizontalScrollMetrics(
-                            contentWidth: proxy.size.width,
-                            offset: -proxy.frame(in: .named(scrollCoordinateSpaceName)).minX
-                        ))
-                }
+            if #available(iOS 18.0, *) {
+                measuredContent(content)
+                    .gesture(
+                        GuardedScrollSwipeGesture(
+                            gestureState: gestureState,
+                            scrollContext: scrollContext,
+                            onAction: horizontalScrollAction))
+            } else {
+                measuredContent(content)
             }
         }
         .coordinateSpace(name: scrollCoordinateSpaceName)
@@ -188,13 +188,22 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
         .onDisappear { gestureState.removeRegion(id: regionID) }
 
         if #available(iOS 18.0, *) {
-            scroller.gesture(
-                GuardedScrollSwipeGesture(
-                    gestureState: gestureState,
-                    scrollContext: scrollContext,
-                    onAction: horizontalScrollAction))
+            scroller
         } else {
             scroller.simultaneousGesture(touchDownGesture)
+        }
+    }
+
+    private func measuredContent(_ content: Content) -> some View {
+        content.background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: HorizontalScrollMetricsKey.self,
+                    value: HorizontalScrollMetrics(
+                        contentWidth: proxy.size.width,
+                        offset: -proxy.frame(in: .named(scrollCoordinateSpaceName)).minX
+                    ))
+            }
         }
     }
 

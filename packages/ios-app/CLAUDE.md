@@ -63,8 +63,8 @@ the drag pulls away from (right at leading, left at trailing). Freeze edge state
 at drag start. Capture must tolerate either inner/outer callback order, and an
 unknown context in a guarded region fails closed. Edge math uses the effective
 viewport, including both 8pt expansions from negative horizontal padding.
-On iOS 18+, each guarded scroller uses `UIGestureRecognizerRepresentable` to
-resolve its own handoff; iOS 26 no longer makes a descendant SwiftUI gesture
+On iOS 18+, content inside each guarded scroller uses
+`UIGestureRecognizerRepresentable` to resolve its own handoff; iOS 26 no longer makes a descendant SwiftUI gesture
 simultaneous with an ancestor gesture. The parent handles ordinary content and
 iOS 17 keeps the SwiftUI arbitration path.
 Ordinary transcript navigation and vertical scrolling stay unchanged. Because
