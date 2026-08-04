@@ -1046,6 +1046,43 @@ describe('slicc-dock-tree', () => {
     });
   });
 
+  describe('moveSurfaceToZone', () => {
+    it("relocates a placed leaf to become the destination zone's sole occupant", () => {
+      const el = mount();
+      el.setTree({
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, left: leaf('x'), right: leaf('other') },
+      });
+
+      el.moveSurfaceToZone('x', 'right');
+
+      expect(el.getTree().zones.left).toBeNull();
+      expect(el.getTree().zones.right).toEqual(leaf('x'));
+    });
+
+    it('does not clobber the destination zone when surfaceId is not placed anywhere (falls through to placeSurface)', () => {
+      const el = mount();
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, right: leaf('other') } });
+
+      el.moveSurfaceToZone('sprinkle:not-yet-open', 'right');
+
+      // 'other' must survive — the bug clobbered it outright.
+      expect(el.getSurfaceIds()).toContain('other');
+      expect(el.getSurfaceIds()).toContain('sprinkle:not-yet-open');
+    });
+
+    it('is a no-op when surfaceId is already the sole occupant of zone', () => {
+      const el = mount();
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, right: leaf('x') } });
+      const events: CustomEvent[] = [];
+      el.addEventListener('dock-tree-change', (e) => events.push(e as CustomEvent));
+
+      el.moveSurfaceToZone('x', 'right');
+
+      expect(events).toHaveLength(0);
+    });
+  });
+
   describe('external drag-drop (beginExternalDrag)', () => {
     /** Dispatch a `PointerEvent` with the given coords/id, bubbling (so window-level listeners fire). */
     function firePointer(

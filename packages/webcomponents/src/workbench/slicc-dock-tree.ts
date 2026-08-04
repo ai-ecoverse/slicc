@@ -885,18 +885,26 @@ export class SliccDockTree extends HTMLElement {
    * rule means the webapp can't compose a move from `removeSurface` +
    * `placeSurface` for a pinned id, so this is a first-class primitive
    * instead. A no-op when `surfaceId` is locked (locking blocks relocation
-   * the same as drag) or already the sole occupant of `zone`.
+   * the same as drag) or already the sole occupant of `zone`. When
+   * `surfaceId` isn't placed anywhere in the tree, falls through to
+   * `placeSurface` rather than clobbering whatever `zone` already holds.
    */
   moveSurfaceToZone(surfaceId: string, zone: ZoneName): void {
+    let found = false;
     for (const z of ZONE_NAMES) {
       const root = this.#tree.zones[z];
       if (!root) continue;
       const node = findLeafById(root, surfaceId);
       if (!node) continue;
+      found = true;
       if (this.#isLockedNode(node, z)) return;
       if (z === zone && root === node) return; // already the zone's sole leaf
       zoneDetach(this.#tree.zones, z, node);
       break;
+    }
+    if (!found) {
+      this.placeSurface(surfaceId, zone);
+      return;
     }
     const newLeaf: DockNode = { type: 'leaf', surfaceId };
     this.#tree.zones[zone] = newLeaf;
