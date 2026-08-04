@@ -8,6 +8,7 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
     private final class RecordingRegistrar: FileProviderDomainRegistering {
         var addedDomains: [NSFileProviderDomain] = []
         var removedDomains: [NSFileProviderDomain] = []
+        var knownDomains: [NSFileProviderDomain] = []
         var error: Error?
 
         func add(
@@ -25,23 +26,50 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
             removedDomains.append(domain)
             completionHandler(error)
         }
+
+        func getDomains(completionHandler: @escaping ([NSFileProviderDomain], Error?) -> Void) {
+            completionHandler(knownDomains, error)
+        }
     }
 
     func testRegistrationRequiresCredentials() {
         let registrar = RecordingRegistrar()
-        let lifecycle = FileProviderDomainLifecycle(registrar: registrar)
+        let defaults = UserDefaults(suiteName: "fileprovider.lifecycle.tests.\(UUID().uuidString)")
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: defaults)
 
         lifecycle.registerIfCredentialsAvailable(false)
         XCTAssertTrue(registrar.addedDomains.isEmpty)
+        XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "skipped-no-credentials")
 
         lifecycle.registerIfCredentialsAvailable(true)
-        XCTAssertEqual(registrar.addedDomains.map(\.identifier), [FileProviderDomainLifecycle.domain.identifier])
+        XCTAssertEqual(
+            registrar.addedDomains.map(\.identifier),
+            [FileProviderDomainLifecycle.domainIdentifier])
+        XCTAssertTrue(registrar.removedDomains.isEmpty)
+        XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "register-succeeded")
+    }
+
+    func testDisabledDomainIsRemovedBeforeReAdd() {
+        let registrar = RecordingRegistrar()
+        // Fresh NSFileProviderDomain instances report userEnabled=false until
+        // the system enables them; that matches the sticky-disabled recovery
+        // path we need after SupportsEnumeration was added.
+        registrar.knownDomains = [FileProviderDomainLifecycle.makeDomain()]
+        let defaults = UserDefaults(suiteName: "fileprovider.lifecycle.tests.\(UUID().uuidString)")
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: defaults)
+
+        lifecycle.registerIfCredentialsAvailable(true)
+
+        XCTAssertEqual(registrar.removedDomains.count, 1)
+        XCTAssertEqual(registrar.addedDomains.count, 1)
+        XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "register-succeeded")
     }
 
     func testDuplicateRegistrationAndAbsentRemovalAreHarmless() {
         let registrar = RecordingRegistrar()
         registrar.error = NSFileProviderError(.providerNotFound)
-        let lifecycle = FileProviderDomainLifecycle(registrar: registrar)
+        let defaults = UserDefaults(suiteName: "fileprovider.lifecycle.tests.\(UUID().uuidString)")
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: defaults)
 
         lifecycle.registerIfCredentialsAvailable(true)
         lifecycle.registerIfCredentialsAvailable(true)
@@ -50,5 +78,6 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
 
         XCTAssertEqual(registrar.addedDomains.count, 2)
         XCTAssertEqual(registrar.removedDomains.count, 2)
+        XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "remove-failed")
     }
 }

@@ -40,6 +40,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower
+        INFOPLIST_KEY_CFBundleDisplayName: SliccFollower
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: 'UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: 'UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
@@ -72,14 +73,18 @@ targets:
     info:
       path: SliccFileProvider/Info.plist
       properties:
+        CFBundleDisplayName: SLICC
         NSExtension:
           NSExtensionPointIdentifier: com.apple.fileprovider-nonui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
           NSExtensionFileProviderDocumentGroup: group.ai.sliccy.follower
+          # Required for Files.app Locations visibility (Apple template default).
+          NSExtensionFileProviderSupportsEnumeration: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.fileprovider
         PRODUCT_NAME: SliccFileProvider
+        INFOPLIST_KEY_CFBundleDisplayName: SLICC
         CODE_SIGN_ENTITLEMENTS: SliccFileProvider.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:
