@@ -233,7 +233,12 @@ final class FixtureConversationUITests: XCTestCase {
             codeBlock.frame.minX, leadingEdgeX - 20,
             "The guarded drag must still scroll the code block")
 
-        dragLeft(across: codeBlock, in: app)
+        // A single physical flick does not guarantee that every simulator
+        // width traverses the remaining content. Keep pulling through the
+        // bounded scroll range until one drag starts at the trailing edge.
+        for _ in 0..<3 where selection.label == "Fixture scoop 1" {
+            dragLeft(across: codeBlock, in: app)
+        }
         XCTAssertTrue(
             waitForLabel("Fixture scoop 2", on: selection),
             "At the trailing edge the same drag must hand off to scoop navigation")
