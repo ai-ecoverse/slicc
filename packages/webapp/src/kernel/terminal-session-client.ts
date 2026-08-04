@@ -31,7 +31,6 @@ import type {
   TerminalSessionId,
   TerminalStatusMsg,
 } from '../shell/terminal-protocol.js';
-import type { OffscreenClient } from '../ui/offscreen-client.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -46,7 +45,7 @@ export interface TerminalSessionClientOptions {
    * intentionally exposed so this class doesn't need to reach into
    * private internals.
    */
-  client: OffscreenClient;
+  client: TerminalSessionTransport;
   /** Session id. Caller-provided so panels can stamp meaningful values. */
   sid: TerminalSessionId;
   /**
@@ -63,8 +62,20 @@ export interface TerminalExecResult {
   exitCode: number;
 }
 
+export interface TerminalExecOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+  /** Stream through `onEvent` without retaining output in the result. Default false. */
+  discardCapturedOutput?: boolean;
+}
+
+export interface TerminalSessionTransport {
+  sendRaw(message: TerminalControlMsg): void;
+  onTerminalEvent(handler: (event: TerminalEventMsg) => void): () => void;
+}
+
 export class TerminalSessionClient {
-  private readonly client: OffscreenClient;
+  private readonly client: TerminalSessionTransport;
   private readonly sid: TerminalSessionId;
   private readonly onEvent: ((event: TerminalEventMsg) => void) | null;
   private nextExecId = 1;
@@ -169,12 +180,13 @@ export class TerminalSessionClient {
    * concurrent exec per session, but the client still tracks ids
    * for future streaming-pty support).
    */
-  exec(command: string): Promise<TerminalExecResult> {
+  exec(command: string, opts: TerminalExecOptions = {}): Promise<TerminalExecResult> {
     const execId = `e${this.nextExecId++}`;
+    const { discardCapturedOutput = false, ...request } = opts;
     return new Promise((resolve) => {
       this.pending.set(execId, resolve);
-      this.buffers.set(execId, { stdout: '', stderr: '' });
-      this.send({ type: 'terminal-exec', sid: this.sid, execId, command });
+      if (!discardCapturedOutput) this.buffers.set(execId, { stdout: '', stderr: '' });
+      this.send({ type: 'terminal-exec', sid: this.sid, execId, command, ...request });
     });
   }
 
@@ -207,7 +219,10 @@ export class TerminalSessionClient {
       this.clearOpenTimers();
       return;
     }
-    if (this.opened) this.send({ type: 'terminal-close', sid: this.sid });
+    // An open envelope may already be queued or executing in the worker even
+    // before its `opened` status reaches this client. Pair every begun handshake
+    // with a close so that late worker-side shell creation cannot leak.
+    if (this.opened || hadPendingOpen) this.send({ type: 'terminal-close', sid: this.sid });
     this.opened = false;
     // Reject pending opens (none in steady state) and resolve
     // pending execs with a synthetic exit so callers don't hang.
@@ -228,10 +243,10 @@ export class TerminalSessionClient {
    * (or skip `close()` and call this directly to abort).
    */
   dispose(): void {
-    this.clearOpenTimers();
-    const waiters = this.openWaiters;
-    this.openWaiters = [];
-    for (const waiter of waiters) waiter(new Error('terminal session disposed'));
+    // Close before dropping the event subscription. In particular, a queued
+    // terminal-open must still be followed by terminal-close when disposal
+    // races the open acknowledgement.
+    this.close();
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
@@ -281,6 +296,8 @@ export class TerminalSessionClient {
     if (status.state === 'opened') {
       this.opened = true;
       this.flushOpenWaiters();
+    } else if (status.state === 'closed') {
+      this.opened = false;
     } else if (status.state === 'error') {
       this.opened = false;
       this.flushOpenWaiters(new Error(status.error ?? 'terminal session error'));

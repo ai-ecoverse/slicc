@@ -114,6 +114,7 @@ describe('RemoteExecRouter', () => {
     await vi.waitFor(() =>
       expect(sent.some((message) => message.type === 'exec.response')).toBe(true)
     );
+    expect(execInShell.mock.calls[0]?.[1].sessionId).toBe('requester');
     expect(sent.filter((message) => message.type === 'exec.chunk')).toEqual([
       { type: 'exec.chunk', requestId: 'local-1', stream: 'stdout', data: encoded('out') },
       { type: 'exec.chunk', requestId: 'local-1', stream: 'stderr', data: encoded('err') },
@@ -160,7 +161,8 @@ describe('RemoteExecRouter', () => {
           });
         })
     );
-    const { followers, router } = createHarness({ execInShell });
+    const closeExecShell = vi.fn();
+    const { followers, router } = createHarness({ execInShell, closeExecShell });
     addFollower(followers, 'requester');
     router.handleFollowerExecMessage('requester', {
       type: 'exec.request',
@@ -172,5 +174,6 @@ describe('RemoteExecRouter', () => {
     followers.removeFollower('requester');
 
     expect(localSignal?.aborted).toBe(true);
+    expect(closeExecShell).toHaveBeenCalledWith('requester');
   });
 });

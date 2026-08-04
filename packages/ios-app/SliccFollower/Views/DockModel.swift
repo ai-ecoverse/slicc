@@ -50,17 +50,4 @@ enum DockModel {
             id: "monitor", surface: .monitor, systemImage: "waveform.path.ecg",
             label: "Monitor"),
     ]
-
-    /// The follower-honest placeholder for surfaces the phone cannot serve,
-    /// texts shared with the browser follower (`wc-follower.ts`) so both
-    /// followers explain the constraint in the same words. Nil for surfaces
-    /// that have a real view.
-    static func placeholderText(for surface: DockSurface) -> String? {
-        switch surface {
-        case .sprinkle, .browser, .monitor, .memory, .files:
-            return nil
-        case .term:
-            return "The shell runs on the leader. A follower has no local terminal - drive the session through chat."
-        }
-    }
 }

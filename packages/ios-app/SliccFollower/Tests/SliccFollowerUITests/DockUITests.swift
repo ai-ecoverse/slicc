@@ -9,26 +9,30 @@ final class DockUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testDockTogglesTheTerminalPlaceholder() {
+    func testDockShowsDisconnectedTerminalState() {
         let app = XCUIApplication()
-        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "connected"]
+        app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "disconnected"]
         app.launch()
 
         let term = app.buttons["dock-term"]
         XCTAssertTrue(term.waitForExistence(timeout: 60))
         term.tap()
 
-        let placeholder = app.staticTexts["workbench-placeholder"]
+        let placeholder = app.staticTexts["terminal-disconnected"]
         XCTAssertTrue(
             placeholder.waitForExistence(timeout: 10),
-            "the terminal surface explains it lives on the leader")
+            "the terminal surface asks for an active leader")
+        XCTAssertTrue(placeholder.isHittable)
 
         // Tapping the ACTIVE item collapses the workbench — a toggle, not a
         // nav stack (web dock parity).
         term.tap()
-        XCTAssertFalse(
-            placeholder.waitForExistence(timeout: 3),
-            "tap-active collapses back to chat")
+        let collapsed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: placeholder)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [collapsed], timeout: 3), .completed,
+            "tap-active removes the collapsed placeholder from accessibility")
     }
 
     func testNewChatLivesInTheTopControlNotTheRail() {
@@ -53,6 +57,7 @@ final class DockUITests: XCTestCase {
         app.launchArguments += [
             "-joinUrl", "", "-uiTestConnectionState", "connected",
             "-leftHandedDock", "YES",
+            "-uiTestTerminalFixture", "YES",
         ]
         app.launch()
 
@@ -60,7 +65,7 @@ final class DockUITests: XCTestCase {
         XCTAssertTrue(term.waitForExistence(timeout: 60))
         term.tap()
         XCTAssertTrue(
-            app.staticTexts["workbench-placeholder"].waitForExistence(timeout: 10),
+            app.descendants(matching: .any)["terminal-surface"].waitForExistence(timeout: 10),
             "the mirrored rail toggles surfaces exactly like the trailing one")
     }
 }

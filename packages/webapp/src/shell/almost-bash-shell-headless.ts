@@ -163,6 +163,7 @@ export interface HeadlessShellLike {
   getCwd(): string;
   getScriptCatalog(): ScriptCatalog;
   getEnv(): Record<string, string>;
+  applySessionOverrides?(options: { cwd?: string; env?: Record<string, string> }): void;
   getJshCommandNames(): Promise<string[]>;
   syncJshCommands(): Promise<void>;
   executeCommand(
@@ -492,6 +493,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   /** A copy of the latest environment. */
   getEnv(): Record<string, string> {
     return { ...this.lastEnv };
+  }
+
+  /** Merge per-request overrides into a persistent terminal shell. */
+  applySessionOverrides(options: { cwd?: string; env?: Record<string, string> }): void {
+    if (options.cwd !== undefined) {
+      this.cwd = options.cwd;
+      this.lastEnv.PWD = options.cwd;
+    }
+    if (options.env) Object.assign(this.lastEnv, options.env);
   }
 
   /** Currently discovered `.jsh` command names (filtered by allow-list). */

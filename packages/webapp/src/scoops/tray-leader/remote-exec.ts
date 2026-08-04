@@ -209,6 +209,7 @@ export class RemoteExecRouter {
     this.localExecAborters.set(abortKey, { bootstrapId, controller });
     try {
       const result = await execInShell(command, {
+        sessionId: bootstrapId,
         cwd,
         env,
         signal: controller.signal,
@@ -256,5 +257,6 @@ export class RemoteExecRouter {
       entry.controller.abort();
       this.localExecAborters.delete(requestId);
     }
+    this.context.options.closeExecShell?.(bootstrapId);
   }
 }

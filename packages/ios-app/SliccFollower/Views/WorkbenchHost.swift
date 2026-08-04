@@ -8,6 +8,10 @@ import SwiftUI
 /// surface lives on the leader — much better than a missing tab.
 struct WorkbenchHost: View {
     let surface: DockSurface
+    /// Only `.term` outlives its presentation (see `TerminalView.isActive`);
+    /// every other surface is torn down on collapse, so they default to
+    /// active and never observe this.
+    var isActive: Bool = true
 
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -31,11 +35,37 @@ struct WorkbenchHost: View {
             case .files:
                 FilesView()
             case .term:
-                placeholder(DockModel.placeholderText(for: surface) ?? "")
+                TerminalView(
+                    client: appState.terminalClient,
+                    connectionAvailable: Self.terminalConnectionAvailable(
+                        connectionState: appState.connectionState,
+                        isLeaderStalled: appState.isLeaderStalled,
+                        leaderCapabilities: terminalLeaderCapabilities),
+                    transportConnected: appState.connectionState == .connected,
+                    isActive: isActive,
+                    theme: appState.leaderTheme
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.canvas)
+    }
+
+    static func terminalConnectionAvailable(
+        connectionState: ConnectionState,
+        isLeaderStalled _: Bool,
+        leaderCapabilities: TraySyncCapabilities?
+    ) -> Bool {
+        connectionState == .connected && leaderCapabilities?.exec == true
+    }
+
+    private var terminalLeaderCapabilities: TraySyncCapabilities? {
+        #if DEBUG
+            if UITestHooks.terminalFixtureEnabled {
+                return TraySyncCapabilities(exec: true)
+            }
+        #endif
+        return appState.leaderCapabilities
     }
 
     @ViewBuilder

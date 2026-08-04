@@ -101,6 +101,8 @@ export interface LeaderTrayPeerManagerOptions {
   onPeerConnected?: (peer: LeaderTrayPeerState, channel: TrayDataChannelLike) => void;
   /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
   onPeerDisconnected?: (bootstrapId: string, reason: string) => void;
+  /** Called when the established data channel definitively closes. */
+  onPeerTransportClosed?: (bootstrapId: string, reason: string) => void;
   iceServers?: TrayIceServerConfig[];
 }
 
@@ -256,6 +258,7 @@ export class LeaderTrayPeerManager {
       } else {
         log.warn('Leader data channel closed post-connect', { bootstrapId: message.bootstrapId });
         this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel closed');
+        this.options.onPeerTransportClosed?.(message.bootstrapId, 'Data channel closed');
       }
     });
     channel.addEventListener('error', () => {
@@ -286,6 +289,10 @@ export class LeaderTrayPeerManager {
   private closeControllerPeers(controllerId: string): void {
     for (const [bootstrapId, active] of this.peers.entries()) {
       if (active.state.controllerId === controllerId) {
+        if (active.state.state === 'connected') {
+          this.options.onPeerDisconnected?.(bootstrapId, 'Controller superseded');
+          this.options.onPeerTransportClosed?.(bootstrapId, 'Controller superseded');
+        }
         active.peer.close();
         this.peers.delete(bootstrapId);
       }

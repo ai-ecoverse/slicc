@@ -2744,13 +2744,27 @@ describe('cherry teleport selection', () => {
 
 describe('version handshake', () => {
   it('sends hello as the first message on addFollower', () => {
+    const { manager } = createManager({ execInShell: vi.fn(async () => ({ exitCode: 0 })) });
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const first = JSON.parse(channel.sent[0]) as {
+      type: string;
+      protocolVersion: number;
+      capabilities: { exec: boolean };
+    };
+    expect(first.type).toBe('hello');
+    expect(first.protocolVersion).toBe(5);
+    expect(first.capabilities).toEqual({ exec: true });
+  });
+
+  it('advertises exec false when follower-originated shell execution is unavailable', () => {
     const { manager } = createManager();
     const channel = new FakeChannel();
     manager.addFollower('b1', channel);
 
-    const first = JSON.parse(channel.sent[0]) as { type: string; protocolVersion: number };
-    expect(first.type).toBe('hello');
-    expect(first.protocolVersion).toBe(5);
+    const first = JSON.parse(channel.sent[0]) as { capabilities: { exec: boolean } };
+    expect(first.capabilities).toEqual({ exec: false });
   });
 
   it('warns when a follower speaks a newer protocol version', () => {

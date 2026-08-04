@@ -23,6 +23,7 @@ function tick(ms = 5): Promise<void> {
 }
 
 interface StubShell extends HeadlessShellLike {
+  applySessionOverrides: Mock<NonNullable<HeadlessShellLike['applySessionOverrides']>>;
   dispose: Mock<() => void>;
   executeCommand: Mock<HeadlessShellLike['executeCommand']>;
 }
@@ -54,6 +55,7 @@ function makeStubShell(opts?: {
     return { stdout, stderr, exitCode };
   });
   return {
+    applySessionOverrides: vi.fn(),
     dispose: vi.fn(),
     executeCommand,
     executeScriptFile: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
@@ -173,6 +175,42 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     ctx.dispose();
   });
 
+  it('can stream output without retaining it in the exec result', async () => {
+    const ctx = setupChannel();
+    const output = 'x'.repeat(128 * 1024);
+    ctx.shell.executeCommand.mockResolvedValue({ stdout: output, stderr: '', exitCode: 0 });
+    await ctx.client.open();
+
+    const result = await ctx.client.exec('large-output', { discardCapturedOutput: true });
+
+    expect(result).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    expect(
+      ctx.events
+        .filter((event) => event.type === 'terminal-output')
+        .map((event) => (event.type === 'terminal-output' ? event.data : ''))
+        .join('')
+    ).toBe(output);
+    ctx.dispose();
+  });
+
+  it('applies per-exec cwd and env overrides before running a persistent shell command', async () => {
+    const ctx = setupChannel();
+    await ctx.client.open({ cwd: '/initial', env: { NAME: 'first' } });
+    await ctx.client.exec('pwd', {
+      cwd: '/workspace',
+      env: { NAME: 'second', COLUMNS: '120', LINES: '40' },
+    });
+
+    expect(ctx.shell.applySessionOverrides).toHaveBeenCalledWith({
+      cwd: '/workspace',
+      env: { NAME: 'second', COLUMNS: '120', LINES: '40' },
+    });
+    expect(ctx.shell.applySessionOverrides.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.shell.executeCommand.mock.invocationCallOrder[0]
+    );
+    ctx.dispose();
+  });
+
   it('exec failure surfaces a non-zero exit + stderr', async () => {
     const ctx = setupChannel();
     ctx.shell.executeCommand.mockImplementationOnce(async () => {
@@ -227,6 +265,20 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     await tick();
     expect(ctx.shell.dispose).toHaveBeenCalledTimes(1);
     expect(ctx.events.some((e) => e.type === 'terminal-status' && e.state === 'closed')).toBe(true);
+    ctx.dispose();
+  });
+
+  it('close before open resolves still disposes the queued worker shell', async () => {
+    const ctx = setupChannel();
+    const openP = ctx.client.open({ retryMs: 1000 });
+
+    // MessageChannel preserves the open → close order, but neither envelope
+    // reaches the worker until this synchronous turn completes.
+    ctx.client.close();
+
+    await expect(openP).rejects.toThrow(/closed/);
+    await vi.waitFor(() => expect(ctx.shellFactory).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ctx.shell.dispose).toHaveBeenCalledTimes(1));
     ctx.dispose();
   });
 

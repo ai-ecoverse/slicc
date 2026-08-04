@@ -79,11 +79,10 @@ export interface TraySyncHelloMessage {
   runtime?: string;
   /**
    * Optional capability advertisement (additive — legacy peers omit it). The
-   * only capability today is `exec`: this peer will run real OS shell commands
-   * on its counterpart's behalf. It is set exclusively by the `slicc … follow`
-   * CLI (`packages/slicc-cli`); browser and iOS followers have no OS shell and
-   * leave it absent, so the leader never routes an `exec.request` to a peer
-   * that cannot serve it. See the `exec.*` messages below.
+   * only capability today is `exec`: this peer accepts `exec.request`. Leaders
+   * set it when their virtual shell is wired; the `slicc … follow` CLI sets it
+   * when it has a real OS runner. Browser and iOS followers have no OS shell and
+   * advertise false or omit it. See the `exec.*` messages below.
    */
   capabilities?: TraySyncCapabilities;
   /**
@@ -98,7 +97,7 @@ export interface TraySyncHelloMessage {
 
 /** Peer capability advertisement carried on `hello`. */
 export interface TraySyncCapabilities {
-  /** This peer can run OS shell commands via `exec.request` (CLI `follow`). */
+  /** This peer accepts commands via `exec.request`. */
   exec?: boolean;
 }
 
