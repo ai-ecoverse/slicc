@@ -252,6 +252,13 @@ jobs:
           APPLE_DISTRIBUTION_CERT_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
           APPLE_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
           APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_PROVISIONING_PROFILE_NAME: ${{ secrets.APPLE_PROVISIONING_PROFILE_NAME }}
+          # File Provider appex ships inside SliccFollower.ipa; without these
+          # the package script soft-skips the entire TestFlight upload (see
+          # packages/ios-app/scripts/package-and-upload-testflight.sh).
+          APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME: ${{ secrets.APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME }}
+          APPLE_FILEPROVIDER_BUNDLE_ID: ${{ secrets.APPLE_FILEPROVIDER_BUNDLE_ID }}
           # Repo variable, not a secret: set to 1 to archive the iOS build
           # WITHOUT the iCloud KVS entitlement while the App Store profile
           # lacks the iCloud capability (see package-and-upload-testflight.sh).
