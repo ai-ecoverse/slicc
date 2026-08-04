@@ -117,6 +117,7 @@ struct ChatView: View {
                             showSettings: $showSettings,
                             showFrozenSessions: $showFrozenSessions,
                             inputText: $presentation.composerDraft,
+                            stagedAttachments: $presentation.stagedAttachments,
                             transcriptPosition: $presentation.transcriptPosition,
                             ptt: ptt)
                     }
@@ -125,7 +126,9 @@ struct ChatView: View {
                     // so tap-active-to-collapse stays reachable.
                     if presentation.terminalWasOpened || presentation.activeSurface == .term {
                         WorkbenchHost(
-                            surface: .term, isActive: presentation.activeSurface == .term
+                            surface: .term,
+                            isActive: presentation.activeSurface == .term,
+                            terminalModel: presentation.terminal(client: appState.terminalClient)
                         )
                         .opacity(presentation.activeSurface == .term ? 1 : 0)
                         .allowsHitTesting(presentation.activeSurface == .term)
@@ -173,6 +176,7 @@ struct ChatView: View {
                     showSettings: $showSettings,
                     showFrozenSessions: $showFrozenSessions,
                     inputText: $presentation.composerDraft,
+                    stagedAttachments: $presentation.stagedAttachments,
                     transcriptPosition: $presentation.transcriptPosition,
                     ptt: ptt)
             }
@@ -201,10 +205,14 @@ struct ChatView: View {
     private var workbench: some View {
         ZStack {
             if presentation.terminalWasOpened || presentation.activeSurface == .term {
-                WorkbenchHost(surface: .term, isActive: presentation.activeSurface == .term)
-                    .opacity(presentation.activeSurface == .term ? 1 : 0)
-                    .allowsHitTesting(presentation.activeSurface == .term)
-                    .accessibilityHidden(presentation.activeSurface != .term)
+                WorkbenchHost(
+                    surface: .term,
+                    isActive: presentation.activeSurface == .term,
+                    terminalModel: presentation.terminal(client: appState.terminalClient)
+                )
+                .opacity(presentation.activeSurface == .term ? 1 : 0)
+                .allowsHitTesting(presentation.activeSurface == .term)
+                .accessibilityHidden(presentation.activeSurface != .term)
             }
             if let surface = presentation.activeSurface, surface != .term {
                 WorkbenchHost(surface: surface)
@@ -264,6 +272,7 @@ struct ConversationView: View {
     @Binding var showSettings: Bool
     @Binding var showFrozenSessions: Bool
     @Binding var inputText: String
+    @Binding var stagedAttachments: [MessageAttachment]
     @Binding var transcriptPosition: ScrollPosition
     @ObservedObject var ptt: PttController
     @State private var showNewSessionDialog = false
@@ -469,7 +478,8 @@ struct ConversationView: View {
                 onSteer: { text, attachments in
                     appState.sendMessage(text, steer: true, attachments: attachments)
                     inputText = ""
-                }
+                },
+                stagedAttachments: $stagedAttachments
             )
         }
     }

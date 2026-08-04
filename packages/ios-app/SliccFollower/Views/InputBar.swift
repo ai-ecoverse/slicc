@@ -32,8 +32,11 @@ struct InputBar: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.palette) private var palette
 
-    /// Photos staged for the next send (downscaled + base64 already).
-    @State private var stagedAttachments: [MessageAttachment] = []
+    /// Photos staged for the next send (downscaled + base64 already). Owned by
+    /// the shell rather than here, so an adaptive layout change — which
+    /// rebuilds this composer — cannot silently discard what the user picked,
+    /// and a `PhotosPicker` load in flight cannot land in a discarded copy.
+    @Binding var stagedAttachments: [MessageAttachment]
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotoPicker = false
     @State private var showCamera = false
@@ -424,7 +427,8 @@ struct InputBar: View {
                 isConnected: true,
                 ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
-                onAbort: {}
+                onAbort: {},
+                stagedAttachments: .constant([])
             )
         }
     }
@@ -442,7 +446,8 @@ struct InputBar: View {
                 isConnected: true,
                 ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
-                onAbort: {}
+                onAbort: {},
+                stagedAttachments: .constant([])
             )
         }
     }
@@ -460,7 +465,8 @@ struct InputBar: View {
                 isConnected: false,
                 ptt: PttController(engine: InputBar.makeDictationEngine()),
                 onSend: { _, _, _ in },
-                onAbort: {}
+                onAbort: {},
+                stagedAttachments: .constant([])
             )
         }
     }

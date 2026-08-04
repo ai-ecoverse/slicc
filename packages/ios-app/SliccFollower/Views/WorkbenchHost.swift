@@ -10,6 +10,11 @@ struct WorkbenchHost: View {
     /// every other surface is torn down on collapse, so they default to
     /// active and never observe this.
     var isActive: Bool = true
+    /// Supplied only for `.term`, and owned by the shell rather than by this
+    /// host: both adaptive layouts hand over the same model, so resizing
+    /// across the size-class boundary re-parents the terminal instead of
+    /// rebuilding it. Other surfaces leave it nil and never read it.
+    var terminalModel: TerminalViewModel?
 
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -33,16 +38,18 @@ struct WorkbenchHost: View {
             case .files:
                 FilesView()
             case .term:
-                TerminalView(
-                    client: appState.terminalClient,
-                    connectionAvailable: Self.terminalConnectionAvailable(
-                        connectionState: appState.connectionState,
-                        isLeaderStalled: appState.isLeaderStalled,
-                        leaderCapabilities: terminalLeaderCapabilities),
-                    transportConnected: appState.connectionState == .connected,
-                    isActive: isActive,
-                    theme: appState.leaderTheme
-                )
+                if let terminalModel {
+                    TerminalView(
+                        model: terminalModel,
+                        connectionAvailable: Self.terminalConnectionAvailable(
+                            connectionState: appState.connectionState,
+                            isLeaderStalled: appState.isLeaderStalled,
+                            leaderCapabilities: terminalLeaderCapabilities),
+                        transportConnected: appState.connectionState == .connected,
+                        isActive: isActive,
+                        theme: appState.leaderTheme
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
