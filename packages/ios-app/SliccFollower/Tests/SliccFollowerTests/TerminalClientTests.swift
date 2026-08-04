@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 @MainActor
 final class TerminalClientTests: XCTestCase {

@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// The wire shape of the generic `lick` envelope and the `hello` fields.
 ///

@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 import SliccTraySession
 import SwiftUI
 import WebKit
@@ -34,7 +35,7 @@ enum ReconnectBackoff {
     }
 }
 
-// ChatMessage is defined in Models/ChatMessage.swift
+// ChatMessage is defined in SliccTrayKit/Models/ChatMessage.swift
 
 /// Wrapper for decoding chunked snapshot payloads.
 /// The leader serializes snapshots as `JSON.stringify({ messages, scoopJid })`.
@@ -179,12 +180,18 @@ class AppState: ObservableObject {
     /// directly; without iCloud provisioning it degrades to a local cache
     /// and simply stays empty.
     let sessionStore: TraySessionSyncStore
+    private let credentialStore: TrayCredentialStore
+    private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
 
-    init() {
+    init(
+        credentialStore: TrayCredentialStore = TrayCredentialStore(),
+        fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle()
+    ) {
         sessionStore = AppState.makeSessionStore()
-        if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
-            joinUrlHistory = history
-        }
+        self.credentialStore = credentialStore
+        self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
+        Self.purgeLegacyJoinURLDefaults()
+        fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
         #if DEBUG
             if let fixtureScoops = UITestHooks.scoopStatusFixture() {
                 scoops = fixtureScoops
@@ -243,18 +250,17 @@ class AppState: ObservableObject {
     /// secret-bearing URL never surfaces in the field, the persisted setting,
     /// or the visible history. Reconnects reuse it.
     private var activeJoinUrl: String = ""
+    private var activeDisplayName: String?
 
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
-        connect(to: joinUrl, rememberInHistory: true)
+        connect(to: joinUrl, displayName: nil, rememberInHistory: true)
     }
 
     /// Join an iCloud-discovered session. The URL stays out of the Join URL
-    /// field, the `joinUrl` setting, and the Recent URLs list — a discovered
-    /// session is rediscoverable from iCloud, so nothing needs to remember
-    /// (or display) its secret.
-    func connectToDiscoveredSession(joinUrl url: String) {
-        connect(to: url, rememberInHistory: false)
+    /// field and Recent URLs list; only non-secret metadata is shared.
+    func connectToDiscoveredSession(joinUrl url: String, displayName: String? = nil) {
+        connect(to: url, displayName: displayName, rememberInHistory: false)
     }
 
     // MARK: - Frozen sessions (freezer rail)
@@ -294,7 +300,7 @@ class AppState: ObservableObject {
         }
     }
 
-    private func connect(to rawUrl: String, rememberInHistory: Bool) {
+    private func connect(to rawUrl: String, displayName: String?, rememberInHistory: Bool) {
         let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
         guard connectionState != .connecting else { return }
@@ -306,6 +312,7 @@ class AppState: ObservableObject {
         leaderTheme = nil
         if rememberInHistory { addToHistory(trimmed) }
         activeJoinUrl = trimmed
+        activeDisplayName = displayName
 
         // Tear down any previous connection first.
         tearDown()
@@ -335,6 +342,8 @@ class AppState: ObservableObject {
         reconnectTask = nil
         reconnectAttempt = 0
         isLeaderStalled = false
+        clearTrayCredentials()
+        fileProviderDomainLifecycle.removeDomain()
         tearDown()
         resetCDPState()
         connectionState = .disconnected
@@ -386,13 +395,6 @@ class AppState: ObservableObject {
         // empty registry, so stale remote tabs would otherwise outlive the
         // tray that owned them.
         remoteTargets.removeAll()
-    }
-
-    /// Clear all stored data (history, credentials, etc.)
-    func clearStoredData() {
-        joinUrlHistory = []
-        UserDefaults.standard.removeObject(forKey: "joinUrlHistory")
-        UserDefaults.standard.removeObject(forKey: "joinUrl")
     }
 
     // MARK: - UI Actions
@@ -729,12 +731,15 @@ class AppState: ObservableObject {
     func dataChannelOpened() {
         logger.info("Data channel opened")
         connectionState = .connected
-        connectedSince = Date()
+        let connectedAt = Date()
+        connectedSince = connectedAt
         leaderProtocolVersion = nil
         leaderCapabilities = nil
         leaderMotd = nil
         modelCatalog = []
         modelSelectionState = nil
+        let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
+        fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialsSaved)
 
         // Reuse the existing CDP bridge across reconnects so the user's
         // hosted tabs survive transient WebRTC drops. Only spin up a new
@@ -1461,7 +1466,10 @@ class AppState: ObservableObject {
             // moves us out of `.reconnecting`; abandon the budget silently.
             guard connectionState == .reconnecting else { return }
 
-            connect(to: activeJoinUrl, rememberInHistory: false)
+            connect(
+                to: activeJoinUrl,
+                displayName: activeDisplayName,
+                rememberInHistory: false)
 
             // `connect(to:)` drives its own async signaling; wait for it to settle
             // before deciding whether this attempt earned another.
@@ -1482,13 +1490,16 @@ class AppState: ObservableObject {
         reconnectAttempt = 0
     }
 
-    // MARK: - Private: Teardown
+}
 
+// MARK: - Teardown and history
+
+extension AppState {
     /// Tear down transport state (signaling, WebRTC, keepalive) ahead of a
     /// reconnect. Deliberately does NOT touch the CDP bridge — open tabs
     /// must survive transient WebRTC drops. Use `resetCDPState()` from
     /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
-    private func tearDown() {
+    fileprivate func tearDown() {
         terminalClient.disconnect()
         connectTask?.cancel()
         connectTask = nil
@@ -1506,9 +1517,7 @@ class AppState: ObservableObject {
         stopTargetsAdvertiseTimer()
     }
 
-    // MARK: - Private: History
-
-    private func addToHistory(_ url: String) {
+    fileprivate func addToHistory(_ url: String) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         joinUrlHistory.removeAll { $0 == trimmed }
@@ -1516,7 +1525,37 @@ class AppState: ObservableObject {
         if joinUrlHistory.count > 5 {
             joinUrlHistory = Array(joinUrlHistory.prefix(5))
         }
-        UserDefaults.standard.set(joinUrlHistory, forKey: "joinUrlHistory")
+    }
+}
+
+extension AppState {
+    /// Clear all stored data (history, credentials, etc.)
+    func clearStoredData() {
+        joinUrlHistory = []
+        credentialStore.clear()
+        fileProviderDomainLifecycle.removeDomain()
+        Self.purgeLegacyJoinURLDefaults()
+    }
+
+    fileprivate static func purgeLegacyJoinURLDefaults() {
+        // Join URLs carry session secrets and must not remain in defaults.
+        UserDefaults.standard.removeObject(forKey: "joinUrlHistory")
+        UserDefaults.standard.removeObject(forKey: "joinUrl")
+    }
+
+    fileprivate func persistTrayCredentials(connectedAt: Date) -> Bool {
+        guard let trayID = trayId, let joinURL = URL(string: activeJoinUrl) else { return false }
+        return credentialStore.save(
+            joinURL: joinURL,
+            trayID: trayID,
+            displayName: activeDisplayName,
+            lastConnectedAt: connectedAt)
+    }
+
+    fileprivate func clearTrayCredentials() {
+        credentialStore.clear()
+        activeJoinUrl = ""
+        activeDisplayName = nil
     }
 }
 

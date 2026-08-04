@@ -2,6 +2,7 @@ import UIKit
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// Follower-originated CDP for tab previews (#1865): request/response
 /// correlation, chunk reassembly, and failure surfacing.

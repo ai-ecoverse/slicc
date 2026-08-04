@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 import SliccTraySession
 import UIKit
 

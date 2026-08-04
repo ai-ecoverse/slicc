@@ -9,5 +9,13 @@
 	     profile degrade to a local cache (UbiquitousKeyValueBackend). -->
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>S8LB56P782.ai.sliccy.trays</string>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.ai.sliccy.follower</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)ai.sliccy.follower.credentials</string>
+	</array>
 </dict>
 </plist>

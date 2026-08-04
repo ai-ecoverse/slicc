@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// The 48pt right-edge dock rail — the phone's tab bar for workbench

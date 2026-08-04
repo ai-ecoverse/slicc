@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// SF Symbol mapping that mirrors the lucide icons used in the SLICC web UI

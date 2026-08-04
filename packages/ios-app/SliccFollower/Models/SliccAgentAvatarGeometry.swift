@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 /// View-independent inputs and geometry for the googly-eyed agent tile.
 /// Ratios mirror `slicc-agent-avatar.ts`; the SwiftUI view only paints them.

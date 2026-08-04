@@ -1,0 +1,126 @@
+import Foundation
+import XCTest
+
+@testable import SliccTrayKit
+
+final class TrayCredentialStoreTests: XCTestCase {
+    private final class MemoryKeychain: TrayCredentialKeychain {
+        var data: Data?
+        var writeSucceeds = true
+
+        func read() -> Data? { data }
+
+        func write(_ data: Data) -> Bool {
+            guard writeSucceeds else { return false }
+            self.data = data
+            return true
+        }
+
+        func clear() {
+            data = nil
+        }
+    }
+
+    private var suiteName: String!
+    private var defaults: UserDefaults!
+    private var credentialMetadata: [String: Any] {
+        defaults.dictionaryRepresentation().filter { key, _ in
+            key.hasPrefix("trayCredential.")
+        }
+    }
+
+    override func setUp() {
+        super.setUp()
+        suiteName = "TrayCredentialStoreTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        suiteName = nil
+        super.tearDown()
+    }
+
+    func testWriteReadClearRoundTripKeepsSecretOutOfDefaults() throws {
+        let keychain = MemoryKeychain()
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        let joinURL = try XCTUnwrap(URL(string: "https://tray.example/join/session-secret"))
+        let connectedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+        XCTAssertTrue(
+            store.save(
+                joinURL: joinURL,
+                trayID: "tray-123",
+                displayName: "Chrome on MacBook",
+                lastConnectedAt: connectedAt))
+        XCTAssertEqual(
+            store.load(),
+            TrayCredentials(
+                joinURL: joinURL,
+                trayID: "tray-123",
+                displayName: "Chrome on MacBook",
+                lastConnectedAt: connectedAt))
+        XCTAssertFalse(
+            defaults.dictionaryRepresentation().values.contains { value in
+                String(describing: value).contains("session-secret")
+            })
+
+        store.clear()
+
+        XCTAssertNil(store.load())
+        XCTAssertNil(keychain.data)
+        XCTAssertTrue(credentialMetadata.isEmpty)
+    }
+
+    func testUnavailableAppGroupAndKeychainDegradeWithoutMutation() throws {
+        let store = TrayCredentialStore(defaults: nil, keychain: nil)
+        let joinURL = try XCTUnwrap(URL(string: "https://tray.example/join/unavailable-secret"))
+
+        XCTAssertFalse(
+            store.save(
+                joinURL: joinURL,
+                trayID: "tray-123",
+                displayName: nil))
+        XCTAssertNil(store.load())
+        store.clear()
+    }
+
+    func testKeychainWriteFailureDoesNotPublishMetadata() throws {
+        let keychain = MemoryKeychain()
+        keychain.writeSucceeds = false
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        let joinURL = try XCTUnwrap(URL(string: "https://tray.example/join/rejected-secret"))
+
+        XCTAssertFalse(
+            store.save(
+                joinURL: joinURL,
+                trayID: "tray-123",
+                displayName: "Unavailable"))
+        XCTAssertNil(store.load())
+        XCTAssertTrue(credentialMetadata.isEmpty)
+    }
+
+    func testKeychainUpdateFailurePreservesPreviousCredential() throws {
+        let keychain = MemoryKeychain()
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        let originalURL = try XCTUnwrap(URL(string: "https://tray.example/join/original-secret"))
+        let originalDate = Date(timeIntervalSince1970: 1_750_000_000)
+        XCTAssertTrue(
+            store.save(
+                joinURL: originalURL,
+                trayID: "original-tray",
+                displayName: "Original leader",
+                lastConnectedAt: originalDate))
+        let originalCredential = try XCTUnwrap(store.load())
+        keychain.writeSucceeds = false
+
+        XCTAssertFalse(
+            store.save(
+                joinURL: try XCTUnwrap(URL(string: "https://tray.example/join/rejected-secret")),
+                trayID: "replacement-tray",
+                displayName: "Replacement leader"))
+
+        XCTAssertEqual(store.load(), originalCredential)
+    }
+}

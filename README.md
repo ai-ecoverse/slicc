@@ -46,7 +46,7 @@ Once you're in, you can:
 - **UI on the fly.** SLICC can generate rich user interfaces on the fly. These can be small visualizations in a chat response, or full-blown web applications that run in a sidebar, or even a separate tab.
 - **Built around Skills.** Agents don't suffer from missing capabilities, they suffer from skill issues. SLICC can install native skills into `/workspace/skills`, and it also discovers compatible `.agents` / `.claude` skills read-only across the reachable VFS.
 - **More than a coding panel.** Coding is one strong use case, but SLICC is built for practical browser work too: authenticated web apps, repetitive tab work, content operations, debugging, research, and automation.
-- **Works across runtimes.** Start in the CLI, run the thin Chrome extension that loads SLICC from `sliccy.ai`, connect multiple tray sessions, attach to Electron apps, embed SLICC into any third-party page via the [`@ai-ecoverse/cherry`](packages/cherry/) host SDK, or join from an iOS follower (`SliccFollower`) — all on the same core.
+- **Works across runtimes.** Start in the CLI, run the thin Chrome extension that loads SLICC from `sliccy.ai`, connect multiple tray sessions, attach to Electron apps, embed SLICC into any third-party page via the [`@ai-ecoverse/cherry`](packages/cherry/) host SDK, or join from an iOS follower (`SliccFollower`) with read/write leader files in Files.app — all on the same core.
 - **Delegates in parallel.** The main agent can spin up isolated sub-agents for task-specific work instead of stuffing everything into one conversation.
 
 ## Who it is for

@@ -5,7 +5,7 @@
 // non-matching failure exits immediately with its status preserved, and a
 // second matching failure is not retried again.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const lib = resolve(here, 'swift-coverage-runner-retry.sh');
+const coverageScriptPath = resolve(here, 'swift-coverage-check.sh');
+const coverageScript = readFileSync(coverageScriptPath, 'utf8');
 
 let dir;
 beforeEach(() => {
@@ -130,5 +132,109 @@ describe('run_with_runner_init_retry', () => {
     const { stub, calls } = makeStub([{ output: 'all green', exit: 0 }]);
     expect(run(stub).status).toBe(0);
     expect(calls()).toBe(1);
+  });
+});
+
+describe('swift-coverage-check xcodebuild invocation', () => {
+  it('selects an iPhone from the runtime matching the simulator SDK', () => {
+    const devices = {
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-4-1': [
+          { isAvailable: true, name: 'iPhone 17 Pro', udid: 'prerelease' },
+        ],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [
+          { isAvailable: true, name: 'iPhone 17', udid: 'matching' },
+        ],
+      },
+    };
+    const result = spawnSync(
+      'bash',
+      ['-c', `source ${JSON.stringify(coverageScriptPath)}; select_iphone_for_sdk 26.5`],
+      { input: JSON.stringify(devices) }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.toString()).toBe('matching');
+    expect(coverageScript).toContain('xcrun --sdk iphonesimulator --show-sdk-version');
+  });
+
+  it('runs only the unit bundle and keeps simulator code signing enabled', () => {
+    expect(coverageScript).toContain('"-only-testing:${TEST_BUNDLE_NAME}Tests"');
+    expect(coverageScript).toContain('-parallel-testing-enabled NO');
+    expect(coverageScript).not.toContain('CODE_SIGNING_ALLOWED=NO');
+  });
+
+  it('discovers linked framework coverage objects without kit-specific names', () => {
+    const packageRoot = join(dir, 'ios-app');
+    const appDir = join(dir, 'SliccFollower.app');
+    const futureKit = join(appDir, 'Frameworks/FutureKit.framework/FutureKit');
+    const vendorKit = join(appDir, 'Frameworks/VendorKit.framework/VendorKit');
+    mkdirSync(dirname(futureKit), { recursive: true });
+    mkdirSync(dirname(vendorKit), { recursive: true });
+    writeFileSync(futureKit, 'instrumented local framework');
+    writeFileSync(vendorKit, 'linked vendor framework');
+
+    const result = spawnSync('bash', [
+      '-c',
+      `source ${JSON.stringify(coverageScriptPath)}
+configure_xcode_coverage_scope ios-app ${JSON.stringify(packageRoot)} ${JSON.stringify(appDir)}
+printf 'objects=%s\\n' "\${COVERAGE_OBJECT_ARGS[*]}"
+printf 'arch=%s\\n' "\${COVERAGE_ARCH_ARGS[*]}"
+printf 'ignore=%s\\n' "\${COVERAGE_IGNORE_REGEX}"
+printf 'sources=%s\\n' "\${COVERAGE_SOURCE_PATHS[*]}"`,
+    ]);
+    const output = result.stdout.toString();
+
+    expect(result.status).toBe(0);
+    expect(output).toContain(`objects=-object ${futureKit} -object ${vendorKit}`);
+    expect(output).toContain('arch=-arch ');
+    expect(output).toContain('SliccFollower/(Views|CDP)/');
+    expect(output).toContain(`sources=${packageRoot}`);
+    expect(coverageScript).not.toContain('SliccTrayKit.framework');
+  });
+});
+
+describe('swift-coverage-check SPM invocation', () => {
+  it('reports coverage when optional coverage argument arrays are empty', () => {
+    const packageRoot = join(dir, 'spm-package');
+    const bundleName = 'FixturePackageTests';
+    const coverageDir = join(packageRoot, '.build/coverage');
+    const testBinary = join(
+      packageRoot,
+      `.build/debug/${bundleName}.xctest/Contents/MacOS/${bundleName}`
+    );
+    const binDir = join(dir, 'bin');
+    mkdirSync(dirname(testBinary), { recursive: true });
+    mkdirSync(coverageDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(testBinary, 'fixture test binary');
+    writeFileSync(join(coverageDir, 'default.profdata'), 'fixture profile');
+    writeFileSync(join(binDir, 'swift'), '#!/bin/bash\nexit 0\n');
+    writeFileSync(
+      join(binDir, 'xcrun'),
+      `#!/bin/bash
+shift
+for arg in "$@"; do
+  [[ -n "$arg" ]] || exit 90
+done
+if [[ "$1" == "report" ]]; then
+  echo "TOTAL 1 0 100 1 0 100 1 0 100 1 0 100"
+fi
+`
+    );
+    chmodSync(testBinary, 0o755);
+    chmodSync(join(binDir, 'swift'), 0o755);
+    chmodSync(join(binDir, 'xcrun'), 0o755);
+
+    const result = spawnSync(
+      '/bin/bash',
+      [coverageScriptPath, packageRoot, bundleName, '0', '0', '0'],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      }
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Coverage summary:');
   });
 });

@@ -10,7 +10,7 @@
  *
  * Consumed by `packages/webapp` (leader + TS follower) and
  * `packages/cloudflare-worker` (SessionTray Durable Object). The iOS follower
- * mirrors a subset in `packages/ios-app/SliccFollower/Models/TrayTypes.swift`
+ * mirrors a subset in `packages/ios-app/SliccTrayKit/Models/TrayTypes.swift`
  * — update that mirror when this file changes.
  *
  * Worker-internal persisted state (`TrayBootstrapRecord`, `TrayRecord`) is NOT

@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// Golden-fixture corpus tests (#1294 P0-2).
 ///

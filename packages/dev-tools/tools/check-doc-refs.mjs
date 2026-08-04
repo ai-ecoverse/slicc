@@ -34,7 +34,17 @@ const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 /** Collect all CLAUDE.md files in the repo, excluding generated/vendor dirs. */
 function collectClaudeMds(root) {
   const results = [];
-  const skipDirs = new Set(['node_modules', '.git', 'dist', '.build', '.worktrees', 'worktrees']);
+  const skipDirs = new Set([
+    'node_modules',
+    '.git',
+    'dist',
+    '.build',
+    '.worktrees',
+    'worktrees',
+    // Local agent/yolo scratch trees (gitignored) can contain stale CLAUDE.md
+    // copies that are not part of the repo surface.
+    '.yolo',
+  ]);
 
   function walk(dir) {
     let entries;

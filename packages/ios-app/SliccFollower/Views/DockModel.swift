@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 /// A workbench surface the dock can open. Mirrors the web dock's item set
 /// (`packages/webcomponents/src/dock/slicc-dock.ts`): sprinkle launchers

@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// The dock's item order and placeholder honesty (#1802) — pure model,
 /// mirroring `slicc-dock.ts`.

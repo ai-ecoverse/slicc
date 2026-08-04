@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// The `new_session` wire contract: all three dispositions encode with the
 /// canonical string values and decode back.

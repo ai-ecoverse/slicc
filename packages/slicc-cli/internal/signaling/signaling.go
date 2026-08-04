@@ -2,7 +2,7 @@
 // contract (packages/shared-ts/src/tray-signaling.ts): the HTTP attach loop and
 // the bootstrap poll/answer/ice-candidate/retry exchange with the Cloudflare
 // tray-hub worker. It is a direct port of the proven iOS follower connector
-// (packages/ios-app/SliccFollower/Networking/TraySignaling.swift), plus the
+// (packages/ios-app/SliccTrayKit/Networking/TraySignaling.swift), plus the
 // TRAY_SUPERSEDED redirect the TS follower handles and iOS omits.
 package signaling
 

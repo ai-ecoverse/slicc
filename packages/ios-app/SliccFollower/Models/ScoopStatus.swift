@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 enum ScoopLifecycle: String, CaseIterable, Equatable, Sendable {
     case working

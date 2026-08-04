@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 /// Frozen-session index and archive parsing — the read side of the leader's
 /// freezer, mirrored from `packages/webapp/src/transcript/frozen-archive-format.ts`.

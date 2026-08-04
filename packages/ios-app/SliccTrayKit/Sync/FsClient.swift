@@ -26,9 +26,9 @@ import OSLog
 ///   resolves with the bytes received so far, because a caller cannot tell a
 ///   truncated file from a real one.
 @MainActor
-final class FsClient {
+public final class FsClient {
     /// How a request can fail from the client's point of view.
-    enum FsError: LocalizedError, Equatable {
+    public enum FsError: LocalizedError, Equatable {
         /// The leader ran the op and reported failure (`ok: false`).
         case leader(message: String, code: String?)
         /// No response within the deadline.
@@ -40,7 +40,7 @@ final class FsClient {
         /// The leader's chunking was self-inconsistent.
         case malformedChunking(String)
 
-        var errorDescription: String? {
+        public var errorDescription: String? {
             switch self {
             case .leader(let message, let code):
                 return code.map { "\(message) (\($0))" } ?? message
@@ -58,7 +58,7 @@ final class FsClient {
 
     /// Default per-request deadline. Generous: the leader may be mid-turn and
     /// the VFS read queues behind agent work.
-    static let defaultTimeout: TimeInterval = 30
+    public static let defaultTimeout: TimeInterval = 30
 
     /// Runtime id that routes a request to the leader's own VFS rather than to
     /// a peer follower. Matches the `'leader'` literal in `follower-dispatch.ts`.
@@ -79,7 +79,7 @@ final class FsClient {
     private let makeRequestId: () -> String
     private let logger = Logger(subsystem: "ai.slicc.follower", category: "fs")
 
-    init(
+    public init(
         timeout: TimeInterval = FsClient.defaultTimeout,
         makeRequestId: @escaping () -> String = { UUID().uuidString },
         send: @escaping (FollowerToLeaderMessage) -> Bool
@@ -96,7 +96,7 @@ final class FsClient {
     // MARK: - Requesting
 
     /// Run an op against the leader's VFS and await the reassembled payload.
-    func perform(_ request: TrayFsRequest) async throws -> TrayFsResponseData {
+    public func perform(_ request: TrayFsRequest) async throws -> TrayFsResponseData {
         let requestId = makeRequestId()
         return try await withCheckedThrowingContinuation { continuation in
             pending[requestId] = Pending(request: request, continuation: continuation)
@@ -116,7 +116,7 @@ final class FsClient {
     }
 
     /// Read a UTF-8 file from the leader's VFS.
-    func readFile(_ path: String) async throws -> String {
+    public func readFile(_ path: String) async throws -> String {
         let data = try await perform(.readFile(path: path, encoding: .utf8))
         guard case .file(let content, _) = data else {
             throw FsError.unexpectedPayload(expected: "file", got: data.wireType)
@@ -125,7 +125,7 @@ final class FsClient {
     }
 
     /// Read a binary file, decoding the leader's base64.
-    func readBinaryFile(_ path: String) async throws -> Data {
+    public func readBinaryFile(_ path: String) async throws -> Data {
         let payload = try await perform(.readFile(path: path, encoding: .binary))
         guard case .file(let content, _) = payload else {
             throw FsError.unexpectedPayload(expected: "file", got: payload.wireType)
@@ -136,8 +136,21 @@ final class FsClient {
         return decoded
     }
 
+    /// Write UTF-8 text to the leader's VFS.
+    public func writeFile(_ path: String, content: String) async throws {
+        try await expectVoid(
+            from: .writeFile(path: path, content: content, encoding: .utf8))
+    }
+
+    /// Write exact bytes to the leader's VFS using base64 on the wire.
+    public func writeBinaryFile(_ path: String, data: Data) async throws {
+        try await expectVoid(
+            from: .writeFile(
+                path: path, content: data.base64EncodedString(), encoding: .base64))
+    }
+
     /// List a directory in the leader's VFS.
-    func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
+    public func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
         let data = try await perform(.readDir(path: path))
         guard case .dirEntries(let entries) = data else {
             throw FsError.unexpectedPayload(expected: "dirEntries", got: data.wireType)
@@ -146,12 +159,22 @@ final class FsClient {
     }
 
     /// Stat a path in the leader's VFS.
-    func stat(_ path: String) async throws -> TrayFsStat {
+    public func stat(_ path: String) async throws -> TrayFsStat {
         let data = try await perform(.stat(path: path))
         guard case .stat(let stat) = data else {
             throw FsError.unexpectedPayload(expected: "stat", got: data.wireType)
         }
         return stat
+    }
+
+    /// Create a directory in the leader's VFS.
+    public func mkdir(_ path: String, recursive: Bool = false) async throws {
+        try await expectVoid(from: .mkdir(path: path, recursive: recursive))
+    }
+
+    /// Remove a file or directory from the leader's VFS.
+    public func remove(_ path: String, recursive: Bool = false) async throws {
+        try await expectVoid(from: .rm(path: path, recursive: recursive))
     }
 
     /// Test whether a path exists in the leader's VFS.
@@ -166,7 +189,7 @@ final class FsClient {
     // MARK: - Responding
 
     /// Feed a `fs.response` from the leader into the correlator.
-    func handleResponse(requestId: String, response: TrayFsResponse) {
+    public func handleResponse(requestId: String, response: TrayFsResponse) {
         guard var entry = pending[requestId] else {
             // A late reply after a timeout, or a reply to a request this
             // client never made. Nothing to resume; drop it quietly.
@@ -209,7 +232,7 @@ final class FsClient {
     }
 
     /// Fail every in-flight request. Called when the channel drops.
-    func cancelAll(_ reason: FsError = .disconnected) {
+    public func cancelAll(_ reason: FsError = .disconnected) {
         let ids = Array(pending.keys)
         for id in ids { fail(id, with: reason) }
     }
@@ -219,7 +242,7 @@ final class FsClient {
     /// iOS federates no filesystem of its own, so the honest answer is an
     /// error rather than silence: `fs-router.ts` sets no timeout, so a dropped
     /// request leaves the leader's promise pending forever.
-    static func refusal(for request: TrayFsRequest) -> TrayFsResponse {
+    public static func refusal(for request: TrayFsRequest) -> TrayFsResponse {
         .failure(
             "iOS follower serves no filesystem (op \(request.op) on \(request.path))",
             code: "ENOTSUP")
@@ -246,6 +269,13 @@ final class FsClient {
             self?.fail(requestId, with: .timedOut(op: request.op, path: request.path))
         }
         pending[requestId] = entry
+    }
+
+    private func expectVoid(from request: TrayFsRequest) async throws {
+        let data = try await perform(request)
+        guard case .void = data else {
+            throw FsError.unexpectedPayload(expected: "void", got: data.wireType)
+        }
     }
 
     private func finish(_ requestId: String, with data: TrayFsResponseData) {

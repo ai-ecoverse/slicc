@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// One remote tray tab (leader or another follower) as a preview card:

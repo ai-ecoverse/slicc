@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { buildCorpusDocument } from '../../webapp/src/scoops/tray-sync-protocol-corpus.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const swiftMirror = resolve(here, '../../ios-app/SliccFollower/Models/SyncProtocol.swift');
+const swiftMirror = resolve(here, '../../ios-app/SliccTrayKit/Models/SyncProtocol.swift');
 const out = resolve(
   here,
   '../../ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'
@@ -30,10 +30,14 @@ const document = buildCorpusDocument();
 // CI failure far from the cause. Cross-check here and fail loudly instead.
 const swiftSource = readFileSync(swiftMirror, 'utf8');
 const swiftVersion = Number(
-  /^\s*let traySyncProtocolVersion\s*=\s*(\d+)/m.exec(swiftSource)?.[1] ?? Number.NaN
+  /^\s*(?:(?:public|internal|package|fileprivate|private)\s+)?let\s+traySyncProtocolVersion\s*=\s*(\d+)/m.exec(
+    swiftSource
+  )?.[1] ?? Number.NaN
 );
 if (!Number.isInteger(swiftVersion)) {
-  throw new Error(`Could not read 'let traySyncProtocolVersion' from ${swiftMirror}`);
+  throw new Error(
+    `Could not read 'let traySyncProtocolVersion' with an optional access modifier from ${swiftMirror}`
+  );
 }
 if (document.traySyncProtocolVersion !== swiftVersion) {
   throw new Error(

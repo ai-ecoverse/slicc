@@ -1,4 +1,5 @@
 import PhotosUI
+import SliccTrayKit
 import SwiftUI
 import UIKit
 

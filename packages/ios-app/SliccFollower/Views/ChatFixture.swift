@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 /// UI fixture — synthetic chat history that exercises every message
 /// variant the SwiftUI chat panel knows how to render. Mirrors the

@@ -2,7 +2,7 @@
  * Agent/chat wire payload types embedded in the tray sync protocol
  * (`tray-sync-protocol.ts`) — the leader↔follower data-channel format
  * partially mirrored by the iOS follower
- * (`packages/ios-app/SliccFollower/Models/SyncProtocol.swift`).
+ * (`packages/ios-app/SliccTrayKit/Models/SyncProtocol.swift`).
  *
  * Types only — platform-agnostic by construction (no DOM, no Node, no
  * imports). The behavior that produces/consumes these shapes stays in

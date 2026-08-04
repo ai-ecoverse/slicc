@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 import XCTest
 

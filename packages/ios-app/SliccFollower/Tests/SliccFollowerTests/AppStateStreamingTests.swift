@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 import XCTest
 
 @testable import SliccFollower

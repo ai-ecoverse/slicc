@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayKit
 
 /// Which federated tabs the browser surface should list.
 ///

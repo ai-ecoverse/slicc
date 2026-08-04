@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// View-only state that must outlive either adaptive shell subtree.

@@ -18,23 +18,23 @@ import Foundation
 /// Restricted to what the leader will accept. Adding a case here without
 /// adding it to `FORWARDABLE_TO_LEADER` produces a lick the leader logs and
 /// drops.
-enum FollowerLickType: String, Codable {
+public enum FollowerLickType: String, Codable {
     case navigate
     case discovery
 }
 
 /// A lick originating on this follower.
-struct LickEvent: Codable, Equatable {
-    let type: FollowerLickType
+public struct LickEvent: Codable, Equatable {
+    public let type: FollowerLickType
     /// ISO-8601, matching the browser follower's `new Date().toISOString()`.
-    let timestamp: String
+    public let timestamp: String
     /// Free-form payload the cone reads. For `navigate` this is the handoff
     /// descriptor (`url`, `verb`, `target`, and optional `instruction`,
     /// `branch`, `path`, `title`).
-    let body: AnyCodable?
+    public let body: AnyCodable?
 
     /// `navigate`: the page URL whose response advertised the handoff rel.
-    var navigateUrl: String?
+    public var navigateUrl: String?
     /// `discovery`: origin, artifact kind, and manifest URL.
     var discoveryOrigin: String?
     var discoveryKind: String?
@@ -42,9 +42,9 @@ struct LickEvent: Codable, Equatable {
     /// Always nil on the wire from a follower — the leader strips it anyway
     /// (`const { targetScoop: _droppedTarget, ...rest }`). Modelled so the
     /// omission is visible rather than looking like an oversight.
-    var targetScoop: String?
+    public var targetScoop: String?
 
-    init(
+    public init(
         type: FollowerLickType,
         timestamp: String,
         body: AnyCodable?,
@@ -62,32 +62,5 @@ struct LickEvent: Codable, Equatable {
         self.discoveryKind = discoveryKind
         self.discoveryUrl = discoveryUrl
         self.targetScoop = targetScoop
-    }
-
-    /// Build the navigate lick for a recognised handoff, matching the body the
-    /// browser follower's navigate watcher sends
-    /// (`ui/follower-navigate-watcher.ts`).
-    static func navigate(
-        pageURL: String,
-        match: HandoffMatch,
-        title: String? = nil,
-        timestamp: String = ISO8601DateFormatter().string(from: Date())
-    ) -> LickEvent {
-        // Raw values, not pre-wrapped: `AnyCodable` wraps nested containers
-        // itself, and handing it a dictionary of `AnyCodable` double-wraps.
-        var body: [String: Any] = [
-            "url": pageURL,
-            "verb": match.verb.rawValue,
-            "target": match.target,
-        ]
-        if let instruction = match.instruction { body["instruction"] = instruction }
-        if let branch = match.branch { body["branch"] = branch }
-        if let path = match.path { body["path"] = path }
-        if let title, !title.isEmpty { body["title"] = title }
-        return LickEvent(
-            type: .navigate,
-            timestamp: timestamp,
-            body: AnyCodable(body),
-            navigateUrl: pageURL)
     }
 }

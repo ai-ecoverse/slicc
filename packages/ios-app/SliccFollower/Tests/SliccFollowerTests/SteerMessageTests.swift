@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// The `user_message.steer` wire contract: optional on the wire — omitted
 /// when false, present when true — and tolerated on decode either way.

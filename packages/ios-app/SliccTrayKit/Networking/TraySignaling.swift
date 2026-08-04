@@ -22,7 +22,7 @@ enum TraySignalingError: Error, LocalizedError {
     }
 }
 
-// Wire types are defined in Models/TrayTypes.swift
+// Wire types are defined in SliccTrayKit/Models/TrayTypes.swift
 
 // MARK: - Raw HTTP response shapes (private, for decoding only)
 
@@ -59,39 +59,39 @@ private struct RawFollowerBootstrapResponse: Codable {
 
 // MARK: - Plan types (public API)
 
-enum AttachAction: String, Sendable {
+public enum AttachAction: String, Sendable {
     case wait, signal, fail
 }
 
-struct FollowerAttachPlan: Sendable {
-    let trayId: String
-    let controllerId: String
-    let participantCount: Int
-    let leader: TrayLeaderSummary?
-    let action: AttachAction
-    let code: String
-    var retryAfterMs: Int?
-    var error: String?
-    var bootstrap: TrayBootstrapStatus?
-    var iceServers: [TurnIceServer]?
+public struct FollowerAttachPlan: Sendable {
+    public let trayId: String
+    public let controllerId: String
+    public let participantCount: Int
+    public let leader: TrayLeaderSummary?
+    public let action: AttachAction
+    public let code: String
+    public var retryAfterMs: Int?
+    public var error: String?
+    public var bootstrap: TrayBootstrapStatus?
+    public var iceServers: [TurnIceServer]?
 }
 
-struct FollowerBootstrapPlan: Sendable {
-    let trayId: String
-    let controllerId: String
-    let participantCount: Int
-    let leader: TrayLeaderSummary?
-    let bootstrap: TrayBootstrapStatus
-    let events: [TrayBootstrapEvent]
+public struct FollowerBootstrapPlan: Sendable {
+    public let trayId: String
+    public let controllerId: String
+    public let participantCount: Int
+    public let leader: TrayLeaderSummary?
+    public let bootstrap: TrayBootstrapStatus
+    public let events: [TrayBootstrapEvent]
 }
 
 // MARK: - Signaling Client
 
-actor TraySignalingClient {
-    let joinUrl: URL
+public actor TraySignalingClient {
+    public let joinUrl: URL
     private let session: URLSession
 
-    init(joinUrl: URL, session: URLSession = .shared) {
+    public init(joinUrl: URL, session: URLSession = .shared) {
         self.joinUrl = joinUrl
         self.session = session
     }
@@ -99,7 +99,7 @@ actor TraySignalingClient {
     // MARK: - 1. Attach
 
     /// First call to join a tray. POST { controllerId, runtime } → FollowerAttachPlan
-    func attach(controllerId: String, runtime: String = "slicc-ios") async throws -> FollowerAttachPlan {
+    public func attach(controllerId: String, runtime: String = "slicc-ios") async throws -> FollowerAttachPlan {
         let body: [String: Any] = ["controllerId": controllerId, "runtime": runtime]
         let (data, response) = try await post(body: body)
         let rawText = String(data: data, encoding: .utf8) ?? "(empty)"
@@ -115,7 +115,9 @@ actor TraySignalingClient {
     // MARK: - 2. Poll
 
     /// Poll for bootstrap events (offer, ICE candidates).
-    func pollBootstrap(controllerId: String, bootstrapId: String, cursor: Int?) async throws -> FollowerBootstrapPlan {
+    public func pollBootstrap(
+        controllerId: String, bootstrapId: String, cursor: Int?
+    ) async throws -> FollowerBootstrapPlan {
         var body: [String: Any] = [
             "action": "poll",
             "controllerId": controllerId,
@@ -128,7 +130,9 @@ actor TraySignalingClient {
     // MARK: - 3. Answer
 
     /// Send SDP answer back to the leader.
-    func sendAnswer(controllerId: String, bootstrapId: String, answer: TraySessionDescription) async throws -> FollowerBootstrapPlan {
+    public func sendAnswer(
+        controllerId: String, bootstrapId: String, answer: TraySessionDescription
+    ) async throws -> FollowerBootstrapPlan {
         let body: [String: Any] = [
             "action": "answer",
             "controllerId": controllerId,
@@ -141,7 +145,9 @@ actor TraySignalingClient {
     // MARK: - 4. ICE Candidate
 
     /// Send an ICE candidate to the leader.
-    func sendIceCandidate(controllerId: String, bootstrapId: String, candidate: TrayIceCandidate) async throws -> FollowerBootstrapPlan {
+    public func sendIceCandidate(
+        controllerId: String, bootstrapId: String, candidate: TrayIceCandidate
+    ) async throws -> FollowerBootstrapPlan {
         var candidateDict: [String: Any] = ["candidate": candidate.candidate]
         if let sdpMid = candidate.sdpMid { candidateDict["sdpMid"] = sdpMid }
         if let sdpMLineIndex = candidate.sdpMLineIndex { candidateDict["sdpMLineIndex"] = sdpMLineIndex }
@@ -159,7 +165,9 @@ actor TraySignalingClient {
     // MARK: - 5. Retry
 
     /// Retry a failed bootstrap.
-    func retryBootstrap(controllerId: String, bootstrapId: String, runtime: String = "slicc-ios") async throws -> FollowerBootstrapPlan {
+    public func retryBootstrap(
+        controllerId: String, bootstrapId: String, runtime: String = "slicc-ios"
+    ) async throws -> FollowerBootstrapPlan {
         let body: [String: Any] = [
             "action": "retry",
             "controllerId": controllerId,

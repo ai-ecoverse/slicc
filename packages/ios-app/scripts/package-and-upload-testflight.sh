@@ -18,7 +18,13 @@
 #   APPLE_API_KEY_P8_BASE64            base64 of AuthKey_*.p8
 #   APPLE_DISTRIBUTION_CERT_BASE64     base64 of Apple Distribution .p12
 #   APPLE_DISTRIBUTION_CERT_PASSWORD   password for the .p12
-#   APPLE_PROVISIONING_PROFILE_BASE64  base64 of the App Store .mobileprovision
+#   APPLE_PROVISIONING_PROFILE_BASE64  base64 of the main App Store .mobileprovision
+#   APPLE_PROVISIONING_PROFILE_NAME    defaults to "Slicc Follower App Store"
+#   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64
+#                                      base64 of the File Provider appex App Store profile
+#   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME
+#                                      defaults to "Slicc Follower File Provider App Store"
+#   APPLE_FILEPROVIDER_BUNDLE_ID       defaults to com.sliccy.follower.fileprovider
 #   APPLE_TEAM_ID                      defaults to S8LB56P782
 #   KEYCHAIN_PATH                      reuse a keychain set up by an
 #                                       earlier workflow step; if unset
@@ -77,7 +83,8 @@ secret_unusable() {
 }
 for var in APPLE_DISTRIBUTION_CERT_BASE64 APPLE_DISTRIBUTION_CERT_PASSWORD \
            APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID \
-           APPLE_PROVISIONING_PROFILE_BASE64; do
+           APPLE_PROVISIONING_PROFILE_BASE64 \
+           APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64; do
   if secret_unusable "$var"; then
     msg="TestFlight secret \$$var is missing or set to \"-\" — skipping iOS upload."
     if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
@@ -98,6 +105,8 @@ BUILD_NUMBER="${GITHUB_RUN_NUMBER:-$(git -C "$PROJECT_ROOT" rev-list --count HEA
 TEAM_ID="${APPLE_TEAM_ID:-S8LB56P782}"
 BUNDLE_ID="${APPLE_BUNDLE_ID:-com.sliccy.follower}"
 PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
+FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.fileprovider}"
+FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
 
 echo "=== SliccFollower TestFlight v${VERSION} (build ${BUILD_NUMBER}) ==="
 
@@ -202,18 +211,27 @@ elif [ -n "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ]; then
   echo "  imported Apple Distribution cert"
 fi
 
-# --- Profile: install into ~/Library/MobileDevice/Provisioning Profiles ----
-if [ -n "${APPLE_PROVISIONING_PROFILE_BASE64:-}" ]; then
-  PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-  mkdir -p "$PROFILE_DIR"
-  PROFILE_TMP="$(mktemp -t slicc-profile).mobileprovision"
-  CLEANUP+=("$PROFILE_TMP")
-  printf '%s' "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_TMP"
-  PROFILE_UUID="$(security cms -D -i "$PROFILE_TMP" 2>/dev/null \
+# --- Profiles: install into ~/Library/MobileDevice/Provisioning Profiles ----
+# Helper installs one base64 profile and echoes its UUID. The app embeds a
+# File Provider appex, so archive/export needs both the main app profile and
+# the appex profile (same App Group).
+install_profile_b64() {
+  local b64="$1" label="$2"
+  local profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+  mkdir -p "$profile_dir"
+  local profile_tmp
+  profile_tmp="$(mktemp -t slicc-profile).mobileprovision"
+  CLEANUP+=("$profile_tmp")
+  printf '%s' "$b64" | base64 --decode > "$profile_tmp"
+  local profile_uuid
+  profile_uuid="$(security cms -D -i "$profile_tmp" 2>/dev/null \
     | plutil -extract UUID raw -o - -)"
-  cp "$PROFILE_TMP" "$PROFILE_DIR/${PROFILE_UUID}.mobileprovision"
-  echo "  installed provisioning profile $PROFILE_UUID"
-fi
+  cp "$profile_tmp" "$profile_dir/${profile_uuid}.mobileprovision"
+  echo "  installed $label provisioning profile $profile_uuid"
+}
+
+install_profile_b64 "$APPLE_PROVISIONING_PROFILE_BASE64" "app"
+install_profile_b64 "$APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64" "fileprovider"
 
 # --- API key: locate the .p8 so altool / xcodebuild can find it -----------
 if [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_KEY_ISSUER_ID:-}" ]; then
@@ -270,6 +288,8 @@ cat > "$EXPORT_OPTS" <<EOF
     <dict>
         <key>${BUNDLE_ID}</key>
         <string>${PROFILE_NAME}</string>
+        <key>${FILEPROVIDER_BUNDLE_ID}</key>
+        <string>${FILEPROVIDER_PROFILE_NAME}</string>
     </dict>
     <key>uploadSymbols</key>
     <true/>
@@ -288,6 +308,89 @@ echo "  archiving..."
 # at the command line keeps the .pbxproj friendly for local Xcode
 # builds while pinning CI to the manual cert + provisioning profile we
 # already imported.
+#
+# Global PROVISIONING_PROFILE_SPECIFIER only covers the app target; the
+# File Provider appex needs its own specifier. xcodebuild accepts the
+# global override for the main product; export uses ExportOptions.plist
+# for both bundle IDs. To keep archive codesign happy for the embedded
+# appex, also pass the appex specifier via a temporary xcconfig that
+# only XcodeGen-style target settings would otherwise provide. We patch
+# the generated pbxproj Release configs for the two bundle IDs just for
+# this archive (project is regenerated in CI anyway from project.yml).
+python3 - "$IOS_PROJECT_DIR/SliccFollower.xcodeproj/project.pbxproj" \
+  "$BUNDLE_ID" "$PROFILE_NAME" \
+  "$FILEPROVIDER_BUNDLE_ID" "$FILEPROVIDER_PROFILE_NAME" \
+  "$TEAM_ID" <<'PY'
+import sys
+from pathlib import Path
+path, app_id, app_prof, fp_id, fp_prof, team = sys.argv[1:7]
+text = Path(path).read_text()
+lines = text.splitlines(keepends=True)
+out = []
+i = 0
+targets = {
+    app_id: (app_prof, "Manual"),
+    fp_id: (fp_prof, "Manual"),
+}
+while i < len(lines):
+    out.append(lines[i])
+    for bundle_id, (profile, style) in targets.items():
+        if f"PRODUCT_BUNDLE_IDENTIFIER = {bundle_id};" in lines[i]:
+            block = []
+            j = i + 1
+            while j < len(lines) and lines[j].strip() != "};":
+                block.append(lines[j])
+                j += 1
+            new_block = []
+            seen = set()
+            for l in block:
+                if "PROVISIONING_PROFILE_SPECIFIER" in l:
+                    new_block.append(
+                        f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile}";\n'
+                    )
+                    seen.add("profile")
+                    continue
+                if "CODE_SIGN_STYLE" in l:
+                    new_block.append(f"\t\t\t\tCODE_SIGN_STYLE = {style};\n")
+                    seen.add("style")
+                    continue
+                if "DEVELOPMENT_TEAM" in l:
+                    new_block.append(f"\t\t\t\tDEVELOPMENT_TEAM = {team};\n")
+                    seen.add("team")
+                    continue
+                if "CODE_SIGN_IDENTITY" in l and "sdk" not in l:
+                    new_block.append(
+                        '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
+                    )
+                    seen.add("identity")
+                    continue
+                new_block.append(l)
+            inserts = []
+            if "profile" not in seen:
+                inserts.append(
+                    f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{profile}";\n'
+                )
+            if "style" not in seen:
+                inserts.append(f"\t\t\t\tCODE_SIGN_STYLE = {style};\n")
+            if "team" not in seen:
+                inserts.append(f"\t\t\t\tDEVELOPMENT_TEAM = {team};\n")
+            if "identity" not in seen:
+                inserts.append(
+                    '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
+                )
+            out.extend(inserts)
+            out.extend(new_block)
+            if j < len(lines):
+                out.append(lines[j])
+            i = j + 1
+            break
+    else:
+        i += 1
+        continue
+Path(path).write_text("".join(out))
+print(f"  patched pbxproj signing for {app_id} + {fp_id}")
+PY
+
 xcodebuild \
   -project "$IOS_PROJECT_DIR/SliccFollower.xcodeproj" \
   -scheme SliccFollower \
@@ -301,8 +404,6 @@ xcodebuild \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="Apple Distribution" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
-  PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-  PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   ${ENTITLEMENTS_OVERRIDE[@]+"${ENTITLEMENTS_OVERRIDE[@]}"} \

@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import SliccTrayKit
 
 /// Single-flight client for running commands in the leader's virtual shell.
 ///

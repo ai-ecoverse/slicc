@@ -1,6 +1,7 @@
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayKit
 
 /// Which federated tabs reach the browser surface. The leader enumerates its
 /// whole browser, so its own SLICC page arrives in the registry like any
