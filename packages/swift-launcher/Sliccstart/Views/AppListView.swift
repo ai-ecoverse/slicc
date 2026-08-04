@@ -429,7 +429,7 @@ struct AppListView: View {
             return AnyShapeStyle(.primary)
         case .checking, .upToDate:
             return AnyShapeStyle(.secondary)
-        case .noInstallableRelease:
+        case .noInstallableRelease, .translocated:
             return AnyShapeStyle(Color.orange)
         case .failed:
             return AnyShapeStyle(Color.red)
