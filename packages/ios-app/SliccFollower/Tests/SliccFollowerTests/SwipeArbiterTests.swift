@@ -51,19 +51,6 @@ final class SwipeArbiterTests: XCTestCase {
             action(horizontal: 100, origin: .guardedContent(nonOverflowing)), .previous)
     }
 
-    func testOuterGestureDefersGuardedContentToScroller() {
-        XCTAssertEqual(
-            SwipeArbiter.outerAction(
-                for: CGSize(width: -100, height: 4),
-                origin: .guardedContent(trailing)),
-            .none)
-        XCTAssertEqual(
-            SwipeArbiter.outerAction(
-                for: CGSize(width: -100, height: 4),
-                origin: .ordinaryContent),
-            .next)
-    }
-
     func testMeasuredEdgesIncludeToleranceBounceAndNonOverflowingContent() {
         let nearLeading = SwipeArbiter.ScrollContext(
             offset: 0.5, contentWidth: 200, viewportWidth: 100)

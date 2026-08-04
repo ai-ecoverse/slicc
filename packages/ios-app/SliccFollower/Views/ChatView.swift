@@ -305,15 +305,18 @@ struct ConversationView: View {
                     onInlineSprinkleLick: { _, _ in },
                     scrollPosition: $transcriptPosition
                 )
-                .simultaneousGesture(frozenDismissGesture)
+                .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
+                .background {
+                    TranscriptSwipeGestureBridge(
+                        gestureState: horizontalScrollGestureState,
+                        onAction: handleTranscriptSwipe)
+                }
                 FrozenSessionBanner()
             } else {
                 liveConversation
             }
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
-        .environment(\.horizontalScrollAction, handleTranscriptSwipe)
-        .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
         .background(palette.canvas)
         // The live session identifies itself through the compact switcher in
         // the corner, not through a nav title — two copies of the same scoop
@@ -457,9 +460,12 @@ struct ConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
-            // simultaneousGesture so the inner ScrollView keeps vertical scrolling;
-            // we only react to mostly-horizontal flicks (filtered in onEnded).
-            .simultaneousGesture(swipeGesture)
+            .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
+            .background {
+                TranscriptSwipeGestureBridge(
+                    gestureState: horizontalScrollGestureState,
+                    onAction: handleTranscriptSwipe)
+            }
 
             InputBar(
                 text: $inputText,
@@ -485,22 +491,6 @@ struct ConversationView: View {
                 },
                 stagedAttachments: $stagedAttachments
             )
-        }
-    }
-
-    /// Right swipe anywhere on a frozen transcript dismisses back to live —
-    /// the same filter as the scoop swipe (mostly-horizontal flicks only) so
-    /// vertical scrolling stays untouched.
-    private var frozenDismissGesture: some Gesture {
-        arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            handleTranscriptSwipe(action)
-        }
-    }
-
-    /// Horizontal drag gesture that routes to AppState's swipe handlers.
-    private var swipeGesture: some Gesture {
-        arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            handleTranscriptSwipe(action)
         }
     }
 
@@ -585,11 +575,14 @@ struct FixtureConversationView: View {
                 },
                 scrollPosition: $transcriptPosition
             )
-            .simultaneousGesture(fixtureSwipeGesture)
+            .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
+            .background {
+                TranscriptSwipeGestureBridge(
+                    gestureState: horizontalScrollGestureState,
+                    onAction: handleFixtureSwipe)
+            }
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
-        .environment(\.horizontalScrollAction, handleFixtureSwipe)
-        .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
         .background(palette.canvas)
         .navigationTitle("UI Fixture")
         .navigationBarTitleDisplayMode(.inline)
@@ -608,12 +601,6 @@ struct FixtureConversationView: View {
         return action
     }
 
-    private var fixtureSwipeGesture: some Gesture {
-        arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            handleFixtureSwipe(action)
-        }
-    }
-
     private func handleFixtureSwipe(_ action: SwipeArbiter.Action) {
         switch action {
         case .next:
@@ -624,37 +611,6 @@ struct FixtureConversationView: View {
             break
         }
     }
-}
-
-/// The live conversation and leaderless fixture share this exact arbitration path.
-private func arbitratedScoopSwipeGesture(
-    state: HorizontalScrollGestureState,
-    onAction: @escaping (SwipeArbiter.Action) -> Void
-) -> some Gesture {
-    let touchDownGesture = DragGesture(
-        minimumDistance: 0,
-        coordinateSpace: .named(state.coordinateSpaceName)
-    )
-    .onChanged { value in
-        state.beginOuterGesture(at: value.startLocation)
-    }
-    .onEnded { _ in
-        state.endTouchGesture()
-    }
-
-    let actionGesture = DragGesture(
-        minimumDistance: SwipeArbiter.gestureMinimumDistance,
-        coordinateSpace: .named(state.coordinateSpaceName)
-    )
-    .onChanged { value in
-        state.beginOuterGesture(at: value.startLocation)
-    }
-    .onEnded { value in
-        let origin = state.endOuterGesture()
-        onAction(SwipeArbiter.outerAction(for: value.translation, origin: origin))
-    }
-
-    return actionGesture.simultaneously(with: touchDownGesture)
 }
 
 // MARK: - ScoopSwitcher

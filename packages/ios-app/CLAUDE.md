@@ -63,9 +63,9 @@ the drag pulls away from (right at leading, left at trailing). Freeze edge state
 at drag start. Capture must tolerate either inner/outer callback order, and an
 unknown context in a guarded region fails closed. Edge math uses the effective
 viewport, including both 8pt expansions from negative horizontal padding.
-Guarded scrollers resolve handoff on their own gesture; iOS 26 no longer makes a
-descendant gesture simultaneous with an ancestor gesture. The ancestor handles
-ordinary transcript drags only, avoiding duplicate navigation on older iOS.
+The transcript observer is a UIKit pan recognizer that explicitly permits
+simultaneous recognition; iOS 26 no longer makes a descendant SwiftUI gesture
+simultaneous with an ancestor gesture. The inner gesture still snapshots edges.
 Ordinary transcript navigation and vertical scrolling stay unchanged. Because
 the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
