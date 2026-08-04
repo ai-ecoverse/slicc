@@ -1203,6 +1203,9 @@ class AppState: ObservableObject {
             logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
+                // Match WcChatController: content_done finalizes only this message.
+                // Turn-level busy state falls on turn_end or status: ready so tools
+                // that follow remain stoppable and steerable.
                 // Retained for cost attribution, as the webapp does. Neither
                 // surface renders these in the thread.
                 if let model { buffer[idx].model = model }
@@ -1212,7 +1215,6 @@ class AppState: ObservableObject {
                     cancelPendingMessagesFlush()
                     messages = buffer
                 }
-                settleTurn(messageId: messageId, isVisible: isVisible)
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
             }
 
