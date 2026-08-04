@@ -97,9 +97,25 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
 extension ScoopSummary {
     func avatarGeometry(sideLength: Double = 26) -> SliccAgentAvatarGeometry {
         let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
-        // Mirrors DEFAULT_COLOR in slicc-agent-avatar.ts; ScoopSummary carries no color.
-        let color = isCone ? "#D2691E" : "#FFB6C1"
+        let state = state ?? "idle"
+        let eyes: SliccAgentAvatarGeometry.EyeState
+        switch state {
+        case "broken": eyes = .dead
+        case "initializing": eyes = .none
+        default: eyes = .open
+        }
         return .init(
-            type: type, color: color, eyes: .open, fill: fill ?? 0, sideLength: sideLength)
+            type: type, color: avatarColor, eyes: eyes, fill: fill ?? 0,
+            blink: state == "working", sideLength: sideLength)
+    }
+
+    /// Mirrors `scoopColor`: UInt32 wrapping over the name's UTF-16 code units.
+    private var avatarColor: String {
+        if isCone { return "#b07823" }
+        let palette = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#3b82f6", "#ef4444"]
+        let hash = name.utf16.reduce(UInt32.zero) { hash, codeUnit in
+            hash &* 31 &+ UInt32(codeUnit)
+        }
+        return palette[Int(hash % UInt32(palette.count))]
     }
 }

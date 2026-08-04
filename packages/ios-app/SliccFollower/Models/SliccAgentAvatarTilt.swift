@@ -1,12 +1,20 @@
 import Combine
 import CoreMotion
 import Foundation
+import UIKit
 
 struct SliccAgentAvatarAttitude: Equatable, Sendable {
     static let zero = Self(roll: 0, pitch: 0)
 
     let roll: Double
     let pitch: Double
+}
+
+enum SliccAgentAvatarInterfaceOrientation: Equatable, Sendable {
+    case portrait
+    case portraitUpsideDown
+    case landscapeLeft
+    case landscapeRight
 }
 
 /// Lifecycle seam for deterministic previews/tests and the CoreMotion implementation.
@@ -90,14 +98,31 @@ struct SliccAgentAvatarTiltMapping: Sendable {
         for attitude: SliccAgentAvatarAttitude,
         geometry: SliccAgentAvatarGeometry,
         reduceMotion: Bool,
-        isDeviceMotionAvailable: Bool
+        isDeviceMotionAvailable: Bool,
+        orientation: SliccAgentAvatarInterfaceOrientation = .portrait
     ) -> SliccAgentAvatarGeometry.Point {
         guard !reduceMotion, isDeviceMotionAvailable, fullTravelTilt > 0 else {
             return .init(x: 0, y: 0)
         }
         let scale = geometry.maxPupilTravel / fullTravelTilt
-        return geometry.clampedPupilOffset(
-            .init(x: attitude.roll * scale, y: -attitude.pitch * scale))
+        let screenAxes = screenAxes(for: attitude, orientation: orientation)
+        return geometry.clampedPupilOffset(.init(x: screenAxes.x * scale, y: screenAxes.y * scale))
+    }
+
+    private func screenAxes(
+        for attitude: SliccAgentAvatarAttitude,
+        orientation: SliccAgentAvatarInterfaceOrientation
+    ) -> SliccAgentAvatarGeometry.Point {
+        switch orientation {
+        case .portrait:
+            .init(x: attitude.roll, y: -attitude.pitch)
+        case .portraitUpsideDown:
+            .init(x: -attitude.roll, y: attitude.pitch)
+        case .landscapeLeft:
+            .init(x: -attitude.pitch, y: -attitude.roll)
+        case .landscapeRight:
+            .init(x: attitude.pitch, y: attitude.roll)
+        }
     }
 
     func smoothedOffset(
@@ -118,16 +143,21 @@ final class SliccAgentAvatarTiltController: ObservableObject {
 
     private let source: any SliccAgentAvatarTiltSource
     private let mapping: SliccAgentAvatarTiltMapping
+    private let interfaceOrientation: @MainActor () -> SliccAgentAvatarInterfaceOrientation
     private var geometry: SliccAgentAvatarGeometry?
     private var motionDisabled = false
     private var isUpdating = false
 
     init(
         source: any SliccAgentAvatarTiltSource,
-        mapping: SliccAgentAvatarTiltMapping = .init()
+        mapping: SliccAgentAvatarTiltMapping = .init(),
+        interfaceOrientation: @escaping @MainActor () -> SliccAgentAvatarInterfaceOrientation = {
+            SliccAgentAvatarTiltController.currentInterfaceOrientation
+        }
     ) {
         self.source = source
         self.mapping = mapping
+        self.interfaceOrientation = interfaceOrientation
     }
 
     func update(geometry: SliccAgentAvatarGeometry, motionDisabled: Bool) {
@@ -154,7 +184,21 @@ final class SliccAgentAvatarTiltController: ObservableObject {
         guard let geometry else { return }
         let target = mapping.pupilOffset(
             for: attitude, geometry: geometry, reduceMotion: motionDisabled,
-            isDeviceMotionAvailable: source.isDeviceMotionAvailable)
+            isDeviceMotionAvailable: source.isDeviceMotionAvailable,
+            orientation: interfaceOrientation())
         pupilOffset = mapping.smoothedOffset(from: pupilOffset, toward: target)
+    }
+
+    private static var currentInterfaceOrientation: SliccAgentAvatarInterfaceOrientation {
+        let orientation = UIApplication.shared.connectedScenes.lazy
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }?
+            .interfaceOrientation
+        switch orientation {
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .portrait
+        }
     }
 }
