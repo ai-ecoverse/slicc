@@ -320,8 +320,10 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
         }
 
         func handle(_ gesture: UILongPressGestureRecognizer) {
-            guard let view = gesture.view else { return }
-            let location = gesture.location(in: view)
+            guard let window = gesture.view?.window else { return }
+            // The recognizer's SwiftUI host can move with scroll content.
+            // Window coordinates preserve the finger's full translation.
+            let location = gesture.location(in: window)
             switch gesture.state {
             case .began:
                 startLocation = location
