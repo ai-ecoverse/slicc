@@ -58,7 +58,7 @@ final class SteerUITests: XCTestCase {
             "The streaming send affordance must not exist while idle")
     }
 
-    func testContentDoneRestoresIdleComposerWithoutTurnEnd() {
+    func testReadyStatusRestoresIdleComposerWithoutTurnEnd() {
         let app = XCUIApplication()
         app.launchArguments += [
             "-joinUrl", "", "-uiTestCompletedTurn", "YES",
@@ -70,9 +70,9 @@ final class SteerUITests: XCTestCase {
         let idleSend = app.buttons["composer-send"]
         XCTAssertTrue(
             idleSend.waitForExistence(timeout: 10),
-            "content_done should restore the idle send control without turn_end")
+            "status: ready should restore the idle send control without turn_end")
         XCTAssertFalse(
             app.buttons["send-while-streaming"].exists,
-            "A completed turn must not retain the streaming send affordance")
+            "A ready turn must not retain the streaming send affordance")
     }
 }

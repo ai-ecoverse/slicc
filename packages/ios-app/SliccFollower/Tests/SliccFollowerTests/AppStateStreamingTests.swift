@@ -11,7 +11,7 @@ final class AppStateStreamingTests: XCTestCase {
     }
 
     @MainActor
-    func testContentDoneSettlesMatchingVisibleTurnWithoutTurnEnd() throws {
+    func testContentDoneThenToolUseKeepsStopSteerAvailable() throws {
         let state = AppState()
         state.selectedScoopJid = "cone"
 
@@ -19,32 +19,18 @@ final class AppStateStreamingTests: XCTestCase {
         try send(
             .contentDone(messageId: "reply", model: nil, usage: nil),
             scoopJid: "cone", to: state)
-
-        XCTAssertFalse(state.isStreaming)
-        XCTAssertNil(state.streamingMessageId)
-        XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
-    }
-
-    @MainActor
-    func testLateContentDoneDoesNotSettleNewerVisibleTurn() throws {
-        let state = AppState()
-        state.selectedScoopJid = "cone"
-        try send(.messageStart(messageId: "earlier"), scoopJid: "cone", to: state)
         try send(
-            .contentDone(messageId: "earlier", model: nil, usage: nil),
-            scoopJid: "cone", to: state)
-        try send(.messageStart(messageId: "current"), scoopJid: "cone", to: state)
-
-        try send(
-            .contentDone(messageId: "earlier", model: nil, usage: nil),
+            .toolUseStart(messageId: "reply", toolName: "bash", toolInput: nil),
             scoopJid: "cone", to: state)
 
         XCTAssertTrue(state.isStreaming)
-        XCTAssertEqual(state.streamingMessageId, "current")
+        XCTAssertEqual(state.streamingMessageId, "reply")
+        XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
+        XCTAssertEqual(state.messages.last?.toolCalls?.last?.name, "bash")
     }
 
     @MainActor
-    func testTurnEndAfterContentDoneRemainsIdempotent() throws {
+    func testTurnEndSettlesAfterContentDone() throws {
         let state = AppState()
         state.selectedScoopJid = "cone"
         try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
@@ -88,16 +74,24 @@ final class AppStateStreamingTests: XCTestCase {
     }
 
     @MainActor
-    func testProcessingAndReadyStatusesMapToStreamingState() throws {
+    func testReadyStatusSettlesCompletedMessageWithoutTurnEnd() throws {
         let state = AppState()
+        state.selectedScoopJid = "cone"
 
         state.handleDataChannelMessage(
             try JSONEncoder().encode(LeaderToFollowerMessage.status(scoopStatus: "processing")))
         XCTAssertTrue(state.isStreaming)
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try send(
+            .contentDone(messageId: "reply", model: nil, usage: nil),
+            scoopJid: "cone", to: state)
+        XCTAssertTrue(state.isStreaming)
+        XCTAssertEqual(state.streamingMessageId, "reply")
 
         state.handleDataChannelMessage(
             try JSONEncoder().encode(LeaderToFollowerMessage.status(scoopStatus: "ready")))
         XCTAssertFalse(state.isStreaming)
         XCTAssertNil(state.streamingMessageId)
+        XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
     }
 }
