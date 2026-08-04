@@ -22,10 +22,15 @@
 #   APPLE_PROVISIONING_PROFILE_NAME    defaults to "Slicc Follower App Store"
 #   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64
 #                                      base64 of the File Provider appex App Store profile
+#                                      (required — missing/"-" soft-skips the whole upload)
 #   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME
 #                                      defaults to "Slicc Follower File Provider App Store"
 #   APPLE_FILEPROVIDER_BUNDLE_ID       defaults to com.sliccy.follower.fileprovider
 #   APPLE_TEAM_ID                      defaults to S8LB56P782
+#
+# Release wiring: .github/workflows/release.yml must pass every APPLE_* secret
+# above into the Publish release step env. Repo secrets alone are not enough —
+# an unset workflow env makes the File Provider check soft-skip TestFlight.
 #   KEYCHAIN_PATH                      reuse a keychain set up by an
 #                                       earlier workflow step; if unset
 #                                       and APPLE_DISTRIBUTION_CERT_BASE64
