@@ -117,11 +117,25 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         }
     }
 
-    func testScoopSummaryNilFillMapsToZero() {
-        let geometry = scoopSummary(isCone: false, fill: nil).avatarGeometry()
+    func testScoopSummaryAbsentFillStaysAbsent() {
+        let geometry = scoopSummary(isCone: false, state: nil, fill: nil).avatarGeometry()
 
-        XCTAssertEqual(geometry.fill, 0)
-        XCTAssertFalse(geometry.fill.isNaN)
+        XCTAssertNil(geometry.fill)
+        XCTAssertEqual(geometry.pupilRadius, 0.167 * 26, accuracy: accuracy)
+    }
+
+    func testScoopSummaryMapsLifecycleToWebEyeStates() {
+        XCTAssertEqual(
+            scoopSummary(isCone: false, state: "broken", fill: 20).avatarGeometry().eyes,
+            .dead)
+        XCTAssertEqual(
+            scoopSummary(isCone: false, state: "initializing", fill: 20).avatarGeometry().eyes,
+            .none)
+        for state in ["working", "idle", nil] as [String?] {
+            XCTAssertEqual(
+                scoopSummary(isCone: false, state: state, fill: 20).avatarGeometry().eyes,
+                .open)
+        }
     }
 
     func testZeroTiltCentersPupils() {
