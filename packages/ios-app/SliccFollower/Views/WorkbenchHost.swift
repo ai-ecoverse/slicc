@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SwiftUI
 
 /// The selected workbench surface. ChatView presents it over the conversation
