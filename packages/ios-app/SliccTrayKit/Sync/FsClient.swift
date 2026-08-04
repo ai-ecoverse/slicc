@@ -136,6 +136,19 @@ public final class FsClient {
         return decoded
     }
 
+    /// Write UTF-8 text to the leader's VFS.
+    public func writeFile(_ path: String, content: String) async throws {
+        try await expectVoid(
+            from: .writeFile(path: path, content: content, encoding: .utf8))
+    }
+
+    /// Write exact bytes to the leader's VFS using base64 on the wire.
+    public func writeBinaryFile(_ path: String, data: Data) async throws {
+        try await expectVoid(
+            from: .writeFile(
+                path: path, content: data.base64EncodedString(), encoding: .base64))
+    }
+
     /// List a directory in the leader's VFS.
     public func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
         let data = try await perform(.readDir(path: path))
@@ -152,6 +165,16 @@ public final class FsClient {
             throw FsError.unexpectedPayload(expected: "stat", got: data.wireType)
         }
         return stat
+    }
+
+    /// Create a directory in the leader's VFS.
+    public func mkdir(_ path: String, recursive: Bool = false) async throws {
+        try await expectVoid(from: .mkdir(path: path, recursive: recursive))
+    }
+
+    /// Remove a file or directory from the leader's VFS.
+    public func remove(_ path: String, recursive: Bool = false) async throws {
+        try await expectVoid(from: .rm(path: path, recursive: recursive))
     }
 
     /// Test whether a path exists in the leader's VFS.
@@ -246,6 +269,13 @@ public final class FsClient {
             self?.fail(requestId, with: .timedOut(op: request.op, path: request.path))
         }
         pending[requestId] = entry
+    }
+
+    private func expectVoid(from request: TrayFsRequest) async throws {
+        let data = try await perform(request)
+        guard case .void = data else {
+            throw FsError.unexpectedPayload(expected: "void", got: data.wireType)
+        }
     }
 
     private func finish(_ requestId: String, with data: TrayFsResponseData) {

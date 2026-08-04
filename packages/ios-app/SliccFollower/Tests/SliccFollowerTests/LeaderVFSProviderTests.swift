@@ -22,6 +22,14 @@ final class LeaderVFSProviderTests: XCTestCase {
             return data
         }
 
+        func writeBinaryFile(_ path: String, data: Data) async throws {
+            operations.append("write:\(path):\(data.base64EncodedString())")
+            if let error { throw error }
+            files[path] = data
+            stats[path] = TrayFsStat(type: .file, size: data.count, mtime: 2, ctime: 1)
+            addEntry(path, type: .file)
+        }
+
         func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
             operations.append("dir:\(path)")
             if let error { throw error }
@@ -39,6 +47,43 @@ final class LeaderVFSProviderTests: XCTestCase {
             }
             return stat
         }
+
+        func mkdir(_ path: String, recursive: Bool) async throws {
+            operations.append("mkdir:\(path):\(recursive)")
+            if let error { throw error }
+            directories[path] = directories[path] ?? []
+            stats[path] = TrayFsStat(type: .directory, size: 0, mtime: 2, ctime: 1)
+            addEntry(path, type: .directory)
+        }
+
+        func remove(_ path: String, recursive: Bool) async throws {
+            operations.append("rm:\(path):\(recursive)")
+            if let error { throw error }
+            let prefix = path + "/"
+            if directories[path]?.isEmpty == false && !recursive {
+                throw FsClient.FsError.leader(message: "not empty", code: "ENOTEMPTY")
+            }
+            guard stats[path] != nil || files[path] != nil || directories[path] != nil else {
+                throw FsClient.FsError.leader(message: "missing", code: "ENOENT")
+            }
+            files = files.filter { $0.key != path && !$0.key.hasPrefix(prefix) }
+            stats = stats.filter { $0.key != path && !$0.key.hasPrefix(prefix) }
+            directories = directories.filter { $0.key != path && !$0.key.hasPrefix(prefix) }
+            let parent = (path as NSString).deletingLastPathComponent
+            let name = (path as NSString).lastPathComponent
+            directories[parent.isEmpty ? "/" : parent]?.removeAll { $0.name == name }
+        }
+
+        private func addEntry(_ path: String, type: TrayFsNodeType) {
+            let parent = (path as NSString).deletingLastPathComponent
+            let parentPath = parent.isEmpty ? "/" : parent
+            let name = (path as NSString).lastPathComponent
+            var entries = directories[parentPath] ?? []
+            if !entries.contains(where: { $0.name == name }) {
+                entries.append(TrayFsDirEntry(name: name, type: type))
+            }
+            directories[parentPath] = entries
+        }
     }
 
     private final class FakeConnection: FileProviderFSConnection {
@@ -47,8 +92,17 @@ final class LeaderVFSProviderTests: XCTestCase {
 
         init(fs: FakeFS) { self.fs = fs }
         func readBinaryFile(_ path: String) async throws -> Data { try await fs.readBinaryFile(path) }
+        func writeBinaryFile(_ path: String, data: Data) async throws {
+            try await fs.writeBinaryFile(path, data: data)
+        }
         func readDir(_ path: String) async throws -> [TrayFsDirEntry] { try await fs.readDir(path) }
         func stat(_ path: String) async throws -> TrayFsStat { try await fs.stat(path) }
+        func mkdir(_ path: String, recursive: Bool) async throws {
+            try await fs.mkdir(path, recursive: recursive)
+        }
+        func remove(_ path: String, recursive: Bool) async throws {
+            try await fs.remove(path, recursive: recursive)
+        }
         func disconnect() { disconnected = true }
     }
 
@@ -106,7 +160,7 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertThrowsError(try VFSItemIdentity.identifier(for: "/../../proc"))
     }
 
-    func testItemBuildsMetadataAndReadOnlyCapabilitiesFromStat() throws {
+    func testItemBuildsMetadataAndCapabilitiesPerNodeType() throws {
         let stat = TrayFsStat(type: .file, size: 42, mtime: 1_750_000_000_000, ctime: 1_740_000_000_000)
         let item = try LeaderVFSItem(path: "/docs/report.pdf", stat: stat)
 
@@ -115,12 +169,29 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertEqual(item.documentSize, 42)
         XCTAssertEqual(item.contentModificationDate, Date(timeIntervalSince1970: 1_750_000_000))
         XCTAssertTrue(item.capabilities.contains(.allowsReading))
-        XCTAssertFalse(item.capabilities.contains(.allowsWriting))
+        XCTAssertTrue(item.capabilities.contains(.allowsWriting))
+        XCTAssertTrue(item.capabilities.contains(.allowsRenaming))
+        XCTAssertTrue(item.capabilities.contains(.allowsReparenting))
+        XCTAssertTrue(item.capabilities.contains(.allowsDeleting))
 
         let directory = try LeaderVFSItem(
             path: "/docs", stat: TrayFsStat(type: .directory, size: 0, mtime: 0, ctime: 0))
         XCTAssertTrue(directory.capabilities.contains(.allowsContentEnumerating))
-        XCTAssertFalse(directory.capabilities.contains(.allowsAddingSubItems))
+        XCTAssertTrue(directory.capabilities.contains(.allowsAddingSubItems))
+        XCTAssertTrue(directory.capabilities.contains(.allowsRenaming))
+        XCTAssertTrue(directory.capabilities.contains(.allowsReparenting))
+        XCTAssertTrue(directory.capabilities.contains(.allowsDeleting))
+
+        let root = try LeaderVFSItem(path: "/")
+        XCTAssertTrue(root.capabilities.contains(.allowsAddingSubItems))
+        XCTAssertFalse(root.capabilities.contains(.allowsRenaming))
+        XCTAssertFalse(root.capabilities.contains(.allowsDeleting))
+
+        let symlink = try LeaderVFSItem(
+            path: "/link", stat: TrayFsStat(type: .symlink, size: 1, mtime: 0, ctime: 0))
+        XCTAssertTrue(symlink.capabilities.contains(.allowsReading))
+        XCTAssertFalse(symlink.capabilities.contains(.allowsWriting))
+        XCTAssertFalse(symlink.capabilities.contains(.allowsDeleting))
     }
 
     func testRootEnumerationUsesReadDirAndStatAndExcludesProc() async throws {
@@ -156,6 +227,128 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertEqual(fetched.0, data)
         XCTAssertEqual(fetched.1.documentSize, NSNumber(value: data.count))
         XCTAssertEqual(Set(fs.operations), ["read:/image.bin", "stat:/image.bin"])
+    }
+
+    func testCreateFileAndDirectoryAdvanceAnchorAndReturnSignalTargets() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = []
+        let provider = LeaderVFSProvider(fs: fs)
+        let anchor = provider.currentSyncAnchor()
+        let bytes = Data([0, 1, 127, 128, 255])
+
+        let file = try await provider.createItem(
+            parentIdentifier: .rootContainer, filename: "bytes.bin", isDirectory: false,
+            contents: bytes)
+        let directory = try await provider.createItem(
+            parentIdentifier: .rootContainer, filename: "notes", isDirectory: true,
+            contents: nil)
+
+        XCTAssertEqual(file.item?.path, "/bytes.bin")
+        XCTAssertEqual(directory.item?.path, "/notes")
+        XCTAssertEqual(fs.files["/bytes.bin"], bytes)
+        XCTAssertNotEqual(provider.currentSyncAnchor(), anchor)
+        XCTAssertEqual(Set(file.containersToSignal), [.workingSet, .rootContainer])
+        XCTAssertTrue(fs.operations.contains("mkdir:/notes:false"))
+    }
+
+    func testModifyFileEditsRenamesAndMovesExactBytes() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [
+            TrayFsDirEntry(name: "from", type: .directory),
+            TrayFsDirEntry(name: "to", type: .directory),
+        ]
+        fs.directories["/from"] = [TrayFsDirEntry(name: "draft.bin", type: .file)]
+        fs.directories["/to"] = []
+        fs.stats["/from"] = TrayFsStat(type: .directory, size: 0, mtime: 1, ctime: 1)
+        fs.stats["/to"] = TrayFsStat(type: .directory, size: 0, mtime: 1, ctime: 1)
+        fs.stats["/from/draft.bin"] = TrayFsStat(type: .file, size: 3, mtime: 1, ctime: 1)
+        fs.files["/from/draft.bin"] = Data([1, 2, 3])
+        let provider = LeaderVFSProvider(fs: fs)
+        let source = try VFSItemIdentity.identifier(for: "/from/draft.bin")
+        let destinationParent = try VFSItemIdentity.identifier(for: "/to")
+        let replacement = Data([0, 127, 128, 254, 255])
+        let anchor = provider.currentSyncAnchor()
+
+        let result = try await provider.modifyItem(
+            identifier: source, parentIdentifier: destinationParent, filename: "final.bin",
+            contents: replacement)
+
+        XCTAssertNil(fs.files["/from/draft.bin"])
+        XCTAssertEqual(fs.files["/to/final.bin"], replacement)
+        XCTAssertEqual(result.item?.path, "/to/final.bin")
+        XCTAssertNotEqual(provider.currentSyncAnchor(), anchor)
+        XCTAssertEqual(
+            Set(result.containersToSignal),
+            [.workingSet, destinationParent, try VFSItemIdentity.identifier(for: "/from")])
+    }
+
+    func testModifyDirectoryRecursivelyMovesChildren() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [TrayFsDirEntry(name: "old", type: .directory)]
+        fs.directories["/old"] = [TrayFsDirEntry(name: "nested", type: .directory)]
+        fs.directories["/old/nested"] = [TrayFsDirEntry(name: "file.bin", type: .file)]
+        fs.stats["/old"] = TrayFsStat(type: .directory, size: 0, mtime: 1, ctime: 1)
+        fs.stats["/old/nested"] = TrayFsStat(type: .directory, size: 0, mtime: 1, ctime: 1)
+        fs.stats["/old/nested/file.bin"] = TrayFsStat(type: .file, size: 4, mtime: 1, ctime: 1)
+        fs.files["/old/nested/file.bin"] = Data([5, 6, 7, 8])
+        let provider = LeaderVFSProvider(fs: fs)
+
+        let result = try await provider.modifyItem(
+            identifier: VFSItemIdentity.identifier(for: "/old"),
+            parentIdentifier: .rootContainer, filename: "new", contents: nil)
+
+        XCTAssertEqual(result.item?.path, "/new")
+        XCTAssertEqual(fs.files["/new/nested/file.bin"], Data([5, 6, 7, 8]))
+        XCTAssertNil(fs.directories["/old"])
+        XCTAssertTrue(fs.operations.contains("rm:/old:true"))
+    }
+
+    func testDeleteHonorsRecursiveOptionAndIsIdempotent() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [TrayFsDirEntry(name: "folder", type: .directory)]
+        fs.directories["/folder"] = [TrayFsDirEntry(name: "file.txt", type: .file)]
+        fs.stats["/folder"] = TrayFsStat(type: .directory, size: 0, mtime: 1, ctime: 1)
+        fs.stats["/folder/file.txt"] = TrayFsStat(type: .file, size: 1, mtime: 1, ctime: 1)
+        fs.files["/folder/file.txt"] = Data("x".utf8)
+        let provider = LeaderVFSProvider(fs: fs)
+        let identifier = try VFSItemIdentity.identifier(for: "/folder")
+
+        await assertMappedFailure(.directoryNotEmpty) {
+            _ = try await provider.deleteItem(identifier: identifier, recursive: false)
+        }
+        let result = try await provider.deleteItem(identifier: identifier, recursive: true)
+        _ = try await provider.deleteItem(identifier: identifier, recursive: true)
+
+        XCTAssertNil(fs.directories["/folder"])
+        XCTAssertNil(result.item)
+        XCTAssertEqual(Set(result.containersToSignal), [.workingSet, .rootContainer])
+    }
+
+    func testMutationFailuresMapToNativeFileProviderErrors() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [TrayFsDirEntry(name: "exists.txt", type: .file)]
+        fs.stats["/exists.txt"] = TrayFsStat(type: .file, size: 1, mtime: 1, ctime: 1)
+        fs.files["/exists.txt"] = Data("x".utf8)
+        let provider = LeaderVFSProvider(fs: fs)
+
+        await assertMappedFailure(.filenameCollision) {
+            _ = try await provider.createItem(
+                parentIdentifier: .rootContainer, filename: "exists.txt", isDirectory: false,
+                contents: Data())
+        }
+
+        fs.error = FsClient.FsError.disconnected
+        await assertMappedFailure(.serverUnreachable) {
+            _ = try await provider.createItem(
+                parentIdentifier: .rootContainer, filename: "offline.txt", isDirectory: false,
+                contents: Data())
+        }
+
+        fs.error = FsClient.FsError.leader(message: "denied", code: "EACCES")
+        await assertMappedFailure(.deletionRejected) {
+            _ = try await provider.deleteItem(
+                identifier: VFSItemIdentity.identifier(for: "/exists.txt"), recursive: false)
+        }
     }
 
     func testChangesRefreshKnownDirectoriesAndReportUpdatesAndDeletes() async throws {
@@ -231,6 +424,10 @@ final class LeaderVFSProviderTests: XCTestCase {
         assertMapped(FsClient.FsError.timedOut(op: "stat", path: "/slow"), is: .serverUnreachable)
         assertMapped(FsClient.FsError.disconnected, is: .serverUnreachable)
         assertMapped(FsClient.FsError.leader(message: "missing", code: "ENOENT"), is: .noSuchItem)
+        assertMapped(FsClient.FsError.leader(message: "denied", code: "EACCES"), is: .cannotSynchronize)
+        assertMapped(VFSProviderError.filenameCollision, is: .filenameCollision)
+        assertMapped(VFSProviderError.directoryNotEmpty, is: .directoryNotEmpty)
+        assertMapped(VFSProviderError.deletionRejected, is: .deletionRejected)
     }
 
     func testConnectionPoolMissingCredentialsFailsImmediately() async {
@@ -340,8 +537,25 @@ final class LeaderVFSProviderTests: XCTestCase {
         let result = try await read.value
         XCTAssertEqual(result, expected)
 
-        let interrupted = Task { try await connection.stat("/slow") }
+        let write = Task { try await connection.writeBinaryFile("/file.bin", data: expected) }
         for _ in 0..<100 where connector.sent.count < 3 { await Task.yield() }
+        let writeRequest = try JSONDecoder().decode(
+            FollowerToLeaderMessage.self, from: connector.sent[2])
+        guard case .fsRequest(let writeID, _, let operation) = writeRequest else {
+            return XCTFail("expected routed write request")
+        }
+        XCTAssertEqual(
+            operation,
+            .writeFile(
+                path: "/file.bin", content: expected.base64EncodedString(), encoding: .base64))
+        connector.receive(
+            try JSONEncoder().encode(
+                LeaderToFollowerMessage.fsResponse(
+                    requestId: writeID, response: .success(.void))))
+        try await write.value
+
+        let interrupted = Task { try await connection.writeBinaryFile("/interrupted.bin", data: expected) }
+        for _ in 0..<100 where connector.sent.count < 4 { await Task.yield() }
         connector.disconnect()
         await assertFsFailure(.disconnected) { _ = try await interrupted.value }
         connection.disconnect()
@@ -363,6 +577,22 @@ final class LeaderVFSProviderTests: XCTestCase {
         let mapped = VFSProviderErrorMapper.map(error) as NSError
         XCTAssertEqual(mapped.domain, NSFileProviderErrorDomain, file: file, line: line)
         XCTAssertEqual(mapped.code, expected.rawValue, file: file, line: line)
+    }
+
+    private func assertMappedFailure(
+        _ expected: NSFileProviderError.Code,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            XCTFail("expected mapped error \(expected)", file: file, line: line)
+        } catch {
+            let mapped = VFSProviderErrorMapper.map(error) as NSError
+            XCTAssertEqual(mapped.domain, NSFileProviderErrorDomain, file: file, line: line)
+            XCTAssertEqual(mapped.code, expected.rawValue, file: file, line: line)
+        }
     }
 
     private func assertVFSFailure(

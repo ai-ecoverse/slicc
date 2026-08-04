@@ -146,6 +146,77 @@ final class FsClientTests: XCTestCase {
         }
     }
 
+    func testTextWriteAndReadRoundTripUsesUtf8() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let write = Task { try await client.writeFile("/note.txt", content: "hello 🏖️") }
+        await waitForInFlight(client)
+        guard case .fsRequest(_, _, let request) = wire.sent[0] else {
+            return XCTFail("expected write request")
+        }
+        XCTAssertEqual(
+            request,
+            .writeFile(path: "/note.txt", content: "hello 🏖️", encoding: .utf8))
+        client.handleResponse(requestId: wire.requestId()!, response: .success(.void))
+        try await write.value
+
+        let read = Task { try await client.readFile("/note.txt") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId(at: 1)!,
+            response: .success(.file(content: "hello 🏖️", encoding: .utf8)))
+        let textResult = try await read.value
+        XCTAssertEqual(textResult, "hello 🏖️")
+    }
+
+    func testBinaryWriteAndReadRoundTripUsesBase64() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let expected = Data([0, 1, 127, 128, 254, 255])
+        let write = Task { try await client.writeBinaryFile("/bytes.bin", data: expected) }
+        await waitForInFlight(client)
+        guard case .fsRequest(_, _, let request) = wire.sent[0] else {
+            return XCTFail("expected write request")
+        }
+        XCTAssertEqual(
+            request,
+            .writeFile(
+                path: "/bytes.bin", content: expected.base64EncodedString(), encoding: .base64))
+        client.handleResponse(requestId: wire.requestId()!, response: .success(.void))
+        try await write.value
+
+        let read = Task { try await client.readBinaryFile("/bytes.bin") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId(at: 1)!,
+            response: .success(
+                .file(content: expected.base64EncodedString(), encoding: .base64)))
+        let binaryResult = try await read.value
+        XCTAssertEqual(binaryResult, expected)
+    }
+
+    func testMkdirAndRemoveUseExistingWireCases() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let mkdir = Task { try await client.mkdir("/folder", recursive: true) }
+        await waitForInFlight(client)
+        guard case .fsRequest(_, _, let mkdirRequest) = wire.sent[0] else {
+            return XCTFail("expected mkdir request")
+        }
+        XCTAssertEqual(mkdirRequest, .mkdir(path: "/folder", recursive: true))
+        client.handleResponse(requestId: wire.requestId()!, response: .success(.void))
+        try await mkdir.value
+
+        let remove = Task { try await client.remove("/folder", recursive: true) }
+        await waitForInFlight(client)
+        guard case .fsRequest(_, _, let removeRequest) = wire.sent[1] else {
+            return XCTFail("expected remove request")
+        }
+        XCTAssertEqual(removeRequest, .rm(path: "/folder", recursive: true))
+        client.handleResponse(requestId: wire.requestId(at: 1)!, response: .success(.void))
+        try await remove.value
+    }
+
     func testReadDirDecodesEntries() async throws {
         let wire = Wire()
         let client = makeClient(wire: wire)
@@ -284,6 +355,27 @@ final class FsClientTests: XCTestCase {
         XCTAssertEqual(client.inFlightCount, 0, "a timed-out request must be evicted")
     }
 
+    func testWriteTimesOutAndLeaderRefusalPropagates() async throws {
+        let timeoutWire = Wire()
+        let timeoutClient = makeClient(wire: timeoutWire, timeout: 0.15)
+        let timedOut = Task { try await timeoutClient.writeFile("/slow.txt", content: "x") }
+        await waitForInFlight(timeoutClient)
+        await assertThrowsFsError(.timedOut(op: "writeFile", path: "/slow.txt")) {
+            _ = try await timedOut.value
+        }
+
+        let refusalWire = Wire()
+        let refusalClient = makeClient(wire: refusalWire)
+        let refused = Task { try await refusalClient.writeBinaryFile("/denied", data: Data()) }
+        await waitForInFlight(refusalClient)
+        refusalClient.handleResponse(
+            requestId: refusalWire.requestId()!,
+            response: .failure("permission denied", code: "EACCES"))
+        await assertThrowsFsError(.leader(message: "permission denied", code: "EACCES")) {
+            _ = try await refused.value
+        }
+    }
+
     func testFailedSendFailsImmediately() async throws {
         let wire = Wire()
         wire.sendSucceeds = false
@@ -314,6 +406,18 @@ final class FsClientTests: XCTestCase {
             requestId: wire.requestId()!,
             response: .success(.file(content: "x", encoding: .utf8)))
         await assertThrowsFsError(.unexpectedPayload(expected: "dirEntries", got: "file")) {
+            _ = try await task.value
+        }
+    }
+
+    func testWriteRejectsNonVoidSuccessPayload() async throws {
+        let wire = Wire()
+        let client = makeClient(wire: wire)
+        let task = Task { try await client.writeFile("/a.txt", content: "x") }
+        await waitForInFlight(client)
+        client.handleResponse(
+            requestId: wire.requestId()!, response: .success(.exists(true)))
+        await assertThrowsFsError(.unexpectedPayload(expected: "void", got: "exists")) {
             _ = try await task.value
         }
     }

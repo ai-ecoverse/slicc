@@ -5,11 +5,16 @@ import SliccTrayKit
 final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderReplicatedExtension {
     private let fsClient: FileProviderFSClientPool
     private let provider: LeaderVFSProvider
+    private let manager: NSFileProviderManager?
+    private static let supportedMutationFields: NSFileProviderItemFields = [
+        .contents, .filename, .parentItemIdentifier,
+    ]
 
     required init(domain: NSFileProviderDomain) {
         let fsClient = FileProviderFSClientPool()
         self.fsClient = fsClient
         provider = LeaderVFSProvider(fs: fsClient)
+        manager = NSFileProviderManager(for: domain)
         super.init()
     }
 
@@ -63,8 +68,22 @@ final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderRepli
                 NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?
             ) -> Void
     ) -> Progress {
-        completionHandler(nil, [], false, unsupportedError())
-        return completedProgress()
+        let task = Task { @MainActor in
+            do {
+                let contents = try url.map { try Data(contentsOf: $0) }
+                let result = try await provider.createItem(
+                    parentIdentifier: itemTemplate.parentItemIdentifier,
+                    filename: itemTemplate.filename,
+                    isDirectory: itemTemplate.contentType?.conforms(to: .folder) == true,
+                    contents: contents)
+                await signalEnumerators(result.containersToSignal)
+                completionHandler(
+                    result.item, fields.subtracting(Self.supportedMutationFields), false, nil)
+            } catch {
+                completionHandler(nil, [], false, VFSProviderErrorMapper.map(error))
+            }
+        }
+        return progress(for: task)
     }
 
     func modifyItem(
@@ -79,8 +98,22 @@ final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderRepli
                 NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?
             ) -> Void
     ) -> Progress {
-        completionHandler(nil, [], false, unsupportedError())
-        return completedProgress()
+        let task = Task { @MainActor in
+            do {
+                let contents = try newContents.map { try Data(contentsOf: $0) }
+                let result = try await provider.modifyItem(
+                    identifier: item.itemIdentifier,
+                    parentIdentifier: item.parentItemIdentifier,
+                    filename: item.filename,
+                    contents: contents)
+                await signalEnumerators(result.containersToSignal)
+                completionHandler(
+                    result.item, changedFields.subtracting(Self.supportedMutationFields), false, nil)
+            } catch {
+                completionHandler(nil, [], false, VFSProviderErrorMapper.map(error))
+            }
+        }
+        return progress(for: task)
     }
 
     func deleteItem(
@@ -90,8 +123,17 @@ final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderRepli
         request: NSFileProviderRequest,
         completionHandler: @escaping (Error?) -> Void
     ) -> Progress {
-        completionHandler(unsupportedError())
-        return completedProgress()
+        let task = Task { @MainActor in
+            do {
+                let result = try await provider.deleteItem(
+                    identifier: itemIdentifier, recursive: options.contains(.recursive))
+                await signalEnumerators(result.containersToSignal)
+                completionHandler(nil)
+            } catch {
+                completionHandler(VFSProviderErrorMapper.map(error))
+            }
+        }
+        return progress(for: task)
     }
 
     func enumerator(
@@ -111,13 +153,12 @@ final class FileProviderExtension: NSObject, @preconcurrency NSFileProviderRepli
         return progress
     }
 
-    private func completedProgress() -> Progress {
-        let progress = Progress(totalUnitCount: 1)
-        progress.completedUnitCount = 1
-        return progress
-    }
-
-    private func unsupportedError() -> Error {
-        NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError)
+    private func signalEnumerators(_ identifiers: [NSFileProviderItemIdentifier]) async {
+        guard let manager else { return }
+        for identifier in identifiers {
+            await withCheckedContinuation { continuation in
+                manager.signalEnumerator(for: identifier) { _ in continuation.resume() }
+            }
+        }
     }
 }

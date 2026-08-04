@@ -64,6 +64,12 @@ public final class FileProviderFSClientPool: FileProviderFSClient {
         return try await client.readBinaryFile(path)
     }
 
+    public func writeBinaryFile(_ path: String, data: Data) async throws {
+        let client = try await connectedClient()
+        defer { scheduleIdleDisconnect() }
+        try await client.writeBinaryFile(path, data: data)
+    }
+
     public func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
         let client = try await connectedClient()
         defer { scheduleIdleDisconnect() }
@@ -74,6 +80,18 @@ public final class FileProviderFSClientPool: FileProviderFSClient {
         let client = try await connectedClient()
         defer { scheduleIdleDisconnect() }
         return try await client.stat(path)
+    }
+
+    public func mkdir(_ path: String, recursive: Bool) async throws {
+        let client = try await connectedClient()
+        defer { scheduleIdleDisconnect() }
+        try await client.mkdir(path, recursive: recursive)
+    }
+
+    public func remove(_ path: String, recursive: Bool) async throws {
+        let client = try await connectedClient()
+        defer { scheduleIdleDisconnect() }
+        try await client.remove(path, recursive: recursive)
     }
 
     public func disconnect() {
@@ -199,12 +217,24 @@ final class TrayFileProviderConnection: NSObject, FileProviderFSConnection {
         try await fsClient.readBinaryFile(path)
     }
 
+    func writeBinaryFile(_ path: String, data: Data) async throws {
+        try await fsClient.writeBinaryFile(path, data: data)
+    }
+
     func readDir(_ path: String) async throws -> [TrayFsDirEntry] {
         try await fsClient.readDir(path)
     }
 
     func stat(_ path: String) async throws -> TrayFsStat {
         try await fsClient.stat(path)
+    }
+
+    func mkdir(_ path: String, recursive: Bool) async throws {
+        try await fsClient.mkdir(path, recursive: recursive)
+    }
+
+    func remove(_ path: String, recursive: Bool) async throws {
+        try await fsClient.remove(path, recursive: recursive)
     }
 
     func disconnect() {

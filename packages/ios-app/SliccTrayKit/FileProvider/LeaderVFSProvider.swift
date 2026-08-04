@@ -5,8 +5,11 @@ import UniformTypeIdentifiers
 @MainActor
 public protocol FileProviderFSClient: AnyObject {
     func readBinaryFile(_ path: String) async throws -> Data
+    func writeBinaryFile(_ path: String, data: Data) async throws
     func readDir(_ path: String) async throws -> [TrayFsDirEntry]
     func stat(_ path: String) async throws -> TrayFsStat
+    func mkdir(_ path: String, recursive: Bool) async throws
+    func remove(_ path: String, recursive: Bool) async throws
 }
 
 extension FsClient: FileProviderFSClient {}
@@ -66,6 +69,10 @@ public enum VFSProviderError: Error, Equatable {
     case missingCredentials
     case serverUnreachable
     case noSuchItem
+    case filenameCollision
+    case directoryNotEmpty
+    case deletionRejected
+    case notWritable
     case invalidIdentifier
     case invalidPath
 }
@@ -80,11 +87,27 @@ public enum VFSProviderErrorMapper {
             VFSProviderError.invalidIdentifier,
             VFSProviderError.invalidPath:
             code = .noSuchItem
+        case VFSProviderError.filenameCollision:
+            code = .filenameCollision
+        case VFSProviderError.directoryNotEmpty:
+            code = .directoryNotEmpty
+        case VFSProviderError.deletionRejected:
+            code = .deletionRejected
+        case VFSProviderError.notWritable:
+            code = .cannotSynchronize
         case let fsError as FsClient.FsError:
-            if case .leader(_, let leaderCode) = fsError, leaderCode == "ENOENT" {
-                code = .noSuchItem
-            } else {
+            switch fsError {
+            case .leader(_, let leaderCode):
+                switch leaderCode {
+                case "ENOENT": code = .noSuchItem
+                case "EEXIST": code = .filenameCollision
+                case "ENOTEMPTY": code = .directoryNotEmpty
+                default: code = .cannotSynchronize
+                }
+            case .timedOut, .disconnected:
                 code = .serverUnreachable
+            case .unexpectedPayload, .malformedChunking:
+                code = .cannotSynchronize
             }
         default:
             code = .serverUnreachable
@@ -121,10 +144,19 @@ public final class LeaderVFSItem: NSObject, NSFileProviderItemProtocol {
         switch stat?.type ?? .directory {
         case .directory:
             contentType = .folder
-            capabilities = [.allowsContentEnumerating]
+            capabilities =
+                path == "/"
+                ? [.allowsContentEnumerating, .allowsAddingSubItems]
+                : [
+                    .allowsContentEnumerating, .allowsAddingSubItems, .allowsRenaming,
+                    .allowsReparenting, .allowsDeleting,
+                ]
         case .file:
             contentType = UTType(filenameExtension: (filename as NSString).pathExtension) ?? .data
-            capabilities = [.allowsReading]
+            capabilities = [
+                .allowsReading, .allowsWriting, .allowsRenaming, .allowsReparenting,
+                .allowsDeleting,
+            ]
         case .symlink:
             contentType = .item
             capabilities = [.allowsReading]
@@ -143,6 +175,11 @@ public struct LeaderVFSChangeSet {
     public let updated: [LeaderVFSItem]
     public let deleted: [NSFileProviderItemIdentifier]
     public let anchor: NSFileProviderSyncAnchor
+}
+
+public struct LeaderVFSMutationResult {
+    public let item: LeaderVFSItem?
+    public let containersToSignal: [NSFileProviderItemIdentifier]
 }
 
 @MainActor
@@ -209,6 +246,101 @@ public final class LeaderVFSProvider {
         itemsByPath[path] = item
         record(updated: [item], deleted: [])
         return (result.0, item)
+    }
+
+    public func createItem(
+        parentIdentifier: NSFileProviderItemIdentifier,
+        filename: String,
+        isDirectory: Bool,
+        contents: Data?
+    ) async throws -> LeaderVFSMutationResult {
+        let parentPath = try allowedPath(for: parentIdentifier)
+        let path = try VFSItemIdentity.childPath(parent: parentPath, name: filename)
+        guard !Self.isProc(path) else { throw VFSProviderError.notWritable }
+        try await ensureAbsent(path)
+
+        if isDirectory {
+            try await fs.mkdir(path, recursive: false)
+        } else {
+            try await fs.writeBinaryFile(path, data: contents ?? Data())
+        }
+        let item = try LeaderVFSItem(path: path, stat: await fsStat(path))
+        itemsByPath[path] = item
+        if isDirectory { knownDirectories.insert(path) }
+        childrenByDirectory.removeValue(forKey: parentPath)
+        record(updated: [item], deleted: [])
+        return try mutationResult(item: item, parentPaths: [parentPath])
+    }
+
+    public func modifyItem(
+        identifier: NSFileProviderItemIdentifier,
+        parentIdentifier: NSFileProviderItemIdentifier,
+        filename: String,
+        contents: Data?
+    ) async throws -> LeaderVFSMutationResult {
+        let sourcePath = try allowedPath(for: identifier)
+        guard sourcePath != "/" else { throw VFSProviderError.notWritable }
+        let parentPath = try allowedPath(for: parentIdentifier)
+        let destinationPath = try VFSItemIdentity.childPath(parent: parentPath, name: filename)
+        guard !Self.isProc(destinationPath) else { throw VFSProviderError.notWritable }
+        if destinationPath.hasPrefix(sourcePath + "/") { throw VFSProviderError.invalidPath }
+
+        let sourceStat = try await fsStat(sourcePath)
+        let moved = sourcePath != destinationPath
+        if moved {
+            try await ensureAbsent(destinationPath)
+            do {
+                try await copyItem(
+                    from: sourcePath, to: destinationPath, type: sourceStat.type,
+                    replacementContents: contents)
+                try await fs.remove(sourcePath, recursive: sourceStat.type == .directory)
+            } catch {
+                try? await fs.remove(destinationPath, recursive: true)
+                throw error
+            }
+        } else if let contents {
+            guard sourceStat.type == .file else { throw VFSProviderError.notWritable }
+            try await fs.writeBinaryFile(sourcePath, data: contents)
+        }
+
+        let item = try LeaderVFSItem(path: destinationPath, stat: await fsStat(destinationPath))
+        var deleted: [NSFileProviderItemIdentifier] = []
+        if moved {
+            deleted = purgeSubtree(root: sourcePath)
+            if !deleted.contains(identifier) { deleted.append(identifier) }
+            childrenByDirectory.removeValue(forKey: (sourcePath as NSString).deletingLastPathComponent)
+            childrenByDirectory.removeValue(forKey: parentPath)
+        }
+        itemsByPath[destinationPath] = item
+        if sourceStat.type == .directory { knownDirectories.insert(destinationPath) }
+        if moved || contents != nil { record(updated: [item], deleted: deleted) }
+        let oldParent = (sourcePath as NSString).deletingLastPathComponent
+        return try mutationResult(item: item, parentPaths: [oldParent, parentPath])
+    }
+
+    public func deleteItem(
+        identifier: NSFileProviderItemIdentifier, recursive: Bool
+    ) async throws -> LeaderVFSMutationResult {
+        let path = try allowedPath(for: identifier)
+        guard path != "/" else { throw VFSProviderError.deletionRejected }
+        let parentPath = (path as NSString).deletingLastPathComponent
+        do {
+            try await fs.remove(path, recursive: recursive)
+        } catch let error as FsClient.FsError {
+            if Self.hasLeaderCode(error, "ENOENT") {
+                // File Provider deletion is idempotent when the remote item is already gone.
+            } else if Self.hasLeaderCode(error, "EACCES") || Self.hasLeaderCode(error, "EPERM") {
+                throw VFSProviderError.deletionRejected
+            } else {
+                throw error
+            }
+        }
+
+        var deleted = purgeSubtree(root: path)
+        if !deleted.contains(identifier) { deleted.append(identifier) }
+        childrenByDirectory.removeValue(forKey: parentPath)
+        record(updated: [], deleted: deleted)
+        return try mutationResult(item: nil, parentPaths: [parentPath])
     }
 
     public func changes(from syncAnchor: NSFileProviderSyncAnchor) async throws -> LeaderVFSChangeSet {
@@ -283,6 +415,54 @@ public final class LeaderVFSProvider {
         try await fs.stat(path)
     }
 
+    private func ensureAbsent(_ path: String) async throws {
+        do {
+            _ = try await fsStat(path)
+            throw VFSProviderError.filenameCollision
+        } catch let error as FsClient.FsError where Self.hasLeaderCode(error, "ENOENT") {
+            return
+        }
+    }
+
+    private func copyItem(
+        from sourcePath: String,
+        to destinationPath: String,
+        type: TrayFsNodeType,
+        replacementContents: Data? = nil
+    ) async throws {
+        switch type {
+        case .file:
+            let data: Data
+            if let replacementContents {
+                data = replacementContents
+            } else {
+                data = try await fs.readBinaryFile(sourcePath)
+            }
+            try await fs.writeBinaryFile(destinationPath, data: data)
+        case .directory:
+            guard replacementContents == nil else { throw VFSProviderError.notWritable }
+            try await fs.mkdir(destinationPath, recursive: false)
+            for entry in try await fs.readDir(sourcePath) {
+                let sourceChild = try VFSItemIdentity.childPath(parent: sourcePath, name: entry.name)
+                let destinationChild = try VFSItemIdentity.childPath(
+                    parent: destinationPath, name: entry.name)
+                try await copyItem(from: sourceChild, to: destinationChild, type: entry.type)
+            }
+        case .symlink:
+            throw VFSProviderError.notWritable
+        }
+    }
+
+    private func mutationResult(
+        item: LeaderVFSItem?, parentPaths: [String]
+    ) throws -> LeaderVFSMutationResult {
+        var identifiers = [NSFileProviderItemIdentifier.workingSet]
+        for path in Set(parentPaths).sorted() {
+            identifiers.append(try VFSItemIdentity.identifier(for: path.isEmpty ? "/" : path))
+        }
+        return LeaderVFSMutationResult(item: item, containersToSignal: identifiers)
+    }
+
     private func allowedPath(for identifier: NSFileProviderItemIdentifier) throws -> String {
         let path = try VFSItemIdentity.path(for: identifier)
         guard !Self.isProc(path) else { throw VFSProviderError.noSuchItem }
@@ -304,6 +484,11 @@ public final class LeaderVFSProvider {
 
     private static func isProc(_ path: String) -> Bool {
         path == "/proc" || path.hasPrefix("/proc/")
+    }
+
+    private static func hasLeaderCode(_ error: FsClient.FsError, _ code: String) -> Bool {
+        if case .leader(_, let leaderCode) = error { return leaderCode == code }
+        return false
     }
 }
 
