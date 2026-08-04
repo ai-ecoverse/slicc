@@ -1263,6 +1263,14 @@ class AppState: ObservableObject {
 
         case .error(let error):
             logger.error("Agent event: error — \(error)")
+            if let idx = buffer.lastIndex(where: { $0.isStreaming == true }) {
+                buffer[idx].isStreaming = false
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    cancelPendingMessagesFlush()
+                    messages = buffer
+                }
+            }
             if isVisible { leaderError = error }
             settleTurn(messageId: nil, isVisible: isVisible)
 
