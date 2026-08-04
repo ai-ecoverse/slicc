@@ -97,10 +97,19 @@ private struct HorizontalScrollGestureStateKey: EnvironmentKey {
     static let defaultValue = HorizontalScrollGestureState()
 }
 
+private struct HorizontalScrollActionKey: EnvironmentKey {
+    static let defaultValue: (SwipeArbiter.Action) -> Void = { _ in }
+}
+
 extension EnvironmentValues {
     var horizontalScrollGestureState: HorizontalScrollGestureState {
         get { self[HorizontalScrollGestureStateKey.self] }
         set { self[HorizontalScrollGestureStateKey.self] = newValue }
+    }
+
+    var horizontalScrollAction: (SwipeArbiter.Action) -> Void {
+        get { self[HorizontalScrollActionKey.self] }
+        set { self[HorizontalScrollActionKey.self] = newValue }
     }
 }
 
@@ -132,12 +141,14 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
     let showsIndicators: Bool
 
     @Environment(\.horizontalScrollGestureState) private var gestureState
+    @Environment(\.horizontalScrollAction) private var horizontalScrollAction
     @State private var scrollCoordinateSpaceName = UUID()
     @State private var regionID = UUID()
     @State private var metrics = HorizontalScrollMetrics()
     @State private var viewportWidth: CGFloat = 0
     @State private var regionFrame = CGRect.null
     @State private var touchActive = false
+    @State private var capturedOrigin: SwipeArbiter.DragOrigin?
 
     func body(content: Content) -> some View {
         ScrollView(.horizontal, showsIndicators: showsIndicators) {
@@ -188,15 +199,20 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
             .onChanged { _ in
                 guard !touchActive else { return }
                 touchActive = true
-                gestureState.beginInnerGesture(
-                    context: SwipeArbiter.ScrollContext(
-                        offset: metrics.offset,
-                        contentWidth: metrics.contentWidth,
-                        viewportWidth: effectiveViewportWidth(viewportWidth)))
+                let context = SwipeArbiter.ScrollContext(
+                    offset: metrics.offset,
+                    contentWidth: metrics.contentWidth,
+                    viewportWidth: effectiveViewportWidth(viewportWidth))
+                capturedOrigin = .guardedContent(context)
+                gestureState.beginInnerGesture(context: context)
             }
-            .onEnded { _ in
+            .onEnded { value in
+                let origin = capturedOrigin ?? .unknown
                 touchActive = false
+                capturedOrigin = nil
                 gestureState.endInnerGesture()
+                horizontalScrollAction(
+                    SwipeArbiter.action(for: value.translation, origin: origin))
             }
     }
 

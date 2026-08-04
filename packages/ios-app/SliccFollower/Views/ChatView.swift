@@ -312,6 +312,7 @@ struct ConversationView: View {
             }
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleTranscriptSwipe)
         .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
         .background(palette.canvas)
         // The live session identifies itself through the compact switcher in
@@ -492,23 +493,29 @@ struct ConversationView: View {
     /// vertical scrolling stays untouched.
     private var frozenDismissGesture: some Gesture {
         arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            if action == .previous {
-                appState.closeFrozenSession()
-            }
+            handleTranscriptSwipe(action)
         }
     }
 
     /// Horizontal drag gesture that routes to AppState's swipe handlers.
     private var swipeGesture: some Gesture {
         arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            switch action {
-            case .next:
-                appState.swipeToNextScoop()
-            case .previous:
-                appState.swipeToPreviousScoop()
-            case .none:
-                break
-            }
+            handleTranscriptSwipe(action)
+        }
+    }
+
+    private func handleTranscriptSwipe(_ action: SwipeArbiter.Action) {
+        if appState.openFrozen != nil {
+            if action == .previous { appState.closeFrozenSession() }
+            return
+        }
+        switch action {
+        case .next:
+            appState.swipeToNextScoop()
+        case .previous:
+            appState.swipeToPreviousScoop()
+        case .none:
+            break
         }
     }
 }
@@ -581,6 +588,7 @@ struct FixtureConversationView: View {
             .simultaneousGesture(fixtureSwipeGesture)
         }
         .environment(\.horizontalScrollGestureState, horizontalScrollGestureState)
+        .environment(\.horizontalScrollAction, handleFixtureSwipe)
         .coordinateSpace(name: horizontalScrollGestureState.coordinateSpaceName)
         .background(palette.canvas)
         .navigationTitle("UI Fixture")
@@ -602,14 +610,18 @@ struct FixtureConversationView: View {
 
     private var fixtureSwipeGesture: some Gesture {
         arbitratedScoopSwipeGesture(state: horizontalScrollGestureState) { action in
-            switch action {
-            case .next:
-                selectedFixtureScoop = min(selectedFixtureScoop + 1, 3)
-            case .previous:
-                selectedFixtureScoop = max(selectedFixtureScoop - 1, 1)
-            case .none:
-                break
-            }
+            handleFixtureSwipe(action)
+        }
+    }
+
+    private func handleFixtureSwipe(_ action: SwipeArbiter.Action) {
+        switch action {
+        case .next:
+            selectedFixtureScoop = min(selectedFixtureScoop + 1, 3)
+        case .previous:
+            selectedFixtureScoop = max(selectedFixtureScoop - 1, 1)
+        case .none:
+            break
         }
     }
 }
@@ -639,7 +651,7 @@ private func arbitratedScoopSwipeGesture(
     }
     .onEnded { value in
         let origin = state.endOuterGesture()
-        onAction(SwipeArbiter.action(for: value.translation, origin: origin))
+        onAction(SwipeArbiter.outerAction(for: value.translation, origin: origin))
     }
 
     return actionGesture.simultaneously(with: touchDownGesture)

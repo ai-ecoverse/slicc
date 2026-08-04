@@ -71,4 +71,14 @@ struct SwipeArbiter {
         guard scrollContext.atLeadingEdge else { return .none }
         return .previous
     }
+
+    /// Guarded descendants resolve their own handoff because iOS 26 no longer
+    /// makes descendant gestures simultaneous with ancestor gestures.
+    static func outerAction(
+        for translation: CGSize,
+        origin: DragOrigin
+    ) -> Action {
+        guard origin == .ordinaryContent else { return .none }
+        return action(for: translation, origin: origin)
+    }
 }
