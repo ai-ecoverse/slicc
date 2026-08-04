@@ -340,11 +340,12 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
             let location = gesture.location(in: window)
             switch gesture.state {
             case .began:
+                let context = liveScrollContext(for: gesture)
                 startLocation = location
-                capturedContext = scrollContext
-                gestureState.beginInnerGesture(context: scrollContext)
+                capturedContext = context
+                gestureState.beginInnerGesture(context: context)
                 gestureState.recordSwipeDiagnostic(
-                    "began leading=\(scrollContext.atLeadingEdge) trailing=\(scrollContext.atTrailingEdge)")
+                    "began leading=\(context.atLeadingEdge) trailing=\(context.atTrailingEdge)")
             case .changed:
                 guard let startLocation else { return }
                 gestureState.recordSwipeDiagnostic(
@@ -378,6 +379,29 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
             default:
                 break
             }
+        }
+
+        private func liveScrollContext(
+            for gesture: UIGestureRecognizer
+        ) -> SwipeArbiter.ScrollContext {
+            var view = gesture.view
+            while let currentView = view {
+                if let scrollView = currentView as? UIScrollView {
+                    let insets = scrollView.adjustedContentInset
+                    let contentWidth =
+                        scrollView.contentSize.width + insets.left + insets.right
+                    guard contentWidth > scrollView.bounds.width + 1 else {
+                        view = currentView.superview
+                        continue
+                    }
+                    return SwipeArbiter.ScrollContext(
+                        offset: scrollView.contentOffset.x + insets.left,
+                        contentWidth: contentWidth,
+                        viewportWidth: scrollView.bounds.width)
+                }
+                view = currentView.superview
+            }
+            return scrollContext
         }
     }
 }
