@@ -1,17 +1,20 @@
 import SwiftUI
 
-/// The workbench surface presented over the chat — the native analogue of
-/// the webapp's narrow-viewport full-bleed overlay (`slicc-shell.ts`
-/// ≤560px: `position: absolute; right: 48px; z-index: 5`), leaving only
-/// the dock rail beside it. Real views where the follower has one
-/// (browser tabs, sprinkles); an honest placeholder everywhere the
-/// surface lives on the leader — much better than a missing tab.
+/// The selected workbench surface. ChatView presents it over the conversation
+/// at compact width and beside the conversation at regular width. Real views
+/// appear where the follower has one (browser tabs, sprinkles); an honest
+/// placeholder appears everywhere the surface lives on the leader.
 struct WorkbenchHost: View {
     let surface: DockSurface
     /// Only `.term` outlives its presentation (see `TerminalView.isActive`);
     /// every other surface is torn down on collapse, so they default to
     /// active and never observe this.
     var isActive: Bool = true
+    /// Supplied only for `.term`, and owned by the shell rather than by this
+    /// host: both adaptive layouts hand over the same model, so resizing
+    /// across the size-class boundary re-parents the terminal instead of
+    /// rebuilding it. Other surfaces leave it nil and never read it.
+    var terminalModel: TerminalViewModel?
 
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -35,16 +38,18 @@ struct WorkbenchHost: View {
             case .files:
                 FilesView()
             case .term:
-                TerminalView(
-                    client: appState.terminalClient,
-                    connectionAvailable: Self.terminalConnectionAvailable(
-                        connectionState: appState.connectionState,
-                        isLeaderStalled: appState.isLeaderStalled,
-                        leaderCapabilities: terminalLeaderCapabilities),
-                    transportConnected: appState.connectionState == .connected,
-                    isActive: isActive,
-                    theme: appState.leaderTheme
-                )
+                if let terminalModel {
+                    TerminalView(
+                        model: terminalModel,
+                        connectionAvailable: Self.terminalConnectionAvailable(
+                            connectionState: appState.connectionState,
+                            isLeaderStalled: appState.isLeaderStalled,
+                            leaderCapabilities: terminalLeaderCapabilities),
+                        transportConnected: appState.connectionState == .connected,
+                        isActive: isActive,
+                        theme: appState.leaderTheme
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -2,21 +2,18 @@ import SwiftUI
 import UIKit
 import os
 
-/// Top-level container view with a NavigationSplitView whose sidebar lists
-/// chat with the dock rail beside it — the webapp's narrow-viewport IA
-/// (`slicc-shell.ts` ≤560px): chat is the app, workbench surfaces overlay
-/// it full-bleed, and only the 48pt dock stays tappable. There is no
-/// sidebar and no split view on a phone.
+/// Top-level adaptive shell. Compact width preserves the webapp's narrow IA:
+/// chat is the app, workbench surfaces overlay it full-bleed, and only the
+/// 48pt dock stays tappable. Regular width keeps chat visible beside the
+/// selected workbench surface.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @StateObject private var presentation: ChatPresentationState
+    @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
     @State private var showSettings = false
     @State private var hasAppeared = false
-    /// The open workbench surface; nil is the collapsed (chat-only) state.
-    @State private var activeSurface: DockSurface?
-    /// Once opened, keep Ghostty attached to the window behind other tabs so
-    /// removing its UIView cannot destroy the terminal surface and scrollback.
-    @State private var terminalWasOpened = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
     @State private var fixtureMode = false
     /// Lifted to the shell so hook seeding and the chat toolbar snowflake
@@ -26,42 +23,27 @@ struct ChatView: View {
     /// Settings toggle) — reachability for left-handed use.
     @AppStorage("leftHandedDock") private var leftHandedDock = false
 
+    init() {
+        _presentation = StateObject(
+            wrappedValue: ChatPresentationState(composerDraft: Self.seededComposerText()))
+    }
+
+    /// Test seam for proving the shell, rather than either adaptive branch,
+    /// constructs and owns the presentation state.
+    init(presentation: @autoclosure @escaping () -> ChatPresentationState) {
+        _presentation = StateObject(wrappedValue: presentation())
+    }
+
     var body: some View {
-        // The rail sits BESIDE the navigation stack, not inside it: a rail
-        // under the navigation bar collides with the bar's chrome (the
-        // leading title in left-handed mode, the trailing controls in
-        // right-handed). Outside, the bar spans only the chat column.
-        HStack(spacing: 0) {
-            if leftHandedDock {
-                dockRail
-            }
-            NavigationStack {
-                ZStack {
-                    if fixtureMode {
-                        FixtureConversationView()
-                    } else {
-                        ConversationView(
-                            showSettings: $showSettings,
-                            showFrozenSessions: $showFrozenSessions)
-                    }
-                    // The workbench covers the chat, not the rail — the
-                    // same full-bleed overlay the web shell uses at ≤560px,
-                    // so tap-active-to-collapse stays reachable.
-                    if terminalWasOpened || activeSurface == .term {
-                        WorkbenchHost(surface: .term, isActive: activeSurface == .term)
-                            .opacity(activeSurface == .term ? 1 : 0)
-                            .allowsHitTesting(activeSurface == .term)
-                            .accessibilityHidden(activeSurface != .term)
-                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
-                    }
-                    if let surface = activeSurface, surface != .term {
-                        WorkbenchHost(surface: surface)
-                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
-                    }
-                }
-            }
-            if !leftHandedDock {
-                dockRail
+        GeometryReader { geometry in
+            switch ShellLayout.mode(
+                horizontalSizeClass: horizontalSizeClass,
+                availableWidth: geometry.size.width
+            ) {
+            case .compactOverlay:
+                compactShell
+            case .regularSplit:
+                regularShell
             }
         }
         // A leader theme pins the scheme to its base; unthemed follows the
@@ -86,8 +68,8 @@ struct ChatView: View {
                 // Before the connection-state early return: screenshots
                 // combine a forced state with an open surface.
                 if let surface = UITestHooks.opensDockSurface() {
-                    activeSurface = surface
-                    terminalWasOpened = surface == .term
+                    presentation.activeSurface = surface
+                    presentation.terminalWasOpened = surface == .term
                 }
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
@@ -109,13 +91,139 @@ struct ChatView: View {
                 appState.connect()
             }
         }
-        .onChange(of: activeSurface) { surface in
-            if surface == .term { terminalWasOpened = true }
+        .onChange(of: presentation.activeSurface) { surface in
+            if surface == .term { presentation.terminalWasOpened = true }
         }
     }
 
+    /// The phone shell stays structurally unchanged: the rail remains outside
+    /// the navigation stack while the workbench overlays only the conversation.
+    private var compactShell: some View {
+        // The rail sits BESIDE the navigation stack, not inside it: a rail
+        // under the navigation bar collides with the bar's chrome (the
+        // leading title in left-handed mode, the trailing controls in
+        // right-handed). Outside, the bar spans only the chat column.
+        HStack(spacing: 0) {
+            if leftHandedDock {
+                dockRail
+            }
+            NavigationStack {
+                ZStack {
+                    if fixtureMode {
+                        FixtureConversationView(
+                            transcriptPosition: $presentation.transcriptPosition)
+                    } else {
+                        ConversationView(
+                            showSettings: $showSettings,
+                            showFrozenSessions: $showFrozenSessions,
+                            inputText: $presentation.composerDraft,
+                            stagedAttachments: $presentation.stagedAttachments,
+                            transcriptPosition: $presentation.transcriptPosition,
+                            ptt: ptt)
+                    }
+                    // The workbench covers the chat, not the rail — the
+                    // same full-bleed overlay the web shell uses at ≤560px,
+                    // so tap-active-to-collapse stays reachable.
+                    if presentation.terminalWasOpened || presentation.activeSurface == .term {
+                        WorkbenchHost(
+                            surface: .term,
+                            isActive: presentation.activeSurface == .term,
+                            terminalModel: presentation.terminal(client: appState.terminalClient)
+                        )
+                        .opacity(presentation.activeSurface == .term ? 1 : 0)
+                        .allowsHitTesting(presentation.activeSurface == .term)
+                        .accessibilityHidden(presentation.activeSurface != .term)
+                        .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+                    }
+                    if let surface = presentation.activeSurface, surface != .term {
+                        WorkbenchHost(surface: surface)
+                            .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+                    }
+                }
+            }
+            if !leftHandedDock {
+                dockRail
+            }
+        }
+    }
+
+    /// Regular width mirrors the dock and its workbench around a persistent
+    /// conversation column. With no selected surface, conversation fills the
+    /// space beside the rail.
+    private var regularShell: some View {
+        HStack(spacing: 0) {
+            if leftHandedDock {
+                dockRail
+                regularWorkbench
+            }
+
+            conversation
+
+            if !leftHandedDock {
+                regularWorkbench
+                dockRail
+            }
+        }
+    }
+
+    private var conversation: some View {
+        NavigationStack {
+            if fixtureMode {
+                FixtureConversationView(
+                    transcriptPosition: $presentation.transcriptPosition)
+            } else {
+                ConversationView(
+                    showSettings: $showSettings,
+                    showFrozenSessions: $showFrozenSessions,
+                    inputText: $presentation.composerDraft,
+                    stagedAttachments: $presentation.stagedAttachments,
+                    transcriptPosition: $presentation.transcriptPosition,
+                    ptt: ptt)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var regularWorkbench: some View {
+        if presentation.activeSurface != nil {
+            if leftHandedDock {
+                workbench
+                Divider()
+            } else {
+                Divider()
+                workbench
+            }
+        }
+    }
+
+    /// Stacked rather than switched, so moving between surfaces does not take
+    /// the Ghostty view out of the window and destroy the terminal's
+    /// scrollback (the compact shell keeps it for the same reason). Collapsing
+    /// the column entirely still tears it down: an invisible full-width
+    /// workbench cannot be expressed in a side-by-side layout.
+    private var workbench: some View {
+        ZStack {
+            if presentation.terminalWasOpened || presentation.activeSurface == .term {
+                WorkbenchHost(
+                    surface: .term,
+                    isActive: presentation.activeSurface == .term,
+                    terminalModel: presentation.terminal(client: appState.terminalClient)
+                )
+                .opacity(presentation.activeSurface == .term ? 1 : 0)
+                .allowsHitTesting(presentation.activeSurface == .term)
+                .accessibilityHidden(presentation.activeSurface != .term)
+            }
+            if let surface = presentation.activeSurface, surface != .term {
+                WorkbenchHost(surface: surface)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.move(edge: leftHandedDock ? .leading : .trailing))
+    }
+
     private var dockRail: some View {
-        DockRail(active: $activeSurface, sprinkles: appState.sprinkles)
+        DockRail(active: $presentation.activeSurface, sprinkles: appState.sprinkles)
     }
 
     /// Composer text seeded from the `-uiTestComposerText` launch argument —
@@ -163,7 +271,10 @@ struct ConversationView: View {
     @Environment(\.palette) private var palette
     @Binding var showSettings: Bool
     @Binding var showFrozenSessions: Bool
-    @State private var inputText = ChatView.seededComposerText()
+    @Binding var inputText: String
+    @Binding var stagedAttachments: [MessageAttachment]
+    @Binding var transcriptPosition: ScrollPosition
+    @ObservedObject var ptt: PttController
     @State private var showNewSessionDialog = false
     /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
     /// reachable edge.
@@ -190,7 +301,8 @@ struct ConversationView: View {
                     messages: frozen.archive.messages,
                     isStreaming: false,
                     toolUICards: [],
-                    onInlineSprinkleLick: { _, _ in }
+                    onInlineSprinkleLick: { _, _ in },
+                    scrollPosition: $transcriptPosition
                 )
                 .simultaneousGesture(frozenDismissGesture)
                 FrozenSessionBanner()
@@ -338,7 +450,8 @@ struct ConversationView: View {
                 toolUICards: appState.toolUICards,
                 onInlineSprinkleLick: { body, target in
                     appState.sendSprinkleLick("inline", body: body, targetScoop: target)
-                }
+                },
+                scrollPosition: $transcriptPosition
             )
             // simultaneousGesture so the inner ScrollView keeps vertical scrolling;
             // we only react to mostly-horizontal flicks (filtered in onEnded).
@@ -353,6 +466,7 @@ struct ConversationView: View {
                 // than claiming the follower is disconnected.
                 isStalled: appState.isLeaderStalled,
                 steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
+                ptt: ptt,
                 onSend: { text, attachments, dictated in
                     appState.sendMessage(
                         text, attachments: attachments, dictated: dictated)
@@ -364,7 +478,8 @@ struct ConversationView: View {
                 onSteer: { text, attachments in
                     appState.sendMessage(text, steer: true, attachments: attachments)
                     inputText = ""
-                }
+                },
+                stagedAttachments: $stagedAttachments
             )
         }
     }
@@ -410,6 +525,7 @@ struct ConversationView: View {
 /// log to the console — there's no scoop on the other end of the bridge.
 struct FixtureConversationView: View {
     @Environment(\.palette) private var palette
+    @Binding var transcriptPosition: ScrollPosition
     @State private var messages: [ChatMessage] = ChatFixture.makeMessages()
     @State private var lastLick: String?
     private static let log = Logger(subsystem: "com.slicc.follower", category: "Fixture")
@@ -454,7 +570,8 @@ struct FixtureConversationView: View {
                     let summary = describeLick(body: body, target: target)
                     Self.log.info("sprinkle lick: \(summary)")
                     lastLick = summary
-                }
+                },
+                scrollPosition: $transcriptPosition
             )
         }
         .background(palette.canvas)

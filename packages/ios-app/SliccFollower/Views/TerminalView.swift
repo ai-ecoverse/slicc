@@ -24,7 +24,11 @@ struct TerminalView: View {
         }
     }
 
-    @StateObject private var model: TerminalViewModel
+    /// Observed, never owned. The shell holds the model so that crossing the
+    /// compact/regular boundary re-parents the terminal instead of rebuilding
+    /// it; owning it here as a `@StateObject` would drop the scrollback and
+    /// any in-flight command every time the window is resized.
+    @ObservedObject private var model: TerminalViewModel
     let connectionAvailable: Bool
     /// Kept separate from `connectionAvailable`, which also fails closed when
     /// an old or limited leader does not advertise terminal execution.
@@ -42,23 +46,17 @@ struct TerminalView: View {
     @Environment(\.palette) private var palette
 
     init(
-        client: TerminalClient,
+        model: TerminalViewModel,
         connectionAvailable: Bool,
         transportConnected: Bool,
         isActive: Bool,
         theme: SliccTheme?
     ) {
+        _model = ObservedObject(wrappedValue: model)
         self.connectionAvailable = connectionAvailable
         self.transportConnected = transportConnected
         self.isActive = isActive
         self.theme = theme
-        #if DEBUG
-            _model = StateObject(
-                wrappedValue: TerminalViewModel(
-                    client: client, fixtureEnabled: UITestHooks.terminalFixtureEnabled))
-        #else
-            _model = StateObject(wrappedValue: TerminalViewModel(client: client))
-        #endif
     }
 
     var body: some View {
