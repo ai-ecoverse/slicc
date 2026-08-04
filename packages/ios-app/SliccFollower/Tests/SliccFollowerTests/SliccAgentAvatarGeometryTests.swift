@@ -3,6 +3,26 @@ import XCTest
 @testable import SliccFollower
 
 @MainActor
+private final class ManuallyEmittingAvatarTiltSource: SliccAgentAvatarTiltSource {
+    var isDeviceMotionAvailable = true
+    private var handler: (@MainActor (SliccAgentAvatarAttitude) -> Void)?
+
+    func startDeviceMotionUpdates(
+        _ handler: @escaping @MainActor (SliccAgentAvatarAttitude) -> Void
+    ) {
+        self.handler = handler
+    }
+
+    func stopDeviceMotionUpdates() {
+        handler = nil
+    }
+
+    func emit(_ attitude: SliccAgentAvatarAttitude) {
+        handler?(attitude)
+    }
+}
+
+@MainActor
 final class SliccAgentAvatarGeometryTests: XCTestCase {
     private let accuracy = 0.000_001
 
@@ -63,7 +83,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let reviewer = scoopSummary(isCone: false, name: "reviewer", fill: 82).avatarGeometry(
             sideLength: 24)
         let coder = scoopSummary(isCone: false, name: "coder", fill: 64).avatarGeometry()
-        let unicode = scoopSummary(isCone: false, name: "🍨", fill: 12).avatarGeometry()
+        let astralScalar = scoopSummary(isCone: false, name: "🚀", fill: 12).avatarGeometry()
 
         XCTAssertEqual(cone.type, .cone)
         XCTAssertEqual(cone.color, "#b07823")
@@ -75,7 +95,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(reviewer.fill, 82)
         XCTAssertEqual(reviewer.sideLength, 24)
         XCTAssertEqual(coder.color, "#10b981")
-        XCTAssertEqual(unicode.color, "#06b6d4")
+        XCTAssertEqual(astralScalar.color, "#8b5cf6")
         XCTAssertNotEqual(reviewer.color, coder.color)
     }
 
@@ -182,6 +202,39 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         controller.update(geometry: tiltGeometry, motionDisabled: false)
 
         XCTAssertEqual(source.startCallCount, 1)
+    }
+
+    func testTiltControllerReadsInjectedOrientationForEveryMotionSample() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var orientation = SliccAgentAvatarInterfaceOrientation.portrait
+        var orientationReadCount = 0
+        let controller = SliccAgentAvatarTiltController(
+            source: source,
+            interfaceOrientation: {
+                orientationReadCount += 1
+                return orientation
+            })
+        let attitude = SliccAgentAvatarAttitude(roll: 0.1, pitch: 0.2)
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+
+        source.emit(attitude)
+        let portraitTarget = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .portrait)
+        let portraitOffset = tiltMapping.smoothedOffset(
+            from: .init(x: 0, y: 0), toward: portraitTarget)
+        XCTAssertEqual(controller.pupilOffset, portraitOffset)
+        XCTAssertEqual(orientationReadCount, 1)
+
+        orientation = .landscapeRight
+        source.emit(attitude)
+        let landscapeTarget = tiltMapping.pupilOffset(
+            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            isDeviceMotionAvailable: true, orientation: .landscapeRight)
+        let landscapeOffset = tiltMapping.smoothedOffset(
+            from: portraitOffset, toward: landscapeTarget)
+        XCTAssertEqual(controller.pupilOffset, landscapeOffset)
+        XCTAssertEqual(orientationReadCount, 2)
     }
 
     func testTiltControllerMotionDisabledStopsAndCenters() {
