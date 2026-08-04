@@ -83,7 +83,8 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let reviewer = scoopSummary(isCone: false, name: "reviewer", fill: 82).avatarGeometry(
             sideLength: 24)
         let coder = scoopSummary(isCone: false, name: "coder", fill: 64).avatarGeometry()
-        let astralScalar = scoopSummary(isCone: false, name: "🚀", fill: 12).avatarGeometry()
+        let rocket = scoopSummary(isCone: false, name: "🚀", fill: 12).avatarGeometry()
+        let pileOfPoo = scoopSummary(isCone: false, name: "💩", fill: 12).avatarGeometry()
 
         XCTAssertEqual(cone.type, .cone)
         XCTAssertEqual(cone.color, "#b07823")
@@ -95,7 +96,8 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(reviewer.fill, 82)
         XCTAssertEqual(reviewer.sideLength, 24)
         XCTAssertEqual(coder.color, "#10b981")
-        XCTAssertEqual(astralScalar.color, "#8b5cf6")
+        XCTAssertEqual(rocket.color, "#8b5cf6")
+        XCTAssertEqual(pileOfPoo.color, "#8b5cf6")
         XCTAssertNotEqual(reviewer.color, coder.color)
     }
 
