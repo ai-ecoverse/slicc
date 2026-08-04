@@ -11,6 +11,7 @@
 		02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434BBAD25E91BD0B7D626821 /* AppState.swift */; };
 		07FB78A21C6B4886CF4FEA74 /* AppStateFrozenSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE98FF01376D2519FAC3A05 /* AppStateFrozenSessions.swift */; };
 		09FE7E5B6F63D6850F2EBFBE /* UITestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1308398CD972FF297E2C75 /* UITestHooks.swift */; };
+		0A2E0E32557303EF81B1F3A1 /* AppStateStreamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC17E730D500B3482A2952ED /* AppStateStreamingTests.swift */; };
 		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
 		11F604368853A3A60AC0B10F /* PttController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F779D2634D4AED6D1AEDA07 /* PttController.swift */; };
 		15CF4C85551B4FE239D55E94 /* SliccIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438577405ABBCA33F117862C /* SliccIcons.swift */; };
@@ -284,6 +285,7 @@
 		F8E6A8B63717540E230B11C9 /* TerminalViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewModel.swift; sourceTree = "<group>"; };
 		F9555BBF8AC72C74630432D1 /* theme-vectors.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "theme-vectors.json"; sourceTree = "<group>"; };
 		FA2246D17E400D5616AD36E0 /* SliccAgentAvatarTilt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccAgentAvatarTilt.swift; sourceTree = "<group>"; };
+		FC17E730D500B3482A2952ED /* AppStateStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateStreamingTests.swift; sourceTree = "<group>"; };
 		FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRouteUITests.swift; sourceTree = "<group>"; };
 		FD6CEFD575FD21C28BEC39F5 /* tray-sync-corpus.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "tray-sync-corpus.json"; sourceTree = "<group>"; };
 		FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateDelivery.swift; sourceTree = "<group>"; };
@@ -309,6 +311,7 @@
 		32BEF7BC73FC1288DC470211 /* SliccFollowerTests */ = {
 			isa = PBXGroup;
 			children = (
+				FC17E730D500B3482A2952ED /* AppStateStreamingTests.swift */,
 				787E06CD88652B51BA32D519 /* AttachmentMessageTests.swift */,
 				2D69F96CFDFB32CC8A815552 /* BrowserTargetsTests.swift */,
 				496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */,
@@ -796,6 +799,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0A2E0E32557303EF81B1F3A1 /* AppStateStreamingTests.swift in Sources */,
 				581EB92FA65132178CAE334E /* AttachmentMessageTests.swift in Sources */,
 				80CAC841902FCED56E805928 /* BrowserTargetsTests.swift in Sources */,
 				E568114F9C5022800E90127F /* CdpPreviewClientTests.swift in Sources */,

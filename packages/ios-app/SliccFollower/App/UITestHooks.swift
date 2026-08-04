@@ -39,6 +39,31 @@ import UIKit
             UserDefaults.standard.string(forKey: "uiTestConnectionState")
         }
 
+        /// Stage a completed visible turn without a leader
+        /// (`-uiTestCompletedTurn YES`). All messages enter through the real
+        /// data-channel decoder; status: ready settles the turn because the
+        /// missing `turn_end` is deliberate.
+        @MainActor
+        static func scriptCompletedTurn(into appState: AppState) -> Bool {
+            guard UserDefaults.standard.bool(forKey: "uiTestCompletedTurn") else { return false }
+            let scoopJid = "ui-test-cone"
+            let messageId = "ui-test-reply"
+            appState.connectionState = .connected
+            appState.selectedScoopJid = scoopJid
+            let messages: [LeaderToFollowerMessage] = [
+                .agentEvent(event: .messageStart(messageId: messageId), scoopJid: scoopJid),
+                .agentEvent(
+                    event: .contentDone(messageId: messageId, model: nil, usage: nil),
+                    scoopJid: scoopJid),
+                .status(scoopStatus: "ready"),
+            ]
+            for message in messages {
+                guard let data = try? JSONEncoder().encode(message) else { return false }
+                appState.handleDataChannelMessage(data)
+            }
+            return true
+        }
+
         /// Seed the iCloud sessions list without touching iCloud:
         /// `-uiTestSessionsFixture YES` yields two devices' worth of fixture
         /// sessions, `-uiTestSessionsEmpty YES` a deterministic empty store.

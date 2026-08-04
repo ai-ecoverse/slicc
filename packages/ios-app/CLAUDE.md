@@ -181,14 +181,11 @@ picks a simulator, enables coverage and on-failure retries, and enforces the
   --xcodebuild SliccFollower packages/ios-app SliccFollower
 ```
 
-Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`,
-`ios-app.xcresult` with per-test durations). Neither bundle is `parallelizable`: the unit tests total
-~7s, so cloning simulators only raced the UI runner, which then fails preflight
-with `Busy` or dies on `Timed out while loading Accessibility`.
-`randomExecutionOrder` still holds, so no test may depend on another's side
-effects. Coverage is measured against
-`SliccFollower.app/SliccFollower.debug.dylib`, not the launcher stub beside it —
-debug builds put the code and the coverage mapping in the dylib.
+Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, and the timed
+`ios-app.xcresult`). Neither bundle is `parallelizable`: simulator clones race
+the UI runner into `Busy` or accessibility timeouts. Tests still run in random
+order, so they cannot share state. Coverage reads
+`SliccFollower.app/SliccFollower.debug.dylib`, where debug code and mappings live.
 
 ## Simulator QA path
 
@@ -208,6 +205,8 @@ in-memory backend (fixture URLs dial `127.0.0.1:1`, failing hermetically). `UITe
 must not carry a flag that skips the connection path. The failure-state test
 dials `http://127.0.0.1:1/…` — refused without DNS or egress, so
 `Connection Failed` arrives in seconds.
+`-uiTestCompletedTurn YES` feeds `message_start` + `content_done` + `status:
+ready` through the real dispatcher, proving settlement without `turn_end`.
 
 - **Put accessibility identifiers on leaves.** SwiftUI pushes one onto a
   container's leaves instead of minting a container, so an identifier on a
@@ -262,7 +261,7 @@ the skip message.
 
 ## Related Guides
 
-- `packages/shared-ts/src/tray-sync-protocol.ts` — canonical protocol (the file this app's `SyncProtocol.swift` partially mirrors); payload types in `packages/shared-ts/src/agent-wire-types.ts`
+- `packages/shared-ts/src/tray-sync-protocol.ts` — canonical protocol; payload types in `agent-wire-types.ts`
 - `packages/webapp/src/scoops/tray-leader-sync.ts` — leader-side broadcast/respond logic
 - `packages/webapp/src/scoops/tray-follower-sync.ts` — browser follower
 - `packages/webapp/src/ui/sprinkle-follower-controller.ts` — browser follower's page-side sprinkle renderer (mirrors `SprinkleWebView` behavior)

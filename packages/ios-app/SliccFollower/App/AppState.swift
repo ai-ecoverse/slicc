@@ -209,7 +209,7 @@ class AppState: ObservableObject {
     private var chunkReassembler = TrayChunkReassembler()
 
     /// ID of the message currently being streamed.
-    private var streamingMessageId: String?
+    private(set) var streamingMessageId: String?
 
     /// Coalesces high-frequency `messages` republishes during streaming so a
     /// burst of contentDeltas doesn't peg the SwiftUI render loop and starve
@@ -875,7 +875,8 @@ class AppState: ObservableObject {
         case .status(let scoopStatus):
             logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
-            isStreaming = (scoopStatus == "streaming" || scoopStatus == "running")
+            // The leader emits processing/ready; streaming/running remain accepted busy aliases.
+            isStreaming = ["processing", "streaming", "running"].contains(scoopStatus)
             if wasStreaming && !isStreaming {
                 streamingMessageId = nil
             }
@@ -1202,6 +1203,9 @@ class AppState: ObservableObject {
             logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
+                // Match WcChatController: content_done finalizes only this message.
+                // Turn-level busy state falls on turn_end or status: ready so tools
+                // that follow remain stoppable and steerable.
                 // Retained for cost attribution, as the webapp does. Neither
                 // surface renders these in the thread.
                 if let model { buffer[idx].model = model }
@@ -1259,7 +1263,16 @@ class AppState: ObservableObject {
 
         case .error(let error):
             logger.error("Agent event: error — \(error)")
+            if let idx = buffer.lastIndex(where: { $0.isStreaming == true }) {
+                buffer[idx].isStreaming = false
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    cancelPendingMessagesFlush()
+                    messages = buffer
+                }
+            }
             if isVisible { leaderError = error }
+            settleTurn(messageId: nil, isVisible: isVisible)
 
         // Events that mutate no transcript state. Kept as a single arm so the
         // switch stays exhaustive — a new protocol case is then a compile error
@@ -1268,6 +1281,14 @@ class AppState: ObservableObject {
         case .toolUI, .toolUIDone, .screenshot, .terminalOutput, .unknown:
             handleNonTranscriptAgentEvent(event)
         }
+    }
+
+    /// Settle only the visible turn that the terminal event belongs to.
+    private func settleTurn(messageId: String?, isVisible: Bool) {
+        guard isVisible, let activeMessageId = streamingMessageId else { return }
+        guard messageId == nil || messageId == activeMessageId else { return }
+        isStreaming = false
+        streamingMessageId = nil
     }
 
     /// Agent events that never touch `messages`.
