@@ -11,6 +11,7 @@ final class LeaderVFSProviderTests: XCTestCase {
         var stats: [String: TrayFsStat] = [:]
         var files: [String: Data] = [:]
         var error: Error?
+        var removeErrors: [String: Error] = [:]
         private(set) var operations: [String] = []
 
         func readBinaryFile(_ path: String) async throws -> Data {
@@ -58,6 +59,7 @@ final class LeaderVFSProviderTests: XCTestCase {
 
         func remove(_ path: String, recursive: Bool) async throws {
             operations.append("rm:\(path):\(recursive)")
+            if let removeError = removeErrors[path] { throw removeError }
             if let error { throw error }
             let prefix = path + "/"
             if directories[path]?.isEmpty == false && !recursive {
@@ -303,6 +305,27 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertTrue(fs.operations.contains("rm:/old:true"))
     }
 
+    func testModifySurfacesRollbackFailureWhenDestinationCleanupFails() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [TrayFsDirEntry(name: "source.bin", type: .file)]
+        fs.stats["/source.bin"] = TrayFsStat(type: .file, size: 3, mtime: 1, ctime: 1)
+        fs.files["/source.bin"] = Data([1, 2, 3])
+        fs.removeErrors["/source.bin"] = FsClient.FsError.leader(
+            message: "source busy", code: "EBUSY")
+        let cleanupError = FsClient.FsError.leader(message: "cleanup denied", code: "EACCES")
+        fs.removeErrors["/destination.bin"] = cleanupError
+        let provider = LeaderVFSProvider(fs: fs)
+
+        await assertFsFailure(cleanupError) {
+            _ = try await provider.modifyItem(
+                identifier: VFSItemIdentity.identifier(for: "/source.bin"),
+                parentIdentifier: .rootContainer, filename: "destination.bin", contents: nil)
+        }
+
+        XCTAssertEqual(fs.files["/destination.bin"], Data([1, 2, 3]))
+        XCTAssertTrue(fs.operations.contains("rm:/destination.bin:true"))
+    }
+
     func testDeleteHonorsRecursiveOptionAndIsIdempotent() async throws {
         let fs = FakeFS()
         fs.directories["/"] = [TrayFsDirEntry(name: "folder", type: .directory)]
@@ -341,6 +364,13 @@ final class LeaderVFSProviderTests: XCTestCase {
         await assertMappedFailure(.serverUnreachable) {
             _ = try await provider.createItem(
                 parentIdentifier: .rootContainer, filename: "offline.txt", isDirectory: false,
+                contents: Data())
+        }
+
+        fs.error = FsClient.FsError.leader(message: "stat denied", code: "EACCES")
+        await assertMappedFailure(.cannotSynchronize) {
+            _ = try await provider.createItem(
+                parentIdentifier: .rootContainer, filename: "denied.txt", isDirectory: false,
                 contents: Data())
         }
 

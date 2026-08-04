@@ -295,8 +295,18 @@ public final class LeaderVFSProvider {
                     replacementContents: contents)
                 try await fs.remove(sourcePath, recursive: sourceStat.type == .directory)
             } catch {
-                try? await fs.remove(destinationPath, recursive: true)
-                throw error
+                let mutationError = error
+                do {
+                    try await fs.remove(destinationPath, recursive: true)
+                } catch let cleanupError as FsClient.FsError
+                    where Self.hasLeaderCode(cleanupError, "ENOENT")
+                {
+                    // A copy can fail before creating the destination; there is nothing to roll back.
+                } catch {
+                    // Prefer the cleanup error: it signals that the copied destination still exists.
+                    throw error
+                }
+                throw mutationError
             }
         } else if let contents {
             guard sourceStat.type == .file else { throw VFSProviderError.notWritable }
@@ -345,6 +355,8 @@ public final class LeaderVFSProvider {
 
     public func changes(from syncAnchor: NSFileProviderSyncAnchor) async throws -> LeaderVFSChangeSet {
         let requested = Self.decode(anchor: syncAnchor)
+        // refreshDirectory can purge a missing subtree from knownDirectories mid-loop. The sorted
+        // array is a snapshot, so skip descendants that an earlier refresh already purged.
         for path in knownDirectories.sorted() where knownDirectories.contains(path) {
             _ = try await refreshDirectory(path)
         }
@@ -421,6 +433,9 @@ public final class LeaderVFSProvider {
             throw VFSProviderError.filenameCollision
         } catch let error as FsClient.FsError where Self.hasLeaderCode(error, "ENOENT") {
             return
+        } catch {
+            // Only ENOENT confirms absence; transport and other leader failures stay actionable.
+            throw error
         }
     }
 
