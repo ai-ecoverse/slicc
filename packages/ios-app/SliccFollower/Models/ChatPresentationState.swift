@@ -1,4 +1,5 @@
 import SwiftUI
+import SliccTrayKit
 
 /// View-only state that must outlive either adaptive shell subtree.
 /// `ChatView` owns one instance and passes bindings into both layouts, so a

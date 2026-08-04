@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 
+import SliccTrayKit
 @testable import SliccFollower
 
 final class AppStateStreamingTests: XCTestCase {

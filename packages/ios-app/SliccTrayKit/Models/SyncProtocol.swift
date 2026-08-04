@@ -148,13 +148,35 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let folder: String
     public let isCone: Bool
     public let assistantLabel: String
-    let trigger: String?
+    public let trigger: String?
     /// Agent-tab lifecycle state. Optional for compatibility with older leaders.
     public let state: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
     public let fill: Double?
 
     public var id: String { jid }
+
+    /// Explicit public memberwise init — the synthesized one is internal once
+    /// this type lives in `SliccTrayKit` and is constructed from the app/tests.
+    public init(
+        jid: String,
+        name: String,
+        folder: String,
+        isCone: Bool,
+        assistantLabel: String,
+        trigger: String? = nil,
+        state: String? = nil,
+        fill: Double? = nil
+    ) {
+        self.jid = jid
+        self.name = name
+        self.folder = folder
+        self.isCone = isCone
+        self.assistantLabel = assistantLabel
+        self.trigger = trigger
+        self.state = state
+        self.fill = fill
+    }
 }
 
 /// Mirrors SprinkleSummary from tray-sync-protocol.ts
@@ -163,13 +185,29 @@ public struct SprinkleSummary: Codable, Identifiable, Hashable {
     public let title: String
     public let path: String
     public let open: Bool
-    let autoOpen: Bool
+    public let autoOpen: Bool
     /// Raw icon spec from the leader's `.shtml` (Lucide name, VFS path, inline
     /// `<svg>`, or `data:` URL). Optional — sprinkles without an icon fall back
     /// to the default sparkle. iOS sidebar rendering doesn't consume this yet.
     public let icon: String?
 
     public var id: String { name }
+
+    public init(
+        name: String,
+        title: String,
+        path: String,
+        open: Bool,
+        autoOpen: Bool = false,
+        icon: String? = nil
+    ) {
+        self.name = name
+        self.title = title
+        self.path = path
+        self.open = open
+        self.autoOpen = autoOpen
+        self.icon = icon
+    }
 }
 
 // MARK: - Model Catalog / Selection
