@@ -541,6 +541,7 @@ struct FixtureConversationView: View {
                             .font(.caption2.monospaced())
                             .foregroundStyle(palette.ink.opacity(0.55))
                             .accessibilityIdentifier("fixture-scoop-selection")
+                            .accessibilityValue(horizontalScrollGestureState.swipeDiagnostic)
                     }
                 }
                 Spacer()

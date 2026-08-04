@@ -241,7 +241,8 @@ final class FixtureConversationUITests: XCTestCase {
         }
         XCTAssertTrue(
             waitForLabel("Fixture scoop 2", on: selection),
-            "At the trailing edge the same drag must hand off to scoop navigation")
+            "At the trailing edge the same drag must hand off to scoop navigation; "
+                + "gesture diagnostic: \(String(describing: selection.value))")
 
         dragLeft(across: ordinaryText, in: app)
         XCTAssertTrue(

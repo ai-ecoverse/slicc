@@ -6,6 +6,7 @@ import UIKit
 final class HorizontalScrollGestureState: ObservableObject {
     let coordinateSpaceName = UUID()
     fileprivate static let horizontalTouchSlop: CGFloat = 8
+    @Published private(set) var swipeDiagnostic = "idle"
 
     private struct Region {
         let frame: CGRect
@@ -26,6 +27,10 @@ final class HorizontalScrollGestureState: ObservableObject {
 
     func endInnerGesture() {
         innerContext = nil
+    }
+
+    func recordSwipeDiagnostic(_ diagnostic: String) {
+        swipeDiagnostic = diagnostic
     }
 
     func updateRegion(
@@ -338,22 +343,38 @@ private struct GuardedScrollSwipeGesture: UIGestureRecognizerRepresentable {
                 startLocation = location
                 capturedContext = scrollContext
                 gestureState.beginInnerGesture(context: scrollContext)
+                gestureState.recordSwipeDiagnostic(
+                    "began leading=\(scrollContext.atLeadingEdge) trailing=\(scrollContext.atTrailingEdge)")
+            case .changed:
+                guard let startLocation else { return }
+                gestureState.recordSwipeDiagnostic(
+                    "changed dx=\(Int(location.x - startLocation.x)) dy=\(Int(location.y - startLocation.y))")
             case .ended:
                 guard let startLocation, let capturedContext else { return }
                 self.startLocation = nil
                 self.capturedContext = nil
                 gestureState.endInnerGesture()
-                onAction(
-                    SwipeArbiter.action(
-                        for: CGSize(
-                            width: location.x - startLocation.x,
-                            height: location.y - startLocation.y),
-                        origin: .guardedContent(capturedContext)))
+                let translation = CGSize(
+                    width: location.x - startLocation.x,
+                    height: location.y - startLocation.y)
+                let action = SwipeArbiter.action(
+                    for: translation,
+                    origin: .guardedContent(capturedContext))
+                let diagnostic =
+                    "ended dx=\(Int(translation.width)) dy=\(Int(translation.height)) "
+                    + "leading=\(capturedContext.atLeadingEdge) "
+                    + "trailing=\(capturedContext.atTrailingEdge) "
+                    + "action=\(String(describing: action))"
+                gestureState.recordSwipeDiagnostic(
+                    diagnostic)
+                onAction(action)
             case .cancelled, .failed:
                 guard startLocation != nil else { return }
                 startLocation = nil
                 capturedContext = nil
                 gestureState.endInnerGesture()
+                gestureState.recordSwipeDiagnostic(
+                    gesture.state == .cancelled ? "cancelled" : "failed")
             default:
                 break
             }
