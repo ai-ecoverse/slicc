@@ -47,6 +47,9 @@ final class ChatPresentationStateTests: XCTestCase {
         let owner = try XCTUnwrap(constructedOwners.first)
         let ownerIdentity = ObjectIdentifier(owner)
         owner.activeSurface = .browser
+        // Set while another surface is open: the terminal has to stay mounted
+        // behind the browser, and a resize must not be what tears it down.
+        owner.terminalWasOpened = true
         owner.composerDraft = "Keep this unfinished thought"
         owner.transcriptPosition.scrollTo(id: "message-42", anchor: .center)
 
@@ -65,6 +68,9 @@ final class ChatPresentationStateTests: XCTestCase {
             XCTAssertEqual(constructedOwners.count, 1, "\(step.name) must not construct branch state")
             XCTAssertEqual(ObjectIdentifier(constructedOwners[0]), ownerIdentity)
             XCTAssertEqual(owner.activeSurface, .browser, "\(step.name) lost the open surface")
+            XCTAssertTrue(
+                owner.terminalWasOpened,
+                "\(step.name) would have detached the terminal surface and its scrollback")
             XCTAssertEqual(
                 owner.composerDraft,
                 "Keep this unfinished thought",
