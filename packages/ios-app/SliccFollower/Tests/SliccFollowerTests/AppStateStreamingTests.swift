@@ -56,6 +56,36 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertFalse(state.isStreaming)
         XCTAssertNil(state.streamingMessageId)
         XCTAssertEqual(state.leaderError, "boom")
+        XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
+        XCTAssertEqual(try XCTUnwrap(state.messagesByScoop["cone"]?.last).isStreaming, false)
+    }
+
+    @MainActor
+    func testBackgroundAgentErrorDoesNotRelatchWhenSelected() throws {
+        let state = AppState()
+        state.scoops = [
+            ScoopSummary(
+                jid: "cone", name: "cone", folder: "/workspace", isCone: true,
+                assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+            ScoopSummary(
+                jid: "scoop", name: "scoop", folder: "/scoops/scoop", isCone: false,
+                assistantLabel: "scoop", trigger: nil, state: nil, fill: nil),
+        ]
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "cone-reply"), scoopJid: "cone", to: state)
+        try send(.messageStart(messageId: "scoop-reply"), scoopJid: "scoop", to: state)
+
+        try send(.error(error: "boom"), scoopJid: "scoop", to: state)
+
+        XCTAssertTrue(state.isStreaming)
+        XCTAssertEqual(state.streamingMessageId, "cone-reply")
+        XCTAssertEqual(try XCTUnwrap(state.messagesByScoop["scoop"]?.last).isStreaming, false)
+
+        state.selectScoop(jid: "scoop")
+
+        XCTAssertFalse(state.isStreaming)
+        XCTAssertNil(state.streamingMessageId)
+        XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
     }
 
     @MainActor
