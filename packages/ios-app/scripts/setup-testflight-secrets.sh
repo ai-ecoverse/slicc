@@ -15,7 +15,11 @@
 #   APPLE_API_KEY_P8_BASE64             # base64 of the AuthKey_*.p8
 #   APPLE_DISTRIBUTION_CERT_BASE64      # base64 of an Apple Distribution .p12
 #   APPLE_DISTRIBUTION_CERT_PASSWORD    # password for the .p12
-#   APPLE_PROVISIONING_PROFILE_BASE64   # base64 of the App Store .mobileprovision
+#   APPLE_PROVISIONING_PROFILE_BASE64              # main App Store .mobileprovision
+#   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 # File Provider appex App Store profile
+#   APPLE_PROVISIONING_PROFILE_NAME                # optional plain text
+#   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME   # optional plain text
+#   APPLE_FILEPROVIDER_BUNDLE_ID                   # optional plain text
 #
 # Usage:
 #   packages/ios-app/scripts/setup-testflight-secrets.sh \
@@ -23,6 +27,7 @@
 #     --issuer-id 13125f6b-67e9-4fa2-9c4a-ec54dc1fc873 \
 #     --p8 ~/.appstoreconnect/private_keys/AuthKey_DWXPL9LU63.p8 \
 #     --profile "$HOME/Library/MobileDevice/Provisioning Profiles/Slicc_Follower_App_Store.mobileprovision" \
+#     --fileprovider-profile /path/to/Slicc_Follower_File_Provider_App_Store.mobileprovision \
 #     --cert-p12 /path/to/AppleDistribution.p12 \
 #     --cert-password 'something'
 #
@@ -58,6 +63,10 @@ KEY_ID="${APPLE_API_KEY_ID:-}"
 ISSUER_ID="${APPLE_API_KEY_ISSUER_ID:-}"
 P8_PATH="${APPLE_API_KEY_P8_PATH:-}"
 PROFILE_PATH="${APPLE_PROVISIONING_PROFILE_PATH:-}"
+FILEPROVIDER_PROFILE_PATH="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH:-}"
+PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
+FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
+FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.fileprovider}"
 CERT_P12_PATH="${APPLE_DISTRIBUTION_CERT_P12:-}"
 CERT_PASSWORD="${APPLE_DISTRIBUTION_CERT_PASSWORD:-}"
 
@@ -67,6 +76,10 @@ while [ $# -gt 0 ]; do
     --issuer-id) ISSUER_ID="$2"; shift 2;;
     --p8) P8_PATH="$2"; shift 2;;
     --profile) PROFILE_PATH="$2"; shift 2;;
+    --fileprovider-profile) FILEPROVIDER_PROFILE_PATH="$2"; shift 2;;
+    --profile-name) PROFILE_NAME="$2"; shift 2;;
+    --fileprovider-profile-name) FILEPROVIDER_PROFILE_NAME="$2"; shift 2;;
+    --fileprovider-bundle-id) FILEPROVIDER_BUNDLE_ID="$2"; shift 2;;
     --cert-p12) CERT_P12_PATH="$2"; shift 2;;
     --cert-password) CERT_PASSWORD="$2"; shift 2;;
     --repo) REPO="$2"; shift 2;;
@@ -102,6 +115,7 @@ missing=()
 [ -z "$ISSUER_ID" ]     && missing+=("--issuer-id / APPLE_API_KEY_ISSUER_ID")
 [ -z "$P8_PATH" ]       && missing+=("--p8 / APPLE_API_KEY_P8_PATH")
 [ -z "$PROFILE_PATH" ]  && missing+=("--profile / APPLE_PROVISIONING_PROFILE_PATH")
+[ -z "$FILEPROVIDER_PROFILE_PATH" ] && missing+=("--fileprovider-profile / APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH")
 [ -z "$CERT_P12_PATH" ] && missing+=("--cert-p12 / APPLE_DISTRIBUTION_CERT_P12")
 [ -z "$CERT_PASSWORD" ] && missing+=("--cert-password / APPLE_DISTRIBUTION_CERT_PASSWORD")
 if [ ${#missing[@]} -ne 0 ]; then
@@ -112,7 +126,7 @@ if [ ${#missing[@]} -ne 0 ]; then
   exit 2
 fi
 
-for f in "$P8_PATH" "$PROFILE_PATH" "$CERT_P12_PATH"; do
+for f in "$P8_PATH" "$PROFILE_PATH" "$FILEPROVIDER_PROFILE_PATH" "$CERT_P12_PATH"; do
   if [ ! -f "$f" ]; then
     echo "error: file not found: $f" >&2
     exit 2
@@ -148,7 +162,11 @@ set_secret APPLE_API_KEY_P8_BASE64 "$(base64 < "$P8_PATH")"
 set_secret APPLE_DISTRIBUTION_CERT_BASE64 "$(base64 < "$CERT_P12_PATH")"
 set_secret APPLE_DISTRIBUTION_CERT_PASSWORD "$CERT_PASSWORD"
 set_secret APPLE_PROVISIONING_PROFILE_BASE64 "$(base64 < "$PROFILE_PATH")"
+set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 "$(base64 < "$FILEPROVIDER_PROFILE_PATH")"
+set_secret APPLE_PROVISIONING_PROFILE_NAME "$PROFILE_NAME"
+set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME "$FILEPROVIDER_PROFILE_NAME"
+set_secret APPLE_FILEPROVIDER_BUNDLE_ID "$FILEPROVIDER_BUNDLE_ID"
 
 echo
 echo "Done. Verify with:"
-echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING'"
+echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER'"
