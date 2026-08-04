@@ -22,18 +22,18 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
     let type: AvatarType
     let color: String
     let eyes: EyeState
-    let fill: Double
+    let fill: Double?
     let blink: Bool
     let sideLength: Double
 
     init(
-        type: AvatarType, color: String, eyes: EyeState = .open, fill: Double = 0,
+        type: AvatarType, color: String, eyes: EyeState = .open, fill: Double? = nil,
         blink: Bool = false, sideLength: Double = 26
     ) {
         self.type = type
         self.color = color
         self.eyes = eyes
-        self.fill = min(100, max(0, fill))
+        self.fill = fill.map { min(100, max(0, $0)) }
         self.blink = blink
         self.sideLength = max(0, sideLength)
     }
@@ -69,7 +69,8 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         return Point(x: proposed.x * scale, y: proposed.y * scale)
     }
 
-    static func fillScale(for fill: Double) -> Double {
+    static func fillScale(for fill: Double?) -> Double {
+        guard let fill else { return 1 }
         let clampedFill = min(100, max(0, fill))
         if clampedFill <= 50 { return 1 }
         if clampedFill >= 85 { return 2.2 }
@@ -97,16 +98,17 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
 extension ScoopSummary {
     func avatarGeometry(sideLength: Double = 26) -> SliccAgentAvatarGeometry {
         let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
-        let state = state ?? "idle"
-        let eyes: SliccAgentAvatarGeometry.EyeState
-        switch state {
-        case "broken": eyes = .dead
-        case "initializing": eyes = .none
-        default: eyes = .open
-        }
+        let scoopStatus = status
+        let eyes: SliccAgentAvatarGeometry.EyeState =
+            switch scoopStatus.lifecycle {
+            case .broken: .dead
+            case .initializing: .none
+            case .working, .idle, .unknown: .open
+            }
         return .init(
-            type: type, color: avatarColor, eyes: eyes, fill: fill ?? 0,
-            blink: state == "working", sideLength: sideLength)
+            type: type, color: avatarColor, eyes: eyes, fill: scoopStatus.fullness,
+            blink: scoopStatus.lifecycle == .working,
+            sideLength: sideLength)
     }
 
     /// Mirrors `scoopColor`: JS iterates scalars, while `charCodeAt(0)` deliberately
