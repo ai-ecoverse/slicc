@@ -1,7 +1,7 @@
+import SliccTrayKit
 import SwiftUI
 import XCTest
 
-import SliccTrayKit
 @testable import SliccFollower
 
 @MainActor

@@ -100,4 +100,27 @@ final class TrayCredentialStoreTests: XCTestCase {
         XCTAssertNil(store.load())
         XCTAssertTrue(credentialMetadata.isEmpty)
     }
+
+    func testKeychainUpdateFailurePreservesPreviousCredential() throws {
+        let keychain = MemoryKeychain()
+        let store = TrayCredentialStore(defaults: defaults, keychain: keychain)
+        let originalURL = try XCTUnwrap(URL(string: "https://tray.example/join/original-secret"))
+        let originalDate = Date(timeIntervalSince1970: 1_750_000_000)
+        XCTAssertTrue(
+            store.save(
+                joinURL: originalURL,
+                trayID: "original-tray",
+                displayName: "Original leader",
+                lastConnectedAt: originalDate))
+        let originalCredential = try XCTUnwrap(store.load())
+        keychain.writeSucceeds = false
+
+        XCTAssertFalse(
+            store.save(
+                joinURL: try XCTUnwrap(URL(string: "https://tray.example/join/rejected-secret")),
+                trayID: "replacement-tray",
+                displayName: "Replacement leader"))
+
+        XCTAssertEqual(store.load(), originalCredential)
+    }
 }

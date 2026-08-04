@@ -109,6 +109,8 @@ Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, `ios-app.xcresu
 
 `SliccFileProvider/` is excluded: the appex never launches under unit tests, so its sources would vanish from the report rather than register as zero. Measured enumeration/read/error logic lives in `SliccTrayKit`; the appex stays a thin `NSFileProvider` adapter. Do not add the appex binary to coverage objects.
 
+File Provider reads have an in-memory size ceiling: `readBinaryFile` materializes the complete base64 response and decoded `Data` before the appex writes its temporary file. There is no streaming path or fixed byte limit, so the effective ceiling is the appex process memory budget (on the order of a few hundred MB), and the practical raw-file limit is lower while both representations coexist. Treat very large leader VFS files as unsupported until reads stream to disk.
+
 ## Simulator QA path
 
 Hand-running the app for exploratory QA is covered in [`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md).

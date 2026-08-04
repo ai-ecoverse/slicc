@@ -1,6 +1,6 @@
+import SliccTrayKit
 import XCTest
 
-import SliccTrayKit
 @testable import SliccFollower
 
 final class ScoopStatusTests: XCTestCase {

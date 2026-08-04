@@ -68,7 +68,8 @@ public final class TrayCredentialStore {
     ) -> Bool {
         guard !trayID.isEmpty, let defaults, let keychain else { return false }
         guard keychain.write(Data(joinURL.absoluteString.utf8)) else {
-            removeMetadata(from: defaults)
+            // A failed update leaves the old keychain value intact, so preserve its matching metadata.
+            // On a first save there is no prior metadata, and the store remains fully empty.
             return false
         }
 
