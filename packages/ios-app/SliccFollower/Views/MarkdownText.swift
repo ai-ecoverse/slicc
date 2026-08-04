@@ -150,30 +150,29 @@ struct MarkdownText: View {
     /// comparison squeezed into a phone's width is unreadable, and the
     /// leader emits those routinely.
     private func tableView(_ table: MarkdownTable) -> some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
+                    tableCell(
+                        cell, alignment: table.alignments[safe: column] ?? .leading,
+                        isHeader: true, zebra: false)
+                }
+            }
+            Rectangle()
+                .fill(palette.line)
+                .frame(height: 1)
+                .gridCellColumns(max(table.columnCount, 1))
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, row in
                 GridRow {
-                    ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
+                    ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
                         tableCell(
                             cell, alignment: table.alignments[safe: column] ?? .leading,
-                            isHeader: true, zebra: false)
-                    }
-                }
-                Rectangle()
-                    .fill(palette.line)
-                    .frame(height: 1)
-                    .gridCellColumns(max(table.columnCount, 1))
-                ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, row in
-                    GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
-                            tableCell(
-                                cell, alignment: table.alignments[safe: column] ?? .leading,
-                                isHeader: false, zebra: !rowIndex.isMultiple(of: 2))
-                        }
+                            isHeader: false, zebra: !rowIndex.isMultiple(of: 2))
                     }
                 }
             }
         }
+        .horizontalScrollGuard()
         .background(palette.field)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
@@ -207,15 +206,14 @@ struct MarkdownText: View {
                     .padding(.top, 8)
                     .padding(.bottom, 4)
             }
-            ScrollView(.horizontal, showsIndicators: true) {
-                Text(code)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(palette.ink.opacity(0.85))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, language != nil ? 4 : 12)
-                    .padding(.bottom, 8)
-                    .textSelection(.enabled)
-            }
+            Text(code)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(palette.ink.opacity(0.85))
+                .padding(.horizontal, 12)
+                .padding(.vertical, language != nil ? 4 : 12)
+                .padding(.bottom, 8)
+                .textSelection(.enabled)
+                .horizontalScrollGuard()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.field)

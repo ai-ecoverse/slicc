@@ -69,6 +69,7 @@ final class FixtureConversationUITests: XCTestCase {
         "diagram.png",  // attachment chip on a bubble-less message
         "Allow npm publish?",  // tool_ui title, badge and meta stripped
         "Waiting for approval on the leader",  // tool_ui read-only body
+        "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER",  // overflowing code block
     ]
 
     override func setUp() {
@@ -198,6 +199,51 @@ final class FixtureConversationUITests: XCTestCase {
             "Reload should rebuild the fixture transcript")
     }
 
+    func testCodeBlockScrollUsesRubberBandScoopHandoff() {
+        let app = launchFixtureApp()
+        let selection = app.staticTexts["fixture-scoop-selection"]
+        XCTAssertTrue(selection.waitForExistence(timeout: 60))
+        XCTAssertEqual(selection.label, "Fixture scoop 1")
+        XCTAssertTrue(waitForListToSettleAtBottom(in: app))
+
+        let codeBlock = app.staticTexts.matching(
+            NSPredicate(
+                format: "label CONTAINS %@",
+                "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER")
+        ).firstMatch
+        let ordinaryText = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", "A fenced code block:")
+        ).firstMatch
+
+        // The fixture starts at the newest message, so walk upward with a hard
+        // bound until both drag targets in the markdown message are hittable.
+        for _ in 0..<12 where !(codeBlock.isHittable && ordinaryText.isHittable) {
+            app.swipeDown()
+        }
+        XCTAssertTrue(codeBlock.isHittable, "The overflowing code-block renderer should appear")
+        XCTAssertTrue(ordinaryText.isHittable, "The ordinary-text control should appear")
+
+        let leadingEdgeX = codeBlock.frame.minX
+        dragLeft(across: codeBlock, in: app)
+
+        XCTAssertEqual(
+            selection.label, "Fixture scoop 1",
+            "A code block with room to scroll must keep the current scoop")
+        XCTAssertLessThan(
+            codeBlock.frame.minX, leadingEdgeX - 20,
+            "The guarded drag must still scroll the code block")
+
+        dragLeft(across: codeBlock, in: app)
+        XCTAssertTrue(
+            waitForLabel("Fixture scoop 2", on: selection),
+            "At the trailing edge the same drag must hand off to scoop navigation")
+
+        dragLeft(across: ordinaryText, in: app)
+        XCTAssertTrue(
+            waitForLabel("Fixture scoop 3", on: selection),
+            "Ordinary transcript text must not suppress scoop navigation")
+    }
+
     // MARK: - Helpers
 
     /// Launch straight into the fixture route.
@@ -287,5 +333,34 @@ final class FixtureConversationUITests: XCTestCase {
 
     private func isComplete(ids: Set<String>, labels: Set<String>) -> Bool {
         ids == Self.expectedMessageIds && missingMarkers(in: labels).isEmpty
+    }
+
+    private func dragLeft(across element: XCUIElement, in app: XCUIApplication) {
+        let visibleFrame = element.frame.intersection(app.frame)
+        XCTAssertGreaterThan(visibleFrame.width, 100, "Drag target must expose a horizontal span")
+        // The trailing 48pt dock is outside the chat gesture surface even when
+        // a wide text leaf reports an accessibility frame beneath it.
+        let chatTrailingEdge = app.frame.maxX - 48
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let start = origin.withOffset(
+            CGVector(dx: min(visibleFrame.maxX, chatTrailingEdge) - 12, dy: visibleFrame.midY))
+        let end = origin.withOffset(
+            CGVector(dx: visibleFrame.minX + 12, dy: visibleFrame.midY))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    private func waitForLabel(
+        _ label: String,
+        on element: XCUIElement,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        XCTWaiter.wait(
+            for: [
+                XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "label == %@", label),
+                    object: element)
+            ],
+            timeout: timeout
+        ) == .completed
     }
 }

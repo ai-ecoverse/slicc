@@ -55,6 +55,14 @@ Model TS follower features on `AppState`:
 - `hello` sends `exec: false` + device `motd`
 - Multi-scoop buffers, model/thinking controls, agent events
 
+### Transcript swipe arbitration
+
+Nested horizontal transcript content owns a drag while it can still scroll in
+that direction; scoop navigation (and frozen-session dismissal) takes over only
+at the edge the drag pulls away from. Sample the edge at drag start, before the
+inner scroller moves. A `simultaneousGesture` preserves vertical scrolling but
+does not choose a horizontal winner, so it is not sufficient by itself.
+
 ### Licks
 
 `sprinkle.lick` is its own message (`sprinkle` is not `FORWARDABLE_TO_LEADER`). `LickEvent` mirrors only `navigate` and `discovery`. `navigate` handoffs come from `WKNavigationResponse` Link headers (main frame only).

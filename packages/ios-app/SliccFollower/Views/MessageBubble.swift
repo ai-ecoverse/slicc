@@ -581,21 +581,20 @@ struct LickRow: View {
             if isExpanded, !bodies.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(bodies.enumerated()), id: \.offset) { index, body in
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            Text(body)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(palette.ink.opacity(0.75))
-                                .textSelection(.enabled)
-                                .padding(12)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(bodyBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(borderColor, lineWidth: 0.5)
-                        )
-                        .accessibilityIdentifier("lick-part-\(index)")
+                        Text(body)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(palette.ink.opacity(0.75))
+                            .textSelection(.enabled)
+                            .padding(12)
+                            .horizontalScrollGuard(showsIndicators: false)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(bodyBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .strokeBorder(borderColor, lineWidth: 0.5)
+                            )
+                            .accessibilityIdentifier("lick-part-\(index)")
                     }
                 }
                 .padding(.top, 4)
