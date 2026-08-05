@@ -290,8 +290,13 @@ struct InputBar: View {
                 .frame(minHeight: 38, maxHeight: 100)
                 .fixedSize(horizontal: false, vertical: true)
                 .focused($isFocused)
-                .onSubmit {
+                // TextEditor owns Return as a newline, so onSubmit does not
+                // fire for a hardware keyboard. Consume plain Return here;
+                // let Shift-Return continue to the editor for a line break.
+                .onKeyPress(keys: [.return]) { event in
+                    guard !event.modifiers.contains(.shift) else { return .ignored }
                     sendIfPossible()
+                    return .handled
                 }
                 // While push-to-talk is armed the UIKit text view must not
                 // swallow touches: UITextView sits above any sibling overlay
