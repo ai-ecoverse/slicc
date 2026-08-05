@@ -132,11 +132,11 @@ The unit suite runs through `xcodebuild test` on a simulator. The shared coverag
   --xcodebuild SliccFollower packages/ios-app SliccFollower
 ```
 
-Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, `ios-app.xcresult`). The gate passes `-only-testing:SliccFollowerTests`, disables parallel simulator clones (shared app-state isolation), and keeps `randomExecutionOrder`. Coverage combines `SliccFollower.debug.dylib` with every linked framework under `Frameworks/` (so `SliccTrayKit` stays measured). SwiftUI/CDP/AppState orchestration stays on the separate UI-test gate.
+Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, `ios-app.xcresult`). The gate runs only `SliccFollowerTests`, disables parallel clones for shared app-state isolation, and keeps random order. Coverage combines the app dylib with every linked framework so `SliccTrayKit` stays measured; SwiftUI/CDP/AppState orchestration stays on the UI-test gate.
 
 `SliccFileProvider/` is excluded: the appex never launches under unit tests, so its sources would vanish from the report rather than register as zero. Enumeration/read/error logic lives in `SliccTrayKit`; the appex stays a thin `NSFileProvider` adapter. Do not add the appex binary to coverage objects.
 
-File Provider reads have an in-memory size ceiling: `readBinaryFile` materializes the whole base64 response and decoded `Data` before the appex writes its temp file. No streaming path and no fixed byte limit, so the ceiling is the appex memory budget (a few hundred MB) and the practical raw-file limit is lower while both representations coexist. Treat very large leader VFS files as unsupported until reads stream to disk.
+File Provider reads are memory-bound: `readBinaryFile` holds the whole base64 response and decoded `Data` before the appex writes its temp file. No streaming path and no byte limit, so the ceiling is the appex memory budget. Treat very large leader VFS files as unsupported until reads stream to disk.
 
 ## Simulator QA path
 
