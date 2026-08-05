@@ -27,7 +27,7 @@ final class BrowserTargetsTests: XCTestCase {
         let visible = BrowserTargets.visible(targets, ownRuntimeId: "ios-me", joinUrl: joinUrl)
         XCTAssertEqual(
             visible.map(\.localTargetId), ["theirs"],
-            "our own tabs are the live local carousel, not preview cards")
+            "our own tabs are live local tabs on the browser surface, not preview cards")
     }
 
     func testDropsTheLeadersOwnSliccPage() {

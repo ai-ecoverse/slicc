@@ -4,15 +4,33 @@ import WebKit
 
 // MARK: - TabsCarouselView
 
-/// Horizontal paged carousel of locally-hosted CDP targets (one WKWebView per
-/// page). Driven by `AppState.cdpTargets` and the bridge's underlying webviews.
+/// The browser surface, Safari-shaped. Two modes, never mixed (#1916):
 ///
-/// Used as the detail column when the sidebar's "Tabs" entry is selected.
+/// - **Tab overview** — a two-column grid where local WKWebView tabs and
+///   remote tray tabs (leader / other followers, #1865) are peers. The only
+///   place both worlds meet.
+/// - **Full-screen browsing** — one local tab with a Liquid Glass address
+///   bar at the bottom. The shell hides the dock rail and navigation bar
+///   while this mode is active (`AppState.browserViewingTabId`).
+///
+/// Tab controls live in the surface content, never the navigation toolbar:
+/// at compact width nested toolbar items merge with the covered
+/// conversation's and collapse into a synthesized `…` overflow, and at
+/// regular width the workbench column has no `NavigationStack`, so toolbar
+/// items would not render at all.
 struct TabsCarouselView: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedTabId: String?
-    @State private var showingNewTabPrompt = false
-    @State private var newTabUrlInput: String = "https://"
+    /// The tab whose bottom bar currently shows the address field.
+    @State private var editingAddressTabId: String?
+    @State private var addressText = ""
+    /// Set when `+` creates a tab, consumed by the browsing view's
+    /// `onAppear`: the bar must exist before its field can take focus.
+    @State private var pendingAddressFocusTabId: String?
+    /// Page captures for the overview cards, keyed by target id. Taken on
+    /// the way out of browsing mode — the only moment the webview is
+    /// mounted and renderable.
+    @State private var tabSnapshots: [String: UIImage] = [:]
+    @FocusState private var addressFocus: String?
 
     @Environment(\.palette) private var palette
 
@@ -20,114 +38,248 @@ struct TabsCarouselView: View {
         appState.connectionState == .connected
     }
 
-    /// Tabs living elsewhere in the tray (leader / other followers).
-    /// Remote pages cannot be hosted live here, so they render as preview
-    /// cards — screenshots captured over follower-originated CDP (#1865).
-    /// Local tabs stay live WKWebViews in the carousel above.
-    @ViewBuilder
-    private var remoteList: some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                remoteHeader
-                ForEach(appState.remoteTargets, id: \.targetId) { target in
-                    RemoteTabCard(target: target)
-                }
-            }
-            .padding(12)
-        }
-    }
-
-    @ViewBuilder
-    private var remoteStrip: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            remoteHeader
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(appState.remoteTargets, id: \.targetId) { target in
-                        RemoteTabCard(target: target)
-                            .frame(width: 240)
-                    }
-                }
-                .padding(.horizontal, 12)
-            }
-        }
-        .padding(.vertical, 8)
-        .background(palette.surface)
-    }
-
-    private var remoteHeader: some View {
-        Text("Elsewhere in the tray")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(palette.inkSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
+    private var viewingTarget: CDPTargetSummary? {
+        guard let id = appState.browserViewingTabId else { return nil }
+        return appState.cdpTargets.first { $0.id == id }
     }
 
     var body: some View {
         Group {
-            if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty {
+            if let target = viewingTarget {
+                browsingView(target)
+            } else if appState.cdpTargets.isEmpty && appState.remoteTargets.isEmpty {
                 emptyState
-            } else if appState.cdpTargets.isEmpty {
-                remoteList
             } else {
-                VStack(spacing: 0) {
-                    pagedCarousel
-                    if !appState.remoteTargets.isEmpty {
-                        remoteStrip
-                    }
-                }
+                tabOverview
             }
         }
         .background(palette.canvas)
-        .navigationTitle(currentTabTitle())
+        .navigationTitle("Tabs")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    presentNewTabPrompt()
-                } label: {
-                    Image(systemName: "plus.square.on.square")
+        .onChange(of: appState.cdpTargets) { targets in
+            // The tab being edited can be closed by the leader mid-edit.
+            if let editing = editingAddressTabId, !targets.contains(where: { $0.id == editing }) {
+                endAddressEditing()
+            }
+        }
+    }
+
+    // MARK: - Full-screen browsing
+
+    /// One tab, full bleed, glass bar floating over the page.
+    @ViewBuilder
+    private func browsingView(_ target: CDPTargetSummary) -> some View {
+        ZStack(alignment: .bottom) {
+            if let webView = appState.cdpWebView(for: target.id) {
+                CDPTargetWebView(webView: webView)
+            } else {
+                ProgressView("Tab unavailable")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            bottomBar(target)
+        }
+        .onAppear {
+            if pendingAddressFocusTabId == target.id {
+                pendingAddressFocusTabId = nil
+                beginEditingAddress(target)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bottomBar(_ target: CDPTargetSummary) -> some View {
+        HStack(spacing: 10) {
+            if editingAddressTabId == target.id {
+                addressField(target)
+            } else {
+                circleBarButton("arrow.clockwise", label: "Reload tab") {
+                    appState.cdpBridgeReload(target.id)
                 }
-                .disabled(!canControlTabs)
-                if let tabId = effectiveSelectedTabId() {
-                    Button(role: .destructive) {
-                        appState.cdpCloseTab(tabId)
-                        selectedTabId = nil
-                    } label: {
-                        Image(systemName: "xmark.square")
+                addressPill(target)
+                circleBarButton(
+                    "square.on.square", label: "Show all tabs",
+                    identifier: "browser-show-tabs"
+                ) {
+                    leaveBrowsing(target)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+    }
+
+    /// Host only, like Safari's pill — the title belongs to the overview
+    /// card. Tapping opens the address field.
+    private func addressPill(_ target: CDPTargetSummary) -> some View {
+        Button {
+            beginEditingAddress(target)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "globe")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text(Self.pillLabel(for: target.url))
+                    .font(.system(size: 14, weight: .medium))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+        }
+        .modifier(GlassCapsuleButtonStyle())
+        .accessibilityLabel("Address: \(Self.pillLabel(for: target.url))")
+        .accessibilityHint("Edit address")
+        .accessibilityIdentifier("browser-address-display")
+    }
+
+    @ViewBuilder
+    private func addressField(_ target: CDPTargetSummary) -> some View {
+        TextField("Enter website address", text: $addressText)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled(true)
+            .keyboardType(.URL)
+            .submitLabel(.go)
+            .focused($addressFocus, equals: target.id)
+            .onSubmit { commitAddress(for: target) }
+            .font(.system(size: 14))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .modifier(GlassCapsuleBackground())
+            .accessibilityIdentifier("browser-address-field")
+        Button("Cancel") { endAddressEditing() }
+            .font(.system(size: 14))
+            .foregroundStyle(palette.ink.opacity(0.7))
+            .accessibilityIdentifier("browser-address-cancel")
+    }
+
+    private func circleBarButton(
+        _ systemImage: String, label: String, identifier: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 44, height: 44)
+        }
+        .modifier(GlassCircleButtonStyle())
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(identifier ?? systemImage)
+    }
+
+    /// Back to the overview, capturing the page for its card first — the
+    /// webview is only renderable while still mounted.
+    private func leaveBrowsing(_ target: CDPTargetSummary) {
+        if let webView = appState.cdpWebView(for: target.id) {
+            webView.takeSnapshot(with: nil) { image, _ in
+                if let image { tabSnapshots[target.id] = image }
+            }
+        }
+        endAddressEditing()
+        appState.browserViewingTabId = nil
+    }
+
+    // MARK: - Tab overview
+
+    /// Two-column Safari-style grid. Local tabs and remote previews are
+    /// peers here, never stacked under a live page.
+    private var tabOverview: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
+                spacing: 12
+            ) {
+                if !appState.cdpTargets.isEmpty {
+                    Section {
+                        ForEach(appState.cdpTargets) { target in
+                            LocalTabCard(
+                                target: target,
+                                snapshot: tabSnapshots[target.id],
+                                canControl: canControlTabs,
+                                onOpen: { appState.browserViewingTabId = target.id },
+                                onClose: { appState.cdpCloseTab(target.id) }
+                            )
+                        }
+                    } header: {
+                        gridHeader("On this device")
                     }
-                    .disabled(!canControlTabs)
+                }
+                if !appState.remoteTargets.isEmpty {
+                    Section {
+                        ForEach(appState.remoteTargets, id: \.targetId) { target in
+                            RemoteTabCard(target: target) {
+                                openRemoteTabLocally(target)
+                            }
+                        }
+                    } header: {
+                        gridHeader("Elsewhere in the tray")
+                    }
                 }
             }
+            .padding(12)
         }
-        .alert("New tab", isPresented: $showingNewTabPrompt) {
-            TextField("URL", text: $newTabUrlInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .keyboardType(.URL)
-            Button("Open") {
-                openNewTab(from: newTabUrlInput)
-            }
-            Button("Blank") {
-                appState.cdpOpenTab(url: "about:blank")
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Enter the URL to load. Leave as-is or pick Blank for an empty page.")
+        .overlay(alignment: .bottomTrailing) {
+            floatingNewTabButton
         }
     }
 
-    private func presentNewTabPrompt() {
-        let trimmed = newTabUrlInput.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty || trimmed == "https://" || trimmed == "about:blank" {
-            newTabUrlInput = "https://"
-        }
-        showingNewTabPrompt = true
+    private func gridHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.inkSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
     }
 
-    private func openNewTab(from raw: String) {
-        let normalized = Self.normalizeUrl(raw)
-        appState.cdpOpenTab(url: normalized)
+    /// Circular glass `+` floated over the overview — the normal initial
+    /// Browser state must carry its own local-tab affordance (#1916).
+    private var floatingNewTabButton: some View {
+        Button {
+            openNewTab()
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 52, height: 52)
+        }
+        .modifier(GlassCircleButtonStyle())
+        .disabled(!canControlTabs)
+        .accessibilityLabel("Open new tab")
+        .accessibilityIdentifier("browser-open-new-tab")
+        .padding(20)
+    }
+
+    /// Safari-shaped creation: no dialog. `+` opens a blank tab full screen
+    /// and hands focus to its address field.
+    private func openNewTab() {
+        let id = appState.cdpOpenTab()
+        appState.browserViewingTabId = id
+        pendingAddressFocusTabId = id
+    }
+
+    /// A remote card is one tap from becoming local: open its URL in a
+    /// WKWebView tab here and go full screen. The remote original is
+    /// untouched — this is "open a copy", the closest a follower can get
+    /// to teleporting a tab.
+    private func openRemoteTabLocally(_ target: TrayTargetEntry) {
+        guard canControlTabs, !target.url.isEmpty else { return }
+        let id = appState.cdpOpenTab(url: target.url)
+        appState.browserViewingTabId = id
+    }
+
+    // MARK: - Address editing
+
+    private func beginEditingAddress(_ target: CDPTargetSummary) {
+        addressText = target.url == "about:blank" ? "" : target.url
+        editingAddressTabId = target.id
+        addressFocus = target.id
+    }
+
+    private func commitAddress(for target: CDPTargetSummary) {
+        appState.cdpNavigate(target.id, to: Self.normalizeUrl(addressText))
+        endAddressEditing()
+    }
+
+    private func endAddressEditing() {
+        editingAddressTabId = nil
+        addressFocus = nil
     }
 
     /// Coerce user input into a loadable URL: empty → about:blank,
@@ -143,6 +295,11 @@ struct TabsCarouselView: View {
         return "https://\(trimmed)"
     }
 
+    /// What the pill calls a page: the host, or "New tab" for a blank one.
+    static func pillLabel(for url: String) -> String {
+        url == "about:blank" ? "New tab" : RemoteTabCard.displayHost(url)
+    }
+
     // MARK: - Empty state
 
     @ViewBuilder
@@ -155,106 +312,172 @@ struct TabsCarouselView: View {
                 .font(.headline)
             Text(
                 canControlTabs
-                    ? "The leader can drive WKWebView tabs over the CDP bridge — they appear here as a paged carousel. You can also open a blank tab manually."
+                    ? "Tabs you open live on this device — and the leader can drive them over the CDP bridge."
                     : "Connect to a leader (Settings → Join URL) to host browser tabs here."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 40)
+            // The one place the affordance keeps a text label: the empty
+            // state is doing first-run teaching. Everywhere else a bare
+            // glass `+` carries the same accessibility label.
             Button {
-                presentNewTabPrompt()
+                openNewTab()
             } label: {
-                Label("Open new tab…", systemImage: "plus.square.on.square")
+                Label("Open new tab", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(ProminentGlassButtonStyle())
             .disabled(!canControlTabs)
+            .accessibilityLabel("Open new tab")
+            .accessibilityIdentifier("browser-open-new-tab")
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    // MARK: - Paged carousel
+// MARK: - LocalTabCard
 
-    @ViewBuilder
-    private var pagedCarousel: some View {
-        let binding = Binding<String>(
-            get: { effectiveSelectedTabId() ?? appState.cdpTargets.first?.id ?? "" },
-            set: { selectedTabId = $0 }
+/// One local tab in the overview grid: last snapshot (or a placeholder for
+/// a never-viewed tab — Safari shows those blank too), caption, and a
+/// Safari-style close button.
+private struct LocalTabCard: View {
+    let target: CDPTargetSummary
+    let snapshot: UIImage?
+    let canControl: Bool
+    let onOpen: () -> Void
+    let onClose: () -> Void
+
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            thumbnail
+            caption
+        }
+        .frame(height: 156)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(palette.line, lineWidth: 0.5)
         )
-        TabView(selection: binding) {
-            ForEach(appState.cdpTargets) { target in
-                tabPage(target)
-                    .tag(target.id)
-            }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .always))
-        .indexViewStyle(.page(backgroundDisplayMode: .always))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { onOpen() }
+        .accessibilityAction(named: "Open tab") { onOpen() }
+        .overlay(alignment: .topTrailing) { closeButton }
     }
 
     @ViewBuilder
-    private func tabPage(_ target: CDPTargetSummary) -> some View {
-        VStack(spacing: 0) {
-            tabHeader(target)
-            Divider().background(Color.white.opacity(0.08))
-            if let webView = appState.cdpWebView(for: target.id) {
-                CDPTargetWebView(webView: webView)
+    private var thumbnail: some View {
+        ZStack {
+            Rectangle().fill(palette.field)
+            if let snapshot {
+                // Bounded via overlay so the `.fill` image cannot inflate
+                // the ZStack past the card frame (see RemoteTabCard).
+                Color.clear
+                    .overlay(
+                        Image(uiImage: snapshot)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    )
+                    .clipped()
             } else {
-                ProgressView("Tab unavailable")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Image(systemName: "globe")
+                    .font(.system(size: 28))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.bottom, 40)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder
-    private func tabHeader(_ target: CDPTargetSummary) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "globe")
-                .foregroundStyle(.blue)
-            // Title over origin, not title over full URL: a phone-width
-            // header cannot show a real URL and the truncated middle of one
-            // is unreadable noise.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(target.title.isEmpty ? "Untitled" : target.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Text(RemoteTabCard.displayHost(target.url))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            Spacer()
-            Button {
-                appState.cdpBridgeReload(target.id)
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .foregroundStyle(palette.ink.opacity(0.7))
-            }
+    private var caption: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(target.title.isEmpty ? "Untitled" : target.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .accessibilityIdentifier("browser-local-tab-title")
+            Text(TabsCarouselView.pillLabel(for: target.url))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(palette.surface)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.regularMaterial)
     }
 
-    // MARK: - Helpers
-
-    private func effectiveSelectedTabId() -> String? {
-        if let id = selectedTabId, appState.cdpTargets.contains(where: { $0.id == id }) {
-            return id
+    private var closeButton: some View {
+        Button(role: .destructive) {
+            onClose()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
+                .frame(width: 26, height: 26)
+                .background(.regularMaterial, in: Circle())
         }
-        return appState.cdpTargets.first?.id
+        .buttonStyle(.plain)
+        .disabled(!canControl)
+        .accessibilityLabel("Close tab")
+        .accessibilityIdentifier("browser-tab-close")
+        .padding(6)
     }
+}
 
-    private func currentTabTitle() -> String {
-        guard let id = effectiveSelectedTabId(),
-            let target = appState.cdpTargets.first(where: { $0.id == id })
-        else {
-            return "Tabs"
+// MARK: - Glass styles
+
+/// Liquid Glass on iOS 26; a material stand-in with the same geometry on
+/// iOS 18, the deployment target.
+private struct GlassCircleButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+        } else {
+            content
+                .buttonStyle(.plain)
+                .background(.regularMaterial, in: Circle())
         }
-        if !target.title.isEmpty { return target.title }
-        if !target.url.isEmpty { return target.url }
-        return "Tabs"
+    }
+}
+
+private struct GlassCapsuleButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+        } else {
+            content
+                .buttonStyle(.plain)
+                .background(.regularMaterial, in: Capsule())
+        }
+    }
+}
+
+/// Glass for a non-button container (the address `TextField`).
+private struct GlassCapsuleBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content.background(.regularMaterial, in: Capsule())
+        }
+    }
+}
+
+private struct ProminentGlassButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content.buttonStyle(.borderedProminent)
+        }
     }
 }
 

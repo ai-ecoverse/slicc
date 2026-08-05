@@ -96,6 +96,13 @@ struct ChatView: View {
         }
     }
 
+    /// Full-screen browsing: a foregrounded local tab claims the whole
+    /// phone — no rail, no navigation bar (Safari-shaped). The way back is
+    /// the tab-overview button in the browser's own bottom bar.
+    private var isBrowserFullScreen: Bool {
+        presentation.activeSurface == .browser && appState.browserViewingTabId != nil
+    }
+
     /// The phone shell stays structurally unchanged: the rail remains outside
     /// the navigation stack while the workbench overlays only the conversation.
     private var compactShell: some View {
@@ -104,7 +111,7 @@ struct ChatView: View {
         // leading title in left-handed mode, the trailing controls in
         // right-handed). Outside, the bar spans only the chat column.
         HStack(spacing: 0) {
-            if leftHandedDock {
+            if leftHandedDock && !isBrowserFullScreen {
                 dockRail
             }
             NavigationStack {
@@ -119,7 +126,13 @@ struct ChatView: View {
                             inputText: $presentation.composerDraft,
                             stagedAttachments: $presentation.stagedAttachments,
                             transcriptPosition: $presentation.transcriptPosition,
-                            ptt: ptt)
+                            ptt: ptt,
+                            // The overlay covers the conversation but not
+                            // the shared navigation bar, so the chat's
+                            // toolbar items would keep rendering over the
+                            // workbench surface and merge with any items it
+                            // contributes into a synthesized `…` (#1916).
+                            toolbarSuppressed: presentation.activeSurface != nil)
                     }
                     // The workbench covers the chat, not the rail — the
                     // same full-bleed overlay the web shell uses at ≤560px,
@@ -140,8 +153,9 @@ struct ChatView: View {
                             .transition(.move(edge: leftHandedDock ? .leading : .trailing))
                     }
                 }
+                .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
             }
-            if !leftHandedDock {
+            if !leftHandedDock && !isBrowserFullScreen {
                 dockRail
             }
         }
@@ -275,6 +289,10 @@ struct ConversationView: View {
     @Binding var stagedAttachments: [MessageAttachment]
     @Binding var transcriptPosition: ScrollPosition
     @ObservedObject var ptt: PttController
+    /// True while a compact workbench overlay covers this conversation.
+    /// The regular split never sets it: there the conversation stays
+    /// visible beside the workbench and keeps its toolbar.
+    var toolbarSuppressed: Bool = false
     @State private var showNewSessionDialog = false
     @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
     /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
@@ -324,8 +342,10 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
-            identityGroup
-            sessionControls
+            if !toolbarSuppressed {
+                identityGroup
+                sessionControls
+            }
         }
         .sheet(isPresented: $showFrozenSessions) {
             FrozenSessionsView()
