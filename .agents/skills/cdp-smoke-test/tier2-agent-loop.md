@@ -25,6 +25,55 @@ Verify login landed:
   "JSON.parse(localStorage.getItem('slicc_accounts')||'[]').map(a=>({p:a.providerId,ok:!!a.accessToken}))"
 ```
 
+## Send a prompt and read the answer
+
+Choose the first option that fits:
+
+1. **Follower CLI — preferred for a real tray session.** It needs the leader's
+   tray-session `https://…/join/<token>` URL (from **Copy tray join URL** or the
+   leader's `host` command), not a localhost bridge or CDP port. It streams one
+   assistant turn to stdout and exits:
+
+   ```bash
+   slicc <join-url> prompt "Reply with exactly one word: pong"
+   ```
+
+   On macOS, `slicc prompt-cloud "Reply with exactly one word: pong"` can resolve
+   the newest iCloud-synced tray session through Sliccstart instead. It requests
+   on-screen `--reveal-urls` consent and never prints the URL; put
+   `--index N` or `--session <id-prefix>` before the prompt to select another.
+
+2. **Playwright e2e helpers — preferred for repeatable local automation.** In a
+   test under `packages/webapp/tests/e2e/`, submit through the real composer,
+   await the processing boundary, then read or assert the thread:
+
+   ```ts
+   import { expect } from '@playwright/test';
+   import { submitUserMessage, waitForTurnComplete } from './fake-llm-helpers.js';
+
+   await submitUserMessage(page, 'Reply with exactly one word: pong');
+   await waitForTurnComplete(page);
+   await expect(page.locator('slicc-chat-thread')).toContainText('pong');
+   ```
+
+3. **`slicc-cdp` — interactive/manual local-harness driving.** `prompt` types and
+   sends but does not wait for turn completion:
+
+   ```bash
+   .agents/skills/cdp-smoke-test/scripts/slicc-cdp prompt 'Reply with exactly one word: pong'
+   ```
+
+   As the manual fallback, poll the visible thread until the expected reply
+   appears (and, when relevant, stops growing):
+
+   ```bash
+   .agents/skills/cdp-smoke-test/scripts/slicc-cdp eval \
+     "document.querySelector('slicc-chat-thread')?.innerText.slice(-600)"
+   ```
+
+The legacy dev-tools prompt driver was removed; do not use
+`packages/dev-tools/tools/slicc-debug.mjs` to send prompts.
+
 ## Checks
 
 Run with `slicc-cdp prompt` (poll the transcript with
