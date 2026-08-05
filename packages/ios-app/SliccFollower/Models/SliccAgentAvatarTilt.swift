@@ -253,9 +253,10 @@ final class SliccAgentAvatarTiltController: ObservableObject {
             for: relativeAttitude, geometry: geometry, reduceMotion: motionDisabled,
             isDeviceMotionAvailable: source.isDeviceMotionAvailable,
             orientation: interfaceOrientation())
-        let elapsed = lastSampleTime.map {
-            min(max(0, sampleTime - $0), Self.maximumSampleInterval)
-        } ?? 0
+        let elapsed =
+            lastSampleTime.map {
+                min(max(0, sampleTime - $0), Self.maximumSampleInterval)
+            } ?? 0
         lastSampleTime = sampleTime
         pupilOffset = mapping.rateLimitedOffset(
             from: pupilOffset, toward: target,
