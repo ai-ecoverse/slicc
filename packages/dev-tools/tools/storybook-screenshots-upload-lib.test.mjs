@@ -4,8 +4,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapWithConcurrency,
+  RETRY_BASE_DELAY_MS,
+  retryDelayMs,
   uploadManifest,
   uploadOne,
+  uploadOneWithRetry,
 } from './storybook-screenshots-upload-lib.mjs';
 
 /** In-memory fake standing in for the real wrangler-backed R2 client. */
@@ -89,6 +92,83 @@ describe('uploadOne', () => {
     expect(r2.calls.some((c) => c.op === 'putFile')).toBe(false);
     const putText = r2.calls.find((c) => c.op === 'putText');
     expect(putText).toMatchObject({ key: 'pr-1/abc/a.png.ref', text: 'deadbeef1234' });
+  });
+});
+
+describe('retryDelayMs', () => {
+  it('grows exponentially at the jitter ceiling', () => {
+    const atCeiling = () => 1;
+    expect(retryDelayMs(1, atCeiling)).toBe(RETRY_BASE_DELAY_MS);
+    expect(retryDelayMs(2, atCeiling)).toBe(RETRY_BASE_DELAY_MS * 2);
+    expect(retryDelayMs(3, atCeiling)).toBe(RETRY_BASE_DELAY_MS * 4);
+  });
+
+  it('applies full jitter, so the delay can be anywhere down to zero', () => {
+    expect(retryDelayMs(3, () => 0)).toBe(0);
+    expect(retryDelayMs(3, () => 0.5)).toBe(RETRY_BASE_DELAY_MS * 2);
+  });
+});
+
+describe('uploadOneWithRetry', () => {
+  const baseArgs = { outDir: '/out', prefix: 'pr-1/abc', bucket: 'shots', log: () => {} };
+  const item = { file: 'a.png', contentHash: 'deadbeef1234' };
+
+  it('retries a rate-limited upload after a backoff and succeeds', async () => {
+    const r2 = fakeR2();
+    let attempts = 0;
+    const failing = {
+      ...r2,
+      async exists(bucket, key) {
+        attempts++;
+        if (attempts === 1) throw new Error('429 code 971');
+        return r2.exists(bucket, key);
+      },
+    };
+    const sleeps = [];
+    const result = await uploadOneWithRetry(item, {
+      ...baseArgs,
+      r2: failing,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(result).toEqual({ file: 'a.png', isNew: true });
+    expect(sleeps).toHaveLength(1);
+  });
+
+  it('does not sleep when the first attempt succeeds', async () => {
+    const sleeps = [];
+    await uploadOneWithRetry(item, {
+      ...baseArgs,
+      r2: fakeR2(),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    expect(sleeps).toEqual([]);
+  });
+
+  it('rethrows the last error once every attempt is exhausted', async () => {
+    const r2 = fakeR2();
+    const alwaysFails = {
+      ...r2,
+      async exists() {
+        throw new Error('429 code 971');
+      },
+    };
+    const sleeps = [];
+    await expect(
+      uploadOneWithRetry(item, {
+        ...baseArgs,
+        r2: alwaysFails,
+        retries: 3,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      })
+    ).rejects.toThrow('429 code 971');
+    expect(sleeps).toHaveLength(2);
   });
 });
 

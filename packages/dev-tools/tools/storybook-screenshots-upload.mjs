@@ -8,13 +8,13 @@
 // workflow script) took ~4s/file (existence check + put, sometimes a second
 // put for the hash blob) — over an hour for a few hundred affected stories.
 // Running N uploads concurrently cuts wall-clock roughly by the concurrency
-// factor; R2/wrangler has no documented per-account rate limit that a modest
-// concurrency would trip.
+// factor, but R2 does rate-limit bursts (`429` / code 971), so concurrency
+// stays modest and failed shots retry with jittered backoff.
 //
 // Usage:
 //   node packages/dev-tools/tools/storybook-screenshots-upload.mjs \
 //     --manifest=<dir>/manifest.json --out-dir=<dir> --prefix=pr-123/<sha> \
-//     --bucket=slicc-pr-screenshots --new-uploads-out=<path> [--concurrency=8]
+//     --bucket=slicc-pr-screenshots --new-uploads-out=<path> [--concurrency=4]
 //
 // Requires CLOUDFLARE_API_TOKEN (and CLOUDFLARE_ACCOUNT_ID) in the environment
 // for `npx wrangler r2 object` to authenticate. Exit codes: 0 = success
@@ -96,7 +96,7 @@ async function main() {
   if (!manifestPath || !outDir || !prefix || !bucket || !newUploadsOut) {
     stderr.write(
       'usage: storybook-screenshots-upload.mjs --manifest=<path> --out-dir=<dir> ' +
-        '--prefix=<pr-N/sha> --bucket=<name> --new-uploads-out=<path> [--concurrency=8]\n'
+        '--prefix=<pr-N/sha> --bucket=<name> --new-uploads-out=<path> [--concurrency=4]\n'
     );
     exit(2);
   }

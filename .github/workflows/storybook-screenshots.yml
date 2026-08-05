@@ -115,7 +115,7 @@ jobs:
             --prefix="pr-${PR_NUMBER}/${HEAD_SHA}" \
             --bucket="${R2_BUCKET}" \
             --new-uploads-out=.storybook-screenshots/new-uploads.json \
-            --concurrency=8
+            --concurrency=4
 
       - name: Upload screenshots as workflow artifact
         if: always()

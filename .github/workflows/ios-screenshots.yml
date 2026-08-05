@@ -128,6 +128,30 @@ jobs:
               process.exit(0);
             }
 
+            // R2 rate-limits upload bursts with 429 / code 971. Retry each put
+            // with exponentially backed-off, jittered sleeps so a throttled
+            // shot does not fail the whole step. execSync is synchronous, so
+            // the sleep is a blocking Atomics.wait.
+            const RETRIES = 5;
+            const sleepSync = (ms) => {
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+            };
+            const putWithRetry = (cmd) => {
+              let lastError;
+              for (let attempt = 1; attempt <= RETRIES; attempt++) {
+                try {
+                  execSync(cmd, { stdio: "inherit" });
+                  return;
+                } catch (err) {
+                  lastError = err;
+                  if (attempt < RETRIES) {
+                    sleepSync(Math.round(Math.random() * 500 * 2 ** (attempt - 1)));
+                  }
+                }
+              }
+              throw lastError;
+            };
+
             const prefix = process.env.PREFIX;
             const bucket = process.env.R2_BUCKET;
             let newCount = 0;
@@ -152,20 +176,17 @@ jobs:
 
               if (exists) {
                 console.log(`  ⊙ ${item.file} (cached, hash ${item.contentHash.slice(0, 8)}…)`);
-                execSync(
-                  `echo "${item.contentHash}" | npx wrangler r2 object put "${bucket}/${key}.ref" --pipe --content-type text/plain --remote`,
-                  { stdio: "inherit" }
+                putWithRetry(
+                  `echo "${item.contentHash}" | npx wrangler r2 object put "${bucket}/${key}.ref" --pipe --content-type text/plain --remote`
                 );
                 cachedCount++;
               } else {
                 console.log(`  ↑ ${item.file} -> r2://${bucket}/${key} (new, hash ${item.contentHash.slice(0, 8)}…)`);
-                execSync(
-                  `npx wrangler r2 object put "${bucket}/${key}" --file "${src}" --content-type image/png --remote`,
-                  { stdio: "inherit" }
+                putWithRetry(
+                  `npx wrangler r2 object put "${bucket}/${key}" --file "${src}" --content-type image/png --remote`
                 );
-                execSync(
-                  `npx wrangler r2 object put "${bucket}/${hashKey}" --file "${src}" --content-type image/png --remote`,
-                  { stdio: "inherit" }
+                putWithRetry(
+                  `npx wrangler r2 object put "${bucket}/${hashKey}" --file "${src}" --content-type image/png --remote`
                 );
                 newCount++;
                 newUploads.push(item.file);

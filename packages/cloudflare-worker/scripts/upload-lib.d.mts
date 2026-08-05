@@ -16,6 +16,11 @@ export interface RunUploadsOptions {
   exec: Exec;
   concurrency?: number;
   retries?: number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export declare function runUploads(files: string[], opts: RunUploadsOptions): Promise<void>;
+
+export declare const RETRY_BASE_DELAY_MS: number;
+
+export declare function retryDelayMs(attempt: number, random?: () => number): number;
