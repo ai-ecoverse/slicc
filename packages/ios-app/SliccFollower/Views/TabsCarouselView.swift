@@ -24,10 +24,17 @@ struct TabsCarouselView: View {
     /// Remote pages cannot be hosted live here, so they render as preview
     /// cards — screenshots captured over follower-originated CDP (#1865).
     /// Local tabs stay live WKWebViews in the carousel above.
+    ///
+    /// This is the normal initial Browser state, so it must carry the
+    /// local-tab affordance itself (#1916): before it did, the only plus
+    /// button lived in a nested navigation toolbar that merged into an
+    /// inert `…` overflow at compact width.
     @ViewBuilder
     private var remoteList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                openNewTabButton
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 remoteHeader
                 ForEach(appState.remoteTargets, id: \.targetId) { target in
                     RemoteTabCard(target: target)
@@ -81,25 +88,6 @@ struct TabsCarouselView: View {
         .background(palette.canvas)
         .navigationTitle(currentTabTitle())
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    presentNewTabPrompt()
-                } label: {
-                    Image(systemName: "plus.square.on.square")
-                }
-                .disabled(!canControlTabs)
-                if let tabId = effectiveSelectedTabId() {
-                    Button(role: .destructive) {
-                        appState.cdpCloseTab(tabId)
-                        selectedTabId = nil
-                    } label: {
-                        Image(systemName: "xmark.square")
-                    }
-                    .disabled(!canControlTabs)
-                }
-            }
-        }
         .alert("New tab", isPresented: $showingNewTabPrompt) {
             TextField("URL", text: $newTabUrlInput)
                 .textInputAutocapitalization(.never)
@@ -115,6 +103,24 @@ struct TabsCarouselView: View {
         } message: {
             Text("Enter the URL to load. Leave as-is or pick Blank for an empty page.")
         }
+    }
+
+    /// The one reliable local-tab affordance, shared by every tab-less
+    /// state. It lives in the surface content, never in the navigation
+    /// toolbar: at compact width nested toolbar items merge with the
+    /// covered conversation's and collapse into a synthesized `…`
+    /// overflow, and at regular width the workbench column has no
+    /// `NavigationStack`, so toolbar items would not render at all (#1916).
+    private var openNewTabButton: some View {
+        Button {
+            presentNewTabPrompt()
+        } label: {
+            Label("Open new tab…", systemImage: "plus.square.on.square")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!canControlTabs)
+        .accessibilityLabel("Open new tab")
+        .accessibilityIdentifier("browser-open-new-tab")
     }
 
     private func presentNewTabPrompt() {
@@ -162,14 +168,8 @@ struct TabsCarouselView: View {
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 40)
-            Button {
-                presentNewTabPrompt()
-            } label: {
-                Label("Open new tab…", systemImage: "plus.square.on.square")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canControlTabs)
-            .padding(.top, 4)
+            openNewTabButton
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -218,6 +218,7 @@ struct TabsCarouselView: View {
                 Text(target.title.isEmpty ? "Untitled" : target.title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
+                    .accessibilityIdentifier("browser-local-tab-title")
                 Text(RemoteTabCard.displayHost(target.url))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -231,6 +232,26 @@ struct TabsCarouselView: View {
                 Image(systemName: "arrow.clockwise")
                     .foregroundStyle(palette.ink.opacity(0.7))
             }
+            .accessibilityLabel("Reload tab")
+            Button {
+                presentNewTabPrompt()
+            } label: {
+                Image(systemName: "plus.square.on.square")
+                    .foregroundStyle(palette.ink.opacity(0.7))
+            }
+            .disabled(!canControlTabs)
+            .accessibilityLabel("Open new tab")
+            .accessibilityIdentifier("browser-tab-new")
+            Button(role: .destructive) {
+                appState.cdpCloseTab(target.id)
+                selectedTabId = nil
+            } label: {
+                Image(systemName: "xmark.square")
+                    .foregroundStyle(palette.ink.opacity(0.7))
+            }
+            .disabled(!canControlTabs)
+            .accessibilityLabel("Close tab")
+            .accessibilityIdentifier("browser-tab-close")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

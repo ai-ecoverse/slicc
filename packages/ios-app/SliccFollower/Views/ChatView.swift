@@ -119,7 +119,13 @@ struct ChatView: View {
                             inputText: $presentation.composerDraft,
                             stagedAttachments: $presentation.stagedAttachments,
                             transcriptPosition: $presentation.transcriptPosition,
-                            ptt: ptt)
+                            ptt: ptt,
+                            // The overlay covers the conversation but not
+                            // the shared navigation bar, so the chat's
+                            // toolbar items would keep rendering over the
+                            // workbench surface and merge with any items it
+                            // contributes into a synthesized `…` (#1916).
+                            toolbarSuppressed: presentation.activeSurface != nil)
                     }
                     // The workbench covers the chat, not the rail — the
                     // same full-bleed overlay the web shell uses at ≤560px,
@@ -275,6 +281,10 @@ struct ConversationView: View {
     @Binding var stagedAttachments: [MessageAttachment]
     @Binding var transcriptPosition: ScrollPosition
     @ObservedObject var ptt: PttController
+    /// True while a compact workbench overlay covers this conversation.
+    /// The regular split never sets it: there the conversation stays
+    /// visible beside the workbench and keeps its toolbar.
+    var toolbarSuppressed: Bool = false
     @State private var showNewSessionDialog = false
     @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
     /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
@@ -324,8 +334,10 @@ struct ConversationView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
-            identityGroup
-            sessionControls
+            if !toolbarSuppressed {
+                identityGroup
+                sessionControls
+            }
         }
         .sheet(isPresented: $showFrozenSessions) {
             FrozenSessionsView()

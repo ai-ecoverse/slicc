@@ -745,23 +745,7 @@ class AppState: ObservableObject {
         // hosted tabs survive transient WebRTC drops. Only spin up a new
         // bridge if there isn't one (first connect, or after a user-
         // initiated `disconnect()` cleared it).
-        let bridge: CDPBridge
-        if let existing = cdpBridge {
-            bridge = existing
-        } else {
-            bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
-                self?.sendToLeader(msg)
-            }
-            bridge.onTargetsChanged = { [weak self] in
-                Task { @MainActor in self?.refreshCDPTargets() }
-            }
-            bridge.onHandoffDetected = { [weak self] pageURL, match, title in
-                Task { @MainActor in
-                    self?.forwardNavigateLick(pageURL: pageURL, match: match, title: title)
-                }
-            }
-            cdpBridge = bridge
-        }
+        let bridge = ensureCdpBridge()
         // Re-advertise existing targets so the (possibly new) leader knows
         // about every WKWebView we still own.
         bridge.advertiseTargets()
@@ -1116,9 +1100,31 @@ class AppState: ObservableObject {
         cdpBridge?.webView(for: targetId)
     }
 
+    /// The bridge, created on first use. A user-opened tab may precede the
+    /// first data-channel open (the browser surface renders in every
+    /// connection state), and `sendToLeader` already drops messages while
+    /// the channel is closed — `dataChannelOpened` re-advertises whatever
+    /// targets exist once the leader can hear about them.
+    private func ensureCdpBridge() -> CDPBridge {
+        if let existing = cdpBridge { return existing }
+        let bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
+            self?.sendToLeader(msg)
+        }
+        bridge.onTargetsChanged = { [weak self] in
+            Task { @MainActor in self?.refreshCDPTargets() }
+        }
+        bridge.onHandoffDetected = { [weak self] pageURL, match, title in
+            Task { @MainActor in
+                self?.forwardNavigateLick(pageURL: pageURL, match: match, title: title)
+            }
+        }
+        cdpBridge = bridge
+        return bridge
+    }
+
     /// Manually open a new tab (e.g. from a UI button). Mirrors `tab.open`.
     func cdpOpenTab(url: String = "about:blank") {
-        cdpBridge?.handleTabOpen(requestId: "ui-\(UUID().uuidString)", url: url)
+        ensureCdpBridge().handleTabOpen(requestId: "ui-\(UUID().uuidString)", url: url)
     }
 
     /// Manually close a tab from the carousel.
