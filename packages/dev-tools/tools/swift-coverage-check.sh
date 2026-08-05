@@ -29,16 +29,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # Resolved before any `cd` below — BASH_SOURCE may be a relative path.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Simulator selection is shared with ios-sim-test.sh (the non-coverage CI
+# matrix legs) so the two paths cannot drift.
+# shellcheck source=packages/dev-tools/tools/ios-sim-select.sh
+source "$SCRIPT_DIR/ios-sim-select.sh"
+
 select_iphone_for_sdk() {
-  local sdk_version="$1"
-  IOS_SIMULATOR_RUNTIME_KEY="com.apple.CoreSimulator.SimRuntime.iOS-${sdk_version//./-}" node -e '
-    let input = "";
-    process.stdin.on("data", chunk => input += chunk).on("end", () => {
-      const devices = JSON.parse(input).devices?.[process.env.IOS_SIMULATOR_RUNTIME_KEY] ?? [];
-      const iphone = devices.find(device => device.isAvailable && /iPhone/.test(device.name));
-      process.stdout.write(iphone?.udid ?? "");
-    });
-  '
+  select_ios_sim_for_sdk "$1" iPhone
 }
 
 configure_xcode_coverage_scope() {
