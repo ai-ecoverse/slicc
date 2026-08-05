@@ -52,15 +52,15 @@ export function validateScreens(registry) {
  * unspecified, so runtimes are version-sorted — an older runtime can fail
  * at app launch (same rationale as docs/ios-simulator-qa.md).
  */
-export function pickNewestIPhone(simctlJson) {
+function pickNewestDevice(simctlJson, deviceName) {
   const devices = simctlJson?.devices ?? {};
   const candidates = [];
   for (const [runtime, list] of Object.entries(devices)) {
     const match = runtime.match(/SimRuntime\.iOS-([0-9-]+)$/);
     if (!match) continue;
     const version = match[1].split('-').map(Number);
-    const iphones = (list ?? []).filter((d) => d.isAvailable && /iPhone/.test(d.name));
-    if (iphones.length > 0) candidates.push({ version, udid: iphones[0].udid });
+    const matches = (list ?? []).filter((d) => d.isAvailable && deviceName.test(d.name));
+    if (matches.length > 0) candidates.push({ version, udid: matches[0].udid });
   }
   candidates.sort((a, b) => {
     for (let i = 0; i < Math.max(a.version.length, b.version.length); i++) {
@@ -70,6 +70,25 @@ export function pickNewestIPhone(simctlJson) {
     return 0;
   });
   return candidates.at(-1)?.udid ?? null;
+}
+
+export function pickNewestIPhone(simctlJson) {
+  return pickNewestDevice(simctlJson, /iPhone/);
+}
+
+export function pickNewestIPad(simctlJson) {
+  return pickNewestDevice(simctlJson, /iPad/);
+}
+
+export function screensForCapture(screens, { device, screenName }) {
+  const selected = screenName ? screens.filter((screen) => screen.name === screenName) : screens;
+  if (selected.length === 0) {
+    throw new Error(`screen "${screenName}" is not registered`);
+  }
+  return selected.map((screen) => ({
+    ...screen,
+    name: device === 'ipad' ? `ipad-${screen.name}` : screen.name,
+  }));
 }
 
 /** Screenshot filename for a screen. */

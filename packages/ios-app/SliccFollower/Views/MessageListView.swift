@@ -3,6 +3,12 @@ import SwiftUI
 
 // MARK: - MessageListView
 
+enum MessageListLayout {
+    /// Keeps long-form assistant responses readable on regular-width iPads while
+    /// allowing compact and split-view transcripts to use all available space.
+    static let maximumReadableWidth: CGFloat = 680
+}
+
 /// Renders chat messages as a scrollable list with auto-scroll to bottom.
 struct MessageListView: View {
     let messages: [ChatMessage]
@@ -99,6 +105,10 @@ struct MessageListView: View {
                     .id("bottom")
             }
             .scrollTargetLayout()
+            // The inner frame caps the reading column; the outer frame fills
+            // the scroll viewport so SwiftUI centers that capped column.
+            .frame(maxWidth: MessageListLayout.maximumReadableWidth)
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
         .scrollPosition($scrollPosition)

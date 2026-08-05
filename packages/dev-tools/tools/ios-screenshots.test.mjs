@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   buildManifest,
+  pickNewestIPad,
   pickNewestIPhone,
+  screensForCapture,
   screenshotFile,
   validateScreens,
 } from './ios-screenshots-lib.mjs';
@@ -76,6 +78,64 @@ describe('pickNewestIPhone', () => {
 
   it('returns null when nothing qualifies', () => {
     expect(pickNewestIPhone({ devices: {} })).toBeNull();
+  });
+});
+
+describe('pickNewestIPad', () => {
+  it('picks an available iPad from the newest iOS runtime', () => {
+    const json = {
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-18-5': [
+          { isAvailable: true, name: 'iPad Pro 13-inch', udid: 'older' },
+        ],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [
+          { isAvailable: true, name: 'iPhone 17 Pro', udid: 'phone' },
+          { isAvailable: true, name: 'iPad Air 13-inch', udid: 'newest' },
+        ],
+      },
+    };
+    expect(pickNewestIPad(json)).toBe('newest');
+  });
+
+  it('returns null when no iPad qualifies', () => {
+    expect(pickNewestIPad({ devices: {} })).toBeNull();
+  });
+
+  it('skips unavailable iPads and non-iOS runtimes', () => {
+    const json = {
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-5': [
+          { isAvailable: false, name: 'iPad Pro 13-inch', udid: 'unavailable' },
+        ],
+        'com.apple.CoreSimulator.SimRuntime.watchOS-26-0': [
+          { isAvailable: true, name: 'iPad impostor', udid: 'watch' },
+        ],
+      },
+    };
+    expect(pickNewestIPad(json)).toBeNull();
+  });
+});
+
+describe('screensForCapture', () => {
+  const screens = [
+    { name: 'settings', args: ['-a'] },
+    { name: 'conversation-fixture', args: ['-b'] },
+  ];
+
+  it('selects and namespaces the iPad proof screen', () => {
+    expect(
+      screensForCapture(screens, { device: 'ipad', screenName: 'conversation-fixture' })
+    ).toEqual([{ name: 'ipad-conversation-fixture', args: ['-b'] }]);
+  });
+
+  it('leaves the complete iPhone registry names unchanged', () => {
+    expect(screensForCapture(screens, { device: 'iphone' })).toEqual(screens);
+  });
+
+  it('rejects an unknown requested screen', () => {
+    expect(() => screensForCapture(screens, { device: 'ipad', screenName: 'missing' })).toThrow(
+      /not registered/
+    );
   });
 });
 

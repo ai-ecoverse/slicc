@@ -85,6 +85,26 @@ jobs:
             --app=packages/ios-app/.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app \
             --out=.ios-screenshots/out
 
+          # The full registry stays on iPhone; the transcript additionally gets
+          # an iPad capture so regular-width readability changes have direct proof.
+          node packages/dev-tools/tools/ios-screenshots.mjs \
+            --app=packages/ios-app/.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app \
+            --out=.ios-screenshots/ipad \
+            --device=ipad \
+            --screen=conversation-fixture
+
+          node -e '
+            const fs = require("fs");
+            const phone = JSON.parse(fs.readFileSync(".ios-screenshots/out/manifest.json", "utf8"));
+            const ipad = JSON.parse(fs.readFileSync(".ios-screenshots/ipad/manifest.json", "utf8"));
+            for (const shot of ipad.shots) {
+              fs.copyFileSync(".ios-screenshots/ipad/" + shot.file, ".ios-screenshots/out/" + shot.file);
+            }
+            phone.device = phone.device + "; " + ipad.device;
+            phone.shots.push(...ipad.shots);
+            fs.writeFileSync(".ios-screenshots/out/manifest.json", JSON.stringify(phone, null, 2) + "\n");
+          '
+
       - name: Check upload mode
         id: mode
         env:
