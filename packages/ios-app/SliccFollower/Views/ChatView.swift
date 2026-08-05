@@ -788,6 +788,8 @@ struct ConversationView: View {
                 messages: appState.messages,
                 isStreaming: appState.isStreaming,
                 toolUICards: appState.toolUICards,
+                openApprovals: appState.openApprovals,
+                onOpenApprovalDecision: appState.resolveOpenApproval,
                 onInlineSprinkleLick: { body, target in
                     appState.sendSprinkleLick("inline", body: body, targetScoop: target)
                 },

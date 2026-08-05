@@ -18,7 +18,7 @@ stdout, stderr, and exit code.
 
 ## Discover targets
 
-Only a follower started with a **runner** is an exec target. Find them:
+CLI followers started with a **runner** and iOS followers advertising exec are targets. Find them:
 
 ```bash
 host           # exec targets tagged [ssh]; browser targets tagged [playwright]
@@ -26,9 +26,12 @@ ssh --list     # just the exec targets + their runtime ids, each with a MOTD lin
 ```
 
 A target id looks like `follower-<uuid>`. `ssh --list` prints each target's
-advertised MOTD beneath it — who/what/where it is and its runner — so you know
-what you're connecting to. Browser and iOS followers have no OS shell and are
-never `ssh` targets (they show as `[playwright]`, driven via `playwright-cli`).
+advertised MOTD beneath it so you know what you're connecting to. Browser
+followers are never `ssh` targets. iOS followers accept only
+`open [--universal|--x-callback] <url>`, gate it through on-device scoped
+approval, and launch the approved destination. `--universal` requires a universal
+link; `--x-callback` returns bounded JSON on stdout and distinct success, error,
+or cancel exit codes. An unavailable app fails instead of pretending to launch.
 `host` hides capability-less followers (e.g. transient `prompt`/`exec` CLI
 connections) as a count, so the list stays the actionable targets.
 

@@ -5,6 +5,39 @@ import XCTest
 @testable import SliccFollower
 
 final class AppStateStreamingTests: XCTestCase {
+    func testDecodeFailureSummaryNeverIncludesRawURLPayload() {
+        let secretURL = "fixtureapp://calendar/create?token=never-log-this"
+        let malformed = Data(
+            "{\"type\":\"exec.request\",\"command\":\"open \(secretURL)\"}".utf8)
+
+        let summary = SafeLeaderMessageLog.decodeFailureSummary(malformed)
+
+        XCTAssertTrue(summary.contains("type=exec.request"))
+        XCTAssertTrue(summary.contains("\(malformed.count) bytes"))
+        XCTAssertFalse(summary.contains(secretURL))
+        XCTAssertFalse(summary.contains("never-log-this"))
+    }
+
+    func testDecodeFailureSummaryRejectsSensitiveDiscriminator() {
+        let secretURL = "fixtureapp://calendar/create?token=never-log-this"
+        let malformed = Data("{\"type\":\"\(secretURL)\"}".utf8)
+
+        XCTAssertEqual(
+            SafeLeaderMessageLog.decodeFailureSummary(malformed),
+            "Failed to decode leader message (\(malformed.count) bytes, type=unknown)")
+    }
+
+    func testURLLogSummaryNeverIncludesQueryValues() {
+        let secretURL = "https://example.com/action?token=never-log-this"
+
+        let summary = SafeLeaderMessageLog.urlEventSummary(
+            "Leader requested new tab", url: secretURL)
+
+        XCTAssertTrue(summary.contains("\(secretURL.utf8.count) URL bytes"))
+        XCTAssertFalse(summary.contains(secretURL))
+        XCTAssertFalse(summary.contains("never-log-this"))
+    }
+
     @MainActor
     private func send(_ event: AgentEvent, scoopJid: String, to state: AppState) throws {
         let message = LeaderToFollowerMessage.agentEvent(event: event, scoopJid: scoopJid)

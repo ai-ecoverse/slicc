@@ -338,6 +338,32 @@ import UIKit
             UserDefaults.standard.bool(forKey: "uiTestTerminalFixture")
         }
 
+        /// An inbound `exec` open request as the leader would phrase it, so
+        /// the fixture enters through `OpenApprovalController.handle` rather
+        /// than being published past it.
+        struct OpenApprovalFixture {
+            let requestId: String
+            let command: String
+            let requesterIdentity: String
+            let sessionIdentity: String
+        }
+
+        /// Stage the native external-app approval card without a leader.
+        /// The query is intentionally present in the fixture URL: the UI test
+        /// proves none of its values become labels or accessibility identifiers.
+        static func openApprovalFixture() -> OpenApprovalFixture? {
+            guard stagesOpenApprovalFixture else { return nil }
+            return OpenApprovalFixture(
+                requestId: "ui-open-approval",
+                command: "open --x-callback fixtureapp://calendar/create?secret=never-display",
+                requesterIdentity: "Fixture Mac",
+                sessionIdentity: "Fixture session")
+        }
+
+        static var stagesOpenApprovalFixture: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestOpenApproval")
+        }
+
         /// Stage a canned photo in the composer on launch
         /// (`-uiTestAttachmentFixture YES`): PhotosPicker runs out of
         /// process and cannot be driven hermetically, so attachment UI

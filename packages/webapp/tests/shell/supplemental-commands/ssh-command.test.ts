@@ -41,6 +41,7 @@ describe('ssh command', () => {
       const r = await createSshCommand().execute(args, ctx());
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('ssh - run a command on a connected tray follower');
+      expect(r.stdout).toContain('launches the approved destination');
     }
   });
 
@@ -71,6 +72,20 @@ describe('ssh command', () => {
     expect(r.stdout).toContain(
       '      slicc-cli exec target · alice@studio · darwin/arm64 · runner: sh -c'
     );
+  });
+
+  it('lists an iOS follower with its restricted-command MOTD', async () => {
+    hoisted.followers = [
+      {
+        runtimeId: 'follower-ios',
+        runtime: 'slicc-ios',
+        exec: true,
+        motd: 'SLICC iOS follower on iPhone — only supported command: open',
+      },
+    ];
+    const r = await createSshCommand().execute(['--list'], ctx());
+    expect(r.stdout).toContain('  - follower-ios (slicc-ios)');
+    expect(r.stdout).toContain('      SLICC iOS follower on iPhone — only supported command: open');
   });
 
   it('reports when no follower is an exec target', async () => {

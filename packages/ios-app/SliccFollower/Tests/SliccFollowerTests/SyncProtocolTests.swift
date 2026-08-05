@@ -22,7 +22,7 @@ final class SyncProtocolHelloTests: XCTestCase {
             return XCTFail("expected legacy hello")
         }
         XCTAssertNil(legacyCapabilities)
-        XCTAssertFalse(trayFollowerCapabilities.exec)
+        XCTAssertTrue(trayFollowerCapabilities.exec)
     }
 }
 

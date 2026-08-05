@@ -81,23 +81,25 @@ export interface TraySyncHelloMessage {
    * Optional capability advertisement (additive — legacy peers omit it). The
    * only capability today is `exec`: this peer accepts `exec.request`. Leaders
    * set it when their virtual shell is wired; the `slicc … follow` CLI sets it
-   * when it has a real OS runner. Browser and iOS followers have no OS shell and
-   * advertise false or omit it. See the `exec.*` messages below.
+   * when it has a real OS runner; iOS sets it for its restricted, non-shell
+   * `open` verb. Browser followers advertise false or omit it. See the `exec.*`
+   * messages below.
    */
   capabilities?: TraySyncCapabilities;
   /**
-   * Optional one-line description of an exec-capable follower (additive). The
-   * `slicc … follow <runner>` CLI sets it to a concise summary — who/what the
-   * target is, its platform, and its runner — and the leader surfaces it to the
-   * agent (`ssh --list`) so the first `ssh` reveals what the target is. Legacy
-   * and browser/iOS peers omit it.
+   * Optional one-line description of an exec-capable follower (additive). CLI
+   * and iOS followers describe their supported surface, and the leader exposes
+   * it to the agent through `ssh --list`. Legacy and browser peers omit it.
    */
   motd?: string;
 }
 
 /** Peer capability advertisement carried on `hello`. */
 export interface TraySyncCapabilities {
-  /** This peer accepts commands via `exec.request`. */
+  /**
+   * This peer accepts `exec.request`. A receiver may run a shell or expose only
+   * a restricted verb set; its MOTD documents the supported surface.
+   */
   exec?: boolean;
 }
 
@@ -464,20 +466,34 @@ export function isCherrySliccEventMessage(m: unknown): m is CherrySliccEventMess
 // Remote command execution (streaming, symmetric)
 // ---------------------------------------------------------------------------
 
+/** Maximum number of parameters forwarded from one approved x-callback result. */
+export const TRAY_MAX_OPEN_CALLBACK_PARAM_COUNT = 16;
+
 /**
- * Run a shell command on the receiving peer. Symmetric like `cdp.request`:
- * present in BOTH direction unions. The LEADER sends it to a `follow`-mode CLI
- * follower — the `ssh` supplemental command → the follower runs it on its real
- * OS as the user who started `slicc … follow`. A CLI follower sends it to the
- * LEADER — the `slicc … exec` subcommand → the leader runs it in its in-browser
- * virtual shell. Only a peer that advertised `hello.capabilities.exec` is a
- * valid OS-exec target; any other follower replies with an error
- * `exec.response` instead of running anything.
+ * Maximum serialized UTF-8 byte length of one approved x-callback JSON result,
+ * not JavaScript string length. 16 KiB stays below
+ * `TRAY_DEFAULT_MAX_MESSAGE_BYTES` (`65536` bytes), so the result always fits in
+ * one unchunked tray message.
+ */
+export const TRAY_MAX_OPEN_CALLBACK_BYTES = 16 * 1024;
+
+/**
+ * Request command execution on the receiving peer. Symmetric like
+ * `cdp.request`: present in BOTH direction unions. The LEADER sends it through
+ * the `ssh` supplemental command to a capable follower. A `follow`-mode CLI
+ * follower runs it through its configured OS runner; iOS accepts only its
+ * restricted, non-shell verb set. A CLI follower sends it to the LEADER through
+ * `slicc … exec`, where the in-browser virtual shell runs it. Only a peer that
+ * advertised `hello.capabilities.exec` is a valid target; any other follower
+ * replies with an error `exec.response` instead of running anything.
  */
 export interface TrayExecRequestMessage {
   type: 'exec.request';
   requestId: string;
-  /** Command line, interpreted by the receiver's shell. */
+  /**
+   * Command text. Shell-capable receivers interpret it as a command line;
+   * restricted receivers accept only their documented verb grammar.
+   */
   command: string;
   /** Optional working directory on the receiver. */
   cwd?: string;

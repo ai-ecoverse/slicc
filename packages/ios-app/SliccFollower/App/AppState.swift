@@ -66,6 +66,8 @@ class AppState: ObservableObject {
     /// transcript because the leader mounts them outside the message list too,
     /// so a streaming re-render cannot wipe them.
     @Published var toolUICards: [ToolUIPlaceholder] = []
+    @Published var openApprovals: [OpenApprovalRequest] = []
+    @Published var openGrants: [OpenGrant] = []
     @Published var isStreaming: Bool = false
 
     // Multi-scoop awareness
@@ -118,6 +120,7 @@ class AppState: ObservableObject {
     private(set) lazy var terminalClient = TerminalClient { [weak self] in
         self?.sendToLeader($0) ?? false
     }
+    private(set) lazy var openApprovalController = makeOpenApprovalController()
     /// Follower-originated CDP for tab previews (#1865).
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
@@ -182,14 +185,18 @@ class AppState: ObservableObject {
     let sessionStore: TraySessionSyncStore
     private let credentialStore: TrayCredentialStore
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
+    let openGrantStore: OpenGrantStore
 
     init(
         credentialStore: TrayCredentialStore = TrayCredentialStore(),
-        fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle()
+        fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
+        openGrantStore: OpenGrantStore = OpenGrantStore()
     ) {
         sessionStore = AppState.makeSessionStore()
         self.credentialStore = credentialStore
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
+        self.openGrantStore = openGrantStore
+        openGrants = openGrantStore.grants
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
         #if DEBUG
@@ -198,6 +205,7 @@ class AppState: ObservableObject {
                 selectedScoopJid = fixtureScoops.first?.jid
                 leaderActiveScoopJid = fixtureScoops.first?.jid
             }
+            configureOpenApprovalFixture()
         #endif
     }
 
@@ -254,7 +262,7 @@ class AppState: ObservableObject {
     /// secret-bearing URL never surfaces in the field, the persisted setting,
     /// or the visible history. Reconnects reuse it.
     private var activeJoinUrl: String = ""
-    private var activeDisplayName: String?
+    var activeDisplayName: String?
 
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
@@ -791,6 +799,7 @@ class AppState: ObservableObject {
                 runtime: "slicc-ios",
                 capabilities: trayFollowerCapabilities,
                 motd: trayFollowerMotd))
+        openApprovalController.transportAvailable()
 
         // Request the preserved view so the fresh leader follower record
         // re-registers it before thinking changes can target that scoop.
@@ -820,8 +829,7 @@ class AppState: ObservableObject {
         do {
             msg = try decoder.decode(LeaderToFollowerMessage.self, from: data)
         } catch {
-            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
-            logger.error("Failed to decode leader message (\(data.count) bytes): \(error.localizedDescription) — preview: \(preview)")
+            logger.error("\(SafeLeaderMessageLog.decodeFailureSummary(data))")
             return
         }
 
@@ -847,9 +855,8 @@ class AppState: ObservableObject {
                         logger.info("Chunked snapshot decoded: \(payload.messages.count) messages, scoopJid=\(payload.scoopJid)")
                         ingestSnapshot(messages: payload.messages, scoopJid: payload.scoopJid)
                     } catch {
-                        logger.error("Failed to decode reassembled snapshot: \(error.localizedDescription)")
-                        let preview = String(fullJson.prefix(300))
-                        logger.error("Snapshot JSON preview: \(preview)")
+                        logger.error(
+                            "Failed to decode reassembled snapshot (\(jsonData.count) bytes)")
                     }
                 }
             }
@@ -969,7 +976,8 @@ class AppState: ObservableObject {
             )
 
         case .tabOpen(let requestId, let url):
-            logger.info("Leader requested new tab: \(url)")
+            logger.info(
+                "\(SafeLeaderMessageLog.urlEventSummary("Leader requested new tab", url: url))")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .previewOpen(let requestId, let url):
@@ -978,7 +986,8 @@ class AppState: ObservableObject {
             // the URL in a WKWebView CDP target. The preview-vs-tab
             // distinction is informational on iOS (Phase 1) — the request
             // id flows back via the standard tab.opened ack.
-            logger.info("Leader requested preview tab: \(url)")
+            logger.info(
+                "\(SafeLeaderMessageLog.urlEventSummary("Leader requested preview tab", url: url))")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .targetsRegistry(let targets):
@@ -1388,7 +1397,7 @@ class AppState: ObservableObject {
     /// no indication their message was lost — the silent-drop behaviour this
     /// whole change exists to remove (#1700).
     @discardableResult
-    private func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
+    func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
         let data: Data
         do {
             data = try JSONEncoder().encode(msg)
@@ -1469,6 +1478,7 @@ class AppState: ObservableObject {
     func handleDisconnect(reason: String) {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
+        openApprovalController.disconnect()
         terminalClient.disconnect()
 
         // A stall that ends in a real disconnect must not leave the composer
@@ -1540,6 +1550,7 @@ extension AppState {
     /// must survive transient WebRTC drops. Use `resetCDPState()` from
     /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
     fileprivate func tearDown() {
+        openApprovalController.disconnect()
         terminalClient.disconnect()
         connectTask?.cancel()
         connectTask = nil
@@ -1575,6 +1586,7 @@ extension AppState {
         credentialStore.clear()
         fileProviderDomainLifecycle.removeDomain()
         Self.purgeLegacyJoinURLDefaults()
+        openApprovalController.revokeAllGrants()
     }
 
     fileprivate static func purgeLegacyJoinURLDefaults() {
@@ -1713,27 +1725,6 @@ extension AppState {
         if displayLevel == "max" { return (.xhigh, "max") }
         guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
         return (level, nil)
-    }
-}
-
-// MARK: - Terminal sync routing
-
-extension AppState {
-    private func handleExecMessage(_ message: LeaderToFollowerMessage) {
-        switch message {
-        case .execRequest(let requestId, _, _, _):
-            terminalClient.refuseLeaderRequest(requestId: requestId)
-        case .execChunk(let requestId, let stream, let data):
-            terminalClient.handleChunk(
-                requestId: requestId, stream: stream, base64Data: data)
-        case .execResponse(let requestId, let exitCode, let signal, let error):
-            terminalClient.handleResponse(
-                requestId: requestId, exitCode: exitCode, signal: signal, error: error)
-        case .execSignal:
-            return
-        default:
-            return
-        }
     }
 }
 

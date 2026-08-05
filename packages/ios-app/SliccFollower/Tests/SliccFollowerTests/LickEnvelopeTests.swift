@@ -86,22 +86,19 @@ final class LickEnvelopeTests: XCTestCase {
 
     // MARK: - hello
 
-    func testFollowerHelloAdvertisesExecFalseExplicitly() throws {
+    func testFollowerHelloAdvertisesExec() throws {
         let json = try encode(
             .hello(
                 protocolVersion: traySyncProtocolVersion, runtime: "slicc-ios",
                 capabilities: trayFollowerCapabilities, motd: "test motd"))
         XCTAssertEqual(json["runtime"] as? String, "slicc-ios")
         let capabilities = try XCTUnwrap(json["capabilities"] as? [String: Any])
-        // Present and false, not absent: the leader's exec gate reads
-        // `peerCapabilities?.exec`, so absent and false behave alike — but only
-        // one of them says so.
-        XCTAssertEqual(capabilities["exec"] as? Bool, false)
+        XCTAssertEqual(capabilities["exec"] as? Bool, true)
         XCTAssertEqual(json["motd"] as? String, "test motd")
     }
 
-    func testFollowerCapabilitiesNeverClaimExec() {
-        XCTAssertFalse(trayFollowerCapabilities.exec, "iOS has no OS shell")
+    func testFollowerCapabilitiesAdvertiseRestrictedExec() {
+        XCTAssertTrue(trayFollowerCapabilities.exec)
     }
 
     func testMotdIdentifiesThePhone() {
@@ -109,6 +106,7 @@ final class LickEnvelopeTests: XCTestCase {
         // follower from the others without being a paragraph.
         let motd = trayFollowerMotd
         XCTAssertTrue(motd.contains("iOS"), "motd should name the platform: \(motd)")
+        XCTAssertTrue(motd.contains("only supported command: open"))
         XCTAssertFalse(motd.isEmpty)
         XCTAssertLessThan(motd.count, 200, "motd is a one-liner")
         XCTAssertFalse(motd.contains("\n"), "motd is a one-liner")

@@ -1,3 +1,4 @@
+import SliccTrayKit
 import SliccTraySession
 import SwiftUI
 
@@ -48,6 +49,7 @@ struct SettingsView: View {
                     }
                     trayInfoSection
                 }
+                openGrantsSection
                 advancedSection
             }
             .navigationTitle("Settings")
@@ -391,6 +393,46 @@ struct SettingsView: View {
         } header: {
             Text("Tray Info")
         }
+    }
+
+    // MARK: - Open Grants Section
+
+    private var openGrantsSection: some View {
+        Section {
+            if appState.openGrants.isEmpty {
+                Text("No stored open grants")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(appState.openGrants) { grant in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(grant.scope.scheme)
+                            Text(Self.grantDestination(grant.scope))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Revoke", role: .destructive) {
+                            appState.revokeOpenGrant(id: grant.id)
+                        }
+                        .accessibilityIdentifier("open-grant-revoke-\(grant.id.uuidString)")
+                    }
+                }
+                Button("Revoke All Open Grants", role: .destructive) {
+                    appState.revokeAllOpenGrants()
+                }
+            }
+        } header: {
+            Text("Allowed App Destinations")
+        } footer: {
+            Text("Grants stay on this phone and match only the displayed scheme and destination prefix.")
+        }
+    }
+
+    private static func grantDestination(_ scope: OpenGrantScope) -> String {
+        if scope.authority.isEmpty { return scope.actionPrefix }
+        if scope.actionPrefix.isEmpty { return scope.authority }
+        return scope.authority + "/" + scope.actionPrefix
     }
 
     // MARK: - Advanced Section

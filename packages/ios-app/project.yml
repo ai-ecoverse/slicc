@@ -45,6 +45,8 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.sliccy.follower.deeplink
             CFBundleURLSchemes: [slicc]
+          - CFBundleURLName: com.sliccy.follower.open-callback
+            CFBundleURLSchemes: [slicc-open-callback]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower

@@ -38,7 +38,8 @@ Plain SPM commands do nothing useful on a macOS host. Build and test go through 
 
 - `preview.open` → `CDPBridge.handleTabOpen`, ack `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable` in the corpus.
-- All four `exec.*` messages are mirrored; terminal originates, leader requests get unsupported. `capabilities.exec` stays false (no OS shell).
+- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gated by scoped approval, then launches that exact approved destination through `UIApplication.open` (`universalLinksOnly` for `--universal`). Raw paths reject traversal and encoded delimiters; hierarchical URLs must standardize unchanged. 1,024 IDs tombstoned; 128 failed terminal deliveries retry FIFO.
+- `--x-callback` replaces any supplied callback keys with app-owned nonce URLs. A correlated success/error/cancel emits one ordered `{status, parameters:[{name,value}]}` JSON line on stdout, then exit 0/1/130. Results are limited to 16 parameters and 16 KiB serialized JSON; overflow fails without truncation. Callback state is process-local, so a callback after app restoration is consumed silently and the leader owns its request timeout.
 
 Both union doc-comments state omissions; `// MARK: -` boundaries are the anchors.
 
@@ -53,24 +54,12 @@ Model TS follower features on `AppState`:
 - Dispatch: `handleDataChannelMessage`
 - Sprinkles: refresh/fetch/lick/handle content (chunk reassembly + waiter dedup)
 - Leader VFS: `FsClient` requests with `targetRuntimeId: "leader"`; leader-origin requests get `ENOTSUP` (not silence). Client owns deadline + reassembly.
-- `hello` sends `exec: false` + device `motd`
+- `hello` sends `exec: true` + device `motd`
 - Multi-scoop buffers, model/thinking controls, agent events
 
 ### Transcript swipe arbitration
 
-Nested horizontal transcript content owns a drag while it can still scroll in
-that direction; scoop navigation or frozen dismissal takes over only at the edge
-the drag pulls away from (right at leading, left at trailing). Freeze edge state
-at drag start. Capture must tolerate either inner/outer callback order, and an
-unknown context in a guarded region fails closed. Edge math uses the effective
-viewport, including both 8pt expansions from negative horizontal padding.
-On iOS 18+, content inside each guarded scroller uses
-`UIGestureRecognizerRepresentable` to resolve its own handoff; iOS 26 no longer
-makes a descendant SwiftUI gesture simultaneous with an ancestor one. The
-recognizer snapshots live backing-`UIScrollView` metrics at touch-down. The
-parent handles ordinary content and iOS 17 keeps the SwiftUI geometry path.
-Ordinary navigation and vertical scrolling are unchanged. The target is iOS 17,
-so use preference/geometry APIs, not iOS 18 scroll APIs.
+Nested horizontal content keeps a drag while it can scroll that way; scoop navigation or frozen dismissal takes over only at the departing edge. Freeze edge state at drag start, tolerate either callback order, and fail closed for unknown guarded contexts. Edge math includes both 8pt negative-padding expansions. On iOS 18+, each guarded scroller uses `UIGestureRecognizerRepresentable` and snapshots its backing `UIScrollView` at touch-down; the parent handles ordinary content. Keep the iOS 17 preference/geometry fallback and preserve vertical scrolling.
 
 ### Licks
 
@@ -125,18 +114,18 @@ swiftlint lint
 
 ## Test + coverage
 
-The unit suite runs through `xcodebuild test` on a simulator. The shared coverage gate picks an iPhone from the runtime matching the simulator SDK, boots it, enables coverage and on-failure retries, and enforces the `ios-app` floors in `coverage-thresholds.json`. Set `SLICC_IOS_SIM_UDID` to a worktree-owned simulator UDID to override selection locally; unset or empty keeps the SDK-runtime selection. Do not pass `CODE_SIGNING_ALLOWED=NO` to simulator tests: XCTest needs the ad-hoc-signed app and test bundle. That override is only for the build-only command above.
+Run unit tests through `xcodebuild test` on a simulator. The coverage gate selects and boots an iPhone matching the simulator SDK, retries infrastructure failures, and enforces `coverage-thresholds.json`. Override selection locally with a worktree-owned `SLICC_IOS_SIM_UDID`. Never pass `CODE_SIGNING_ALLOWED=NO` to tests because XCTest needs ad-hoc signing; use it only for the build command above.
 
 ```bash
 ./packages/dev-tools/tools/swift-coverage-check.sh \
   --xcodebuild SliccFollower packages/ios-app SliccFollower
 ```
 
-Outputs land in `.build/coverage/` (`summary.json`, `lcov.info`, `ios-app.xcresult`). The gate runs only `SliccFollowerTests`, disables parallel clones for shared app-state isolation, and keeps random order. Coverage combines the app dylib with every linked framework so `SliccTrayKit` stays measured; SwiftUI/CDP/AppState orchestration stays on the UI-test gate.
+Outputs land in `.build/coverage/`. The gate runs only `SliccFollowerTests`, disables parallel clones for shared app-state isolation, and keeps random order. Coverage combines the app dylib with linked frameworks so `SliccTrayKit` stays measured; SwiftUI/CDP/AppState orchestration remains on the UI-test gate.
 
-`SliccFileProvider/` is excluded: the appex never launches under unit tests, so its sources would vanish from the report rather than register as zero. Enumeration/read/error logic lives in `SliccTrayKit`; the appex stays a thin `NSFileProvider` adapter. Do not add the appex binary to coverage objects.
+Exclude `SliccFileProvider/` from coverage: the appex does not launch in unit tests, while its measured enumeration/read/error logic lives in `SliccTrayKit`. Do not add the thin adapter binary as a coverage object.
 
-File Provider reads are memory-bound: `readBinaryFile` holds the whole base64 response and decoded `Data` before the appex writes its temp file. No streaming path and no byte limit, so the ceiling is the appex memory budget. Treat very large leader VFS files as unsupported until reads stream to disk.
+File Provider reads are memory-bound: `readBinaryFile` holds the complete base64 response and decoded `Data` before writing. Treat very large leader VFS files as unsupported until reads stream to disk.
 
 ## Simulator QA path
 
