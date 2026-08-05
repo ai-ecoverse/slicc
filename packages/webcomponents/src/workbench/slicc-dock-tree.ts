@@ -11,8 +11,8 @@ import { iconEl } from '../internal/icons.js';
  * flex column of `[top?, center-row?, bottom?]`, where the center row is a
  * flex row of `[left?, middle?, right?]`. Each shown zone hosts a recursive
  * `.dock-tree__split` tree (`row`/`col`) down to `.dock-tree__leaf` containers,
- * each holding a `.dock-tree__tile` (when the opt-in `tiles-movable`
- * attribute is present, an unlocked leaf gets a hover-revealed
+ * each holding a `.dock-tree__tile` (when the opt-in `tiles-movable` gate
+ * resolves true, an unlocked leaf gets a hover-revealed
  * `.dock-tree__tile-move` corner button over the actual `<slicc-surface>`
  * content; the gate defaults off, and a locked leaf always renders none).
  * An empty zone renders as
@@ -212,6 +212,11 @@ export const CHAT_SURFACE_ID = 'chat';
 
 /** Prefix stripped from a sprinkle's surfaceId when deriving its friendly tile label. */
 const SPRINKLE_PREFIX = 'sprinkle:';
+
+/** Whether an attribute/property input is the explicit false string. */
+function isFalseString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'false';
+}
 
 /**
  * Derive a friendly tile-handle label from a raw `surfaceId`: the reserved
@@ -706,7 +711,7 @@ function buildPreviewEl(): HTMLDivElement {
  * when `surfaceId` isn't placed, is `locked`, or the axis has nothing to
  * size against (a lone shown block).
  *
- * @attr tiles-movable - boolean opt-in for internal/external tile drag; reflected by `tilesMovable`, defaults off
+ * @attr tiles-movable - boolean opt-in for internal/external tile drag; absent or `"false"` is off, empty is on; reflected by `tilesMovable`
  * @slot - default; `<slicc-surface>` children, matched into the tree by id
  * @fires dock-tree-change - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired after a drag-drop (internal or external), `placeSurface`, or `removeSurface` mutates the tree
  * @fires dock-tree-resize - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired on divider-drag pointerup, or `setSurfaceSize` actually changing a weight
@@ -779,11 +784,12 @@ export class SliccDockTree extends HTMLElement {
 
   /** Whether internal and external tile drag is enabled; reflected to `tiles-movable`. */
   get tilesMovable(): boolean {
-    return this.hasAttribute('tiles-movable');
+    const value = this.getAttribute('tiles-movable');
+    return value !== null && !isFalseString(value);
   }
 
   set tilesMovable(value: boolean) {
-    this.toggleAttribute('tiles-movable', !!value);
+    this.toggleAttribute('tiles-movable', Boolean(value) && !isFalseString(value));
   }
 
   /** Set/replace the layout; `null` resets to an all-empty tree. */

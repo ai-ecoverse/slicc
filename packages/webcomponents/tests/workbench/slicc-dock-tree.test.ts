@@ -115,6 +115,38 @@ describe('slicc-dock-tree', () => {
       expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
     });
 
+    it('treats an explicit false attribute string as off while an empty attribute is on', () => {
+      const el = mount();
+      el.appendChild(surface('middle'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
+
+      el.setAttribute('tiles-movable', 'false');
+      expect(el.tilesMovable).toBe(false);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
+
+      el.setAttribute('tiles-movable', '');
+      expect(el.tilesMovable).toBe(true);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(1);
+    });
+
+    it('coerces a runtime false property string off while preserving boolean reflection', () => {
+      const el = mount();
+      el.appendChild(surface('middle'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
+
+      el.tilesMovable = true;
+      expect(el.getAttribute('tiles-movable')).toBe('');
+
+      (el as unknown as { tilesMovable: string }).tilesMovable = 'false';
+      expect(el.tilesMovable).toBe(false);
+      expect(el.hasAttribute('tiles-movable')).toBe(false);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
+
+      el.tilesMovable = true;
+      el.tilesMovable = false;
+      expect(el.hasAttribute('tiles-movable')).toBe(false);
+    });
+
     it('a stale move-button pointerdown no-ops after the gate is turned off', () => {
       const el = mountWithTileDrag();
       el.appendChild(surface('middle'));
