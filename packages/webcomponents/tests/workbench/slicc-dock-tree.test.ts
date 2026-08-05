@@ -60,6 +60,13 @@ function mount(): SliccDockTree {
   return el;
 }
 
+/** Mount with the opt-in tile drag gate enabled. */
+function mountWithTileDrag(): SliccDockTree {
+  const el = mount();
+  el.tilesMovable = true;
+  return el;
+}
+
 describe('slicc-dock-tree', () => {
   beforeEach(() => {
     document.body.replaceChildren();
@@ -81,6 +88,84 @@ describe('slicc-dock-tree', () => {
     expect(el.querySelectorAll('.dock-tree__zone')).toHaveLength(0);
     expect(el.querySelector('.dock-tree__row')).toBeNull();
     expect(el.querySelectorAll('.dock-tree__divider')).toHaveLength(0);
+  });
+
+  describe('tile drag gate', () => {
+    it('defaults off and renders no move handle for an unlocked leaf', () => {
+      const el = mount();
+      el.appendChild(surface('middle'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
+
+      expect(el.tilesMovable).toBe(false);
+      expect(el.hasAttribute('tiles-movable')).toBe(false);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
+    });
+
+    it('reflects tilesMovable to tiles-movable and renders the handle when enabled', () => {
+      const el = mount();
+      el.appendChild(surface('middle'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
+
+      el.tilesMovable = true;
+      expect(el.hasAttribute('tiles-movable')).toBe(true);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(1);
+
+      el.removeAttribute('tiles-movable');
+      expect(el.tilesMovable).toBe(false);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
+    });
+
+    it('a stale move-button pointerdown no-ops after the gate is turned off', () => {
+      const el = mountWithTileDrag();
+      el.appendChild(surface('middle'));
+      el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
+      const before = el.getTree();
+      const events: CustomEvent[] = [];
+      el.addEventListener('dock-tree-change', (event) => events.push(event as CustomEvent));
+      const staleButton = el.querySelector('.dock-tree__tile-move') as HTMLElement;
+      el.tilesMovable = false;
+
+      const pointerdown = new PointerEvent('pointerdown', {
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+      });
+      staleButton.dispatchEvent(pointerdown);
+
+      expect(pointerdown.defaultPrevented).toBe(false);
+      expect(el.querySelectorAll('.dock-tree__zone--droppable')).toHaveLength(0);
+      expect(el.querySelector('.dock-tree__ghost--active')).toBeNull();
+      expect(el.getTree()).toEqual(before);
+      expect(events).toHaveLength(0);
+    });
+
+    it('beginExternalDrag no-ops while the gate is off', () => {
+      const el = mount();
+      const before = el.getTree();
+      const events: CustomEvent[] = [];
+      el.addEventListener('dock-tree-change', (event) => events.push(event as CustomEvent));
+
+      el.beginExternalDrag('sprinkle:x');
+      window.dispatchEvent(new PointerEvent('pointermove', { clientX: 10, clientY: 10 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { clientX: 10, clientY: 10 }));
+
+      expect(el.querySelectorAll('.dock-tree__zone')).toHaveLength(0);
+      expect(el.querySelector('.dock-tree__ghost--active')).toBeNull();
+      expect(el.getTree()).toEqual(before);
+      expect(events).toHaveLength(0);
+    });
+
+    it('combines the enabled gate with locked so a locked leaf still has no handle', () => {
+      const el = mountWithTileDrag();
+      el.appendChild(surface('middle'));
+      el.setTree({
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, middle: { ...leaf('middle'), locked: true } },
+      });
+
+      expect(el.tilesMovable).toBe(true);
+      expect(el.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
+    });
   });
 
   it('fills a flex-column parent with no explicit height on the host (host flex:1)', () => {
@@ -571,6 +656,7 @@ describe('slicc-dock-tree', () => {
 
     /** `pointerdown` on `surfaceId`'s move button — starts the drag (re-renders synchronously). */
     function startDragOn(el: SliccDockTree, surfaceId: string): void {
+      el.tilesMovable = true;
       const button = moveButtonFor(el, surfaceId);
       const rect = button.getBoundingClientRect();
       firePointer(button, 'pointerdown', {
@@ -837,7 +923,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('the move button is labeled with the surfaceId (title/aria-label) and shows a grab cursor', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('middle'));
       el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
       const button = moveButtonFor(el, 'middle');
@@ -1114,6 +1200,16 @@ describe('slicc-dock-tree', () => {
       return { x: rect.left + rect.width * fx, y: rect.top + rect.height * fy };
     }
 
+    /** Opt the component into tile drag, then enter its public external-drag path. */
+    function beginEnabledExternalDrag(
+      el: SliccDockTree,
+      surfaceId: string,
+      pointerId?: number
+    ): void {
+      el.tilesMovable = true;
+      el.beginExternalDrag(surfaceId, pointerId);
+    }
+
     it("lands a brand-new leaf via the drop-region path when dropped on a tile's edge, and fires dock-tree-change", () => {
       const el = mount();
       for (const id of ['top', 'left', 'middle', 'right', 'bottom']) el.appendChild(surface(id));
@@ -1123,7 +1219,7 @@ describe('slicc-dock-tree', () => {
       const events: CustomEvent[] = [];
       el.addEventListener('dock-tree-change', (e) => events.push(e as CustomEvent));
 
-      el.beginExternalDrag('sprinkle:rail', 7);
+      beginEnabledExternalDrag(el, 'sprinkle:rail', 7);
       // Empty zones render live as placeholders during ANY drag (internal or external).
       const ghost = el.querySelector('.dock-tree__ghost') as HTMLElement;
       expect(ghost.classList.contains('dock-tree__ghost--active')).toBe(true);
@@ -1156,7 +1252,7 @@ describe('slicc-dock-tree', () => {
     it('lands into an empty zone outright', () => {
       const el = mount();
       el.appendChild(surface('sprinkle:rail'));
-      el.beginExternalDrag('sprinkle:rail');
+      beginEnabledExternalDrag(el, 'sprinkle:rail');
 
       const rightZone = el.querySelector('.dock-tree__zone[data-zone="right"]') as HTMLElement;
       const placeholder = rightZone.querySelector('.dock-tree__empty') as HTMLElement;
@@ -1169,7 +1265,7 @@ describe('slicc-dock-tree', () => {
     it('leaves the leaf slot empty when the surface element has not mounted yet', () => {
       const el = mount();
       // No <slicc-surface surface-id="sprinkle:rail"> appended anywhere.
-      el.beginExternalDrag('sprinkle:rail');
+      beginEnabledExternalDrag(el, 'sprinkle:rail');
       const rightZone = el.querySelector('.dock-tree__zone[data-zone="right"]') as HTMLElement;
       const placeholder = rightZone.querySelector('.dock-tree__empty') as HTMLElement;
       const r = placeholder.getBoundingClientRect();
@@ -1190,7 +1286,7 @@ describe('slicc-dock-tree', () => {
       const events: CustomEvent[] = [];
       el.addEventListener('dock-tree-change', (e) => events.push(e as CustomEvent));
 
-      el.beginExternalDrag('sprinkle:rail');
+      beginEnabledExternalDrag(el, 'sprinkle:rail');
       moveAndDrop(-500, -500);
 
       expect(el.getTree()).toEqual(before);
@@ -1200,7 +1296,7 @@ describe('slicc-dock-tree', () => {
     it('tags every rendered zone droppable during an external drag too', () => {
       const el = mount();
       el.setTree(standardSpec());
-      el.beginExternalDrag('sprinkle:rail');
+      beginEnabledExternalDrag(el, 'sprinkle:rail');
       const zones = Array.from(el.querySelectorAll('.dock-tree__zone')) as HTMLElement[];
       expect(zones.length).toBeGreaterThan(0);
       for (const z of zones) expect(z.classList.contains('dock-tree__zone--droppable')).toBe(true);
@@ -1220,7 +1316,7 @@ describe('slicc-dock-tree', () => {
       // 'middle' is already docked in the `middle` zone — beginExternalDrag it
       // as if it were a fresh drag from outside, then drop on a DIFFERENT
       // zone's tile edge.
-      el.beginExternalDrag('middle');
+      beginEnabledExternalDrag(el, 'middle');
       const targetRect = (el.querySelector('slicc-surface[surface-id="right"]') as HTMLElement)
         .closest('.dock-tree__tile')!
         .getBoundingClientRect();
@@ -1259,7 +1355,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it("the rendered tile's move button uses the friendly label for a 'chat' leaf", () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface(CHAT_SURFACE_ID));
       el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf(CHAT_SURFACE_ID) } });
 
@@ -1273,7 +1369,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it("the rendered tile's move button uses the friendly label for a 'sprinkle:foo' leaf", () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('sprinkle:foo'));
       el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('sprinkle:foo') } });
 
@@ -1314,7 +1410,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('a pinned leaf can still be drag-moved between zones', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       for (const id of ['top', 'left', 'middle', 'right', 'bottom']) el.appendChild(surface(id));
       el.setTree(standardSpec());
       el.setPinned(['left']);
@@ -1414,7 +1510,7 @@ describe('slicc-dock-tree', () => {
     }
 
     it('a locked leaf renders no move button', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('middle'));
       el.setTree({
         ...EMPTY_SPEC,
@@ -1427,7 +1523,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('an unlocked leaf still renders its move button', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('middle'));
       el.setTree({ ...EMPTY_SPEC, zones: { ...EMPTY_SPEC.zones, middle: leaf('middle') } });
       const tile = (el.querySelector('slicc-surface[surface-id="middle"]') as HTMLElement).closest(
@@ -1437,7 +1533,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('tree-level locked: true locks every leaf, in every zone, with no per-leaf flag set', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       for (const id of ['top', 'left', 'middle', 'right', 'bottom']) el.appendChild(surface(id));
       el.setTree({ ...standardSpec(), locked: true });
       for (const id of ['top', 'left', 'middle', 'right', 'bottom']) {
@@ -1449,7 +1545,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('locking a split locks every descendant leaf, but not an unrelated sibling zone', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('a'));
       el.appendChild(surface('b'));
       el.appendChild(surface('c'));
@@ -1476,7 +1572,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('a locked leaf cannot be dragged: no dock-tree-change fires, and the tree is unchanged', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       for (const id of ['top', 'left', 'middle', 'right', 'bottom']) el.appendChild(surface(id));
       const spec = standardSpec();
       spec.zones.left = { type: 'leaf', surfaceId: 'left', locked: true };
@@ -1565,7 +1661,7 @@ describe('slicc-dock-tree', () => {
     });
 
     it('a locked leaf rejects being a drop target: an external drag dropped on its edge cancels cleanly', () => {
-      const el = mount();
+      const el = mountWithTileDrag();
       el.appendChild(surface('locked-one'));
       el.setTree({
         ...EMPTY_SPEC,
