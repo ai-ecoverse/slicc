@@ -23,9 +23,9 @@ enum DictationPermission: Equatable {
 /// Mirrors `SpeechSession` in `packages/webcomponents/src/composer/speech.ts`.
 protocol DictationSession {
     /// Stop listening and resolve the final transcript ("" when nothing).
-    func stop() async -> String
+    @MainActor func stop() async -> String
     /// Abort without a transcript (gesture cancelled, teardown).
-    func cancel()
+    @MainActor func cancel()
 }
 
 /// The audio stack behind the composer's push-to-talk gesture, mirroring the
@@ -58,7 +58,18 @@ protocol DictationEngine {
 /// analogue of the web's "enhanced" whisper engine, minus the 150 MB
 /// download. Server-based recognition is the deliberate fallback, and the
 /// status line discloses which one is active.
+@MainActor
 final class AppleDictationEngine: DictationEngine {
+    private let audioSession: any AudioSessionCoordinating
+
+    convenience init() {
+        self.init(audioSession: AudioSessionCoordinator.shared)
+    }
+
+    init(audioSession: any AudioSessionCoordinating) {
+        self.audioSession = audioSession
+    }
+
     var permission: DictationPermission {
         let speech = SFSpeechRecognizer.authorizationStatus()
         let mic = AVAudioApplication.shared.recordPermission
@@ -108,26 +119,66 @@ final class AppleDictationEngine: DictationEngine {
         // status line discloses).
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
 
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-
+        try audioSession.beginRecording()
         let audioEngine = AVAudioEngine()
         let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
+        do {
+            Self.reinstallTap(on: AppleDictationInputTap(node: input)) { buffer in
+                request.append(buffer)
+            }
+            audioEngine.prepare()
+            try audioEngine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            audioSession.endRecording()
+            throw error
         }
-        audioEngine.prepare()
-        try audioEngine.start()
 
         return AppleDictationSessionBox(
             audioEngine: audioEngine,
+            audioSession: audioSession,
             request: request,
             recognizer: recognizer,
             onPartial: onPartial,
             onError: onError
         )
+    }
+
+    static func reinstallTap(
+        on input: any DictationInputTapping,
+        append: @escaping (AVAudioPCMBuffer) -> Void
+    ) {
+        input.removeTap()
+        let format = input.currentOutputFormat
+        input.installTap(format: format) { buffer, _ in
+            append(buffer)
+        }
+    }
+}
+
+@MainActor
+protocol DictationInputTapping: AnyObject {
+    var currentOutputFormat: AVAudioFormat { get }
+    func removeTap()
+    func installTap(format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock)
+}
+
+@MainActor
+private final class AppleDictationInputTap: DictationInputTapping {
+    private let node: AVAudioInputNode
+
+    init(node: AVAudioInputNode) {
+        self.node = node
+    }
+
+    var currentOutputFormat: AVAudioFormat { node.outputFormat(forBus: 0) }
+
+    func removeTap() {
+        node.removeTap(onBus: 0)
+    }
+
+    func installTap(format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock) {
+        node.installTap(onBus: 0, bufferSize: 1024, format: format, block: block)
     }
 }
 
@@ -147,6 +198,7 @@ enum DictationError: Error, LocalizedError {
 /// hands ownership to the continuation.
 private final class AppleDictationSessionBox: DictationSession, @unchecked Sendable {
     private let audioEngine: AVAudioEngine
+    private let audioSession: any AudioSessionCoordinating
     private let request: SFSpeechAudioBufferRecognitionRequest
     private var task: SFSpeechRecognitionTask?
     private let lock = NSLock()
@@ -156,12 +208,14 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
 
     init(
         audioEngine: AVAudioEngine,
+        audioSession: any AudioSessionCoordinating,
         request: SFSpeechAudioBufferRecognitionRequest,
         recognizer: SFSpeechRecognizer,
         onPartial: @escaping @MainActor @Sendable (String) -> Void,
         onError: @escaping @MainActor @Sendable (String) -> Void
     ) {
         self.audioEngine = audioEngine
+        self.audioSession = audioSession
         self.request = request
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
@@ -240,10 +294,10 @@ private final class AppleDictationSessionBox: DictationSession, @unchecked Senda
         task = nil
     }
 
+    @MainActor
     private func stopAudio() {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: .notifyOthersOnDeactivation)
+        audioSession.endRecording()
     }
 }
