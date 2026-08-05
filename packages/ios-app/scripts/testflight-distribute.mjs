@@ -38,7 +38,11 @@ const p8Path = process.env.APPLE_API_KEY_P8_PATH ?? '';
 const buildNumber = process.env.SLICC_TF_BUILD_NUMBER ?? '';
 const bundleId = process.env.SLICC_TF_BUNDLE_ID || 'com.sliccy.follower';
 const groupName = process.env.SLICC_TF_EXTERNAL_GROUP ?? '';
-const timeoutMinutes = Number(process.env.SLICC_TF_PROCESSING_TIMEOUT_MINUTES || '30');
+// A typo'd value must degrade to the default, not to NaN: a NaN deadline
+// never compares true and would turn the processing poll into an infinite
+// loop with only the CI job timeout as a backstop.
+const parsedTimeout = Number(process.env.SLICC_TF_PROCESSING_TIMEOUT_MINUTES || '30');
+const timeoutMinutes = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30;
 
 if (!groupName) {
   console.log('SLICC_TF_EXTERNAL_GROUP not set — skipping TestFlight distribution.');
@@ -192,7 +196,11 @@ for (;;) {
 console.log(`Build processed: ${build.id}`);
 
 // --- 2. What to Test -------------------------------------------------------
-const whatsNew = (process.env.SLICC_TF_WHATS_NEW || defaultWhatsNew()).slice(0, 4000);
+// Code-point-safe truncation: a plain .slice counts UTF-16 units and can
+// split a surrogate pair (emoji) at the 4000-char ASC limit.
+const whatsNew = [...(process.env.SLICC_TF_WHATS_NEW || defaultWhatsNew())]
+  .slice(0, 4000)
+  .join('');
 const localizations = await must(
   'GET',
   `/builds/${build.id}/betaBuildLocalizations?fields[betaBuildLocalizations]=locale`,
@@ -265,10 +273,15 @@ if (!group) {
 const attach = await asc('POST', `/betaGroups/${group.id}/relationships/builds`, {
   data: [{ id: build.id, type: 'builds' }],
 });
-if (attach.status >= 400) {
+if (attach.status < 400) {
+  console.log(`Build ${buildNumber} attached to tester group "${groupName}".`);
+} else if (firstErrorCode(attach.json) === 'STATE_ERROR' || attach.status === 409) {
+  // Same idempotency contract as the review submission: a build already in
+  // the group is a no-op on re-runs, not a failed release.
+  console.log(`Build ${buildNumber} already in "${groupName}" (${attach.text.slice(0, 200)})`);
+} else {
   console.error(
     `error: attaching build to "${groupName}" failed (HTTP ${attach.status}): ${attach.text.slice(0, 500)}`
   );
   process.exit(1);
 }
-console.log(`Build ${buildNumber} attached to tester group "${groupName}".`);
