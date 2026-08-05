@@ -406,6 +406,28 @@ final class OpenApprovalTests: XCTestCase {
         XCTAssertEqual(wire.responses.map(\.0), ["one", "two", "three", "five", "six"])
     }
 
+    func testTombstoneEvictionNeverExposesALiveRequestToReplay() throws {
+        let store = OpenRequestStore(tombstoneLimit: 1)
+        XCTAssertTrue(store.claim(requestId: "live"))
+        let command = try OpenCommandParser.parse("open fixtureapp://calendar/create")
+        store.insertClaimed(
+            OpenApprovalRequest(
+                requestId: "live", command: command,
+                requesterIdentity: "Leader", sessionIdentity: "Session"),
+            expiresAt: Date(timeIntervalSince1970: 1_750_000_000))
+
+        for requestId in ["filler-one", "filler-two", "filler-three"] {
+            XCTAssertTrue(store.claim(requestId: requestId))
+        }
+        XCTAssertFalse(store.claim(requestId: "live"), "a pending request must stay unreplayable")
+        XCTAssertNotNil(store.request(id: "live"))
+
+        XCTAssertNotNil(store.settle(id: "live"))
+        XCTAssertFalse(store.claim(requestId: "live"), "a settled request stays tombstoned")
+        XCTAssertTrue(store.claim(requestId: "filler-four"))
+        XCTAssertTrue(store.claim(requestId: "live"), "settled tombstones are evictable")
+    }
+
     func testMalformedUnknownAndUnavailableEmitTerminalResponses() {
         let wire = Wire()
         let controller = makeController(wire: wire)

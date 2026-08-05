@@ -17,5 +17,11 @@ final class OpenApprovalUITests: XCTestCase {
             app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS %@", "never-display"))
                 .firstMatch.exists)
+
+        // The fixture is staged through the controller, so Deny settles the
+        // request rather than leaving the card up on unreachable state.
+        app.buttons["open-approval-deny"].tap()
+        XCTAssertTrue(
+            app.buttons["open-approval-deny"].waitForNonExistence(timeout: 10))
     }
 }

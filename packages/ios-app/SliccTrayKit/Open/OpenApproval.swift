@@ -117,10 +117,19 @@ public final class OpenRequestStore {
             return false
         }
         seenRequestOrder.append(requestId)
-        if seenRequestOrder.count > tombstoneLimit {
-            seenRequestIds.remove(seenRequestOrder.removeFirst())
-        }
+        evictOldestSettledTombstone()
         return true
+    }
+
+    /// Eviction skips IDs whose request is still live, so `seenRequestIds`
+    /// stays a superset of `entries.keys` and a pending request can never be
+    /// replayed. The limit is soft while more than `tombstoneLimit` requests
+    /// are outstanding at once.
+    private func evictOldestSettledTombstone() {
+        guard seenRequestOrder.count > tombstoneLimit,
+            let index = seenRequestOrder.firstIndex(where: { entries[$0] == nil })
+        else { return }
+        seenRequestIds.remove(seenRequestOrder.remove(at: index))
     }
 
     public func insertClaimed(_ request: OpenApprovalRequest, expiresAt: Date) {

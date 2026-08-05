@@ -1551,18 +1551,33 @@ extension AppState {
     }
 
     fileprivate func makeOpenApprovalController() -> OpenApprovalController {
-        OpenApprovalController(
+        var send: (FollowerToLeaderMessage) -> Bool = { [weak self] in
+            self?.sendToLeader($0) ?? false
+        }
+        #if DEBUG
+            // No leader answers the fixture, and a send failure would settle
+            // the request as unavailable before the card ever renders.
+            if UITestHooks.stagesOpenApprovalFixture { send = { _ in true } }
+        #endif
+        return OpenApprovalController(
             grantStore: openGrantStore,
-            send: { [weak self] in self?.sendToLeader($0) ?? false },
+            send: send,
             onApprovalsChanged: { [weak self] in self?.openApprovals = $0 },
             onGrantsChanged: { [weak self] in self?.openGrants = $0 })
     }
 
     #if DEBUG
+        /// Enters through `handle` so the controller owns the request: a UI
+        /// test tapping Deny / Allow once / Always allow settles real state
+        /// instead of hitting an approval the controller never saw.
         fileprivate func configureOpenApprovalFixture() {
             guard let fixture = UITestHooks.openApprovalFixture() else { return }
-            openApprovals = [fixture]
             connectionState = .connected
+            openApprovalController.handle(
+                requestId: fixture.requestId,
+                command: fixture.command,
+                requesterIdentity: fixture.requesterIdentity,
+                sessionIdentity: fixture.sessionIdentity)
         }
     #endif
 }
