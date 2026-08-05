@@ -25,11 +25,15 @@ final class KokoroSpeakerTests: XCTestCase {
     }
 
     private final class FakePlayer: KokoroAudioPlaying {
+        struct Failure: Error {}
+
         var samples: [Float] = []
         var stops = 0
         var onPlay: (() -> Void)?
+        var shouldFail = false
 
         func play(samples: [Float], completion: @escaping @MainActor () -> Void) throws {
+            if shouldFail { throw Failure() }
             self.samples = samples
             onPlay?()
         }
@@ -54,6 +58,30 @@ final class KokoroSpeakerTests: XCTestCase {
         func synthesize(text: String, voice: String, speed: Float) async throws -> [Float] {
             try await Task.sleep(for: .seconds(60))
             return []
+        }
+    }
+
+    private actor PreparingSynthesizer: KokoroSpeechSynthesizing {
+        private(set) var prepareCalls = 0
+        private(set) var loadCalls = 0
+        private(set) var synthesisCalls = 0
+        private var loaded = false
+
+        func prepare() async throws {
+            prepareCalls += 1
+            guard !loaded else { return }
+            loadCalls += 1
+            loaded = true
+        }
+
+        func synthesize(text: String, voice: String, speed: Float) async throws -> [Float] {
+            try await prepare()
+            synthesisCalls += 1
+            return [0.25, -0.25]
+        }
+
+        func counts() -> (prepare: Int, load: Int, synthesis: Int) {
+            (prepareCalls, loadCalls, synthesisCalls)
         }
     }
 
@@ -109,16 +137,73 @@ final class KokoroSpeakerTests: XCTestCase {
         XCTAssertTrue(fallback.spoken.isEmpty)
     }
 
+    func testPrewarmIsIdempotentAndFirstSpeakReusesPreparedSynthesizer() async {
+        let synthesizer = PreparingSynthesizer()
+        let player = FakePlayer()
+        let played = expectation(description: "prepared Kokoro PCM played")
+        player.onPlay = { played.fulfill() }
+        var constructions = 0
+        let speaker = KokoroSpeaker(
+            modelDirectory: URL(fileURLWithPath: "/models", isDirectory: true),
+            presenceChecker: Presence(value: true),
+            fallback: FakeSpeaker(),
+            synthesizerFactory: { _ in
+                constructions += 1
+                return synthesizer
+            },
+            player: player)
+
+        await speaker.prewarm()
+        await speaker.prewarm()
+        let countsAfterPrewarm = await synthesizer.counts()
+
+        XCTAssertEqual(constructions, 1)
+        XCTAssertEqual(countsAfterPrewarm.prepare, 1)
+        XCTAssertEqual(countsAfterPrewarm.load, 1)
+        speaker.speak("hello", lang: "en")
+        await fulfillment(of: [played], timeout: 1)
+        let countsAfterSpeak = await synthesizer.counts()
+        XCTAssertEqual(constructions, 1)
+        XCTAssertEqual(countsAfterSpeak.prepare, 2)
+        XCTAssertEqual(countsAfterSpeak.load, 1)
+        XCTAssertEqual(countsAfterSpeak.synthesis, 1)
+    }
+
     func testSynthesisFailureFallsBackToSystemVoice() async {
         let fallback = FakeSpeaker()
         let spoke = expectation(description: "system fallback spoke")
         fallback.onSpeak = { spoke.fulfill() }
-        let speaker = makeSpeaker(fallback: fallback, synthesizer: FailingSynthesizer())
+        var stages: [KokoroSpeaker.FailureStage] = []
+        let speaker = makeSpeaker(
+            fallback: fallback,
+            synthesizer: FailingSynthesizer(),
+            onFailure: { stages.append($0) })
 
         speaker.speak("hello", lang: "en")
         await fulfillment(of: [spoke], timeout: 1)
 
         XCTAssertEqual(fallback.spoken.first?.0, "hello")
+        XCTAssertEqual(stages, [.synthesis])
+    }
+
+    func testPlaybackFailureUsesDistinctFallbackBranch() async {
+        let fallback = FakeSpeaker()
+        let player = FakePlayer()
+        player.shouldFail = true
+        let spoke = expectation(description: "playback failure used system fallback")
+        fallback.onSpeak = { spoke.fulfill() }
+        var stages: [KokoroSpeaker.FailureStage] = []
+        let speaker = makeSpeaker(
+            fallback: fallback,
+            synthesizer: SuccessfulSynthesizer(),
+            player: player,
+            onFailure: { stages.append($0) })
+
+        speaker.speak("hello", lang: "en")
+        await fulfillment(of: [spoke], timeout: 1)
+
+        XCTAssertEqual(fallback.spoken.first?.0, "hello")
+        XCTAssertEqual(stages, [.playback])
     }
 
     func testSynthesisTimeoutFallsBackWithoutWaitingForInference() async {
@@ -216,7 +301,8 @@ final class KokoroSpeakerTests: XCTestCase {
         fallback: FakeSpeaker,
         synthesizer: any KokoroSpeechSynthesizing,
         player: FakePlayer? = nil,
-        timeout: Duration = .seconds(20)
+        timeout: Duration = .seconds(20),
+        onFailure: ((KokoroSpeaker.FailureStage) -> Void)? = nil
     ) -> KokoroSpeaker {
         KokoroSpeaker(
             modelDirectory: URL(fileURLWithPath: "/models", isDirectory: true),
@@ -224,7 +310,8 @@ final class KokoroSpeakerTests: XCTestCase {
             fallback: fallback,
             synthesizerFactory: { _ in synthesizer },
             player: player ?? FakePlayer(),
-            synthesisTimeout: timeout)
+            synthesisTimeout: timeout,
+            onFailure: onFailure)
     }
 
 }

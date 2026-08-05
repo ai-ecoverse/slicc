@@ -1,7 +1,12 @@
 import Foundation
 
 protocol KokoroSpeechSynthesizing: Sendable {
+    func prepare() async throws
     func synthesize(text: String, voice: String, speed: Float) async throws -> [Float]
+}
+
+extension KokoroSpeechSynthesizing {
+    func prepare() async throws {}
 }
 
 /// Local-only wrapper around the verified seven-stage CoreML Kokoro pipeline.
@@ -22,8 +27,15 @@ actor KokoroTTSEngine: KokoroSpeechSynthesizing {
         g2p = G2PModel(modelsDirectory: modelsDirectory)
     }
 
+    func prepare() async throws {
+        guard !didWarmUp else { return }
+        try await store.loadIfNeeded()
+        try await g2p.ensureModelsAvailable()
+        didWarmUp = true
+    }
+
     func synthesize(text: String, voice: String, speed: Float) async throws -> [Float] {
-        try await warmUp()
+        try await prepare()
         let phonemes = try await phonemize(text)
         let vocabulary = try await store.vocabulary()
         let inputIDs = try vocabulary.encode(phonemes)
@@ -36,13 +48,6 @@ actor KokoroTTSEngine: KokoroSpeechSynthesizing {
             speed: speed,
             store: store
         ).samples
-    }
-
-    private func warmUp() async throws {
-        guard !didWarmUp else { return }
-        try await store.loadIfNeeded()
-        try await g2p.ensureModelsAvailable()
-        didWarmUp = true
     }
 
     private func phonemize(_ text: String) async throws -> String {
