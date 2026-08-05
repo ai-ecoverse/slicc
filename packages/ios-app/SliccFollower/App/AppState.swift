@@ -264,35 +264,6 @@ class AppState: ObservableObject {
     private var activeJoinUrl: String = ""
     var activeDisplayName: String?
 
-    /// Attempt to connect to the tray using the current joinUrl.
-    func connect() {
-        connect(to: joinUrl, displayName: nil, rememberInHistory: true)
-    }
-
-    /// A device that has connected before lands in the conversation, not in
-    /// Settings: try the Keychain-stored last-good session on launch and let
-    /// Settings appear only when there is nothing to try. A dead session
-    /// surfaces through the normal retry path (`.gaveUp` presents Settings).
-    /// Gated on the same Auto-reconnect toggle that governs drop recovery.
-    @discardableResult
-    func attemptStoredConnection() -> Bool {
-        guard autoReconnect,
-            connectionState == .disconnected,
-            let credentials = credentialStore.load()
-        else { return false }
-        connect(
-            to: credentials.joinURL.absoluteString,
-            displayName: credentials.displayName,
-            rememberInHistory: false)
-        return true
-    }
-
-    /// Join an iCloud-discovered session. The URL stays out of the Join URL
-    /// field and Recent URLs list; only non-secret metadata is shared.
-    func connectToDiscoveredSession(joinUrl url: String, displayName: String? = nil) {
-        connect(to: url, displayName: displayName, rememberInHistory: false)
-    }
-
     // MARK: - Frozen sessions (freezer rail)
 
     /// Single-flight guard for `new_session`: the leader runs its own
@@ -1743,6 +1714,42 @@ extension AppState {
         if displayLevel == "max" { return (.xhigh, "max") }
         guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
         return (level, nil)
+    }
+}
+
+// MARK: - Connect entry points
+
+/// The three ways a connection starts. They live in an extension so they stay
+/// outside the `AppState` body, which sits against the SwiftLint
+/// `type_body_length` ceiling; the dialing machinery itself stays in the class.
+extension AppState {
+    /// Attempt to connect to the tray using the current joinUrl.
+    func connect() {
+        connect(to: joinUrl, displayName: nil, rememberInHistory: true)
+    }
+
+    /// Join an iCloud-discovered session. The URL stays out of the Join URL
+    /// field and Recent URLs list; only non-secret metadata is shared.
+    func connectToDiscoveredSession(joinUrl url: String, displayName: String? = nil) {
+        connect(to: url, displayName: displayName, rememberInHistory: false)
+    }
+
+    /// A device that has connected before lands in the conversation, not in
+    /// Settings: try the Keychain-stored last-good session on launch and let
+    /// Settings appear only when there is nothing to try. A dead session
+    /// surfaces through the normal retry path (`.gaveUp` presents Settings).
+    /// Gated on the same Auto-reconnect toggle that governs drop recovery.
+    @discardableResult
+    func attemptStoredConnection() -> Bool {
+        guard autoReconnect,
+            connectionState == .disconnected,
+            let credentials = credentialStore.load()
+        else { return false }
+        connect(
+            to: credentials.joinURL.absoluteString,
+            displayName: credentials.displayName,
+            rememberInHistory: false)
+        return true
     }
 }
 
