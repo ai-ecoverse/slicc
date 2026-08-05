@@ -170,8 +170,7 @@ final class VoiceReplyTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(for: "en-US", preferredIdentifier: nil, from: voices)?
-                .identifier,
+            AVSpeechSpeaker.rankedVoice(for: "en-US", from: voices)?.identifier,
             "premium")
     }
 
@@ -182,8 +181,7 @@ final class VoiceReplyTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(for: "en-US", preferredIdentifier: nil, from: voices)?
-                .identifier,
+            AVSpeechSpeaker.rankedVoice(for: "en-US", from: voices)?.identifier,
             "american-compact")
     }
 
@@ -194,8 +192,7 @@ final class VoiceReplyTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(for: "de", preferredIdentifier: nil, from: voices)?
-                .identifier,
+            AVSpeechSpeaker.rankedVoice(for: "de", from: voices)?.identifier,
             "austrian-premium")
     }
 
@@ -206,51 +203,13 @@ final class VoiceReplyTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(for: "fr-FR", preferredIdentifier: nil, from: voices)?
-                .identifier,
+            AVSpeechSpeaker.rankedVoice(for: "fr-FR", from: voices)?.identifier,
             "alpha")
-    }
-
-    func testSameBaseStoredVoiceOverridesAutomaticRanking() {
-        let voices = [
-            voice("automatic", "en-US", .premium),
-            voice("chosen", "en-GB", .default),
-        ]
-
-        XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(
-                for: "en-AU", preferredIdentifier: "chosen", from: voices)?.identifier,
-            "chosen")
-    }
-
-    func testWrongLanguageStoredVoiceFallsBackToRanking() {
-        let voices = [
-            voice("automatic", "en-US", .premium),
-            voice("chosen", "de-DE", .premium),
-        ]
-
-        XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(
-                for: "en", preferredIdentifier: "chosen", from: voices)?.identifier,
-            "automatic")
-    }
-
-    func testEmptyStoredVoiceIdentifierUsesAutomaticRanking() {
-        let voices = [
-            voice("compact", "en-US", .default),
-            voice("premium", "en-US", .premium),
-        ]
-
-        XCTAssertEqual(
-            AVSpeechSpeaker.rankedVoice(
-                for: "en-US", preferredIdentifier: "", from: voices)?.identifier,
-            "premium")
     }
 
     func testUnavailableLanguageHasNoRankedVoice() {
         let voices = [voice("english", "en-US", .premium)]
-        XCTAssertNil(
-            AVSpeechSpeaker.rankedVoice(for: "ja", preferredIdentifier: nil, from: voices))
+        XCTAssertNil(AVSpeechSpeaker.rankedVoice(for: "ja", from: voices))
     }
 
     // MARK: - The loop
