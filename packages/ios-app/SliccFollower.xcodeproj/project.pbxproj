@@ -176,6 +176,7 @@
 		D56461BFD63D34E913F3E06C /* FsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFD7FE981111CAAE8A28C354 /* FsClient.swift */; };
 		D64746441155B8987B3861BF /* TerminalViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8E6A8B63717540E230B11C9 /* TerminalViewModel.swift */; };
 		D8DBCC93A5690762E6EC691F /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FFEFD16CC3B2E95B556EAD5B /* UniformTypeIdentifiers.framework */; };
+		D9DB8C89C53EEB125BAC7613 /* AppStateOpenApproval.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8051D12EAB0E1FE384AB284F /* AppStateOpenApproval.swift */; };
 		DACF7A2937C1C17C39FC178E /* KokoroAneSynthesizer+Types.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B60948933E1B17401E263F /* KokoroAneSynthesizer+Types.swift */; };
 		DB0AF7A14C8E12E49F8C6C7F /* AppGroupInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91602884D860402E88B4868A /* AppGroupInbox.swift */; };
 		DE768243B6F093DD9C0AE32B /* FileProviderDomainLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F4BA4F974367F5D6E64E1CE /* FileProviderDomainLifecycleTests.swift */; };
@@ -396,6 +397,7 @@
 		7BF55967F5396E597EE34125 /* SprinkleDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SprinkleDetailView.swift; sourceTree = "<group>"; };
 		7E727142147B0FB449F418D1 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
 		7EA819197BD89392DB702159 /* TerminalClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalClient.swift; sourceTree = "<group>"; };
+		8051D12EAB0E1FE384AB284F /* AppStateOpenApproval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateOpenApproval.swift; sourceTree = "<group>"; };
 		815944B9A3240A796D690ADF /* FileProviderTrayConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderTrayConnection.swift; sourceTree = "<group>"; };
 		81B8EC8680591A3A1A9BD392 /* LucideIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LucideIcon.swift; sourceTree = "<group>"; };
 		83613696C70A0EF218A19B6D /* FilesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesUITests.swift; sourceTree = "<group>"; };
@@ -651,6 +653,7 @@
 				434BBAD25E91BD0B7D626821 /* AppState.swift */,
 				FDB1EE73D7F0AA0AE4B8BC83 /* AppStateDelivery.swift */,
 				DDE98FF01376D2519FAC3A05 /* AppStateFrozenSessions.swift */,
+				8051D12EAB0E1FE384AB284F /* AppStateOpenApproval.swift */,
 				6A88993C99745347AF830860 /* AppStateTheme.swift */,
 				902A857AB83EAF288ECDDA37 /* FileProviderDomainLifecycle.swift */,
 				4AE19C8ADC78C0F48027D9B5 /* InboundActions.swift */,
@@ -1163,6 +1166,7 @@
 				02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */,
 				2AB3075DAEAC8AC08789EF37 /* AppStateDelivery.swift in Sources */,
 				07FB78A21C6B4886CF4FEA74 /* AppStateFrozenSessions.swift in Sources */,
+				D9DB8C89C53EEB125BAC7613 /* AppStateOpenApproval.swift in Sources */,
 				9494D2F9E9EFAB61FFC71886 /* AppStateTheme.swift in Sources */,
 				5B5741496E7C7EA37979CFF2 /* AttachmentChips.swift in Sources */,
 				A0327A6785996F45F4FED08A /* AttachmentStaging.swift in Sources */,

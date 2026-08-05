@@ -120,11 +120,7 @@ class AppState: ObservableObject {
     private(set) lazy var terminalClient = TerminalClient { [weak self] in
         self?.sendToLeader($0) ?? false
     }
-    private(set) lazy var openApprovalController = OpenApprovalController(
-        grantStore: openGrantStore,
-        send: { [weak self] in self?.sendToLeader($0) ?? false },
-        onApprovalsChanged: { [weak self] in self?.openApprovals = $0 },
-        onGrantsChanged: { [weak self] in self?.openGrants = $0 })
+    private(set) lazy var openApprovalController = makeOpenApprovalController()
     /// Follower-originated CDP for tab previews (#1865).
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
@@ -209,10 +205,7 @@ class AppState: ObservableObject {
                 selectedScoopJid = fixtureScoops.first?.jid
                 leaderActiveScoopJid = fixtureScoops.first?.jid
             }
-            if let fixture = UITestHooks.openApprovalFixture() {
-                openApprovals = [fixture]
-                connectionState = .connected
-            }
+            configureOpenApprovalFixture()
         #endif
     }
 
@@ -1549,6 +1542,31 @@ class AppState: ObservableObject {
 
 }
 
+extension AppState {
+    fileprivate func handleExecMessage(_ message: LeaderToFollowerMessage) {
+        handleApprovalGatedExecMessage(
+            message,
+            requesterIdentity: activeDisplayName ?? "Connected SLICC leader",
+            sessionIdentity: trayId ?? "Current tray")
+    }
+
+    fileprivate func makeOpenApprovalController() -> OpenApprovalController {
+        OpenApprovalController(
+            grantStore: openGrantStore,
+            send: { [weak self] in self?.sendToLeader($0) ?? false },
+            onApprovalsChanged: { [weak self] in self?.openApprovals = $0 },
+            onGrantsChanged: { [weak self] in self?.openGrants = $0 })
+    }
+
+    #if DEBUG
+        fileprivate func configureOpenApprovalFixture() {
+            guard let fixture = UITestHooks.openApprovalFixture() else { return }
+            openApprovals = [fixture]
+            connectionState = .connected
+        }
+    #endif
+}
+
 // MARK: - Teardown and history
 
 extension AppState {
@@ -1732,43 +1750,6 @@ extension AppState {
         if displayLevel == "max" { return (.xhigh, "max") }
         guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
         return (level, nil)
-    }
-}
-
-// MARK: - Terminal sync routing
-
-extension AppState {
-    func resolveOpenApproval(requestId: String, decision: OpenApprovalDecision) {
-        openApprovalController.resolve(requestId: requestId, decision: decision)
-    }
-
-    func revokeOpenGrant(id: UUID) {
-        openApprovalController.revokeGrant(id: id)
-    }
-
-    func revokeAllOpenGrants() {
-        openApprovalController.revokeAllGrants()
-    }
-
-    private func handleExecMessage(_ message: LeaderToFollowerMessage) {
-        switch message {
-        case .execRequest(let requestId, let command, _, _):
-            openApprovalController.handle(
-                requestId: requestId,
-                command: command,
-                requesterIdentity: activeDisplayName ?? "Connected SLICC leader",
-                sessionIdentity: trayId ?? "Current tray")
-        case .execChunk(let requestId, let stream, let data):
-            terminalClient.handleChunk(
-                requestId: requestId, stream: stream, base64Data: data)
-        case .execResponse(let requestId, let exitCode, let signal, let error):
-            terminalClient.handleResponse(
-                requestId: requestId, exitCode: exitCode, signal: signal, error: error)
-        case .execSignal(let requestId, let signal):
-            openApprovalController.cancel(requestId: requestId, signal: signal)
-        default:
-            return
-        }
     }
 }
 
