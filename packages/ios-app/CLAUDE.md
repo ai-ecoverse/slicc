@@ -84,24 +84,22 @@ the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
 ## iCloud Sessions
 
-`AppState.sessionStore` is a read-only `TraySessionSyncStore` from **`packages/swift-traysession`** (launcher publishes; phone joins). `SettingsView` lists sessions by device; a tap joins via `connectToDiscoveredSession`. KVS id `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds degrade to an empty local cache; `SLICC_IOS_NO_ICLOUD=1` archives TestFlight without the entitlement. Never log `joinUrl` or put it in telemetry/accessibility ids.
+`AppState.sessionStore` reads **`packages/swift-traysession`**; the launcher publishes, the phone joins, and `SettingsView` selects sessions. KVS id `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds use an empty cache; `SLICC_IOS_NO_ICLOUD=1` omits the entitlement. Never expose `joinUrl`.
 
 ## Frozen Sessions
 
-`Models/FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`. `FrozenSessionsView` lists past sessions; opening one swaps the transcript read-only. Hooks: `-uiTestFrozenFixture/Empty`.
+`FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`; its view opens saved transcripts read-only. Hook: `-uiTestFrozenFixture/Empty`.
 
 ## Push to Talk
 
-Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak their matching reply: English packs use Kokoro; all other paths use `AVSpeechSynthesizer`. Typed turns stay silent. `AudioSessionCoordinator` is the only `AVAudioSession` owner; it serializes recording against playback and restores the inherited category and preferred sample rate after each lease. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+Hold an empty composer to dictate (`PttController` + `Dictation`/`SFSpeechRecognizer`); release calls `InputBar.submit(_:dictated:)`. Only matching dictated replies speak: English uses Kokoro, other paths use `AVSpeechSynthesizer`; typed turns stay silent. `AudioSessionCoordinator` solely owns `AVAudioSession`, serializes recording/playback, and restores the inherited category/sample rate. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
 
 ### Local Kokoro models
 
-Settings offers the anonymous, pinned ~83 MB Hugging Face pack behind explicit
-Wi-Fi consent, with progress, cancel, retry, and removal; replies never provision
-it. The pack contains nine CoreML stages, two vocabularies, and `af_heart`; its
-marker and colocated cache are deleted together. Background Assets was rejected:
-its Xcode 27 beta spike never delivered/read back on Simulator, and `ba-serve`
-failed TLS key authorization. Weights are not committed. See
+Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after
+Wi-Fi consent with progress, cancel, retry, and removal; replies never provision.
+Pack: nine CoreML stages, two vocabularies, and `af_heart`. Marker/cache delete
+together; weights are not committed. See
 [`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md) for QA.
 
 ## Terminal
