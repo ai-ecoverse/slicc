@@ -59,6 +59,7 @@ mountSlicc({
   features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
   layout, // DockTreeSpec-shaped object — optional pushed layout, typically with locked: true (serialized in handshake welcome)
+  flags, // { [flagId]: value } — optional feature-flag overrides for this embed, e.g. panel-layouts
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
   uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (follower renders UI but advertises no CDP target)
@@ -88,11 +89,12 @@ mountSlicc({
   at mount time and sent in `handshake.welcome`; there is no runtime toggle.
   Separate from `capabilities` (which gates agent _powers_ over the host page);
   features gate _UI surfaces_ shown to the user.
-- **Feature flags are separate:** the `?cherry=1` webapp boot uses the shared registry in
-  `packages/webapp/src/core/feature-flags.ts` with Cherry defaults (`experimental-settings`
-  is off). This is not `SIDE_PANEL_FEATURES` in
-  `packages/chrome-extension/src/cherry-panel-protocol.ts`: that constant is host-provided,
-  mount-time `CherryFeatures` panel visibility sent in `handshake.welcome`, not remote flag config.
+- **Feature flags are separate** from `CherryFeatures`: the `?cherry=1` boot uses the shared
+  registry in `feature-flags.ts` (Cherry default: `experimental-settings` off, hiding the
+  dialog that would toggle these). `flags` on `mountSlicc` is the host's session-only bridge
+  into that registry — same `userToggleable`-and-float gate a local override must pass; see
+  `docs/layouts.md`. Not `SIDE_PANEL_FEATURES` in `cherry-panel-protocol.ts` (extension), which
+  is mount-time `CherryFeatures` panel visibility, not a registry flag.
 - `theme` accepts a `SliccTheme` object (`{ id, name, base, tokens, css?,
 disableShader?, components? }`) that the SDK serializes as JSON in the
   handshake welcome. The follower applies it on boot via `applyCherryTheme`,
@@ -127,7 +129,7 @@ save` in an embed reports it needs one rather than writing your arrangement into
   channelId is pinned (synchronous, single-shot per hello).
 - `hooks.onPermissionRequest(domain)` gates each synthetic CDP domain the leader
   tries to use (return `false` to deny — the SDK answers `-32601`).
-- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction. The follower also emits two transport-layer (not cone-routed) sentinels: `slicc.follower.ready` when the WebRTC channel to the leader connects, and `slicc.follower.disconnected` on transient drops AND on terminal `onGaveUp` (so the host always gets an authoritative "stop emitting" signal — see `wc-follower.ts:onConnectionChange` and `onGaveUp`). Hosts should defer `emitHostEvent` calls until `ready` arrives, since `emitHostEvent` calls that reach the follower before the tray channel is open are silently dropped.
+- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction. The follower also emits two transport-layer sentinels: `slicc.follower.ready` (WebRTC channel connected) and `slicc.follower.disconnected` (transient drop or terminal `onGaveUp`) — see `wc-follower.ts:onConnectionChange`. Defer `emitHostEvent` until `ready`: calls before the tray channel opens are silently dropped.
 - `SliccHandle.emitHostEvent(name, detail?)` is the **host → cone** direction: the host page emits a named event that posts a `host.event` envelope to the follower, which forwards it over the tray channel as `cherry.host_event`; the leader turns it into a `cherry` lick (labeled **Cherry Event**) on the cone. No-ops with a warning before the handshake completes (no `channelId` to pin it to).
 
 ## Host-SDK ↔ iframe synthetic-CDP boundary
@@ -282,15 +284,14 @@ the repo's `node_modules` — the same file a bundler would resolve. **Serve fro
 the repo root** (`npx http-server . -p 8080`) so both relative map paths resolve.
 
 **Screenshots:** set the **screenshot** dropdown to `html2canvas` (it defaults to
-`none`) _before_ Mount — capabilities are fixed at mount time, so changing it
-afterward does nothing. The SDK is built with `tsc` (no bundling), so the
-screenshot path keeps a bare `await import('html2canvas-pro')` (resolved per the
-import map above). The renderer is the maintained **`html2canvas-pro`** fork —
-the original `html2canvas@1.4.1` throws on CSS Color 4 syntax (`color()`,
-`oklch`, …), which is common on real host pages; the capability value stays
-`'html2canvas'` (the strategy), only the implementation lib differs. Cherry's
-screenshot is a best-effort DOM raster of `document.body`, not a pixel-level CDP
-capture.
+`none`) _before_ Mount — capabilities are fixed at mount time. The SDK is built
+with `tsc` (no bundling), so the screenshot path keeps a bare
+`await import('html2canvas-pro')` (resolved per the import map above). The
+renderer is the maintained **`html2canvas-pro`** fork — the original
+`html2canvas@1.4.1` throws on CSS Color 4 syntax (`color()`, `oklch`, …); the
+capability value stays `'html2canvas'`, only the implementation lib differs.
+Cherry's screenshot is a best-effort DOM raster of `document.body`, not a
+pixel-level CDP capture.
 
 ## Transcript export
 

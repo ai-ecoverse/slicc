@@ -128,4 +128,39 @@ describe('CherryHostTransport features', () => {
     await connectPromise;
     expect(h.transport.theme).toBeNull();
   });
+
+  it('exposes flags from handshake welcome', async () => {
+    const h = makeTransport();
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    const flagsJson = JSON.stringify({ 'panel-layouts': 'on' });
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+      joinUrl: 'https://host.example/join?t=X',
+      flags: flagsJson,
+    });
+
+    await connectPromise;
+    expect(h.transport.flags).toBe(flagsJson);
+  });
+
+  it('flags defaults to null when welcome has no flags field', async () => {
+    const h = makeTransport();
+    const connectPromise = h.transport.connect({ timeout: 5000 } as CDPConnectOptions);
+    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: hello.channelId,
+      kind: 'handshake.welcome',
+      joinUrl: 'https://host.example/join?t=X',
+    });
+
+    await connectPromise;
+    expect(h.transport.flags).toBeNull();
+  });
 });

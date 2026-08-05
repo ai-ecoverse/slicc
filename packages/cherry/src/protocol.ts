@@ -70,6 +70,15 @@ export interface CherryHandshakeWelcome {
   layout?: string;
   /** Locked effort level. When set, the thinking-level picker is hidden. */
   effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * JSON-serialized feature-flag overrides (e.g. `{"panel-layouts":"on"}`) the
+   * host wants applied for this embed. Applied once, at boot, session-only —
+   * never written to localStorage. Only takes effect for flags that are
+   * `userToggleable` and allowed for the `cherry` float (the same gate a local
+   * user override must pass); an embedder is not a trusted operator of this
+   * deployment, so it cannot flip a flag nobody marked safe for outside control.
+   */
+  flags?: string;
 }
 
 /**

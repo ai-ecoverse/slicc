@@ -156,6 +156,30 @@ export interface MountSliccOptions {
    * cost/quality tradeoff; the end user cannot override it.
    */
   effortLevel?: EffortLevel;
+  /**
+   * Feature-flag overrides to apply for this embed, e.g.
+   * `{ 'panel-layouts': 'on' }`. Serialized as JSON in the handshake welcome
+   * and applied once at boot — session-only, like `theme`/`layout`; never
+   * persisted to the follower's localStorage.
+   *
+   * Only takes effect for flags the follower's registry marks
+   * `userToggleable` and allows for the `cherry` float — the same gate a
+   * local end-user override must pass. An embedder is not a trusted operator
+   * of the SLICC deployment it's pointed at, so it cannot flip a flag nobody
+   * decided was safe for outside control; an id that fails the gate (or isn't
+   * recognized) is silently dropped rather than applied partially.
+   *
+   * `panel-layouts` is the flag this exists for today: it ships `off` by
+   * default and, inside a Cherry embed, the "Experimental features…" dialog
+   * that would otherwise let a user flip it is itself hidden (Cherry sets
+   * `experimental-settings: off`) — so pushing it here is the only way to
+   * turn panels on for an embed without changing the target deployment's
+   * worker-level `FEATURE_FLAGS`. See `docs/layouts.md`.
+   *
+   * @example
+   * mountSlicc({ flags: { 'panel-layouts': 'on' }, layout: { ... } });
+   */
+  flags?: Record<string, string>;
 }
 
 export interface SliccHandle {

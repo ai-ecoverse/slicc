@@ -74,6 +74,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   private _theme: string | null = null;
   private _layout: string | null = null;
   private _effortLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null = null;
+  private _flags: string | null = null;
   /**
    * Wire version negotiated with the host SDK. connect() posts one hello per
    * SUPPORTED_CHERRY_PROTOCOL_VERSIONS entry; the version of the welcome the
@@ -201,6 +202,14 @@ export class CherryHostTransport extends SyntheticCdpTransport {
    */
   get effortLevel(): 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null {
     return this._effortLevel;
+  }
+
+  /**
+   * JSON-serialized feature-flag overrides from the host SDK's
+   * handshake.welcome. Null when the host did not supply any.
+   */
+  get flags(): string | null {
+    return this._flags;
   }
 
   /** The wire version negotiated at handshake (own version until connected). */
@@ -483,6 +492,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     this._theme = env.theme ?? null;
     this._layout = env.layout ?? null;
     this._effortLevel = env.effortLevel ?? null;
+    this._flags = env.flags ?? null;
     this._features = env.features ?? {
       terminal: true,
       files: true,

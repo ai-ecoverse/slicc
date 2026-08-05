@@ -1,6 +1,6 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
-import { isFeatureEnabled } from '../../core/feature-flags.js';
+import { applyHostFlagOverrides, isFeatureEnabled } from '../../core/feature-flags.js';
 import { createLogger } from '../../core/logger.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
@@ -345,6 +345,20 @@ export async function mountWcUiFollower(
   // synchronous with no flash.
   if (isCherry && prelude.cherryTransport?.theme) {
     applyCherryTheme(prelude.cherryTransport.theme);
+  }
+  // Apply host-pushed feature-flag overrides BEFORE the panel-layouts gate
+  // check below — this is what lets a host's own pushed layout turn the flag
+  // on for itself, rather than depending on this deployment's worker-level
+  // FEATURE_FLAGS. Session-only (see applyHostFlagOverrides): never persisted.
+  if (isCherry && prelude.cherryTransport?.flags) {
+    try {
+      const pushedFlags = JSON.parse(prelude.cherryTransport.flags);
+      if (pushedFlags && typeof pushedFlags === 'object' && !Array.isArray(pushedFlags)) {
+        applyHostFlagOverrides(pushedFlags);
+      }
+    } catch (err) {
+      log.warn('follower: host-pushed flags were not valid JSON — ignoring', err);
+    }
   }
   // A host-pushed layout replaces `mountWcShell`'s chat-only default
   // wholesale. Applied directly, like theme — never through

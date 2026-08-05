@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  applyHostFlagOverrides,
   coerceFeatureFlagValue,
   FEATURE_FLAG_STORAGE_KEY,
   getFeatureValue,
@@ -176,5 +177,52 @@ describe('feature flag registry', () => {
     const unknownId = 'not-registered' as 'experimental-settings';
     expect(resolveFlagValue(unknownId, 'standalone')).toBeUndefined();
     expect(isFeatureEnabled(unknownId)).toBe(false);
+  });
+});
+
+describe('applyHostFlagOverrides (Cherry-pushed session flags)', () => {
+  it('applies a userToggleable flag for the active float', () => {
+    initFeatureFlags('cherry');
+    expect(applyHostFlagOverrides({ 'panel-layouts': 'on' })).toEqual({ 'panel-layouts': 'on' });
+    expect(getFeatureValue('panel-layouts')).toBe('on');
+  });
+
+  it('drops a flag that is not userToggleable, even though the worker trusts centralValues for it', () => {
+    initFeatureFlags('cherry');
+    expect(applyHostFlagOverrides({ 'experimental-settings': 'on' })).toEqual({});
+    expect(getFeatureValue('experimental-settings')).toBe('off');
+  });
+
+  it('drops an unrecognized id and a non-string value without throwing', () => {
+    initFeatureFlags('cherry');
+    expect(
+      applyHostFlagOverrides({
+        'not-a-real-flag': 'on',
+        'panel-layouts': true as unknown as string,
+      })
+    ).toEqual({});
+  });
+
+  it('never persists to localStorage — session-only, like a pushed theme/layout', () => {
+    initFeatureFlags('cherry');
+    applyHostFlagOverrides({ 'panel-layouts': 'on' });
+    expect(readFeatureFlagOverrides()).toEqual({});
+  });
+
+  it('is reset on the next initFeatureFlags call (next boot)', () => {
+    initFeatureFlags('cherry');
+    applyHostFlagOverrides({ 'panel-layouts': 'on' });
+    expect(getFeatureValue('panel-layouts')).toBe('on');
+
+    initFeatureFlags('cherry');
+    expect(getFeatureValue('panel-layouts')).toBe('off');
+  });
+
+  it('a local user override still wins over a host-pushed value', () => {
+    initFeatureFlags('cherry');
+    applyHostFlagOverrides({ 'panel-layouts': 'on' });
+    expect(resolveFlags('cherry', {}, { 'panel-layouts': 'off' })).toEqual(
+      expect.objectContaining({ 'panel-layouts': 'off' })
+    );
   });
 });

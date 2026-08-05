@@ -321,6 +321,48 @@ describe('mountSliccImpl', () => {
     handle.destroy();
   });
 
+  it('serializes options.flags as JSON in the handshake.welcome envelope', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; flags?: string }[] = [];
+    const flags = { 'panel-layouts': 'on' };
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      flags,
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.testReceive({
+      cherry: 2,
+      channelId: 'ch-flags',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.flags).toBe(JSON.stringify(flags));
+    handle.destroy();
+  });
+
+  it('omits flags from the welcome envelope when options.flags is undefined', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; flags?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.testReceive({
+      cherry: 2,
+      channelId: 'ch-no-flags',
+      kind: 'handshake.hello',
+    } as never);
+    const welcome = posted.find((e) => e.kind === 'handshake.welcome');
+    expect(welcome?.flags).toBeUndefined();
+    handle.destroy();
+  });
+
   it('normalizes a trailing-slash sliccOrigin to the bare origin for postMessage targeting', async () => {
     const container = document.createElement('div');
     const posted: { kind?: string; channelId?: string }[] = [];
