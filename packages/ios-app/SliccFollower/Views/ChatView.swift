@@ -432,16 +432,18 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
-            shellSessionCluster
+            // Compact: the workbench overlays the conversation, so the
+            // cluster goes with the rest of the chat toolbar.
+            shellSessionCluster(suppressed: presentation.activeSurface != nil)
         }
     }
 
-    /// The floating session cluster: shell chrome above the rail. Hidden
-    /// with the rest of the chat toolbar while a workbench overlay or
-    /// full-screen browsing owns the screen.
+    /// The floating session cluster: shell chrome above the rail. It tracks
+    /// the chat toolbar, so each branch passes its own `suppressed` rule, and
+    /// full-screen browsing hides it in both.
     @ViewBuilder
-    private var shellSessionCluster: some View {
-        if !isBrowserFullScreen, presentation.activeSurface == nil, !fixtureMode {
+    private func shellSessionCluster(suppressed: Bool) -> some View {
+        if !isBrowserFullScreen, !suppressed, !fixtureMode {
             SessionControlsCluster(
                 showSettings: $showSettings,
                 showFrozenSessions: $showFrozenSessions,
@@ -482,7 +484,9 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
-            shellSessionCluster
+            // Regular split keeps the conversation beside the workbench, so
+            // the cluster stays with it — same rule as the chat toolbar.
+            shellSessionCluster(suppressed: false)
         }
     }
 
