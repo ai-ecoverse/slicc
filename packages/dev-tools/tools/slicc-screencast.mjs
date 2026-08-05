@@ -5,10 +5,10 @@
  * Connects to a Chrome remote-debugging port (the dev harness's Chrome on
  * :9222), attaches to the leader UI page target, and streams
  * `Page.startScreencast` frames to disk as individual JPEG/PNG files plus a
- * `manifest.json`. Drive the UI however you like (slicc-debug chat/shell,
- * playwright-cli, or by hand) while it records, then stop it. Review the
- * frames directly, or pass `--video` to assemble a webm (best-effort; needs
- * ffmpeg on PATH or Playwright's bundled ffmpeg).
+ * `manifest.json`. Drive the UI however you like (slicc-cdp prompt,
+ * slicc-debug shell, playwright-cli, or by hand) while it records, then stop
+ * it. Review the frames directly, or pass `--video` to assemble a webm
+ * (best-effort; needs ffmpeg on PATH or Playwright's bundled ffmpeg).
  *
  * Usage:
  *   node packages/dev-tools/tools/slicc-screencast.mjs [options]

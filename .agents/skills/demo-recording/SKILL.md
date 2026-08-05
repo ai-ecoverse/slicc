@@ -60,9 +60,9 @@ Frames + `manifest.json` land in `--out`. Review them directly (open a few
 
 Pick whichever fits — the recorder just captures whatever the tab shows:
 
-- **`slicc-debug.mjs`** (host, over the same CDP port) — drive the agent/shell:
-  `node packages/dev-tools/tools/slicc-debug.mjs chat "open the reference page"`
-  or `… shell "playwright-cli ..."`.
+- **`slicc-cdp` + `slicc-debug.mjs`** (host, over the same CDP port) — drive the
+  agent with `.agents/skills/cdp-smoke-test/scripts/slicc-cdp prompt "open the reference page"`
+  or the shell with `node packages/dev-tools/tools/slicc-debug.mjs shell "playwright-cli ..."`.
 - **A Playwright e2e test** — the deterministic path. Boot the leader with the
   harness helpers (`seedLocalLlmProvider` → `gotoLeader` → `waitForSW`), then
   `submitUserMessage(page, …)` + `waitForTurnComplete(page)` per phase. Spawn the
