@@ -13,7 +13,16 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         case open
         case dead
         case none
+        case `static`
     }
+
+    static let noiseCellSize = 1.0
+    static let noiseFramesPerSecond = 12.0
+    static let noiseOpacity = 0.72
+    static let noiseLuminance = [0.08, 0.36, 0.68, 0.94]
+    static let frozenNoiseSeed: UInt32 = 0x51CC_A11E
+    static let noiseFrameSalt: UInt32 = 0x9E37_79B9
+    static let noiseEyeSalt: UInt32 = 0x85EB_CA6B
 
     struct Point: Equatable, Sendable {
         let x: Double
@@ -97,17 +106,21 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
 }
 
 extension ScoopSummary {
-    func avatarGeometry(sideLength: Double = 26) -> SliccAgentAvatarGeometry {
+    func avatarGeometry(
+        sideLength: Double = 26,
+        eyesOverride: SliccAgentAvatarGeometry.EyeState? = nil
+    ) -> SliccAgentAvatarGeometry {
         let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
         let scoopStatus = status
-        let eyes: SliccAgentAvatarGeometry.EyeState =
+        let lifecycleEyes: SliccAgentAvatarGeometry.EyeState =
             switch scoopStatus.lifecycle {
             case .broken: .dead
             case .initializing: .none
             case .working, .idle, .unknown: .open
             }
         return .init(
-            type: type, color: avatarColor, eyes: eyes, fill: scoopStatus.fullness,
+            type: type, color: avatarColor, eyes: eyesOverride ?? lifecycleEyes,
+            fill: scoopStatus.fullness,
             blink: scoopStatus.lifecycle == .working,
             sideLength: sideLength)
     }

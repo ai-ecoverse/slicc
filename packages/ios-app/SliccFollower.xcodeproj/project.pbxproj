@@ -104,6 +104,7 @@
 		941662107E886C9BA55F2658 /* SliccAgentAvatarGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A30A613A67EAAAA1298638B /* SliccAgentAvatarGeometryTests.swift */; };
 		9494D2F9E9EFAB61FFC71886 /* AppStateTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A88993C99745347AF830860 /* AppStateTheme.swift */; };
 		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
+		97FA17E58CFA5DDBBC6AD562 /* ComposerKeyboardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86213C633DA21B9B2DC3D8F4 /* ComposerKeyboardUITests.swift */; };
 		9AD8326007279D3F37D57C9C /* ICloudSessionList.swift in Sources */ = {isa = PBXBuildFile; fileRef = D158A5ACE0AC9C2CE6FEFCD3 /* ICloudSessionList.swift */; };
 		9B4F7F9FE42C1F6FA3516BB6 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 315100B263D51211AE7263F0 /* ShareViewController.swift */; };
 		9BC89CF40CBEAF067487B455 /* SliccTraySession in Frameworks */ = {isa = PBXBuildFile; productRef = 94A995EE85CB8B2E61D3B1C2 /* SliccTraySession */; };
@@ -128,7 +129,6 @@
 		BD662161506DEE603F8854EF /* ConnectionStateUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37492C8E3201CB2A14C6BD12 /* ConnectionStateUITests.swift */; };
 		BE805A88112FF5627440F9A2 /* MemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A73EE3E38934A8DE13AF2BD /* MemoryStore.swift */; };
 		C1CC6CC22FA5B076B8FF0A7F /* ThemePaletteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 507969DA6DFEA7E053C53F32 /* ThemePaletteTests.swift */; };
-		C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */; };
 		C5E734A68251BBE47EBE506D /* NewSessionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7EF3911627A88E5691B3949 /* NewSessionUITests.swift */; };
 		C6725B6E16D0AB3B9C3B7CD4 /* ChatPresentationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CFD824F932894C842D4886D /* ChatPresentationState.swift */; };
 		C6E628E97FBA4327029F4EA8 /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74436609529E6D4A056393E9 /* SyncProtocol.swift */; };
@@ -349,6 +349,7 @@
 		841A713C553168F264F8D4DE /* RemoteTabCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTabCard.swift; sourceTree = "<group>"; };
 		844647F0DBCA8CC0C840D09A /* AttachmentStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentStaging.swift; sourceTree = "<group>"; };
 		8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PttControllerTests.swift; sourceTree = "<group>"; };
+		86213C633DA21B9B2DC3D8F4 /* ComposerKeyboardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerKeyboardUITests.swift; sourceTree = "<group>"; };
 		874A883BDEF9351B647F4EE0 /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		88219CD0B963530C38CE40FB /* SliccFollowerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SliccFollowerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8859CA5D8E4C5BB29158CCF3 /* ModelProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProtocolTests.swift; sourceTree = "<group>"; };
@@ -357,7 +358,6 @@
 		8D76B8F603084A6021B6DD6B /* KeepaliveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeepaliveTests.swift; sourceTree = "<group>"; };
 		902A857AB83EAF288ECDDA37 /* FileProviderDomainLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderDomainLifecycle.swift; sourceTree = "<group>"; };
 		91602884D860402E88B4868A /* AppGroupInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroupInbox.swift; sourceTree = "<group>"; };
-		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
 		955A92ECF3F67770059EF5A5 /* TerminalLineEndings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalLineEndings.swift; sourceTree = "<group>"; };
 		9572AB87A7ACEC6740682685 /* FrozenSessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessionsTests.swift; sourceTree = "<group>"; };
 		96512A32BEB09D12336C0056 /* FileProviderExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileProviderExtension.swift; sourceTree = "<group>"; };
@@ -662,6 +662,7 @@
 			isa = PBXGroup;
 			children = (
 				AFCAA64AD099330D7C84B889 /* AttachmentUITests.swift */,
+				86213C633DA21B9B2DC3D8F4 /* ComposerKeyboardUITests.swift */,
 				FD162F974FA1F7C5C51E1727 /* ConnectionRouteUITests.swift */,
 				37492C8E3201CB2A14C6BD12 /* ConnectionStateUITests.swift */,
 				C27B23D49C2C36F1A276CF23 /* DockUITests.swift */,
@@ -691,7 +692,6 @@
 				65F5E877CC67E8790899B164 /* AvatarIsolationView.swift */,
 				3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */,
 				11B186EDFDE184DC8B3215C4 /* ChatView.swift */,
-				940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */,
 				1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */,
 				C1FF5A8AF177D5B78AFD87FD /* DockModel.swift */,
 				58899461D44B42F512AD0645 /* DockRail.swift */,
@@ -1039,7 +1039,6 @@
 				8EEACE6ED76E43E36FC9F0AB /* ChatFixture.swift in Sources */,
 				C6725B6E16D0AB3B9C3B7CD4 /* ChatPresentationState.swift in Sources */,
 				73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */,
-				C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */,
 				B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */,
 				2A750B8B02200270E97C8D6E /* Dictation.swift in Sources */,
 				3154CC4D9E37E6D8031FCC3F /* DictationPriming.swift in Sources */,
@@ -1104,6 +1103,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CBD602492763F0ABCF40B586 /* AttachmentUITests.swift in Sources */,
+				97FA17E58CFA5DDBBC6AD562 /* ComposerKeyboardUITests.swift in Sources */,
 				67EC4D5BDDC4014A965FF5B4 /* ConnectionRouteUITests.swift in Sources */,
 				BD662161506DEE603F8854EF /* ConnectionStateUITests.swift in Sources */,
 				7517352B67786422613418E5 /* DockUITests.swift in Sources */,
