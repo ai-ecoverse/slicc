@@ -452,6 +452,18 @@ whose node is `null` collapses entirely.
   the same state machine.
 - `setPinned(surfaceIds)` — non-removable leaves (runtime-only, never serialized).
 
+Drag-drop: every unlocked leaf reveals a `.dock-tree__tile-move` button on hover
+over its top-left corner; hovering another tile computes a `DropRegion`
+(`n`/`s`/`e`/`w`/`center`) and splits accordingly.
+
+The `tilesMovable` / `tiles-movable` gate is set by the webapp only when
+`panel-layouts` resolves on at boot. Default off renders no move button and makes
+internal/external drag starts no-op. When enabled, the nearest-edge-or-center-box
+region maps `e`/`w` to a `row` split (side-by-side and nestable for more columns),
+and `n`/`s` or `center` to a `col` split (stacked). Dropping on an empty zone
+placeholder makes the leaf that zone's root; dropping on the dragged tile, a
+locked tile, or nowhere valid cancels without an event, and locking always wins.
+
 Dock-tree drag is dormant in the shipped webapp. With `panel-layouts` off,
 `tiles-movable` stays off; with it on, `panelize-shell.ts` calls
 `shellRow.replaceWith(layout)`, removing the dock-tree, and rearrangement moves to
