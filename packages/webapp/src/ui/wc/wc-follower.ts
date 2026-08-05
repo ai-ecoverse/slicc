@@ -335,13 +335,9 @@ export async function mountWcUiFollower(
     return mountWcUiLive(app, bootLog, 'standalone');
   }
 
-  // Resolve once at boot, matching the live path: feature flags have no live
-  // refresh, and changing layout engines after mount would strand live panels.
-  const panelsRequested = isFeatureEnabled('panel-layouts');
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient - those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
-  boot.refs.dockTree.tilesMovable = panelsRequested;
 
   // Apply host-supplied theme AFTER the shell mounts — mountWcShell's
   // ensureSystemTheme() sets body data-theme from OS preference, so we must
@@ -364,6 +360,10 @@ export async function mountWcUiFollower(
       log.warn('follower: host-pushed flags were not valid JSON — ignoring', err);
     }
   }
+  // Resolve once at boot, matching the live path: feature flags have no live
+  // refresh, and changing layout engines after mount would strand live panels.
+  const panelsRequested = isFeatureEnabled('panel-layouts');
+  boot.refs.dockTree.tilesMovable = panelsRequested;
   // A host-pushed layout replaces `mountWcShell`'s chat-only default
   // wholesale. Applied directly, like theme — never through
   // `wireDockTreePersistence` (never wired for followers at all), so a
