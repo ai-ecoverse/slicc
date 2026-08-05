@@ -10,6 +10,58 @@ struct SliccAgentAvatarAttitude: Equatable, Sendable {
     let pitch: Double
 }
 
+private struct SliccAgentAvatarTiltBaseline {
+    static let defaultWindowDuration: TimeInterval = 60
+
+    private struct Sample {
+        let attitude: SliccAgentAvatarAttitude
+        let timestamp: TimeInterval
+    }
+
+    private let windowDuration: TimeInterval
+    private var samples: [Sample] = []
+    private var firstSampleIndex = 0
+    private var rollSum = 0.0
+    private var pitchSum = 0.0
+
+    init(windowDuration: TimeInterval = Self.defaultWindowDuration) {
+        self.windowDuration = max(0, windowDuration)
+    }
+
+    mutating func deviation(
+        for attitude: SliccAgentAvatarAttitude, at timestamp: TimeInterval
+    ) -> SliccAgentAvatarAttitude {
+        samples.append(.init(attitude: attitude, timestamp: timestamp))
+        rollSum += attitude.roll
+        pitchSum += attitude.pitch
+        discardSamples(olderThan: timestamp - windowDuration)
+
+        let count = Double(samples.count - firstSampleIndex)
+        return .init(
+            roll: attitude.roll - rollSum / count,
+            pitch: attitude.pitch - pitchSum / count)
+    }
+
+    mutating func reset() {
+        samples.removeAll(keepingCapacity: true)
+        firstSampleIndex = 0
+        rollSum = 0
+        pitchSum = 0
+    }
+
+    private mutating func discardSamples(olderThan cutoff: TimeInterval) {
+        while firstSampleIndex < samples.count, samples[firstSampleIndex].timestamp < cutoff {
+            rollSum -= samples[firstSampleIndex].attitude.roll
+            pitchSum -= samples[firstSampleIndex].attitude.pitch
+            firstSampleIndex += 1
+        }
+        if firstSampleIndex >= 1_024, firstSampleIndex * 2 >= samples.count {
+            samples.removeFirst(firstSampleIndex)
+            firstSampleIndex = 0
+        }
+    }
+}
+
 enum SliccAgentAvatarInterfaceOrientation: Equatable, Sendable {
     case portrait
     case portraitUpsideDown
@@ -86,7 +138,6 @@ final class FixedSliccAgentAvatarTiltSource: SliccAgentAvatarTiltSource {
 /// Pure conversion from device attitude to the avatar geometry's pupil offset.
 struct SliccAgentAvatarTiltMapping: Sendable {
     static let defaultFullTravelTilt = Double.pi / 6
-    static let defaultSmoothingFactor = 0.18
 
     let fullTravelTilt: Double
 
@@ -125,38 +176,50 @@ struct SliccAgentAvatarTiltMapping: Sendable {
         }
     }
 
-    func smoothedOffset(
+    func rateLimitedOffset(
         from current: SliccAgentAvatarGeometry.Point,
         toward target: SliccAgentAvatarGeometry.Point,
-        factor: Double = Self.defaultSmoothingFactor
+        maximumDistance: Double
     ) -> SliccAgentAvatarGeometry.Point {
-        let amount = min(1, max(0, factor))
+        let x = target.x - current.x
+        let y = target.y - current.y
+        let distance = hypot(x, y)
+        let allowedDistance = max(0, maximumDistance)
+        guard distance > allowedDistance, distance > 0 else { return target }
+        let scale = allowedDistance / distance
         return .init(
-            x: current.x + (target.x - current.x) * amount,
-            y: current.y + (target.y - current.y) * amount)
+            x: current.x + x * scale,
+            y: current.y + y * scale)
     }
 }
 
 @MainActor
 final class SliccAgentAvatarTiltController: ObservableObject {
+    private static let maximumSampleInterval: TimeInterval = 1.0 / 30.0
+
     @Published private(set) var pupilOffset = SliccAgentAvatarGeometry.Point(x: 0, y: 0)
 
     private let source: any SliccAgentAvatarTiltSource
     private let mapping: SliccAgentAvatarTiltMapping
     private let interfaceOrientation: @MainActor () -> SliccAgentAvatarInterfaceOrientation
+    private let clock: @MainActor () -> TimeInterval
     private var geometry: SliccAgentAvatarGeometry?
+    private var baseline = SliccAgentAvatarTiltBaseline()
+    private var lastSampleTime: TimeInterval?
     private var motionDisabled = false
     private var isUpdating = false
 
     init(
         source: any SliccAgentAvatarTiltSource,
         mapping: SliccAgentAvatarTiltMapping = .init(),
+        clock: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         interfaceOrientation: @escaping @MainActor () -> SliccAgentAvatarInterfaceOrientation = {
             SliccAgentAvatarTiltController.currentInterfaceOrientation
         }
     ) {
         self.source = source
         self.mapping = mapping
+        self.clock = clock
         self.interfaceOrientation = interfaceOrientation
     }
 
@@ -178,15 +241,25 @@ final class SliccAgentAvatarTiltController: ObservableObject {
         if isUpdating { source.stopDeviceMotionUpdates() }
         isUpdating = false
         pupilOffset = .init(x: 0, y: 0)
+        baseline.reset()
+        lastSampleTime = nil
     }
 
     private func receive(_ attitude: SliccAgentAvatarAttitude) {
         guard let geometry else { return }
+        let sampleTime = clock()
+        let relativeAttitude = baseline.deviation(for: attitude, at: sampleTime)
         let target = mapping.pupilOffset(
-            for: attitude, geometry: geometry, reduceMotion: motionDisabled,
+            for: relativeAttitude, geometry: geometry, reduceMotion: motionDisabled,
             isDeviceMotionAvailable: source.isDeviceMotionAvailable,
             orientation: interfaceOrientation())
-        pupilOffset = mapping.smoothedOffset(from: pupilOffset, toward: target)
+        let elapsed = lastSampleTime.map {
+            min(max(0, sampleTime - $0), Self.maximumSampleInterval)
+        } ?? 0
+        lastSampleTime = sampleTime
+        pupilOffset = mapping.rateLimitedOffset(
+            from: pupilOffset, toward: target,
+            maximumDistance: geometry.eyeDiameter * elapsed)
     }
 
     private static var currentInterfaceOrientation: SliccAgentAvatarInterfaceOrientation {

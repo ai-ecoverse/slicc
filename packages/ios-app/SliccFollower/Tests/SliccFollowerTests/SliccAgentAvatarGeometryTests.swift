@@ -244,16 +244,88 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
             .init(x: 0, y: 0))
     }
 
-    func testTiltControllerStartsOnceAndPublishesSmoothedOffset() {
+    func testTiltControllerStartsOnceAndUsesFirstSampleAsNeutralTilt() {
         let source = FixedSliccAgentAvatarTiltSource(roll: 0.2, pitch: 0.1)
         let controller = SliccAgentAvatarTiltController(source: source)
 
         controller.update(geometry: tiltGeometry, motionDisabled: false)
 
         XCTAssertEqual(source.startCallCount, 1)
-        XCTAssertGreaterThan(controller.pupilOffset.x, 0)
-        XCTAssertLessThan(controller.pupilOffset.y, 0)
-        XCTAssertGreaterThan(hypot(controller.pupilOffset.x, controller.pupilOffset.y), 0)
+        XCTAssertEqual(controller.pupilOffset, .init(x: 0, y: 0))
+    }
+
+    func testTiltControllerKeepsConstantTiltCentered() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
+        let controller = SliccAgentAvatarTiltController(source: source, clock: { time })
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+
+        source.emit(.init(roll: 0.2, pitch: 0.1))
+        time = 1
+        source.emit(.init(roll: 0.2, pitch: 0.1))
+
+        XCTAssertEqual(controller.pupilOffset, .init(x: 0, y: 0))
+    }
+
+    func testTiltControllerMovesRelativeToAverageTilt() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
+        let controller = SliccAgentAvatarTiltController(source: source, clock: { time })
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+        source.emit(.zero)
+
+        time = 1
+        source.emit(.init(roll: 0.04, pitch: 0.02))
+
+        let expected = tiltMapping.pupilOffset(
+            for: .init(roll: 0.02, pitch: 0.01), geometry: tiltGeometry,
+            reduceMotion: false, isDeviceMotionAvailable: true)
+        assertPoint(controller.pupilOffset, equals: expected)
+    }
+
+    func testTiltControllerAverageOnlyIncludesLastMinute() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
+        let controller = SliccAgentAvatarTiltController(source: source, clock: { time })
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+        source.emit(.zero)
+        time = 59
+        source.emit(.init(roll: 0.2, pitch: 0.1))
+
+        time = 61
+        source.emit(.init(roll: 0.2, pitch: 0.1))
+
+        assertPoint(controller.pupilOffset, equals: .init(x: 0, y: 0))
+    }
+
+    func testTiltControllerLimitsSpeedToOneEyeDiameterPerSecond() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
+        let controller = SliccAgentAvatarTiltController(source: source, clock: { time })
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+        source.emit(.zero)
+
+        time = 0.01
+        source.emit(.init(roll: 10, pitch: -10))
+
+        XCTAssertEqual(
+            hypot(controller.pupilOffset.x, controller.pupilOffset.y),
+            tiltGeometry.eyeDiameter * 0.01, accuracy: accuracy)
+    }
+
+    func testTiltControllerLimitsMovementAfterLongUpdateGap() {
+        let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
+        let controller = SliccAgentAvatarTiltController(source: source, clock: { time })
+        controller.update(geometry: tiltGeometry, motionDisabled: false)
+        source.emit(.zero)
+
+        time = 60
+        source.emit(.init(roll: 10, pitch: -10))
+
+        XCTAssertEqual(
+            hypot(controller.pupilOffset.x, controller.pupilOffset.y),
+            tiltGeometry.eyeDiameter / 30, accuracy: accuracy)
     }
 
     func testTiltControllerDoesNotStartTwiceWhileUpdating() {
@@ -268,35 +340,37 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
 
     func testTiltControllerReadsInjectedOrientationForEveryMotionSample() {
         let source = ManuallyEmittingAvatarTiltSource()
+        var time: TimeInterval = 0
         var orientation = SliccAgentAvatarInterfaceOrientation.portrait
         var orientationReadCount = 0
         let controller = SliccAgentAvatarTiltController(
             source: source,
+            clock: { time },
             interfaceOrientation: {
                 orientationReadCount += 1
                 return orientation
             })
-        let attitude = SliccAgentAvatarAttitude(roll: 0.1, pitch: 0.2)
+        let attitude = SliccAgentAvatarAttitude(roll: 0.02, pitch: 0.04)
         controller.update(geometry: tiltGeometry, motionDisabled: false)
 
+        source.emit(.zero)
+        time = 1
         source.emit(attitude)
         let portraitTarget = tiltMapping.pupilOffset(
-            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            for: .init(roll: 0.01, pitch: 0.02), geometry: tiltGeometry, reduceMotion: false,
             isDeviceMotionAvailable: true, orientation: .portrait)
-        let portraitOffset = tiltMapping.smoothedOffset(
-            from: .init(x: 0, y: 0), toward: portraitTarget)
-        XCTAssertEqual(controller.pupilOffset, portraitOffset)
-        XCTAssertEqual(orientationReadCount, 1)
+        assertPoint(controller.pupilOffset, equals: portraitTarget)
+        XCTAssertEqual(orientationReadCount, 2)
 
         orientation = .landscapeRight
+        time = 2
         source.emit(attitude)
         let landscapeTarget = tiltMapping.pupilOffset(
-            for: attitude, geometry: tiltGeometry, reduceMotion: false,
+            for: .init(roll: 0.02 / 3, pitch: 0.04 / 3), geometry: tiltGeometry,
+            reduceMotion: false,
             isDeviceMotionAvailable: true, orientation: .landscapeRight)
-        let landscapeOffset = tiltMapping.smoothedOffset(
-            from: portraitOffset, toward: landscapeTarget)
-        XCTAssertEqual(controller.pupilOffset, landscapeOffset)
-        XCTAssertEqual(orientationReadCount, 2)
+        assertPoint(controller.pupilOffset, equals: landscapeTarget)
+        XCTAssertEqual(orientationReadCount, 3)
     }
 
     func testTiltControllerMotionDisabledStopsAndCenters() {
@@ -354,6 +428,14 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
 
     private var tiltMapping: SliccAgentAvatarTiltMapping {
         .init()
+    }
+
+    private func assertPoint(
+        _ point: SliccAgentAvatarGeometry.Point,
+        equals expected: SliccAgentAvatarGeometry.Point
+    ) {
+        XCTAssertEqual(point.x, expected.x, accuracy: accuracy)
+        XCTAssertEqual(point.y, expected.y, accuracy: accuracy)
     }
 
     private func scoopSummary(
