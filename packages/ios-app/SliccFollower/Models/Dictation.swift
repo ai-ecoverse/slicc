@@ -123,8 +123,12 @@ final class AppleDictationEngine: DictationEngine {
         let audioEngine = AVAudioEngine()
         let input = audioEngine.inputNode
         do {
-            Self.reinstallTap(on: AppleDictationInputTap(node: input)) { buffer in
-                request.append(buffer)
+            guard
+                Self.reinstallTap(on: AppleDictationInputTap(node: input), append: { buffer in
+                    request.append(buffer)
+                })
+            else {
+                throw DictationError.inputFormatUnavailable
             }
             audioEngine.prepare()
             try audioEngine.start()
@@ -144,15 +148,23 @@ final class AppleDictationEngine: DictationEngine {
         )
     }
 
+    /// Re-reads the input node's live format before installing the tap.
+    /// Returns `false` without installing when the session is mid-transition
+    /// (interruption, route change) and reports a degenerate 0 Hz / 0-channel
+    /// format: `installTap` would raise an uncatchable `NSException` from
+    /// `AUGraphNodeBaseV3::CreateRecordingTap`.
+    @discardableResult
     static func reinstallTap(
         on input: any DictationInputTapping,
         append: @escaping (AVAudioPCMBuffer) -> Void
-    ) {
+    ) -> Bool {
         input.removeTap()
         let format = input.currentOutputFormat
+        guard format.sampleRate > 0, format.channelCount > 0 else { return false }
         input.installTap(format: format) { buffer, _ in
             append(buffer)
         }
+        return true
     }
 }
 
@@ -184,9 +196,15 @@ private final class AppleDictationInputTap: DictationInputTapping {
 
 enum DictationError: Error, LocalizedError {
     case recognizerUnavailable
+    case inputFormatUnavailable
 
     var errorDescription: String? {
-        "Speech recognition is unavailable right now"
+        switch self {
+        case .recognizerUnavailable:
+            "Speech recognition is unavailable right now"
+        case .inputFormatUnavailable:
+            "The microphone is switching routes — try again in a moment"
+        }
     }
 }
 

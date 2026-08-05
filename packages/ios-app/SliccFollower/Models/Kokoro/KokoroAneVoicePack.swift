@@ -44,8 +44,19 @@ struct KokoroAneVoicePack: Sendable {
                 guard let rowArr = dict[String(row)] as? [Any] else {
                     throw KokoroAneError.invalidVoicePack("missing row \(row)")
                 }
+                // Per-row validation, not just the total: two rows off by ±1
+                // in opposite directions keep the total intact while shifting
+                // every later row's style slices by a column.
+                guard rowArr.count == cols else {
+                    throw KokoroAneError.invalidVoicePack(
+                        "row \(row) has \(rowArr.count) elements, expected \(cols)")
+                }
                 for value in rowArr {
-                    if let n = value as? NSNumber { storage.append(n.floatValue) }
+                    guard let n = value as? NSNumber else {
+                        throw KokoroAneError.invalidVoicePack(
+                            "row \(row) contains a non-numeric value")
+                    }
+                    storage.append(n.floatValue)
                 }
             }
             return try KokoroAneVoicePack(storage: storage)

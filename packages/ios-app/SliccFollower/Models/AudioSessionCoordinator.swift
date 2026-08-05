@@ -119,7 +119,11 @@ final class AudioSessionCoordinator: AudioSessionCoordinating {
     }
 
     private func beginLease() throws -> Snapshot {
-        guard lease == nil else { throw AudioSessionCoordinatorError.busy }
+        switch lease {
+        case .recording: throw AudioSessionCoordinatorError.busy(holder: .recording)
+        case .playback: throw AudioSessionCoordinatorError.busy(holder: .playback)
+        case nil: break
+        }
         return Snapshot(
             category: backend.category,
             mode: backend.mode,
@@ -142,10 +146,21 @@ final class AudioSessionCoordinator: AudioSessionCoordinating {
     }
 }
 
-enum AudioSessionCoordinatorError: LocalizedError {
-    case busy
+enum AudioSessionCoordinatorError: LocalizedError, Equatable {
+    enum LeaseHolder: String {
+        case recording
+        case playback
+    }
+
+    /// A lease was requested while `holder` still owned the session. Naming the
+    /// holder is what distinguishes a concurrent-lease bug from a session
+    /// configuration conflict in on-device forensics.
+    case busy(holder: LeaseHolder)
 
     var errorDescription: String? {
-        "Another audio operation is still active"
+        switch self {
+        case .busy(let holder):
+            "Another audio operation is still active (\(holder.rawValue))"
+        }
     }
 }

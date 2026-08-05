@@ -262,9 +262,14 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     await ctx.client.open();
     expect(ctx.shell.dispose).not.toHaveBeenCalled();
     ctx.client.close();
-    await tick();
-    expect(ctx.shell.dispose).toHaveBeenCalledTimes(1);
-    expect(ctx.events.some((e) => e.type === 'terminal-status' && e.state === 'closed')).toBe(true);
+    // The dispose and the status event cross the channel on separate ticks, so
+    // wait for each rather than assuming one fixed delay covers both.
+    await vi.waitFor(() => expect(ctx.shell.dispose).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(ctx.events.some((e) => e.type === 'terminal-status' && e.state === 'closed')).toBe(
+        true
+      )
+    );
     ctx.dispose();
   });
 

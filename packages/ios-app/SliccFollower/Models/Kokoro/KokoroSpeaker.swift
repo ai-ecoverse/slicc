@@ -80,23 +80,30 @@ final class KokoroPCMPlayer: KokoroAudioPlaying {
             channel.update(from: baseAddress, count: samples.count)
         }
         node.stop()
+        // Wire and prepare the graph before the session is activated so a
+        // configuration failure never leaves an activated lease behind, and so
+        // `node.stop()` above runs against the route the previous play used.
+        try configureIfNeeded(format: format)
+        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor in
+                self?.engine.stop()
+                self?.releaseSession()
+                completion()
+            }
+        }
+        engine.prepare()
+
         try audioSession.beginPlayback(preferredSampleRate: format.sampleRate)
         sessionActive = true
         do {
-            try configureIfNeeded(format: format)
-            node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                Task { @MainActor in
-                    self?.engine.stop()
-                    self?.releaseSession()
-                    completion()
-                }
-            }
-            engine.prepare()
             try engine.start()
             node.play()
         } catch {
             node.stop()
             engine.stop()
+            // Rewire from scratch next time: the mixer may be bound to a route
+            // that no longer exists.
+            configured = false
             releaseSession()
             throw error
         }
@@ -211,6 +218,7 @@ final class KokoroSpeaker: SpeechSpeaking {
     }
 
     func speak(_ text: String, lang: String?) {
+        let supersededTask = synthesisTask
         stopActiveRequest()
         fallback.stop()
         guard let lang, Self.route(language: lang, modelsPresent: true) == .kokoro else {
@@ -223,7 +231,9 @@ final class KokoroSpeaker: SpeechSpeaking {
                 fallback.speak(text, lang: lang)
                 return
             }
-            startSynthesis(text: text, lang: lang, modelDirectory: modelDirectory)
+            startSynthesis(
+                text: text, lang: lang, modelDirectory: modelDirectory,
+                awaiting: supersededTask)
             return
         }
 
@@ -232,7 +242,9 @@ final class KokoroSpeaker: SpeechSpeaking {
             return
         }
         if managedModelsPresent(in: managedModelDirectory) {
-            startSynthesis(text: text, lang: lang, modelDirectory: managedModelDirectory)
+            startSynthesis(
+                text: text, lang: lang, modelDirectory: managedModelDirectory,
+                awaiting: supersededTask)
             return
         }
         guard let resourceDownloader else {
@@ -243,6 +255,8 @@ final class KokoroSpeaker: SpeechSpeaking {
         let request = UUID()
         activeRequest = request
         synthesisTask = Task { [weak self] in
+            await supersededTask?.value
+            guard !Task.isCancelled else { return }
             do {
                 let resolvedDirectory = try await resourceDownloader.ensureModels(
                     variant: .english, directory: managedModelDirectory)
@@ -251,7 +265,8 @@ final class KokoroSpeaker: SpeechSpeaking {
                     throw KokoroModelProvisioningError.incompleteDownload(missing: [])
                 }
                 self?.startSynthesis(
-                    text: text, lang: lang, modelDirectory: resolvedDirectory, request: request)
+                    text: text, lang: lang, modelDirectory: resolvedDirectory, request: request,
+                    awaiting: nil)
             } catch is CancellationError {
                 return
             } catch {
@@ -279,23 +294,46 @@ final class KokoroSpeaker: SpeechSpeaking {
         return managedModelDirectory
     }
 
+    /// Canonicalizes a models directory so the pre-warm and speak paths agree
+    /// on cache identity: `URL` equality is sensitive to trailing slashes and
+    /// symlinks, and `Application Support` is symlinked on device.
+    private static func canonical(_ directory: URL) -> URL {
+        directory.resolvingSymlinksInPath().standardizedFileURL
+    }
+
     private func synthesizer(for directory: URL) -> any KokoroSpeechSynthesizing {
-        if let cachedSynthesizer, cachedSynthesizer.directory == directory {
+        let canonicalDirectory = Self.canonical(directory)
+        if let cachedSynthesizer, cachedSynthesizer.directory == canonicalDirectory {
             return cachedSynthesizer.value
         }
-        let synthesizer = synthesizerFactory(directory)
-        cachedSynthesizer = (directory, synthesizer)
+        if let cachedSynthesizer {
+            let previous = cachedSynthesizer.directory.path
+            logger.info(
+                "Kokoro models directory changed; rebuilding synthesizer (was \(previous, privacy: .public), now \(canonicalDirectory.path, privacy: .public))"
+            )
+        }
+        let synthesizer = synthesizerFactory(canonicalDirectory)
+        cachedSynthesizer = (canonicalDirectory, synthesizer)
         isPrewarmed = false
         return synthesizer
     }
 
+    /// `awaiting` is the superseded synthesis task, if any. A superseded request
+    /// may still be inside a non-cancellable CoreML prediction, so the new task
+    /// awaits its unwind before starting — the ANE never runs two chains at
+    /// once. Callers that are themselves running as `synthesisTask` (the
+    /// download path) must pass `nil` to avoid awaiting themselves.
     private func startSynthesis(
-        text: String, lang: String, modelDirectory: URL, request: UUID = UUID()
+        text: String, lang: String, modelDirectory: URL, request: UUID = UUID(),
+        awaiting previousTask: Task<Void, Never>?
     ) {
         activeRequest = request
         let synthesizer = synthesizer(for: modelDirectory)
+        previousTask?.cancel()
         startTimeout(request: request, text: text, lang: lang)
         synthesisTask = Task { [weak self] in
+            await previousTask?.value
+            guard !Task.isCancelled else { return }
             do {
                 let samples = try await synthesizer.synthesize(
                     text: text, voice: KokoroAneConstants.defaultVoice, speed: 1.0)
@@ -382,18 +420,26 @@ final class KokoroSpeaker: SpeechSpeaking {
     private func timeoutIfActive(request: UUID, text: String, lang: String?) {
         guard activeRequest == request else { return }
         logger.error("Kokoro synthesis timed out; using system voice")
-        synthesisTask?.cancel()
-        finishRequest()
+        abandonActiveRequest()
         fallback.speak(text, lang: lang)
     }
 
     private func stopActiveRequest() {
-        synthesisTask?.cancel()
-        timeoutTask?.cancel()
+        abandonActiveRequest()
         player.stop()
-        finishRequest()
     }
 
+    /// Gives up on the in-flight request without dropping `synthesisTask`: a
+    /// cancelled chain can still be inside a non-cancellable CoreML prediction,
+    /// and the next request awaits this handle before it starts its own.
+    private func abandonActiveRequest() {
+        synthesisTask?.cancel()
+        timeoutTask?.cancel()
+        activeRequest = nil
+        timeoutTask = nil
+    }
+
+    /// Retires a request that ran to completion, so its task handle is spent.
     private func finishRequest() {
         activeRequest = nil
         synthesisTask = nil

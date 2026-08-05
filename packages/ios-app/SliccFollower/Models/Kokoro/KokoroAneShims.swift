@@ -214,6 +214,7 @@ actor KokoroAneResourceDownloader: KokoroAneResourceDownloading {
 
     static let completionMarker = ".provisioned"
     static let hubCacheDirectoryName = ".hub-cache"
+    private static let logger = AppLogger(category: "KokoroResourceDownloader")
     private let hubDownloader: any KokoroHubSnapshotDownloading
     private let fileManager: FileManager
 
@@ -263,6 +264,14 @@ actor KokoroAneResourceDownloader: KokoroAneResourceDownloading {
             {
                 return directory
             }
+            // A cold cache is the expected failure here, so fall through to the
+            // network fetch. A storage failure is not: swallowing it would
+            // resurface later misclassified as `offline`/`httpFailure`.
+            let classified = Self.classify(error)
+            if case .storageFailure = classified { throw classified }
+            Self.logger.warning(
+                "Kokoro cache-only snapshot failed; falling back to network: \(classified.localizedDescription)"
+            )
         }
 
         do {

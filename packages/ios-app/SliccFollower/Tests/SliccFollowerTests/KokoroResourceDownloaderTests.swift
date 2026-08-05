@@ -18,6 +18,7 @@ final class KokoroResourceDownloaderTests: XCTestCase {
             case partial
             case interrupted
             case http
+            case cacheStorageFailure
         }
 
         let behavior: Behavior
@@ -48,6 +49,8 @@ final class KokoroResourceDownloaderTests: XCTestCase {
                 throw CancellationError()
             case (.http, false):
                 throw TestError.http
+            case (.cacheStorageFailure, true):
+                throw KokoroModelProvisioningError.storageFailure("disk is unreadable")
             default:
                 throw TestError.cacheMiss
             }
@@ -203,6 +206,25 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         XCTAssertEqual(requestedModes, [true])
     }
 
+    func testCacheOnlyStorageFailureIsNotReclassifiedAsNetworkTrouble() async throws {
+        let (directory, cleanup) = temporaryDirectory()
+        defer { cleanup() }
+        let fake = FakeHubDownloader(.cacheStorageFailure)
+        let downloader = KokoroAneResourceDownloader(hubDownloader: fake)
+
+        do {
+            _ = try await downloader.ensureModels(variant: .english, directory: directory)
+            XCTFail("expected the storage failure to surface")
+        } catch let error as KokoroModelProvisioningError {
+            guard case .storageFailure = error else {
+                return XCTFail("expected storageFailure, got \(error)")
+            }
+        }
+        // The network fetch must not run: a storage bug is not a cache miss.
+        let requestedModes = await fake.requestedModes()
+        XCTAssertEqual(requestedModes, [true])
+    }
+
     func testHuggingFaceVocabIndexShapeLoadsAcousticVocabulary() throws {
         let (directory, cleanup) = temporaryDirectory()
         defer { cleanup() }
@@ -214,6 +236,65 @@ final class KokoroResourceDownloaderTests: XCTestCase {
 
         XCTAssertEqual(vocabulary.map["a"], 43)
         XCTAssertEqual(vocabulary.map["ɹ"], 123)
+    }
+
+    func testVoicePackJSONRejectsAShortRowEvenWhenTheTotalStaysCorrect() throws {
+        let (directory, cleanup) = temporaryDirectory()
+        defer { cleanup() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Row 1 short by one and row 2 long by one: the total matches, but every
+        // later row's style slices would shift by a column.
+        let url = try writeVoicePackJSON(
+            in: directory, rowLengths: [1: KokoroAneConstants.voicePackCols - 1,
+                                        2: KokoroAneConstants.voicePackCols + 1])
+
+        XCTAssertThrowsError(try KokoroAneVoicePack.load(from: url)) {
+            XCTAssertTrue(
+                "\($0)".contains("row 1 has 255 elements"), "unexpected error: \($0)")
+        }
+    }
+
+    func testVoicePackJSONRejectsANonNumericElement() throws {
+        let (directory, cleanup) = temporaryDirectory()
+        defer { cleanup() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = try writeVoicePackJSON(in: directory, nonNumericInRow: 3)
+
+        XCTAssertThrowsError(try KokoroAneVoicePack.load(from: url)) {
+            XCTAssertTrue(
+                "\($0)".contains("row 3 contains a non-numeric value"),
+                "unexpected error: \($0)")
+        }
+    }
+
+    func testWellShapedVoicePackJSONLoads() throws {
+        let (directory, cleanup) = temporaryDirectory()
+        defer { cleanup() }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = try writeVoicePackJSON(in: directory)
+
+        let pack = try KokoroAneVoicePack.load(from: url)
+
+        XCTAssertEqual(
+            pack.storage.count,
+            KokoroAneConstants.voicePackRows * KokoroAneConstants.voicePackCols)
+    }
+
+    /// Writes a `<voice>.json` voice pack. `rowLengths` overrides individual row
+    /// element counts, and `nonNumericInRow` swaps one element for a string.
+    private func writeVoicePackJSON(
+        in directory: URL, rowLengths: [Int: Int] = [:], nonNumericInRow: Int? = nil
+    ) throws -> URL {
+        let cols = KokoroAneConstants.voicePackCols
+        var dict: [String: Any] = [:]
+        for row in 1...KokoroAneConstants.voicePackRows {
+            var values: [Any] = Array(repeating: 0.5 as Double, count: rowLengths[row] ?? cols)
+            if row == nonNumericInRow, !values.isEmpty { values[0] = "nope" }
+            dict[String(row)] = values
+        }
+        let url = directory.appendingPathComponent("af_heart.json")
+        try JSONSerialization.data(withJSONObject: dict).write(to: url)
+        return url
     }
 
     private func assertFailure(

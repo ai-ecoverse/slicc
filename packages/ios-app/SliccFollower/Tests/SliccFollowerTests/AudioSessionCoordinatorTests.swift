@@ -107,12 +107,54 @@ final class AudioSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(input.installedSampleRates, [48_000, 44_100])
     }
 
+    /// The 0 Hz / 0-channel format an input node reports mid-route-change.
+    private static func degenerateFormat() -> AVAudioFormat? {
+        var description = AudioStreamBasicDescription()
+        description.mFormatID = kAudioFormatLinearPCM
+        description.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
+        description.mSampleRate = 0
+        description.mChannelsPerFrame = 0
+        description.mBitsPerChannel = 32
+        description.mFramesPerPacket = 1
+        return AVAudioFormat(streamDescription: &description)
+    }
+
+    func testDegenerateInputFormatAbortsTapInstallation() throws {
+        // Installing a tap with a 0 Hz format raises an uncatchable NSException
+        // from `AUGraphNodeBaseV3::CreateRecordingTap`.
+        guard let degenerate = Self.degenerateFormat(),
+            degenerate.sampleRate == 0 || degenerate.channelCount == 0
+        else {
+            throw XCTSkip("this platform refuses to describe a degenerate format")
+        }
+        let input = InputTap(formats: [degenerate])
+
+        let installed = AppleDictationEngine.reinstallTap(on: input) { _ in }
+
+        XCTAssertFalse(installed)
+        XCTAssertEqual(input.operations, ["remove", "format"])
+        XCTAssertTrue(input.installedSampleRates.isEmpty)
+    }
+
     func testRecordingAndPlaybackLeasesAreExclusive() throws {
         let coordinator = AudioSessionCoordinator(backend: Backend())
         try coordinator.beginRecording()
 
         XCTAssertThrowsError(try coordinator.beginPlayback(preferredSampleRate: 24_000)) {
-            XCTAssertTrue($0 is AudioSessionCoordinatorError)
+            XCTAssertEqual(
+                $0 as? AudioSessionCoordinatorError, .busy(holder: .recording))
+        }
+    }
+
+    func testBusyErrorNamesThePlaybackLeaseHolder() throws {
+        let coordinator = AudioSessionCoordinator(backend: Backend())
+        try coordinator.beginPlayback(preferredSampleRate: 24_000)
+
+        XCTAssertThrowsError(try coordinator.beginRecording()) {
+            XCTAssertEqual($0 as? AudioSessionCoordinatorError, .busy(holder: .playback))
+            XCTAssertEqual(
+                ($0 as? AudioSessionCoordinatorError)?.errorDescription,
+                "Another audio operation is still active (playback)")
         }
     }
 }

@@ -41,6 +41,9 @@ actor G2PModel {
     private var encoder: MLModel?
     private var decoder: MLModel?
 
+    /// Causal masks keyed by decode length; see `causalMask(length:)`.
+    private var causalMaskCache: [Int: MLMultiArray] = [:]
+
     init(modelsDirectory: URL) {
         self.modelsDirectory = modelsDirectory
     }
@@ -104,15 +107,7 @@ actor G2PModel {
                 posIds[[0, i] as [NSNumber]] = NSNumber(value: Int32(i + 2))
             }
 
-            // causal_mask: upper triangular with -1e4
-            let mask = try MLMultiArray(
-                shape: [1, NSNumber(value: decLen), NSNumber(value: decLen)], dataType: .float32)
-            for i in 0..<decLen {
-                for j in 0..<decLen {
-                    let val: Float = j > i ? -1e4 : 0
-                    mask[[0, i, j] as [NSNumber]] = NSNumber(value: val)
-                }
-            }
+            let mask = try causalMask(length: decLen)
 
             let decoderProvider = try MLDictionaryFeatureProvider(
                 dictionary: [
@@ -166,6 +161,26 @@ actor G2PModel {
     }
 
     // MARK: - Private
+
+    /// Upper-triangular `-1e4` causal mask of shape `[1, length, length]`.
+    ///
+    /// Filled through `dataPointer` rather than the `NSNumber` subscript, and
+    /// cached by length: the greedy decode walks the same lengths for every
+    /// word, so only the first word of a reply pays the fill cost.
+    private func causalMask(length: Int) throws -> MLMultiArray {
+        if let cached = causalMaskCache[length] { return cached }
+        let mask = try MLMultiArray(
+            shape: [1, NSNumber(value: length), NSNumber(value: length)], dataType: .float32)
+        let pointer = mask.dataPointer.bindMemory(to: Float.self, capacity: length * length)
+        for i in 0..<length {
+            let row = i * length
+            for j in 0..<length {
+                pointer[row + j] = j > i ? -1e4 : 0
+            }
+        }
+        causalMaskCache[length] = mask
+        return mask
+    }
 
     private func loadIfNeeded() throws {
         if graphemeToId != nil && encoder != nil && decoder != nil { return }

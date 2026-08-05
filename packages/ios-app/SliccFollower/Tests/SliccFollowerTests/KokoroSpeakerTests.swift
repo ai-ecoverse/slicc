@@ -169,6 +169,39 @@ final class KokoroSpeakerTests: XCTestCase {
         XCTAssertEqual(countsAfterSpeak.synthesis, 1)
     }
 
+    func testPrewarmedSynthesizerIsReusedAcrossEquivalentDirectoryURLs() async {
+        // Same directory, non-canonical spelling: without canonicalization the
+        // cache misses and the speak path reloads all seven models.
+        let canonical = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kokoro-models", isDirectory: true)
+        let equivalent = canonical.appendingPathComponent("nested/..", isDirectory: true)
+        let synthesizer = PreparingSynthesizer()
+        let player = FakePlayer()
+        let played = expectation(description: "pre-warmed Kokoro PCM played")
+        player.onPlay = { played.fulfill() }
+        var directories: [URL] = []
+        let speaker = KokoroSpeaker(
+            modelDirectory: equivalent,
+            presenceChecker: Presence(value: true),
+            fallback: FakeSpeaker(),
+            synthesizerFactory: { directory in
+                directories.append(directory)
+                return synthesizer
+            },
+            player: player)
+
+        await speaker.prewarm()
+        speaker.speak("hello", lang: "en")
+        await fulfillment(of: [played], timeout: 1)
+
+        XCTAssertEqual(directories.count, 1)
+        XCTAssertEqual(
+            directories.first?.path,
+            canonical.resolvingSymlinksInPath().standardizedFileURL.path)
+        let counts = await synthesizer.counts()
+        XCTAssertEqual(counts.load, 1)
+    }
+
     func testSynthesisFailureFallsBackToSystemVoice() async {
         let fallback = FakeSpeaker()
         let spoke = expectation(description: "system fallback spoke")

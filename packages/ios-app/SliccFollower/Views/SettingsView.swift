@@ -486,6 +486,13 @@ private struct SpeechSettingsSection: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .accessibilityIdentifier("kokoro-install-status")
+            // Routes through the same VoiceReply path a dictated reply takes,
+            // so a silent Kokoro path surfaces here instead of in dictation.
+            Button("Play a Short Sample") {
+                VoiceReply.shared.speakReply(
+                    markdown: "<!--lang:en-->Kokoro is installed and speaking.")
+            }
+            .accessibilityIdentifier("kokoro-install-preview")
             if !kokoroModels.usesDeveloperPack {
                 Button("Remove Download", role: .destructive) {
                     kokoroModels.removeInstallation()
