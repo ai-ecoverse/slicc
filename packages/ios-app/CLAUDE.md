@@ -136,12 +136,12 @@ Hand-running the app for exploratory QA is covered in [`docs/ios-simulator-qa.md
 
 A `bundle.ui-testing` target remains in the scheme, but the unit coverage gate excludes it. Run `-only-testing:SliccFollowerUITests` when UI changes, as a separate CI job. No test needs a leader: `-uiTestFixtureRoute YES` opens the leaderless **UI Fixture** route; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions in-memory; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` keeps the fullness cue static. `UITestHooks` is `#if DEBUG` only. The failure-state test dials `http://127.0.0.1:1/…` so `Connection Failed` arrives without DNS. `-uiTestCompletedTurn YES` feeds `message_start` + `content_done` + `status: ready` through the real dispatcher.
 
-Regular-width browser tabs claim the whole iPad window; returning to the tab overview restores the split. CI runs this enter/exit regression separately on an iPad simulator.
+Regular-width browser tabs claim the whole iPad window; returning to the tab overview restores the split. CI runs this enter/exit regression in the `ios-app-tests` device × iOS matrix (iPad cells; iOS 27 cells are informational).
 
 - Put accessibility identifiers on leaves (`message-<id>`). Container ids propagate; `.accessibilityElement(children: .contain)` does not fix that.
 - Row ids alone are blind — also add a `variantMarkers` string only that renderer can emit.
 - The transcript pins to the newest message; variant walks scroll bottom-to-top and must be bounded.
-- A red CI job names the test, not the reason. Read XCTAssert text from the uploaded `test-timings-ios-app` xcresult via `xcrun xcresulttool get test-results tests`. Host death before XCTest connects is usually a runtime mismatch or `CODE_SIGNING_ALLOWED=NO` on the test build, not a flake.
+- A red CI job names the test, not the reason. Read XCTAssert text from the uploaded `test-timings-ios-app-<ios>-<device>` xcresult via `xcrun xcresulttool get test-results tests`. Host death before XCTest connects is usually a runtime mismatch or `CODE_SIGNING_ALLOWED=NO` on the test build, not a flake.
 
 ## Linting
 

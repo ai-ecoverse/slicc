@@ -1361,15 +1361,108 @@ jobs:
             -scheme SliccFollower \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          # Unlike the SPM packages, an xcodegen project has no Package.swift for
+          # Periphery to infer from, so the project/scheme/target are explicit.
+          cd packages/ios-app && periphery scan \
+            --project SliccFollower.xcodeproj \
+            --schemes SliccFollower \
+            --targets SliccFollower \
+            --disable-update-check || true
+
+  # Simulator test matrix: device × iOS runtime, all cells concurrent so the
+  # slowest leg (not the sum of legs) bounds iOS wall-clock. The iPhone/26
+  # cell is the canonical coverage-gated run; iPhone/27 repeats the unit suite
+  # against the beta SDK without the coverage gate (line coverage shifts
+  # between SDKs, and the floors track the stable one). iPad cells run the
+  # regular-width browser regression. iOS 27 cells ride the `xcode-27` beta
+  # runner image and are informational (continue-on-error) until 27 goes GA —
+  # a beta-image breakage must not hold the merge queue.
+  ios-app-tests:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
+        ios: ['26', '27']
+    runs-on: ${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}
+    continue-on-error: ${{ matrix.ios == '27' }}
+    # Simulator boots can wedge on fresh runner images; fail fast instead of
+    # holding the merge queue for the 6h default.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other Swift jobs) instead of relying
+      # on the runner's preinstalled version.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+      - name: Resolve SPM dependencies
+        run: |
+          cd packages/ios-app
+          xcodebuild -resolvePackageDependencies \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower
       # Golden-fixture protocol corpus + unit tests. The shared coverage script
       # picks the simulator, runs `xcodebuild test` with coverage + parallel
       # testing + on-failure retries, and gates the result against the `ios-app`
       # floors in coverage-thresholds.json.
-      - name: Test (with coverage threshold gate)
+      - name: Test (iPhone unit suite, coverage threshold gate)
+        if: matrix.device == 'iPhone' && matrix.ios == '26'
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
             --xcodebuild SliccFollower packages/ios-app SliccFollower
+      - name: Test (iPhone unit suite, no coverage gate)
+        if: matrix.device == 'iPhone' && matrix.ios != '26'
+        run: |
+          set -o pipefail
+          cd packages/ios-app
+          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          PHONE_UDID=$(
+            xcrun simctl list devices available --json |
+              IOS_SIMULATOR_RUNTIME_KEY="com.apple.CoreSimulator.SimRuntime.iOS-${SDK_VERSION//./-}" node -e '
+                let input = "";
+                process.stdin.on("data", chunk => input += chunk).on("end", () => {
+                  const devices = JSON.parse(input).devices?.[process.env.IOS_SIMULATOR_RUNTIME_KEY] ?? [];
+                  const phone = devices.find(device => device.isAvailable && /iPhone/.test(device.name));
+                  process.stdout.write(phone?.udid ?? "");
+                });
+              '
+          )
+          if [[ -z "$PHONE_UDID" ]]; then
+            echo "::error::No available iPhone simulator matching the iOS $SDK_VERSION SDK"
+            exit 1
+          fi
+          xcrun simctl boot "$PHONE_UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$PHONE_UDID" -b
+          xcodebuild test \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination "platform=iOS Simulator,id=$PHONE_UDID" \
+            -derivedDataPath .build/xcodebuild \
+            -resultBundlePath .build/unit-suite.xcresult \
+            -parallel-testing-enabled NO \
+            -retry-tests-on-failure \
+            -test-iterations 2 \
+            -only-testing:SliccFollowerTests
       - name: Test regular-width browser (iPad)
+        if: matrix.device == 'iPad'
         run: |
           set -o pipefail
           cd packages/ios-app
@@ -1402,7 +1495,7 @@ jobs:
             -test-iterations 2 \
             -only-testing:SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-ios-app
@@ -1414,24 +1507,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: test-timings-ios-app
+          name: test-timings-ios-app-${{ matrix.ios }}-${{ matrix.device }}
           path: |
             packages/ios-app/.build/coverage/ios-app.xcresult
+            packages/ios-app/.build/unit-suite.xcresult
             packages/ios-app/.build/regular-width-ui.xcresult
           if-no-files-found: ignore
-      - name: Install Periphery
-        run: brew install peripheryapp/periphery/periphery
-      - name: Dead code detection (Periphery)
-        run: |
-          # Informational scan; surfaces unused Swift declarations without
-          # blocking PRs while existing findings get cleaned up incrementally.
-          # Unlike the SPM packages, an xcodegen project has no Package.swift for
-          # Periphery to infer from, so the project/scheme/target are explicit.
-          cd packages/ios-app && periphery scan \
-            --project SliccFollower.xcodeproj \
-            --schemes SliccFollower \
-            --targets SliccFollower \
-            --disable-update-check || true
 
   global-install:
     needs: changes
@@ -1553,6 +1634,7 @@ jobs:
         swift-optel,
         swift-traysession,
         ios-app,
+        ios-app-tests,
         go-optel,
         slicc-cli,
         release-gate,
