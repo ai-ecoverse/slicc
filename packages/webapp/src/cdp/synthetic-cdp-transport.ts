@@ -9,6 +9,7 @@
  * - PreviewBridgeCdpTransport (postMessage to the preview bridge bootstrap)
  */
 
+import { waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
 
@@ -99,7 +100,7 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
     if (this._state !== 'connected') throw new Error('Transport is not connected');
 
     const synthetic = this.handleSynthetic(method, params);
-    if (synthetic) return synthetic;
+    if (synthetic !== null) return synthetic;
 
     const result = await this.forward(method, params, sessionId, timeout);
 
@@ -127,18 +128,14 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
   }
 
   once(event: string, timeout = DEFAULT_TIMEOUT): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Timed out waiting for event: ${event}`));
-      }, timeout);
-      const handler: CDPEventListener = (params) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
-      };
-      this.on(event, handler);
-    });
+    return waitForEvent<Record<string, unknown>>(
+      (handler) => {
+        this.on(event, handler);
+        return () => this.off(event, handler);
+      },
+      timeout,
+      `Timed out waiting for event: ${event}`
+    );
   }
 
   /**

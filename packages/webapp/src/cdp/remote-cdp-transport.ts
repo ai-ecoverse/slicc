@@ -4,6 +4,7 @@
  */
 
 import { reassembleCDPResponse } from '../scoops/tray-sync-protocol.js';
+import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPEventListener, ConnectionState } from './types.js';
 
@@ -21,14 +22,7 @@ export interface RemoteCDPSender {
 }
 
 export class RemoteCDPTransport implements CDPTransport {
-  private readonly pending = new Map<
-    string,
-    {
-      resolve: (r: Record<string, unknown>) => void;
-      reject: (e: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  >();
+  private readonly pending = new PendingRequestTable<string>();
   private readonly eventListeners = new Map<string, Set<CDPEventListener>>();
   private readonly chunkBuffers = new Map<
     string,
@@ -52,11 +46,7 @@ export class RemoteCDPTransport implements CDPTransport {
 
   disconnect(): void {
     this._state = 'disconnected';
-    for (const [, { reject, timer }] of this.pending) {
-      clearTimeout(timer);
-      reject(new Error('Transport disconnected'));
-    }
-    this.pending.clear();
+    this.pending.rejectAll('Transport disconnected');
   }
 
   async send(
@@ -70,14 +60,13 @@ export class RemoteCDPTransport implements CDPTransport {
     }
     const requestId = `remote-${++this.requestCounter}-${Date.now()}`;
     const tm = timeout ?? this.timeoutMs;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(`Remote CDP request timed out after ${tm}ms: ${method}`));
-      }, tm);
-      this.pending.set(requestId, { resolve, reject, timer });
-      this.sender.sendCDPRequest(requestId, method, params, sessionId);
-    });
+    const response = this.pending.issue(
+      requestId,
+      tm,
+      `Remote CDP request timed out after ${tm}ms: ${method}`
+    );
+    this.sender.sendCDPRequest(requestId, method, params, sessionId);
+    return response;
   }
 
   on(event: string, listener: CDPEventListener): void {
@@ -94,19 +83,14 @@ export class RemoteCDPTransport implements CDPTransport {
   }
 
   once(event: string, timeout?: number): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const tm = timeout ?? this.timeoutMs;
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Remote CDP event timed out: ${event}`));
-      }, tm);
-      const handler = (params: Record<string, unknown>) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
-      };
-      this.on(event, handler);
-    });
+    return waitForEvent<Record<string, unknown>>(
+      (handler) => {
+        this.on(event, handler);
+        return () => this.off(event, handler);
+      },
+      timeout ?? this.timeoutMs,
+      `Remote CDP event timed out: ${event}`
+    );
   }
 
   /** Called by the sync manager when a cdp.response arrives for this transport. */
@@ -118,8 +102,7 @@ export class RemoteCDPTransport implements CDPTransport {
     chunkIndex?: number,
     totalChunks?: number
   ): void {
-    const entry = this.pending.get(requestId);
-    if (!entry) return;
+    if (!this.pending.has(requestId)) return;
 
     // Use reassembleCDPResponse for both chunked and non-chunked messages
     const assembled = reassembleCDPResponse(this.chunkBuffers, {
@@ -134,10 +117,8 @@ export class RemoteCDPTransport implements CDPTransport {
 
     if (!assembled) return; // Still waiting for more chunks
 
-    this.pending.delete(requestId);
-    clearTimeout(entry.timer);
-    if (assembled.error) entry.reject(new Error(assembled.error));
-    else entry.resolve(assembled.result ?? {});
+    if (assembled.error) this.pending.reject(requestId, new Error(assembled.error));
+    else this.pending.resolve(requestId, assembled.result ?? {});
   }
 
   /** Called by the sync manager when a CDP event arrives for this transport. */
