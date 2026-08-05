@@ -10,7 +10,6 @@ This file covers the repo's developer-tooling surface.
 
 - **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against the official `@playwright/cli` schema. Run after upgrading `@playwright/cli` or after adding/removing a handler. Full reference: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
 - **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): skills available in dev mode (`npm run dev`) but stripped from production builds. Loaded via a `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts` and remapped to `/workspace/skills/` in the VFS. Currently contains `playwright-cli-e2e` — an automated + manual E2E regression suite for the playwright-cli command. Run it in a Slicc dev instance: `pcli-e2e`.
-- **Prompt/build helpers**: `packages/dev-tools/tools/slicc-prompt.mjs`
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
 - **Visual/integration helpers**: `packages/webapp/tests/test-dips.mjs` and related targeted test utilities
@@ -42,7 +41,7 @@ This file covers the repo's developer-tooling surface.
 
 ### SLICC CDP Debug Toolkit
 
-`packages/dev-tools/tools/slicc-debug.mjs` — CDP diagnostic CLI for the standalone dev harness. Subcommands: `targets`, `logs`, `vfs ls/cat`, `eval`, `shell`, `chat`. Page-target selection via `--url`/`--url-pattern`. Payload input via `--file`. Run: `node packages/dev-tools/tools/slicc-debug.mjs --help`. See the script's header comment for the full option reference.
+`packages/dev-tools/tools/slicc-debug.mjs` — CDP diagnostic CLI for the standalone dev harness. Subcommands: `targets`, `logs`, `vfs ls/cat`, `eval`, `shell`. Page-target selection via `--url`/`--url-pattern`. Payload input via `--file`. Run: `node packages/dev-tools/tools/slicc-debug.mjs --help`. See the script's header comment for the full option reference.
 
 ### SLICC CDP Screencast Recorder
 

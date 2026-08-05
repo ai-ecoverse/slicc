@@ -12,7 +12,6 @@
  *   vfs cat <path>              Read a VFS file (text)
  *   eval <expression>           Evaluate JS in the page context
  *   shell <command>             Run a shell command via the sprinkle exec bridge
- *   chat <prompt>               Send a prompt to the SLICC agent
  *
  * Page-target selection:
  *   --url <substring>           Pick the page target whose URL contains <substring>
@@ -400,40 +399,6 @@ async function cmdShell(cdpPort, command, cwd = DEFAULT_CWD, urlFilter = null) {
   }
 }
 
-async function cmdChat(cdpPort, prompt, urlFilter = null) {
-  const conn = await attachToTarget(cdpPort, 'page', urlFilter);
-  const result = await evalIn(
-    conn,
-    `
-    (async () => {
-      try {
-        // Try the orchestrator's prompt method
-        const orch = globalThis.__slicc_orchestrator;
-        if (orch?.prompt) {
-          await orch.prompt(${JSON.stringify(prompt)});
-          return 'Prompt sent to orchestrator';
-        }
-        // Fallback: simulate typing into the chat input
-        const input = document.querySelector('.chat-input textarea, [data-chat-input]');
-        if (input) {
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLTextAreaElement.prototype, 'value').set;
-          nativeInputValueSetter.call(input, ${JSON.stringify(prompt)});
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          // Find and click the send button
-          const btn = document.querySelector('.chat-input button[type="submit"], .chat-send-btn');
-          if (btn) { btn.click(); return 'Prompt submitted via UI'; }
-          return 'Typed into input but no send button found';
-        }
-        return 'ERROR: No orchestrator or chat input found';
-      } catch (e) { return 'ERROR: ' + e.message; }
-    })()
-  `
-  );
-  console.log(result);
-  conn.close();
-}
-
 // ── CLI dispatcher ───────────────────────────────────────────────────────────
 
 async function main() {
@@ -457,7 +422,6 @@ Commands:
   eval --target=worker <expr>   Evaluate JS in the kernel worker
   eval --target=blob <expr>     Evaluate JS in the blob worker (JS/py realm)
   shell <command>               Run a shell command via the sprinkle exec bridge
-  chat <prompt>                 Send a prompt to the SLICC agent
 
 Page-target selection (page commands):
   --url <substring>             Pick the page target whose URL contains <substring>
@@ -529,16 +493,6 @@ Environment:
         process.exit(1);
       }
       await cmdShell(cdpPort, shellCmd, resolveCwd(flags, process.env), urlFilter);
-      break;
-    }
-
-    case 'chat': {
-      const prompt = rest.join(' ');
-      if (!prompt) {
-        console.error('Usage: slicc-debug chat <prompt>');
-        process.exit(1);
-      }
-      await cmdChat(cdpPort, prompt, urlFilter);
       break;
     }
 

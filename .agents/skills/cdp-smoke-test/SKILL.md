@@ -6,15 +6,15 @@ description: |
   provider (boot, panels, terminal, accounts dialog); Tier 2 exercises the
   agent loop through a connected provider (chat, shell tool, browser
   control, scoops, sprinkles, transcript export). Use when asked to start a
-  SLICC dev instance
-  in a browser you control, smoke-test a build, or run
-  an autonomous debugging session against the UI.
+  SLICC dev instance in a browser you control, smoke-test a build, run an
+  autonomous debugging session against the UI, or send a prompt to a running
+  SLICC and read its assistant reply.
 ---
 
 # CDP Smoke Test
 
 Boot the standalone harness with the latest local build, attach over CDP,
-and work through the two test tiers. All driving goes through
+and work through the two test tiers. Manual local-harness driving goes through
 `scripts/slicc-cdp` (zero-dependency, Node 22+).
 
 ## Setup
