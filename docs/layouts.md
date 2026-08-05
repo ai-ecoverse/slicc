@@ -452,9 +452,11 @@ whose node is `null` collapses entirely.
   the same state machine.
 - `setPinned(surfaceIds)` — non-removable leaves (runtime-only, never serialized).
 
-Drag-drop: every unlocked leaf reveals a `.dock-tree__tile-move` button on hover
-over its top-left corner; hovering another tile computes a `DropRegion`
-(`n`/`s`/`e`/`w`/`center`) and splits accordingly.
+Dock-tree drag is dormant in the shipped webapp. With `panel-layouts` off,
+`tiles-movable` stays off; with it on, `panelize-shell.ts` calls
+`shellRow.replaceWith(layout)`, removing the dock-tree, and rearrangement moves to
+`.slicc-layout__move`. The machinery remains as the component contract for
+embedders/tests and in case panels are reverted.
 
 Resize: every divider is pointer-drag-resizable, clamped to 2% of the dragged
 pair's combined weight — the same floor `setSurfaceSize` enforces, so dragging can
