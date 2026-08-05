@@ -75,27 +75,26 @@ final class ScoopStatusUITests: XCTestCase {
         XCTAssertEqual(firstFrame, secondFrame, "Reduced motion must render one non-animating frame")
     }
 
-    func testAvatarPositionStaysStableAcrossLabelLengthsAndHandedness() {
+    func testLongLabelHeaderStaysContainedAcrossHandedness() {
         for leftHanded in [false, true] {
             let app = launchFixtureApp(leftHanded: leftHanded)
             let mode = leftHanded ? "left-handed" : "normal"
-            select(jid: "fixture-short", in: app)
-            let shortAvatar = app.descendants(matching: .any)["scoop-avatar"]
-            XCTAssertTrue(shortAvatar.waitForExistence(timeout: 10), "\(mode) avatar should exist")
-            XCTAssertEqual(shortAvatar.label, "S: idle, 20% context fill")
-
             select(jid: "fixture-long", in: app)
-            let longAvatar = app.descendants(matching: .any)["scoop-avatar"]
-            XCTAssertTrue(longAvatar.waitForExistence(timeout: 10), "\(mode) avatar should persist")
-            XCTAssertEqual(
-                longAvatar.label,
-                "Scoop with a deliberately overlong assistant label: idle, 20% context fill")
-            XCTAssertEqual(
-                longAvatar.frame.midX, shortAvatar.frame.midX, accuracy: 0.5,
-                "\(mode) avatar center must not move with label length")
-
+            let navigationBar = app.navigationBars.firstMatch
+            let avatar = app.descendants(matching: .any)["scoop-avatar"]
             let switcher = app.buttons["scoop-switcher"]
+            XCTAssertTrue(navigationBar.waitForExistence(timeout: 10), "\(mode) bar should exist")
+            XCTAssertTrue(avatar.waitForExistence(timeout: 10), "\(mode) avatar should exist")
             XCTAssertTrue(switcher.isHittable, "\(mode) switcher must remain reachable")
+            XCTAssertEqual(
+                avatar.label,
+                "Scoop with a deliberately overlong assistant label: idle, 20% context fill")
+            assertContained(avatar, in: navigationBar, mode: mode)
+            assertContained(switcher, in: navigationBar, mode: mode)
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "long-label-header-\(mode)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
             for identifier in ["frozen-rail-button", "settings-button", "new-chat-button"] {
                 let control = app.buttons[identifier]
                 XCTAssertTrue(control.isHittable, "\(mode) \(identifier) must remain reachable")
@@ -118,6 +117,15 @@ final class ScoopStatusUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["scoop-switcher"].waitForExistence(timeout: 60))
         return app
+    }
+
+    private func assertContained(
+        _ element: XCUIElement, in container: XCUIElement, mode: String
+    ) {
+        let bounds = container.frame.insetBy(dx: -0.5, dy: -0.5)
+        XCTAssertTrue(
+            bounds.contains(element.frame),
+            "\(mode) \(element.identifier) frame \(element.frame) must stay inside \(container.frame)")
     }
 
     private func assertSelection(

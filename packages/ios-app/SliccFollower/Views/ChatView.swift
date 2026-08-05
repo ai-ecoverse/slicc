@@ -423,9 +423,33 @@ struct ChatView: View {
                 }
                 .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
             }
+            // Above the rail: the session cluster deliberately overlaps the
+            // rail gutter, and must paint over it rather than beneath.
+            .zIndex(1)
             if !leftHandedDock && !isBrowserFullScreen {
                 dockRail
+                    .zIndex(0)
             }
+        }
+        .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
+            shellSessionCluster
+        }
+    }
+
+    /// The floating session cluster: shell chrome above the rail. Hidden
+    /// with the rest of the chat toolbar while a workbench overlay or
+    /// full-screen browsing owns the screen.
+    @ViewBuilder
+    private var shellSessionCluster: some View {
+        if !isBrowserFullScreen, presentation.activeSurface == nil, !fixtureMode {
+            SessionControlsCluster(
+                showSettings: $showSettings,
+                showFrozenSessions: $showFrozenSessions,
+                frozenOpen: appState.openFrozen != nil,
+                leftHanded: leftHandedDock
+            )
+            .padding(.top, 4)
+            .padding(.horizontal, 12)
         }
     }
 
@@ -456,6 +480,9 @@ struct ChatView: View {
                     dockRail
                 }
             }
+        }
+        .overlay(alignment: leftHandedDock ? .topLeading : .topTrailing) {
+            shellSessionCluster
         }
     }
 
@@ -576,7 +603,6 @@ struct ConversationView: View {
     /// The regular split never sets it: there the conversation stays
     /// visible beside the workbench and keeps its toolbar.
     var toolbarSuppressed: Bool = false
-    @State private var showNewSessionDialog = false
     @StateObject private var horizontalScrollGestureState = HorizontalScrollGestureState()
     /// Mirrors `ChatView` so the nav-bar clusters follow the rail to the
     /// reachable edge.
@@ -616,13 +642,7 @@ struct ConversationView: View {
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
             if !toolbarSuppressed {
-                if leftHandedDock {
-                    sessionControls
-                    identityGroup
-                } else {
-                    identityGroup
-                    sessionControls
-                }
+                identityGroup
             }
         }
         .sheet(isPresented: $showFrozenSessions) {
@@ -668,40 +688,46 @@ struct ConversationView: View {
                 .accessibilityIdentifier("frozen-back")
             }
         } else if #available(iOS 26.0, *) {
-            ToolbarItem(placement: .principal) {
-                selectedAvatarView
+            // Order: dropdown pill leads, the avatar sits alone at the
+            // center, session controls trail — three separate items so
+            // nothing can paint over anything else.
+            ToolbarItem(placement: identityPlacement) {
+                switcherPill
             }
             .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: identityPlacement) {
-                materialIdentityLabel
+            ToolbarItem(placement: .principal) {
+                selectedAvatarView
             }
             .sharedBackgroundVisibility(.hidden)
         } else {
+            ToolbarItem(placement: identityPlacement) {
+                switcherPill
+            }
             ToolbarItem(placement: .principal) {
                 selectedAvatarView
-            }
-            ToolbarItem(placement: identityPlacement) {
-                ScoopSwitcher()
-                    .frame(width: identityLabelWidth)
             }
         }
     }
 
-    /// A constant identity width prevents UIKit from rebalancing `.principal`
-    /// when the selected assistant label grows or truncates.
-    private var identityLabelWidth: CGFloat {
-        84
-    }
-
-    @available(iOS 26.0, *)
-    private var materialIdentityLabel: some View {
+    /// One control height for the whole header row — pill, avatar, and
+    /// cluster all measure 36pt like the cluster's buttons.
+    private var switcherPill: some View {
         ScoopSwitcher()
-            .frame(width: identityLabelWidth)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
             .background(.regularMaterial, in: Capsule())
     }
 
     private var selectedAvatarView: some View {
+        sizedAvatar
+    }
+
+    private var sizedAvatar: some View {
+        rawAvatarView
+            .frame(width: 36, height: 36)
+    }
+
+    private var rawAvatarView: some View {
         ScoopStatusAvatar(
             avatar: selectedAvatar,
             accessibilityLabel: selectedAccessibilityLabel
@@ -712,14 +738,14 @@ struct ConversationView: View {
         let eyesOverride: SliccAgentAvatarGeometry.EyeState? =
             showsConnectionStatic ? .static : nil
         return appState.selectedScoop?.avatarGeometry(
-            sideLength: 20,
+            sideLength: 30,
             eyesOverride: eyesOverride
         )
             ?? .init(
                 type: .cone,
                 color: "#D2691E",
                 eyes: eyesOverride ?? .open,
-                sideLength: 20)
+                sideLength: 30)
     }
 
     private var selectedAccessibilityLabel: String {
@@ -749,107 +775,6 @@ struct ConversationView: View {
         case .failed: return "Connection Failed"
         case .gaveUp: return "Couldn't reach the leader. Reload to retry."
         }
-    }
-
-    /// Session-level actions. `settings` sits in the middle of the cluster in
-    /// both handedness modes; the outer two mirror so New chat — the most
-    /// frequent of the three — stays nearest the holding hand's edge.
-    @ToolbarContentBuilder
-    private var sessionControls: some ToolbarContent {
-        if #available(iOS 26.0, *) {
-            ToolbarItem(placement: controlsPlacement) {
-                materialSessionControls
-            }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItemGroup(placement: controlsPlacement) {
-                if appState.openFrozen != nil {
-                    settingsButton
-                } else if leftHandedDock {
-                    newChatButton
-                    settingsButton
-                    frozenSessionsButton
-                } else {
-                    frozenSessionsButton
-                    settingsButton
-                    newChatButton
-                }
-            }
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private var materialSessionControls: some View {
-        HStack(spacing: 0) {
-            if appState.openFrozen != nil {
-                settingsButton
-                    .frame(width: 36, height: 36)
-            } else if leftHandedDock {
-                newChatButton
-                    .frame(width: 36, height: 36)
-                settingsButton
-                    .frame(width: 36, height: 36)
-                frozenSessionsButton
-                    .frame(width: 36, height: 36)
-            } else {
-                frozenSessionsButton
-                    .frame(width: 36, height: 36)
-                settingsButton
-                    .frame(width: 36, height: 36)
-                newChatButton
-                    .frame(width: 36, height: 36)
-            }
-        }
-        .background(.regularMaterial, in: Capsule())
-    }
-
-    private var newChatButton: some View {
-        Button {
-            UIApplication.shared.sendAction(
-                #selector(UIResponder.resignFirstResponder),
-                to: nil, from: nil, for: nil)
-            showNewSessionDialog = true
-        } label: {
-            if appState.newSessionInFlight {
-                ProgressView()
-            } else {
-                Image(systemName: "square.and.pencil")
-                    .foregroundStyle(palette.ink.opacity(0.7))
-            }
-        }
-        // Gated like the composer: with no usable leader the request would
-        // silently vanish (requestNewSession returns when the channel cannot
-        // be written).
-        .disabled(
-            appState.newSessionInFlight
-                || appState.connectionState != .connected
-                || appState.isLeaderStalled
-        )
-        .accessibilityLabel("New chat")
-        .accessibilityIdentifier("new-chat-button")
-        .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))
-    }
-
-    private var settingsButton: some View {
-        Button {
-            showSettings = true
-        } label: {
-            Image(systemName: "gearshape")
-                .foregroundStyle(palette.ink.opacity(0.7))
-        }
-        .accessibilityLabel("Settings")
-        .accessibilityIdentifier("settings-button")
-    }
-
-    private var frozenSessionsButton: some View {
-        Button {
-            showFrozenSessions = true
-        } label: {
-            Image(systemName: "snowflake")
-                .foregroundStyle(palette.ink.opacity(0.7))
-        }
-        .accessibilityLabel("Past Sessions")
-        .accessibilityIdentifier("frozen-rail-button")
     }
 
     @ViewBuilder
@@ -1086,9 +1011,10 @@ struct ScoopSwitcher: View {
         }
     }
 
-    /// Label + leader-active dot, sized to sit inside the nav bar.
-    /// The 52pt content floor fits `Scoo…` at the 15pt semibold nav-bar font
-    /// when the stable toolbar container constrains a long assistant label.
+    /// The dropdown's face: label + chevron only. The bound lives INSIDE
+    /// the label because a Menu never compresses its label view — an outer
+    /// frame makes long text overflow the pill instead of truncating.
+    /// Leader-active is spoken in the menu rows, not as a dot here.
     private var identityLabel: some View {
         HStack(spacing: 5) {
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
@@ -1096,22 +1022,14 @@ struct ScoopSwitcher: View {
                 .foregroundStyle(palette.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(minWidth: 52, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
-            if appState.leaderActiveScoopJid != nil,
-                appState.leaderActiveScoopJid == appState.selectedScoopJid
-            {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-            }
+                .frame(maxWidth: 120, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             if appState.scoops.count > 1 {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(palette.ink.opacity(0.5))
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The leader's active scoop is marked in the menu too — the dot on the
@@ -1123,6 +1041,95 @@ struct ScoopSwitcher: View {
         return scoop.jid == appState.leaderActiveScoopJid
             ? "\(status) · \(kind) · active"
             : "\(status) · \(kind)"
+    }
+}
+
+// MARK: - SessionControlsCluster
+
+/// The session cluster as shell chrome, not toolbar content: the
+/// navigation bar clips its items at the column edge, and this cluster
+/// deliberately overlaps the dock rail — so it floats in the shell's
+/// coordinate space above the rail instead.
+struct SessionControlsCluster: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.palette) private var palette
+    @Binding var showSettings: Bool
+    @Binding var showFrozenSessions: Bool
+    let frozenOpen: Bool
+    let leftHanded: Bool
+    @State private var showNewSessionDialog = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if frozenOpen {
+                settingsButton
+                    .frame(width: 36, height: 36)
+            } else if leftHanded {
+                newChatButton
+                    .frame(width: 36, height: 36)
+                settingsButton
+                    .frame(width: 36, height: 36)
+                frozenSessionsButton
+                    .frame(width: 36, height: 36)
+            } else {
+                frozenSessionsButton
+                    .frame(width: 36, height: 36)
+                settingsButton
+                    .frame(width: 36, height: 36)
+                newChatButton
+                    .frame(width: 36, height: 36)
+            }
+        }
+        .background(.regularMaterial, in: Capsule())
+    }
+
+    private var newChatButton: some View {
+        Button {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil)
+            showNewSessionDialog = true
+        } label: {
+            if appState.newSessionInFlight {
+                ProgressView()
+            } else {
+                Image(systemName: "square.and.pencil")
+                    .foregroundStyle(palette.ink.opacity(0.7))
+            }
+        }
+        // Gated like the composer: with no usable leader the request would
+        // silently vanish (requestNewSession returns when the channel cannot
+        // be written).
+        .disabled(
+            appState.newSessionInFlight
+                || appState.connectionState != .connected
+                || appState.isLeaderStalled
+        )
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("new-chat-button")
+        .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))
+    }
+
+    private var settingsButton: some View {
+        Button {
+            showSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .foregroundStyle(palette.ink.opacity(0.7))
+        }
+        .accessibilityLabel("Settings")
+        .accessibilityIdentifier("settings-button")
+    }
+
+    private var frozenSessionsButton: some View {
+        Button {
+            showFrozenSessions = true
+        } label: {
+            Image(systemName: "snowflake")
+                .foregroundStyle(palette.ink.opacity(0.7))
+        }
+        .accessibilityLabel("Past Sessions")
+        .accessibilityIdentifier("frozen-rail-button")
     }
 }
 
