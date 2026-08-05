@@ -3,7 +3,6 @@ import Foundation
 
 enum KokoroModelInstallationState: Equatable, Sendable {
     case notInstalled
-    case awaitingConsent
     case downloading(fraction: Double)
     case installed
     case failed(KokoroModelProvisioningError)
@@ -25,6 +24,8 @@ final class KokoroModelInstallation: ObservableObject {
     }()
 
     @Published private(set) var state: KokoroModelInstallationState
+    /// When the in-flight download started; drives the ETA line in Settings.
+    @Published private(set) var downloadStartedAt: Date?
     let usesDeveloperPack: Bool
 
     private let managedDirectory: URL?
@@ -61,30 +62,27 @@ final class KokoroModelInstallation: ObservableObject {
         }
     }
 
+    /// One tap starts the download — the button copy carries the size and
+    /// Wi-Fi disclosure, so a separate consent step would only restate what
+    /// the user just read (product call: single click, then cancel + ETA).
     func requestInstallation() {
         guard !usesDeveloperPack else { return }
         switch state {
         case .notInstalled, .failed:
-            state = .awaitingConsent
-        case .awaitingConsent, .downloading, .installed:
+            beginDownload()
+        case .downloading, .installed:
             break
         }
     }
 
-    func declineConsent() {
-        guard case .awaitingConsent = state else { return }
-        state = .notInstalled
-    }
-
-    func confirmInstallation() {
-        guard case .awaitingConsent = state, let managedDirectory else {
-            if managedDirectory == nil {
-                state = .failed(.storageFailure("Application Support is unavailable"))
-            }
+    private func beginDownload() {
+        guard let managedDirectory else {
+            state = .failed(.storageFailure("Application Support is unavailable"))
             return
         }
         let downloadID = UUID()
         activeDownloadID = downloadID
+        downloadStartedAt = Date()
         state = .downloading(fraction: 0)
         downloadTask = Task { [weak self] in
             guard let self else { return }
@@ -129,6 +127,7 @@ final class KokoroModelInstallation: ObservableObject {
         activeDownloadID = nil
         downloadTask?.cancel()
         downloadTask = nil
+        downloadStartedAt = nil
         do {
             try removeManagedDirectory()
             state = .notInstalled
@@ -160,6 +159,7 @@ final class KokoroModelInstallation: ObservableObject {
         guard activeDownloadID == downloadID else { return }
         activeDownloadID = nil
         downloadTask = nil
+        downloadStartedAt = nil
         self.state = state
     }
 

@@ -35,6 +35,9 @@ struct SettingsView: View {
     /// every single layout pass of the sheet. It is sampled once, off the
     /// main actor, and the answer cannot change while the sheet is open.
     @State private var hasICloudIdentity: Bool?
+    /// Sinks sessions whose leader no longer answers to the bottom of the
+    /// iCloud list (KVS keeps advertising them past the leader's death).
+    @StateObject private var reachability = SessionReachability()
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -136,30 +139,41 @@ struct SettingsView: View {
     /// used in an accessibility identifier (rows use the one-way session id).
     private var iCloudSessionsSection: some View {
         Section {
-            let groups = ICloudSessionList.groups(from: appState.sessionStore.sessions)
-            if groups.isEmpty {
+            let rows = sessionRowsSortedByReachability
+            if rows.isEmpty {
                 sessionsEmptyState
             } else {
-                ForEach(groups) { group in
-                    ForEach(group.sessions) { session in
-                        sessionRow(session, deviceName: group.deviceName)
-                    }
+                ForEach(rows, id: \.session.id) { row in
+                    sessionRow(row.session, deviceName: row.deviceName)
                 }
             }
         } header: {
             Text("iCloud Sessions")
         } footer: {
-            Text(
-                "Leaders started with Sliccstart on this Apple ID appear here "
-                    + "automatically. Others (cloud, another Apple ID) still join via a "
-                    + "pasted Join URL below."
-            )
+            Text("Sessions started with Sliccstart on your other devices appear automatically.")
         }
         .onAppear {
             appState.sessionStore.reload()
             now = Date()
+            reachability.probe(appState.sessionStore.sessions)
         }
         .onReceive(staleTicker) { now = $0 }
+    }
+
+    /// Flattened device groups, reachable (or not-yet-probed) sessions first,
+    /// each cohort newest-first. Unreachable rows keep rendering — the probe
+    /// can be wrong about a flaky network — but sink below the live ones.
+    private var sessionRowsSortedByReachability: [(session: SyncedTraySession, deviceName: String)] {
+        ICloudSessionList.groups(from: appState.sessionStore.sessions)
+            .flatMap { group in
+                group.sessions.map { (session: $0, deviceName: group.deviceName) }
+            }
+            .sorted { a, b in
+                let aReachable = reachability.presumedReachable(a.session.id)
+                let bReachable = reachability.presumedReachable(b.session.id)
+                if aReachable != bReachable { return aReachable }
+                return a.session.lastSeenAt > b.session.lastSeenAt
+            }
     }
 
     private func sessionRow(_ session: SyncedTraySession, deviceName: String) -> some View {
@@ -175,18 +189,23 @@ struct SettingsView: View {
                 joinUrl: session.joinUrl,
                 displayName: session.label.isEmpty ? nil : session.label)
         } label: {
+            let unreachable = reachability.verdicts[session.id] == .unreachable
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.label.isEmpty ? "SLICC session" : session.label)
                         .foregroundStyle(.primary)
-                    Text("\(deviceName) · \(ICloudSessionList.age(of: session.lastSeenAt, now: now))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "\(deviceName) · \(ICloudSessionList.age(of: session.lastSeenAt, now: now))"
+                            + (unreachable ? " · not responding" : "")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "arrow.right.circle")
-                    .foregroundStyle(.tint)
+                Image(systemName: unreachable ? "icloud.slash" : "arrow.right.circle")
+                    .foregroundStyle(unreachable ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
             }
+            .opacity(unreachable ? 0.55 : 1)
         }
         // The one-way hash, deliberately — never the join URL.
         .accessibilityIdentifier("icloud-session-\(session.id)")
@@ -208,8 +227,8 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             Text(
                 reason == .iCloudUnavailable
-                    ? "iCloud is unavailable on this device. Sign in to iCloud, or paste a Join URL below."
-                    : "No active sessions. Start a leader with Sliccstart on a Mac using this Apple ID, or paste a Join URL below."
+                    ? "Sign in to iCloud to see sessions from your other devices."
+                    : "No active sessions."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -245,12 +264,77 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
             }
             joinUrlHelpDisclosure
-            connectDisconnectButton
-            connectionStatusRow
+            connectActionRow
+            connectionNote
         } header: {
             Text("Connection")
         } footer: {
-            Text("The Join URL pairs this phone with a SLICC desktop browser so it can mirror the conversation.")
+            Text("Connect to a SLICC session with its Join URL.")
+        }
+    }
+
+    /// A plain action row, styled like Cancel Download and Clear Stored
+    /// Data — just blue instead of red (review note on the first draft).
+    @ViewBuilder
+    private var connectActionRow: some View {
+        switch appState.connectionState {
+        case .connected:
+            Button("Disconnect", role: .destructive) {
+                appState.disconnect()
+            }
+        case .reconnecting:
+            // Same full teardown as Disconnect (reconnect budget, stored
+            // credentials, file-provider domain) — the label says what the
+            // tap actually abandons.
+            Button("Stop Reconnecting", role: .destructive) {
+                appState.disconnect()
+            }
+        case .connecting:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Connecting…")
+                    .foregroundStyle(.secondary)
+            }
+        case .disconnected, .failed, .gaveUp:
+            Button(connectionAttemptFailed ? "Retry" : "Connect") {
+                awaitingConnect = true
+                appState.connect()
+            }
+            .disabled(
+                appState.joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+        }
+    }
+
+    private var connectionAttemptFailed: Bool {
+        appState.connectionState == .failed || appState.connectionState == .gaveUp
+    }
+
+    /// Status appears only when it says something: an in-flight reconnect, a
+    /// live connection, or why the last attempt failed. An idle sheet shows
+    /// no "Disconnected" row for a connection nobody has started.
+    @ViewBuilder
+    private var connectionNote: some View {
+        switch appState.connectionState {
+        case .connected:
+            HStack(spacing: 8) {
+                Circle().fill(.green).frame(width: 8, height: 8)
+                Text("Connected").foregroundStyle(.secondary)
+            }
+        case .reconnecting:
+            HStack(spacing: 8) {
+                Circle().fill(.orange).frame(width: 8, height: 8)
+                Text("Reconnecting…").foregroundStyle(.secondary)
+            }
+        case .failed, .gaveUp:
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text(appState.lastError ?? "Couldn't connect. Check the Join URL and try again.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        case .disconnected, .connecting:
+            EmptyView()
         }
     }
 
@@ -300,70 +384,6 @@ struct SettingsView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var connectDisconnectButton: some View {
-        Group {
-            if appState.connectionState == .connected || appState.connectionState == .reconnecting {
-                Button(role: .destructive) {
-                    appState.disconnect()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Text("Disconnect").fontWeight(.semibold)
-                        Spacer()
-                    }
-                }
-            } else {
-                Button {
-                    awaitingConnect = true
-                    appState.connect()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Text("Connect").fontWeight(.semibold)
-                        Spacer()
-                    }
-                }
-                .disabled(
-                    appState.joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || appState.connectionState == .connecting
-                )
-                .tint(.purple)
-            }
-        }
-    }
-
-    private var connectionStatusRow: some View {
-        HStack {
-            Text("Status")
-            Spacer()
-            Circle()
-                .fill(connectionDotColor)
-                .frame(width: 8, height: 8)
-            Text(connectionStatusText)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var connectionDotColor: Color {
-        switch appState.connectionState {
-        case .disconnected, .failed, .gaveUp: .red
-        case .connecting: .yellow
-        case .connected: .green
-        case .reconnecting: .orange
-        }
-    }
-
-    private var connectionStatusText: String {
-        switch appState.connectionState {
-        case .disconnected: "Disconnected"
-        case .connecting: "Connecting…"
-        case .connected: "Connected"
-        case .reconnecting: "Reconnecting…"
-        case .failed: "Failed"
-        case .gaveUp: "Gave up"
         }
     }
 
@@ -472,11 +492,19 @@ struct SettingsView: View {
 
 private struct SpeechSettingsSection: View {
     @StateObject private var kokoroModels = KokoroModelInstallation.shared
+    /// Re-samples the ETA once a second while a download runs; progress
+    /// callbacks alone can stall for seconds on a slow link and let a
+    /// stale "about 10 s left" sit on screen.
+    @State private var now = Date()
+    private let etaTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Section {
             if case .notInstalled = kokoroModels.state {
-                Button("Enable high-quality English voice") {
+                // One tap starts the download; the label already discloses
+                // the size and Wi-Fi-only behavior, so there is no second
+                // confirm step — just Cancel + ETA once it runs.
+                Button("Download High-Quality English Voice") {
                     kokoroModels.requestInstallation()
                 }
                 .accessibilityIdentifier("kokoro-install-toggle")
@@ -486,34 +514,26 @@ private struct SpeechSettingsSection: View {
         } header: {
             Text("Speech")
         }
+        .onReceive(etaTicker) { tick in
+            // Only invalidate the section while an ETA is actually on
+            // screen; a 1 Hz re-render of an idle sheet shows up in
+            // Instruments (review finding).
+            if case .downloading = kokoroModels.state { now = tick }
+        }
     }
 
     @ViewBuilder
     private var kokoroInstallationStatus: some View {
         switch kokoroModels.state {
         case .notInstalled:
-            Text("Optional Wi-Fi download · about 83 MB. Replies use the system voice until installed.")
+            Text("83 MB. Downloads over Wi-Fi only.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("kokoro-install-status")
-        case .awaitingConsent:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(
-                    "About 83 MB. The download is Wi-Fi only and never uses cellular data."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("kokoro-install-status")
-                Button("Download on Wi-Fi") { kokoroModels.confirmInstallation() }
-                    .accessibilityIdentifier("kokoro-download-confirm")
-                Button("Cancel") { kokoroModels.declineConsent() }
-                    .accessibilityIdentifier("kokoro-consent-cancel")
-            }
-            .buttonStyle(.borderless)
         case .downloading(let fraction):
             ProgressView(value: fraction)
                 .accessibilityIdentifier("kokoro-download-progress")
-            Text("Downloading on Wi-Fi · \(Int(fraction * 100))%")
+            Text(downloadStatusLine(fraction: fraction))
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("kokoro-install-status")
@@ -553,6 +573,31 @@ private struct SpeechSettingsSection: View {
             Button("Retry Download") { kokoroModels.requestInstallation() }
                 .accessibilityIdentifier("kokoro-install-retry")
         }
+    }
+
+    /// "Downloading · 42% · About 40 seconds remaining" — Apple's download
+    /// phrasing. The ETA extrapolates from elapsed wall-clock and completed
+    /// fraction; it only appears once 5% is in, because earlier
+    /// extrapolations swing wildly.
+    private func downloadStatusLine(fraction: Double) -> String {
+        var line = "Downloading · \(Int(fraction * 100))%"
+        if let started = kokoroModels.downloadStartedAt, fraction >= 0.05, fraction < 1 {
+            let elapsed = now.timeIntervalSince(started)
+            let remaining = elapsed * (1 - fraction) / fraction
+            if remaining.isFinite, remaining > 0 {
+                line += " · About \(Self.roundedETA(seconds: remaining)) remaining"
+            }
+        }
+        return line
+    }
+
+    private static func roundedETA(seconds: Double) -> String {
+        if seconds >= 90 {
+            let minutes = Int((seconds / 60).rounded())
+            return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        }
+        // Sub-90s counts in tens of seconds so the number does not flicker.
+        return "\(max(10, Int((seconds / 10).rounded()) * 10)) seconds"
     }
 }
 
