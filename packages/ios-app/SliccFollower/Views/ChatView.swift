@@ -12,6 +12,7 @@ struct ChatView: View {
     @EnvironmentObject var inboundActions: InboundActionCoordinator
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.openURL) private var openURL
     @StateObject private var presentation: ChatPresentationState
     @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
     @State private var showSettings = false
@@ -96,7 +97,10 @@ struct ChatView: View {
             if surface == .term { presentation.terminalWasOpened = true }
         }
         .overlay(alignment: .top) {
-            inboundOpenCard
+            VStack(spacing: 8) {
+                inboundOpenCard
+                inboundPromptCard
+            }
         }
         .onChange(of: inboundActions.pendingOpen) { action in
             // The App-Intent route was an explicit user action — execute
@@ -157,6 +161,97 @@ struct ChatView: View {
         }
         let id = appState.cdpOpenTab(url: action.url.absoluteString)
         appState.browserViewingTabId = id
+    }
+
+    /// Confirmation card for an automation prompt. Deep-linked prompts can
+    /// trigger agent tools, so nothing is sent until the user says so —
+    /// fail-closed is the policy until unattended automation is an
+    /// explicit decision (#1918).
+    @ViewBuilder
+    private var inboundPromptCard: some View {
+        if let action = inboundActions.pendingPrompt {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Prompt SLICC?", systemImage: "text.bubble")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(action.prompt)
+                    .font(.system(size: 13))
+                    .lineLimit(4)
+                Text(
+                    action.xSuccess == nil
+                        ? "Sends to the current conversation."
+                        : "Sends to the current conversation; the reply is returned to the requesting app."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                HStack {
+                    Button("Dismiss") {
+                        inboundActions.consume(prompt: action)
+                        fireCallback(action.xCancel, params: [:])
+                    }
+                    .accessibilityIdentifier("inbound-prompt-dismiss")
+                    Spacer()
+                    Button("Send") {
+                        executeInboundPrompt(action)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        appState.connectionState != .connected || appState.isLeaderStalled
+                    )
+                    .accessibilityIdentifier("inbound-prompt-send")
+                }
+            }
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .accessibilityIdentifier("inbound-prompt-card")
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private func executeInboundPrompt(_ action: InboundActionCoordinator.PendingPrompt) {
+        inboundActions.consume(prompt: action)
+        guard appState.connectionState == .connected, !appState.isLeaderStalled,
+            let scoopJid = appState.selectedScoopJid
+        else {
+            fireCallback(
+                action.xError, params: ["errorMessage": "SLICC is not connected to a leader"])
+            return
+        }
+        appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
+            switch outcome {
+            case .reply(let text):
+                fireCallback(
+                    action.xSuccess, params: ["result": Self.boundedCallbackResult(text)])
+            case .failure(let message):
+                fireCallback(action.xError, params: ["errorMessage": message])
+            }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(180))
+            appState.inboundPrompt.timeout()
+        }
+        appState.sendMessage(action.prompt)
+    }
+
+    /// Append our result parameters to the caller-supplied callback and
+    /// bounce over. The callback URL and its values are never logged.
+    private func fireCallback(_ url: URL?, params: [String: String]) {
+        guard let url,
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return }
+        if !params.isEmpty {
+            components.queryItems =
+                (components.queryItems ?? [])
+                + params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        if let final = components.url { openURL(final) }
+    }
+
+    /// x-callback results ride in a URL query — cap what we return rather
+    /// than hand Shortcuts an unbounded string (#1918).
+    static func boundedCallbackResult(_ text: String) -> String {
+        text.count <= 2000 ? text : String(text.prefix(2000)) + "…"
     }
 
     /// Full-screen browsing: a foregrounded local tab claims the whole

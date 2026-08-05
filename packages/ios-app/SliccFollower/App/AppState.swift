@@ -1056,6 +1056,10 @@ class AppState: ObservableObject {
         }
     }
 
+    /// One-shot waiter for `slicc://prompt` automation — its own object so
+    /// the settle logic stays out of this (size-capped) type body.
+    let inboundPrompt = InboundPromptWaiter()
+
     /// Speak a finished assistant reply when the turn it answers was dictated.
     ///
     /// Hooked to BOTH completion events because leaders disagree about which
@@ -1251,6 +1255,7 @@ class AppState: ObservableObject {
                     messages = buffer
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
+                inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
@@ -1294,6 +1299,7 @@ class AppState: ObservableObject {
                     streamingMessageId = nil
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
+                inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
             }
 
         case .error(let error):
@@ -1307,6 +1313,7 @@ class AppState: ObservableObject {
                 }
             }
             if isVisible { leaderError = error }
+            inboundPrompt.fail(scoopJid: scoopJid, error: error)
             settleTurn(messageId: nil, isVisible: isVisible)
 
         // Events that mutate no transcript state. Kept as a single arm so the
