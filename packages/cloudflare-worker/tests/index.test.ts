@@ -1213,6 +1213,7 @@ describe('tray worker skeleton', () => {
         'GET /handoff',
         'GET /.well-known/api-catalog',
         'GET /.well-known/apple-app-site-association',
+        'GET /privacy',
         'GET /llms.txt',
         'GET /status',
         'GET /rel/:name',

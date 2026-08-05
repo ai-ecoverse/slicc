@@ -42,6 +42,7 @@ import {
   handlePreviewUpload,
   handleTraySupersede,
 } from './preview-routes.js';
+import { buildPrivacyResponse } from './privacy.js';
 import { buildRelResponse } from './rel-docs.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 import {
@@ -565,6 +566,7 @@ const ROUTES_INDEX_BODY = {
     'GET /handoff',
     'GET /.well-known/api-catalog',
     'GET /.well-known/apple-app-site-association',
+    'GET /privacy',
     'GET /llms.txt',
     'GET /status',
     'GET /rel/:name',
@@ -778,6 +780,17 @@ async function tryHandleInstallerRoutes(
   return null;
 }
 
+// GET|HEAD pages served straight from a builder, with no env or fetch
+// dependency. `/privacy` is linked from App Store Connect and must be
+// answered by the worker, not the SPA fallback (which would serve the
+// dashboard shell instead of a policy).
+const STATIC_INFO_ROUTES: Record<string, (request: Request) => Response> = {
+  '/.well-known/api-catalog': buildApiCatalogResponse,
+  '/.well-known/apple-app-site-association': buildAppSiteAssociationResponse,
+  '/llms.txt': buildLlmsTxtResponse,
+  '/privacy': buildPrivacyResponse,
+};
+
 async function tryHandleInfoRoutes(
   url: URL,
   request: Request,
@@ -812,22 +825,9 @@ async function tryHandleInfoRoutes(
     return buildHandoffResponse(request);
   }
 
-  if (
-    url.pathname === '/.well-known/api-catalog' &&
-    (request.method === 'GET' || request.method === 'HEAD')
-  ) {
-    return buildApiCatalogResponse(request);
-  }
-
-  if (url.pathname === '/llms.txt' && (request.method === 'GET' || request.method === 'HEAD')) {
-    return buildLlmsTxtResponse(request);
-  }
-
-  if (
-    url.pathname === '/.well-known/apple-app-site-association' &&
-    (request.method === 'GET' || request.method === 'HEAD')
-  ) {
-    return buildAppSiteAssociationResponse(request);
+  const staticInfoRoute = STATIC_INFO_ROUTES[url.pathname];
+  if (staticInfoRoute && (request.method === 'GET' || request.method === 'HEAD')) {
+    return staticInfoRoute(request);
   }
 
   if (url.pathname === '/status' && (request.method === 'GET' || request.method === 'HEAD')) {
