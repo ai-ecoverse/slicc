@@ -68,6 +68,7 @@ targets:
       - package: GhosttyTerminal
       - target: SliccTrayKit
       - target: SliccFileProvider
+      - target: SliccShareExtension
       - package: WebRTC
       - package: SliccTraySession
       - sdk: WebKit.framework
@@ -99,6 +100,35 @@ targets:
       - target: SliccTrayKit
       - sdk: FileProvider.framework
       - sdk: UniformTypeIdentifiers.framework
+  SliccShareExtension:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccShareExtension
+      # Shared with the app so the two ends of the App Group inbox cannot
+      # drift (#1918). Foundation-only by design.
+      - path: SliccFollower/App/AppGroupInbox.swift
+    info:
+      path: SliccShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: SLICC
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            # Web URLs only — other payload kinds are rejected at
+            # activation rather than failing inside (#1918).
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.share
+        PRODUCT_NAME: SliccShareExtension
+        INFOPLIST_KEY_CFBundleDisplayName: SLICC
+        CODE_SIGN_ENTITLEMENTS: SliccShareExtension.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - sdk: UniformTypeIdentifiers.framework
   SliccFollowerTests:
     type: bundle.unit-test
     supportedDestinations: [iOS]
@@ -128,6 +158,7 @@ schemes:
         SliccTrayKit: all
         SliccFileProvider: all
         SliccFollower: all
+        SliccShareExtension: all
         SliccFollowerTests: [test]
         SliccFollowerUITests: [test]
     test:
