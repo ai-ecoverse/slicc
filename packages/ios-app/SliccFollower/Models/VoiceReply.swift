@@ -10,9 +10,8 @@ import OSLog
 /// listening half (push-to-talk) but not the answering half, so a hands-free
 /// exchange still ended with the user having to look at the screen.
 ///
-/// The web routes through Kokoro or Web Speech; iOS has one always-present
-/// engine, `AVSpeechSynthesizer`, so the engine-selection layer collapses and
-/// only the coordination survives.
+/// Like the web, iOS routes English replies through Kokoro when its local
+/// models are present and otherwise falls back to the system synthesizer.
 @MainActor
 final class VoiceReply {
     static let shared = VoiceReply()
@@ -42,10 +41,14 @@ final class VoiceReply {
     private static let maxPending = 8
 
     /// The engine is injectable so the coordination is testable without a
-    /// live audio session; it defaults lazily because `AVSpeechSpeaker` is
-    /// itself main-actor isolated.
+    /// live audio session. The default router keeps the system voice as a
+    /// no-model, non-English, failure, and timeout fallback.
     init(speaker: SpeechSpeaking? = nil) {
-        self.speaker = speaker ?? AVSpeechSpeaker()
+        self.speaker =
+            speaker
+            ?? KokoroSpeaker(
+                modelDirectory: KokoroDevelopmentModels.directoryURL(),
+                resourceDownloader: nil)
     }
 
     /// A dictated submission just went out to `scoopJid` — its answer should
@@ -226,8 +229,6 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         let quality: Quality
     }
 
-    static let voiceIdentifierDefaultsKey = "speech.voiceIdentifier"
-
     /// Created on the first spoken reply, never at launch. Constructing a
     /// synthesizer wakes the system speech services on the main actor, and
     /// most sessions never dictate at all.
@@ -282,32 +283,19 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
                 language: $0.language,
                 quality: quality(of: $0))
         }
-        let preferredIdentifier = UserDefaults.standard.string(forKey: voiceIdentifierDefaultsKey)
-        guard
-            let selected = rankedVoice(
-                for: lang, preferredIdentifier: preferredIdentifier, from: candidates)
-        else { return nil }
+        guard let selected = rankedVoice(for: lang, from: candidates) else { return nil }
         return voices.first { $0.identifier == selected.identifier }
     }
 
     /// Select from supplied value types so ranking needs no live speech service.
-    /// A same-language user override wins first. Otherwise exact BCP-47 matches
-    /// precede base-subtag fallbacks, then quality ranks premium > enhanced >
-    /// default. Voice identifier is the stable final tiebreak.
+    /// Exact BCP-47 matches precede base-subtag fallbacks, then quality ranks
+    /// premium > enhanced > default. Voice identifier is the stable final
+    /// tiebreak.
     static func rankedVoice(
         for lang: String,
-        preferredIdentifier: String?,
         from voices: [VoiceCandidate]
     ) -> VoiceCandidate? {
         let replyBase = baseLanguage(of: lang)
-        if let preferredIdentifier, !preferredIdentifier.isEmpty,
-            let preferred = voices.first(where: {
-                $0.identifier == preferredIdentifier && baseLanguage(of: $0.language) == replyBase
-            })
-        {
-            return preferred
-        }
-
         let exact = voices.filter {
             $0.language.caseInsensitiveCompare(lang) == .orderedSame
         }

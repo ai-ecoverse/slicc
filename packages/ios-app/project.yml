@@ -69,6 +69,7 @@ targets:
       - target: SliccTrayKit
       - target: SliccFileProvider
       - target: SliccShareExtension
+      - package: HuggingFace
       - package: WebRTC
       - package: SliccTraySession
       - sdk: WebKit.framework
@@ -191,6 +192,9 @@ packages:
   GhosttyTerminal:
     url: https://github.com/Lakr233/libghostty-spm
     exactVersion: 1.3.2
+  HuggingFace:
+    url: https://github.com/huggingface/swift-huggingface
+    minorVersion: 0.9.0
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 150.0.0

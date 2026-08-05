@@ -92,7 +92,17 @@ the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
 ## Push to Talk
 
-Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak replies (`VoiceReply` / `DictationPriming`); typed turns stay silent. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak their matching reply: English packs use Kokoro; all other paths use `AVSpeechSynthesizer`. Typed turns stay silent. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+
+### Local Kokoro models
+
+Settings offers the anonymous, pinned ~83 MB Hugging Face pack behind explicit
+Wi-Fi consent, with progress, cancel, retry, and removal; replies never provision
+it. The pack contains nine CoreML stages, two vocabularies, and `af_heart`; its
+marker and colocated cache are deleted together. Background Assets was rejected:
+its Xcode 27 beta spike never delivered/read back on Simulator, and `ba-serve`
+failed TLS key authorization. Weights are not committed. See
+[`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md) for QA.
 
 ## Terminal
 
