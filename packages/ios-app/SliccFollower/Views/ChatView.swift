@@ -667,34 +667,33 @@ struct ConversationView: View {
             }
         } else if #available(iOS 26.0, *) {
             ToolbarItem(placement: .principal) {
-                selectedAvatarView
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: identityPlacement) {
-                materialIdentityLabel
+                HStack(spacing: 6) {
+                    selectedAvatarView
+                    materialIdentityLabel
+                }
             }
             .sharedBackgroundVisibility(.hidden)
         } else {
-            ToolbarItem(placement: .principal) {
-                selectedAvatarView
-            }
-            ToolbarItem(placement: identityPlacement) {
-                ScoopSwitcher()
-                    .frame(width: identityLabelWidth)
+            ToolbarItemGroup(placement: identityPlacement) {
+                HStack(spacing: 6) {
+                    selectedAvatarView
+                    ScoopSwitcher()
+                        .frame(maxWidth: identityLabelMaxWidth)
+                }
             }
         }
     }
 
-    /// A constant identity width prevents UIKit from rebalancing `.principal`
-    /// when the selected assistant label grows or truncates.
-    private var identityLabelWidth: CGFloat {
-        84
+    /// Keep enough text for visible characters before the ellipsis while
+    /// leaving compact bars room for the adjacent avatar and session controls.
+    private var identityLabelMaxWidth: CGFloat {
+        78
     }
 
     @available(iOS 26.0, *)
     private var materialIdentityLabel: some View {
         ScoopSwitcher()
-            .frame(width: identityLabelWidth)
+            .frame(maxWidth: identityLabelMaxWidth)
             .padding(.vertical, 8)
             .background(.regularMaterial, in: Capsule())
     }
@@ -1085,8 +1084,8 @@ struct ScoopSwitcher: View {
     }
 
     /// Label + leader-active dot, sized to sit inside the nav bar.
-    /// The 52pt content floor fits `Scoo…` at the 15pt semibold nav-bar font
-    /// when the stable toolbar container constrains a long assistant label.
+    /// The 52pt text ceiling fits visible characters before the ellipsis at
+    /// the 15pt semibold nav-bar font without reserving space for short labels.
     private var identityLabel: some View {
         HStack(spacing: 5) {
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
@@ -1094,8 +1093,7 @@ struct ScoopSwitcher: View {
                 .foregroundStyle(palette.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(minWidth: 52, maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
+                .frame(maxWidth: 52, alignment: .leading)
             if appState.leaderActiveScoopJid != nil,
                 appState.leaderActiveScoopJid == appState.selectedScoopJid
             {
