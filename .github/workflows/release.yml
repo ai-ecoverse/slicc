@@ -264,6 +264,12 @@ jobs:
           # WITHOUT the iCloud KVS entitlement while the App Store profile
           # lacks the iCloud capability (see package-and-upload-testflight.sh).
           SLICC_IOS_NO_ICLOUD: ${{ vars.SLICC_IOS_NO_ICLOUD }}
+          # Repo variables: name of the TestFlight tester group each build is
+          # distributed to after upload (empty -> upload only), and an optional
+          # hosted demo session join link appended to the What to Test notes.
+          # See packages/ios-app/scripts/testflight-distribute.mjs.
+          SLICC_TF_EXTERNAL_GROUP: ${{ vars.SLICC_TF_EXTERNAL_GROUP }}
+          SLICC_TF_DEMO_JOIN_URL: ${{ vars.SLICC_TF_DEMO_JOIN_URL }}
         run: npx semantic-release
 
       - name: Alert on red release

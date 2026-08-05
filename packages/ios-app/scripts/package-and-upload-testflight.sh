@@ -503,3 +503,18 @@ case "$GREP_STATUS" in
     ;;
 esac
 echo "=== SliccFollower v${VERSION} (build ${BUILD_NUMBER}) uploaded ==="
+
+# --- External distribution (opt-in) ----------------------------------------
+# altool stops at "uploaded"; testflight-distribute.mjs waits for processing,
+# sets What to Test, submits Beta App Review, and attaches the build to the
+# named tester group. Gated on SLICC_TF_EXTERNAL_GROUP so repos without an
+# external program keep the historical upload-only behavior.
+if [ -n "${SLICC_TF_EXTERNAL_GROUP:-}" ]; then
+  echo "  distributing to tester group '$SLICC_TF_EXTERNAL_GROUP'..."
+  SLICC_TF_BUILD_NUMBER="$BUILD_NUMBER" \
+    SLICC_TF_BUNDLE_ID="$BUNDLE_ID" \
+    APPLE_API_KEY_P8_PATH="$P8_PATH" \
+    node "$SCRIPT_DIR/testflight-distribute.mjs"
+else
+  echo "  SLICC_TF_EXTERNAL_GROUP not set — upload only, no tester distribution."
+fi

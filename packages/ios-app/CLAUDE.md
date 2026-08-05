@@ -162,6 +162,8 @@ swift format --in-place --parallel --recursive SliccFollower Package.swift
 
 Releases run `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`), path-gated by `release-native.mjs`. The script **soft-skips with exit 0** when `SLICC_SKIP_TESTFLIGHT=1`, an Apple secret is missing/`-`, or default Xcode is below 26. A green release is not proof an ipa shipped.
 
+After upload, `scripts/testflight-distribute.mjs` (gated on the `SLICC_TF_EXTERNAL_GROUP` repo variable; unset = upload-only) waits for processing, sets What to Test notes (appending `SLICC_TF_DEMO_JOIN_URL` when set), submits Beta App Review idempotently, and attaches the build to that tester group.
+
 ## Related Guides
 
 - `packages/shared-ts/src/tray-sync-protocol.ts` — canonical protocol
