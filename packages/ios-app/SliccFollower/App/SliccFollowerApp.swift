@@ -12,6 +12,7 @@ struct SliccFollowerApp: App {
         WindowGroup {
             rootView
                 .onOpenURL { url in
+                    if appState.handleOpenCallback(url) { return }
                     // Untrusted input: the coordinator validates and the
                     // shell asks before anything opens. A rejected link is
                     // dropped here — there is nothing useful to render for

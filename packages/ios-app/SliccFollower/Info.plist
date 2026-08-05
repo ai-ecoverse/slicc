@@ -26,6 +26,14 @@
 				<string>slicc</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.sliccy.follower.open-callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>slicc-open-callback</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>

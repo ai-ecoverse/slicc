@@ -38,7 +38,8 @@ Plain SPM commands do nothing useful on a macOS host. Build and test go through 
 
 - `preview.open` → `CDPBridge.handleTabOpen`, ack `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable` in the corpus.
-- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gated by scoped approval, acked without launching. Raw paths reject traversal and encoded delimiters; hierarchical URLs must standardize unchanged. 1,024 IDs tombstoned; 128 failed responses retry FIFO.
+- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gated by scoped approval, then launches that exact approved destination through `UIApplication.open` (`universalLinksOnly` for `--universal`). Raw paths reject traversal and encoded delimiters; hierarchical URLs must standardize unchanged. 1,024 IDs tombstoned; 128 failed terminal deliveries retry FIFO.
+- `--x-callback` replaces any supplied callback keys with app-owned nonce URLs. A correlated success/error/cancel emits one ordered `{status, parameters:[{name,value}]}` JSON line on stdout, then exit 0/1/130. Results are limited to 16 parameters and 16 KiB serialized JSON; overflow fails without truncation. Callback state is process-local, so a callback after app restoration is consumed silently and the leader owns its request timeout.
 
 Both union doc-comments state omissions; `// MARK: -` boundaries are the anchors.
 

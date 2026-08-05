@@ -29,7 +29,9 @@ A target id looks like `follower-<uuid>`. `ssh --list` prints each target's
 advertised MOTD beneath it so you know what you're connecting to. Browser
 followers are never `ssh` targets. iOS followers accept only
 `open [--universal|--x-callback] <url>`, gate it through on-device scoped
-approval, and acknowledge approval without launching the destination.
+approval, and launch the approved destination. `--universal` requires a universal
+link; `--x-callback` returns bounded JSON on stdout and distinct success, error,
+or cancel exit codes. An unavailable app fails instead of pretending to launch.
 `host` hides capability-less followers (e.g. transient `prompt`/`exec` CLI
 connections) as a count, so the list stays the actionable targets.
 
