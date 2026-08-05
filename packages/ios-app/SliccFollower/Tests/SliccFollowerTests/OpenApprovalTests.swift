@@ -111,12 +111,10 @@ final class OpenApprovalTests: XCTestCase {
     }
 
     func testGrantScopeOmitsQueryButDoesNotWidenAcrossDestinationIdentity() throws {
-        let approved = try OpenCommandParser.parse(
-            "open fixtureapp://calendar/create?private=one").scope
+        let approved = try OpenCommandParser.parse("open fixtureapp://calendar/create?private=one").scope
         XCTAssertEqual(
             approved,
-            try OpenCommandParser.parse(
-                "open fixtureapp://calendar/create?private=two").scope)
+            try OpenCommandParser.parse("open fixtureapp://calendar/create?private=two").scope)
         XCTAssertNotEqual(
             approved,
             try OpenCommandParser.parse("open otherapp://calendar/create?private=one").scope)

@@ -1,5 +1,5 @@
-import SliccTraySession
 import SliccTrayKit
+import SliccTraySession
 import SwiftUI
 
 struct SettingsView: View {
