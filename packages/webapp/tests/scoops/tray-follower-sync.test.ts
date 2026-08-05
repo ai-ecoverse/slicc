@@ -14,6 +14,8 @@ import type {
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 
+type LegacyStatusMessage = Omit<Extract<LeaderToFollowerMessage, { type: 'status' }>, 'scoopJid'>;
+
 // ---------------------------------------------------------------------------
 // Fake data channel
 // ---------------------------------------------------------------------------
@@ -40,7 +42,7 @@ class FakeChannel implements TrayDataChannelLike {
     this.readyState = 'closed';
   }
 
-  simulateLeaderMessage(msg: LeaderToFollowerMessage): void {
+  simulateLeaderMessage(msg: LeaderToFollowerMessage | LegacyStatusMessage): void {
     const data = JSON.stringify(msg);
     for (const listener of this.listeners.get('message') ?? []) {
       listener({ data });
@@ -423,7 +425,11 @@ describe('FollowerSyncManager', () => {
       const onStatus = vi.fn();
       const follower = new FollowerSyncManager(channel, { onStatus });
 
-      channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'processing' });
+      channel.simulateLeaderMessage({
+        type: 'status',
+        scoopStatus: 'processing',
+        scoopJid: 'cone',
+      });
 
       expect(onStatus).toHaveBeenCalledWith('processing');
     });

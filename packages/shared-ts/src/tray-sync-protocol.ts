@@ -268,7 +268,7 @@ export type LeaderToFollowerMessage =
       scoopJid: string;
       attachments?: MessageAttachment[];
     }
-  | { type: 'status'; scoopStatus: string }
+  | { type: 'status'; scoopStatus: string; scoopJid: string }
   | { type: 'error'; error: string }
   | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }
   /**

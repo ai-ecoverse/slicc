@@ -308,7 +308,7 @@ describe('LeaderSyncManager', () => {
     manager.broadcastStatus('processing');
 
     const sent = channel.parseSent();
-    expect(sent[1]).toEqual({ type: 'status', scoopStatus: 'processing' });
+    expect(sent[1]).toEqual({ type: 'status', scoopStatus: 'processing', scoopJid: 'cone' });
   });
 
   it('does not broadcast when no followers are connected', () => {

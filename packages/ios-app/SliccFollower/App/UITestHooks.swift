@@ -92,7 +92,7 @@ import UIKit
                 .agentEvent(
                     event: .contentDone(messageId: messageId, model: nil, usage: nil),
                     scoopJid: scoopJid),
-                .status(scoopStatus: "ready"),
+                .status(scoopStatus: "ready", scoopJid: scoopJid),
             ]
             for message in messages {
                 guard let data = try? JSONEncoder().encode(message) else { return false }

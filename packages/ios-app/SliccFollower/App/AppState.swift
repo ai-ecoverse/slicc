@@ -884,7 +884,7 @@ class AppState: ObservableObject {
                 }
             }
 
-        case .status(let scoopStatus):
+        case .status(let scoopStatus, _):
             logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
             // The leader emits processing/ready; streaming/running remain accepted busy aliases.

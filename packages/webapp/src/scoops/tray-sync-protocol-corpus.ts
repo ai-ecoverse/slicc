@@ -236,7 +236,10 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       ],
     },
   },
-  status: { ios: 'decoded', message: { type: 'status', scoopStatus: 'processing' } },
+  status: {
+    ios: 'decoded',
+    message: { type: 'status', scoopStatus: 'processing', scoopJid: 'cone' },
+  },
   error: { ios: 'decoded', message: { type: 'error', error: 'boom' } },
   'scoops.list': {
     ios: 'decoded',

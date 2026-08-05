@@ -97,6 +97,7 @@ type Pong struct {
 type Status struct {
 	Type        string `json:"type"` // "status"
 	ScoopStatus string `json:"scoopStatus"`
+	ScoopJid    string `json:"scoopJid,omitempty"`
 }
 
 // AgentEventEnvelope wraps a streamed agent event (leader→follower).

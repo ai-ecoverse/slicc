@@ -97,7 +97,11 @@ export class BroadcastManager {
 
   broadcastStatus(status: string): void {
     if (this.context.followers.followers.size === 0) return;
-    this.broadcast({ type: 'status', scoopStatus: status });
+    this.broadcast({
+      type: 'status',
+      scoopStatus: status,
+      scoopJid: this.context.options.getScoopJid(),
+    });
   }
 
   async sendSnapshotToFollower(bootstrapId: string, scoopJid?: string): Promise<void> {

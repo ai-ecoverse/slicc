@@ -159,9 +159,9 @@ describe('FollowerRegistry', () => {
       .mockReturnValueOnce(200)
       .mockReturnValueOnce(60_101);
 
-    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'one' });
-    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'two' });
-    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'three' });
+    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'one', scoopJid: 'cone' });
+    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'two', scoopJid: 'cone' });
+    registry.broadcastToAllFollowers({ type: 'status', scoopStatus: 'three', scoopJid: 'cone' });
 
     expect(log.error).toHaveBeenCalledTimes(2);
     registry.removeFollower('stuck');

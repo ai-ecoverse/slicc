@@ -110,7 +110,8 @@ final class AppStateStreamingTests: XCTestCase {
         state.selectedScoopJid = "cone"
 
         state.handleDataChannelMessage(
-            try JSONEncoder().encode(LeaderToFollowerMessage.status(scoopStatus: "processing")))
+            try JSONEncoder().encode(
+                LeaderToFollowerMessage.status(scoopStatus: "processing", scoopJid: "cone")))
         XCTAssertTrue(state.isStreaming)
         try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
         try send(
@@ -120,7 +121,8 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(state.streamingMessageId, "reply")
 
         state.handleDataChannelMessage(
-            try JSONEncoder().encode(LeaderToFollowerMessage.status(scoopStatus: "ready")))
+            try JSONEncoder().encode(
+                LeaderToFollowerMessage.status(scoopStatus: "ready", scoopJid: "cone")))
         XCTAssertFalse(state.isStreaming)
         XCTAssertNil(state.streamingMessageId)
         XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
