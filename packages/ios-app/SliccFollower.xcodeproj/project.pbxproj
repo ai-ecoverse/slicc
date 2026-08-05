@@ -116,6 +116,7 @@
 		A510DB540628EEEFC588B834 /* MemoryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AADA76C8F5B9002C98EBFC6 /* MemoryUITests.swift */; };
 		A5A215E64B167C5F918EA6FA /* ICloudSessionsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9FC22E5B3D4B0DA205C7F62 /* ICloudSessionsUITests.swift */; };
 		A9C0449A188D09A99F506FFE /* InlineSprinkleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F2EECDCB4AF899D3071D13C /* InlineSprinkleView.swift */; };
+		AE08581FE6512D8EF88FDE63 /* OpenInSliccIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE1509E5289AC182F04B1FDB /* OpenInSliccIntents.swift */; };
 		AE5A18B87CA361902F68C6B6 /* TrayFs.swift in Sources */ = {isa = PBXBuildFile; fileRef = E21AD012F0C72C6F1EF4FAAF /* TrayFs.swift */; };
 		B2C8B3A408D6696046BFA08C /* FilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92410F3BA05462ECDEB20A1 /* FilesView.swift */; };
 		B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */; };
@@ -149,6 +150,7 @@
 		E7C4247F7A2D4F6FFB34FA0C /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AA69C9075066023237D992 /* WebRTCManager.swift */; };
 		E88523E3E74C5CE9470746B7 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FFEFD16CC3B2E95B556EAD5B /* UniformTypeIdentifiers.framework */; };
 		E8F341988A6006B0132BFD61 /* ChatPresentationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072D67E727EF4751A1F46665 /* ChatPresentationStateTests.swift */; };
+		EA2700E13066F5AEACB6D3E3 /* InboundActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE19C8ADC78C0F48027D9B5 /* InboundActions.swift */; };
 		EA509061B7265380324F6A40 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 31404ABDC03C86EA89A2B92B /* WebRTC */; };
 		EDCEBDF62330D1775F1B4EE2 /* LinkHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB9ADA61005F3F96BE8CDE2 /* LinkHeader.swift */; };
 		EF0B48599565F81D6133D671 /* FileProvider.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B62D019882F420F864DD1BD0 /* FileProvider.framework */; };
@@ -261,6 +263,7 @@
 		0A51DB1BA99DAE89F21CF736 /* SVGPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGPath.swift; sourceTree = "<group>"; };
 		0B2B453FB36EEF90DF0C8A24 /* CdpOpenTabTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpOpenTabTests.swift; sourceTree = "<group>"; };
 		11B186EDFDE184DC8B3215C4 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		121F56787ADFC45E962E4D64 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		13E209029F63F2427997E161 /* ScoopStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoopStatusTests.swift; sourceTree = "<group>"; };
 		1572105F0B5819E4CC07BD84 /* ThemeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEngine.swift; sourceTree = "<group>"; };
 		18BF55CBA000161C54E4770C /* CdpPreviewClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpPreviewClient.swift; sourceTree = "<group>"; };
@@ -289,6 +292,7 @@
 		49044DEA0E67369B54805BE5 /* TerminalLineEndingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalLineEndingsTests.swift; sourceTree = "<group>"; };
 		496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpPreviewClientTests.swift; sourceTree = "<group>"; };
 		4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolUICard.swift; sourceTree = "<group>"; };
+		4AE19C8ADC78C0F48027D9B5 /* InboundActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboundActions.swift; sourceTree = "<group>"; };
 		4E99369A8A6B1A9B8EBE996E /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		507969DA6DFEA7E053C53F32 /* ThemePaletteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePaletteTests.swift; sourceTree = "<group>"; };
 		508DFA2D4CC9FD26DCC66AD4 /* FrozenSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrozenSessions.swift; sourceTree = "<group>"; };
@@ -376,6 +380,7 @@
 		D8BE50108EF2BB5BE17D889C /* TerminalClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalClientTests.swift; sourceTree = "<group>"; };
 		DD1308398CD972FF297E2C75 /* UITestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestHooks.swift; sourceTree = "<group>"; };
 		DDE98FF01376D2519FAC3A05 /* AppStateFrozenSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFrozenSessions.swift; sourceTree = "<group>"; };
+		DE1509E5289AC182F04B1FDB /* OpenInSliccIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenInSliccIntents.swift; sourceTree = "<group>"; };
 		E21AD012F0C72C6F1EF4FAAF /* TrayFs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFs.swift; sourceTree = "<group>"; };
 		E326D34AE874B17953C8895E /* VoiceReply.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceReply.swift; sourceTree = "<group>"; };
 		E365829FF69F26F07534A5F1 /* LickEvent+Navigate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LickEvent+Navigate.swift"; sourceTree = "<group>"; };
@@ -539,6 +544,8 @@
 				DDE98FF01376D2519FAC3A05 /* AppStateFrozenSessions.swift */,
 				6A88993C99745347AF830860 /* AppStateTheme.swift */,
 				902A857AB83EAF288ECDDA37 /* FileProviderDomainLifecycle.swift */,
+				4AE19C8ADC78C0F48027D9B5 /* InboundActions.swift */,
+				DE1509E5289AC182F04B1FDB /* OpenInSliccIntents.swift */,
 				C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */,
 				DD1308398CD972FF297E2C75 /* UITestHooks.swift */,
 			);
@@ -726,6 +733,7 @@
 		BB5014359700AC04F578180A /* SliccFollower */ = {
 			isa = PBXGroup;
 			children = (
+				121F56787ADFC45E962E4D64 /* Info.plist */,
 				610460E1CC7B9EBB1F34EC0E /* SliccFollower.entitlements */,
 				465A70583C8607C07D58E04D /* App */,
 				A80E98982729018ABE0252BF /* CDP */,
@@ -981,6 +989,7 @@
 				67554B5BF8BA0434704207EF /* HorizontalScrollGuard.swift in Sources */,
 				9AD8326007279D3F37D57C9C /* ICloudSessionList.swift in Sources */,
 				88FE04B67265180C58A84F82 /* ImageAttachmentBuilder.swift in Sources */,
+				EA2700E13066F5AEACB6D3E3 /* InboundActions.swift in Sources */,
 				A9C0449A188D09A99F506FFE /* InlineSprinkleView.swift in Sources */,
 				0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */,
 				977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */,
@@ -995,6 +1004,7 @@
 				5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */,
 				91B4DBF9FB2F5B25B099607C /* MonitorView.swift in Sources */,
 				A14D3D308AFA24D467ECDE96 /* NewSessionDialog.swift in Sources */,
+				AE08581FE6512D8EF88FDE63 /* OpenInSliccIntents.swift in Sources */,
 				11F604368853A3A60AC0B10F /* PttController.swift in Sources */,
 				68FA70C9EC1A7C1137CC277D /* PttOverlayView.swift in Sources */,
 				1C51604116AA20BE57F33B46 /* RemoteTabCard.swift in Sources */,
@@ -1162,6 +1172,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = SliccFollower/SliccFollower.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = SliccFollower/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SliccFollower;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Take a photo to attach it to your message.";
@@ -1392,6 +1403,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = SliccFollower/SliccFollower.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = SliccFollower/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = SliccFollower;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Take a photo to attach it to your message.";

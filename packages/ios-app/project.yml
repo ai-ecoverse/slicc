@@ -37,6 +37,14 @@ targets:
         # globs all of SliccFollower/.
         excludes:
           - Tests
+    # The inbound deep-link route (#1918): `slicc://open?url=…`. Merged with
+    # the GENERATE_INFOPLIST_FILE keys at build time.
+    info:
+      path: SliccFollower/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.sliccy.follower.deeplink
+            CFBundleURLSchemes: [slicc]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower

@@ -9,6 +9,7 @@ import os
 /// selected workbench surface.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var inboundActions: InboundActionCoordinator
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var presentation: ChatPresentationState
@@ -94,6 +95,68 @@ struct ChatView: View {
         .onChange(of: presentation.activeSurface) { surface in
             if surface == .term { presentation.terminalWasOpened = true }
         }
+        .overlay(alignment: .top) {
+            inboundOpenCard
+        }
+        .onChange(of: inboundActions.pendingOpen) { action in
+            // The App-Intent route was an explicit user action — execute
+            // without a second confirmation. Deep links keep their card.
+            if let action, !action.needsConfirmation {
+                executeInboundOpen(action)
+            }
+        }
+    }
+
+    // MARK: - Inbound open (#1918)
+
+    /// Confirmation card for a deep-linked URL: a received link is
+    /// untrusted input, so nothing opens until the user says so here.
+    @ViewBuilder
+    private var inboundOpenCard: some View {
+        if let action = inboundActions.pendingOpen, action.needsConfirmation {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Open in SLICC's browser?", systemImage: "globe")
+                    .font(.system(size: 14, weight: .semibold))
+                // Host leads, full URL follows small — the host is the
+                // trust decision; the rest is context.
+                Text(action.url.host() ?? "")
+                    .font(.system(size: 13, weight: .medium))
+                Text(action.url.absoluteString)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                HStack {
+                    Button("Dismiss") {
+                        inboundActions.consume(action)
+                    }
+                    .accessibilityIdentifier("inbound-open-dismiss")
+                    Spacer()
+                    Button("Open") {
+                        executeInboundOpen(action)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("inbound-open-confirm")
+                }
+            }
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .accessibilityIdentifier("inbound-open-card")
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    /// The shell owns execution: open the URL as a local tab and land the
+    /// user in full-screen browsing, exactly like tapping a remote card.
+    private func executeInboundOpen(_ action: InboundActionCoordinator.PendingOpen) {
+        inboundActions.consume(action)
+        withAnimation {
+            presentation.activeSurface = .browser
+        }
+        let id = appState.cdpOpenTab(url: action.url.absoluteString)
+        appState.browserViewingTabId = id
     }
 
     /// Full-screen browsing: a foregrounded local tab claims the whole
