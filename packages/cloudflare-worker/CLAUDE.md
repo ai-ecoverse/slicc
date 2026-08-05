@@ -20,7 +20,7 @@ the built SLICC webapp as static assets to browser visitors.
 | `src/handoff-page.ts`                                                                  | `/handoff` route — converts `?upskill=`/`?handoff=`/`?msg=` into `Link` response header                             |
 | `src/api-catalog.ts`                                                                   | `/.well-known/api-catalog` (RFC 9264 linkset) builder                                                               |
 | `src/install-cli.ts`                                                                   | `/install-cli` POSIX installer script + `/download/slicc-cli/:target` release-asset resolver                        |
-| `src/llms-txt.ts`                                                                      | `/llms.txt` builder                                                                                                 |
+| `src/llms-txt.ts`, `src/privacy.ts`                                                    | `/llms.txt` builder; `/privacy` canonical-policy redirect                                                           |
 | `src/rel-docs.ts`                                                                      | `/rel/:name` — dereferenceable docs for SLICC custom rels                                                           |
 | `src/flags.ts`                                                                         | `/api/flags` string-map resolution, CORS, and per-float edge caching                                                |
 | `src/oauth-exchange.ts`, `src/oauth-registry.ts`                                       | OAuth callback relay (`/auth/callback`)                                                                             |
@@ -46,30 +46,31 @@ Sandbox lifecycle logic lives in `@slicc/cloud-core`; worker `src/cloud/` is ada
 
 ### Public Routes
 
-| Route                                 | Description                                                                                                                                               |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /tray`                          | Create a tray; return join/controller/webhook capability URLs                                                                                             |
-| `GET /handoff`                        | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                                  |
-| `GET /install-cli`                    | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                                |
-| `GET /install-cli.ps1`                | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH                |
-| `GET /download/slicc-cli/:target`     | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; errors are real HTTP errors (no SPA fallback)      |
-| `GET /.well-known/api-catalog`        | RFC 9264 linkset for all public routes                                                                                                                    |
-| `GET /llms.txt`                       | LLM markdown digest                                                                                                                                       |
-| `GET\|HEAD /status`                   | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                                    |
-| `GET /rel/:name`                      | Dereferenceable docs for SLICC custom rel URIs                                                                                                            |
-| `GET\|POST /join/:token`              | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                                        |
-| `GET\|POST /controller/:token`        | Leader attach and WS upgrade                                                                                                                              |
-| `POST /webhook/:token/:webhookId`     | Forward webhook events into the live leader                                                                                                               |
-| `POST /api/tray/:trayId/preview`      | Mint a preview token; body `{ path, bridge?, maxTabs?, quiet?, webhookId? }`; response `{ previewToken, url }`                                            |
-| `POST /api/tray/:trayId/preview/stop` | Revoke a preview token; body `{ previewToken }`                                                                                                           |
-| `GET /api/tray/:trayId/previews`      | List active previews for a tray                                                                                                                           |
-| `GET <token>.sliccy.now/*`            | Preview HTTP pipe — streams file from leader via DO; 30s timeout; bridge mode injects `<script src="/__slicc/preview-bridge.js">`                         |
-| `GET __slicc/preview-bridge.js`       | Bundled preview bootstrap (bridge-enabled previews only; build-generated, not committed)                                                                  |
-| `WS __slicc/bridge`                   | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit` between tabs and leader; hibernated via `setWebSocketAutoResponse` |
-| `POST __slicc/emit`                   | Fallback beacon relay for `window.slicc.emit` on page unload                                                                                              |
-| `GET /auth/callback`                  | OAuth callback relay; also a capture hop for the cloud dashboard (no `state` → `postMessage` to `window.opener`)                                          |
-| `GET /auth/mcp-callback`              | MCP OAuth capture hop; preserves opaque `state` and posts the untouched callback URL to the same-origin opener                                            |
-| `GET /api/flags`                      | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                               |
+| Route                                 | Description                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /tray`                          | Create a tray; return join/controller/webhook capability URLs                                                                              |
+| `GET /handoff`                        | Convert `?upskill=`, `?handoff=`, or `?msg=` into RFC 8288 `Link` header                                                                   |
+| `GET /install-cli`                    | POSIX installer script for the Go `slicc` follower CLI (`curl -fsSL …/install-cli \| sh`); covers macOS/Linux/WSL/Git Bash                 |
+| `GET /install-cli.ps1`                | Native-Windows PowerShell installer (`irm …/install-cli.ps1 \| iex`) — installs to `%LOCALAPPDATA%\Programs\slicc`, persists the user PATH |
+| `GET /download/slicc-cli/:target`     | 302 to the newest release asset for a CLI target (`darwin-arm64`, …); scans past binary-less releases; real HTTP errors, no SPA fallback   |
+| `GET /.well-known/api-catalog`        | RFC 9264 linkset for all public routes                                                                                                     |
+| `GET /llms.txt`                       | LLM markdown digest                                                                                                                        |
+| `GET\|HEAD /privacy`                  | 301 to www.sliccy.com/privacy (App Store Connect link)                                                                                     |
+| `GET\|HEAD /status`                   | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                     |
+| `GET /rel/:name`                      | Dereferenceable docs for SLICC custom rel URIs                                                                                             |
+| `GET\|POST /join/:token`              | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                         |
+| `GET\|POST /controller/:token`        | Leader attach and WS upgrade                                                                                                               |
+| `POST /webhook/:token/:webhookId`     | Forward webhook events into the live leader                                                                                                |
+| `POST /api/tray/:trayId/preview`      | Mint a preview token; body `{ path, bridge?, maxTabs?, quiet?, webhookId? }`; response `{ previewToken, url }`                             |
+| `POST /api/tray/:trayId/preview/stop` | Revoke a preview token; body `{ previewToken }`                                                                                            |
+| `GET /api/tray/:trayId/previews`      | List active previews for a tray                                                                                                            |
+| `GET <token>.sliccy.now/*`            | Preview HTTP pipe — streams file from leader via DO; 30s timeout; bridge mode injects the preview-bridge script                            |
+| `GET __slicc/preview-bridge.js`       | Bundled preview bootstrap (bridge-enabled previews only; build-generated, not committed)                                                   |
+| `WS __slicc/bridge`                   | Preview bridge WS (`slicc.preview-bridge.v1.<connId>`); relays CDP + attributed `emit`; hibernated via `setWebSocketAutoResponse`          |
+| `POST __slicc/emit`                   | Fallback beacon relay for `window.slicc.emit` on page unload                                                                               |
+| `GET /auth/callback`                  | OAuth callback relay; capture hop for the cloud dashboard (no `state` → `postMessage` to opener)                                           |
+| `GET /auth/mcp-callback`              | MCP OAuth capture hop; preserves opaque `state` and posts the untouched callback URL to the same-origin opener                             |
+| `GET /api/flags`                      | Resolve `{ float, flags }` string values for `?float=<float>`; unknown/invalid profiles fall back to `base`                                |
 
 **Routes-mirror rule:** every new route must appear in three places:
 
