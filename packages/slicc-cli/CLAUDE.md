@@ -91,7 +91,7 @@ with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
 (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
 `packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json`)
 is decoded by `internal/protocol/corpus_test.go` for the message types the CLI
-produces/consumes (`exec.*`, `hello`), so a wire change that breaks the CLI fails
+produces/consumes (`exec.*`, `hello`, `status`), so a wire change that breaks the CLI fails
 `go test`. When the
 tray protocol changes, regenerate the corpus JSON and update the Go structs +
 `corpus_test.go` alongside the TS and Swift mirrors.

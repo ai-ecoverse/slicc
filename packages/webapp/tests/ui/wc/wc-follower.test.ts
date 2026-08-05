@@ -507,6 +507,32 @@ describe('mountWcUiFollower', () => {
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
 
+  it('applies status only for the viewed scoop while accepting legacy unscoped status', async () => {
+    const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
+    const setProcessing = vi.spyOn(WcChatController.prototype, 'setProcessing');
+    try {
+      const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+      const app = document.getElementById('app')!;
+      await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+      const opts = startFollowerSpy.mock.calls[0]![0];
+
+      opts.onSnapshot([], 'cone-jid');
+      expect(setProcessing).toHaveBeenLastCalledWith(false);
+      setProcessing.mockClear();
+
+      opts.onStatus('processing', 'research');
+      expect(setProcessing).not.toHaveBeenCalled();
+
+      opts.onStatus('processing', 'cone-jid');
+      expect(setProcessing).toHaveBeenLastCalledWith(true);
+
+      opts.onStatus('ready');
+      expect(setProcessing).toHaveBeenLastCalledWith(false);
+    } finally {
+      setProcessing.mockRestore();
+    }
+  });
+
   it('shows a terminal "reload to retry" state when the tray gives up', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;

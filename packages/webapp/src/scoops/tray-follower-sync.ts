@@ -67,8 +67,8 @@ export interface FollowerSyncManagerOptions {
     scoopJid: string,
     attachments?: MessageAttachment[]
   ) => void;
-  /** Called when the leader sends a status update. */
-  onStatus?: (scoopStatus: string) => void;
+  /** Called when the leader sends a status update. scoopJid is absent for legacy leaders. */
+  onStatus?: (scoopStatus: string, scoopJid?: string) => void;
   /** Called when the leader sends an updated target registry. */
   onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
   /** Optional CDP transport for executing local CDP commands (follower's browser). */
@@ -168,6 +168,14 @@ interface SprinkleFetchBuffer {
   sprinkleName: string;
   chunks: Map<number, string>;
   totalChunks: number;
+}
+
+/** Legacy unscoped statuses apply; scoped statuses apply only to the viewed scoop. */
+export function shouldApplyFollowerStatus(
+  statusScoopJid: string | undefined,
+  selectedScoopJid: string | null
+): boolean {
+  return statusScoopJid === undefined || statusScoopJid === selectedScoopJid;
 }
 
 /**
@@ -780,7 +788,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
 
       case 'status':
-        this.options.onStatus?.(message.scoopStatus);
+        this.options.onStatus?.(message.scoopStatus, message.scoopJid);
         break;
 
       case 'error':

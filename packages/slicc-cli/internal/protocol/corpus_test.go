@@ -10,7 +10,7 @@ import (
 
 // The golden corpus is the cross-language wire fixture set generated from
 // packages/webapp/src/scoops/tray-sync-protocol-corpus.ts. This test decodes the
-// message types the CLI models (exec.* + hello) into the Go structs and asserts a
+// message types the CLI models (exec.* + hello + status) into the Go structs and asserts a
 // lossless round-trip, so a TS wire change that would break the CLI fails here.
 
 type corpusEntry struct {
@@ -53,6 +53,8 @@ func target(typ string) any {
 		return &ExecResponse{}
 	case TypeExecSignal:
 		return &ExecSignal{}
+	case TypeStatus:
+		return &Status{}
 	default:
 		return nil
 	}
@@ -93,8 +95,18 @@ func TestCorpusExecAndHelloRoundTrip(t *testing.T) {
 		}
 	}
 
-	// exec.* in both directions (8) + hello in both directions (2).
-	if modeled < 10 {
-		t.Fatalf("expected >=10 modeled corpus fixtures, found %d — did exec.*/hello move?", modeled)
+	// exec.* in both directions (8) + hello in both directions (2) + status (1).
+	if modeled < 11 {
+		t.Fatalf("expected >=11 modeled corpus fixtures, found %d — did exec.*/hello/status move?", modeled)
+	}
+}
+
+func TestLegacyStatusWithoutScoopJidDecodes(t *testing.T) {
+	var status Status
+	if err := json.Unmarshal([]byte(`{"type":"status","scoopStatus":"ready"}`), &status); err != nil {
+		t.Fatalf("decode legacy status: %v", err)
+	}
+	if status.Type != TypeStatus || status.ScoopStatus != "ready" || status.ScoopJid != "" {
+		t.Fatalf("unexpected legacy status: %#v", status)
 	}
 }

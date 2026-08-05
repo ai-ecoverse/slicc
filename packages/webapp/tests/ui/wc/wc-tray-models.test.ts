@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
+import type { ChatMessage } from '../../../src/ui/types.js';
 import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from '../../../src/ui/wc/leader-model-events.js';
 import {
   buildFollowerOptions,
@@ -102,6 +103,44 @@ describe('role-switch follower model controls', () => {
     options.onScoopsList?.([{ jid: 'cone', name: 'cone', isCone: true }] as never, 'cone');
     expect(options.getSelectedScoopJid?.()).toBe('cone');
     expect(switcher.getAttribute('active')).toBe('cone');
+  });
+});
+
+describe('role-switch follower status', () => {
+  it('re-establishes snapshot busy state and ignores statuses for another scoop', () => {
+    const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
+    const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
+    const options = buildFollowerOptions(
+      {
+        refs: { composerMeta: document.createElement('div'), switcher },
+        browser: {},
+        client: { sendSetFollowerForwarding: vi.fn() },
+        window: { localStorage: { getItem: vi.fn(() => null) } },
+        getController: () => controller,
+        addSprinkle: vi.fn(),
+        removeSprinkle: vi.fn(),
+      } as never,
+      'https://tray.example/join/token',
+      () => null
+    );
+    const streaming: ChatMessage[] = [
+      { id: 'a1', role: 'assistant', content: 'working', timestamp: 1, isStreaming: true },
+    ];
+
+    options.onSnapshot(streaming, 'research');
+    expect(options.getSelectedScoopJid?.()).toBe('research');
+    expect(controller.loadMessages).toHaveBeenCalledWith(streaming);
+    expect(controller.setProcessing).toHaveBeenLastCalledWith(true);
+
+    controller.setProcessing.mockClear();
+    options.onStatus('ready', 'cone');
+    expect(controller.setProcessing).not.toHaveBeenCalled();
+
+    options.onStatus('ready', 'research');
+    expect(controller.setProcessing).toHaveBeenLastCalledWith(false);
+
+    options.onStatus('processing');
+    expect(controller.setProcessing).toHaveBeenLastCalledWith(true);
   });
 });
 

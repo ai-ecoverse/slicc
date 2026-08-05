@@ -109,7 +109,7 @@ describe('tray-sync-protocol', () => {
 
       sync.close();
 
-      sync.send({ type: 'status', scoopStatus: 'idle' });
+      sync.send({ type: 'status', scoopStatus: 'idle', scoopJid: 'cone' });
       expect(dc.sent).toHaveLength(0);
 
       dc.simulateMessage(JSON.stringify({ type: 'abort' }));
@@ -137,14 +137,14 @@ describe('tray-sync-protocol', () => {
       };
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       // Should not throw, and should return false
-      const result = sync.send({ type: 'status', scoopStatus: 'idle' });
+      const result = sync.send({ type: 'status', scoopStatus: 'idle', scoopJid: 'cone' });
       expect(result).toBe(false);
     });
 
     it('returns true on successful send', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
-      const result = sync.send({ type: 'status', scoopStatus: 'idle' });
+      const result = sync.send({ type: 'status', scoopStatus: 'idle', scoopJid: 'cone' });
       expect(result).toBe(true);
     });
 
@@ -152,7 +152,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       sync.close();
-      const result = sync.send({ type: 'status', scoopStatus: 'idle' });
+      const result = sync.send({ type: 'status', scoopStatus: 'idle', scoopJid: 'cone' });
       expect(result).toBe(false);
     });
 
@@ -204,8 +204,21 @@ describe('tray-sync-protocol', () => {
         messageId: 'm2',
       });
 
-      dc.simulateMessage(JSON.stringify({ type: 'status', scoopStatus: 'processing' }));
-      expect(received).toEqual([{ type: 'status', scoopStatus: 'processing' }]);
+      dc.simulateMessage(
+        JSON.stringify({ type: 'status', scoopStatus: 'processing', scoopJid: 'cone' })
+      );
+      expect(received).toEqual([{ type: 'status', scoopStatus: 'processing', scoopJid: 'cone' }]);
+    });
+
+    it('decodes a legacy status without scoopJid', () => {
+      const dc = new FakeSyncDataChannel();
+      const sync = createFollowerSyncChannel(dc);
+      const received: LeaderToFollowerMessage[] = [];
+      sync.onMessage((msg) => received.push(msg));
+
+      dc.simulateMessage(JSON.stringify({ type: 'status', scoopStatus: 'ready' }));
+
+      expect(received).toEqual([{ type: 'status', scoopStatus: 'ready' }]);
     });
 
     it('receives user_message_echo from leader', () => {

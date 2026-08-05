@@ -308,7 +308,8 @@
       "ios": "decoded",
       "message": {
         "type": "status",
-        "scoopStatus": "processing"
+        "scoopStatus": "processing",
+        "scoopJid": "cone"
       }
     },
     {

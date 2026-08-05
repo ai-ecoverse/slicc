@@ -425,7 +425,7 @@ public enum LeaderToFollowerMessage: Codable {
     case agentEvent(event: AgentEvent, scoopJid: String)
     case userMessageEcho(
         text: String, messageId: String, scoopJid: String, attachments: [MessageAttachment]?)
-    case status(scoopStatus: String)
+    case status(scoopStatus: String, scoopJid: String? = nil)
     case error(error: String)
     case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
     case modelsList(models: [TrayModelCatalogEntry])
@@ -527,7 +527,9 @@ public enum LeaderToFollowerMessage: Codable {
                 attachments: try container.decodeIfPresent(
                     [MessageAttachment].self, forKey: .attachments))
         case "status":
-            self = .status(scoopStatus: try container.decode(String.self, forKey: .scoopStatus))
+            self = .status(
+                scoopStatus: try container.decode(String.self, forKey: .scoopStatus),
+                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
         case "error":
             self = .error(error: try container.decode(String.self, forKey: .error))
         case "scoops.list":
@@ -691,9 +693,10 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode(messageId, forKey: .messageId)
             try container.encode(scoopJid, forKey: .scoopJid)
             try container.encodeIfPresent(attachments, forKey: .attachments)
-        case .status(let scoopStatus):
+        case .status(let scoopStatus, let scoopJid):
             try container.encode("status", forKey: .type)
             try container.encode(scoopStatus, forKey: .scoopStatus)
+            try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
         case .error(let error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)

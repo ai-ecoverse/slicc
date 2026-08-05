@@ -6,13 +6,18 @@ import {
   getFollowerTrayRuntimeStatus,
   setFollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
-import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
+import {
+  FollowerSyncManager,
+  shouldApplyFollowerStatus,
+} from '../../src/scoops/tray-follower-sync.js';
 import type {
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
   TrayTargetEntry,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+
+type LegacyStatusMessage = Omit<Extract<LeaderToFollowerMessage, { type: 'status' }>, 'scoopJid'>;
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -40,7 +45,7 @@ class FakeChannel implements TrayDataChannelLike {
     this.readyState = 'closed';
   }
 
-  simulateLeaderMessage(msg: LeaderToFollowerMessage): void {
+  simulateLeaderMessage(msg: LeaderToFollowerMessage | LegacyStatusMessage): void {
     const data = JSON.stringify(msg);
     for (const listener of this.listeners.get('message') ?? []) {
       listener({ data });
@@ -418,14 +423,36 @@ describe('FollowerSyncManager', () => {
   });
 
   describe('status handling', () => {
-    it('calls onStatus callback', () => {
+    it('forwards the status scoop identity to the callback', () => {
       const channel = new FakeChannel();
       const onStatus = vi.fn();
       const follower = new FollowerSyncManager(channel, { onStatus });
 
-      channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'processing' });
+      channel.simulateLeaderMessage({
+        type: 'status',
+        scoopStatus: 'processing',
+        scoopJid: 'cone',
+      });
 
-      expect(onStatus).toHaveBeenCalledWith('processing');
+      expect(onStatus).toHaveBeenCalledWith('processing', 'cone');
+      void follower;
+    });
+
+    it('applies only the viewed scoop status while preserving legacy unscoped updates', () => {
+      expect(shouldApplyFollowerStatus('research', 'cone')).toBe(false);
+      expect(shouldApplyFollowerStatus('cone', 'cone')).toBe(true);
+      expect(shouldApplyFollowerStatus(undefined, 'cone')).toBe(true);
+    });
+
+    it('forwards a legacy status without scoopJid instead of dropping it', () => {
+      const channel = new FakeChannel();
+      const onStatus = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onStatus });
+
+      channel.simulateLeaderMessage({ type: 'status', scoopStatus: 'ready' });
+
+      expect(onStatus).toHaveBeenCalledWith('ready', undefined);
+      void follower;
     });
   });
 

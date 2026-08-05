@@ -26,6 +26,24 @@ final class SyncProtocolHelloTests: XCTestCase {
     }
 }
 
+final class SyncProtocolStatusTests: XCTestCase {
+    func testStatusRoundTripsScoopJidAndDecodesLegacyOmission() throws {
+        let scoped = LeaderToFollowerMessage.status(scoopStatus: "processing", scoopJid: "cone")
+        let encoded = try JSONEncoder().encode(scoped)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(object["scoopJid"] as? String, "cone")
+
+        let legacy = try JSONDecoder().decode(
+            LeaderToFollowerMessage.self,
+            from: Data(#"{"type":"status","scoopStatus":"ready"}"#.utf8))
+        guard case .status(let scoopStatus, let scoopJid) = legacy else {
+            return XCTFail("expected status")
+        }
+        XCTAssertEqual(scoopStatus, "ready")
+        XCTAssertNil(scoopJid)
+    }
+}
+
 // Compiled into the `SliccFollowerTests` bundle (see project.yml) and run in CI
 // via `xcodebuild test` on an iOS Simulator — `swift test` cannot run on a plain
 // macOS host because the package depends on an iOS-only WebRTC binary. The
