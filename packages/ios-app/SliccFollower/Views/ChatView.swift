@@ -96,6 +96,13 @@ struct ChatView: View {
         }
     }
 
+    /// Full-screen browsing: a foregrounded local tab claims the whole
+    /// phone — no rail, no navigation bar (Safari-shaped). The way back is
+    /// the tab-overview button in the browser's own bottom bar.
+    private var isBrowserFullScreen: Bool {
+        presentation.activeSurface == .browser && appState.browserViewingTabId != nil
+    }
+
     /// The phone shell stays structurally unchanged: the rail remains outside
     /// the navigation stack while the workbench overlays only the conversation.
     private var compactShell: some View {
@@ -104,7 +111,7 @@ struct ChatView: View {
         // leading title in left-handed mode, the trailing controls in
         // right-handed). Outside, the bar spans only the chat column.
         HStack(spacing: 0) {
-            if leftHandedDock {
+            if leftHandedDock && !isBrowserFullScreen {
                 dockRail
             }
             NavigationStack {
@@ -146,8 +153,9 @@ struct ChatView: View {
                             .transition(.move(edge: leftHandedDock ? .leading : .trailing))
                     }
                 }
+                .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
             }
-            if !leftHandedDock {
+            if !leftHandedDock && !isBrowserFullScreen {
                 dockRail
             }
         }

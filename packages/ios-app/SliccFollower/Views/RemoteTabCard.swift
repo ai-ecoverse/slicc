@@ -7,6 +7,10 @@ import SwiftUI
 /// cannot serve a capture shows the reason instead of an empty frame.
 struct RemoteTabCard: View {
     let target: TrayTargetEntry
+    /// Overview tap: open this tab's URL in a local tab. Attached inside
+    /// the card body — a gesture bolted on from the grid outside never
+    /// fired (the local card's inside-the-body gesture demonstrably does).
+    var onOpen: (() -> Void)?
 
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -35,6 +39,9 @@ struct RemoteTabCard: View {
             RoundedRectangle(cornerRadius: 14)
                 .stroke(palette.line, lineWidth: 0.5)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onTapGesture { onOpen?() }
+        .accessibilityAction(named: "Open here") { onOpen?() }
         .task(id: target.targetId) { await capture() }
     }
 
@@ -46,10 +53,18 @@ struct RemoteTabCard: View {
             case .loading:
                 ProgressView()
             case .image(let image):
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .accessibilityIdentifier("remote-preview-\(target.targetId)")
+                // Bounded via overlay: a bare `.fill` image reports its
+                // oversized ideal height, inflating the ZStack past the
+                // card frame — which pushed the bottom-anchored caption
+                // half outside the clip shape and cut the text in two.
+                Color.clear
+                    .overlay(
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .accessibilityIdentifier("remote-preview-\(target.targetId)")
+                    )
+                    .clipped()
             case .unavailable(let reason):
                 VStack(spacing: 6) {
                     Image(systemName: "rectangle.on.rectangle.slash")

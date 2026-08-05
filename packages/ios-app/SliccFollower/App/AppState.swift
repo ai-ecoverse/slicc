@@ -237,11 +237,15 @@ class AppState: ObservableObject {
     private var cdpBridge: CDPBridge?
     /// Periodic timer for re-advertising targets.
     private var targetsAdvertiseTimer: Timer?
-    /// Visible carousel of locally-hosted CDP targets (one per WKWebView).
+    /// Visible list of locally-hosted CDP targets (one per WKWebView).
     @Published var cdpTargets: [CDPTargetSummary] = []
     /// Federated tabs elsewhere in the tray (`targets.registry`, own
     /// runtime excluded) — the browser surface's preview cards.
     @Published var remoteTargets: [TrayTargetEntry] = []
+    /// The local tab the browser surface shows full screen; nil means the
+    /// tab overview grid. Published because the shell reacts too: full
+    /// screen hides the dock rail and the navigation bar.
+    @Published var browserViewingTabId: String?
 
     // MARK: - Connection Lifecycle
 
@@ -1092,6 +1096,12 @@ class AppState: ObservableObject {
     /// Refresh the published `cdpTargets` from the bridge.
     private func refreshCDPTargets() {
         cdpTargets = cdpBridge?.currentTargets() ?? []
+        // The tab on screen can be closed out from under the user (leader
+        // Target.closeTarget, disconnect reset) — fall back to the overview
+        // rather than presenting a dead id full screen.
+        if let viewing = browserViewingTabId, !cdpTargets.contains(where: { $0.id == viewing }) {
+            browserViewingTabId = nil
+        }
     }
 
     /// Accessor for the live WKWebView backing a CDP target. Returns nil if
@@ -1122,9 +1132,16 @@ class AppState: ObservableObject {
         return bridge
     }
 
-    /// Manually open a new tab (e.g. from a UI button). Mirrors `tab.open`.
-    func cdpOpenTab(url: String = "about:blank") {
-        ensureCdpBridge().handleTabOpen(requestId: "ui-\(UUID().uuidString)", url: url)
+    /// Manually open a new tab (the browser surface's `+`). Returns the new
+    /// target id so the UI can select the page and focus its address field.
+    @discardableResult
+    func cdpOpenTab(url: String = "about:blank") -> String {
+        ensureCdpBridge().openTab(url: url)
+    }
+
+    /// Navigate a local tab from the address bar.
+    func cdpNavigate(_ targetId: String, to url: String) {
+        cdpBridge?.navigate(targetId: targetId, to: url)
     }
 
     /// Manually close a tab from the carousel.

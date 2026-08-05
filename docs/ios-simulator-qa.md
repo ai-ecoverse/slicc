@@ -54,7 +54,7 @@ signal: the pre-connect path emits no `os_log`, so a `log stream` on
 `subsystem == "com.slicc.follower"` stays silent until a data channel opens.
 `SliccFollowerUITests` already covers the sheet and the failure pill, so reach
 for this only against a real leader — a synthetic token reaches the failure
-state and no further, leaving chat, sprinkles, and the CDP carousel untested.
+state and no further, leaving chat, sprinkles, and the browser surface untested.
 
 ## Getting a real Join URL
 

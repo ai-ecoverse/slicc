@@ -157,8 +157,10 @@ final class CDPBridge {
         }
     }
 
-    /// Dispatch a `tab.open` from the leader.
-    func handleTabOpen(requestId: String, url: String) {
+    /// Create and register a WKWebView-backed target; returns its id.
+    /// UI-originated opens (the browser surface's `+`) use this directly;
+    /// leader-originated paths add their own ack/response around it.
+    func openTab(url: String) -> String {
         let id = mintTargetId()
         let webView = makeWebView()
         let target = CDPTarget(targetId: id, webView: webView, contextId: mintContextId())
@@ -166,9 +168,23 @@ final class CDPBridge {
         targets[id] = target
         targetOrder.append(id)
         _ = target.navigate(to: url)
-        send(.tabOpened(requestId: requestId, targetId: id))
         advertiseTargets()
         notifyTargetsChanged()
+        return id
+    }
+
+    /// UI-originated navigation (the address bar). Not a leader request,
+    /// so no `cdp.response` is emitted.
+    func navigate(targetId: String, to url: String) {
+        guard let target = targets[targetId] else { return }
+        _ = target.navigate(to: url)
+        notifyTargetsChanged()
+    }
+
+    /// Dispatch a `tab.open` from the leader.
+    func handleTabOpen(requestId: String, url: String) {
+        let id = openTab(url: url)
+        send(.tabOpened(requestId: requestId, targetId: id))
     }
 
     // MARK: - Domain handlers
@@ -179,15 +195,7 @@ final class CDPBridge {
         switch method {
         case "Target.createTarget":
             let url = (params["url"] as? String) ?? "about:blank"
-            let id = mintTargetId()
-            let webView = makeWebView()
-            let target = CDPTarget(targetId: id, webView: webView, contextId: mintContextId())
-            target.bridge = self
-            targets[id] = target
-            targetOrder.append(id)
-            _ = target.navigate(to: url)
-            advertiseTargets()
-            notifyTargetsChanged()
+            let id = openTab(url: url)
             respond(requestId: requestId, result: ["targetId": id])
 
         case "Target.closeTarget":
