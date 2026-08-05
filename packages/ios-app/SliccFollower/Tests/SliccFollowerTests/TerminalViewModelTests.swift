@@ -31,10 +31,14 @@ final class TerminalViewModelTests: XCTestCase {
         var continuation: CheckedContinuation<TerminalClient.RunResult, Error>?
         var cancelCount = 0
         var runCount = 0
+        var onRunStarted: ((Int) -> Void)?
 
         func run() async throws -> TerminalClient.RunResult {
             runCount += 1
-            return try await withCheckedThrowingContinuation { continuation = $0 }
+            return try await withCheckedThrowingContinuation {
+                continuation = $0
+                onRunStarted?(runCount)
+            }
         }
 
         func cancel() -> Bool {
@@ -231,6 +235,8 @@ final class TerminalViewModelTests: XCTestCase {
 
     func testCtrlCQueuesNextCommandUntilLeaderAcknowledgesCancellation() async {
         let suspended = SuspendedRun()
+        let secondRunStarted = expectation(description: "queued command started")
+        suspended.onRunStarted = { if $0 == 2 { secondRunStarted.fulfill() } }
         let model = TerminalViewModel(
             runCommand: { _, _, _ in try await suspended.run() },
             cancelCommand: { suspended.cancel() }
@@ -252,7 +258,7 @@ final class TerminalViewModelTests: XCTestCase {
         XCTAssertFalse(model.accessibilityTranscript.hasSuffix(TerminalViewModel.prompt))
 
         suspended.acknowledgeCancellation()
-        for _ in 0..<100 where suspended.runCount < 2 { await Task.yield() }
+        await fulfillment(of: [secondRunStarted], timeout: 1)
         XCTAssertEqual(suspended.runCount, 2)
         XCTAssertTrue(model.isRunning)
 

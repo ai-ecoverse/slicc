@@ -10,9 +10,8 @@ import OSLog
 /// listening half (push-to-talk) but not the answering half, so a hands-free
 /// exchange still ended with the user having to look at the screen.
 ///
-/// The web routes through Kokoro or Web Speech; iOS has one always-present
-/// engine, `AVSpeechSynthesizer`, so the engine-selection layer collapses and
-/// only the coordination survives.
+/// Like the web, iOS routes English replies through Kokoro when its local
+/// models are present and otherwise falls back to the system synthesizer.
 @MainActor
 final class VoiceReply {
     static let shared = VoiceReply()
@@ -42,10 +41,14 @@ final class VoiceReply {
     private static let maxPending = 8
 
     /// The engine is injectable so the coordination is testable without a
-    /// live audio session; it defaults lazily because `AVSpeechSpeaker` is
-    /// itself main-actor isolated.
+    /// live audio session. The default router keeps the system voice as a
+    /// no-model, non-English, failure, and timeout fallback.
     init(speaker: SpeechSpeaking? = nil) {
-        self.speaker = speaker ?? AVSpeechSpeaker()
+        self.speaker =
+            speaker
+            ?? KokoroSpeaker(
+                modelDirectory: KokoroDevelopmentModels.directoryURL(),
+                resourceDownloader: nil)
     }
 
     /// A dictated submission just went out to `scoopJid` — its answer should
@@ -97,6 +100,10 @@ final class VoiceReply {
     func reset() {
         pending.removeAll()
         speaker.stop()
+    }
+
+    func prewarm() async {
+        await speaker.prewarm()
     }
 
     /// Read an assistant reply aloud, markdown reduced to speakable prose.
@@ -202,9 +209,14 @@ final class VoiceReply {
 /// without a live audio session.
 @MainActor
 protocol SpeechSpeaking {
+    func prewarm() async
     func speak(_ text: String, lang: String?)
     func stop()
     func hasVoice(for lang: String) -> Bool
+}
+
+extension SpeechSpeaking {
+    func prewarm() async {}
 }
 
 /// `AVSpeechSynthesizer` behind the seam.
@@ -214,11 +226,35 @@ protocol SpeechSpeaking {
 /// back to whatever was playing before.
 @MainActor
 final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelegate {
+    struct VoiceCandidate: Equatable {
+        enum Quality: Int {
+            case `default`
+            case enhanced
+            case premium
+        }
+
+        let identifier: String
+        let language: String
+        let quality: Quality
+    }
+
     /// Created on the first spoken reply, never at launch. Constructing a
     /// synthesizer wakes the system speech services on the main actor, and
     /// most sessions never dictate at all.
     private var synthesizer: AVSpeechSynthesizer?
+    private let audioSession: any AudioSessionCoordinating
+    private var sessionActive = false
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "voice-reply")
+
+    override init() {
+        audioSession = AudioSessionCoordinator.shared
+        super.init()
+    }
+
+    init(audioSession: any AudioSessionCoordinating) {
+        self.audioSession = audioSession
+        super.init()
+    }
 
     func speak(_ text: String, lang: String?) {
         guard activateSession() else { return }
@@ -226,6 +262,10 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         if let lang, let voice = Self.voice(for: lang) {
             utterance.voice = voice
         }
+        // A small relative slowdown improves clarity across languages, while
+        // neutral pitch preserves each installed voice's designed prosody.
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.92
+        utterance.pitchMultiplier = 1.0
         let synthesizer = self.synthesizer ?? makeSynthesizer()
         // Barge-in: a new reply replaces the one still playing rather than
         // queueing behind it.
@@ -239,8 +279,10 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     }
 
     func stop() {
-        guard let synthesizer, synthesizer.isSpeaking else { return }
-        synthesizer.stopSpeaking(at: .immediate)
+        if let synthesizer, synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        releaseSession()
     }
 
     func hasVoice(for lang: String) -> Bool {
@@ -254,13 +296,58 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
         return created
     }
 
-    /// An exact BCP-47 match first, then any voice sharing the base subtag —
-    /// a `de` reply should still speak in `de-DE`.
+    /// Enumerate on every lookup so newly installed voices are immediately
+    /// eligible without a stale cache after the system's voices-change event.
     private static func voice(for lang: String) -> AVSpeechSynthesisVoice? {
-        if let exact = AVSpeechSynthesisVoice(language: lang) { return exact }
-        let base = lang.split(separator: "-").first.map(String.init)?.lowercased() ?? lang
-        return AVSpeechSynthesisVoice.speechVoices().first {
-            $0.language.lowercased().split(separator: "-").first.map(String.init) == base
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+        let candidates = voices.map {
+            VoiceCandidate(
+                identifier: $0.identifier,
+                language: $0.language,
+                quality: quality(of: $0))
+        }
+        guard let selected = rankedVoice(for: lang, from: candidates) else { return nil }
+        return voices.first { $0.identifier == selected.identifier }
+    }
+
+    /// Select from supplied value types so ranking needs no live speech service.
+    /// Exact BCP-47 matches precede base-subtag fallbacks, then quality ranks
+    /// premium > enhanced > default. Voice identifier is the stable final
+    /// tiebreak.
+    static func rankedVoice(
+        for lang: String,
+        from voices: [VoiceCandidate]
+    ) -> VoiceCandidate? {
+        let replyBase = baseLanguage(of: lang)
+        let exact = voices.filter {
+            $0.language.caseInsensitiveCompare(lang) == .orderedSame
+        }
+        let matching: [VoiceCandidate]
+        if exact.isEmpty {
+            matching = voices.filter { baseLanguage(of: $0.language) == replyBase }
+        } else {
+            matching = exact
+        }
+        return matching.min {
+            if $0.quality != $1.quality { return $0.quality.rawValue > $1.quality.rawValue }
+            return $0.identifier < $1.identifier
+        }
+    }
+
+    private static func baseLanguage(of language: String) -> String {
+        language.split(separator: "-").first.map(String.init)?.lowercased() ?? language.lowercased()
+    }
+
+    private static func quality(of voice: AVSpeechSynthesisVoice) -> VoiceCandidate.Quality {
+        switch voice.quality {
+        case .premium:
+            return .premium
+        case .enhanced:
+            return .enhanced
+        case .default:
+            return .default
+        @unknown default:
+            return .default
         }
     }
 
@@ -271,10 +358,9 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     /// rather than `.playAndRecord` also drops the microphone, which nothing
     /// needs while the phone is the one talking.
     private func activateSession() -> Bool {
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-            try session.setActive(true, options: [])
+            try audioSession.beginPlayback(preferredSampleRate: nil)
+            sessionActive = true
             return true
         } catch {
             logger.error("spoken reply audio session failed: \(error.localizedDescription)")
@@ -285,12 +371,9 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     /// Hand the route back so ducked audio returns to full volume and the
     /// next push-to-talk hold can claim the microphone.
     private func releaseSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(
-                false, options: .notifyOthersOnDeactivation)
-        } catch {
-            logger.warning("releasing audio session failed: \(error.localizedDescription)")
-        }
+        guard sessionActive else { return }
+        audioSession.endPlayback()
+        sessionActive = false
     }
 
     nonisolated func speechSynthesizer(

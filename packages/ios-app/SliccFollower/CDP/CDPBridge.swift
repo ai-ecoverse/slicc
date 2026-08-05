@@ -645,9 +645,7 @@ final class CDPBridge {
         cfg.defaultWebpagePreferences.allowsContentJavaScript = true
         let frame = CGRect(x: 0, y: 0, width: 390, height: 844)
         let webView = WKWebView(frame: frame, configuration: cfg)
-        if #available(iOS 16.4, *) {
-            webView.isInspectable = true
-        }
+        webView.isInspectable = true
         return webView
     }
 

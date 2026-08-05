@@ -6,7 +6,7 @@ This file covers the iOS follower app in `packages/ios-app/`.
 
 `packages/ios-app/SliccFollower/` is a native iOS SwiftUI app (`SliccFollower`) that connects to a SLICC leader over WebRTC and presents the leader's chat + sprinkles + (limited) federated CDP. It is **a follower only** — it does not host an agent runtime.
 
-`packages/ios-app` is a Swift Package Manager project (`Package.swift`), not an npm workspace. XcodeGen generates its Xcode project from `project.yml`.
+`packages/ios-app` is a Swift Package Manager project (`Package.swift`), not an npm workspace. It targets iOS 26. XcodeGen generates its Xcode project from `project.yml`.
 
 ## Layout
 
@@ -84,15 +84,23 @@ the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
 ## iCloud Sessions
 
-`AppState.sessionStore` is a read-only `TraySessionSyncStore` from **`packages/swift-traysession`** (launcher publishes; phone joins). `SettingsView` lists sessions by device; a tap joins via `connectToDiscoveredSession`. KVS id `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds degrade to an empty local cache; `SLICC_IOS_NO_ICLOUD=1` archives TestFlight without the entitlement. Never log `joinUrl` or put it in telemetry/accessibility ids.
+`AppState.sessionStore` reads **`packages/swift-traysession`**; the launcher publishes, the phone joins, and `SettingsView` selects sessions. KVS id `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds use an empty cache; `SLICC_IOS_NO_ICLOUD=1` omits the entitlement. Never expose `joinUrl`.
 
 ## Frozen Sessions
 
-`Models/FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`. `FrozenSessionsView` lists past sessions; opening one swaps the transcript read-only. Hooks: `-uiTestFrozenFixture/Empty`.
+`FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`; its view opens saved transcripts read-only. Hook: `-uiTestFrozenFixture/Empty`.
 
 ## Push to Talk
 
-Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak replies (`VoiceReply` / `DictationPriming`); typed turns stay silent. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+Hold an empty composer to dictate (`PttController` + `Dictation`/`SFSpeechRecognizer`); release calls `InputBar.submit(_:dictated:)`. Only matching dictated replies speak: English uses Kokoro, other paths use `AVSpeechSynthesizer`; typed turns stay silent. `AudioSessionCoordinator` solely owns `AVAudioSession`, serializes recording/playback, and restores the inherited category/sample rate. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+
+### Local Kokoro models
+
+Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after
+Wi-Fi consent with progress, cancel, retry, and removal; replies never provision.
+Pack: nine CoreML stages, two vocabularies, and `af_heart`. Marker/cache delete
+together; weights are not committed. See
+[`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md) for QA.
 
 ## Terminal
 

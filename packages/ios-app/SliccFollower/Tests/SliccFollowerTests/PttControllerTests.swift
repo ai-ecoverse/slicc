@@ -200,6 +200,23 @@ final class PttControllerTests: XCTestCase {
         XCTAssertEqual(engine.lastSession?.stopped, true)
     }
 
+    func testRecordingStopsPlaybackBeforeStartingTheMic() async {
+        let engine = FakeEngine(permission: .granted)
+        let scheduler = FakeScheduler()
+        var playbackStopped = false
+        let controller = PttController(
+            engine: engine,
+            scheduler: scheduler,
+            prepareForRecording: { playbackStopped = true })
+
+        controller.pressDown()
+        scheduler.fireNext()
+        await waitUntil(engine.startCount == 1)
+
+        XCTAssertTrue(playbackStopped)
+        XCTAssertEqual(engine.startCount, 1)
+    }
+
     func testCaptionKeepsOnlyTrailingWords() async {
         let engine = FakeEngine(permission: .granted)
         let scheduler = FakeScheduler()

@@ -14,7 +14,9 @@ struct ChatView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
     @StateObject private var presentation: ChatPresentationState
-    @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
+    @StateObject private var ptt = PttController(
+        engine: InputBar.makeDictationEngine(),
+        prepareForRecording: { VoiceReply.shared.stopSpeaking() })
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).

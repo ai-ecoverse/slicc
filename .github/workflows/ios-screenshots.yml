@@ -37,7 +37,8 @@ permissions:
 
 jobs:
   screenshots:
-    runs-on: macos-latest
+    # The iOS 26 deployment target requires the Xcode 26 SDK.
+    runs-on: macos-26
     timeout-minutes: 40
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}

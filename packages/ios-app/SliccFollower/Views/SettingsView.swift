@@ -41,6 +41,7 @@ struct SettingsView: View {
             Form {
                 iCloudSessionsSection
                 connectionSection
+                speechSection
                 if appState.connectionState == .connected {
                     if appState.supportsModelControls {
                         modelSection
@@ -364,6 +365,12 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Speech Section
+
+    private var speechSection: some View {
+        SpeechSettingsSection()
+    }
+
     // MARK: - Tray Info Section
 
     private var trayInfoSection: some View {
@@ -417,6 +424,92 @@ struct SettingsView: View {
             }
         } header: {
             Text("Advanced")
+        }
+    }
+}
+
+private struct SpeechSettingsSection: View {
+    @StateObject private var kokoroModels = KokoroModelInstallation.shared
+
+    var body: some View {
+        Section {
+            if case .notInstalled = kokoroModels.state {
+                Button("Enable high-quality English voice") {
+                    kokoroModels.requestInstallation()
+                }
+                .accessibilityIdentifier("kokoro-install-toggle")
+            }
+
+            kokoroInstallationStatus
+        } header: {
+            Text("Speech")
+        }
+    }
+
+    @ViewBuilder
+    private var kokoroInstallationStatus: some View {
+        switch kokoroModels.state {
+        case .notInstalled:
+            Text("Optional Wi-Fi download · about 83 MB. Replies use the system voice until installed.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("kokoro-install-status")
+        case .awaitingConsent:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    "About 83 MB. The download is Wi-Fi only and never uses cellular data."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("kokoro-install-status")
+                Button("Download on Wi-Fi") { kokoroModels.confirmInstallation() }
+                    .accessibilityIdentifier("kokoro-download-confirm")
+                Button("Cancel") { kokoroModels.declineConsent() }
+                    .accessibilityIdentifier("kokoro-consent-cancel")
+            }
+            .buttonStyle(.borderless)
+        case .downloading(let fraction):
+            ProgressView(value: fraction)
+                .accessibilityIdentifier("kokoro-download-progress")
+            Text("Downloading on Wi-Fi · \(Int(fraction * 100))%")
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("kokoro-install-status")
+            Button("Cancel Download", role: .destructive) { kokoroModels.cancelDownload() }
+                .accessibilityIdentifier("kokoro-download-cancel")
+        case .installed:
+            Text(
+                kokoroModels.usesDeveloperPack
+                    ? "Installed from SLICC_KOKORO_MODELS_DIR."
+                    : "Installed · about 83 MB"
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("kokoro-install-status")
+            // Routes through the same VoiceReply path a dictated reply takes,
+            // so a silent Kokoro path surfaces here instead of in dictation.
+            Button("Play a Short Sample") {
+                VoiceReply.shared.speakReply(
+                    markdown: "<!--lang:en-->Kokoro is installed and speaking.")
+            }
+            .accessibilityIdentifier("kokoro-install-preview")
+            if !kokoroModels.usesDeveloperPack {
+                Button("Remove Download", role: .destructive) {
+                    kokoroModels.removeInstallation()
+                }
+                .accessibilityIdentifier("kokoro-install-remove")
+            }
+        case .failed(let error):
+            Text(error.localizedDescription)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .accessibilityIdentifier("kokoro-install-failure")
+            Text("Replies continue with the system voice.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("kokoro-install-status")
+            Button("Retry Download") { kokoroModels.requestInstallation() }
+                .accessibilityIdentifier("kokoro-install-retry")
         }
     }
 }
