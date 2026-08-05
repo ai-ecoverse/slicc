@@ -1362,64 +1362,6 @@ jobs:
             -scheme SliccFollower \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
-      # Golden-fixture protocol corpus + unit tests. The shared coverage script
-      # picks the simulator, runs `xcodebuild test` with coverage + parallel
-      # testing + on-failure retries, and gates the result against the `ios-app`
-      # floors in coverage-thresholds.json.
-      - name: Test (with coverage threshold gate)
-        run: |
-          ./packages/dev-tools/tools/swift-coverage-check.sh \
-            --xcodebuild SliccFollower packages/ios-app SliccFollower
-      - name: Test regular-width browser (iPad)
-        run: |
-          set -o pipefail
-          cd packages/ios-app
-          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
-          IPAD_UDID=$(
-            xcrun simctl list devices available --json |
-              IOS_SIMULATOR_RUNTIME_KEY="com.apple.CoreSimulator.SimRuntime.iOS-${SDK_VERSION//./-}" node -e '
-                let input = "";
-                process.stdin.on("data", chunk => input += chunk).on("end", () => {
-                  const devices = JSON.parse(input).devices?.[process.env.IOS_SIMULATOR_RUNTIME_KEY] ?? [];
-                  const ipad = devices.find(device => device.isAvailable && /iPad/.test(device.name));
-                  process.stdout.write(ipad?.udid ?? "");
-                });
-              '
-          )
-          if [[ -z "$IPAD_UDID" ]]; then
-            echo "::error::No available iPad simulator matching the iOS $SDK_VERSION SDK"
-            exit 1
-          fi
-          xcrun simctl boot "$IPAD_UDID" 2>/dev/null || true
-          xcrun simctl bootstatus "$IPAD_UDID" -b
-          xcodebuild test \
-            -project SliccFollower.xcodeproj \
-            -scheme SliccFollower \
-            -destination "platform=iOS Simulator,id=$IPAD_UDID" \
-            -derivedDataPath .build/xcodebuild \
-            -resultBundlePath .build/regular-width-ui.xcresult \
-            -parallel-testing-enabled NO \
-            -retry-tests-on-failure \
-            -test-iterations 2 \
-            -only-testing:SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-ios-app
-          path: packages/ios-app/.build/coverage/lcov.info
-          if-no-files-found: ignore
-      # Per-test timings live in the result bundle; upload it so a slow or flaky
-      # test can be diagnosed without re-running the simulator locally.
-      - name: Upload test timings (xcresult)
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-timings-ios-app
-          path: |
-            packages/ios-app/.build/coverage/ios-app.xcresult
-            packages/ios-app/.build/regular-width-ui.xcresult
-          if-no-files-found: ignore
       - name: Install Periphery
         run: brew install peripheryapp/periphery/periphery
       - name: Dead code detection (Periphery)
@@ -1433,6 +1375,96 @@ jobs:
             --schemes SliccFollower \
             --targets SliccFollower \
             --disable-update-check || true
+
+  # Simulator test matrix: device × iOS runtime, all cells concurrent so the
+  # slowest leg (not the sum of legs) bounds iOS wall-clock. The iPhone/26
+  # cell is the canonical coverage-gated run; iPhone/27 repeats the unit suite
+  # against the beta SDK without the coverage gate (line coverage shifts
+  # between SDKs, and the floors track the stable one). iPad cells run the
+  # regular-width browser regression. iOS 27 cells ride the `xcode-27` beta
+  # runner image and are informational (continue-on-error) until 27 goes GA —
+  # a beta-image breakage must not hold the merge queue.
+  ios-app-tests:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iPhone, iPad]
+        ios: ['26', '27']
+    runs-on: ${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}
+    continue-on-error: ${{ matrix.ios == '27' }}
+    # Simulator boots can wedge on fresh runner images; fail fast instead of
+    # holding the merge queue for the 6h default.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other Swift jobs) instead of relying
+      # on the runner's preinstalled version.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+      - name: Resolve SPM dependencies
+        run: |
+          cd packages/ios-app
+          xcodebuild -resolvePackageDependencies \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower
+      # Golden-fixture protocol corpus + unit tests. The shared coverage script
+      # picks the simulator, runs `xcodebuild test` with coverage + parallel
+      # testing + on-failure retries, and gates the result against the `ios-app`
+      # floors in coverage-thresholds.json.
+      - name: Test (iPhone unit suite, coverage threshold gate)
+        if: matrix.device == 'iPhone' && matrix.ios == '26'
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            --xcodebuild SliccFollower packages/ios-app SliccFollower
+      # Both non-coverage legs share ios-sim-test.sh, which reuses the
+      # coverage script's simulator selection, SLICC_IOS_SIM_UDID override,
+      # pre-boot, and runner-init retry — one canonical path, no drift.
+      - name: Test (iPhone unit suite, no coverage gate)
+        if: matrix.device == 'iPhone' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPhone \
+            --result-bundle .build/unit-suite.xcresult \
+            --only-testing SliccFollowerTests
+      - name: Test regular-width browser (iPad)
+        if: matrix.device == 'iPad'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPad \
+            --result-bundle .build/regular-width-ui.xcresult \
+            --only-testing SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
+      - name: Upload coverage report
+        if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-ios-app
+          path: packages/ios-app/.build/coverage/lcov.info
+          if-no-files-found: ignore
+      # Per-test timings live in the result bundle; upload it so a slow or flaky
+      # test can be diagnosed without re-running the simulator locally.
+      - name: Upload test timings (xcresult)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-ios-app-${{ matrix.ios }}-${{ matrix.device }}
+          path: |
+            packages/ios-app/.build/coverage/ios-app.xcresult
+            packages/ios-app/.build/unit-suite.xcresult
+            packages/ios-app/.build/regular-width-ui.xcresult
+          if-no-files-found: ignore
 
   global-install:
     needs: changes
@@ -1554,6 +1586,7 @@ jobs:
         swift-optel,
         swift-traysession,
         ios-app,
+        ios-app-tests,
         go-optel,
         slicc-cli,
         release-gate,
