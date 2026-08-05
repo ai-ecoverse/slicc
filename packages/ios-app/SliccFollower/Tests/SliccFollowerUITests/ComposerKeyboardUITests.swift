@@ -17,8 +17,8 @@ final class ComposerKeyboardUITests: XCTestCase {
         app.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(
-            app.staticTexts["send from keyboard"].waitForExistence(timeout: 10),
-            "plain Return should submit the composed prompt")
+            app.staticTexts["composer-placeholder"].waitForExistence(timeout: 10),
+            "plain Return should submit and clear the composed prompt")
     }
 
     func testShiftReturnInsertsLineBreak() {
