@@ -62,7 +62,8 @@ final class KokoroResourceDownloaderTests: XCTestCase {
 
         private func populate(_ destination: URL, missing: String? = nil) throws {
             for entry in KokoroAneResourceDownloader.downloadableEntries where entry != missing {
-                let url = destination.appendingPathComponent(entry)
+                let url = destination.appendingPathComponent(
+                    KokoroAneResourceDownloader.repositoryPath(for: entry))
                 if entry.hasSuffix(".mlmodelc") {
                     try FileManager.default.createDirectory(
                         at: url, withIntermediateDirectories: true)
@@ -75,13 +76,34 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         }
     }
 
-    func testGlobsSelectOnlyRootModelsVocabulariesAndDefaultVoice() {
+    func testGlobsSelectEnglishSynthesisModelsAndRootG2PResources() {
         let expected = Set(
-            KokoroAneResourceDownloader.modelBundles.map { "\($0)/*" } + [
+            KokoroAneResourceDownloader.modelBundles.map {
+                "\(KokoroAneResourceDownloader.repositoryPath(for: $0))/*"
+            } + [
                 "vocab_index.json", "g2p_vocab.json", "voices/af_heart.json",
             ])
         XCTAssertEqual(Set(KokoroAneResourceDownloader.matchingGlobs), expected)
-        XCTAssertFalse(KokoroAneResourceDownloader.matchingGlobs.contains { $0.hasPrefix("ANE/") })
+        XCTAssertTrue(
+            KokoroAneResourceDownloader.matchingGlobs.contains(
+                "ANE/KokoroVocoder.mlmodelc/*"))
+        XCTAssertTrue(
+            KokoroAneResourceDownloader.matchingGlobs.contains("G2PEncoder.mlmodelc/*"))
+        XCTAssertTrue(
+            HuggingFaceKokoroSnapshotDownloader.matchesFile(
+                path: "ANE/KokoroVocoder.mlmodelc/weights/weight.bin", type: .file,
+                globs: KokoroAneResourceDownloader.matchingGlobs))
+        XCTAssertFalse(
+            HuggingFaceKokoroSnapshotDownloader.matchesFile(
+                path: "ANE/KokoroVocoder.mlmodelc/weights", type: .directory,
+                globs: KokoroAneResourceDownloader.matchingGlobs))
+    }
+
+    func testManagedSessionIsWiFiOnlyAndFailsFastWithoutConnectivity() {
+        let configuration = HuggingFaceKokoroSnapshotDownloader.makeSessionConfiguration()
+
+        XCTAssertFalse(configuration.allowsCellularAccess)
+        XCTAssertFalse(configuration.waitsForConnectivity)
     }
 
     func testCacheHitUsesLocalFilesOnlyWithoutNetworkFetch() async throws {
@@ -112,6 +134,12 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         let requestedModes = await fake.requestedModes()
         XCTAssertEqual(requestedModes, [true, false])
         XCTAssertEqual(fractions, [0.35, 1])
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("KokoroVocoder.mlmodelc").path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("ANE/KokoroVocoder.mlmodelc").path))
         let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }

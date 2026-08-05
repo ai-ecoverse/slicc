@@ -44,6 +44,44 @@ screenshot should show **Settings → Connection → Join URL** with
 `Status: Disconnected`. The uninstall matters: a stored `joinUrl` boots the app
 straight into the conversation and auto-connects.
 
+## Kokoro model download and speech
+
+Start from the fresh install above; the model flow must not reuse a developer
+pack or an earlier Hub cache.
+
+1. In **Settings → Speech**, tap **Enable high-quality English voice**. Verify
+   that the consent sheet identifies the anonymous, Wi-Fi-only, approximately
+   83 MB download. Cancel once, then accept it.
+2. During transfer, verify that progress and **Cancel Download** are visible.
+   Cancel once and confirm that the pinned revision directory is removed before
+   retrying.
+3. Accept again and wait for **Installed · about 83 MB**. A complete pack has
+   nine `.mlmodelc` bundles, `vocab_index.json`, `g2p_vocab.json`,
+   `voices/af_heart.json`, and `.provisioned` at the revision root.
+4. Connect to a real leader, dictate an English turn, and verify that the reply
+   is spoken. Include the word “real” and listen for `/ɹˈIl/`; logs or a
+   successful model load are not substitutes for an auditory check.
+5. Tap **Remove Download**. The UI must return to not-installed and the revision
+   directory must be absent. With no cache and networking unavailable, another
+   dictated reply must still use the system voice without attempting a model
+   download.
+
+Inspect the managed pack without relying on UI state:
+
+```bash
+DATA=$(xcrun simctl get_app_container "$UDID" com.sliccy.follower data)
+ROOT="$DATA/Library/Application Support/KokoroModels"
+find "$ROOT" -maxdepth 3 -print
+du -sk "$ROOT"
+```
+
+The managed Hub cache is colocated under the revision, so peak on-disk usage can
+be close to twice the displayed network payload. Removal deletes both the flat
+runtime files and that cache. Save screenshots and any captured WAV under a
+gitignored `.qa/` directory. `simctl` does not expose simulator speaker audio;
+if nobody listened to the output, record that limitation instead of claiming
+pronunciation passed.
+
 ## Driving an interaction without tapping
 
 `simctl` cannot synthesize taps, but `UserDefaults` reads the argument domain,
