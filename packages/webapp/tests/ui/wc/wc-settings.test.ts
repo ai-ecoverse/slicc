@@ -52,6 +52,10 @@ function findPanelLayoutsToggle(dialog: HTMLElement): HTMLInputElement | null {
   return dialog.querySelector('#wcset-feature-panel-layouts');
 }
 
+function findAgenticMemoryToggle(dialog: HTMLElement): HTMLInputElement | null {
+  return dialog.querySelector('#wcset-feature-agentic-memory');
+}
+
 const log = { error: vi.fn() };
 
 function seedAccounts(accounts: unknown[]): void {
@@ -268,6 +272,11 @@ describe('showExperimentalSettings', () => {
     // `listFlags()`, with no per-flag UI code.
     expect(findPanelLayoutsToggle(dialog)).not.toBeNull();
     expect(dialog.textContent).toContain('Panel layouts');
+    expect(findAgenticMemoryToggle(dialog)).not.toBeNull();
+    expect(dialog.textContent).toContain('Agentic memory');
+    expect(dialog.textContent).toContain(
+      'Curate session memory with a background agent instead of a one-shot extraction call.'
+    );
     // `experimental-settings` gates this dialog and is NOT toggleable, so it must
     // never offer a switch that would let a user lock themselves out of it.
     expect(findExperimentalToggle(dialog)).toBeNull();
@@ -287,6 +296,21 @@ describe('showExperimentalSettings', () => {
     toggle.dispatchEvent(new Event('change'));
 
     expect(isFeatureEnabled('panel-layouts')).toBe(true);
+    clickDone(dialog);
+    await result;
+  });
+
+  it('persists an agentic-memory toggle', async () => {
+    initFeatureFlags('standalone', { 'experimental-settings': 'on' });
+    const result = showExperimentalSettings(log);
+    const dialog = await openDialog();
+    const toggle = findAgenticMemoryToggle(dialog) as HTMLInputElement;
+
+    expect(toggle.checked).toBe(false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
     clickDone(dialog);
     await result;
   });

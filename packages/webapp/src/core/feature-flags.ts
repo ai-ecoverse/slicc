@@ -8,7 +8,7 @@ export type FeatureFlagFloat =
   | 'cherry'
   | 'follower';
 
-export type FeatureFlagId = 'experimental-settings' | 'panel-layouts';
+export type FeatureFlagId = 'experimental-settings' | 'panel-layouts' | 'agentic-memory';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -39,6 +39,14 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     // Off everywhere while the dock-tree is still the shipping layout. No
     // `floatDefaults`: the gate is uniform across floats, including a Cherry embed
     // pushing its own layout, so there is one answer to "are panels on here".
+    defaultValue: 'off',
+    userToggleable: true,
+  }),
+  Object.freeze({
+    id: 'agentic-memory',
+    label: 'Agentic memory',
+    description:
+      'Curate session memory with a background agent instead of a one-shot extraction call.',
     defaultValue: 'off',
     userToggleable: true,
   }),

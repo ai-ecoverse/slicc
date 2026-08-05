@@ -52,8 +52,17 @@ describe('feature flag registry', () => {
         defaultValue: 'off',
         userToggleable: true,
       }),
+      expect.objectContaining({
+        id: 'agentic-memory',
+        label: 'Agentic memory',
+        description:
+          'Curate session memory with a background agent instead of a one-shot extraction call.',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
+    expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
   });
 
   it('gates panel layouts OFF by default on every float', () => {
@@ -72,6 +81,26 @@ describe('feature flag registry', () => {
 
   it('lets the USER turn panel layouts on — it is toggleable, unlike the settings gate', () => {
     expect(resolveFlagValue('panel-layouts', 'standalone', { 'panel-layouts': 'on' })).toBe('on');
+  });
+
+  it('gates agentic memory off on every float and accepts a local override', () => {
+    for (const float of [
+      'standalone',
+      'extension',
+      'electron-overlay',
+      'extension-detached',
+      'hosted-leader',
+      'connect',
+      'cherry',
+      'follower',
+    ] as const) {
+      initFeatureFlags(float);
+      expect(isFeatureEnabled('agentic-memory')).toBe(false);
+    }
+
+    initFeatureFlags('standalone');
+    setFeatureFlagOverride('agentic-memory', 'on');
+    expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
   it('uses float-aware bundled defaults', () => {
@@ -111,6 +140,7 @@ describe('feature flag registry', () => {
     expect(resolveFlags('standalone', { 'experimental-settings': 'off' })).toEqual({
       'experimental-settings': 'off',
       'panel-layouts': 'off',
+      'agentic-memory': 'off',
     });
     expect(
       resolveFlags(
@@ -118,7 +148,11 @@ describe('feature flag registry', () => {
         { 'experimental-settings': 'off' },
         { 'experimental-settings': 'on' }
       )
-    ).toEqual({ 'experimental-settings': 'off', 'panel-layouts': 'off' });
+    ).toEqual({
+      'experimental-settings': 'off',
+      'panel-layouts': 'off',
+      'agentic-memory': 'off',
+    });
   });
 
   it('round-trips string overrides through one localStorage key', () => {
