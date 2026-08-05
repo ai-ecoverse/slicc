@@ -16,6 +16,7 @@ import {
   getFollowerTrayRuntimeStatus,
   subscribeToFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import {
   getLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
@@ -254,10 +255,19 @@ export function buildFollowerOptions(
   );
   return {
     joinUrl,
-    onSnapshot: (messages) => getController()?.loadMessages(messages),
+    onSnapshot: (messages, scoopJid) => {
+      selectedScoopJid = scoopJid;
+      const controller = getController();
+      controller?.loadMessages(messages);
+      controller?.setProcessing(messages.some((message) => message.isStreaming));
+    },
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       getController()?.addUserMessage(text, attachments),
-    onStatus: (status) => getController()?.setProcessing(status === 'processing'),
+    onStatus: (status, scoopJid) => {
+      if (shouldApplyFollowerStatus(scoopJid, selectedScoopJid)) {
+        getController()?.setProcessing(status === 'processing');
+      }
+    },
     setChatAgent: (agent) => getController()?.setAgent(agent),
     browserAPI: browser,
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),

@@ -115,8 +115,8 @@ export interface StartPageFollowerTrayOptions {
     scoopJid: string,
     attachments?: MessageAttachment[]
   ) => void;
-  /** Update the chat panel's processing indicator from the leader's scoop status. */
-  onStatus: (scoopStatus: string) => void;
+  /** Update processing from the leader's scoop status. scoopJid is absent for legacy leaders. */
+  onStatus: (scoopStatus: string, scoopJid?: string) => void;
   /**
    * Forward a leader-sent `cherry.slicc_event` (cone → host page) onward. Only
    * the cherry boot path wires this — it routes the event to the host SDK via

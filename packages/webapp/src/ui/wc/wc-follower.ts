@@ -6,6 +6,7 @@ import {
   getFollowerTrayRuntimeStatus,
   subscribeToFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -558,12 +559,20 @@ export async function mountWcUiFollower(
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
     advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
     browserAPI: prelude.browser,
-    onSnapshot: (messages) => controller.loadMessages(messages),
+    onSnapshot: (messages, scoopJid) => {
+      followerSelectedScoop = scoopJid;
+      controller.loadMessages(messages);
+      controller.setProcessing(messages.some((message) => message.isStreaming));
+    },
     // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
     // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
     onUserMessage: (text, _messageId, _scoopJid, attachments) =>
       controller.addUserMessage(text, attachments),
-    onStatus: (status) => controller.setProcessing(status === 'processing'),
+    onStatus: (status, scoopJid) => {
+      if (shouldApplyFollowerStatus(scoopJid, followerSelectedScoop)) {
+        controller.setProcessing(status === 'processing');
+      }
+    },
     setChatAgent: (agent) => controller.setAgent(agent),
     // A headless (hosted / cloud) leader has no human to show the export
     // approval dialog to, so it delegates the prompt here — this follower's
@@ -626,7 +635,7 @@ export async function mountWcUiFollower(
       else log.warn('follower sprinkle open() of a local path is unavailable', { path });
     },
     onScoopsList: (scoops, activeScoopJid) => {
-      if (followerSelectedScoop && !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
+      if (!followerSelectedScoop || !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
         followerSelectedScoop = activeScoopJid;
       }
       boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
