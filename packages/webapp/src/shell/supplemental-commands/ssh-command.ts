@@ -9,7 +9,8 @@
  *
  * Discovery: `ssh` (no args) or `ssh --list` lists exec-capable followers, the
  * same roster the `host` command shows (a `[exec]`-tagged follower is a valid
- * target). Browser / iOS followers have no OS shell and are never targets.
+ * target). Browser followers are never targets; iOS followers accept only a
+ * restricted, non-shell command surface advertised in their MOTD.
  *
  * The shell runs in the kernel worker; the tray data channels live on the page.
  * The run bridges through the `tray-exec` panel-RPC op to
@@ -39,8 +40,9 @@ Usage: ssh [--cwd <dir>] [--timeout <seconds>] <runtime-id> <command...>
        ssh --list
 
 Runs <command> on the follower <runtime-id> (from \`host\` / \`ssh --list\`) and
-returns its stdout, stderr, and exit code. Only a \`slicc … follow\` CLI follower
-accepts commands — it runs them on its real machine as the user who started it.
+returns its stdout, stderr, and exit code. A \`slicc … follow\` CLI follower runs
+commands on its real machine. An iOS follower accepts only \`open\`, after the
+device user approves it.
 
 Options:
   --list, -l           List exec-capable followers and exit

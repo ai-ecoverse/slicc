@@ -388,13 +388,8 @@ public struct TrayChunkFrame: Codable {
 /// Mirrors `TraySyncCapabilities`. Advertised on `hello` so the leader can
 /// route capability-gated work.
 public struct TraySyncCapabilities: Codable, Equatable {
-    /// This peer accepts commands via `exec.request`.
-    ///
-    /// Always false here, stated rather than implied. iOS has no OS shell, and
-    /// the leader gates remote exec on `peerCapabilities?.exec`
-    /// (`remote-exec.ts`), so omitting the field produced the right behaviour
-    /// by accident. Sending it makes the contract explicit, and a future
-    /// capability added to this struct starts from a written-down baseline.
+    /// This peer accepts `exec.request`. iOS supports a restricted verb set and
+    /// never interprets the command with a shell.
     public let exec: Bool
 
     public init(exec: Bool) {
@@ -403,7 +398,7 @@ public struct TraySyncCapabilities: Codable, Equatable {
 }
 
 /// What this build tells the leader it can do.
-public let trayFollowerCapabilities = TraySyncCapabilities(exec: false)
+public let trayFollowerCapabilities = TraySyncCapabilities(exec: true)
 
 // MARK: - LeaderToFollowerMessage
 

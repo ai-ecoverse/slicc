@@ -73,6 +73,20 @@ describe('ssh command', () => {
     );
   });
 
+  it('lists an iOS follower with its restricted-command MOTD', async () => {
+    hoisted.followers = [
+      {
+        runtimeId: 'follower-ios',
+        runtime: 'slicc-ios',
+        exec: true,
+        motd: 'SLICC iOS follower on iPhone — only supported command: open',
+      },
+    ];
+    const r = await createSshCommand().execute(['--list'], ctx());
+    expect(r.stdout).toContain('  - follower-ios (slicc-ios)');
+    expect(r.stdout).toContain('      SLICC iOS follower on iPhone — only supported command: open');
+  });
+
   it('reports when no follower is an exec target', async () => {
     hoisted.followers = [{ runtimeId: 'follower-b', exec: false }];
     const r = await createSshCommand().execute([], ctx());

@@ -391,8 +391,8 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       response: { ok: true, data: { type: 'void' } },
     },
   },
-  // iOS mirrors the full exec wire surface for its leader-backed terminal.
-  // `capabilities.exec` remains false because the phone cannot serve OS exec.
+  // iOS mirrors the full exec wire surface for its leader-backed terminal and
+  // accepts leader requests for its restricted, non-shell `open` verb.
   'exec.request': {
     ios: 'decoded',
     message: {
@@ -644,8 +644,8 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       type: 'hello',
       protocolVersion: 1,
       runtime: 'slicc-ios',
-      capabilities: { exec: false },
-      motd: 'SLICC iOS follower on iPhone (iOS 26.0) — chat and CDP targets, no shell',
+      capabilities: { exec: true },
+      motd: 'SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open',
     },
   },
   ping: { ios: 'decoded', message: { type: 'ping' } },
