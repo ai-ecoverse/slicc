@@ -278,8 +278,15 @@ struct SettingsView: View {
     @ViewBuilder
     private var connectActionRow: some View {
         switch appState.connectionState {
-        case .connected, .reconnecting:
+        case .connected:
             Button("Disconnect", role: .destructive) {
+                appState.disconnect()
+            }
+        case .reconnecting:
+            // Same full teardown as Disconnect (reconnect budget, stored
+            // credentials, file-provider domain) — the label says what the
+            // tap actually abandons.
+            Button("Stop Reconnecting", role: .destructive) {
                 appState.disconnect()
             }
         case .connecting:
@@ -507,7 +514,12 @@ private struct SpeechSettingsSection: View {
         } header: {
             Text("Speech")
         }
-        .onReceive(etaTicker) { now = $0 }
+        .onReceive(etaTicker) { tick in
+            // Only invalidate the section while an ETA is actually on
+            // screen; a 1 Hz re-render of an idle sheet shows up in
+            // Instruments (review finding).
+            if case .downloading = kokoroModels.state { now = tick }
+        }
     }
 
     @ViewBuilder

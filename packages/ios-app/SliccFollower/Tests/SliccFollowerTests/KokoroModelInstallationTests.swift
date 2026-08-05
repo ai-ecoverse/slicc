@@ -85,33 +85,26 @@ final class KokoroModelInstallationTests: XCTestCase {
         func hasVoice(for lang: String) -> Bool { true }
     }
 
-    func testInstallationWaitsForExplicitConsent() async {
-        let (directory, cleanup) = temporaryDirectory()
-        defer { cleanup() }
-        let fake = FakeResourceDownloader(.success)
-        let installation = makeInstallation(directory: directory, downloader: fake)
-
-        XCTAssertEqual(installation.state, .notInstalled)
-        installation.requestInstallation()
-
-        XCTAssertEqual(installation.state, .awaitingConsent)
-        let callCount = await fake.calls()
-        XCTAssertEqual(callCount, 0)
-        installation.declineConsent()
-        XCTAssertEqual(installation.state, .notInstalled)
-    }
-
-    func testConsentedDownloadPublishesProgressThenInstalls() async {
+    func testRequestStartsDownloadImmediately() async {
+        // One-click contract: the button copy carries the size/Wi-Fi
+        // disclosure, so requestInstallation IS the consent — no separate
+        // confirm step exists between the tap and the download.
         let (directory, cleanup) = temporaryDirectory()
         defer { cleanup() }
         let installation = makeInstallation(
             directory: directory, downloader: FakeResourceDownloader(.success))
 
+        XCTAssertEqual(installation.state, .notInstalled)
+        XCTAssertNil(installation.downloadStartedAt)
         installation.requestInstallation()
-        installation.confirmInstallation()
 
+        guard case .downloading = installation.state else {
+            return XCTFail("expected .downloading immediately, got \(installation.state)")
+        }
+        XCTAssertNotNil(installation.downloadStartedAt)
         await waitUntil { installation.state == .downloading(fraction: 0.25) }
         await waitUntil { installation.state == .installed }
+        XCTAssertNil(installation.downloadStartedAt)
     }
 
     func testCancellationReturnsToNotInstalledAndRemovesPartialFiles() async {
@@ -120,12 +113,12 @@ final class KokoroModelInstallationTests: XCTestCase {
         let installation = makeInstallation(
             directory: directory, downloader: FakeResourceDownloader(.waiting))
         installation.requestInstallation()
-        installation.confirmInstallation()
         await waitUntil { installation.state == .downloading(fraction: 0.25) }
 
         installation.cancelDownload()
 
         XCTAssertEqual(installation.state, .notInstalled)
+        XCTAssertNil(installation.downloadStartedAt)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
         XCTAssertFalse(
             FileManager.default.fileExists(
@@ -148,7 +141,7 @@ final class KokoroModelInstallationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
-    func testDeveloperPackIsInstalledWithoutConsentAndCannotBeRemoved() async {
+    func testDeveloperPackIsInstalledWithoutDownloadAndCannotBeRemoved() async {
         let fake = FakeResourceDownloader(.success)
         let installation = KokoroModelInstallation(
             developmentDirectory: URL(fileURLWithPath: "/developer-pack", isDirectory: true),
@@ -170,7 +163,6 @@ final class KokoroModelInstallationTests: XCTestCase {
             directory: directory,
             downloader: FakeResourceDownloader(.failure(.offline("Wi-Fi unavailable"))))
         installation.requestInstallation()
-        installation.confirmInstallation()
         await waitUntil {
             installation.state == .failed(.offline("Wi-Fi unavailable"))
         }

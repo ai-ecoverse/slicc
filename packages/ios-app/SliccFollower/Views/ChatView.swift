@@ -109,11 +109,14 @@ struct ChatView: View {
             // A remembered session outranks the Settings sheet: reconnect to
             // the last-good tray first and only open Settings when there is
             // nothing to try. A dead session lands in .gaveUp, which opens
-            // Settings on appear and through the handler below.
+            // Settings on appear and through the handler below. The stored
+            // attempt deliberately ignores whatever text sits in the Join URL
+            // field — leftover typing must not strand the launch with neither
+            // a connection nor Settings (review finding).
             if appState.connectionState == .gaveUp {
                 showSettings = true
-            } else if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
-                if !appState.attemptStoredConnection() {
+            } else if appState.connectionState == .disconnected {
+                if !appState.attemptStoredConnection() && appState.joinUrl.isEmpty {
                     showSettings = true
                 }
             }

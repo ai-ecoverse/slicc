@@ -51,7 +51,19 @@ final class SessionReachability: ObservableObject {
     }
 
     private static func probeVerdict(url: URL, session: URLSession) async -> Verdict {
-        var request = URLRequest(url: url)
+        // `?json=true` is load-bearing: a bare GET on a hosted join URL hits
+        // the worker's SPA fallback, which answers 200 for live, dead, and
+        // malformed trays alike (index.ts serveSPA short-circuit). Asking
+        // for JSON reaches the real tray handler, whose status reflects
+        // whether the tray still exists.
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return .unreachable
+        }
+        var query = components.queryItems ?? []
+        query.append(URLQueryItem(name: "json", value: "true"))
+        components.queryItems = query
+        guard let probeUrl = components.url else { return .unreachable }
+        var request = URLRequest(url: probeUrl)
         request.httpMethod = "GET"
         guard
             let (_, response) = try? await session.data(for: request),
