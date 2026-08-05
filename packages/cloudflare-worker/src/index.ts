@@ -1,5 +1,6 @@
 import { ELECTRON_OVERLAY_APP_PATH, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { buildApiCatalogResponse } from './api-catalog.js';
+import { buildAppSiteAssociationResponse } from './apple-app-site-association.js';
 import { matchHashedAssetPath, mimeForAssetPath } from './asset-archive.mjs';
 import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
 import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
@@ -563,6 +564,7 @@ const ROUTES_INDEX_BODY = {
     'GET /download/slicc-cli/:target',
     'GET /handoff',
     'GET /.well-known/api-catalog',
+    'GET /.well-known/apple-app-site-association',
     'GET /llms.txt',
     'GET /status',
     'GET /rel/:name',
@@ -819,6 +821,13 @@ async function tryHandleInfoRoutes(
 
   if (url.pathname === '/llms.txt' && (request.method === 'GET' || request.method === 'HEAD')) {
     return buildLlmsTxtResponse(request);
+  }
+
+  if (
+    url.pathname === '/.well-known/apple-app-site-association' &&
+    (request.method === 'GET' || request.method === 'HEAD')
+  ) {
+    return buildAppSiteAssociationResponse(request);
   }
 
   if (url.pathname === '/status' && (request.method === 'GET' || request.method === 'HEAD')) {
