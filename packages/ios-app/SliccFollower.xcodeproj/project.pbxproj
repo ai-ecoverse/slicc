@@ -110,7 +110,6 @@
 		9C28D445499995ADA861D75F /* PttControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */; };
 		9DF8A1F02E02C3662AC7E44E /* ThemeEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3C704861C906098707C875 /* ThemeEngineTests.swift */; };
 		9ECC362CC8EBA3629542A6E7 /* SteerMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 066BAF2F283227600FB92506 /* SteerMessageTests.swift */; };
-		9EFE5E3966FC292C173B26ED /* GlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF52127045CD508A11604A2 /* GlassStyles.swift */; };
 		9FA93426F018C3EE0C94E8E5 /* theme-vectors.json in Resources */ = {isa = PBXBuildFile; fileRef = F9555BBF8AC72C74630432D1 /* theme-vectors.json */; };
 		9FC130913A6643DA7276FFFA /* ToolUICard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */; };
 		A0327A6785996F45F4FED08A /* AttachmentStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844647F0DBCA8CC0C840D09A /* AttachmentStaging.swift */; };
@@ -365,7 +364,6 @@
 		9A73EE3E38934A8DE13AF2BD /* MemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryStore.swift; sourceTree = "<group>"; };
 		9AADA76C8F5B9002C98EBFC6 /* MemoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryUITests.swift; sourceTree = "<group>"; };
 		9C81AE341D6F9E262EEA65EF /* SyncProtocolCorpusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocolCorpusTests.swift; sourceTree = "<group>"; };
-		9DF52127045CD508A11604A2 /* GlassStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassStyles.swift; sourceTree = "<group>"; };
 		9EF40B2C78468173C75F958F /* SliccAgentAvatarGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccAgentAvatarGeometry.swift; sourceTree = "<group>"; };
 		A16A253ACC35EEB12798224E /* NewSessionMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionMessageTests.swift; sourceTree = "<group>"; };
 		A5FA307998C15DDB13AC2852 /* FixtureConversationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureConversationUITests.swift; sourceTree = "<group>"; };
@@ -699,7 +697,6 @@
 				58899461D44B42F512AD0645 /* DockRail.swift */,
 				E92410F3BA05462ECDEB20A1 /* FilesView.swift */,
 				3425D0B50BD57E03FFF47A45 /* FrozenSessionsView.swift */,
-				9DF52127045CD508A11604A2 /* GlassStyles.swift */,
 				B07F6E666E203541FA44FA52 /* HorizontalScrollGuard.swift */,
 				1F2EECDCB4AF899D3071D13C /* InlineSprinkleView.swift */,
 				CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */,
@@ -1052,7 +1049,6 @@
 				B2C8B3A408D6696046BFA08C /* FilesView.swift in Sources */,
 				5E23C33D85A8DFC1772AD1FE /* FrozenSessions.swift in Sources */,
 				319F6B893CA643B51BE218BB /* FrozenSessionsView.swift in Sources */,
-				9EFE5E3966FC292C173B26ED /* GlassStyles.swift in Sources */,
 				CCD45A2DC9CD2D58A5CBCA0F /* HandoffLink.swift in Sources */,
 				67554B5BF8BA0434704207EF /* HorizontalScrollGuard.swift in Sources */,
 				9AD8326007279D3F37D57C9C /* ICloudSessionList.swift in Sources */,

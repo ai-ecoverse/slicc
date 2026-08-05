@@ -22,13 +22,13 @@ final class InboundActionsUITests: XCTestCase {
     func testDeepLinkedOpenConfirmsBeforeOpening() {
         let app = launch()
 
-        let card = app.staticTexts["Open in SLICC's browser?"]
-        XCTAssertTrue(card.waitForExistence(timeout: 60), "the confirmation card renders")
+        let alert = app.alerts["Open in SLICC's browser?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 60), "the system alert renders")
         XCTAssertTrue(
-            app.staticTexts["example.com"].exists,
-            "the host leads the trust decision")
+            alert.staticTexts["https://example.com/docs"].exists,
+            "the alert shows what would open")
 
-        app.buttons["inbound-open-confirm"].firstMatch.tap()
+        alert.buttons["Open"].tap()
         XCTAssertTrue(
             app.buttons["browser-address-display"].firstMatch.waitForExistence(timeout: 10),
             "confirming opens the URL as a full-screen local tab")
@@ -40,12 +40,12 @@ final class InboundActionsUITests: XCTestCase {
     func testDismissDropsTheRequest() {
         let app = launch()
 
-        let dismiss = app.buttons["inbound-open-dismiss"].firstMatch
-        XCTAssertTrue(dismiss.waitForExistence(timeout: 60))
-        dismiss.tap()
+        let alert = app.alerts["Open in SLICC's browser?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 60))
+        alert.buttons["Cancel"].tap()
         XCTAssertFalse(
-            app.staticTexts["Open in SLICC's browser?"].exists,
-            "dismiss drops the card")
+            app.alerts["Open in SLICC's browser?"].exists,
+            "cancel drops the request")
         XCTAssertTrue(
             app.buttons["dock-browser"].exists,
             "nothing opened — the shell stays put")

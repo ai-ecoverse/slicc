@@ -105,11 +105,37 @@ struct ChatView: View {
             if surface == .term { presentation.terminalWasOpened = true }
         }
         .overlay(alignment: .top) {
-            VStack(spacing: 8) {
-                inboundOpenCard
-                inboundPromptCard
-                inboundPhaseChip
+            inboundPhaseChip
+        }
+        .alert(
+            "Open in SLICC's browser?",
+            isPresented: inboundOpenAlertPresented,
+            presenting: inboundActions.pendingOpen
+        ) { action in
+            Button("Open") { executeInboundOpen(action) }
+            if let host = action.url.host() {
+                Button("Always Allow \(host)") {
+                    allowHostAlways(host)
+                    executeInboundOpen(action)
+                }
             }
+            Button("Cancel", role: .cancel) { inboundActions.consume(action) }
+        } message: { action in
+            Text(action.url.absoluteString)
+        }
+        .alert(
+            "Send this prompt to SLICC?",
+            isPresented: inboundPromptAlertPresented,
+            presenting: inboundActions.pendingPrompt
+        ) { action in
+            Button("Send") { executeInboundPrompt(action) }
+            Button("Always Send") {
+                alwaysAllowPrompts = true
+                executeInboundPrompt(action)
+            }
+            Button("Cancel", role: .cancel) { cancelInboundPrompt(action) }
+        } message: { action in
+            Text(action.prompt)
         }
         .onChange(of: inboundActions.pendingOpen) { action in
             // The App-Intent route was an explicit user action, and an
@@ -133,54 +159,6 @@ struct ChatView: View {
 
     // MARK: - Inbound open (#1918)
 
-    /// Confirmation card for a deep-linked URL: a received link is
-    /// untrusted input, so nothing opens until the user says so here.
-    @ViewBuilder
-    private var inboundOpenCard: some View {
-        if let action = inboundActions.pendingOpen, action.needsConfirmation {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Open in SLICC's browser?", systemImage: "globe")
-                    .font(.system(size: 14, weight: .semibold))
-                // Host leads, full URL follows small — the host is the
-                // trust decision; the rest is context.
-                Text(action.url.host() ?? "")
-                    .font(.system(size: 13, weight: .medium))
-                Text(action.url.absoluteString)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                HStack(spacing: 10) {
-                    Button("Dismiss") {
-                        inboundActions.consume(action)
-                    }
-                    .modifier(GlassButton())
-                    .accessibilityIdentifier("inbound-open-dismiss")
-                    Spacer()
-                    if let host = action.url.host() {
-                        Button("Always") {
-                            allowHostAlways(host)
-                            executeInboundOpen(action)
-                        }
-                        .modifier(GlassButton())
-                        .accessibilityLabel("Always open \(host)")
-                        .accessibilityIdentifier("inbound-open-always")
-                    }
-                    Button("Open") {
-                        executeInboundOpen(action)
-                    }
-                    .modifier(GlassProminentButton())
-                    .accessibilityIdentifier("inbound-open-confirm")
-                }
-            }
-            .padding(16)
-            .modifier(GlassCardBackground())
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-
     /// The shell owns execution: open the URL as a local tab and land the
     /// user in full-screen browsing, exactly like tapping a remote card.
     private func executeInboundOpen(_ action: InboundActionCoordinator.PendingOpen) {
@@ -192,62 +170,40 @@ struct ChatView: View {
         appState.browserViewingTabId = id
     }
 
-    /// Confirmation card for an automation prompt. Deep-linked prompts can
-    /// trigger agent tools, so nothing is sent until the user says so —
-    /// fail-closed is the policy until unattended automation is an
-    /// explicit decision (#1918).
-    @ViewBuilder
-    private var inboundPromptCard: some View {
-        if let action = inboundActions.pendingPrompt {
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Prompt SLICC?", systemImage: "text.bubble")
-                    .font(.system(size: 14, weight: .semibold))
-                Text(action.prompt)
-                    .font(.system(size: 13))
-                    .lineLimit(4)
-                Text(
-                    action.xSuccess == nil
-                        ? "Sends to the current conversation."
-                        : "Sends to the current conversation; the reply is returned to the requesting app."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    Button("Dismiss") {
-                        inboundActions.consume(prompt: action)
-                        fireCallback(action.xCancel, params: [:])
-                        inboundActions.resolve(
-                            id: action.id, with: .failure(InboundActionError.cancelled))
-                    }
-                    .modifier(GlassButton())
-                    .accessibilityIdentifier("inbound-prompt-dismiss")
-                    Spacer()
-                    Button("Always") {
-                        alwaysAllowPrompts = true
-                        executeInboundPrompt(action)
-                    }
-                    .modifier(GlassButton())
-                    .disabled(
-                        appState.connectionState != .connected || appState.isLeaderStalled
-                    )
-                    .accessibilityLabel("Always send prompts without asking")
-                    .accessibilityIdentifier("inbound-prompt-always")
-                    Button("Send") {
-                        executeInboundPrompt(action)
-                    }
-                    .modifier(GlassProminentButton())
-                    .disabled(
-                        appState.connectionState != .connected || appState.isLeaderStalled
-                    )
-                    .accessibilityIdentifier("inbound-prompt-send")
+    /// System-alert presentation state: an alert is the platform's own
+    /// confirmation dialog — position, width, fonts, and button colors
+    /// come out of the box (and Liquid Glass on iOS 26). Escape-key or
+    /// programmatic dismissal counts as Cancel: fail closed.
+    private var inboundOpenAlertPresented: Binding<Bool> {
+        Binding(
+            get: { inboundActions.pendingOpen?.needsConfirmation == true },
+            set: { presented in
+                if !presented, let action = inboundActions.pendingOpen,
+                    action.needsConfirmation
+                {
+                    inboundActions.consume(action)
                 }
             }
-            .padding(16)
-            .modifier(GlassCardBackground())
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
+        )
+    }
+
+    private var inboundPromptAlertPresented: Binding<Bool> {
+        Binding(
+            get: { inboundActions.pendingPrompt?.needsConfirmation == true },
+            set: { presented in
+                if !presented, let action = inboundActions.pendingPrompt,
+                    action.needsConfirmation
+                {
+                    cancelInboundPrompt(action)
+                }
+            }
+        )
+    }
+
+    private func cancelInboundPrompt(_ action: InboundActionCoordinator.PendingPrompt) {
+        inboundActions.consume(prompt: action)
+        fireCallback(action.xCancel, params: [:])
+        inboundActions.resolve(id: action.id, with: .failure(InboundActionError.cancelled))
     }
 
     /// Standing per-host decision for deep-linked opens.
