@@ -204,6 +204,63 @@ describe('createAgentBridge — config construction', () => {
     expect(registerCalls[0].config?.writablePaths?.[0]).toBe('/scoops/some-scoop/');
   });
 
+  it('uses explicit writablePaths with pure-replace semantics', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      writablePaths: ['/workspace', '/knowledge/'],
+    });
+
+    expect(registerCalls[0].config?.writablePaths).toEqual([
+      '/workspace/',
+      '/knowledge/',
+      '/scoops/agent-jolly-mint/',
+      '/tmp/',
+    ]);
+  });
+
+  it('keeps historical cwd and /shared roots when writablePaths is omitted', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, cwd: '/scoops/caller' });
+
+    expect(registerCalls[0].config?.writablePaths).toEqual([
+      '/scoops/caller/',
+      '/shared/',
+      '/scoops/agent-jolly-mint/',
+      '/tmp/',
+    ]);
+  });
+
+  it('falls back to historical writable roots for a non-absolute override', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, writablePaths: ['/knowledge/', 'relative'] });
+
+    expect(registerCalls[0].config?.writablePaths).toEqual([
+      '/workspace/',
+      '/shared/',
+      '/scoops/agent-jolly-mint/',
+      '/tmp/',
+    ]);
+  });
+
   it('forwards allowedCommands verbatim', async () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
