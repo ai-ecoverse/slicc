@@ -279,50 +279,30 @@ struct SettingsView: View {
         }
     }
 
-    /// One real button instead of the old list-item/button hybrid. The row
-    /// background is cleared so the prominent capsule reads as a button, not
-    /// as a tinted Form row.
+    /// A plain action row, styled like Cancel Download and Clear Stored
+    /// Data — just blue instead of red (review note on the first draft).
+    @ViewBuilder
     private var connectActionRow: some View {
-        Group {
-            switch appState.connectionState {
-            case .connected, .reconnecting:
-                Button(role: .destructive) {
-                    appState.disconnect()
-                } label: {
-                    Text("Disconnect")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            case .connecting:
-                Button {
-                } label: {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text("Connecting…").fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(true)
-            case .disconnected, .failed, .gaveUp:
-                Button {
-                    awaitingConnect = true
-                    appState.connect()
-                } label: {
-                    Text(connectionAttemptFailed ? "Retry" : "Connect")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.purple)
-                .disabled(
-                    appState.joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+        switch appState.connectionState {
+        case .connected, .reconnecting:
+            Button("Disconnect", role: .destructive) {
+                appState.disconnect()
             }
+        case .connecting:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Connecting…")
+                    .foregroundStyle(.secondary)
+            }
+        case .disconnected, .failed, .gaveUp:
+            Button(connectionAttemptFailed ? "Retry" : "Connect") {
+                awaitingConnect = true
+                appState.connect()
+            }
+            .disabled(
+                appState.joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
         }
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
     }
 
     private var connectionAttemptFailed: Bool {
