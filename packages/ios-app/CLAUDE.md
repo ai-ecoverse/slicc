@@ -38,7 +38,7 @@ Plain SPM commands do nothing useful on a macOS host. Build and test go through 
 
 - `preview.open` → `CDPBridge.handleTabOpen`, ack `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable` in the corpus.
-- iOS advertises `capabilities.exec: true`; `AppState.handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gates it through device-local scoped approval, and acknowledges without launching. Hierarchical and opaque raw path segments reject traversal or decoding that yields a delimiter or `%`; hierarchical URLs must also standardize unchanged. The latest 1,024 request IDs remain tombstoned across reconnects; 128 failed responses retry FIFO after channel reopen.
+- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gated by scoped approval, acked without launching. Raw paths reject traversal and encoded delimiters; hierarchical URLs must standardize unchanged. 1,024 IDs tombstoned; 128 failed responses retry FIFO.
 
 Both union doc-comments state omissions; `// MARK: -` boundaries are the anchors.
 
