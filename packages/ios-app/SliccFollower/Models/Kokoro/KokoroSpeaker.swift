@@ -48,14 +48,21 @@ protocol KokoroAudioPlaying: AnyObject {
 final class KokoroPCMPlayer: KokoroAudioPlaying {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
+    private let audioSession: any AudioSessionCoordinating
     private var configured = false
     private var sessionActive = false
+
+    convenience init() {
+        self.init(audioSession: AudioSessionCoordinator.shared)
+    }
+
+    init(audioSession: any AudioSessionCoordinating) {
+        self.audioSession = audioSession
+    }
 
     func play(samples: [Float], completion: @escaping @MainActor () -> Void) throws {
         guard !samples.isEmpty else { throw PlayerError.emptyAudio }
         guard samples.allSatisfy(\.isFinite) else { throw PlayerError.nonFiniteAudio }
-        try configureIfNeeded()
-        try activateSession()
         guard
             let format = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
@@ -73,47 +80,44 @@ final class KokoroPCMPlayer: KokoroAudioPlaying {
             channel.update(from: baseAddress, count: samples.count)
         }
         node.stop()
-        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            Task { @MainActor in
-                self?.releaseSession()
-                completion()
+        try audioSession.beginPlayback(preferredSampleRate: format.sampleRate)
+        sessionActive = true
+        do {
+            try configureIfNeeded(format: format)
+            node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                Task { @MainActor in
+                    self?.engine.stop()
+                    self?.releaseSession()
+                    completion()
+                }
             }
+            engine.prepare()
+            try engine.start()
+            node.play()
+        } catch {
+            node.stop()
+            engine.stop()
+            releaseSession()
+            throw error
         }
-        node.play()
     }
 
     func stop() {
         node.stop()
+        engine.stop()
         releaseSession()
     }
 
-    private func configureIfNeeded() throws {
+    private func configureIfNeeded(format: AVAudioFormat) throws {
         guard !configured else { return }
-        guard
-            let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 24_000,
-                channels: 1,
-                interleaved: false)
-        else { throw PlayerError.bufferCreation }
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
-        engine.prepare()
-        try engine.start()
         configured = true
-    }
-
-    private func activateSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try session.setActive(true)
-        sessionActive = true
     }
 
     private func releaseSession() {
         guard sessionActive else { return }
-        try? AVAudioSession.sharedInstance().setActive(
-            false, options: .notifyOthersOnDeactivation)
+        audioSession.endPlayback()
         sessionActive = false
     }
 
@@ -140,6 +144,11 @@ final class KokoroSpeaker: SpeechSpeaking {
         case system
     }
 
+    enum FailureStage: Equatable {
+        case synthesis
+        case playback
+    }
+
     typealias SynthesizerFactory = (URL) -> any KokoroSpeechSynthesizing
 
     private let modelDirectory: URL?
@@ -150,11 +159,15 @@ final class KokoroSpeaker: SpeechSpeaking {
     private let synthesizerFactory: SynthesizerFactory
     private let player: any KokoroAudioPlaying
     private let synthesisTimeout: Duration
+    private let onFailure: ((FailureStage) -> Void)?
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "kokoro-speaker")
 
     private var activeRequest: UUID?
     private var synthesisTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
+    private var cachedSynthesizer: (directory: URL, value: any KokoroSpeechSynthesizing)?
+    private var prewarmTask: Task<Void, Error>?
+    private var isPrewarmed = false
 
     init(
         modelDirectory: URL?,
@@ -164,7 +177,8 @@ final class KokoroSpeaker: SpeechSpeaking {
         fallback: (any SpeechSpeaking)? = nil,
         synthesizerFactory: @escaping SynthesizerFactory = { KokoroTTSEngine(modelsDirectory: $0) },
         player: (any KokoroAudioPlaying)? = nil,
-        synthesisTimeout: Duration = .seconds(20)
+        synthesisTimeout: Duration = .seconds(20),
+        onFailure: ((FailureStage) -> Void)? = nil
     ) {
         self.modelDirectory = modelDirectory
         self.managedModelDirectory = managedModelDirectory
@@ -174,6 +188,26 @@ final class KokoroSpeaker: SpeechSpeaking {
         self.synthesizerFactory = synthesizerFactory
         self.player = player ?? KokoroPCMPlayer()
         self.synthesisTimeout = synthesisTimeout
+        self.onFailure = onFailure
+    }
+
+    func prewarm() async {
+        guard !isPrewarmed, let directory = installedModelDirectory() else { return }
+        let synthesizer = synthesizer(for: directory)
+        let task: Task<Void, Error>
+        if let prewarmTask {
+            task = prewarmTask
+        } else {
+            task = Task { try await synthesizer.prepare() }
+            prewarmTask = task
+        }
+        do {
+            try await task.value
+            isPrewarmed = true
+        } catch {
+            logger.error("Kokoro pre-warm failed; first speech will retry")
+        }
+        prewarmTask = nil
     }
 
     func speak(_ text: String, lang: String?) {
@@ -221,7 +255,8 @@ final class KokoroSpeaker: SpeechSpeaking {
             } catch is CancellationError {
                 return
             } catch {
-                self?.fallbackIfActive(request: request, text: text, lang: lang, error: error)
+                self?.fallbackIfActive(
+                    request: request, text: text, lang: lang, error: error, stage: .synthesis)
             }
         }
     }
@@ -234,11 +269,31 @@ final class KokoroSpeaker: SpeechSpeaking {
                 ).path)
     }
 
+    private func installedModelDirectory() -> URL? {
+        if let modelDirectory {
+            return presenceChecker.modelsPresent(in: modelDirectory) ? modelDirectory : nil
+        }
+        guard let managedModelDirectory, managedModelsPresent(in: managedModelDirectory) else {
+            return nil
+        }
+        return managedModelDirectory
+    }
+
+    private func synthesizer(for directory: URL) -> any KokoroSpeechSynthesizing {
+        if let cachedSynthesizer, cachedSynthesizer.directory == directory {
+            return cachedSynthesizer.value
+        }
+        let synthesizer = synthesizerFactory(directory)
+        cachedSynthesizer = (directory, synthesizer)
+        isPrewarmed = false
+        return synthesizer
+    }
+
     private func startSynthesis(
         text: String, lang: String, modelDirectory: URL, request: UUID = UUID()
     ) {
         activeRequest = request
-        let synthesizer = synthesizerFactory(modelDirectory)
+        let synthesizer = synthesizer(for: modelDirectory)
         startTimeout(request: request, text: text, lang: lang)
         synthesisTask = Task { [weak self] in
             do {
@@ -249,7 +304,8 @@ final class KokoroSpeaker: SpeechSpeaking {
             } catch is CancellationError {
                 return
             } catch {
-                self?.fallbackIfActive(request: request, text: text, lang: lang, error: error)
+                self?.fallbackIfActive(
+                    request: request, text: text, lang: lang, error: error, stage: .synthesis)
             }
         }
     }
@@ -301,15 +357,24 @@ final class KokoroSpeaker: SpeechSpeaking {
                 self?.synthesisTask = nil
             }
         } catch {
-            fallbackIfActive(request: request, text: fallbackText, lang: lang, error: error)
+            fallbackIfActive(
+                request: request, text: fallbackText, lang: lang, error: error, stage: .playback)
         }
     }
 
     private func fallbackIfActive(
-        request: UUID, text: String, lang: String?, error: Error
+        request: UUID, text: String, lang: String?, error: Error, stage: FailureStage
     ) {
         guard activeRequest == request else { return }
-        logger.error("Kokoro synthesis failed; using system voice: \(error.localizedDescription)")
+        onFailure?(stage)
+        switch stage {
+        case .synthesis:
+            logger.error(
+                "Kokoro synthesis failed; using system voice: \(String(describing: error), privacy: .public)")
+        case .playback:
+            logger.error(
+                "Kokoro playback failed; using system voice: \(String(describing: error), privacy: .public)")
+        }
         finishRequest()
         fallback.speak(text, lang: lang)
     }

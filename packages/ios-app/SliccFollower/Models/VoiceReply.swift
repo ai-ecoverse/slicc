@@ -102,6 +102,10 @@ final class VoiceReply {
         speaker.stop()
     }
 
+    func prewarm() async {
+        await speaker.prewarm()
+    }
+
     /// Read an assistant reply aloud, markdown reduced to speakable prose.
     /// Best-effort: a failure never disturbs the chat flow.
     ///
@@ -205,9 +209,14 @@ final class VoiceReply {
 /// without a live audio session.
 @MainActor
 protocol SpeechSpeaking {
+    func prewarm() async
     func speak(_ text: String, lang: String?)
     func stop()
     func hasVoice(for lang: String) -> Bool
+}
+
+extension SpeechSpeaking {
+    func prewarm() async {}
 }
 
 /// `AVSpeechSynthesizer` behind the seam.
@@ -233,7 +242,19 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     /// synthesizer wakes the system speech services on the main actor, and
     /// most sessions never dictate at all.
     private var synthesizer: AVSpeechSynthesizer?
+    private let audioSession: any AudioSessionCoordinating
+    private var sessionActive = false
     private let logger = Logger(subsystem: "com.sliccy.follower", category: "voice-reply")
+
+    override init() {
+        audioSession = AudioSessionCoordinator.shared
+        super.init()
+    }
+
+    init(audioSession: any AudioSessionCoordinating) {
+        self.audioSession = audioSession
+        super.init()
+    }
 
     func speak(_ text: String, lang: String?) {
         guard activateSession() else { return }
@@ -258,8 +279,10 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     }
 
     func stop() {
-        guard let synthesizer, synthesizer.isSpeaking else { return }
-        synthesizer.stopSpeaking(at: .immediate)
+        if let synthesizer, synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        releaseSession()
     }
 
     func hasVoice(for lang: String) -> Bool {
@@ -335,10 +358,9 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     /// rather than `.playAndRecord` also drops the microphone, which nothing
     /// needs while the phone is the one talking.
     private func activateSession() -> Bool {
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-            try session.setActive(true, options: [])
+            try audioSession.beginPlayback(preferredSampleRate: nil)
+            sessionActive = true
             return true
         } catch {
             logger.error("spoken reply audio session failed: \(error.localizedDescription)")
@@ -349,12 +371,9 @@ final class AVSpeechSpeaker: NSObject, SpeechSpeaking, AVSpeechSynthesizerDelega
     /// Hand the route back so ducked audio returns to full volume and the
     /// next push-to-talk hold can claim the microphone.
     private func releaseSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(
-                false, options: .notifyOthersOnDeactivation)
-        } catch {
-            logger.warning("releasing audio session failed: \(error.localizedDescription)")
-        }
+        guard sessionActive else { return }
+        audioSession.endPlayback()
+        sessionActive = false
     }
 
     nonisolated func speechSynthesizer(

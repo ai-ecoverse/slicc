@@ -128,6 +128,7 @@
 		9BC89CF40CBEAF067487B455 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = CEF104FB1C3EDA0B98BC5FFF /* WebRTC */; };
 		9C28D445499995ADA861D75F /* PttControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8551D5DAD74B9BFB7CC2B76D /* PttControllerTests.swift */; };
 		9DF8A1F02E02C3662AC7E44E /* ThemeEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3C704861C906098707C875 /* ThemeEngineTests.swift */; };
+		9EBE8E6834CED0586A82D76C /* AudioSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFCA35BA153EE392CC28CAB /* AudioSessionCoordinator.swift */; };
 		9ECC362CC8EBA3629542A6E7 /* SteerMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 066BAF2F283227600FB92506 /* SteerMessageTests.swift */; };
 		9FA93426F018C3EE0C94E8E5 /* theme-vectors.json in Resources */ = {isa = PBXBuildFile; fileRef = F9555BBF8AC72C74630432D1 /* theme-vectors.json */; };
 		9FC130913A6643DA7276FFFA /* ToolUICard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AD3AFC2F2EB348C5A74AEA3 /* ToolUICard.swift */; };
@@ -190,6 +191,7 @@
 		F13E566C40F05F6F3ED297BD /* SliccAgentAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80C9AA05D0F49F7E284BEC5 /* SliccAgentAvatarView.swift */; };
 		F266887FC83BB1D23A4D0441 /* ScoopStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD1AA2BFCF961C6F3372B78 /* ScoopStatus.swift */; };
 		F2C8373CBF5775D4189C7B82 /* ScoopStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E209029F63F2427997E161 /* ScoopStatusTests.swift */; };
+		F511F24080C77FB5E0397E39 /* AudioSessionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68015B8D59A915A8CA05C3D0 /* AudioSessionCoordinatorTests.swift */; };
 		F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */; };
 		F6F874E7F54C3CF3862A620B /* KokoroModelInstallationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90E2EE93E0C82E29F5603BF9 /* KokoroModelInstallationTests.swift */; };
 		F8ED491630EE4BD8E6486580 /* LickEvent+Navigate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E365829FF69F26F07534A5F1 /* LickEvent+Navigate.swift */; };
@@ -368,6 +370,7 @@
 		639AB6CC8494FCE4C252F00B /* ChunkFramingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChunkFramingTests.swift; sourceTree = "<group>"; };
 		63CFFB3D55CD74B43CC70771 /* LeaderVFSProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeaderVFSProviderTests.swift; sourceTree = "<group>"; };
 		65F5E877CC67E8790899B164 /* AvatarIsolationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarIsolationView.swift; sourceTree = "<group>"; };
+		68015B8D59A915A8CA05C3D0 /* AudioSessionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinatorTests.swift; sourceTree = "<group>"; };
 		682FAEF60C107C79F698B89C /* SwipeArbiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeArbiter.swift; sourceTree = "<group>"; };
 		686D36BA22DBC2F94CEA8448 /* BrowserTargets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTargets.swift; sourceTree = "<group>"; };
 		695356CA7F082C3287CFB228 /* SVGPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGPathTests.swift; sourceTree = "<group>"; };
@@ -419,6 +422,7 @@
 		A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA183C2EB1F735E411F62E2F /* TrayCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayCredentialStoreTests.swift; sourceTree = "<group>"; };
 		AA5944F254CB056574062D5E /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
+		ABFCA35BA153EE392CC28CAB /* AudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinator.swift; sourceTree = "<group>"; };
 		AF78C09597C5D63A373EB126 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
 		AFCAA64AD099330D7C84B889 /* AttachmentUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentUITests.swift; sourceTree = "<group>"; };
 		B00A795E28FE6238268A196E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -559,6 +563,7 @@
 			children = (
 				FC17E730D500B3482A2952ED /* AppStateStreamingTests.swift */,
 				787E06CD88652B51BA32D519 /* AttachmentMessageTests.swift */,
+				68015B8D59A915A8CA05C3D0 /* AudioSessionCoordinatorTests.swift */,
 				2D69F96CFDFB32CC8A815552 /* BrowserTargetsTests.swift */,
 				0B2B453FB36EEF90DF0C8A24 /* CdpOpenTabTests.swift */,
 				496510BE3FA550EC3F1CF325 /* CdpPreviewClientTests.swift */,
@@ -661,6 +666,7 @@
 		51886095A534C38E3C7A30E7 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				ABFCA35BA153EE392CC28CAB /* AudioSessionCoordinator.swift */,
 				686D36BA22DBC2F94CEA8448 /* BrowserTargets.swift */,
 				3CFD824F932894C842D4886D /* ChatPresentationState.swift */,
 				04F4A75BA9D14DA689D0E9F4 /* Dictation.swift */,
@@ -1142,6 +1148,7 @@
 				9494D2F9E9EFAB61FFC71886 /* AppStateTheme.swift in Sources */,
 				5B5741496E7C7EA37979CFF2 /* AttachmentChips.swift in Sources */,
 				A0327A6785996F45F4FED08A /* AttachmentStaging.swift in Sources */,
+				9EBE8E6834CED0586A82D76C /* AudioSessionCoordinator.swift in Sources */,
 				1EB817519D7626900D17BDE8 /* AvatarIsolationView.swift in Sources */,
 				5E20209A4C1455BBC0160856 /* BrowserTargets.swift in Sources */,
 				2CE789AA836BB0713F1250D7 /* CDPBridge.swift in Sources */,
@@ -1274,6 +1281,7 @@
 			files = (
 				0A2E0E32557303EF81B1F3A1 /* AppStateStreamingTests.swift in Sources */,
 				581EB92FA65132178CAE334E /* AttachmentMessageTests.swift in Sources */,
+				F511F24080C77FB5E0397E39 /* AudioSessionCoordinatorTests.swift in Sources */,
 				80CAC841902FCED56E805928 /* BrowserTargetsTests.swift in Sources */,
 				02327898D22E1FB57C3FE239 /* CdpOpenTabTests.swift in Sources */,
 				E568114F9C5022800E90127F /* CdpPreviewClientTests.swift in Sources */,

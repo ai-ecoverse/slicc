@@ -103,6 +103,7 @@ final class PttController: ObservableObject {
     private let permissionTimeoutMs: Int
     /// Bounds the release → stop() → commit chain (`FINALIZE_TIMEOUT_MS`).
     private let finalizeTimeoutMs: Int
+    private let prepareForRecording: @MainActor () -> Void
 
     private var pressed = false
     /// Monotonic press counter — async continuations from a stale press bail.
@@ -129,12 +130,14 @@ final class PttController: ObservableObject {
         engine: DictationEngine,
         scheduler: PttScheduling = MainQueuePttScheduler(),
         permissionTimeoutMs: Int = 10_000,
-        finalizeTimeoutMs: Int = 45_000
+        finalizeTimeoutMs: Int = 45_000,
+        prepareForRecording: @escaping @MainActor () -> Void = {}
     ) {
         self.engine = engine
         self.scheduler = scheduler
         self.permissionTimeoutMs = permissionTimeoutMs
         self.finalizeTimeoutMs = finalizeTimeoutMs
+        self.prepareForRecording = prepareForRecording
     }
 
     // MARK: Touch input
@@ -263,6 +266,7 @@ final class PttController: ObservableObject {
     }
 
     private func startRecording(_ t: Int) {
+        prepareForRecording()
         stage = .recording
         caption = ""
         captionIsError = false

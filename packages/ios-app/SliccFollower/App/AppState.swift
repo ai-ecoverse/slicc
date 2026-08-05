@@ -744,6 +744,7 @@ class AppState: ObservableObject {
         modelSelectionState = nil
         let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialsSaved)
+        Task { await VoiceReply.shared.prewarm() }
 
         // Reuse the existing CDP bridge across reconnects so the user's
         // hosted tabs survive transient WebRTC drops. Only spin up a new

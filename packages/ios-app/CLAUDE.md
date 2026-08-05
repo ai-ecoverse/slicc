@@ -92,7 +92,7 @@ the target is iOS 17, use preference/geometry APIs, not iOS 18 scroll APIs.
 
 ## Push to Talk
 
-Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak their matching reply: English packs use Kokoro; all other paths use `AVSpeechSynthesizer`. Typed turns stay silent. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+Hold an empty composer to dictate a `user_message`. `PttController` + `Dictation` seam `SFSpeechRecognizer`. Release submits via `InputBar.submit(_:dictated:)`, not the composer binding. Dictated turns speak their matching reply: English packs use Kokoro; all other paths use `AVSpeechSynthesizer`. Typed turns stay silent. `AudioSessionCoordinator` is the only `AVAudioSession` owner; it serializes recording against playback and restores the inherited category and preferred sample rate after each lease. Hooks: `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
 
 ### Local Kokoro models
 
