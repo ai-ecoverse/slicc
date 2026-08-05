@@ -30,20 +30,19 @@ final class ConnectionRouteUITests: XCTestCase {
             "The Settings sheet should offer its dismiss control")
     }
 
-    func testConnectionPillReportsFailureForAnUnreachableLeader() {
+    func testAvatarAndComposerReportFailureForAnUnreachableLeader() {
         let app = XCUIApplication()
         app.launchArguments += ["-joinUrl", Self.unreachableJoinUrl]
         app.launch()
 
-        let pill = app.staticTexts["connection-status"]
+        let avatar = app.descendants(matching: .any)
+            .matching(identifier: "scoop-avatar")
+            .matching(NSPredicate(format: "label CONTAINS %@", "Connection Failed"))
+            .firstMatch
         XCTAssertTrue(
-            pill.waitForExistence(timeout: 30),
-            "A stored join URL should skip Settings and show the status pill")
+            avatar.waitForExistence(timeout: 60),
+            "A launch Join URL should skip Settings and keep status in the avatar")
 
-        // The pill passes through "Connecting…" first, so wait for the settled
-        // state rather than asserting on whatever is on screen at first sight.
-        let failed = NSPredicate(format: "label == %@", "Connection Failed")
-        expectation(for: failed, evaluatedWith: pill)
-        waitForExpectations(timeout: 60)
+        XCTAssertEqual(app.staticTexts["composer-placeholder"].label, "Disconnected")
     }
 }
