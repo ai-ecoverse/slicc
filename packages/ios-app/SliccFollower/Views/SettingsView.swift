@@ -163,9 +163,7 @@ struct SettingsView: View {
     /// Flattened device groups, reachable (or not-yet-probed) sessions first,
     /// each cohort newest-first. Unreachable rows keep rendering — the probe
     /// can be wrong about a flaky network — but sink below the live ones.
-    private var sessionRowsSortedByReachability:
-        [(session: SyncedTraySession, deviceName: String)]
-    {
+    private var sessionRowsSortedByReachability: [(session: SyncedTraySession, deviceName: String)] {
         ICloudSessionList.groups(from: appState.sessionStore.sessions)
             .flatMap { group in
                 group.sessions.map { (session: $0, deviceName: group.deviceName) }
