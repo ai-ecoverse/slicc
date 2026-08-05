@@ -37,11 +37,12 @@ final class ICloudSessionsUITests: XCTestCase {
         // fixture URL is refused instantly, so the settled state is Failed —
         // which proves the tap connected rather than just closing the sheet.
         rows.firstMatch.tap()
-        let pill = app.staticTexts["connection-status"]
-        XCTAssertTrue(pill.waitForExistence(timeout: 30))
-        let failed = NSPredicate(format: "label == %@", "Connection Failed")
-        expectation(for: failed, evaluatedWith: pill)
-        waitForExpectations(timeout: 60)
+        let avatar = app.descendants(matching: .any)
+            .matching(identifier: "scoop-avatar")
+            .matching(NSPredicate(format: "label CONTAINS %@", "Connection Failed"))
+            .firstMatch
+        XCTAssertTrue(avatar.waitForExistence(timeout: 60))
+        XCTAssertEqual(app.staticTexts["composer-placeholder"].label, "Disconnected")
     }
 
     func testEmptyStateNamesTheReason() {

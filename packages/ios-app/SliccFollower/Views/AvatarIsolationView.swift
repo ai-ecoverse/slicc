@@ -14,29 +14,41 @@ import SwiftUI
             let blink: Bool
         }
 
-        private let states = [
-            AvatarState(
-                name: "scoop · violet · 76", type: .scoop, color: "#8B5CF6",
-                eyes: .open, fill: 76, blink: true),
-            AvatarState(
-                name: "cone · amber · 32", type: .cone, color: "#F59E0B",
-                eyes: .open, fill: 32, blink: false),
-            AvatarState(
-                name: "scoop · orange · dead", type: .scoop, color: "#F97316",
-                eyes: .dead, fill: 84, blink: false),
-            AvatarState(
-                name: "scoop · sky · no eyes", type: .scoop, color: "#38BDF8",
-                eyes: .none, fill: 14, blink: false),
-        ]
-
         private var isDark: Bool { variant.hasPrefix("dark") }
         private var isOffset: Bool { variant.hasSuffix("offset") }
+        private var isStatic: Bool { variant.hasSuffix("static") }
         private var scheme: ColorScheme { isDark ? .dark : .light }
+
+        private var states: [AvatarState] {
+            if isStatic {
+                return [
+                    AvatarState(
+                        name: "cone · amber · static", type: .cone, color: "#F59E0B",
+                        eyes: .static, fill: 92, blink: false)
+                ]
+            }
+            return [
+                AvatarState(
+                    name: "scoop · violet · 76", type: .scoop, color: "#8B5CF6",
+                    eyes: .open, fill: 76, blink: true),
+                AvatarState(
+                    name: "cone · amber · 32", type: .cone, color: "#F59E0B",
+                    eyes: .open, fill: 32, blink: false),
+                AvatarState(
+                    name: "scoop · orange · dead", type: .scoop, color: "#F97316",
+                    eyes: .dead, fill: 84, blink: false),
+                AvatarState(
+                    name: "scoop · sky · no eyes", type: .scoop, color: "#38BDF8",
+                    eyes: .none, fill: 14, blink: false),
+            ]
+        }
 
         var body: some View {
             VStack(spacing: 10) {
-                Text("Avatar · \(isDark ? "dark" : "light") · \(isOffset ? "offset" : "centered")")
+                Text("Avatar · \(isDark ? "dark" : "light") · \(poseLabel)")
                     .font(.headline)
+                    .accessibilityIdentifier(
+                        isStatic ? "avatar-fixture-static" : "avatar-fixture")
                 LazyVGrid(
                     columns: [GridItem(.fixed(170)), GridItem(.fixed(170))], spacing: 10
                 ) {
@@ -58,6 +70,11 @@ import SwiftUI
             .background(isDark ? Color.black : Color.white)
             .foregroundStyle(isDark ? Color.white : Color.black)
             .environment(\.colorScheme, scheme)
+        }
+
+        private var poseLabel: String {
+            if isStatic { return "static" }
+            return isOffset ? "offset" : "centered"
         }
 
         private func avatar(for state: AvatarState, side: Double) -> some View {
