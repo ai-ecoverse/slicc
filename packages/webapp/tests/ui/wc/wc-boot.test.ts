@@ -55,6 +55,7 @@ afterAll(() => {
   vi.restoreAllMocks();
 });
 
+import { FEATURE_FLAG_STORAGE_KEY, initFeatureFlags } from '../../../src/core/feature-flags.js';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient, SessionStats } from '../../../src/ui/offscreen-client.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
@@ -125,6 +126,23 @@ function makeFakeClient() {
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 describe('prepareWcShell + attachWcClient', () => {
+  it.each([
+    ['off', false],
+    ['on', true],
+  ] as const)('sets dock-tree tile movement from panel-layouts=%s at attach', (value, expected) => {
+    localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+    initFeatureFlags('standalone', { 'panel-layouts': value });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const boot = prepareWcShell(root, 'test · wc');
+    const fake = makeFakeClient();
+
+    attachWcClient(boot, fake.client, log);
+
+    expect(boot.refs.dockTree.tilesMovable).toBe(expected);
+    initFeatureFlags('standalone');
+  });
+
   it('mounts the shell and routes composer submissions to the agent', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);

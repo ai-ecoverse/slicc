@@ -335,9 +335,13 @@ export async function mountWcUiFollower(
     return mountWcUiLive(app, bootLog, 'standalone');
   }
 
+  // Resolve once at boot, matching the live path: feature flags have no live
+  // refresh, and changing layout engines after mount would strand live panels.
+  const panelsRequested = isFeatureEnabled('panel-layouts');
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient - those require an OffscreenClient + spawn the worker).
   const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
+  boot.refs.dockTree.tilesMovable = panelsRequested;
 
   // Apply host-supplied theme AFTER the shell mounts — mountWcShell's
   // ensureSystemTheme() sets body data-theme from OS preference, so we must
@@ -364,13 +368,10 @@ export async function mountWcUiFollower(
   // wholesale. Applied directly, like theme — never through
   // `wireDockTreePersistence` (never wired for followers at all), so a
   // locked Cherry layout is never persisted or drifted client-side.
-  // Gated by `panel-layouts` like every other float: the feature is new and no
-  // embedder depends on it yet, so one uniform answer to "are panels on here" beats
-  // an API-shaped exception. A host that pushes a document while the flag is off
-  // gets the default shell and a warning, not a silent half-application.
-  if (isCherry && prelude.cherryTransport?.layout && !isFeatureEnabled('panel-layouts')) {
-    log.warn('follower: ignoring host-pushed layout — the panel-layouts flag is off');
-  } else if (isCherry && prelude.cherryTransport?.layout) {
+  // Panel LayoutDocuments are gated by `panel-layouts` like every other float.
+  // Legacy DockTreeSpec pushes remain supported in either flag state; their
+  // independent `locked` semantics still win over the movement gate.
+  if (isCherry && prelude.cherryTransport?.layout) {
     try {
       const pushed = JSON.parse(prelude.cherryTransport.layout);
       // A host may push EITHER shape: the panel-system `LayoutDocument` (has
@@ -379,7 +380,8 @@ export async function mountWcUiFollower(
       // sniffing the shape is cheaper and less brittle than a version field the
       // older hosts never sent.
       if (pushed && typeof pushed === 'object' && 'base' in pushed) {
-        await applyPushedLayoutDocument(boot, pushed, log);
+        if (panelsRequested) await applyPushedLayoutDocument(boot, pushed, log);
+        else log.warn('follower: ignoring host-pushed layout — the panel-layouts flag is off');
       } else {
         (boot.refs.dockTree as unknown as { setTree(spec: unknown): void }).setTree(pushed);
       }

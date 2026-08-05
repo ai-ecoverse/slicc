@@ -782,7 +782,7 @@ export class SliccDockTree extends HTMLElement {
     this.#render();
   }
 
-  /** Whether internal and external tile drag is enabled; reflected to `tiles-movable`. */
+  /** Whether internal and external tile drag is enabled; reflected to `tiles-movable`. Dormant in the shipped webapp — retained for embedders/tests. */
   get tilesMovable(): boolean {
     const value = this.getAttribute('tiles-movable');
     return value !== null && !isFalseString(value);

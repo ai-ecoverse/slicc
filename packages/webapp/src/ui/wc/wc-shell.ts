@@ -387,7 +387,7 @@ function wireDockExternalDragToTree(dock: HTMLElement, dockTree: WcShellRefs['do
     const target = event.target as HTMLElement | null;
     const item = target?.closest?.('slicc-dock-item');
     const id = item?.getAttribute('item-id');
-    if (!id?.startsWith('sprinkle:')) return;
+    if (!id?.startsWith('sprinkle:') || !dockTree.tilesMovable) return;
     dockTree.beginExternalDrag(id, (event as PointerEvent).pointerId);
   });
 }
