@@ -274,7 +274,7 @@ describe('mountWcUiPreview', () => {
     ).not.toThrow();
   });
 
-  it('a pointerdown on a sprinkle dock launcher arms beginExternalDrag', async () => {
+  it('a pointerdown on a sprinkle dock launcher arms beginExternalDrag when tiles are movable', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -285,6 +285,7 @@ describe('mountWcUiPreview', () => {
       placeholder: 'p',
     });
     const beginExternalDrag = vi.fn();
+    refs.dockTree.tilesMovable = true;
     (
       refs.dockTree as unknown as { beginExternalDrag: typeof beginExternalDrag }
     ).beginExternalDrag = beginExternalDrag;
@@ -296,6 +297,32 @@ describe('mountWcUiPreview', () => {
       new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 7 })
     );
     expect(beginExternalDrag).toHaveBeenCalledWith('sprinkle:hero', 7);
+  });
+
+  it('does not arm an external sprinkle drag when tiles are not movable', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 't',
+      placeholder: 'p',
+    });
+    const beginExternalDrag = vi.fn();
+    refs.dockTree.tilesMovable = false;
+    (
+      refs.dockTree as unknown as { beginExternalDrag: typeof beginExternalDrag }
+    ).beginExternalDrag = beginExternalDrag;
+    const item = document.createElement('slicc-dock-item');
+    item.setAttribute('item-id', 'sprinkle:hero');
+    refs.dock.appendChild(item);
+
+    item.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 7 })
+    );
+
+    expect(beginExternalDrag).not.toHaveBeenCalled();
   });
 
   it('does not arm a drag for a non-sprinkle (tool) dock item', async () => {

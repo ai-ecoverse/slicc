@@ -919,7 +919,9 @@ describe('mountWcUiFollower', () => {
     const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
       getSurfaceIds(): string[];
       removeSurface(id: string): void;
+      tilesMovable: boolean;
     };
+    expect(dockTree.tilesMovable).toBe(true);
     expect(dockTree.getSurfaceIds()).toEqual(expect.arrayContaining(['chat', 'files']));
 
     // Locked, not just pinned: the follower's own UI cannot remove it either.
@@ -931,6 +933,53 @@ describe('mountWcUiFollower', () => {
       tile.querySelector('[surface-id="files"]')
     );
     expect(filesTile?.querySelector('.dock-tree__tile-move')).toBeNull();
+    const chatTile = [...dockTree.querySelectorAll('.dock-tree__tile')].find((tile) =>
+      tile.querySelector('[surface-id="chat"]')
+    );
+    expect(chatTile?.querySelector('.dock-tree__tile-move')).not.toBeNull();
+  });
+
+  it('cherry: applies a locked DockTreeSpec with panel-layouts off while keeping movement disabled', async () => {
+    const pushedTree = {
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: { type: 'leaf', surfaceId: 'files', locked: true },
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify(pushedTree),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+      removeSurface(id: string): void;
+      tilesMovable: boolean;
+    };
+    expect(dockTree.tilesMovable).toBe(false);
+    expect(dockTree.getSurfaceIds()).toEqual(expect.arrayContaining(['chat', 'files']));
+    dockTree.removeSurface('files');
+    expect(dockTree.getSurfaceIds()).toContain('files');
+    expect(dockTree.querySelectorAll('.dock-tree__tile-move')).toHaveLength(0);
   });
 
   it('cherry: accepts a host-pushed panel LayoutDocument, locked so the user cannot rearrange it', async () => {

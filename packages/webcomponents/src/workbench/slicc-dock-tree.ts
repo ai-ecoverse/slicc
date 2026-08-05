@@ -11,9 +11,11 @@ import { iconEl } from '../internal/icons.js';
  * flex column of `[top?, center-row?, bottom?]`, where the center row is a
  * flex row of `[left?, middle?, right?]`. Each shown zone hosts a recursive
  * `.dock-tree__split` tree (`row`/`col`) down to `.dock-tree__leaf` containers,
- * each holding a draggable `.dock-tree__tile` (a hover-revealed
+ * each holding a `.dock-tree__tile` (when the opt-in `tiles-movable` gate
+ * resolves true, an unlocked leaf gets a hover-revealed
  * `.dock-tree__tile-move` corner button over the actual `<slicc-surface>`
- * content — a locked leaf renders none). An empty zone renders as
+ * content; the gate defaults off, and a locked leaf always renders none).
+ * An empty zone renders as
  * a dashed `.dock-tree__empty` placeholder instead (only reachable while
  * `#dragging`). `.dock-tree__parking` is the offstage home for surfaces not
  * currently placed by the tree — hidden via the native `hidden` attribute (JS
@@ -210,6 +212,11 @@ export const CHAT_SURFACE_ID = 'chat';
 
 /** Prefix stripped from a sprinkle's surfaceId when deriving its friendly tile label. */
 const SPRINKLE_PREFIX = 'sprinkle:';
+
+/** Whether an attribute/property input is the explicit false string. */
+function isFalseString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().toLowerCase() === 'false';
+}
 
 /**
  * Derive a friendly tile-handle label from a raw `surfaceId`: the reserved
@@ -643,9 +650,10 @@ function buildPreviewEl(): HTMLDivElement {
  * (e.g. the webapp) can persist without the component touching storage
  * itself.
  *
- * **Internal drag-drop** (the core interaction): every unlocked leaf renders
- * inside a `.dock-tree__tile` with a `.dock-tree__tile-move` corner button —
- * hidden until the tile is hovered, then fades in over its top-left corner
+ * **Internal drag-drop** (the opt-in core interaction): when `tilesMovable`
+ * is true, every unlocked leaf renders inside a `.dock-tree__tile` with a
+ * `.dock-tree__tile-move` corner button — hidden until the tile is hovered,
+ * then fades in over its top-left corner
  * (`title`/`aria-label` carry a friendly form of the surfaceId — see
  * `labelForSurface`) above a `.dock-tree__tile-body` holding the
  * `<slicc-surface>`. A `pointerdown` on that button starts a drag: `#dragging`
@@ -670,9 +678,10 @@ function buildPreviewEl(): HTMLDivElement {
  * ANY drag (internal or external) — a "you can drop anywhere" affordance —
  * layered under the per-hover `--hot` highlight.
  *
- * **External drag-drop**: `beginExternalDrag(surfaceId)` lets a drag that
- * STARTED outside the component (e.g. dragging a dock-rail launcher chip in
- * the webapp) enter the exact same drag state machine — `#onDragMove` /
+ * **External drag-drop**: when `tilesMovable` is true,
+ * `beginExternalDrag(surfaceId)` lets a drag that STARTED outside the
+ * component (e.g. dragging a dock-rail launcher chip in the webapp) enter the
+ * exact same drag state machine — `#onDragMove` /
  * `#onDragUp` are shared verbatim with internal drags. The only difference
  * is the payload: an external drag carries just a `surfaceId` (no existing
  * `DockNode`/source zone), so `#onDragUp` builds a brand-new leaf for it
@@ -702,11 +711,14 @@ function buildPreviewEl(): HTMLDivElement {
  * when `surfaceId` isn't placed, is `locked`, or the axis has nothing to
  * size against (a lone shown block).
  *
+ * @attr tiles-movable - boolean opt-in for internal/external tile drag; absent or `"false"` is off, empty is on; reflected by `tilesMovable`
  * @slot - default; `<slicc-surface>` children, matched into the tree by id
  * @fires dock-tree-change - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired after a drag-drop (internal or external), `placeSurface`, or `removeSurface` mutates the tree
  * @fires dock-tree-resize - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired on divider-drag pointerup, or `setSurfaceSize` actually changing a weight
  */
 export class SliccDockTree extends HTMLElement {
+  static readonly observedAttributes = ['tiles-movable'];
+
   #tree: DockTreeSpec = emptyTree();
   #dragging = false;
   #connected = false;
@@ -762,6 +774,22 @@ export class SliccDockTree extends HTMLElement {
     this.#connected = false;
     this.#childObserver.disconnect();
     this.#cancelDrag();
+  }
+
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
+    if (name !== 'tiles-movable' || oldValue === newValue || !this.#connected) return;
+    if (!this.tilesMovable) this.#cancelDrag();
+    this.#render();
+  }
+
+  /** Whether internal and external tile drag is enabled; reflected to `tiles-movable`. Dormant in the shipped webapp — retained for embedders/tests. */
+  get tilesMovable(): boolean {
+    const value = this.getAttribute('tiles-movable');
+    return value !== null && !isFalseString(value);
+  }
+
+  set tilesMovable(value: boolean) {
+    this.toggleAttribute('tiles-movable', Boolean(value) && !isFalseString(value));
   }
 
   /** Set/replace the layout; `null` resets to an all-empty tree. */
@@ -1192,11 +1220,11 @@ export class SliccDockTree extends HTMLElement {
 
   /**
    * Build a leaf's `.dock-tree__tile`: a `.dock-tree__tile-body` holding the
-   * placed `<slicc-surface>`, plus — unless the leaf is locked — a
-   * `.dock-tree__tile-move` button that fades in only on hover over the
-   * tile's top-left corner (see the CSS). Its `pointerdown` starts the same
-   * internal drag a header used to. A locked leaf renders no move button at
-   * all (rather than a disabled one), matching "cannot drag" literally.
+   * placed `<slicc-surface>`, plus — when `tilesMovable` is true and the leaf
+   * is not locked — a `.dock-tree__tile-move` button that fades in only on
+   * hover over the tile's top-left corner (see the CSS). Its `pointerdown`
+   * starts the same internal drag a header used to. With the gate off, or for
+   * a locked leaf, no move button renders at all (rather than a disabled one).
    * `node`/`zone` are captured by the button's drag-start closure and also
    * recorded in `#tileNodeMap` so `#onDragMove`/`#onDragUp` can map a tile
    * element found via `elementFromPoint` back to its `DockNode`.
@@ -1209,7 +1237,7 @@ export class SliccDockTree extends HTMLElement {
   ): HTMLElement {
     const tile = document.createElement('div');
     tile.className = 'dock-tree__tile';
-    if (!this.#isLockedNode(node, zone)) {
+    if (this.tilesMovable && !this.#isLockedNode(node, zone)) {
       const label = labelForSurface(surfaceId);
       const move = document.createElement('button');
       move.type = 'button';
@@ -1361,12 +1389,13 @@ export class SliccDockTree extends HTMLElement {
   /**
    * `pointerdown` on a tile's move button: enter drag mode. Ported from the
    * prototype's `startDrag`; shared with `beginExternalDrag` via `#beginDrag`.
-   * Guarded against locked nodes as defense-in-depth — a locked leaf renders
-   * no move button at all, but this keeps any future/programmatic entry
-   * point from bypassing the lock.
+   * Guarded against the opt-in gate and locked nodes as defense-in-depth — a
+   * disabled or locked leaf renders no move button at all, but this keeps a
+   * stale button reference or future programmatic entry point from bypassing
+   * either restriction.
    */
   #startDrag(e: PointerEvent, node: DockNode, fromZone: ZoneName): void {
-    if (this.#isLockedNode(node, fromZone)) return;
+    if (!this.tilesMovable || this.#isLockedNode(node, fromZone)) return;
     e.preventDefault();
     this.#beginDrag(
       { kind: 'internal', node, fromZone },
@@ -1377,7 +1406,8 @@ export class SliccDockTree extends HTMLElement {
 
   /**
    * Begin tracking a drag that STARTED outside the component — e.g. the
-   * webapp dragging a dock-rail launcher chip onto the tree. Enters the same
+   * webapp dragging a dock-rail launcher chip onto the tree. A no-op unless
+   * `tilesMovable` is true. When enabled, enters the same
    * drag mode as an internal tile drag (`#dragging=true`, empty zones reveal
    * as live drop placeholders, the ghost label tracks the cursor), reusing
    * `#onDragMove`/`#onDragUp` end to end via the shared `#beginDrag`. The
@@ -1390,6 +1420,7 @@ export class SliccDockTree extends HTMLElement {
    */
   beginExternalDrag(surfaceId: string, pointerId?: number): void {
     void pointerId;
+    if (!this.tilesMovable) return;
     this.#beginDrag({ kind: 'external', surfaceId }, surfaceId);
   }
 
