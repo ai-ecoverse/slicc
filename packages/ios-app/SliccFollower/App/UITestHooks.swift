@@ -373,12 +373,11 @@ import UIKit
         }
 
         /// Pin the Kokoro Settings surface without touching the network or disk.
-        /// `-uiTestKokoroState awaiting|downloading|installed|failed` selects a
+        /// `-uiTestKokoroState downloading|installed|failed` selects a
         /// user-visible state; absence keeps the production filesystem probe.
         static var kokoroModelState: KokoroModelInstallationState? {
             switch UserDefaults.standard.string(forKey: "uiTestKokoroState") {
             case "not-installed": return .notInstalled
-            case "awaiting": return .awaitingConsent
             case "downloading": return .downloading(fraction: 0.42)
             case "installed": return .installed
             case "failed": return .failed(.offline("Connect to Wi-Fi and try again"))

@@ -106,10 +106,16 @@ struct ChatView: View {
                     return
                 }
             #endif
-            if appState.connectionState == .gaveUp
-                || (appState.connectionState == .disconnected && appState.joinUrl.isEmpty)
-            {
+            // A remembered session outranks the Settings sheet: reconnect to
+            // the last-good tray first and only open Settings when there is
+            // nothing to try. A dead session lands in .gaveUp, which opens
+            // Settings on appear and through the handler below.
+            if appState.connectionState == .gaveUp {
                 showSettings = true
+            } else if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
+                if !appState.attemptStoredConnection() {
+                    showSettings = true
+                }
             }
         }
         .onChange(of: appState.connectionState) { _, state in
