@@ -6,7 +6,7 @@ import os
 /// Top-level adaptive shell. Compact width preserves the webapp's narrow IA:
 /// chat is the app, workbench surfaces overlay it full-bleed, and only the
 /// 48pt dock stays tappable. Regular width keeps chat visible beside the
-/// selected workbench surface.
+/// selected workbench surface, except while a browser tab claims the window.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.colorScheme) private var systemScheme
@@ -97,7 +97,7 @@ struct ChatView: View {
     }
 
     /// Full-screen browsing: a foregrounded local tab claims the whole
-    /// phone — no rail, no navigation bar (Safari-shaped). The way back is
+    /// window — no rail, no navigation bar (Safari-shaped). The way back is
     /// the tab-overview button in the browser's own bottom bar.
     private var isBrowserFullScreen: Bool {
         presentation.activeSurface == .browser && appState.browserViewingTabId != nil
@@ -163,19 +163,30 @@ struct ChatView: View {
 
     /// Regular width mirrors the dock and its workbench around a persistent
     /// conversation column. With no selected surface, conversation fills the
-    /// space beside the rail.
+    /// space beside the rail. A foregrounded browser tab expands the same
+    /// workbench to fill the window, keeping its stacked terminal alive.
     private var regularShell: some View {
         HStack(spacing: 0) {
             if leftHandedDock {
-                dockRail
+                if !isBrowserFullScreen {
+                    dockRail
+                }
                 regularWorkbench
             }
 
             conversation
+                .frame(maxWidth: isBrowserFullScreen ? 0 : .infinity)
+                .toolbar(isBrowserFullScreen ? .hidden : .automatic, for: .navigationBar)
+                .opacity(isBrowserFullScreen ? 0 : 1)
+                .allowsHitTesting(!isBrowserFullScreen)
+                .accessibilityHidden(isBrowserFullScreen)
+                .clipped()
 
             if !leftHandedDock {
                 regularWorkbench
-                dockRail
+                if !isBrowserFullScreen {
+                    dockRail
+                }
             }
         }
     }
@@ -203,9 +214,13 @@ struct ChatView: View {
         if presentation.activeSurface != nil {
             if leftHandedDock {
                 workbench
-                Divider()
+                if !isBrowserFullScreen {
+                    Divider()
+                }
             } else {
-                Divider()
+                if !isBrowserFullScreen {
+                    Divider()
+                }
                 workbench
             }
         }
