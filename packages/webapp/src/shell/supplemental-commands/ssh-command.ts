@@ -41,8 +41,8 @@ Usage: ssh [--cwd <dir>] [--timeout <seconds>] <runtime-id> <command...>
 
 Runs <command> on the follower <runtime-id> (from \`host\` / \`ssh --list\`) and
 returns its stdout, stderr, and exit code. A \`slicc … follow\` CLI follower runs
-commands on its real machine. An iOS follower accepts only \`open\`, after the
-device user approves it.
+commands on its real machine. An iOS follower is listed as a target but refuses
+every leader-originated command.
 
 Options:
   --list, -l           List exec-capable followers and exit
