@@ -36,8 +36,9 @@ import {
 // moveSurfaceToZone/beginExternalDrag/setPinned). Kept as a real `div` (not a
 // bare object) so `querySelector`/`append` behave exactly like the production
 // `<slicc-dock-tree>` ref.
-function makeDockTreeRef() {
+function makeDockTreeRef(tilesMovable = false) {
   return Object.assign(document.createElement('div'), {
+    tilesMovable,
     setTree: vi.fn(),
     getTree: vi.fn(() => ({ zones: {}, rowFr: {}, colFr: {} })),
     getSurfaceIds: vi.fn(() => [] as string[]),
@@ -50,9 +51,9 @@ function makeDockTreeRef() {
   });
 }
 
-function makeRefs(): WcShellRefs {
+function makeRefs(tilesMovable = false): WcShellRefs {
   const shell = document.createElement('slicc-shell');
-  const dockTree = makeDockTreeRef();
+  const dockTree = makeDockTreeRef(tilesMovable);
   const dock = document.createElement('slicc-dock') as WcShellRefs['dock'];
   shell.append(dockTree, dock);
   document.body.append(shell);
@@ -165,22 +166,25 @@ describe('sprinkle ids', () => {
 });
 
 describe('WcSprinkleZone', () => {
-  it('addSprinkle creates a dock-tree surface + dock item and places it', () => {
-    const refs = makeRefs();
-    const zone = new WcSprinkleZone(refs);
-    const element = document.createElement('div');
-    element.textContent = 'hero studio';
+  it.each([false, true])(
+    'addSprinkle creates and places its surface with tilesMovable=%s',
+    (tilesMovable) => {
+      const refs = makeRefs(tilesMovable);
+      const zone = new WcSprinkleZone(refs);
+      const element = document.createElement('div');
+      element.textContent = 'hero studio';
 
-    zone.callbacks().addSprinkle('hero', 'Hero studio', element);
+      zone.callbacks().addSprinkle('hero', 'Hero studio', element);
 
-    const surface = (refs.dockTree as unknown as HTMLElement).querySelector(
-      '[surface-id="sprinkle:hero"]'
-    );
-    expect(surface?.contains(element)).toBe(true);
-    expect(dockIds(refs)).toContain('sprinkle:hero');
-    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
-    expect(zone.isOpen('hero')).toBe(true);
-  });
+      const surface = (refs.dockTree as unknown as HTMLElement).querySelector(
+        '[surface-id="sprinkle:hero"]'
+      );
+      expect(surface?.contains(element)).toBe(true);
+      expect(dockIds(refs)).toContain('sprinkle:hero');
+      expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
+      expect(zone.isOpen('hero')).toBe(true);
+    }
+  );
 
   it('attention adds without placing anywhere special (defaults still apply)', () => {
     const refs = makeRefs();

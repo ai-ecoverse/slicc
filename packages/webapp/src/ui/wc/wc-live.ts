@@ -1668,6 +1668,7 @@ export function attachWcClient(
   // Read BEFORE `wireDockTreePersistence` so the dock-tree it would restore into
   // is already superseded when panels are on.
   const panelsRequested = isFeatureEnabled('panel-layouts');
+  refs.dockTree.tilesMovable = panelsRequested;
   if (!panelsRequested) {
     // GUI drag-drop dock-tree layout editor: restore any persisted tree (or
     // seed the default) and wire future mutations back to storage. Runs
