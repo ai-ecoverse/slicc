@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Federated remote-tab preview cards on the browser surface (#1865).
@@ -105,5 +106,38 @@ final class RemoteTabUITests: XCTestCase {
         XCTAssertFalse(
             app.buttons["dock-browser"].exists,
             "full-screen browsing hides the dock rail")
+    }
+
+    /// Run on an iPad simulator: regular-width browsing must claim the whole
+    /// window, then restore the conversation + rail when tabs are shown.
+    func testRegularWidthBrowsingEntersAndExitsFullScreen() throws {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-joinUrl", "", "-uiTestConnectionState", "connected",
+            "-uiTestOpenDockSurface", "browser",
+            "-uiTestRemoteTargetsFixture", "YES",
+        ]
+        app.launch()
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+        guard UIDevice.current.userInterfaceIdiom == .pad, window.frame.width > 560 else {
+            throw XCTSkip("Requires a regular-width iPad simulator destination")
+        }
+        let remoteCard = app.staticTexts["SLICC docs — architecture"].firstMatch
+        XCTAssertTrue(remoteCard.waitForExistence(timeout: 60))
+        XCTAssertTrue(app.buttons["settings-button"].exists, "the split starts with chat visible")
+        XCTAssertTrue(app.buttons["dock-browser"].exists, "the split starts with its rail visible")
+
+        remoteCard.tap()
+        XCTAssertTrue(app.buttons["browser-address-display"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["settings-button"].exists, "full screen hides the conversation")
+        XCTAssertFalse(app.buttons["dock-browser"].exists, "full screen hides the rail")
+
+        app.buttons["browser-show-tabs"].firstMatch.tap()
+
+        XCTAssertTrue(remoteCard.waitForExistence(timeout: 10), "the tabs button restores the overview")
+        XCTAssertTrue(app.buttons["settings-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["dock-browser"].waitForExistence(timeout: 10))
     }
 }
