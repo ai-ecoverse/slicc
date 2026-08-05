@@ -80,13 +80,19 @@ export async function runUploads(
   // Validate hash invariant before any upload attempt
   assertAllHashed(files);
 
-  // Split into batches to respect concurrency
-  for (let i = 0; i < files.length; i += concurrency) {
-    const batch = files.slice(i, i + concurrency);
-    const promises = batch.map((file) => uploadWithRetry(file, bucket, dir, exec, retries, sleep));
+  // Rolling workers rather than fixed batches: a batch barrier would leave the
+  // other slots idle for the whole backoff of a single retrying file.
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < files.length) {
+      const file = files[cursor++];
+      await uploadWithRetry(file, bucket, dir, exec, retries, sleep);
+    }
+  };
 
-    await Promise.all(promises);
-  }
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(concurrency, 1), files.length) }, worker)
+  );
 }
 
 /**

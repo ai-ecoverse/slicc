@@ -113,9 +113,41 @@ describe('runUploads', () => {
     });
     const elapsed = Date.now() - start;
 
-    // 10 files at 2 concurrent = 5 batches × 10ms ≥ 50ms
+    // 10 files at 2 concurrent, 10ms each ≥ 50ms
     expect(elapsed).toBeGreaterThanOrEqual(40);
     expect(execMock).toHaveBeenCalledTimes(10);
+  });
+
+  // Fixed-size batches used to be a barrier: one file backing off held its
+  // whole batch's slots idle. Rolling workers keep every slot busy.
+  it('keeps the other slots busy while one file backs off', async () => {
+    const files = Array.from({ length: 6 }, (_, i) => `file${i}-abc123def${i}.js`);
+    let releaseSlow = () => {};
+    const slowDone = new Promise<void>((resolve) => {
+      releaseSlow = resolve;
+    });
+    const finished: string[] = [];
+    const execMock = vi.fn(async (argv: string[]) => {
+      const objectPath = argv[4];
+      if (objectPath.endsWith('file0-abc123def0.js')) {
+        await slowDone;
+      }
+      finished.push(objectPath);
+    });
+
+    const run = runUploads(files, {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec: execMock,
+      concurrency: 2,
+    });
+
+    // Everything except the stalled file drains through the free slot.
+    await vi.waitFor(() => expect(finished).toHaveLength(files.length - 1));
+    releaseSlow();
+    await run;
+
+    expect(execMock).toHaveBeenCalledTimes(files.length);
   });
 
   it('retries on exec failure', async () => {
