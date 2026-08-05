@@ -20,6 +20,9 @@
 #   APPLE_PROVISIONING_PROFILE_NAME                # optional plain text
 #   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME   # optional plain text
 #   APPLE_FILEPROVIDER_BUNDLE_ID                   # optional plain text
+#   APPLE_SHARE_PROVISIONING_PROFILE_BASE64        # Share extension appex App Store profile
+#   APPLE_SHARE_PROVISIONING_PROFILE_NAME          # optional plain text
+#   APPLE_SHARE_BUNDLE_ID                          # optional plain text
 #
 # Usage:
 #   packages/ios-app/scripts/setup-testflight-secrets.sh \
@@ -67,6 +70,9 @@ FILEPROVIDER_PROFILE_PATH="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH:-}"
 PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
 FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
 FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.fileprovider}"
+SHARE_PROFILE_PATH="${APPLE_SHARE_PROVISIONING_PROFILE_PATH:-}"
+SHARE_PROFILE_NAME="${APPLE_SHARE_PROVISIONING_PROFILE_NAME:-Slicc Follower Share App Store}"
+SHARE_BUNDLE_ID="${APPLE_SHARE_BUNDLE_ID:-com.sliccy.follower.share}"
 CERT_P12_PATH="${APPLE_DISTRIBUTION_CERT_P12:-}"
 CERT_PASSWORD="${APPLE_DISTRIBUTION_CERT_PASSWORD:-}"
 
@@ -80,6 +86,9 @@ while [ $# -gt 0 ]; do
     --profile-name) PROFILE_NAME="$2"; shift 2;;
     --fileprovider-profile-name) FILEPROVIDER_PROFILE_NAME="$2"; shift 2;;
     --fileprovider-bundle-id) FILEPROVIDER_BUNDLE_ID="$2"; shift 2;;
+    --share-profile) SHARE_PROFILE_PATH="$2"; shift 2;;
+    --share-profile-name) SHARE_PROFILE_NAME="$2"; shift 2;;
+    --share-bundle-id) SHARE_BUNDLE_ID="$2"; shift 2;;
     --cert-p12) CERT_P12_PATH="$2"; shift 2;;
     --cert-password) CERT_PASSWORD="$2"; shift 2;;
     --repo) REPO="$2"; shift 2;;
@@ -116,6 +125,7 @@ missing=()
 [ -z "$P8_PATH" ]       && missing+=("--p8 / APPLE_API_KEY_P8_PATH")
 [ -z "$PROFILE_PATH" ]  && missing+=("--profile / APPLE_PROVISIONING_PROFILE_PATH")
 [ -z "$FILEPROVIDER_PROFILE_PATH" ] && missing+=("--fileprovider-profile / APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH")
+[ -z "$SHARE_PROFILE_PATH" ] && missing+=("--share-profile / APPLE_SHARE_PROVISIONING_PROFILE_PATH")
 [ -z "$CERT_P12_PATH" ] && missing+=("--cert-p12 / APPLE_DISTRIBUTION_CERT_P12")
 [ -z "$CERT_PASSWORD" ] && missing+=("--cert-password / APPLE_DISTRIBUTION_CERT_PASSWORD")
 if [ ${#missing[@]} -ne 0 ]; then
@@ -126,7 +136,7 @@ if [ ${#missing[@]} -ne 0 ]; then
   exit 2
 fi
 
-for f in "$P8_PATH" "$PROFILE_PATH" "$FILEPROVIDER_PROFILE_PATH" "$CERT_P12_PATH"; do
+for f in "$P8_PATH" "$PROFILE_PATH" "$FILEPROVIDER_PROFILE_PATH" "$SHARE_PROFILE_PATH" "$CERT_P12_PATH"; do
   if [ ! -f "$f" ]; then
     echo "error: file not found: $f" >&2
     exit 2
@@ -166,7 +176,10 @@ set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 "$(base64 < "$FILEPROV
 set_secret APPLE_PROVISIONING_PROFILE_NAME "$PROFILE_NAME"
 set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME "$FILEPROVIDER_PROFILE_NAME"
 set_secret APPLE_FILEPROVIDER_BUNDLE_ID "$FILEPROVIDER_BUNDLE_ID"
+set_secret APPLE_SHARE_PROVISIONING_PROFILE_BASE64 "$(base64 < "$SHARE_PROFILE_PATH")"
+set_secret APPLE_SHARE_PROVISIONING_PROFILE_NAME "$SHARE_PROFILE_NAME"
+set_secret APPLE_SHARE_BUNDLE_ID "$SHARE_BUNDLE_ID"
 
 echo
 echo "Done. Verify with:"
-echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER'"
+echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER|APPLE_SHARE'"
