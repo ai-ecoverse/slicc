@@ -66,6 +66,8 @@ class AppState: ObservableObject {
     /// transcript because the leader mounts them outside the message list too,
     /// so a streaming re-render cannot wipe them.
     @Published var toolUICards: [ToolUIPlaceholder] = []
+    @Published private(set) var openApprovals: [OpenApprovalRequest] = []
+    @Published private(set) var openGrants: [OpenGrant] = []
     @Published var isStreaming: Bool = false
 
     // Multi-scoop awareness
@@ -118,6 +120,11 @@ class AppState: ObservableObject {
     private(set) lazy var terminalClient = TerminalClient { [weak self] in
         self?.sendToLeader($0) ?? false
     }
+    private(set) lazy var openApprovalController = OpenApprovalController(
+        grantStore: openGrantStore,
+        send: { [weak self] in self?.sendToLeader($0) ?? false },
+        onApprovalsChanged: { [weak self] in self?.openApprovals = $0 },
+        onGrantsChanged: { [weak self] in self?.openGrants = $0 })
     /// Follower-originated CDP for tab previews (#1865).
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
@@ -182,14 +189,18 @@ class AppState: ObservableObject {
     let sessionStore: TraySessionSyncStore
     private let credentialStore: TrayCredentialStore
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
+    private let openGrantStore: OpenGrantStore
 
     init(
         credentialStore: TrayCredentialStore = TrayCredentialStore(),
-        fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle()
+        fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
+        openGrantStore: OpenGrantStore = OpenGrantStore()
     ) {
         sessionStore = AppState.makeSessionStore()
         self.credentialStore = credentialStore
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
+        self.openGrantStore = openGrantStore
+        openGrants = openGrantStore.grants
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
         #if DEBUG
@@ -197,6 +208,10 @@ class AppState: ObservableObject {
                 scoops = fixtureScoops
                 selectedScoopJid = fixtureScoops.first?.jid
                 leaderActiveScoopJid = fixtureScoops.first?.jid
+            }
+            if let fixture = UITestHooks.openApprovalFixture() {
+                openApprovals = [fixture]
+                connectionState = .connected
             }
         #endif
     }
@@ -791,6 +806,7 @@ class AppState: ObservableObject {
                 runtime: "slicc-ios",
                 capabilities: trayFollowerCapabilities,
                 motd: trayFollowerMotd))
+        openApprovalController.transportAvailable()
 
         // Request the preserved view so the fresh leader follower record
         // re-registers it before thinking changes can target that scoop.
@@ -820,8 +836,7 @@ class AppState: ObservableObject {
         do {
             msg = try decoder.decode(LeaderToFollowerMessage.self, from: data)
         } catch {
-            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
-            logger.error("Failed to decode leader message (\(data.count) bytes): \(error.localizedDescription) — preview: \(preview)")
+            logger.error("\(SafeLeaderMessageLog.decodeFailureSummary(data))")
             return
         }
 
@@ -847,9 +862,8 @@ class AppState: ObservableObject {
                         logger.info("Chunked snapshot decoded: \(payload.messages.count) messages, scoopJid=\(payload.scoopJid)")
                         ingestSnapshot(messages: payload.messages, scoopJid: payload.scoopJid)
                     } catch {
-                        logger.error("Failed to decode reassembled snapshot: \(error.localizedDescription)")
-                        let preview = String(fullJson.prefix(300))
-                        logger.error("Snapshot JSON preview: \(preview)")
+                        logger.error(
+                            "Failed to decode reassembled snapshot (\(jsonData.count) bytes)")
                     }
                 }
             }
@@ -1469,6 +1483,7 @@ class AppState: ObservableObject {
     func handleDisconnect(reason: String) {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
+        openApprovalController.disconnect()
         terminalClient.disconnect()
 
         // A stall that ends in a real disconnect must not leave the composer
@@ -1540,6 +1555,7 @@ extension AppState {
     /// must survive transient WebRTC drops. Use `resetCDPState()` from
     /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
     fileprivate func tearDown() {
+        openApprovalController.disconnect()
         terminalClient.disconnect()
         connectTask?.cancel()
         connectTask = nil
@@ -1575,6 +1591,7 @@ extension AppState {
         credentialStore.clear()
         fileProviderDomainLifecycle.removeDomain()
         Self.purgeLegacyJoinURLDefaults()
+        openApprovalController.revokeAllGrants()
     }
 
     fileprivate static func purgeLegacyJoinURLDefaults() {
@@ -1719,18 +1736,34 @@ extension AppState {
 // MARK: - Terminal sync routing
 
 extension AppState {
+    func resolveOpenApproval(requestId: String, decision: OpenApprovalDecision) {
+        openApprovalController.resolve(requestId: requestId, decision: decision)
+    }
+
+    func revokeOpenGrant(id: UUID) {
+        openApprovalController.revokeGrant(id: id)
+    }
+
+    func revokeAllOpenGrants() {
+        openApprovalController.revokeAllGrants()
+    }
+
     private func handleExecMessage(_ message: LeaderToFollowerMessage) {
         switch message {
-        case .execRequest(let requestId, _, _, _):
-            terminalClient.refuseLeaderRequest(requestId: requestId)
+        case .execRequest(let requestId, let command, _, _):
+            openApprovalController.handle(
+                requestId: requestId,
+                command: command,
+                requesterIdentity: activeDisplayName ?? "Connected SLICC leader",
+                sessionIdentity: trayId ?? "Current tray")
         case .execChunk(let requestId, let stream, let data):
             terminalClient.handleChunk(
                 requestId: requestId, stream: stream, base64Data: data)
         case .execResponse(let requestId, let exitCode, let signal, let error):
             terminalClient.handleResponse(
                 requestId: requestId, exitCode: exitCode, signal: signal, error: error)
-        case .execSignal:
-            return
+        case .execSignal(let requestId, let signal):
+            openApprovalController.cancel(requestId: requestId, signal: signal)
         default:
             return
         }

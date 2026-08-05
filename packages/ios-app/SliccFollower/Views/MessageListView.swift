@@ -15,6 +15,9 @@ struct MessageListView: View {
     let isStreaming: Bool
     /// Pending read-only approval placeholders, pinned below the transcript.
     var toolUICards: [ToolUIPlaceholder] = []
+    /// Pending native external-app approvals, separate from read-only tool UI.
+    var openApprovals: [OpenApprovalRequest] = []
+    var onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)?
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
     /// Owned above ChatView's compact/regular branch so subtree replacement
@@ -25,12 +28,16 @@ struct MessageListView: View {
         messages: [ChatMessage],
         isStreaming: Bool,
         toolUICards: [ToolUIPlaceholder] = [],
+        openApprovals: [OpenApprovalRequest] = [],
+        onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)? = nil,
         onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)? = nil,
         scrollPosition: Binding<ScrollPosition>
     ) {
         self.messages = messages
         self.isStreaming = isStreaming
         self.toolUICards = toolUICards
+        self.openApprovals = openApprovals
+        self.onOpenApprovalDecision = onOpenApprovalDecision
         self.onInlineSprinkleLick = onInlineSprinkleLick
         _scrollPosition = scrollPosition
     }
@@ -39,7 +46,7 @@ struct MessageListView: View {
 
     var body: some View {
         Group {
-            if messages.isEmpty && toolUICards.isEmpty {
+            if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty {
                 emptyState
             } else {
                 messageList
@@ -99,6 +106,13 @@ struct MessageListView: View {
                         .padding(.horizontal, 12)
                 }
 
+                ForEach(openApprovals) { request in
+                    OpenApprovalCard(request: request) { decision in
+                        onOpenApprovalDecision?(request.requestId, decision)
+                    }
+                    .padding(.horizontal, 12)
+                }
+
                 // Invisible anchor at bottom
                 Color.clear
                     .frame(height: 1)
@@ -116,6 +130,9 @@ struct MessageListView: View {
             scrollToBottom()
         }
         .onChange(of: toolUICards.count) { _, _ in
+            scrollToBottom()
+        }
+        .onChange(of: openApprovals.count) { _, _ in
             scrollToBottom()
         }
         .onChange(of: messages.last?.content) { _, _ in
