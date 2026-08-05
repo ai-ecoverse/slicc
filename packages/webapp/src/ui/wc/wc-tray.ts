@@ -239,6 +239,7 @@ export function buildFollowerOptions(
     interceptLocalHandlers: true,
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
   });
+  deps.refs.switcher.connection = 'disconnected';
   deps.refs.switcher.addEventListener(
     'slicc-scoop-select',
     (event) => {
@@ -273,6 +274,7 @@ export function buildFollowerOptions(
     onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
     getSelectedScoopJid: () => selectedScoopJid,
     onConnectionChange: (connected) => {
+      deps.refs.switcher.connection = connected ? 'connected' : 'disconnected';
       if (!connected) {
         modelSurface.reset();
       }
@@ -796,6 +798,7 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
     );
     try {
       const result = await leavePromise;
+      if (!state.follower) deps.refs.switcher.connection = 'connected';
       releaseLockIfDormant();
       return result;
     } catch (err) {

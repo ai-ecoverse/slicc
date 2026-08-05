@@ -34,6 +34,11 @@ describe('role-switch follower model controls', () => {
       'https://tray.example/join/token',
       () => sync as never
     );
+    expect((switcher as HTMLElement & { connection?: string }).connection).toBe('disconnected');
+    options.onConnectionChange?.(true);
+    expect((switcher as HTMLElement & { connection?: string }).connection).toBe('connected');
+    options.onConnectionChange?.(false);
+    expect((switcher as HTMLElement & { connection?: string }).connection).toBe('disconnected');
 
     options.onModelsList?.([
       {

@@ -626,6 +626,7 @@ export async function mountWcUiFollower(
   const sprinkleCallbacks = sprinkleZone.callbacks();
 
   let followerSelectedScoop: string | null = null;
+  boot.refs.switcher.connection = 'disconnected';
 
   let follower!: ReturnType<typeof startPageFollowerTray>;
   const modelSurface = createFollowerModelSurface({
@@ -677,6 +678,7 @@ export async function mountWcUiFollower(
       });
     },
     onConnectionChange: (connected) => {
+      boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
       setComposerState(connected, connected ? CONNECTED : CONNECTING);
       if (!connected) modelSurface.reset();
       if (isCherry)
@@ -694,6 +696,7 @@ export async function mountWcUiFollower(
     },
     onGaveUp: (lastError) => {
       log.error('follower gave up reaching the leader', { error: lastError });
+      boot.refs.switcher.connection = 'disconnected';
       setComposerState(false, GAVE_UP);
       modelSurface.reset();
       // detachSync suppresses onConnectionChange(false) here - emit terminal.

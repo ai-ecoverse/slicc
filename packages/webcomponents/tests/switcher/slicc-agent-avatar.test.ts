@@ -35,7 +35,13 @@ describe('slicc-agent-avatar', () => {
 
   it('registers and re-renders for every observed attribute', () => {
     expect(customElements.get('slicc-agent-avatar')).toBe(SliccAgentAvatar);
-    expect(SliccAgentAvatar.observedAttributes).toEqual(['type', 'color', 'eyes', 'fill']);
+    expect(SliccAgentAvatar.observedAttributes).toEqual([
+      'type',
+      'color',
+      'eyes',
+      'fill',
+      'connection',
+    ]);
     const element = mount({ type: 'scoop', color: '#123456', eyes: 'open', fill: '0' });
 
     let rendered = element.shadowRoot?.firstElementChild;
@@ -60,6 +66,102 @@ describe('slicc-agent-avatar', () => {
     expect(element.shadowRoot?.firstElementChild).not.toBe(rendered);
     expect(element.shadowRoot?.querySelector('.pupil')).toBeNull();
     expect(element.shadowRoot?.querySelectorAll('.eyes-svg line')).toHaveLength(4);
+  });
+
+  it('lets disconnected static replace lifecycle pupils with noise while keeping the outline', () => {
+    const element = mount({ eyes: 'dead', connection: 'disconnected', fill: '75' });
+    const staticEye = element.shadowRoot?.querySelector('.eye-static');
+    expect(staticEye).not.toBeNull();
+    expect(staticEye?.children[2]?.classList.contains('noise')).toBe(true);
+    expect(staticEye?.children[3]?.classList.contains('eye-outline')).toBe(true);
+    expect(element.shadowRoot?.querySelector('.pupil')).toBeNull();
+    expect(element.shadowRoot?.querySelectorAll('.eyes-svg line')).toHaveLength(0);
+
+    element.setAttribute('connection', 'connected');
+    expect(element.shadowRoot?.querySelectorAll('.eyes-svg line')).toHaveLength(4);
+    expect(element.shadowRoot?.querySelector('.noise')).toBeNull();
+  });
+
+  it('renders the exact frozen xorshift32 frame under reduced motion without starting a loop', () => {
+    const motionQuery = {
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    vi.spyOn(window, 'matchMedia').mockReturnValue(motionQuery);
+    const interval = vi.spyOn(window, 'setInterval');
+    const animationFrame = vi.spyOn(window, 'requestAnimationFrame');
+
+    const element = mount({
+      eyes: 'open',
+      connection: 'disconnected',
+      style: 'width:20px;height:20px',
+    });
+    const groups = element.shadowRoot?.querySelectorAll<SVGGElement>('.noise');
+    const cells = groups?.[0]?.querySelectorAll('rect');
+    expect(groups).toHaveLength(2);
+    expect(groups?.[0]?.getAttribute('data-seed')).toBe('1372365086');
+    expect(groups?.[1]?.getAttribute('data-seed')).toBe('3559353205');
+    expect(
+      Array.from(cells ?? [])
+        .slice(0, 12)
+        .map((cell) => cell.getAttribute('fill'))
+    ).toEqual([
+      'rgb(36% 36% 36%)',
+      'rgb(68% 68% 68%)',
+      'rgb(68% 68% 68%)',
+      'rgb(36% 36% 36%)',
+      'rgb(36% 36% 36%)',
+      'rgb(36% 36% 36%)',
+      'rgb(8% 8% 8%)',
+      'rgb(68% 68% 68%)',
+      'rgb(68% 68% 68%)',
+      'rgb(94% 94% 94%)',
+      'rgb(36% 36% 36%)',
+      'rgb(68% 68% 68%)',
+    ]);
+    expect(cells).toHaveLength(225);
+    expect(cells?.[0]?.getAttribute('opacity')).toBe('0.72');
+    expect(groups?.[0]?.getAttribute('data-cell-size')).toBe('1');
+    expect(interval).not.toHaveBeenCalled();
+    expect(animationFrame).not.toHaveBeenCalled();
+  });
+
+  it('uses iOS reference-date frame seeds at exactly 12 fps and clears the interval', () => {
+    const motionQuery = {
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList;
+    vi.spyOn(window, 'matchMedia').mockReturnValue(motionQuery);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2001, 0, 1) + 1000);
+    const interval = vi.spyOn(window, 'setInterval');
+    const clear = vi.spyOn(window, 'clearInterval');
+
+    const element = mount({ eyes: 'static' });
+    const groups = element.shadowRoot?.querySelectorAll<SVGGElement>('.noise');
+    expect(groups?.[0]?.getAttribute('data-seed')).toBe('995431858');
+    expect(groups?.[1]?.getAttribute('data-seed')).toBe('3200180185');
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 1000 / 12);
+
+    element.remove();
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes an animated zero seed to the iOS frozen seed', () => {
+    const zeroSeedFrame = 968_638_734;
+    const frameTimeMs = Math.ceil((zeroSeedFrame * 1000) / 12);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2001, 0, 1) + frameTimeMs);
+
+    const element = mount({ eyes: 'static', style: 'width:20px;height:20px' });
+    const leftNoise = element.shadowRoot?.querySelector<SVGGElement>('.noise-l');
+    expect(leftNoise?.getAttribute('data-seed')).toBe('1372365086');
+    expect(leftNoise?.querySelectorAll('rect')).toHaveLength(225);
+    expect(
+      Array.from(leftNoise?.querySelectorAll('rect') ?? [])
+        .slice(0, 4)
+        .map((cell) => cell.getAttribute('fill'))
+    ).toEqual(['rgb(36% 36% 36%)', 'rgb(68% 68% 68%)', 'rgb(68% 68% 68%)', 'rgb(36% 36% 36%)']);
   });
 
   it('never binds pointer tracking for dead eyes', () => {
