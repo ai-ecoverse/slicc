@@ -31,6 +31,15 @@ The panel system is gated by the **`panel-layouts` feature flag**, which ships
    needs no release, but takes effect on the next page load: flag hydration is
    read once at boot and has no live refresh.
 3. **Bundled default** — `defaultValue: 'off'` in the flag definition.
+4. **Per embed, by the host page** — `mountSlicc({ flags: { 'panel-layouts': 'on' } })`.
+   The only way to reach this flag from inside a Cherry embed: the "Experimental
+   features…" dialog that would otherwise let a user flip it is itself hidden
+   there (Cherry sets `experimental-settings: off`). Applied once at boot,
+   session-only — never written to the follower's `localStorage` — and gated
+   through the exact same `userToggleable`-and-float check a local user
+   override must pass, so an embedder can only reach flags this registry
+   already marked safe for outside control. See "Cherry: pushing a layout
+   into an embed" below.
 
 There is deliberately **no URL parameter**. An earlier `?panels=1` was removed when
 the flag landed: two switches for one boolean meant a bookmarked URL could
@@ -38,8 +47,8 @@ contradict the user's own setting, with nothing in the UI to explain why.
 
 The gate is uniform across every float, including a Cherry embed that pushes its
 own `LayoutDocument` — one answer to "are panels on here". A host pushing a layout
-while the flag is off gets the default shell and a logged warning, not a partial
-application.
+while the flag is off (and not turning it on itself via `flags`) gets the default
+shell and a logged warning, not a partial application.
 
 ---
 
@@ -342,6 +351,7 @@ sibling. This is what a Cherry embedder sets.
 
 ```ts
 mountSlicc({
+  flags: { 'panel-layouts': 'on' }, // the panel-layouts flag ships off; push it on for this embed
   layout: {
     version: 1,
     id: 'embed',
@@ -358,10 +368,19 @@ mountSlicc({
 });
 ```
 
-Serialized into `handshake.welcome.layout` and applied once at boot — static, like
-`theme`. The follower accepts **either** shape: a `LayoutDocument` (has `base`) or
-the older `DockTreeSpec` (has `zones`), since embedders vendor the SDK and upgrade
-on their own schedule.
+`layout` is serialized into `handshake.welcome.layout` and applied once at boot —
+static, like `theme`. The follower accepts **either** shape: a `LayoutDocument` (has
+`base`) or the older `DockTreeSpec` (has `zones`), since embedders vendor the SDK
+and upgrade on their own schedule.
+
+`flags` is serialized into `handshake.welcome.flags` and applied session-only
+(never persisted) before the `panel-layouts` gate is checked — this is how a
+pushed `LayoutDocument` can turn the flag on for itself rather than depending on
+the target deployment's worker-level `FEATURE_FLAGS`. Only ids the flag registry
+marks `userToggleable`-and-allowed for the `cherry` float take effect; anything
+else is silently dropped, the same gate a local end-user override must pass. A
+vendored SDK too old to send `flags` at all simply doesn't — the field is
+additive, so the handshake still completes.
 
 A pushed layout is applied **without a filesystem**, so it can never be persisted
 or drifted client-side, and `layout save` inside an embed reports that it needs one

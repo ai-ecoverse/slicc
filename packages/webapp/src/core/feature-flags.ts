@@ -49,6 +49,13 @@ const ENABLED_VALUES = new Set(['1', 'on', 'true']);
 
 let activeFloat: FeatureFlagFloat = 'standalone';
 let remoteValues: FeatureFlagValues = {};
+/**
+ * Session-only overrides pushed by a Cherry host in `handshake.welcome.flags`
+ * (or any other embedder-supplied source). Never written to `localStorage` —
+ * like a pushed `theme`/`layout`, this must not persist or drift on the
+ * shared origin. Reset on every `initFeatureFlags` call (i.e. every boot).
+ */
+let hostValues: FeatureFlagValues = {};
 
 interface FeatureFlagStorage {
   getItem(key: string): string | null;
@@ -68,10 +75,12 @@ export function resolveFlagValue(
   if (!definition) return undefined;
   const override = overrides[id];
   if (typeof override === 'string' && canOverride(definition, float)) return override;
+  const hostValue = hostValues[id];
+  if (typeof hostValue === 'string' && canOverride(definition, float)) return hostValue;
   return getBundledDefault(definition, float);
 }
 
-/** Resolve every registered flag using local override → remote value → bundled default. */
+/** Resolve every registered flag using local override → host-pushed value → remote value → bundled default. */
 export function resolveFlags(
   float: FeatureFlagFloat,
   centralValues: Readonly<FeatureFlagValues> = {},
@@ -82,6 +91,11 @@ export function resolveFlags(
     const override = overrides[definition.id];
     if (typeof override === 'string' && canOverride(definition, float)) {
       resolved[definition.id] = override;
+      continue;
+    }
+    const hostValue = hostValues[definition.id];
+    if (typeof hostValue === 'string' && canOverride(definition, float)) {
+      resolved[definition.id] = hostValue;
       continue;
     }
     const centralValue = centralValues[definition.id];
@@ -124,6 +138,33 @@ export function initFeatureFlags(
 ): void {
   activeFloat = float;
   remoteValues = sanitizeValues(centralValues);
+  hostValues = {};
+}
+
+/**
+ * Apply session-only flag overrides pushed by an embedder (a Cherry host's
+ * `handshake.welcome.flags`). Silently drops any id that isn't a known flag
+ * or isn't `userToggleable`-and-allowed for the active float — the same gate
+ * a local user override must pass via `canOverride`. This is what keeps a
+ * host page from flipping a flag nobody decided was safe for it to touch;
+ * unlike the worker's own `centralValues`, an embedder is not a trusted
+ * operator of this deployment.
+ *
+ * Returns the subset that was actually applied, so a caller can warn about
+ * anything dropped. Never touches `localStorage` — reset on every
+ * `initFeatureFlags` call, exactly like a pushed `theme`/`layout`.
+ */
+export function applyHostFlagOverrides(
+  values: Readonly<Record<string, unknown>>
+): FeatureFlagValues {
+  const applied: FeatureFlagValues = {};
+  for (const [id, value] of Object.entries(values)) {
+    const definition = FEATURE_FLAGS_BY_ID.get(id as FeatureFlagId);
+    if (!definition || typeof value !== 'string' || !canOverride(definition, activeFloat)) continue;
+    applied[definition.id] = value;
+  }
+  hostValues = { ...hostValues, ...applied };
+  return applied;
 }
 
 export function getFeatureValue(id: FeatureFlagId): string | undefined {

@@ -1016,6 +1016,71 @@ describe('mountWcUiFollower', () => {
     expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
   });
 
+  it('cherry: a host-pushed flags override turns panel-layouts on for its own pushed layout — no worker-level FEATURE_FLAGS needed', async () => {
+    const pushedDoc = {
+      version: 1,
+      id: 'embed',
+      locked: true,
+      base: { center: { panel: 'chat' } },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          flags: JSON.stringify({ 'panel-layouts': 'on' }),
+          layout: JSON.stringify(pushedDoc),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // Deliberately NO initFeatureFlags('cherry', { 'panel-layouts': 'on' }) call —
+    // the flag must come from the host-pushed `flags`, not the test harness.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const layout = app.querySelector('slicc-layout') as HTMLElement & {
+      getLayout(): { id: string };
+    };
+    expect(layout).not.toBeNull();
+    expect(layout.getLayout().id).toBe('embed');
+  });
+
+  it('cherry: ignores host-pushed flags that are not valid JSON, keeping the flag off (and the default layout)', async () => {
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          flags: '{not json',
+          layout: JSON.stringify({
+            version: 1,
+            id: 'embed',
+            base: { center: { panel: 'chat' } },
+          }),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    expect(app.querySelector('slicc-layout')).toBeNull();
+    expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
+  });
+
   it('cherry: ignores a pushed document that fails schema validation, keeping the default', async () => {
     // `base` present (so it takes the document path) but no id/version — must
     // degrade rather than render a half-broken arrangement.
