@@ -12,6 +12,12 @@ final class AppStateStreamingTests: XCTestCase {
     }
 
     @MainActor
+    private func sendStatus(_ status: String, scoopJid: String, to state: AppState) throws {
+        let message = LeaderToFollowerMessage.status(scoopStatus: status, scoopJid: scoopJid)
+        state.handleDataChannelMessage(try JSONEncoder().encode(message))
+    }
+
+    @MainActor
     func testContentDoneThenToolUseKeepsStopSteerAvailable() throws {
         let state = AppState()
         state.selectedScoopJid = "cone"
@@ -109,9 +115,7 @@ final class AppStateStreamingTests: XCTestCase {
         let state = AppState()
         state.selectedScoopJid = "cone"
 
-        state.handleDataChannelMessage(
-            try JSONEncoder().encode(
-                LeaderToFollowerMessage.status(scoopStatus: "processing", scoopJid: "cone")))
+        try sendStatus("processing", scoopJid: "cone", to: state)
         XCTAssertTrue(state.isStreaming)
         try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
         try send(
@@ -120,11 +124,35 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertTrue(state.isStreaming)
         XCTAssertEqual(state.streamingMessageId, "reply")
 
-        state.handleDataChannelMessage(
-            try JSONEncoder().encode(
-                LeaderToFollowerMessage.status(scoopStatus: "ready", scoopJid: "cone")))
+        try sendStatus("ready", scoopJid: "cone", to: state)
         XCTAssertFalse(state.isStreaming)
         XCTAssertNil(state.streamingMessageId)
         XCTAssertEqual(try XCTUnwrap(state.messages.last).isStreaming, false)
+    }
+
+    @MainActor
+    func testStatusForNonSelectedScoopDoesNotChangeVisibleStreamingState() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+
+        try sendStatus("processing", scoopJid: "scoop", to: state)
+        XCTAssertFalse(state.isStreaming)
+
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try sendStatus("ready", scoopJid: "scoop", to: state)
+        XCTAssertTrue(state.isStreaming)
+        XCTAssertEqual(state.streamingMessageId, "reply")
+    }
+
+    @MainActor
+    func testLegacyUnscopedReadyStatusIsApplied() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+
+        state.handleDataChannelMessage(Data(#"{"type":"status","scoopStatus":"ready"}"#.utf8))
+
+        XCTAssertFalse(state.isStreaming)
+        XCTAssertNil(state.streamingMessageId)
     }
 }
