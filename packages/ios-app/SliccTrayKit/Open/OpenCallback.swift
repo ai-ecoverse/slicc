@@ -61,6 +61,18 @@ public enum OpenCallbackCodec {
             .replacingOccurrences(of: "=", with: "")
     }
 
+    static func constantTimeNonceEqual(_ expected: String, _ candidate: String) -> Bool {
+        let expectedBytes = Array(expected.utf8)
+        let candidateBytes = Array(candidate.utf8)
+        var difference = expectedBytes.count ^ candidateBytes.count
+        for index in 0..<max(expectedBytes.count, candidateBytes.count) {
+            let expectedByte = index < expectedBytes.count ? expectedBytes[index] : 0
+            let candidateByte = index < candidateBytes.count ? candidateBytes[index] : 0
+            difference |= Int(expectedByte ^ candidateByte)
+        }
+        return difference == 0
+    }
+
     /// Adds app-owned callback destinations without re-encoding any non-callback
     /// destination byte. Leader-supplied callback keys are removed at every
     /// percent-encoding depth before the three trusted values are appended.

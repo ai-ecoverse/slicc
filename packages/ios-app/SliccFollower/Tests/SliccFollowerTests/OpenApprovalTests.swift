@@ -606,6 +606,43 @@ extension OpenApprovalTests {
         XCTAssertTrue(restoredWire.sent.isEmpty)
     }
 
+    func testCallbackNonceComparisonAcceptsOnlyEqualStoredValue() throws {
+        let cases = [
+            (requestId: "equal", nonce: "fixed-nonce", accepts: true),
+            (requestId: "same-length", nonce: "fixed-noncf", accepts: false),
+            (requestId: "different-length", nonce: "fixed-nonce-extra", accepts: false),
+        ]
+        for testCase in cases {
+            let wire = Wire()
+            let controller = makeController(wire: wire)
+            controller.handle(
+                requestId: testCase.requestId,
+                command: "open --x-callback fixtureapp://calendar/create",
+                requesterIdentity: "Leader", sessionIdentity: "Session")
+            controller.resolve(requestId: testCase.requestId, decision: .allowOnce)
+            controller.completeLaunch(requestId: testCase.requestId, opened: true)
+            let callback = try makeCallbackURL(
+                status: .success, requestId: testCase.requestId, nonce: testCase.nonce)
+
+            XCTAssertTrue(controller.handleCallbackURL(callback))
+            XCTAssertEqual(
+                wire.responses.map(\.1),
+                testCase.accepts ? [OpenExecExitCode.success.rawValue] : [])
+        }
+
+        let absentWire = Wire()
+        let absentController = makeController(wire: absentWire)
+        absentController.handle(
+            requestId: "absent", command: "open fixtureapp://calendar/create",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+        absentController.resolve(requestId: "absent", decision: .allowOnce)
+        let absentCallback = try makeCallbackURL(
+            status: .success, requestId: "absent", nonce: "fixed-nonce")
+
+        XCTAssertTrue(absentController.handleCallbackURL(absentCallback))
+        XCTAssertTrue(absentWire.responses.isEmpty)
+    }
+
     func testSignalDuringExternalAppWaitCancelsAndInvalidatesCallback() throws {
         let wire = Wire()
         let controller = makeController(wire: wire)

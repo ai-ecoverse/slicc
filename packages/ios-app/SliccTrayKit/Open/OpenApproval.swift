@@ -420,7 +420,8 @@ public final class OpenApprovalController {
     }
 
     private func liveCallbackRequest(requestId: String, nonce: String) -> OpenApprovalRequest? {
-        guard callbackNonces[requestId] == nonce,
+        guard let expectedNonce = callbackNonces[requestId],
+            OpenCallbackCodec.constantTimeNonceEqual(expectedNonce, nonce),
             let request = requestStore.request(id: requestId)
         else { return nil }
         guard !requestStore.isExpired(id: requestId, at: now()) else {
