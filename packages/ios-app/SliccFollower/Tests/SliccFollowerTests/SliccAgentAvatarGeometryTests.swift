@@ -48,6 +48,51 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         XCTAssertEqual(SliccAgentAvatarGeometry.fillScale(for: 85), 2.2, accuracy: accuracy)
     }
 
+    func testStaticNoiseParametersMatchWebRenderer() {
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseCellSize, 1)
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseFramesPerSecond, 12)
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseOpacity, 0.72)
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseLuminance, [0.08, 0.36, 0.68, 0.94])
+        XCTAssertEqual(SliccAgentAvatarGeometry.frozenNoiseSeed, 0x51CC_A11E)
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseFrameSalt, 0x9E37_79B9)
+        XCTAssertEqual(SliccAgentAvatarGeometry.noiseEyeSalt, 0x85EB_CA6B)
+
+        let geometry = SliccAgentAvatarGeometry(
+            type: .scoop, color: "#8B5CF6", eyes: .static, sideLength: 20)
+        let cellsPerAxis = Int(ceil(geometry.eyeDiameter / SliccAgentAvatarGeometry.noiseCellSize))
+        XCTAssertEqual(cellsPerAxis * cellsPerAxis, 225)
+    }
+
+    func testComputedZeroStaticNoiseSeedNormalizesToWebSequence() {
+        let zeroSeedFrame: UInt32 = 968_638_734
+        let computedSeed =
+            SliccAgentAvatarGeometry.frozenNoiseSeed
+            ^ (zeroSeedFrame &* SliccAgentAvatarGeometry.noiseFrameSalt)
+        XCTAssertEqual(computedSeed, 0)
+        var noise = AvatarNoiseGenerator(seed: computedSeed)
+
+        XCTAssertEqual(
+            (0..<12).map { _ in noise.next() },
+            [
+                2_014_281_417, 1_830_072_674, 2_619_937_598, 2_006_912_825,
+                1_500_832_933, 2_045_046_005, 1_799_219_144, 794_102_122,
+                1_098_499_222, 1_150_039_043, 2_206_897_573, 4_143_315_578,
+            ])
+    }
+
+    func testAnimatedStaticNoiseSeedsMatchWebRendererAtOneSecond() {
+        let frame = UInt32(SliccAgentAvatarGeometry.noiseFramesPerSecond)
+        let leftSeed =
+            SliccAgentAvatarGeometry.frozenNoiseSeed
+            ^ (frame &* SliccAgentAvatarGeometry.noiseFrameSalt)
+        let rightSeed =
+            (SliccAgentAvatarGeometry.frozenNoiseSeed
+                ^ SliccAgentAvatarGeometry.noiseEyeSalt) ^ (frame &* SliccAgentAvatarGeometry.noiseFrameSalt)
+
+        XCTAssertEqual(leftSeed, 995_431_858)
+        XCTAssertEqual(rightSeed, 3_200_180_185)
+    }
+
     func testMaxTravelClampsAtBothBounds() {
         let lowFill = SliccAgentAvatarGeometry(
             type: .cone, color: "#F59E0B", fill: 0, sideLength: 100)
@@ -278,7 +323,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
     }
 
     func testTiltControllerClosedEyesStopAndCenter() {
-        for eyes in [SliccAgentAvatarGeometry.EyeState.dead, .none] {
+        for eyes in [SliccAgentAvatarGeometry.EyeState.dead, .none, .static] {
             let source = FixedSliccAgentAvatarTiltSource(roll: 0.2, pitch: 0.1)
             let controller = SliccAgentAvatarTiltController(source: source)
             controller.update(geometry: tiltGeometry, motionDisabled: false)

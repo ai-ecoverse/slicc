@@ -6,7 +6,7 @@ struct SliccAgentAvatarView: View {
     let avatar: SliccAgentAvatarGeometry
     private let pupilOffsetOverride: SliccAgentAvatarGeometry.Point?
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @StateObject private var tiltController: SliccAgentAvatarTiltController
 
     init(
@@ -24,6 +24,14 @@ struct SliccAgentAvatarView: View {
     private var pupilOffset: SliccAgentAvatarGeometry.Point {
         guard !reduceMotion else { return .init(x: 0, y: 0) }
         return pupilOffsetOverride ?? tiltController.pupilOffset
+    }
+
+    private var reduceMotion: Bool {
+        #if DEBUG
+            systemReduceMotion || UITestHooks.reducesMotion
+        #else
+            systemReduceMotion
+        #endif
     }
 
     private var agentColor: Color {
@@ -74,6 +82,15 @@ struct SliccAgentAvatarView: View {
             }
         case .none:
             EmptyView()
+        case .static:
+            ForEach(Array(avatar.eyeCenters.enumerated()), id: \.offset) { index, center in
+                StaticAvatarEye(
+                    avatar: avatar,
+                    eyeIndex: index,
+                    reduceMotion: reduceMotion
+                )
+                .position(x: center.x, y: center.y)
+            }
         }
     }
 
@@ -164,6 +181,95 @@ private struct DeadAvatarEye: View {
     }
 }
 
+private struct StaticAvatarEye: View {
+    let avatar: SliccAgentAvatarGeometry
+    let eyeIndex: Int
+    let reduceMotion: Bool
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                eye(seed: frozenSeed)
+            } else {
+                TimelineView(
+                    .periodic(
+                        from: .now,
+                        by: 1.0 / SliccAgentAvatarGeometry.noiseFramesPerSecond)
+                ) { context in
+                    eye(seed: animatedSeed(at: context.date))
+                }
+            }
+        }
+        .frame(width: avatar.eyeDiameter, height: avatar.eyeDiameter)
+    }
+
+    private var frozenSeed: UInt32 {
+        SliccAgentAvatarGeometry.frozenNoiseSeed
+            ^ (UInt32(truncatingIfNeeded: eyeIndex) &* SliccAgentAvatarGeometry.noiseEyeSalt)
+    }
+
+    private func animatedSeed(at date: Date) -> UInt32 {
+        let frame = UInt32(
+            truncatingIfNeeded: Int64(
+                floor(
+                    date.timeIntervalSinceReferenceDate
+                        * SliccAgentAvatarGeometry.noiseFramesPerSecond)))
+        return frozenSeed ^ (frame &* SliccAgentAvatarGeometry.noiseFrameSalt)
+    }
+
+    private func eye(seed: UInt32) -> some View {
+        ZStack {
+            Ellipse().fill(.white)
+            AvatarStaticNoise(seed: seed)
+                .clipShape(Ellipse())
+            Ellipse().stroke(.black, lineWidth: avatar.eyeOutlineWidth)
+        }
+    }
+}
+
+private struct AvatarStaticNoise: View {
+    let seed: UInt32
+
+    var body: some View {
+        Canvas { context, size in
+            let cellSize = SliccAgentAvatarGeometry.noiseCellSize
+            var noise = AvatarNoiseGenerator(seed: seed)
+            for y in stride(from: 0.0, to: size.height, by: cellSize) {
+                for x in stride(from: 0.0, to: size.width, by: cellSize) {
+                    let shade = SliccAgentAvatarGeometry.noiseLuminance[
+                        Int(noise.next() % UInt32(SliccAgentAvatarGeometry.noiseLuminance.count))
+                    ]
+                    let rect = CGRect(
+                        x: x,
+                        y: y,
+                        width: min(cellSize, size.width - x),
+                        height: min(cellSize, size.height - y))
+                    context.fill(
+                        Path(rect),
+                        with: .color(
+                            Color(white: shade)
+                                .opacity(SliccAgentAvatarGeometry.noiseOpacity)))
+                }
+            }
+        }
+    }
+}
+
+struct AvatarNoiseGenerator {
+    private var state: UInt32
+
+    init(seed: UInt32) {
+        state = seed == 0 ? SliccAgentAvatarGeometry.frozenNoiseSeed : seed
+    }
+
+    mutating func next() -> UInt32 {
+        state ^= state << 13
+        state ^= state >> 17
+        state ^= state << 5
+        return state
+    }
+}
+
 #Preview("Avatar state matrix") {
     HStack(spacing: 24) {
         AvatarPreviewColumn(scheme: .light)
@@ -180,6 +286,7 @@ private struct AvatarPreviewColumn: View {
         SliccAgentAvatarGeometry(type: .cone, color: "#F59E0B", fill: 32, sideLength: 72),
         SliccAgentAvatarGeometry(type: .scoop, color: "#F97316", eyes: .dead, fill: 84, sideLength: 72),
         SliccAgentAvatarGeometry(type: .scoop, color: "#38BDF8", eyes: .none, fill: 14, sideLength: 72),
+        SliccAgentAvatarGeometry(type: .cone, color: "#F59E0B", eyes: .static, fill: 92, sideLength: 72),
     ]
 
     var body: some View {

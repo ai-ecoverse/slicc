@@ -23,6 +23,13 @@ import UIKit
                 .flatMap(URL.init(string:))
         }
 
+        /// Inject a Join URL into the otherwise non-persistent field. A non-empty
+        /// value follows the real connect path; an explicit empty value keeps the
+        /// Settings launch-state test isolated from prior simulator state.
+        static var launchJoinUrl: String? {
+            UserDefaults.standard.string(forKey: "joinUrl")
+        }
+
         /// Route straight to `FixtureConversationView` and skip the join /
         /// connect path entirely, so no test needs a live WebRTC peer.
         static var routesToFixture: Bool {
@@ -31,7 +38,8 @@ import UIKit
 
         /// Route straight to the isolated avatar matrix. The value selects the
         /// screenshot variant: `light-centered`, `light-offset`, `dark-centered`,
-        /// or `dark-offset`.
+        /// `dark-offset`, or the deterministic TV-noise states `light-static`
+        /// and `dark-static`.
         static var avatarFixtureVariant: String? {
             UserDefaults.standard.string(forKey: "uiTestAvatarFixture")
         }
@@ -55,6 +63,11 @@ import UIKit
                     fill: 95),
                 scoop(jid: "fixture-low-fill", label: "Low Fill Scoop", state: "idle", fill: 5),
                 scoop(jid: "fixture-unknown", label: "Unknown Scoop", state: nil, fill: nil),
+                scoop(jid: "fixture-short", label: "S", state: "idle", fill: 20),
+                scoop(
+                    jid: "fixture-long",
+                    label: "Scoop with a deliberately overlong assistant label",
+                    state: "idle", fill: 20),
             ]
         }
 
@@ -62,6 +75,7 @@ import UIKit
         /// tests without changing a shared simulator's persistent settings.
         static var reducesMotion: Bool {
             UserDefaults.standard.bool(forKey: "uiTestReduceMotion")
+                || avatarFixtureVariant?.hasSuffix("-static") == true
         }
 
         private static func scoop(
@@ -72,7 +86,7 @@ import UIKit
                 assistantLabel: label, trigger: nil, state: state, fill: fill)
         }
 
-        /// Force the connection banner into a given state. The stalled and
+        /// Force the avatar/composer connection treatment into a given state. The stalled and
         /// gave-up states are otherwise only reachable by starving a real
         /// leader of pings or exhausting a real reconnect budget, neither of
         /// which a hermetic UI test can stage.
@@ -97,6 +111,9 @@ import UIKit
             let messages: [LeaderToFollowerMessage] = [
                 .agentEvent(event: .messageStart(messageId: messageId), scoopJid: scoopJid),
                 .agentEvent(
+                    event: .contentDelta(messageId: messageId, text: "Stable layout fixture"),
+                    scoopJid: scoopJid),
+                .agentEvent(
                     event: .contentDone(messageId: messageId, model: nil, usage: nil),
                     scoopJid: scoopJid),
                 .status(scoopStatus: "ready", scoopJid: scoopJid),
@@ -104,6 +121,9 @@ import UIKit
             for message in messages {
                 guard let data = try? JSONEncoder().encode(message) else { return false }
                 appState.handleDataChannelMessage(data)
+            }
+            if let raw = forcedConnectionState, let state = ConnectionState(rawValue: raw) {
+                appState.connectionState = state
             }
             return true
         }

@@ -335,21 +335,27 @@ describe('mountWcUiFollower', () => {
     const app = document.getElementById('app')!;
     await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
     const inputCard = app.querySelector('slicc-input-card')!;
+    const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
+      connection: string;
+    };
 
     // Pre-connect: disabled, "Connecting to leader…" — input can't be silently dropped.
     expect(inputCard.hasAttribute('disabled')).toBe(true);
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+    expect(switcher.connection).toBe('disconnected');
 
     // On connect, the tray fires onConnectionChange(true) → enabled + normal placeholder.
     const opts = startFollowerSpy.mock.calls[0]![0];
     opts.onConnectionChange?.(true);
     expect(inputCard.hasAttribute('disabled')).toBe(false);
     expect(inputCard.getAttribute('placeholder')).toBe('Ask the leader, or describe a change…');
+    expect(switcher.connection).toBe('connected');
 
     // A disconnect re-disables + re-shows connecting.
     opts.onConnectionChange?.(false);
     expect(inputCard.hasAttribute('disabled')).toBe(true);
     expect(inputCard.getAttribute('placeholder')).toBe('Connecting to leader…');
+    expect(switcher.connection).toBe('disconnected');
   });
 
   it('keeps model controls hidden before the catalog and for a legacy leader connection', async () => {

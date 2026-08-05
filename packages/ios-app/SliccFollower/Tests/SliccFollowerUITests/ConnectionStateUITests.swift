@@ -1,7 +1,6 @@
 import XCTest
 
-/// The connection banner and composer states introduced with stall detection
-/// and bounded reconnect (#1793).
+/// Avatar-static and composer states introduced with stall detection and bounded reconnect (#1793).
 ///
 /// The stalled and gave-up states cannot be staged against a real leader in a
 /// hermetic test — one needs a peer that stops answering pings while keeping
@@ -18,13 +17,12 @@ final class ConnectionStateUITests: XCTestCase {
     func testAStalledLeaderSaysSoInsteadOfClaimingDisconnection() {
         let app = launchApp(forcing: "stalled")
 
-        let banner = app.staticTexts["connection-status"]
-        XCTAssertTrue(banner.waitForExistence(timeout: 60), "A stall should raise the banner")
-        XCTAssertTrue(
-            banner.label.contains("busy"),
-            "The banner should name the leader as busy, got \(banner.label)")
+        let avatar = avatar(
+            in: app,
+            labeled: "SLICC: unknown, context fill unknown. The leader is busy — hang on…")
+        XCTAssertTrue(avatar.waitForExistence(timeout: 60), "A stall should remain in the avatar")
         XCTAssertFalse(
-            banner.label.contains("Disconnected"),
+            avatar.label.contains("Disconnected"),
             "A stall is not a disconnect and must not read as one")
     }
 
@@ -35,50 +33,83 @@ final class ConnectionStateUITests: XCTestCase {
 
         let placeholder = app.staticTexts["composer-placeholder"]
         XCTAssertTrue(placeholder.waitForExistence(timeout: 60))
-        XCTAssertTrue(
-            placeholder.label.contains("busy"),
-            "The composer should explain the block, got \(placeholder.label)")
+        XCTAssertEqual(placeholder.label, "The leader is busy — hang on…")
     }
 
     /// A transient reconnect must show progress, so it does not read as a hang.
     func testReconnectingShowsWhichAttemptIsInFlight() {
         let app = launchApp(forcing: "reconnecting")
 
-        let banner = app.staticTexts["connection-status"]
-        XCTAssertTrue(banner.waitForExistence(timeout: 60))
-        XCTAssertTrue(
-            banner.label.contains("Reconnecting"),
-            "Expected a reconnecting banner, got \(banner.label)")
-        XCTAssertTrue(
-            banner.label.contains("3"),
-            "The attempt count is what distinguishes a retry from a hang, got \(banner.label)")
+        let avatar = avatar(
+            in: app,
+            labeled: "SLICC: unknown, context fill unknown. Reconnecting… (3/10)")
+        XCTAssertTrue(avatar.waitForExistence(timeout: 60))
+        XCTAssertEqual(app.staticTexts["composer-placeholder"].label, "Disconnected")
     }
 
-    /// Exhausting the budget is terminal and must say what the user can do.
-    func testGivingUpIsTerminalAndActionable() {
+    /// Exhausting the budget is terminal and returns to the actionable Settings route.
+    func testGivingUpReturnsToSettings() {
         let app = launchApp(forcing: "gaveUp")
 
-        let banner = app.staticTexts["connection-status"]
-        XCTAssertTrue(banner.waitForExistence(timeout: 60))
         XCTAssertTrue(
-            banner.label.contains("Couldn't reach the leader"),
-            "Expected the terminal copy, got \(banner.label)")
-        XCTAssertFalse(
-            banner.label.contains("Reconnecting"),
-            "Giving up must not still claim to be retrying")
+            app.navigationBars["Settings"].waitForExistence(timeout: 60),
+            "Giving up should return to Settings instead of inserting a transcript banner")
+        XCTAssertFalse(app.staticTexts["connection-status"].exists)
+    }
+
+    func testChangingToANonConnectedStateDoesNotShiftTheTranscript() {
+        let connectedApp = launchApp(forcing: "connected", completedTurn: true)
+        let connectedAvatar = connectedApp.descendants(matching: .any)["scoop-avatar"].firstMatch
+        XCTAssertTrue(connectedAvatar.waitForExistence(timeout: 60))
+        let connectedAvatarCenterX = connectedAvatar.frame.midX
+        let connectedRow = connectedApp.descendants(matching: .any)["message-ui-test-reply"]
+            .firstMatch
+        XCTAssertTrue(connectedRow.waitForExistence(timeout: 60))
+        let connectedFrame = connectedRow.frame
+        connectedApp.terminate()
+
+        let failedApp = launchApp(forcing: "failed", completedTurn: true)
+        let failedAvatar = avatar(in: failedApp, containing: "Connection Failed")
+        XCTAssertTrue(failedAvatar.waitForExistence(timeout: 60))
+        XCTAssertEqual(
+            failedAvatar.frame.midX, connectedAvatarCenterX, accuracy: 0.5,
+            "Connection treatment must not move the avatar horizontally")
+
+        let failedRow = failedApp.descendants(matching: .any)["message-ui-test-reply"].firstMatch
+        XCTAssertTrue(failedRow.waitForExistence(timeout: 10))
+        XCTAssertEqual(
+            failedRow.frame, connectedFrame,
+            "Connection state belongs in the avatar and must produce zero transcript layout shift")
     }
 
     // MARK: - Helpers
 
     /// `joinUrl` is passed explicitly and empty so a value persisted by another
     /// test cannot start a real connection underneath the forced state.
-    private func launchApp(forcing state: String) -> XCUIApplication {
+    private func launchApp(forcing state: String, completedTurn: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-uiTestConnectionState", state,
             "-joinUrl", "",
         ]
+        if completedTurn {
+            app.launchArguments += ["-uiTestCompletedTurn", "YES"]
+        }
         app.launch()
         return app
+    }
+
+    private func avatar(in app: XCUIApplication, labeled label: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "scoop-avatar")
+            .matching(NSPredicate(format: "label == %@", label))
+            .firstMatch
+    }
+
+    private func avatar(in app: XCUIApplication, containing text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "scoop-avatar")
+            .matching(NSPredicate(format: "label CONTAINS %@", text))
+            .firstMatch
     }
 }
