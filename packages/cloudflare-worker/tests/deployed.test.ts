@@ -34,6 +34,7 @@ describeIfConfigured('deployed tray worker', () => {
         'GET /download/slicc-cli/:target',
         'GET /handoff',
         'GET /.well-known/api-catalog',
+        'GET /.well-known/apple-app-site-association',
         'GET /llms.txt',
         'GET /status',
         'GET /rel/:name',

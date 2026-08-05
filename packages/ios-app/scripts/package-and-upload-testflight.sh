@@ -26,6 +26,11 @@
 #   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME
 #                                      defaults to "Slicc Follower File Provider App Store"
 #   APPLE_FILEPROVIDER_BUNDLE_ID       defaults to com.sliccy.follower.fileprovider
+#   APPLE_SHARE_PROVISIONING_PROFILE_BASE64
+#                                      Share extension appex App Store profile
+#   APPLE_SHARE_PROVISIONING_PROFILE_NAME
+#                                      defaults to "Slicc Follower Share App Store"
+#   APPLE_SHARE_BUNDLE_ID              defaults to com.sliccy.follower.share
 #   APPLE_TEAM_ID                      defaults to S8LB56P782
 #
 # Release wiring: .github/workflows/release.yml must pass every APPLE_* secret
@@ -89,7 +94,8 @@ secret_unusable() {
 for var in APPLE_DISTRIBUTION_CERT_BASE64 APPLE_DISTRIBUTION_CERT_PASSWORD \
            APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID \
            APPLE_PROVISIONING_PROFILE_BASE64 \
-           APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64; do
+           APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 \
+           APPLE_SHARE_PROVISIONING_PROFILE_BASE64; do
   if secret_unusable "$var"; then
     msg="TestFlight secret \$$var is missing or set to \"-\" — skipping iOS upload."
     if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
@@ -112,6 +118,8 @@ BUNDLE_ID="${APPLE_BUNDLE_ID:-com.sliccy.follower}"
 PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
 FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.fileprovider}"
 FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
+SHARE_BUNDLE_ID="${APPLE_SHARE_BUNDLE_ID:-com.sliccy.follower.share}"
+SHARE_PROFILE_NAME="${APPLE_SHARE_PROVISIONING_PROFILE_NAME:-Slicc Follower Share App Store}"
 
 echo "=== SliccFollower TestFlight v${VERSION} (build ${BUILD_NUMBER}) ==="
 
@@ -237,6 +245,7 @@ install_profile_b64() {
 
 install_profile_b64 "$APPLE_PROVISIONING_PROFILE_BASE64" "app"
 install_profile_b64 "$APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64" "fileprovider"
+install_profile_b64 "$APPLE_SHARE_PROVISIONING_PROFILE_BASE64" "share"
 
 # --- API key: locate the .p8 so altool / xcodebuild can find it -----------
 if [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_KEY_ISSUER_ID:-}" ]; then
@@ -295,6 +304,8 @@ cat > "$EXPORT_OPTS" <<EOF
         <string>${PROFILE_NAME}</string>
         <key>${FILEPROVIDER_BUNDLE_ID}</key>
         <string>${FILEPROVIDER_PROFILE_NAME}</string>
+        <key>${SHARE_BUNDLE_ID}</key>
+        <string>${SHARE_PROFILE_NAME}</string>
     </dict>
     <key>uploadSymbols</key>
     <true/>
@@ -325,10 +336,11 @@ echo "  archiving..."
 python3 - "$IOS_PROJECT_DIR/SliccFollower.xcodeproj/project.pbxproj" \
   "$BUNDLE_ID" "$PROFILE_NAME" \
   "$FILEPROVIDER_BUNDLE_ID" "$FILEPROVIDER_PROFILE_NAME" \
+  "$SHARE_BUNDLE_ID" "$SHARE_PROFILE_NAME" \
   "$TEAM_ID" <<'PY'
 import sys
 from pathlib import Path
-path, app_id, app_prof, fp_id, fp_prof, team = sys.argv[1:7]
+path, app_id, app_prof, fp_id, fp_prof, share_id, share_prof, team = sys.argv[1:9]
 text = Path(path).read_text()
 lines = text.splitlines(keepends=True)
 out = []
@@ -336,6 +348,7 @@ i = 0
 targets = {
     app_id: (app_prof, "Manual"),
     fp_id: (fp_prof, "Manual"),
+    share_id: (share_prof, "Manual"),
 }
 while i < len(lines):
     out.append(lines[i])

@@ -9,6 +9,16 @@
 	     profile degrade to a local cache (UbiquitousKeyValueBackend). -->
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>S8LB56P782.ai.sliccy.trays</string>
+	<!-- Universal links: https://(www.)sliccy.ai/app/* opens the app
+	     (#1918). Provisioning must carry Associated Domains for device /
+	     TestFlight builds; unsigned dev/simulator builds degrade to the
+	     slicc:// scheme without it, like the iCloud capability above. The
+	     worker serves the matching apple-app-site-association. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:sliccy.ai</string>
+		<string>applinks:www.sliccy.ai</string>
+	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.ai.sliccy.follower</string>

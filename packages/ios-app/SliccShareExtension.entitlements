@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Same group as the app and the File Provider appex: the share row
+	     parks requests here for the app to drain (#1918). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.ai.sliccy.follower</string>
+	</array>
+</dict>
+</plist>

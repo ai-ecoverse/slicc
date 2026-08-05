@@ -9,8 +9,10 @@ import os
 /// selected workbench surface, except while a browser tab claims the window.
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var inboundActions: InboundActionCoordinator
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.openURL) private var openURL
     @StateObject private var presentation: ChatPresentationState
     @StateObject private var ptt = PttController(engine: InputBar.makeDictationEngine())
     @State private var showSettings = false
@@ -23,6 +25,11 @@ struct ChatView: View {
     /// Mirror the rail to the leading edge (`-leftHandedDock` /
     /// Settings toggle) — reachability for left-handed use.
     @AppStorage("leftHandedDock") private var leftHandedDock = false
+    /// Hosts the user chose to always open without the card, comma-joined.
+    @AppStorage("inboundAlwaysOpenHosts") private var alwaysOpenHosts = ""
+    /// Opt-in unattended prompts: the user made this policy call
+    /// explicitly by choosing Always on the prompt card.
+    @AppStorage("inboundAlwaysAllowPrompts") private var alwaysAllowPrompts = false
 
     init() {
         _presentation = StateObject(
@@ -75,6 +82,9 @@ struct ChatView: View {
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
                 }
+                if let inboundURL = UITestHooks.inboundOpenURL {
+                    _ = inboundActions.receive(url: inboundURL, needsConfirmation: true)
+                }
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
@@ -94,6 +104,250 @@ struct ChatView: View {
         .onChange(of: presentation.activeSurface) { surface in
             if surface == .term { presentation.terminalWasOpened = true }
         }
+        .overlay(alignment: .top) {
+            inboundPhaseChip
+        }
+        .alert(
+            "Open in SLICC's browser?",
+            isPresented: inboundOpenAlertPresented,
+            presenting: inboundActions.pendingOpen
+        ) { action in
+            Button("Open") { executeInboundOpen(action) }
+            if let host = action.url.host() {
+                Button("Always Allow \(host)") {
+                    allowHostAlways(host)
+                    executeInboundOpen(action)
+                }
+            }
+            Button("Cancel", role: .cancel) { inboundActions.consume(action) }
+        } message: { action in
+            Text(action.url.absoluteString)
+        }
+        .alert(
+            "Send this prompt to SLICC?",
+            isPresented: inboundPromptAlertPresented,
+            presenting: inboundActions.pendingPrompt
+        ) { action in
+            Button("Send") { executeInboundPrompt(action) }
+            Button("Always Send") {
+                alwaysAllowPrompts = true
+                executeInboundPrompt(action)
+            }
+            Button("Cancel", role: .cancel) { cancelInboundPrompt(action) }
+        } message: { action in
+            Text(action.prompt)
+        }
+        .onChange(of: inboundActions.pendingOpen) { action in
+            // The App-Intent route was an explicit user action, and an
+            // always-allowed host carries a standing decision — both
+            // execute without the card. Other deep links keep it.
+            if let action, !action.needsConfirmation || hostAlwaysAllowed(action.url) {
+                executeInboundOpen(action)
+            }
+        }
+        .onChange(of: inboundActions.pendingPrompt) { action in
+            if let action, !action.needsConfirmation || alwaysAllowPrompts {
+                executeInboundPrompt(action)
+            }
+        }
+        .onChange(of: inboundActions.pendingTranscript) { request in
+            if let request {
+                executeTranscriptExport(request)
+            }
+        }
+    }
+
+    // MARK: - Inbound open (#1918)
+
+    /// The shell owns execution: open the URL as a local tab and land the
+    /// user in full-screen browsing, exactly like tapping a remote card.
+    private func executeInboundOpen(_ action: InboundActionCoordinator.PendingOpen) {
+        inboundActions.consume(action)
+        withAnimation {
+            presentation.activeSurface = .browser
+        }
+        let id = appState.cdpOpenTab(url: action.url.absoluteString)
+        appState.browserViewingTabId = id
+    }
+
+    /// System-alert presentation state: an alert is the platform's own
+    /// confirmation dialog — position, width, fonts, and button colors
+    /// come out of the box (and Liquid Glass on iOS 26). Escape-key or
+    /// programmatic dismissal counts as Cancel: fail closed.
+    private var inboundOpenAlertPresented: Binding<Bool> {
+        Binding(
+            get: { inboundActions.pendingOpen?.needsConfirmation == true },
+            set: { presented in
+                if !presented, let action = inboundActions.pendingOpen,
+                    action.needsConfirmation
+                {
+                    inboundActions.consume(action)
+                }
+            }
+        )
+    }
+
+    private var inboundPromptAlertPresented: Binding<Bool> {
+        Binding(
+            get: { inboundActions.pendingPrompt?.needsConfirmation == true },
+            set: { presented in
+                if !presented, let action = inboundActions.pendingPrompt,
+                    action.needsConfirmation
+                {
+                    cancelInboundPrompt(action)
+                }
+            }
+        )
+    }
+
+    private func cancelInboundPrompt(_ action: InboundActionCoordinator.PendingPrompt) {
+        inboundActions.consume(prompt: action)
+        fireCallback(action.xCancel, params: [:])
+        inboundActions.resolve(id: action.id, with: .failure(InboundActionError.cancelled))
+    }
+
+    /// Standing per-host decision for deep-linked opens.
+    private func hostAlwaysAllowed(_ url: URL) -> Bool {
+        guard let host = url.host()?.lowercased() else { return false }
+        return alwaysOpenHosts.split(separator: ",").map(String.init).contains(host)
+    }
+
+    private func allowHostAlways(_ host: String) {
+        let normalized = host.lowercased()
+        guard !hostAlwaysAllowed(URL(string: "https://\(normalized)")!) else { return }
+        alwaysOpenHosts = alwaysOpenHosts.isEmpty ? normalized : alwaysOpenHosts + "," + normalized
+    }
+
+    private func executeInboundPrompt(_ action: InboundActionCoordinator.PendingPrompt) {
+        inboundActions.consume(prompt: action)
+        guard appState.connectionState == .connected, !appState.isLeaderStalled,
+            let scoopJid = appState.selectedScoopJid
+        else {
+            fireCallback(
+                action.xError, params: ["errorMessage": "SLICC is not connected to a leader"])
+            inboundActions.resolve(id: action.id, with: .failure(InboundActionError.notConnected))
+            return
+        }
+        inboundActions.phase = .running("Waiting for SLICC's reply…")
+        let timeoutToken = appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
+            switch outcome {
+            case .reply(let text):
+                inboundActions.phase = nil
+                fireCallback(
+                    action.xSuccess, params: ["result": Self.boundedCallbackResult(text)])
+                inboundActions.resolve(id: action.id, with: .success(text))
+            case .failure(let message):
+                inboundActions.phase = .failed(message)
+                fireCallback(action.xError, params: ["errorMessage": message])
+                inboundActions.resolve(
+                    id: action.id, with: .failure(InboundActionError.agent(message)))
+            }
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(180))
+            appState.inboundPrompt.timeout(token: timeoutToken)
+        }
+        appState.sendMessage(action.prompt)
+    }
+
+    /// Transcript export (#1918): re-request the leader snapshot so the
+    /// export is fresh, then render exactly what the phone displays.
+    private func executeTranscriptExport(_ request: InboundActionCoordinator.PendingTranscript) {
+        inboundActions.consume(transcript: request)
+        guard appState.connectionState == .connected, !appState.isLeaderStalled else {
+            inboundActions.resolve(
+                id: request.id, with: .failure(InboundActionError.notConnected))
+            return
+        }
+        inboundActions.phase = .running("Refreshing the conversation…")
+        let timeoutToken = appState.inboundSnapshot.arm(
+            scoopJid: appState.selectedScoopJid ?? ""
+        ) {
+            inboundActions.phase = nil
+            let markdown = Self.transcriptMarkdown(
+                label: appState.selectedScoop?.assistantLabel ?? "SLICC",
+                messages: appState.messages)
+            inboundActions.resolve(id: request.id, with: .success(markdown))
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(30))
+            guard appState.inboundSnapshot.timeout(token: timeoutToken) else { return }
+            inboundActions.phase = nil
+            inboundActions.resolve(
+                id: request.id, with: .failure(InboundActionError.timedOut))
+        }
+        appState.requestFreshSnapshot()
+    }
+
+    /// Transient status for a running automation (and its failure) — the
+    /// coordinator's phase, rendered as a quiet chip instead of a card.
+    @ViewBuilder
+    private var inboundPhaseChip: some View {
+        if let phase = inboundActions.phase {
+            HStack(spacing: 6) {
+                switch phase {
+                case .running(let message):
+                    ProgressView().controlSize(.mini)
+                    Text(message)
+                case .failed(let message):
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(message)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .accessibilityIdentifier("inbound-phase-chip")
+            .transition(.opacity)
+        }
+    }
+
+    /// The conversation as bounded Markdown — the same rows the screen
+    /// renders, nothing more. Truncated head-first when over budget so the
+    /// newest turns survive.
+    static func transcriptMarkdown(label: String, messages: [ChatMessage]) -> String {
+        var sections: [String] = ["# SLICC — \(label)"]
+        for message in messages {
+            let heading = message.role == .user ? "## You" : "## \(label)"
+            var body = message.content
+            if let tools = message.toolCalls, !tools.isEmpty {
+                let names = tools.map { "`\($0.name)`" }.joined(separator: ", ")
+                body += "\n\n_tools: \(names)_"
+            }
+            sections.append("\(heading)\n\n\(body)")
+        }
+        var rendered = sections.joined(separator: "\n\n")
+        let cap = InboundActionCoordinator.maxTranscriptBytes
+        if rendered.utf8.count > cap {
+            while rendered.utf8.count > cap - 32, sections.count > 2 {
+                sections.remove(at: 1)
+                rendered = sections.joined(separator: "\n\n")
+            }
+            rendered = "_older turns truncated_\n\n" + rendered
+        }
+        return rendered
+    }
+
+    /// Append our result parameters to the caller-supplied callback and
+    /// bounce over. The callback URL and its values are never logged.
+    private func fireCallback(_ url: URL?, params: [String: String]) {
+        guard let url,
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return }
+        if !params.isEmpty {
+            components.queryItems =
+                (components.queryItems ?? [])
+                + params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        if let final = components.url { openURL(final) }
+    }
+
+    /// x-callback results ride in a URL query — cap what we return rather
+    /// than hand Shortcuts an unbounded string (#1918).
+    static func boundedCallbackResult(_ text: String) -> String {
+        text.count <= 2000 ? text : String(text.prefix(2000)) + "…"
     }
 
     /// Full-screen browsing: a foregrounded local tab claims the whole
@@ -885,6 +1139,7 @@ private struct ScoopStatusAvatar: View {
     ChatView()
         .preferredColorScheme(.dark)
         .environmentObject(AppState())
+        .environmentObject(InboundActionCoordinator())
 }
 
 #Preview("Scoop status treatments") {

@@ -828,6 +828,9 @@ class AppState: ObservableObject {
         case .snapshot(let chatMessages, let scoopJid):
             logger.info("Snapshot received: \(chatMessages.count) messages, scoopJid=\(scoopJid)")
             ingestSnapshot(messages: chatMessages, scoopJid: scoopJid)
+            // After ingest, so a settling transcript export reads the
+            // fresh rows, not the ones this snapshot replaced (#1918).
+            inboundSnapshot.settle(scoopJid: scoopJid)
 
         case .snapshotChunk(let chunkData, let chunkIndex, let totalChunks, _):
             logger.info("Snapshot chunk \(chunkIndex + 1)/\(totalChunks) received (\(chunkData.count) chars)")
@@ -1060,6 +1063,12 @@ class AppState: ObservableObject {
         }
     }
 
+    /// One-shot waiter for `slicc://prompt` automation — its own object so
+    /// the settle logic stays out of this (size-capped) type body.
+    let inboundPrompt = InboundPromptWaiter()
+    /// Fresh-snapshot waiter for the transcript intent (#1918).
+    let inboundSnapshot = InboundSnapshotWaiter()
+
     /// Speak a finished assistant reply when the turn it answers was dictated.
     ///
     /// Hooked to BOTH completion events because leaders disagree about which
@@ -1255,6 +1264,7 @@ class AppState: ObservableObject {
                     messages = buffer
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
+                inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
@@ -1298,6 +1308,7 @@ class AppState: ObservableObject {
                     streamingMessageId = nil
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
+                inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
             }
 
         case .error(let error):
@@ -1311,6 +1322,7 @@ class AppState: ObservableObject {
                 }
             }
             if isVisible { leaderError = error }
+            inboundPrompt.fail(scoopJid: scoopJid, error: error)
             settleTurn(messageId: nil, isVisible: isVisible)
 
         // Events that mutate no transcript state. Kept as a single arm so the
@@ -1590,6 +1602,12 @@ extension AppState {
 
 extension AppState {
     /// Snapshot request sent on every fresh data channel, preserving the viewed scoop.
+    /// Re-request the selected scoop's snapshot (transcript export wants
+    /// fresh rows, not the in-memory mirror; #1918).
+    func requestFreshSnapshot() {
+        _ = sendToLeader(snapshotRequestForConnection())
+    }
+
     func snapshotRequestForConnection() -> FollowerToLeaderMessage {
         .requestSnapshot(scoopJid: selectedScoopJid)
     }

@@ -72,6 +72,20 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5006EA9002BAE9AAD1385831"
+               BuildableName = "SliccShareExtension.appex"
+               BlueprintName = "SliccShareExtension"
+               ReferencedContainer = "container:SliccFollower.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "4C53CF3862E73DFE4EE2A1F5"
                BuildableName = "SliccTrayKit.framework"
                BlueprintName = "SliccTrayKit"
