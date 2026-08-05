@@ -100,7 +100,9 @@ Libghostty `InMemoryTerminalSession` + `TerminalClient` exec against the leader 
 
 ## Agent Avatar
 
-`SliccAgentAvatarView` / geometry parity with webcomponents. Scoop switcher uses a 20pt avatar; menu rows stay text. Tilt seams CoreMotion; reduce-motion and closed eyes center pupils. `-uiTestAvatarFixture` for screenshots.
+`SliccAgentAvatarView` shares its treatment with the browser `<slicc-agent-avatar>`. The 20pt avatar sits outside and immediately left of the session pill in normal and left-handed layouts; native menu rows stay text-only. Context fullness is pupil size only — never a ring, gauge, badge, or text under the avatar. Connection trouble outranks lifecycle and replaces the pupils and eye whites with 1pt TV static while the accessibility phrase retains label, lifecycle, fill, and connection status. Tilt seams CoreMotion; reduce-motion and closed eyes center pupils. `-uiTestAvatarFixture light-static|dark-static` exposes a frozen noise frame for deterministic screenshots.
+
+The transcript has no connection banner row. Recoverable connection state stays in the avatar and composer placeholder, so state changes cannot move message rows; terminal `.gaveUp` presents Settings instead.
 
 ## Build
 
@@ -134,7 +136,7 @@ Hand-running the app for exploratory QA is covered in [`docs/ios-simulator-qa.md
 
 ## UI tests (`SliccFollowerUITests`)
 
-A `bundle.ui-testing` target remains in the scheme, but the unit coverage gate excludes it. Run `-only-testing:SliccFollowerUITests` when UI changes, as a separate CI job. No test needs a leader: `-uiTestFixtureRoute YES` opens the leaderless **UI Fixture** route; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions in-memory; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` keeps the fullness cue static. `UITestHooks` is `#if DEBUG` only. The failure-state test dials `http://127.0.0.1:1/…` so `Connection Failed` arrives without DNS. `-uiTestCompletedTurn YES` feeds `message_start` + `content_done` + `status: ready` through the real dispatcher.
+A `bundle.ui-testing` target remains in the scheme, but the unit coverage gate excludes it. Run `-only-testing:SliccFollowerUITests` when UI changes, as a separate CI job. No test needs a leader: `-uiTestFixtureRoute YES` opens the leaderless **UI Fixture** route; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions in-memory; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` freezes pupil motion and static noise. `UITestHooks` is `#if DEBUG` only. The failure-state test dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS. `-uiTestCompletedTurn YES` feeds `message_start` + `content_delta` + `content_done` + `status: ready` through the real dispatcher.
 
 Regular-width browser tabs claim the whole iPad window; returning to the tab overview restores the split. CI runs this enter/exit regression separately on an iPad simulator.
 
