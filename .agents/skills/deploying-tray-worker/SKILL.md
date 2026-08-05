@@ -89,6 +89,11 @@ on) with retries and bounded concurrency, failing the release hard if any file f
 upload or the hash invariant is violated. Auth: `CLOUDFLARE_API_TOKEN` (must have R2
 Object Read & Write on both buckets) and `CLOUDFLARE_ACCOUNT_ID`.
 
+The R2 API rate-limits bursts of `wrangler r2 object put` calls with `429` / error code
+`971` ("Please wait and consider throttling your request speed"). Concurrency defaults to
+`4` (`--concurrency <n>` to override) and each file gets 5 attempts with jittered
+exponential backoff. Raising concurrency re-trips the limit on the ~390-file asset set.
+
 ### Maintain age-based garbage collection
 
 An R2 object-lifecycle rule on each bucket deletes objects with `last-modified` older

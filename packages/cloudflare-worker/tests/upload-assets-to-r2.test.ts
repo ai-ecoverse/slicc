@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { assertAllHashed, buildPutArgs, runUploads } from '../scripts/upload-lib.mjs';
+import {
+  assertAllHashed,
+  buildPutArgs,
+  RETRY_BASE_DELAY_MS,
+  retryDelayMs,
+  runUploads,
+} from '../scripts/upload-lib.mjs';
 
 describe('assertAllHashed', () => {
   it('passes when all names are hashed', () => {
@@ -127,6 +133,7 @@ describe('runUploads', () => {
       dir: '/assets',
       exec: execMock,
       retries: 3,
+      sleep: vi.fn().mockResolvedValue(undefined),
     });
 
     expect(execMock).toHaveBeenCalledTimes(3);
@@ -142,10 +149,67 @@ describe('runUploads', () => {
         dir: '/assets',
         exec: execMock,
         retries: 2,
+        sleep: vi.fn().mockResolvedValue(undefined),
       })
     ).rejects.toThrow('Always fails');
 
     expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression: retries used to re-fire instantly, so a burst of R2 429s
+  // (error 971) exhausted every attempt within milliseconds and failed the
+  // deploy gate.
+  it('backs off between retries instead of re-firing instantly', async () => {
+    const execMock = vi.fn().mockRejectedValue(new Error('429: Too Many Requests'));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      runUploads(['file-abc12345.js'], {
+        bucket: 'test-bucket',
+        dir: '/assets',
+        exec: execMock,
+        retries: 4,
+        sleep,
+      })
+    ).rejects.toThrow('429: Too Many Requests');
+
+    // One backoff between each pair of attempts, none after the last.
+    expect(sleep).toHaveBeenCalledTimes(3);
+    for (const [ms] of sleep.mock.calls) {
+      expect(ms).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('uses a real timer backoff when no sleep is injected', async () => {
+    const execMock = vi.fn().mockRejectedValue(new Error('429: Too Many Requests'));
+
+    const start = Date.now();
+    await expect(
+      runUploads(['file-abc12345.js'], {
+        bucket: 'test-bucket',
+        dir: '/assets',
+        exec: execMock,
+        retries: 2,
+      })
+    ).rejects.toThrow('429: Too Many Requests');
+
+    // Full jitter can round to 0ms, so only the attempt count is asserted.
+    expect(execMock).toHaveBeenCalledTimes(2);
+    expect(Date.now() - start).toBeLessThan(RETRY_BASE_DELAY_MS * 4);
+  });
+
+  it('does not sleep when the first attempt succeeds', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await runUploads(['file-abc12345.js'], {
+      bucket: 'test-bucket',
+      dir: '/assets',
+      exec: vi.fn().mockResolvedValue(undefined),
+      retries: 5,
+      sleep,
+    });
+
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it('re-puts every file (no skip)', async () => {
@@ -181,5 +245,19 @@ describe('runUploads', () => {
     ).rejects.toThrow();
 
     expect(execMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('retryDelayMs', () => {
+  it('grows exponentially from the base delay', () => {
+    const noJitter = () => 1;
+    expect(retryDelayMs(1, noJitter)).toBe(RETRY_BASE_DELAY_MS);
+    expect(retryDelayMs(2, noJitter)).toBe(RETRY_BASE_DELAY_MS * 2);
+    expect(retryDelayMs(3, noJitter)).toBe(RETRY_BASE_DELAY_MS * 4);
+  });
+
+  it('applies full jitter so concurrent retries do not fire in lockstep', () => {
+    expect(retryDelayMs(3, () => 0)).toBe(0);
+    expect(retryDelayMs(3, () => 0.5)).toBe(RETRY_BASE_DELAY_MS * 2);
   });
 });

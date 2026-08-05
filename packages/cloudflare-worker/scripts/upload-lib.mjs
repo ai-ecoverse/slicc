@@ -44,6 +44,23 @@ export function buildPutArgs(bucket, file, dir) {
   ];
 }
 
+/** Base delay for the exponential retry backoff, in milliseconds. */
+export const RETRY_BASE_DELAY_MS = 500;
+
+const defaultSleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+/**
+ * Delay before retry `attempt`: exponential (500ms, 1s, 2s, 4s, …) with full
+ * jitter so a batch that trips the R2 rate limit together doesn't retry in
+ * lockstep and trip it again.
+ */
+export function retryDelayMs(attempt, random = Math.random) {
+  return Math.round(random() * RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
+}
+
 /**
  * Run uploads with bounded concurrency and per-file retries.
  * @param {string[]} files - filenames (already validated by assertAllHashed)
@@ -53,16 +70,20 @@ export function buildPutArgs(bucket, file, dir) {
  * @param {Function} opts.exec - injectable exec function: (argv) => Promise<void>
  * @param {number} [opts.concurrency=1] - max concurrent uploads
  * @param {number} [opts.retries=1] - max attempts per file
+ * @param {Function} [opts.sleep] - injectable delay: (ms) => Promise<void>
  * @returns {Promise<void>}
  */
-export async function runUploads(files, { bucket, dir, exec, concurrency = 1, retries = 1 }) {
+export async function runUploads(
+  files,
+  { bucket, dir, exec, concurrency = 1, retries = 1, sleep = defaultSleep }
+) {
   // Validate hash invariant before any upload attempt
   assertAllHashed(files);
 
   // Split into batches to respect concurrency
   for (let i = 0; i < files.length; i += concurrency) {
     const batch = files.slice(i, i + concurrency);
-    const promises = batch.map((file) => uploadWithRetry(file, bucket, dir, exec, retries));
+    const promises = batch.map((file) => uploadWithRetry(file, bucket, dir, exec, retries, sleep));
 
     await Promise.all(promises);
   }
@@ -71,7 +92,7 @@ export async function runUploads(files, { bucket, dir, exec, concurrency = 1, re
 /**
  * Upload a single file with retries.
  */
-async function uploadWithRetry(file, bucket, dir, exec, retries) {
+async function uploadWithRetry(file, bucket, dir, exec, retries, sleep) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -81,6 +102,12 @@ async function uploadWithRetry(file, bucket, dir, exec, retries) {
       return; // success
     } catch (err) {
       lastError = err;
+      // Back off before retrying. Without this, a retry re-fires instantly
+      // into the same R2 rate-limit window (429 / code 971) and burns every
+      // remaining attempt in milliseconds.
+      if (attempt < retries) {
+        await sleep(retryDelayMs(attempt));
+      }
     }
   }
 

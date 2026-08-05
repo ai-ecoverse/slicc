@@ -28,7 +28,10 @@ function parseArgs(args) {
   }
 
   let dir = 'dist/ui/assets'; // default
-  let concurrency = 8; // default: parallelize ~300 files fast enough for CI
+  // 8 spawned ~390 `wrangler r2 object put` calls fast enough to trip the R2
+  // API rate limit (429 / code 971); 4 keeps CI wall-clock acceptable while
+  // staying under it.
+  let concurrency = 4;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--dir' && i + 1 < rest.length) {
       dir = rest[i + 1];
@@ -94,8 +97,10 @@ async function main() {
       bucket,
       dir: assetDir,
       exec: createExec(),
-      concurrency, // default 8 — parallelize ~300 files fast enough for CI
-      retries: 2,
+      concurrency, // default 4 — see parseArgs for the rate-limit rationale
+      // 5 attempts with jittered exponential backoff: enough headroom to ride
+      // out a transient R2 429 burst instead of failing the whole deploy gate.
+      retries: 5,
     });
 
     console.log('All files uploaded successfully');
