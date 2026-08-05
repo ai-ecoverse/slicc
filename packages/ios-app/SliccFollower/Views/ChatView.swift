@@ -72,6 +72,9 @@ struct ChatView: View {
             guard !hasAppeared else { return }
             hasAppeared = true
             #if DEBUG
+                if let launchJoinUrl = UITestHooks.launchJoinUrl {
+                    appState.joinUrl = launchJoinUrl
+                }
                 if let themeJson = UITestHooks.themeFixtureJson() {
                     appState.applyLeaderTheme(themeJson)
                 }
@@ -98,10 +101,19 @@ struct ChatView: View {
                     fixtureMode = true
                     return
                 }
+                if !appState.joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    appState.connect()
+                    return
+                }
             #endif
-            if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
+            if appState.connectionState == .gaveUp
+                || (appState.connectionState == .disconnected && appState.joinUrl.isEmpty)
+            {
                 showSettings = true
             }
+        }
+        .onChange(of: appState.connectionState) { _, state in
+            if state == .gaveUp { showSettings = true }
         }
         .onChange(of: presentation.activeSurface) { surface in
             if surface == .term { presentation.terminalWasOpened = true }
@@ -549,8 +561,8 @@ struct ChatView: View {
 
 // MARK: - ConversationView
 
-/// The chat conversation column shown in the detail pane. Hosts the connection
-/// status bar, scoop indicator, message list (with swipe gestures), and input bar.
+/// The chat conversation column shown in the detail pane. Hosts the scoop
+/// indicator, message list (with swipe gestures), and input bar.
 struct ConversationView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.palette) private var palette
@@ -572,16 +584,6 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Connection status bar
-            ConnectionStatusView(
-                state: appState.connectionState,
-                reconnectAttempt: appState.reconnectAttempt,
-                isStalled: appState.isLeaderStalled,
-                onTapDisconnected: { showSettings = true }
-            )
-            .animation(.easeInOut(duration: 0.3), value: appState.connectionState)
-            .animation(.easeInOut(duration: 0.3), value: appState.isLeaderStalled)
-
             if let frozen = appState.openFrozen {
                 // Read-only view of an archived session. The live transcript
                 // and composer are replaced wholesale — read-only means the
@@ -614,8 +616,13 @@ struct ConversationView: View {
         .navigationBarBackButtonHidden(appState.openFrozen != nil)
         .toolbar {
             if !toolbarSuppressed {
-                identityGroup
-                sessionControls
+                if leftHandedDock {
+                    sessionControls
+                    identityGroup
+                } else {
+                    identityGroup
+                    sessionControls
+                }
             }
         }
         .sheet(isPresented: $showFrozenSessions) {
@@ -649,11 +656,8 @@ struct ConversationView: View {
     /// cone/scoop switcher that replaced the full-width header row.
     @ToolbarContentBuilder
     private var identityGroup: some ToolbarContent {
-        ToolbarItem(placement: identityPlacement) {
-            if appState.openFrozen != nil {
-                // While frozen, Back returns to the LIVE session — the system
-                // back (which pops to the sidebar) is hidden so there is
-                // exactly one back affordance and it does what it looks like.
+        if appState.openFrozen != nil {
+            ToolbarItem(placement: identityPlacement) {
                 Button {
                     appState.closeFrozenSession()
                 } label: {
@@ -662,9 +666,88 @@ struct ConversationView: View {
                 }
                 .accessibilityLabel("Back to live session")
                 .accessibilityIdentifier("frozen-back")
-            } else {
-                ScoopSwitcher()
             }
+        } else if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .principal) {
+                selectedAvatarView
+            }
+            .sharedBackgroundVisibility(.hidden)
+            ToolbarItem(placement: identityPlacement) {
+                materialIdentityLabel
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .principal) {
+                selectedAvatarView
+            }
+            ToolbarItem(placement: identityPlacement) {
+                ScoopSwitcher()
+                    .frame(width: identityLabelWidth)
+            }
+        }
+    }
+
+    /// A constant identity width prevents UIKit from rebalancing `.principal`
+    /// when the selected assistant label grows or truncates.
+    private var identityLabelWidth: CGFloat {
+        84
+    }
+
+    @available(iOS 26.0, *)
+    private var materialIdentityLabel: some View {
+        ScoopSwitcher()
+            .frame(width: identityLabelWidth)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+    }
+
+    private var selectedAvatarView: some View {
+        ScoopStatusAvatar(
+            avatar: selectedAvatar,
+            accessibilityLabel: selectedAccessibilityLabel
+        )
+    }
+
+    private var selectedAvatar: SliccAgentAvatarGeometry {
+        let eyesOverride: SliccAgentAvatarGeometry.EyeState? =
+            showsConnectionStatic ? .static : nil
+        return appState.selectedScoop?.avatarGeometry(
+            sideLength: 20,
+            eyesOverride: eyesOverride
+        )
+            ?? .init(
+                type: .cone,
+                color: "#D2691E",
+                eyes: eyesOverride ?? .open,
+                sideLength: 20)
+    }
+
+    private var selectedAccessibilityLabel: String {
+        let lifecycleLabel =
+            (appState.selectedScoop?.status ?? ScoopStatus(state: nil, fill: nil))
+            .accessibilityPhrase(label: appState.selectedScoop?.assistantLabel ?? "SLICC")
+        guard let connectionStatusText else { return lifecycleLabel }
+        return "\(lifecycleLabel). \(connectionStatusText)"
+    }
+
+    private var showsConnectionStatic: Bool {
+        appState.connectionState != .connected || appState.isLeaderStalled
+    }
+
+    private var connectionStatusText: String? {
+        if appState.connectionState == .connected, appState.isLeaderStalled {
+            return "The leader is busy — hang on…"
+        }
+        switch appState.connectionState {
+        case .connected: return nil
+        case .connecting: return "Connecting…"
+        case .reconnecting:
+            return appState.reconnectAttempt > 0
+                ? "Reconnecting… (\(appState.reconnectAttempt)/\(ReconnectBackoff.maxAttempts))"
+                : "Reconnecting…"
+        case .disconnected: return "Disconnected"
+        case .failed: return "Connection Failed"
+        case .gaveUp: return "Couldn't reach the leader. Reload to retry."
         }
     }
 
@@ -673,19 +756,51 @@ struct ConversationView: View {
     /// frequent of the three — stays nearest the holding hand's edge.
     @ToolbarContentBuilder
     private var sessionControls: some ToolbarContent {
-        ToolbarItemGroup(placement: controlsPlacement) {
-            if appState.openFrozen != nil {
-                settingsButton
-            } else if leftHandedDock {
-                newChatButton
-                settingsButton
-                frozenSessionsButton
-            } else {
-                frozenSessionsButton
-                settingsButton
-                newChatButton
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: controlsPlacement) {
+                materialSessionControls
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItemGroup(placement: controlsPlacement) {
+                if appState.openFrozen != nil {
+                    settingsButton
+                } else if leftHandedDock {
+                    newChatButton
+                    settingsButton
+                    frozenSessionsButton
+                } else {
+                    frozenSessionsButton
+                    settingsButton
+                    newChatButton
+                }
             }
         }
+    }
+
+    @available(iOS 26.0, *)
+    private var materialSessionControls: some View {
+        HStack(spacing: 0) {
+            if appState.openFrozen != nil {
+                settingsButton
+                    .frame(width: 36, height: 36)
+            } else if leftHandedDock {
+                newChatButton
+                    .frame(width: 36, height: 36)
+                settingsButton
+                    .frame(width: 36, height: 36)
+                frozenSessionsButton
+                    .frame(width: 36, height: 36)
+            } else {
+                frozenSessionsButton
+                    .frame(width: 36, height: 36)
+                settingsButton
+                    .frame(width: 36, height: 36)
+                newChatButton
+                    .frame(width: 36, height: 36)
+            }
+        }
+        .background(.regularMaterial, in: Capsule())
     }
 
     private var newChatButton: some View {
@@ -936,7 +1051,7 @@ private func arbitratedScoopSwipeGesture(
 // MARK: - ScoopSwitcher
 
 /// The nav-bar cone/scoop switcher. Replaces the old full-width header row:
-/// the same identity (avatar + label + leader-active dot) in a nav-bar-sized
+/// the same identity (label + leader-active dot) in a nav-bar-sized
 /// control, and a menu that jumps straight to a scoop instead of cycling
 /// one chevron tap at a time. Swipe still cycles.
 struct ScoopSwitcher: View {
@@ -950,9 +1065,6 @@ struct ScoopSwitcher: View {
                     Button {
                         appState.selectScoop(jid: scoop.jid)
                     } label: {
-                        // A menu row can only draw `Image`/`Text`, never a
-                        // custom Shape, so the lucide cone cannot appear
-                        // here — the row says cone or scoop in words instead.
                         Label(
                             menuTitle(for: scoop),
                             systemImage: scoop.jid == appState.selectedScoopJid
@@ -964,28 +1076,28 @@ struct ScoopSwitcher: View {
             } label: {
                 identityLabel
             }
-            .accessibilityLabel(selectedAccessibilityLabel)
+            .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "SLICC")
             .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
         } else {
             identityLabel
-                .accessibilityLabel(selectedAccessibilityLabel)
+                .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "SLICC")
                 .accessibilityIdentifier("scoop-switcher")
         }
     }
 
-    /// Avatar + label + leader-active dot, sized to sit inside the nav bar.
-    /// `.lineLimit(1)` plus a cap keeps a chatty `assistantLabel` from
-    /// pushing the action cluster off the other edge.
+    /// Label + leader-active dot, sized to sit inside the nav bar.
+    /// The 52pt content floor fits `Scoo…` at the 15pt semibold nav-bar font
+    /// when the stable toolbar container constrains a long assistant label.
     private var identityLabel: some View {
         HStack(spacing: 5) {
-            ScoopStatusAvatar(avatar: selectedAvatar, status: selectedStatus)
             Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(palette.ink)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: 140, alignment: .leading)
+                .frame(minWidth: 52, maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
             if appState.leaderActiveScoopJid != nil,
                 appState.leaderActiveScoopJid == appState.selectedScoopJid
             {
@@ -999,26 +1111,12 @@ struct ScoopSwitcher: View {
                     .foregroundStyle(palette.ink.opacity(0.5))
             }
         }
-        .fixedSize()
-    }
-
-    private var selectedAvatar: SliccAgentAvatarGeometry {
-        appState.selectedScoop?.avatarGeometry(sideLength: 20)
-            ?? .init(type: .cone, color: "#D2691E", sideLength: 20)
-    }
-
-    private var selectedStatus: ScoopStatus {
-        appState.selectedScoop?.status ?? ScoopStatus(state: nil, fill: nil)
-    }
-
-    private var selectedAccessibilityLabel: String {
-        selectedStatus.accessibilityPhrase(
-            label: appState.selectedScoop?.assistantLabel ?? "SLICC")
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The leader's active scoop is marked in the menu too — the dot on the
     /// closed control only speaks about the one you are looking at. State and
-    /// fullness stay textual because native Menu rows cannot host the ring.
+    /// fullness stay textual because native Menu rows cannot host the avatar.
     private func menuTitle(for scoop: ScoopSummary) -> String {
         let kind = scoop.isCone ? "cone" : "scoop"
         let status = scoop.status.accessibilityPhrase(label: scoop.assistantLabel)
@@ -1028,110 +1126,19 @@ struct ScoopSwitcher: View {
     }
 }
 
-/// The closed switcher uses a native circular Gauge around the existing avatar
-/// plus an SF Symbol lifecycle badge. This deliberately adapts, rather than
-/// copies, the web glyph + eyes treatment: a ring preserves the numeric context
-/// reading at nav-bar scale and follows platform conventions, while the badge
-/// keeps lifecycle recognizable without asking color or motion to carry meaning.
+/// The selected avatar sits beside the switcher. Fullness is already encoded in
+/// its pupil size; lifecycle and the exact fill remain available to VoiceOver.
 private struct ScoopStatusAvatar: View {
     let avatar: SliccAgentAvatarGeometry
-    let status: ScoopStatus
-
-    @Environment(\.palette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-
-    private var reduceMotion: Bool {
-        #if DEBUG
-            systemReduceMotion || UITestHooks.reducesMotion
-        #else
-            systemReduceMotion
-        #endif
-    }
+    let accessibilityLabel: String
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            fullnessTreatment
+        ZStack {
             SliccAgentAvatarView(avatar: avatar)
-                .accessibilityHidden(true)
-                .frame(width: 20, height: 20)
-                .position(x: 14, y: 14)
-            lifecycleTreatment
-                .offset(x: 2, y: 2)
         }
-        .frame(width: 30, height: 30)
-    }
-
-    @ViewBuilder
-    private var fullnessTreatment: some View {
-        if let fullness = status.fullness {
-            Gauge(value: fullness, in: 0...100) {
-                Text("Context fullness")
-            }
-            .gaugeStyle(.accessoryCircularCapacity)
-            .tint(status.isNearLimit ? palette.accent : palette.inkSecondary)
-            .labelsHidden()
-            .frame(width: 28, height: 28)
-            .accessibilityLabel("Context fullness")
-            .accessibilityValue("\(Int(fullness.rounded())) percent")
-            .accessibilityIdentifier(
-                status.isNearLimit ? "scoop-fullness-near-limit" : "scoop-fullness-normal")
-        } else {
-            Circle()
-                .stroke(
-                    palette.inkTertiary,
-                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2, 2])
-                )
-                .frame(width: 28, height: 28)
-                .accessibilityLabel("Context fullness unknown")
-                .accessibilityIdentifier("scoop-fullness-unknown")
-        }
-    }
-
-    @ViewBuilder
-    private var lifecycleTreatment: some View {
-        if status.lifecycle == .working || status.lifecycle == .initializing {
-            TimelineView(
-                .animation(minimumInterval: 1.0 / 12.0, paused: reduceMotion)
-            ) { context in
-                lifecycleBadge
-                    .opacity(reduceMotion ? 1 : pulseOpacity(at: context.date))
-            }
-        } else {
-            lifecycleBadge
-        }
-    }
-
-    private var lifecycleBadge: some View {
-        Image(systemName: lifecycleSymbol)
-            .font(.system(size: 7, weight: .bold))
-            .foregroundStyle(lifecycleColor)
-            .frame(width: 12, height: 12)
-            .background(Circle().fill(palette.surface))
-            .accessibilityLabel("Lifecycle \(status.lifecycle.rawValue)")
-            .accessibilityIdentifier("scoop-lifecycle-\(status.lifecycle.rawValue)")
-    }
-
-    private var lifecycleSymbol: String {
-        switch status.lifecycle {
-        case .working: "bolt.fill"
-        case .broken: "exclamationmark.triangle.fill"
-        case .initializing: "ellipsis"
-        case .idle: "pause.fill"
-        case .unknown: "questionmark"
-        }
-    }
-
-    private var lifecycleColor: Color {
-        switch status.lifecycle {
-        case .working, .initializing: palette.accent
-        case .broken: palette.ink
-        case .idle, .unknown: palette.inkTertiary
-        }
-    }
-
-    private func pulseOpacity(at date: Date) -> Double {
-        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2)
-        return 0.65 + 0.35 * abs(cos(phase * .pi / 1.2))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier("scoop-avatar")
     }
 }
 
@@ -1142,37 +1149,4 @@ private struct ScoopStatusAvatar: View {
         .preferredColorScheme(.dark)
         .environmentObject(AppState())
         .environmentObject(InboundActionCoordinator())
-}
-
-#Preview("Scoop status treatments") {
-    ScoopStatusTreatmentPreview()
-        .preferredColorScheme(.dark)
-}
-
-private struct ScoopStatusTreatmentPreview: View {
-    var body: some View {
-        HStack(spacing: 14) {
-            ForEach(ScoopLifecycle.allCases, id: \.rawValue) { lifecycle in
-                VStack(spacing: 5) {
-                    ScoopStatusAvatar(
-                        avatar: .init(type: .scoop, color: "#FFB6C1", sideLength: 20),
-                        status: previewStatus(for: lifecycle)
-                    )
-                    Text(lifecycle.rawValue)
-                        .font(.caption2)
-                }
-            }
-        }
-        .padding()
-    }
-
-    private func previewStatus(for lifecycle: ScoopLifecycle) -> ScoopStatus {
-        switch lifecycle {
-        case .working: ScoopStatus(state: lifecycle.rawValue, fill: 42)
-        case .broken: ScoopStatus(state: lifecycle.rawValue, fill: 82)
-        case .initializing: ScoopStatus(state: lifecycle.rawValue, fill: 12)
-        case .idle: ScoopStatus(state: lifecycle.rawValue, fill: 0)
-        case .unknown: ScoopStatus(state: nil, fill: nil)
-        }
-    }
 }
