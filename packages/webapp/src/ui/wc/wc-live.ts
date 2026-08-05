@@ -589,6 +589,7 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
             // refreshes the rail when the late rename/icon land.
             await runNewSessionFreeze({
               vfs: writer,
+              agenticMemorySpawn: (options) => client.spawnAgent(options),
               captureCompleteSnapshot,
               onProgress: (fraction) => {
                 const el = freezerNew();

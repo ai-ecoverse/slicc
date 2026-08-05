@@ -12,6 +12,7 @@ import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
+import { AGENT_BRIDGE_GLOBAL_KEY, type AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import { HIDDEN_TOOL_NAMES } from '../scoops/hidden-tools.js';
@@ -30,6 +31,7 @@ import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/t
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
 import type {
   AgentEventMsg,
+  AgentSpawnResultMsg,
   ErrorMsg,
   ExtensionMessage,
   ForwardedLickEvent,
@@ -1552,6 +1554,11 @@ export class Bridge implements KernelFacade {
         break;
       }
 
+      case 'agent-spawn-request': {
+        await this.handleAgentSpawn(msg);
+        break;
+      }
+
       case 'clear-filesystem':
         await this.orchestrator
           .resetFilesystem()
@@ -1643,6 +1650,34 @@ export class Bridge implements KernelFacade {
         this.applyLocalStorageOp(msg.type, (s) => s.clear());
         break;
       }
+    }
+  }
+
+  private async handleAgentSpawn(
+    msg: Extract<PanelToOffscreenMessage, { type: 'agent-spawn-request' }>
+  ): Promise<void> {
+    const agentBridge = (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] as
+      | AgentBridge
+      | undefined;
+    if (!agentBridge || typeof agentBridge.spawn !== 'function') {
+      this.emit({
+        type: 'agent-spawn-result',
+        requestId: msg.requestId,
+        ok: false,
+        error: 'AgentBridge unavailable',
+      } satisfies AgentSpawnResultMsg);
+      return;
+    }
+    try {
+      const result = await agentBridge.spawn(msg.options);
+      this.emit({ type: 'agent-spawn-result', requestId: msg.requestId, ok: true, result });
+    } catch (err) {
+      this.emit({
+        type: 'agent-spawn-result',
+        requestId: msg.requestId,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      } satisfies AgentSpawnResultMsg);
     }
   }
 

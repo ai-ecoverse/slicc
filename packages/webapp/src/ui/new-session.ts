@@ -8,9 +8,11 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import { createLogger } from '../core/logger.js';
 import type { DirEntry } from '../fs/types.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import type { AgentBridge } from '../scoops/agent-bridge.js';
 import { SessionStore } from '../scoops/chat-session-store.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
@@ -43,6 +45,54 @@ const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
 /** How often the race timer reports progress (ms) to drive the spinner ring. */
 const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
+function resolveAgenticMemorySpawn(
+  opts: RunNewSessionFreezeOptions
+): AgentBridge['spawn'] | undefined {
+  if (!isFeatureEnabled('agentic-memory')) return undefined;
+  if (!opts.agenticMemorySpawn) {
+    log.info('Agentic memory enabled but agent bridge unavailable — using legacy enrichment');
+    return undefined;
+  }
+  return opts.agenticMemorySpawn;
+}
+
+async function runAgenticMemoryFreeze(
+  opts: RunNewSessionFreezeOptions,
+  sessionStore: SessionStore,
+  model: Model<Api>,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  spawn: AgentBridge['spawn']
+): Promise<FrozenSession | null> {
+  const frozen = await freezeConeSession({
+    sessionStore,
+    vfs: opts.vfs,
+    mode: 'full',
+    model,
+    apiKey,
+    headers,
+    agenticMemorySpawn: spawn,
+    pickIcon: (iconOpts) =>
+      import('../providers/quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
+  });
+  if (!frozen) return null;
+  if (opts.captureCompleteSnapshot) {
+    try {
+      await opts.captureCompleteSnapshot(frozen);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? 'unknown';
+      log.warn('captureCompleteSnapshot failed', { code });
+      frozen.completeSnapshotUnavailable = true;
+      try {
+        await markSnapshotUnavailable(opts.vfs, frozen.filename);
+      } catch {
+        // Best-effort — the Markdown archive is still present.
+      }
+    }
+  }
+  return frozen;
+}
+
 export interface RunNewSessionFreezeOptions {
   /**
    * Writable VFS handle. Under `slicc_opfs_vfs === 'opfs'` AND on the
@@ -52,6 +102,8 @@ export interface RunNewSessionFreezeOptions {
    * the same shape structurally.
    */
   vfs: WritableVfsClient;
+  /** Page→kernel spawn seam. Omit it to preserve the legacy enrichment path. */
+  agenticMemorySpawn?: AgentBridge['spawn'];
   /**
    * Race window in ms: how long to wait for LLM enrichment before resolving
    * (so the caller can clear the chat) and continuing enrichment in the
@@ -174,6 +226,18 @@ export async function runNewSessionFreeze(
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
+  }
+
+  const agenticMemorySpawn = apiKey && model ? resolveAgenticMemorySpawn(opts) : undefined;
+  if (agenticMemorySpawn) {
+    return await runAgenticMemoryFreeze(
+      opts,
+      sessionStore,
+      model!,
+      apiKey!,
+      headers,
+      agenticMemorySpawn
+    );
   }
 
   // 1. WRITE FIRST — durable archive on disk before any LLM call.

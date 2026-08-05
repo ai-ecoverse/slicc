@@ -10,7 +10,9 @@
  *  - multiple subscribers each get every message
  */
 
-import { describe, expect, it } from 'vitest';
+import 'fake-indexeddb/auto';
+import { describe, expect, it, vi } from 'vitest';
+import { Bridge } from '../../src/kernel/facade.js';
 import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
@@ -21,6 +23,8 @@ import {
   createMessageChannelTransport,
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
+import { runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';
+import { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
 interface UpMsg {
   type: 'up';
@@ -163,6 +167,46 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
 
     channel.port1.close();
     channel.port2.close();
+  });
+
+  it('round-trips an agent spawn through the real OffscreenClient and Bridge seam', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const bridge = new Bridge(bridgeTransport);
+    await bridge.bind({} as never);
+
+    const spawn = vi.fn(async () => ({ finalText: 'curated', exitCode: 0 }));
+    (globalThis as Record<string, unknown>).__slicc_agent = { spawn };
+    const client = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const result = await runAgenticMemoryPass({
+      spawn: (options) => client.spawnAgent(options),
+      vfs: { readFile: async () => Promise.reject(new Error('MEMORY.md absent')) },
+      sessionArchivePath: '/sessions/frozen.md',
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: '/workspace',
+        writablePaths: ['/workspace/'],
+        visiblePaths: ['/sessions/', '/shared/'],
+      })
+    );
+
+    channel.port1.close();
+    channel.port2.close();
+    delete (globalThis as Record<string, unknown>).__slicc_agent;
   });
 
   it('bridge→panel: bridge-side send wraps payload with source: offscreen', async () => {
