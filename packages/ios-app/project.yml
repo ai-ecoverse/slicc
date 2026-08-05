@@ -126,6 +126,11 @@ targets:
         PRODUCT_NAME: SliccShareExtension
         INFOPLIST_KEY_CFBundleDisplayName: SLICC
         CODE_SIGN_ENTITLEMENTS: SliccShareExtension.entitlements
+        # The share row still reaches UIApplication.open through the
+        # responder chain (the ChatGPT/Claude/Grok/Bluesky pattern) —
+        # only `shared` and the legacy `openURL:` carry the
+        # extension-unavailable annotation, so the instance call
+        # compiles under the mandatory YES here.
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:
       - sdk: UniformTypeIdentifiers.framework

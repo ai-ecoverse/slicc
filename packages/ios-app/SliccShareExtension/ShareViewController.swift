@@ -1,32 +1,46 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Safari's "SLICC" share row (#1918). An out-of-process extension cannot
-/// foreground the containing app (and must not pretend it did — no
-/// responder-chain hacks), so this parks the validated URL in the App
-/// Group inbox, says so honestly, and completes. The app surfaces the
-/// confirmation card on its next activation.
+/// Safari's "SLICC" share row (#1918): ChatGPT-style instant handoff. The
+/// panel appears just long enough to validate the URL, park it in the App
+/// Group inbox, and open the containing app through the responder chain's
+/// `UIApplication` — the pattern ChatGPT, Claude, Grok, and Bluesky
+/// (github.com/bluesky-social/social-app) ship through App Review.
+/// `extensionContext.open` is not honored in Share extensions (verified on
+/// device; Apple forums #773342), so the chain walk is the only working
+/// route. If it ever stops working, the inbox is the source of truth and
+/// the panel says so honestly instead of pretending.
+///
+/// The in-app confirmation card still gates what actually opens; per-host
+/// "Always" decisions apply there. Deep link + inbox double delivery is
+/// absorbed by the coordinator's replay dedup.
 final class ShareViewController: UIViewController {
+
+    private let statusLabel = UILabel()
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .preferredFont(forTextStyle: .callout)
-        label.textAlignment = .center
-        label.numberOfLines = 0
-        label.text = "Sending to SLICC…"
-        view.addSubview(label)
+        statusLabel.font = .preferredFont(forTextStyle: .callout)
+        statusLabel.textAlignment = .center
+        statusLabel.numberOfLines = 0
+        statusLabel.text = "Opening SLICC…"
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(
+                greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
         ])
-        handleAttachments(label: label)
     }
 
-    private func handleAttachments(label: UILabel) {
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        handleAttachment()
+    }
+
+    private func handleAttachment() {
         let providers =
             (extensionContext?.inputItems as? [NSExtensionItem])?
             .flatMap { $0.attachments ?? [] } ?? []
@@ -35,19 +49,55 @@ final class ShareViewController: UIViewController {
                 $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
             })
         else {
-            finish(label: label, message: "Nothing SLICC can open here.")
+            finish(message: "Nothing SLICC can open here.")
             return
         }
         provider.loadItem(forTypeIdentifier: UTType.url.identifier) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard let url = item as? URL, Self.isWebURL(url), AppGroupInbox().enqueue(url: url)
-                else {
-                    self.finish(label: label, message: "Nothing SLICC can open here.")
+                guard let url = item as? URL, Self.isWebURL(url) else {
+                    self.finish(message: "Nothing SLICC can open here.")
                     return
                 }
-                self.finish(label: label, message: "Sent to SLICC — open the app to continue.")
+                self.handOff(url: url)
             }
+        }
+    }
+
+    private func handOff(url: URL) {
+        // Inbox first — the request survives even if the open is refused.
+        _ = AppGroupInbox().enqueue(url: url)
+        guard
+            let encoded = url.absoluteString.addingPercentEncoding(
+                withAllowedCharacters: .alphanumerics),
+            let bounce = URL(string: "slicc://open?url=\(encoded)"),
+            openViaResponderChain(bounce)
+        else {
+            finish(message: "Sent to SLICC — open the app to continue.")
+            return
+        }
+        extensionContext?.completeRequest(returningItems: nil)
+    }
+
+    /// Bluesky's shipped mechanism: the responder chain ends at the live
+    /// `UIApplication`, whose instance `open` the extension may call once
+    /// the target drops APPLICATION_EXTENSION_API_ONLY.
+    private func openViaResponderChain(_ url: URL) -> Bool {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let application = current as? UIApplication {
+                application.open(url, options: [:], completionHandler: nil)
+                return true
+            }
+            responder = current.next
+        }
+        return false
+    }
+
+    private func finish(message: String) {
+        statusLabel.text = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.extensionContext?.completeRequest(returningItems: nil)
         }
     }
 
@@ -62,12 +112,5 @@ final class ShareViewController: UIViewController {
             let host = components.host, !host.isEmpty
         else { return false }
         return true
-    }
-
-    private func finish(label: UILabel, message: String) {
-        label.text = message
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            self?.extensionContext?.completeRequest(returningItems: nil)
-        }
     }
 }
