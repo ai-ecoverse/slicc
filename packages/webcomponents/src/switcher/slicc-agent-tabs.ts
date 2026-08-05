@@ -214,7 +214,7 @@ function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
 }
 
 export class SliccAgentTabs extends HTMLElement {
-  static readonly observedAttributes = ['active', 'attention'];
+  static readonly observedAttributes = ['active', 'attention', 'connection'];
 
   #scoops: ScoopDescriptor[] = [];
   #avatarElement: HTMLElement | null = null;
@@ -290,6 +290,14 @@ export class SliccAgentTabs extends HTMLElement {
   set active(value: string | null) {
     if (value == null) this.removeAttribute('active');
     else this.setAttribute('active', value);
+  }
+
+  get connection(): 'connected' | 'disconnected' {
+    return this.getAttribute('connection') === 'disconnected' ? 'disconnected' : 'connected';
+  }
+
+  set connection(value: 'connected' | 'disconnected') {
+    this.setAttribute('connection', value);
   }
 
   select(key: string): void {
@@ -416,6 +424,7 @@ export class SliccAgentTabs extends HTMLElement {
     this.#setAttribute(avatar, 'type', typeFor(scoop));
     this.#setAttribute(avatar, 'color', scoop.color ?? null);
     this.#setAttribute(avatar, 'eyes', eyesFor(scoop));
+    this.#setAttribute(avatar, 'connection', this.getAttribute('connection'));
     this.#setAttribute(avatar, 'fill', String(Math.round(boundedFill(scoop.fill))));
     this.#setAttribute(avatar, 'blink', state === 'working');
     this.#setAttribute(avatar, 'aria-label', `${scoop.label ?? scoop.key} focused agent`);

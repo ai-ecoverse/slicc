@@ -6,6 +6,14 @@ const PUPIL_R = 18;
 const MAX_OFFSET = 16;
 const LEFT_EYE = { cx: 55, cy: 50, r: 38 } as const;
 const RIGHT_EYE = { cx: 145, cy: 50, r: 38 } as const;
+const NOISE_CELL_SIZE = 1;
+const NOISE_FPS = 12;
+const NOISE_OPACITY = 0.72;
+const NOISE_LUMINANCE = [0.08, 0.36, 0.68, 0.94] as const;
+const FROZEN_NOISE_SEED = 0x51cc_a11e;
+const NOISE_FRAME_SALT = 0x9e37_79b9;
+const NOISE_EYE_SALT = 0x85eb_ca6b;
+const IOS_REFERENCE_DATE_MS = Date.UTC(2001, 0, 1);
 
 interface TypeConfig {
   vb: string;
@@ -190,23 +198,70 @@ function fillToPupilScale(fill: number): number {
   return 1 + ((fill - 50) / 35) * 1.2;
 }
 
+function pupil(cx: number, side: 'l' | 'r', pupilRadius: number): SVGGElement {
+  return svgEl(
+    'g',
+    { class: `pupil pupil-${side}` },
+    svgEl('circle', { cx, cy: 50, r: pupilRadius, fill: '#000' }),
+    svgEl('circle', {
+      cx: cx - pupilRadius * 0.3,
+      cy: 50 - pupilRadius * 0.35,
+      r: pupilRadius * 0.4,
+      fill: '#fff',
+    })
+  );
+}
+
 function eyeOpen(cx: number, side: 'l' | 'r', pupilRadius: number): SVGGElement {
   return svgEl(
     'g',
     { class: `eye-blink eye-${side}` },
     svgEl('circle', { cx, cy: 50, r: 38, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
-    svgEl(
-      'g',
-      { class: `pupil pupil-${side}` },
-      svgEl('circle', { cx, cy: 50, r: pupilRadius, fill: '#000' }),
-      svgEl('circle', {
-        cx: cx - pupilRadius * 0.3,
-        cy: 50 - pupilRadius * 0.35,
-        r: pupilRadius * 0.4,
-        fill: '#fff',
-      })
-    )
+    pupil(cx, side, pupilRadius)
   );
+}
+
+function eyeStatic(cx: number, side: 'l' | 'r'): SVGGElement {
+  const clipId = `slicc-agent-avatar-noise-${side}`;
+  return svgEl(
+    'g',
+    { class: `eye-static eye-${side}` },
+    svgEl('defs', {}, svgEl('clipPath', { id: clipId }, svgEl('circle', { cx, cy: 50, r: 38 }))),
+    svgEl('circle', { cx, cy: 50, r: 38, fill: '#fff' }),
+    svgEl('g', {
+      class: `noise noise-${side}`,
+      'clip-path': `url(#${clipId})`,
+      'data-cell-size': NOISE_CELL_SIZE,
+    }),
+    svgEl('circle', {
+      class: 'eye-outline',
+      cx,
+      cy: 50,
+      r: 38,
+      fill: 'none',
+      stroke: '#000',
+      'stroke-width': 4,
+    })
+  );
+}
+
+function xorshift32(state: number): number {
+  state ^= state << 13;
+  state ^= state >>> 17;
+  state ^= state << 5;
+  return state >>> 0;
+}
+
+function frozenNoiseSeed(eyeIndex: number): number {
+  return (FROZEN_NOISE_SEED ^ Math.imul(eyeIndex, NOISE_EYE_SALT)) >>> 0;
+}
+
+function animatedNoiseSeed(eyeIndex: number, frame: number): number {
+  return (frozenNoiseSeed(eyeIndex) ^ Math.imul(frame, NOISE_FRAME_SALT)) >>> 0;
+}
+
+function currentNoiseFrame(): number {
+  return Math.floor(((Date.now() - IOS_REFERENCE_DATE_MS) / 1000) * NOISE_FPS) >>> 0;
 }
 
 function eyeDead(cx: number): SVGElement[] {
@@ -244,15 +299,20 @@ function place(pupil: Element, cx: number, mx: number, my: number, maxOffset: nu
 }
 
 export class SliccAgentAvatar extends HTMLElement {
-  static readonly observedAttributes = ['type', 'color', 'eyes', 'fill'];
+  static readonly observedAttributes = ['type', 'color', 'eyes', 'fill', 'connection'];
 
   readonly #root: ShadowRoot;
   readonly #onPointerMove = (event: PointerEvent): void => this.#track(event);
-  readonly #onMotionChange = (): void => this.#syncTracking();
+  readonly #onMotionChange = (): void => {
+    this.#syncTracking();
+    if (this.#eyeState() === 'static') this.#startNoise();
+  };
   #motionQuery: MediaQueryList | null = null;
   #pupilL: Element | null = null;
   #pupilR: Element | null = null;
   #eyesSvg: SVGSVGElement | null = null;
+  #noiseCells: SVGRectElement[][] = [];
+  #noiseInterval: number | null = null;
   #maxOffset = MAX_OFFSET;
   #tracking = false;
 
@@ -271,6 +331,7 @@ export class SliccAgentAvatar extends HTMLElement {
 
   disconnectedCallback(): void {
     this.#stopTracking();
+    this.#stopNoise();
     this.#motionQuery?.removeEventListener('change', this.#onMotionChange);
     this.#motionQuery = null;
   }
@@ -282,10 +343,12 @@ export class SliccAgentAvatar extends HTMLElement {
   }
 
   #render(): void {
+    this.#stopNoise();
+    this.#noiseCells = [];
     const type = this.getAttribute('type') === 'cone' ? 'cone' : 'scoop';
     const config = TYPE[type];
     const color = this.getAttribute('color') ?? DEFAULT_COLOR[type];
-    const eyes = this.getAttribute('eyes');
+    const eyes = this.#eyeState();
     const fill = Math.max(
       0,
       Math.min(100, Number.parseFloat(this.getAttribute('fill') ?? '0') || 0)
@@ -313,7 +376,9 @@ export class SliccAgentAvatar extends HTMLElement {
         ? [...eyeDead(LEFT_EYE.cx), ...eyeDead(RIGHT_EYE.cx)]
         : eyes === 'none'
           ? []
-          : [eyeOpen(LEFT_EYE.cx, 'l', pupilRadius), eyeOpen(RIGHT_EYE.cx, 'r', pupilRadius)];
+          : eyes === 'static'
+            ? [eyeStatic(LEFT_EYE.cx, 'l'), eyeStatic(RIGHT_EYE.cx, 'r')]
+            : [eyeOpen(LEFT_EYE.cx, 'l', pupilRadius), eyeOpen(RIGHT_EYE.cx, 'r', pupilRadius)];
     this.#eyesSvg = svgEl(
       'svg',
       {
@@ -342,10 +407,11 @@ export class SliccAgentAvatar extends HTMLElement {
     this.#root.replaceChildren(h('span', { class: 'avatar', 'aria-hidden': 'true' }, inner));
     this.#pupilL = this.#root.querySelector('.pupil-l');
     this.#pupilR = this.#root.querySelector('.pupil-r');
+    if (eyes === 'static') this.#startNoise();
   }
 
   #syncTracking(): void {
-    const shouldTrack = this.getAttribute('eyes') === 'open' && !this.#motionQuery?.matches;
+    const shouldTrack = this.#eyeState() === 'open' && !this.#motionQuery?.matches;
     if (shouldTrack && !this.#tracking) {
       this.ownerDocument.addEventListener('pointermove', this.#onPointerMove);
       this.#tracking = true;
@@ -359,6 +425,78 @@ export class SliccAgentAvatar extends HTMLElement {
     if (!this.#tracking) return;
     this.ownerDocument.removeEventListener('pointermove', this.#onPointerMove);
     this.#tracking = false;
+  }
+
+  #eyeState(): 'open' | 'dead' | 'none' | 'static' {
+    const connection = this.getAttribute('connection');
+    if (connection !== null && connection !== 'connected') return 'static';
+    const eyes = this.getAttribute('eyes');
+    if (eyes === 'dead' || eyes === 'none' || eyes === 'static') return eyes;
+    return 'open';
+  }
+
+  #startNoise(): void {
+    this.#stopNoise();
+    if (this.#noiseCells.length === 0) this.#prepareNoiseCells();
+    if (this.#motionQuery?.matches) {
+      this.#paintNoise(null);
+      return;
+    }
+    this.#paintNoise(currentNoiseFrame());
+    this.#noiseInterval = window.setInterval(() => {
+      this.#paintNoise(currentNoiseFrame());
+    }, 1000 / NOISE_FPS);
+  }
+
+  #prepareNoiseCells(): void {
+    const bounds = this.#eyesSvg?.getBoundingClientRect();
+    const renderedScale = bounds ? Math.min(bounds.width / 200, bounds.height / 100) : 0;
+    const cellSize = NOISE_CELL_SIZE / (renderedScale > 0 ? renderedScale : 0.25);
+    this.#noiseCells = [...this.#root.querySelectorAll<SVGGElement>('.noise')].map(
+      (group, eyeIndex) => {
+        const cx = eyeIndex === 0 ? LEFT_EYE.cx : RIGHT_EYE.cx;
+        const cells: SVGRectElement[] = [];
+        const minX = cx - LEFT_EYE.r;
+        const maxX = cx + LEFT_EYE.r;
+        const minY = 50 - LEFT_EYE.r;
+        const maxY = 50 + LEFT_EYE.r;
+        for (let y = minY; y < maxY; y += cellSize) {
+          for (let x = minX; x < maxX; x += cellSize) {
+            const cell = svgEl('rect', {
+              x,
+              y,
+              width: Math.min(cellSize, maxX - x),
+              height: Math.min(cellSize, maxY - y),
+              opacity: NOISE_OPACITY,
+            });
+            cells.push(cell);
+          }
+        }
+        group.replaceChildren(...cells);
+        return cells;
+      }
+    );
+  }
+
+  #paintNoise(frame: number | null): void {
+    this.#noiseCells.forEach((cells, eyeIndex) => {
+      const seed = frame === null ? frozenNoiseSeed(eyeIndex) : animatedNoiseSeed(eyeIndex, frame);
+      let state = seed === 0 ? FROZEN_NOISE_SEED : seed;
+      const group = cells[0]?.parentElement;
+      group?.setAttribute('data-seed', String(state));
+      for (const cell of cells) {
+        state = xorshift32(state);
+        const luminance = NOISE_LUMINANCE[state % NOISE_LUMINANCE.length];
+        const channel = `${luminance * 100}%`;
+        cell.setAttribute('fill', `rgb(${channel} ${channel} ${channel})`);
+      }
+    });
+  }
+
+  #stopNoise(): void {
+    if (this.#noiseInterval === null) return;
+    window.clearInterval(this.#noiseInterval);
+    this.#noiseInterval = null;
   }
 
   #centerPupils(): void {

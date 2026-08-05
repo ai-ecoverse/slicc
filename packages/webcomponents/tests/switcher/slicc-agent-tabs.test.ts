@@ -209,12 +209,17 @@ describe('slicc-agent-tabs', () => {
     });
   });
 
-  it('reflects active and attention properties to attributes', () => {
+  it('reflects active, attention, and connection properties to attributes', () => {
     const element = mount();
     element.active = 'researcher';
     element.attention = 'designer';
+    element.connection = 'disconnected';
     expect(element.getAttribute('active')).toBe('researcher');
     expect(element.getAttribute('attention')).toBe('designer');
+    expect(element.getAttribute('connection')).toBe('disconnected');
+    expect(avatar(element)?.getAttribute('connection')).toBe('disconnected');
+    element.connection = 'connected';
+    expect(avatar(element)?.getAttribute('connection')).toBe('connected');
     element.active = null;
     element.attention = null;
     expect(element.hasAttribute('active')).toBe(false);

@@ -7,6 +7,7 @@ interface AgentTabsArgs {
   scoops?: ScoopDescriptor[];
   active?: string;
   attention?: string;
+  connection?: 'connected' | 'disconnected';
   width?: number;
   overflowOpen?: boolean;
   reducedMotion?: boolean;
@@ -77,6 +78,7 @@ function buildTabs(args: AgentTabsArgs): HTMLElement {
   tabs.scoops = args.scoops ?? BASE_ROSTER;
   tabs.active = args.active ?? 'cone';
   tabs.attention = args.attention ?? null;
+  tabs.connection = args.connection ?? 'connected';
   frame.append(tabs);
   if (args.reducedMotion) {
     for (const arc of tabs.querySelectorAll<SVGElement>('.slicc-agent-tabs__glyph-arc')) {
@@ -182,6 +184,22 @@ export const ScoopFocused: Story = {
 
 export const EveryStatus: Story = {
   args: { scoops: stateRoster(), active: 'working', width: 620 },
+};
+
+export const Disconnected: Story = {
+  args: {
+    scoops: stateRoster(),
+    active: 'broken',
+    connection: 'disconnected',
+    width: 620,
+  },
+  parameters: {
+    docs: {
+      description: {
+        story: 'Connection trouble overrides the focused agent lifecycle with TV-static eyes.',
+      },
+    },
+  },
 };
 
 export const FullnessLadder: Story = {
