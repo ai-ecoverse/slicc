@@ -118,10 +118,13 @@ COVERAGE_SOURCE_PATHS=("$PACKAGE_ROOT")
 if [[ -n "$XCODE_SCHEME" ]]; then
   DERIVED_DATA=".build/xcodebuild"
   SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
-  UDID=$(
-    xcrun simctl list devices available --json |
-      select_iphone_for_sdk "$SDK_VERSION"
-  )
+  UDID="${SLICC_IOS_SIM_UDID:-}"
+  if [[ -z "$UDID" ]]; then
+    UDID=$(
+      xcrun simctl list devices available --json |
+        select_iphone_for_sdk "$SDK_VERSION"
+    )
+  fi
   if [[ -z "$UDID" ]]; then
     echo "::error::No available iPhone simulator matching the iOS $SDK_VERSION SDK (install one via 'xcodebuild -downloadPlatform iOS')"
     exit 1

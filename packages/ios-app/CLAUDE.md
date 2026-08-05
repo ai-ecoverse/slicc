@@ -115,7 +115,7 @@ swiftlint lint
 
 ## Test + coverage
 
-The unit suite runs through `xcodebuild test` on a simulator. The shared coverage gate picks an iPhone from the runtime matching the simulator SDK, boots it, enables coverage and on-failure retries, and enforces the `ios-app` floors in `coverage-thresholds.json`. Do not pass `CODE_SIGNING_ALLOWED=NO` to simulator tests: XCTest needs the ad-hoc-signed app and test bundle. The unsigned override remains appropriate for the build-only command above.
+The unit suite runs through `xcodebuild test` on a simulator. The shared coverage gate picks an iPhone from the runtime matching the simulator SDK, boots it, enables coverage and on-failure retries, and enforces the `ios-app` floors in `coverage-thresholds.json`. Set `SLICC_IOS_SIM_UDID` to a worktree-owned simulator UDID to override automatic selection locally; when unset or empty, the gate keeps its SDK-runtime selection. Do not pass `CODE_SIGNING_ALLOWED=NO` to simulator tests: XCTest needs the ad-hoc-signed app and test bundle. The unsigned override remains appropriate for the build-only command above.
 
 ```bash
 ./packages/dev-tools/tools/swift-coverage-check.sh \
