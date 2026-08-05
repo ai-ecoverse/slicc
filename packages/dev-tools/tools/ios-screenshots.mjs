@@ -7,7 +7,8 @@
 // Usage:
 //   node packages/dev-tools/tools/ios-screenshots.mjs \
 //     --app=packages/ios-app/.build/xcodebuild/Build/Products/Debug-iphonesimulator/SliccFollower.app \
-//     --out=.ios-screenshots/out [--udid=<udid>] [--registry=<path>]
+//     --out=.ios-screenshots/out [--udid=<udid>] [--registry=<path>] \
+//     [--device=iphone|ipad] [--screen=<name>]
 //
 // Screens are DEBUG-only UITestHooks states, so --app must be a Debug build.
 // Every registered screen is captured on every run — there is no per-screen
@@ -21,7 +22,9 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   buildManifest,
+  pickNewestIPad,
   pickNewestIPhone,
+  screensForCapture,
   screenshotFile,
   validateScreens,
 } from './ios-screenshots-lib.mjs';
@@ -36,24 +39,45 @@ const { values: args } = parseArgs({
     out: { type: 'string' },
     udid: { type: 'string' },
     registry: { type: 'string', default: DEFAULT_REGISTRY },
+    device: { type: 'string', default: 'iphone' },
+    screen: { type: 'string' },
   },
 });
 if (!args.app || !args.out) {
   console.error(
-    'usage: ios-screenshots.mjs --app=<SliccFollower.app> --out=<dir> [--udid=…] [--registry=…]'
+    'usage: ios-screenshots.mjs --app=<SliccFollower.app> --out=<dir> [--udid=…] [--registry=…] [--device=iphone|ipad] [--screen=…]'
   );
+  process.exit(2);
+}
+if (!['iphone', 'ipad'].includes(args.device)) {
+  console.error('::error::--device must be iphone or ipad');
   process.exit(2);
 }
 
 const simctl = (...a) => execFileSync('xcrun', ['simctl', ...a], { encoding: 'utf8' });
 const sleep = (s) => new Promise((resolve) => setTimeout(resolve, s * 1000));
 
-const screens = validateScreens(JSON.parse(readFileSync(args.registry, 'utf8')));
+const registeredScreens = validateScreens(JSON.parse(readFileSync(args.registry, 'utf8')));
+let screens;
+try {
+  screens = screensForCapture(registeredScreens, {
+    device: args.device,
+    screenName: args.screen,
+  });
+} catch (error) {
+  console.error(`::error::${error.message} in ${args.registry}`);
+  process.exit(2);
+}
 
 const udid =
-  args.udid ?? pickNewestIPhone(JSON.parse(simctl('list', 'devices', 'available', '--json')));
+  args.udid ??
+  (args.device === 'ipad' ? pickNewestIPad : pickNewestIPhone)(
+    JSON.parse(simctl('list', 'devices', 'available', '--json'))
+  );
 if (!udid) {
-  console.error('::error::No available iPhone simulator (xcodebuild -downloadPlatform iOS)');
+  console.error(
+    `::error::No available ${args.device} simulator (xcodebuild -downloadPlatform iOS)`
+  );
   process.exit(1);
 }
 const deviceName =
