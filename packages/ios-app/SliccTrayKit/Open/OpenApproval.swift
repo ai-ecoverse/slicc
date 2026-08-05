@@ -87,6 +87,10 @@ public struct OpenApprovalRequest: Equatable, Identifiable, Sendable {
 }
 
 public final class OpenRequestStore {
+    /// Recent request IDs remain tombstoned across reconnects. FIFO eviction
+    /// bounds process-lifetime replay state while protecting the latest 1,024 IDs.
+    public static let defaultTombstoneLimit = 1_024
+
     private struct Entry {
         let request: OpenApprovalRequest
         let expiresAt: Date
@@ -95,22 +99,35 @@ public final class OpenRequestStore {
 
     private var entries: [String: Entry] = [:]
     private var seenRequestIds: Set<String> = []
+    private var seenRequestOrder: [String] = []
     private var nextSequence = 0
+    private let tombstoneLimit: Int
 
-    public init() {}
+    public init(tombstoneLimit: Int = OpenRequestStore.defaultTombstoneLimit) {
+        precondition(tombstoneLimit > 0, "request tombstone limit must be positive")
+        self.tombstoneLimit = tombstoneLimit
+    }
 
     public var pending: [OpenApprovalRequest] {
         entries.values.sorted { $0.sequence < $1.sequence }.map(\.request)
     }
 
-    @discardableResult
-    public func insert(_ request: OpenApprovalRequest, expiresAt: Date) -> Bool {
-        guard !seenRequestIds.contains(request.requestId) else { return false }
-        seenRequestIds.insert(request.requestId)
+    public func claim(requestId: String) -> Bool {
+        guard entries[requestId] == nil, seenRequestIds.insert(requestId).inserted else {
+            return false
+        }
+        seenRequestOrder.append(requestId)
+        if seenRequestOrder.count > tombstoneLimit {
+            seenRequestIds.remove(seenRequestOrder.removeFirst())
+        }
+        return true
+    }
+
+    public func insertClaimed(_ request: OpenApprovalRequest, expiresAt: Date) {
+        precondition(seenRequestIds.contains(request.requestId), "request ID must be claimed")
         entries[request.requestId] = Entry(
             request: request, expiresAt: expiresAt, sequence: nextSequence)
         nextSequence += 1
-        return true
     }
 
     public func request(id: String) -> OpenApprovalRequest? {
@@ -127,9 +144,8 @@ public final class OpenRequestStore {
         return entry.expiresAt <= date
     }
 
-    public func reset() {
+    public func clearPending() {
         entries.removeAll()
-        seenRequestIds.removeAll()
         nextSequence = 0
     }
 }
@@ -140,10 +156,17 @@ public enum OpenApprovalDecision: Sendable {
     case alwaysAllow
 }
 
+public enum OpenApprovalLimits {
+    public static let pendingResponses = 128
+}
+
 @MainActor
 public final class OpenApprovalController {
     public static let defaultTimeout: TimeInterval = 120
     public static let waitingProgress = "Waiting for approval on iPhone…\n"
+    /// Failed terminal responses are retried FIFO on reconnect. The cap avoids
+    /// retaining an unbounded number of abandoned leader requests; on overflow,
+    /// the oldest response is evicted for the newest terminal result.
 
     private let grantStore: OpenGrantStore
     private let requestStore: OpenRequestStore
@@ -154,11 +177,14 @@ public final class OpenApprovalController {
     private let onApprovalsChanged: ([OpenApprovalRequest]) -> Void
     private let onGrantsChanged: ([OpenGrant]) -> Void
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
+    private var pendingResponses: [FollowerToLeaderMessage] = []
+    private let pendingResponseLimit: Int
 
     public init(
         grantStore: OpenGrantStore,
         requestStore: OpenRequestStore = OpenRequestStore(),
         timeout: TimeInterval = 120,
+        pendingResponseLimit: Int = OpenApprovalLimits.pendingResponses,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = {
             try await Task.sleep(nanoseconds: $0)
@@ -168,9 +194,11 @@ public final class OpenApprovalController {
         onGrantsChanged: @escaping ([OpenGrant]) -> Void = { _ in }
     ) {
         precondition(timeout > 0, "approval timeout must be positive")
+        precondition(pendingResponseLimit > 0, "pending response limit must be positive")
         self.grantStore = grantStore
         self.requestStore = requestStore
         self.timeout = timeout
+        self.pendingResponseLimit = pendingResponseLimit
         self.now = now
         self.sleep = sleep
         self.send = send
@@ -180,6 +208,7 @@ public final class OpenApprovalController {
 
     public var pendingApprovals: [OpenApprovalRequest] { requestStore.pending }
     public var grants: [OpenGrant] { grantStore.grants }
+    public var pendingResponseCount: Int { pendingResponses.count }
 
     public func handle(
         requestId: String,
@@ -187,6 +216,7 @@ public final class OpenApprovalController {
         requesterIdentity: String,
         sessionIdentity: String
     ) {
+        guard requestStore.claim(requestId: requestId) else { return }
         let parsed: ParsedOpenCommand
         do {
             parsed = try OpenCommandParser.parse(command)
@@ -205,9 +235,8 @@ public final class OpenApprovalController {
             command: parsed,
             requesterIdentity: boundedIdentity(requesterIdentity),
             sessionIdentity: boundedIdentity(sessionIdentity))
-        guard requestStore.insert(
+        requestStore.insertClaimed(
             approval, expiresAt: now().addingTimeInterval(timeout))
-        else { return }
 
         if grantStore.contains(parsed.scope) {
             settle(requestId: requestId, code: .success, error: nil)
@@ -227,6 +256,12 @@ public final class OpenApprovalController {
 
     public func resolve(requestId: String, decision: OpenApprovalDecision) {
         guard let request = requestStore.request(id: requestId) else { return }
+        guard !requestStore.isExpired(id: requestId, at: now()) else {
+            settle(
+                requestId: requestId, code: .timeout,
+                error: "Timed out waiting for approval")
+            return
+        }
         switch decision {
         case .deny:
             settle(requestId: requestId, code: .denied, error: "User denied the open request")
@@ -252,7 +287,12 @@ public final class OpenApprovalController {
                 requestId: request.requestId, code: .cancelled,
                 error: "Open approval was cancelled by disconnect")
         }
-        requestStore.reset()
+        requestStore.clearPending()
+    }
+
+    /// Retry responses whose transport send previously returned false.
+    public func transportAvailable() {
+        flushPendingResponses()
     }
 
     public func revokeGrant(id: UUID) {
@@ -296,10 +336,23 @@ public final class OpenApprovalController {
         signal: String? = nil,
         error: String?
     ) {
-        _ = send(
+        flushPendingResponses()
+        if pendingResponses.count == pendingResponseLimit {
+            // If delivery remains unavailable, evict the oldest response and retain
+            // FIFO order among every surviving response before appending the newest.
+            pendingResponses.removeFirst()
+        }
+        pendingResponses.append(
             .execResponse(
                 requestId: requestId, exitCode: code.rawValue,
                 signal: signal, error: error))
+        flushPendingResponses()
+    }
+
+    private func flushPendingResponses() {
+        while let response = pendingResponses.first, send(response) {
+            pendingResponses.removeFirst()
+        }
     }
 
     private func publishApprovals() {

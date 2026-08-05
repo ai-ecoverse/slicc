@@ -5,6 +5,12 @@ import XCTest
 
 @MainActor
 final class OpenApprovalTests: XCTestCase {
+    private struct DestinationCase {
+        let url: String
+        let expectedDestination: String
+        let shouldAccept: Bool
+    }
+
     private actor ManualSleeper {
         private var elapsed = false
         private var waiter: CheckedContinuation<Void, Never>?
@@ -31,8 +37,9 @@ final class OpenApprovalTests: XCTestCase {
         var succeeds = true
 
         func send(_ message: FollowerToLeaderMessage) -> Bool {
+            guard succeeds else { return false }
             sent.append(message)
-            return succeeds
+            return true
         }
 
         var responses: [(String, Int, String?, String?)] {
@@ -100,6 +107,7 @@ final class OpenApprovalTests: XCTestCase {
         assertParseFailure("open fixtureapp://calendar/create other", code: .usage)
         assertParseFailure("open --universal fixtureapp://calendar/create", code: .invalidURL)
         assertParseFailure("open file:///private/secret", code: .invalidURL)
+        assertParseFailure("open\tfixtureapp://calendar/create", code: .usage)
     }
 
     func testGrantScopeOmitsQueryButDoesNotWidenAcrossDestinationIdentity() throws {
@@ -121,6 +129,107 @@ final class OpenApprovalTests: XCTestCase {
         XCTAssertNotEqual(
             approved,
             try OpenCommandParser.parse("open fixtureapp://calendar/%63reate?private=one").scope)
+    }
+
+    func testParserRejectsCanonicalizationAndEncodedPathAmbiguity() {
+        let rejectedURLs = [
+            "https://example.com/../admin",
+            "https://example.com/action/./admin",
+            "https://example.com/action/../admin",
+            "https://example.com/action/..",
+            "https://example.com/action/%2e%2e/admin",
+            "https://example.com/action/%2E%2e/admin",
+            "https://example.com/action%2fadmin",
+            "https://example.com/action%2Fadmin",
+            "fixtureapp://calendar/action/../admin",
+            "fixtureapp://calendar/action/%2e%2e/admin",
+        ]
+
+        for url in rejectedURLs {
+            assertParseFailure("open \(url)", code: .invalidURL)
+        }
+    }
+
+    func testGrantScopesMatchIndependentDestinationExpectations() {
+        let cases = [
+            DestinationCase(
+                url: "https://example.com/action?private=one",
+                expectedDestination: "https://example.com/action", shouldAccept: true),
+            DestinationCase(
+                url: "https://example.com/action/subpath?private=two",
+                expectedDestination: "https://example.com/action", shouldAccept: true),
+            DestinationCase(
+                url: "https://example.com/admin",
+                expectedDestination: "https://example.com/admin", shouldAccept: true),
+            DestinationCase(
+                url: "fixtureapp:calendar/create",
+                expectedDestination: "fixtureapp:calendar", shouldAccept: true),
+            DestinationCase(
+                url: "fixtureapp:calendar/delete",
+                expectedDestination: "fixtureapp:calendar", shouldAccept: true),
+            DestinationCase(
+                url: "fixtureapp:contacts/create",
+                expectedDestination: "fixtureapp:contacts", shouldAccept: true),
+            DestinationCase(
+                url: "fixtureapp:calendar/create/../admin",
+                expectedDestination: "fixtureapp:calendar/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/%252e%252e/admin",
+                expectedDestination: "fixtureapp:calendar/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/%252E%252e/admin",
+                expectedDestination: "fixtureapp:calendar/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/create%252Fadmin",
+                expectedDestination: "fixtureapp:calendar/create/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/create%252fadmin",
+                expectedDestination: "fixtureapp:calendar/create/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/create%255Cadmin",
+                expectedDestination: "fixtureapp:calendar/create/admin", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/a/b/../../c",
+                expectedDestination: "fixtureapp:calendar/c", shouldAccept: false),
+            DestinationCase(
+                url: "fixtureapp:calendar/create/..",
+                expectedDestination: "fixtureapp:calendar", shouldAccept: false),
+            DestinationCase(
+                url: "https://example.com/action/%252E%252e/admin",
+                expectedDestination: "https://example.com/admin", shouldAccept: false),
+        ]
+        var parsedCases: [(DestinationCase, OpenGrantScope)] = []
+
+        for testCase in cases {
+            do {
+                let parsed = try OpenCommandParser.parse("open \(testCase.url)")
+                parsedCases.append((testCase, parsed.scope))
+                XCTAssertTrue(
+                    testCase.shouldAccept,
+                    "unexpectedly accepted \(testCase.url) as \(testCase.expectedDestination)")
+            } catch {
+                XCTAssertFalse(
+                    testCase.shouldAccept,
+                    "unexpectedly rejected \(testCase.url) as \(testCase.expectedDestination)")
+            }
+        }
+
+        for leftIndex in parsedCases.indices {
+            for rightIndex in parsedCases.indices where leftIndex < rightIndex {
+                let left = parsedCases[leftIndex]
+                let right = parsedCases[rightIndex]
+                if left.1 == right.1 {
+                    XCTAssertEqual(
+                        left.0.expectedDestination, right.0.expectedDestination,
+                        "equal scopes disagree for \(left.0.url) and \(right.0.url)")
+                }
+                if left.0.expectedDestination != right.0.expectedDestination {
+                    XCTAssertNotEqual(
+                        left.1, right.1,
+                        "different destinations collide for \(left.0.url) and \(right.0.url)")
+                }
+            }
+        }
     }
 
     func testAllowOnceAndDenyEachSettleExactlyOnce() {
@@ -204,6 +313,99 @@ final class OpenApprovalTests: XCTestCase {
         XCTAssertTrue(controller.pendingApprovals.isEmpty)
     }
 
+    func testExpiredAlwaysAllowSettlesTimeoutWithoutPersistingGrant() {
+        let clock = Clock()
+        let sleeper = ManualSleeper()
+        let wire = Wire()
+        let store = OpenGrantStore(defaults: defaults)
+        let controller = makeController(
+            wire: wire, grantStore: store, clock: clock, sleeper: sleeper)
+        controller.handle(
+            requestId: "expired", command: "open fixtureapp://calendar/create",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+
+        clock.now = clock.now.addingTimeInterval(2)
+        controller.resolve(requestId: "expired", decision: .alwaysAllow)
+
+        XCTAssertEqual(wire.responses.map(\.1), [OpenExecExitCode.timeout.rawValue])
+        XCTAssertTrue(store.grants.isEmpty)
+        XCTAssertTrue(controller.pendingApprovals.isEmpty)
+    }
+
+    func testSettledRequestReplayAfterDisconnectIsIgnored() {
+        let wire = Wire()
+        let controller = makeController(wire: wire)
+        controller.handle(
+            requestId: "replay", command: "open fixtureapp://calendar/create",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+        controller.resolve(requestId: "replay", decision: .allowOnce)
+        controller.disconnect()
+        controller.transportAvailable()
+        let sentCount = wire.sent.count
+
+        controller.handle(
+            requestId: "replay", command: "open fixtureapp://calendar/create",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+
+        XCTAssertEqual(wire.sent.count, sentCount)
+        XCTAssertTrue(controller.pendingApprovals.isEmpty)
+    }
+
+    func testFailedResponseIsRetainedAndRedeliveredWhenTransportReturns() {
+        let wire = Wire()
+        let controller = makeController(wire: wire)
+        controller.handle(
+            requestId: "retry", command: "open fixtureapp://calendar/create",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+        wire.succeeds = false
+        controller.resolve(requestId: "retry", decision: .allowOnce)
+
+        XCTAssertTrue(wire.responses.isEmpty)
+        XCTAssertEqual(controller.pendingResponseCount, 1)
+
+        wire.succeeds = true
+        controller.transportAvailable()
+        XCTAssertEqual(wire.responses.map(\.1), [OpenExecExitCode.success.rawValue])
+        XCTAssertEqual(controller.pendingResponseCount, 0)
+    }
+
+    func testReplayAndResponseQueuesAreFIFOBounded() {
+        let store = OpenRequestStore(tombstoneLimit: 2)
+        XCTAssertTrue(store.claim(requestId: "one"))
+        XCTAssertTrue(store.claim(requestId: "two"))
+        XCTAssertTrue(store.claim(requestId: "three"))
+        XCTAssertTrue(store.claim(requestId: "one"), "oldest tombstone should be evicted")
+
+        let wire = Wire()
+        wire.succeeds = false
+        let controller = makeController(wire: wire, pendingResponseLimit: 2)
+        for requestId in ["one", "two"] {
+            controller.handle(
+                requestId: requestId, command: "pwd",
+                requesterIdentity: "Leader", sessionIdentity: "Session")
+        }
+        XCTAssertEqual(controller.pendingResponseCount, 2)
+
+        wire.succeeds = true
+        controller.handle(
+            requestId: "three", command: "pwd",
+            requesterIdentity: "Leader", sessionIdentity: "Session")
+        XCTAssertEqual(wire.responses.map(\.0), ["one", "two", "three"])
+        XCTAssertEqual(controller.pendingResponseCount, 0)
+
+        wire.succeeds = false
+        for requestId in ["four", "five", "six"] {
+            controller.handle(
+                requestId: requestId, command: "pwd",
+                requesterIdentity: "Leader", sessionIdentity: "Session")
+        }
+        XCTAssertEqual(controller.pendingResponseCount, 2)
+
+        wire.succeeds = true
+        controller.transportAvailable()
+        XCTAssertEqual(wire.responses.map(\.0), ["one", "two", "three", "five", "six"])
+    }
+
     func testMalformedUnknownAndUnavailableEmitTerminalResponses() {
         let wire = Wire()
         let controller = makeController(wire: wire)
@@ -223,21 +425,27 @@ final class OpenApprovalTests: XCTestCase {
             [
                 OpenExecExitCode.invalidURL.rawValue,
                 OpenExecExitCode.unsupportedVerb.rawValue,
-                OpenExecExitCode.unavailable.rawValue,
             ])
         XCTAssertTrue(wire.responses[1].3?.contains("open") == true)
+        XCTAssertEqual(controller.pendingResponseCount, 1)
+
+        wire.succeeds = true
+        controller.transportAvailable()
+        XCTAssertEqual(wire.responses.last?.1, OpenExecExitCode.unavailable.rawValue)
     }
 
     private func makeController(
         wire: Wire,
         grantStore: OpenGrantStore? = nil,
         clock: Clock? = nil,
-        sleeper: ManualSleeper? = nil
+        sleeper: ManualSleeper? = nil,
+        pendingResponseLimit: Int = OpenApprovalLimits.pendingResponses
     ) -> OpenApprovalController {
         let clock = clock ?? Clock()
         return OpenApprovalController(
             grantStore: grantStore ?? OpenGrantStore(defaults: nil),
             timeout: 1,
+            pendingResponseLimit: pendingResponseLimit,
             now: { clock.now },
             sleep: { nanoseconds in
                 if let sleeper {

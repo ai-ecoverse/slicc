@@ -580,9 +580,9 @@
         "protocolVersion": 1,
         "runtime": "slicc-ios",
         "capabilities": {
-          "exec": false
+          "exec": true
         },
-        "motd": "SLICC iOS follower on iPhone (iOS 26.0) — chat and CDP targets, no shell"
+        "motd": "SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open"
       }
     },
     {

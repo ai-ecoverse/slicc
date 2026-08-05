@@ -123,6 +123,7 @@
 		8EEACE6ED76E43E36FC9F0AB /* ChatFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */; };
 		91B4DBF9FB2F5B25B099607C /* MonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F98508E6A01545988D9D42 /* MonitorView.swift */; };
 		92BBD6EFB95893D4B3566905 /* VoiceReplyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60DB85370008030F231AAD3 /* VoiceReplyTests.swift */; };
+		933713AE6348A5DFB4535B95 /* SafeLeaderMessageLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15885FE1131033EA39CF77CD /* SafeLeaderMessageLog.swift */; };
 		941662107E886C9BA55F2658 /* SliccAgentAvatarGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A30A613A67EAAAA1298638B /* SliccAgentAvatarGeometryTests.swift */; };
 		9494D2F9E9EFAB61FFC71886 /* AppStateTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A88993C99745347AF830860 /* AppStateTheme.swift */; };
 		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
@@ -316,6 +317,7 @@
 		121F56787ADFC45E962E4D64 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		13E209029F63F2427997E161 /* ScoopStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoopStatusTests.swift; sourceTree = "<group>"; };
 		1572105F0B5819E4CC07BD84 /* ThemeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEngine.swift; sourceTree = "<group>"; };
+		15885FE1131033EA39CF77CD /* SafeLeaderMessageLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeLeaderMessageLog.swift; sourceTree = "<group>"; };
 		18BF55CBA000161C54E4770C /* CdpPreviewClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CdpPreviewClient.swift; sourceTree = "<group>"; };
 		18FA373FE20528F6DFFEA7EB /* FluidAudio-VENDORED.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "FluidAudio-VENDORED.md"; sourceTree = "<group>"; };
 		1B077B663525FD8E0666A8FB /* SliccShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SliccShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -653,6 +655,7 @@
 				902A857AB83EAF288ECDDA37 /* FileProviderDomainLifecycle.swift */,
 				4AE19C8ADC78C0F48027D9B5 /* InboundActions.swift */,
 				DE1509E5289AC182F04B1FDB /* OpenInSliccIntents.swift */,
+				15885FE1131033EA39CF77CD /* SafeLeaderMessageLog.swift */,
 				C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */,
 				DD1308398CD972FF297E2C75 /* UITestHooks.swift */,
 			);
@@ -1220,6 +1223,7 @@
 				68A0308C5A1013ECC8A1C4C7 /* PunctuationPassthrough.swift in Sources */,
 				1C51604116AA20BE57F33B46 /* RemoteTabCard.swift in Sources */,
 				1B1D78732EE937BE2DBF2C05 /* SVGPath.swift in Sources */,
+				933713AE6348A5DFB4535B95 /* SafeLeaderMessageLog.swift in Sources */,
 				F266887FC83BB1D23A4D0441 /* ScoopStatus.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
 				E6AE9D960C36AC71ED33D18E /* ShellLayout.swift in Sources */,

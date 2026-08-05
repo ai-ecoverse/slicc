@@ -38,7 +38,7 @@ Plain SPM commands do nothing useful on a macOS host. Build and test go through 
 
 - `preview.open` → `CDPBridge.handleTabOpen`, ack `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable` in the corpus.
-- All four `exec.*` messages are mirrored; terminal originates, and iOS advertises `capabilities.exec: true` for its restricted, non-shell `open` verb. Leader requests remain unsupported until the `open` handler lands.
+- iOS advertises `capabilities.exec: true`; `AppState.handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, gates it through device-local scoped approval, and acknowledges without launching. Hierarchical and opaque raw path segments reject traversal or decoding that yields a delimiter or `%`; hierarchical URLs must also standardize unchanged. The latest 1,024 request IDs remain tombstoned across reconnects; 128 failed responses retry FIFO after channel reopen.
 
 Both union doc-comments state omissions; `// MARK: -` boundaries are the anchors.
 
@@ -53,7 +53,7 @@ Model TS follower features on `AppState`:
 - Dispatch: `handleDataChannelMessage`
 - Sprinkles: refresh/fetch/lick/handle content (chunk reassembly + waiter dedup)
 - Leader VFS: `FsClient` requests with `targetRuntimeId: "leader"`; leader-origin requests get `ENOTSUP` (not silence). Client owns deadline + reassembly.
-- `hello` sends `exec: true` + a device `motd` naming `open` as the only supported command
+- `hello` sends `exec: true` + device `motd`
 - Multi-scoop buffers, model/thinking controls, agent events
 
 ### Transcript swipe arbitration

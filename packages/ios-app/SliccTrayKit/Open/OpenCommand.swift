@@ -22,8 +22,9 @@ public enum OpenCommandMode: String, Codable, Sendable {
 }
 
 /// Exact persistent grant key. Query and fragment values are deliberately absent.
-/// The first percent-encoded path component is kept verbatim, so crafted escaping
-/// cannot turn a grant for one action prefix into a grant for another.
+/// The first validated percent-encoded path component is kept verbatim. Raw path
+/// validation applies equally to hierarchical and opaque URLs before scope derivation,
+/// so a downstream decoder cannot widen this displayed scope.
 public struct OpenGrantScope: Codable, Hashable, Sendable {
     public let scheme: String
     public let authority: String
@@ -66,15 +67,18 @@ public enum OpenCommandParser {
     /// escape, whitespace, or shell separator is rejected rather than interpreted.
     public static func parse(_ command: String) throws -> ParsedOpenCommand {
         guard !command.isEmpty else { throw usage("open requires one URL") }
-        guard let separator = command.firstIndex(of: " ") else {
+        guard let separator = command.firstIndex(where: \.isWhitespace) else {
             if command == "open" { throw usage("open requires one URL") }
             throw unsupported(command)
         }
 
         let verb = String(command[..<separator])
         guard verb == "open" else { throw unsupported(verb) }
+        guard command[separator] == " " else {
+            throw usage("open requires a space before its URL")
+        }
         var remainder = String(command[command.index(after: separator)...])
-        guard !remainder.isEmpty, !remainder.hasPrefix(" ") else {
+        guard !remainder.isEmpty, remainder.first?.isWhitespace == false else {
             throw usage("open requires exactly one URL argument")
         }
 
@@ -123,12 +127,29 @@ public enum OpenCommandParser {
     private static func parsedURL(_ value: String, mode: OpenCommandMode) throws
         -> ParsedOpenCommand
     {
-        guard let components = URLComponents(string: value),
+        let rawPath = try rawPath(in: value)
+        guard rawPath.path.split(separator: "/", omittingEmptySubsequences: false)
+            .allSatisfy(pathSegmentIsUnambiguous)
+        else {
+            throw invalidURL()
+        }
+        guard let inputComponents = URLComponents(string: value),
+            inputComponents.user == nil,
+            inputComponents.password == nil,
+            let inputURL = inputComponents.url
+        else {
+            throw invalidURL()
+        }
+        let canonicalURL = rawPath.isHierarchical ? inputURL.standardized : inputURL
+        // Raw segment validation above is the load-bearing check for every URL shape.
+        // Foundation standardization is only a secondary check for hierarchical URLs;
+        // it deliberately does not normalize opaque custom-scheme paths.
+        guard !rawPath.isHierarchical || canonicalURL.absoluteString == value,
+            let components = URLComponents(url: canonicalURL, resolvingAgainstBaseURL: false),
             let rawScheme = components.scheme,
             !rawScheme.isEmpty,
             components.user == nil,
-            components.password == nil,
-            let url = components.url
+            components.password == nil
         else {
             throw invalidURL()
         }
@@ -141,9 +162,7 @@ public enum OpenCommandParser {
         var authority = (components.percentEncodedHost ?? "").lowercased()
         if let port = components.port { authority += ":\(port)" }
         let action = components.percentEncodedPath.split(separator: "/").first.map(String.init) ?? ""
-        let decodedAction = action.removingPercentEncoding ?? action
-        guard decodedAction != ".", decodedAction != "..", !authority.isEmpty || !action.isEmpty
-        else { throw invalidURL() }
+        guard !authority.isEmpty || !action.isEmpty else { throw invalidURL() }
 
         let hostAction: String
         if authority.isEmpty {
@@ -155,11 +174,54 @@ public enum OpenCommandParser {
         }
         return ParsedOpenCommand(
             mode: mode,
-            url: url,
+            url: canonicalURL,
             scope: OpenGrantScope(
                 scheme: scheme, authority: authority, actionPrefix: action),
             displayScheme: scheme,
             displayHostAction: hostAction)
+    }
+
+    /// Extract the raw path after the scheme and optional authority. This does not
+    /// ask Foundation to interpret the path, so opaque and hierarchical URLs receive
+    /// the same segment checks.
+    private static func rawPath(in value: String) throws -> (path: String, isHierarchical: Bool) {
+        guard let schemeEnd = value.firstIndex(of: ":"), schemeEnd != value.startIndex else {
+            throw invalidURL()
+        }
+        var pathStart = value.index(after: schemeEnd)
+        let isHierarchical = value[pathStart...].hasPrefix("/")
+        if value[pathStart...].hasPrefix("//") {
+            let authorityStart = value.index(pathStart, offsetBy: 2)
+            guard let delimiter = value[authorityStart...].firstIndex(where: { "/?#".contains($0) })
+            else {
+                return ("", true)
+            }
+            guard value[delimiter] == "/" else { return ("", true) }
+            pathStart = delimiter
+        }
+        let pathEnd = value[pathStart...].firstIndex(where: { $0 == "?" || $0 == "#" })
+            ?? value.endIndex
+        return (String(value[pathStart..<pathEnd]), isHierarchical)
+    }
+
+    /// Decode each raw segment until no escape remains. Literal traversal is rejected,
+    /// and any decode round producing traversal, a path delimiter, or another percent
+    /// escape is invalid. Rejecting the latter makes arbitrary encoding depth fail closed.
+    private static func pathSegmentIsUnambiguous(_ rawSegment: Substring) -> Bool {
+        var segment = String(rawSegment)
+        guard segment != ".", segment != "..", !segment.contains("\\") else { return false }
+        while segment.contains("%") {
+            guard let decoded = segment.removingPercentEncoding, decoded != segment else {
+                return false
+            }
+            guard decoded != ".", decoded != "..",
+                !decoded.contains("/"), !decoded.contains("\\"), !decoded.contains("%")
+            else {
+                return false
+            }
+            segment = decoded
+        }
+        return true
     }
 
     private static func usage(_ message: String) -> OpenCommandParseError {

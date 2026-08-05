@@ -470,9 +470,10 @@ export function isCherrySliccEventMessage(m: unknown): m is CherrySliccEventMess
 export const TRAY_MAX_OPEN_CALLBACK_PARAM_COUNT = 16;
 
 /**
- * Maximum serialized UTF-8 JSON bytes forwarded from one approved x-callback
- * result. 16 KiB stays below `TRAY_DEFAULT_MAX_MESSAGE_BYTES`, keeping the
- * result inside one unchunked tray message.
+ * Maximum serialized UTF-8 byte length of one approved x-callback JSON result,
+ * not JavaScript string length. 16 KiB stays below
+ * `TRAY_DEFAULT_MAX_MESSAGE_BYTES` (`65536` bytes), so the result always fits in
+ * one unchunked tray message.
  */
 export const TRAY_MAX_OPEN_CALLBACK_BYTES = 16 * 1024;
 

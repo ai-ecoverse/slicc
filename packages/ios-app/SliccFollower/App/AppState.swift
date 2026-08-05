@@ -983,7 +983,8 @@ class AppState: ObservableObject {
             )
 
         case .tabOpen(let requestId, let url):
-            logger.info("Leader requested new tab: \(url)")
+            logger.info(
+                "\(SafeLeaderMessageLog.urlEventSummary("Leader requested new tab", url: url))")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .previewOpen(let requestId, let url):
@@ -992,7 +993,8 @@ class AppState: ObservableObject {
             // the URL in a WKWebView CDP target. The preview-vs-tab
             // distinction is informational on iOS (Phase 1) — the request
             // id flows back via the standard tab.opened ack.
-            logger.info("Leader requested preview tab: \(url)")
+            logger.info(
+                "\(SafeLeaderMessageLog.urlEventSummary("Leader requested preview tab", url: url))")
             cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .targetsRegistry(let targets):
