@@ -41,6 +41,7 @@ describe('ssh command', () => {
       const r = await createSshCommand().execute(args, ctx());
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('ssh - run a command on a connected tray follower');
+      expect(r.stdout).toContain('launches the approved destination');
     }
   });
 
