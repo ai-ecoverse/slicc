@@ -884,7 +884,11 @@ class AppState: ObservableObject {
                 }
             }
 
-        case .status(let scoopStatus, _):
+        case .status(let scoopStatus, let scoopJid):
+            guard scoopJid == nil || scoopJid == selectedScoopJid else {
+                logger.debug("Ignoring status update for non-selected scoop")
+                break
+            }
             logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
             // The leader emits processing/ready; streaming/running remain accepted busy aliases.
