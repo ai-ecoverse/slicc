@@ -43,7 +43,8 @@ Runs <command> on the follower <runtime-id> (from \`host\` / \`ssh --list\`) and
 returns its stdout, stderr, and exit code. A \`slicc … follow\` CLI follower runs
 commands on its real machine. An iOS follower accepts only
 \`open [--universal|--x-callback] <url>\`, gates it through on-device scoped
-approval, and acknowledges approval without launching the destination.
+approval, and launches the approved destination. \`--universal\` requires a universal
+link; \`--x-callback\` writes bounded JSON and returns distinct success/error/cancel exits.
 
 Options:
   --list, -l           List exec-capable followers and exit
