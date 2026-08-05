@@ -245,8 +245,11 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         // Row 1 short by one and row 2 long by one: the total matches, but every
         // later row's style slices would shift by a column.
         let url = try writeVoicePackJSON(
-            in: directory, rowLengths: [1: KokoroAneConstants.voicePackCols - 1,
-                                        2: KokoroAneConstants.voicePackCols + 1])
+            in: directory,
+            rowLengths: [
+                1: KokoroAneConstants.voicePackCols - 1,
+                2: KokoroAneConstants.voicePackCols + 1,
+            ])
 
         XCTAssertThrowsError(try KokoroAneVoicePack.load(from: url)) {
             XCTAssertTrue(

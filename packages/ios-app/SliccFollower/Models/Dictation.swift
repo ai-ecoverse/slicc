@@ -123,13 +123,10 @@ final class AppleDictationEngine: DictationEngine {
         let audioEngine = AVAudioEngine()
         let input = audioEngine.inputNode
         do {
-            guard
-                Self.reinstallTap(on: AppleDictationInputTap(node: input), append: { buffer in
-                    request.append(buffer)
-                })
-            else {
-                throw DictationError.inputFormatUnavailable
+            let installed = Self.reinstallTap(on: AppleDictationInputTap(node: input)) { buffer in
+                request.append(buffer)
             }
+            guard installed else { throw DictationError.inputFormatUnavailable }
             audioEngine.prepare()
             try audioEngine.start()
         } catch {
