@@ -173,9 +173,13 @@ public enum OpenApprovalLimits {
 public final class OpenApprovalController {
     public static let defaultTimeout: TimeInterval = 120
     public static let waitingProgress = "Waiting for approval on iPhone…\n"
-    /// Failed terminal responses are retried FIFO on reconnect. The cap avoids
-    /// retaining an unbounded number of abandoned leader requests; on overflow,
-    /// the oldest response is evicted for the newest terminal result.
+    /// Failed terminal deliveries are retried FIFO on reconnect. A delivery may
+    /// contain stdout followed by its response, so callback JSON cannot be split
+    /// from settlement when the transport disappears between sends.
+
+    private struct PendingDelivery {
+        var messages: [FollowerToLeaderMessage]
+    }
 
     private let grantStore: OpenGrantStore
     private let requestStore: OpenRequestStore
@@ -183,10 +187,15 @@ public final class OpenApprovalController {
     private let now: () -> Date
     private let sleep: @Sendable (UInt64) async throws -> Void
     private let send: (FollowerToLeaderMessage) -> Bool
+    private let launch: (OpenLaunchRequest) -> Void
+    private let makeNonce: () throws -> String
     private let onApprovalsChanged: ([OpenApprovalRequest]) -> Void
     private let onGrantsChanged: ([OpenGrant]) -> Void
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
-    private var pendingResponses: [FollowerToLeaderMessage] = []
+    private var pendingDeliveries: [PendingDelivery] = []
+    private var approvalRequestIds: Set<String> = []
+    private var callbackNonces: [String: String] = [:]
+    private var grantAfterLaunch: Set<String> = []
     private let pendingResponseLimit: Int
 
     public init(
@@ -199,6 +208,8 @@ public final class OpenApprovalController {
             try await Task.sleep(nanoseconds: $0)
         },
         send: @escaping (FollowerToLeaderMessage) -> Bool,
+        launch: @escaping (OpenLaunchRequest) -> Void,
+        makeNonce: @escaping () throws -> String = { try OpenCallbackCodec.makeNonce() },
         onApprovalsChanged: @escaping ([OpenApprovalRequest]) -> Void = { _ in },
         onGrantsChanged: @escaping ([OpenGrant]) -> Void = { _ in }
     ) {
@@ -211,13 +222,17 @@ public final class OpenApprovalController {
         self.now = now
         self.sleep = sleep
         self.send = send
+        self.launch = launch
+        self.makeNonce = makeNonce
         self.onApprovalsChanged = onApprovalsChanged
         self.onGrantsChanged = onGrantsChanged
     }
 
-    public var pendingApprovals: [OpenApprovalRequest] { requestStore.pending }
+    public var pendingApprovals: [OpenApprovalRequest] {
+        requestStore.pending.filter { approvalRequestIds.contains($0.requestId) }
+    }
     public var grants: [OpenGrant] { grantStore.grants }
-    public var pendingResponseCount: Int { pendingResponses.count }
+    public var pendingResponseCount: Int { pendingDeliveries.count }
 
     public func handle(
         requestId: String,
@@ -246,12 +261,14 @@ public final class OpenApprovalController {
             sessionIdentity: boundedIdentity(sessionIdentity))
         requestStore.insertClaimed(
             approval, expiresAt: now().addingTimeInterval(timeout))
+        armTimeout(requestId: requestId)
 
         if grantStore.contains(parsed.scope) {
-            settle(requestId: requestId, code: .success, error: nil)
+            beginLaunch(requestId: requestId, persistGrant: false)
             return
         }
 
+        approvalRequestIds.insert(requestId)
         publishApprovals()
         let progress = Data(Self.waitingProgress.utf8).base64EncodedString()
         guard send(.execChunk(requestId: requestId, stream: "stderr", data: progress)) else {
@@ -260,11 +277,10 @@ public final class OpenApprovalController {
                 error: "Approval became unavailable")
             return
         }
-        armTimeout(requestId: requestId)
     }
 
     public func resolve(requestId: String, decision: OpenApprovalDecision) {
-        guard let request = requestStore.request(id: requestId) else { return }
+        guard requestStore.request(id: requestId) != nil else { return }
         guard !requestStore.isExpired(id: requestId, at: now()) else {
             settle(
                 requestId: requestId, code: .timeout,
@@ -275,19 +291,75 @@ public final class OpenApprovalController {
         case .deny:
             settle(requestId: requestId, code: .denied, error: "User denied the open request")
         case .allowOnce:
-            settle(requestId: requestId, code: .success, error: nil)
+            beginLaunch(requestId: requestId, persistGrant: false)
         case .alwaysAllow:
-            grantStore.grant(request.command.scope)
-            onGrantsChanged(grantStore.grants)
-            settle(requestId: requestId, code: .success, error: nil)
+            beginLaunch(requestId: requestId, persistGrant: true)
         }
+    }
+
+    public func completeLaunch(requestId: String, opened: Bool) {
+        guard let request = requestStore.request(id: requestId) else { return }
+        guard !requestStore.isExpired(id: requestId, at: now()) else {
+            settle(requestId: requestId, code: .timeout, error: "Open request timed out")
+            return
+        }
+        guard opened else {
+            settle(
+                requestId: requestId, code: .unavailable,
+                error: "The destination app is unavailable")
+            return
+        }
+        persistGrantIfNeeded(for: request)
+        guard request.command.mode != .xCallback else { return }
+        settle(requestId: requestId, code: .success, error: nil)
+    }
+
+    /// Returns true for every app-owned callback URL, including malformed or
+    /// stale values. Callers must consume those URLs rather than route them into
+    /// any other deep-link handler. Invalid correlations intentionally emit nothing.
+    public func handleCallbackURL(_ url: URL) -> Bool {
+        guard OpenCallbackCodec.owns(url) else { return false }
+        switch OpenCallbackCodec.decode(url) {
+        case .ignored:
+            return true
+        case .overflow(let requestId, let nonce):
+            guard let request = liveCallbackRequest(requestId: requestId, nonce: nonce) else {
+                return true
+            }
+            persistGrantIfNeeded(for: request)
+            settle(
+                requestId: requestId, code: .callbackError,
+                error: "The x-callback result exceeded its safe bounds")
+        case .result(let requestId, let nonce, let result, let json):
+            guard let request = liveCallbackRequest(requestId: requestId, nonce: nonce) else {
+                return true
+            }
+            persistGrantIfNeeded(for: request)
+            let code: OpenExecExitCode
+            let error: String?
+            switch result.status {
+            case .success:
+                code = .success
+                error = nil
+            case .error:
+                code = .callbackError
+                error = "The destination app reported an x-callback error"
+            case .cancel:
+                code = .cancelled
+                error = "The destination app cancelled the x-callback request"
+            }
+            var stdout = json
+            stdout.append(0x0A)
+            settle(requestId: requestId, code: code, error: error, stdout: stdout)
+        }
+        return true
     }
 
     public func cancel(requestId: String, signal: String) {
         guard requestStore.request(id: requestId) != nil else { return }
         settle(
             requestId: requestId, code: .cancelled,
-            signal: signal, error: "Open approval was cancelled")
+            signal: signal, error: "Open request was cancelled")
     }
 
     public func disconnect() {
@@ -323,20 +395,72 @@ public final class OpenApprovalController {
             else { return }
             self.settle(
                 requestId: requestId, code: .timeout,
-                error: "Timed out waiting for approval")
+                error: "Open request timed out")
         }
+    }
+
+    private func beginLaunch(requestId: String, persistGrant: Bool) {
+        guard let request = requestStore.request(id: requestId) else { return }
+        approvalRequestIds.remove(requestId)
+        publishApprovals()
+        if persistGrant { grantAfterLaunch.insert(requestId) }
+
+        let nonce: String?
+        do {
+            nonce = request.command.mode == .xCallback ? try makeNonce() : nil
+            if let nonce { callbackNonces[requestId] = nonce }
+            let url = try OpenCallbackCodec.launchURL(
+                for: request.command, requestId: requestId, nonce: nonce ?? "")
+            launch(OpenLaunchRequest(requestId: requestId, url: url, mode: request.command.mode))
+        } catch {
+            settle(
+                requestId: requestId, code: .unavailable,
+                error: "The approved destination could not be opened")
+        }
+    }
+
+    private func liveCallbackRequest(requestId: String, nonce: String) -> OpenApprovalRequest? {
+        guard callbackNonces[requestId] == nonce,
+            let request = requestStore.request(id: requestId)
+        else { return nil }
+        guard !requestStore.isExpired(id: requestId, at: now()) else {
+            settle(requestId: requestId, code: .timeout, error: "Open request timed out")
+            return nil
+        }
+        return request
+    }
+
+    private func persistGrantIfNeeded(for request: OpenApprovalRequest) {
+        guard grantAfterLaunch.remove(request.requestId) != nil else { return }
+        grantStore.grant(request.command.scope)
+        onGrantsChanged(grantStore.grants)
     }
 
     private func settle(
         requestId: String,
         code: OpenExecExitCode,
         signal: String? = nil,
-        error: String?
+        error: String?,
+        stdout: Data? = nil
     ) {
         guard requestStore.settle(id: requestId) != nil else { return }
         timeoutTasks.removeValue(forKey: requestId)?.cancel()
+        approvalRequestIds.remove(requestId)
+        callbackNonces.removeValue(forKey: requestId)
+        grantAfterLaunch.remove(requestId)
         publishApprovals()
-        respond(requestId: requestId, code: code, signal: signal, error: error)
+        var messages: [FollowerToLeaderMessage] = []
+        if let stdout {
+            messages.append(
+                .execChunk(
+                    requestId: requestId, stream: "stdout",
+                    data: stdout.base64EncodedString()))
+        }
+        messages.append(
+            .execResponse(
+                requestId: requestId, exitCode: code.rawValue,
+                signal: signal, error: error))
+        enqueueDelivery(messages)
     }
 
     private func respond(
@@ -345,27 +469,34 @@ public final class OpenApprovalController {
         signal: String? = nil,
         error: String?
     ) {
-        flushPendingResponses()
-        if pendingResponses.count == pendingResponseLimit {
-            // If delivery remains unavailable, evict the oldest response and retain
-            // FIFO order among every surviving response before appending the newest.
-            pendingResponses.removeFirst()
-        }
-        pendingResponses.append(
+        enqueueDelivery([
             .execResponse(
                 requestId: requestId, exitCode: code.rawValue,
-                signal: signal, error: error))
+                signal: signal, error: error)
+        ])
+    }
+
+    private func enqueueDelivery(_ messages: [FollowerToLeaderMessage]) {
+        flushPendingResponses()
+        if pendingDeliveries.count == pendingResponseLimit { pendingDeliveries.removeFirst() }
+        pendingDeliveries.append(PendingDelivery(messages: messages))
         flushPendingResponses()
     }
 
     private func flushPendingResponses() {
-        while let response = pendingResponses.first, send(response) {
-            pendingResponses.removeFirst()
+        while !pendingDeliveries.isEmpty {
+            guard let message = pendingDeliveries[0].messages.first else {
+                pendingDeliveries.removeFirst()
+                continue
+            }
+            guard send(message) else { return }
+            pendingDeliveries[0].messages.removeFirst()
+            if pendingDeliveries[0].messages.isEmpty { pendingDeliveries.removeFirst() }
         }
     }
 
     private func publishApprovals() {
-        onApprovalsChanged(requestStore.pending)
+        onApprovalsChanged(pendingApprovals)
     }
 
     private func boundedIdentity(_ value: String) -> String {

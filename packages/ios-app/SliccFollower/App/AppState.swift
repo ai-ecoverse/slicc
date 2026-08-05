@@ -66,8 +66,8 @@ class AppState: ObservableObject {
     /// transcript because the leader mounts them outside the message list too,
     /// so a streaming re-render cannot wipe them.
     @Published var toolUICards: [ToolUIPlaceholder] = []
-    @Published private(set) var openApprovals: [OpenApprovalRequest] = []
-    @Published private(set) var openGrants: [OpenGrant] = []
+    @Published var openApprovals: [OpenApprovalRequest] = []
+    @Published var openGrants: [OpenGrant] = []
     @Published var isStreaming: Bool = false
 
     // Multi-scoop awareness
@@ -185,7 +185,7 @@ class AppState: ObservableObject {
     let sessionStore: TraySessionSyncStore
     private let credentialStore: TrayCredentialStore
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
-    private let openGrantStore: OpenGrantStore
+    let openGrantStore: OpenGrantStore
 
     init(
         credentialStore: TrayCredentialStore = TrayCredentialStore(),
@@ -262,7 +262,7 @@ class AppState: ObservableObject {
     /// secret-bearing URL never surfaces in the field, the persisted setting,
     /// or the visible history. Reconnects reuse it.
     private var activeJoinUrl: String = ""
-    private var activeDisplayName: String?
+    var activeDisplayName: String?
 
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
@@ -1397,7 +1397,7 @@ class AppState: ObservableObject {
     /// no indication their message was lost — the silent-drop behaviour this
     /// whole change exists to remove (#1700).
     @discardableResult
-    private func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
+    func sendToLeader(_ msg: FollowerToLeaderMessage) -> Bool {
         let data: Data
         do {
             data = try JSONEncoder().encode(msg)
@@ -1540,46 +1540,6 @@ class AppState: ObservableObject {
         reconnectAttempt = 0
     }
 
-}
-
-extension AppState {
-    fileprivate func handleExecMessage(_ message: LeaderToFollowerMessage) {
-        handleApprovalGatedExecMessage(
-            message,
-            requesterIdentity: activeDisplayName ?? "Connected SLICC leader",
-            sessionIdentity: trayId ?? "Current tray")
-    }
-
-    fileprivate func makeOpenApprovalController() -> OpenApprovalController {
-        var send: (FollowerToLeaderMessage) -> Bool = { [weak self] in
-            self?.sendToLeader($0) ?? false
-        }
-        #if DEBUG
-            // No leader answers the fixture, and a send failure would settle
-            // the request as unavailable before the card ever renders.
-            if UITestHooks.stagesOpenApprovalFixture { send = { _ in true } }
-        #endif
-        return OpenApprovalController(
-            grantStore: openGrantStore,
-            send: send,
-            onApprovalsChanged: { [weak self] in self?.openApprovals = $0 },
-            onGrantsChanged: { [weak self] in self?.openGrants = $0 })
-    }
-
-    #if DEBUG
-        /// Enters through `handle` so the controller owns the request: a UI
-        /// test tapping Deny / Allow once / Always allow settles real state
-        /// instead of hitting an approval the controller never saw.
-        fileprivate func configureOpenApprovalFixture() {
-            guard let fixture = UITestHooks.openApprovalFixture() else { return }
-            connectionState = .connected
-            openApprovalController.handle(
-                requestId: fixture.requestId,
-                command: fixture.command,
-                requesterIdentity: fixture.requesterIdentity,
-                sessionIdentity: fixture.sessionIdentity)
-        }
-    #endif
 }
 
 // MARK: - Teardown and history

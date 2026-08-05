@@ -2,10 +2,11 @@ import Foundation
 
 /// Stable terminal exit contract for iOS `open` requests.
 ///
-/// 0 success; 64 usage; 65 invalid URL; 69 unavailable destination;
+/// 0 success; 1 destination callback error; 64 usage; 65 invalid URL; 69 unavailable destination;
 /// 77 denied; 124 approval timeout; 127 unsupported verb; 130 cancelled.
 public enum OpenExecExitCode: Int, Sendable {
     case success = 0
+    case callbackError = 1
     case usage = 64
     case invalidURL = 65
     case unavailable = 69
@@ -128,8 +129,9 @@ public enum OpenCommandParser {
         -> ParsedOpenCommand
     {
         let rawPath = try rawPath(in: value)
-        guard rawPath.path.split(separator: "/", omittingEmptySubsequences: false)
-            .allSatisfy(pathSegmentIsUnambiguous)
+        guard
+            rawPath.path.split(separator: "/", omittingEmptySubsequences: false)
+                .allSatisfy(pathSegmentIsUnambiguous)
         else {
             throw invalidURL()
         }
@@ -199,7 +201,8 @@ public enum OpenCommandParser {
             guard value[delimiter] == "/" else { return ("", true) }
             pathStart = delimiter
         }
-        let pathEnd = value[pathStart...].firstIndex(where: { $0 == "?" || $0 == "#" })
+        let pathEnd =
+            value[pathStart...].firstIndex(where: { $0 == "?" || $0 == "#" })
             ?? value.endIndex
         return (String(value[pathStart..<pathEnd]), isHierarchical)
     }
