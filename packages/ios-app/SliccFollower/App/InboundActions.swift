@@ -35,16 +35,43 @@ final class InboundActionCoordinator: ObservableObject {
         let xSuccess: URL?
         let xError: URL?
         let xCancel: URL?
+        /// Deep-linked prompts confirm in-app; an App Intent the user just
+        /// invoked is already the explicit action.
+        let needsConfirmation: Bool
         let receivedAt: Date
     }
 
     @Published private(set) var pendingPrompt: PendingPrompt?
 
+    /// A transcript export request (the Get Current Conversation intent).
+    struct PendingTranscript: Identifiable, Equatable {
+        let id: UUID
+        let receivedAt: Date
+    }
+
+    @Published private(set) var pendingTranscript: PendingTranscript?
+
+    /// Coarse lifecycle for the surfaces: what the funnel is doing right
+    /// now, so SwiftUI can show progress and tests can assert transitions
+    /// (#1918 "expose pending/approved/running/completed/failed").
+    enum Phase: Equatable {
+        case running(String)
+        case failed(String)
+    }
+
+    @Published var phase: Phase?
+
+    /// Intent continuations keyed by pending-action id: the App Intent
+    /// awaits here while the shell executes and settles. One-shot.
+    private var resultContinuations: [UUID: CheckedContinuation<String, Error>] = [:]
+
     static let maxPromptLength = 8192
+    static let maxTranscriptBytes = 512 * 1024
 
     /// Replay guard: the same URL arriving again within the window is a
     /// Shortcuts/share-sheet retry, not new intent.
     private var lastAccepted: (url: URL, at: Date)?
+    private var lastPromptAccepted: (prompt: String, at: Date)?
 
     static let maxURLLength = 2048
     private static let dedupWindow: TimeInterval = 3
@@ -103,14 +130,103 @@ final class InboundActionCoordinator: ObservableObject {
     /// Validate and enqueue an automation prompt.
     @discardableResult
     func receive(
-        prompt raw: String, xSuccess: URL?, xError: URL?, xCancel: URL?, now: Date = Date()
+        prompt raw: String, xSuccess: URL?, xError: URL?, xCancel: URL?,
+        needsConfirmation: Bool = true, now: Date = Date()
     ) -> Bool {
         let prompt = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, prompt.count <= Self.maxPromptLength else { return false }
+        // Same replay guard as opens: an identical prompt within the
+        // window is a Shortcuts retry, not new intent.
+        if let last = lastPromptAccepted, last.prompt == prompt,
+            now.timeIntervalSince(last.at) < Self.dedupWindow
+        {
+            return true
+        }
+        lastPromptAccepted = (prompt, now)
         pendingPrompt = PendingPrompt(
             id: UUID(), prompt: prompt, xSuccess: xSuccess, xError: xError, xCancel: xCancel,
-            receivedAt: now)
+            needsConfirmation: needsConfirmation, receivedAt: now)
         return true
+    }
+
+    /// Intent-facing prompt: enqueue without a second confirmation and
+    /// await the reply. The continuation resolves when the shell settles
+    /// the turn (or fails/dismisses it).
+    func runIntentPrompt(_ text: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            guard
+                receive(
+                    prompt: text, xSuccess: nil, xError: nil, xCancel: nil,
+                    needsConfirmation: false)
+            else {
+                continuation.resume(throwing: InboundActionError.invalidPrompt)
+                return
+            }
+            guard let id = pendingPrompt?.id else {
+                // Dedup swallowed it — a retry of a prompt already running.
+                continuation.resume(throwing: InboundActionError.busy)
+                return
+            }
+            resultContinuations[id] = continuation
+        }
+    }
+
+    /// Intent-facing transcript request; resolves with rendered Markdown.
+    func runTranscriptRequest() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let request = PendingTranscript(id: UUID(), receivedAt: Date())
+            pendingTranscript = request
+            resultContinuations[request.id] = continuation
+        }
+    }
+
+    /// Resolve an intent continuation (no-op for card-only actions).
+    func resolve(id: UUID, with result: Result<String, Error>) {
+        resultContinuations.removeValue(forKey: id)?.resume(with: result)
+    }
+
+    /// Surface whatever the Share extension parked while we were away.
+    /// Deferred consumption always confirms — the share tap happened in
+    /// another app, possibly a while ago (#1918).
+    func drainShareInbox(_ inbox: AppGroupInbox = AppGroupInbox()) {
+        for request in inbox.drain() {
+            _ = receive(url: request.url, needsConfirmation: true)
+        }
+    }
+
+    func consume(transcript request: PendingTranscript) {
+        if pendingTranscript?.id == request.id { pendingTranscript = nil }
+    }
+
+    /// The universal-link route (#1918): `https://(www.)sliccy.ai/app/open`
+    /// and `/app/prompt` carry the same query contract as the slicc://
+    /// scheme. A link is a link — everything here confirms in-app.
+    @discardableResult
+    func receive(appLink: URL) -> Bool {
+        guard let components = URLComponents(url: appLink, resolvingAgainstBaseURL: false),
+            components.scheme?.lowercased() == "https",
+            let host = components.host?.lowercased(),
+            host == "sliccy.ai" || host == "www.sliccy.ai",
+            components.path.hasPrefix("/app/")
+        else { return false }
+        let action = components.path.dropFirst("/app/".count).lowercased()
+        func query(_ name: String) -> String? {
+            components.queryItems?.first(where: { $0.name == name })?.value
+        }
+        switch action {
+        case "open":
+            guard let target = query("url"), let url = URL(string: target) else { return false }
+            return receive(url: url, needsConfirmation: true)
+        case "prompt":
+            guard let prompt = query("prompt") else { return false }
+            return receive(
+                prompt: prompt,
+                xSuccess: Self.callbackURL(query("x-success")),
+                xError: Self.callbackURL(query("x-error")),
+                xCancel: Self.callbackURL(query("x-cancel")))
+        default:
+            return false
+        }
     }
 
     /// Take the action out of the slot (about to execute or dismiss). The
@@ -146,6 +262,28 @@ final class InboundActionCoordinator: ObservableObject {
             let host = components.host, !host.isEmpty
         else { return nil }
         return url
+    }
+}
+
+// MARK: - Errors
+
+enum InboundActionError: Error, LocalizedError {
+    case invalidPrompt
+    case busy
+    case notConnected
+    case timedOut
+    case cancelled
+    case agent(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPrompt: return "The prompt is empty or too long."
+        case .busy: return "SLICC is already waiting on another automation request."
+        case .notConnected: return "SLICC is not connected to a leader."
+        case .timedOut: return "Timed out waiting for the reply."
+        case .cancelled: return "The request was dismissed."
+        case .agent(let message): return message
+        }
     }
 }
 
@@ -190,5 +328,29 @@ final class InboundPromptWaiter {
         guard let waiter = armed, waiter.scoopJid == scoopJid else { return }
         armed = nil
         waiter.settle(.failure(error))
+    }
+}
+
+// MARK: - InboundSnapshotWaiter
+
+/// One-shot waiter for a fresh leader snapshot: the transcript intent must
+/// not export stale in-memory rows, so it re-requests and waits for the
+/// `.snapshot` arm to land for the armed scoop (#1918).
+@MainActor
+final class InboundSnapshotWaiter {
+    private var armed: (scoopJid: String, settle: () -> Void)?
+
+    func arm(scoopJid: String, settle: @escaping () -> Void) {
+        armed = (scoopJid, settle)
+    }
+
+    func timeout() {
+        armed = nil
+    }
+
+    func settle(scoopJid: String?) {
+        guard let waiter = armed, waiter.scoopJid == scoopJid ?? waiter.scoopJid else { return }
+        armed = nil
+        waiter.settle()
     }
 }

@@ -77,6 +77,9 @@ struct ChatView: View {
                 if let targets = UITestHooks.remoteTargetsFixture() {
                     appState.remoteTargets = targets
                 }
+                if let inboundURL = UITestHooks.inboundOpenURL {
+                    _ = inboundActions.receive(url: inboundURL, needsConfirmation: true)
+                }
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
@@ -100,6 +103,7 @@ struct ChatView: View {
             VStack(spacing: 8) {
                 inboundOpenCard
                 inboundPromptCard
+                inboundPhaseChip
             }
         }
         .onChange(of: inboundActions.pendingOpen) { action in
@@ -107,6 +111,16 @@ struct ChatView: View {
             // without a second confirmation. Deep links keep their card.
             if let action, !action.needsConfirmation {
                 executeInboundOpen(action)
+            }
+        }
+        .onChange(of: inboundActions.pendingPrompt) { action in
+            if let action, !action.needsConfirmation {
+                executeInboundPrompt(action)
+            }
+        }
+        .onChange(of: inboundActions.pendingTranscript) { request in
+            if let request {
+                executeTranscriptExport(request)
             }
         }
     }
@@ -147,7 +161,6 @@ struct ChatView: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .accessibilityIdentifier("inbound-open-card")
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
@@ -187,6 +200,8 @@ struct ChatView: View {
                     Button("Dismiss") {
                         inboundActions.consume(prompt: action)
                         fireCallback(action.xCancel, params: [:])
+                        inboundActions.resolve(
+                            id: action.id, with: .failure(InboundActionError.cancelled))
                     }
                     .accessibilityIdentifier("inbound-prompt-dismiss")
                     Spacer()
@@ -204,7 +219,6 @@ struct ChatView: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .accessibilityIdentifier("inbound-prompt-card")
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
@@ -216,15 +230,22 @@ struct ChatView: View {
         else {
             fireCallback(
                 action.xError, params: ["errorMessage": "SLICC is not connected to a leader"])
+            inboundActions.resolve(id: action.id, with: .failure(InboundActionError.notConnected))
             return
         }
+        inboundActions.phase = .running("Waiting for SLICC's reply…")
         appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
             switch outcome {
             case .reply(let text):
+                inboundActions.phase = nil
                 fireCallback(
                     action.xSuccess, params: ["result": Self.boundedCallbackResult(text)])
+                inboundActions.resolve(id: action.id, with: .success(text))
             case .failure(let message):
+                inboundActions.phase = .failed(message)
                 fireCallback(action.xError, params: ["errorMessage": message])
+                inboundActions.resolve(
+                    id: action.id, with: .failure(InboundActionError.agent(message)))
             }
         }
         Task {
@@ -232,6 +253,84 @@ struct ChatView: View {
             appState.inboundPrompt.timeout()
         }
         appState.sendMessage(action.prompt)
+    }
+
+    /// Transcript export (#1918): re-request the leader snapshot so the
+    /// export is fresh, then render exactly what the phone displays.
+    private func executeTranscriptExport(_ request: InboundActionCoordinator.PendingTranscript) {
+        inboundActions.consume(transcript: request)
+        guard appState.connectionState == .connected, !appState.isLeaderStalled else {
+            inboundActions.resolve(
+                id: request.id, with: .failure(InboundActionError.notConnected))
+            return
+        }
+        inboundActions.phase = .running("Refreshing the conversation…")
+        appState.inboundSnapshot.arm(scoopJid: appState.selectedScoopJid ?? "") {
+            inboundActions.phase = nil
+            let markdown = Self.transcriptMarkdown(
+                label: appState.selectedScoop?.assistantLabel ?? "SLICC",
+                messages: appState.messages)
+            inboundActions.resolve(id: request.id, with: .success(markdown))
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(30))
+            appState.inboundSnapshot.timeout()
+            inboundActions.phase = nil
+            inboundActions.resolve(
+                id: request.id, with: .failure(InboundActionError.timedOut))
+        }
+        appState.requestFreshSnapshot()
+    }
+
+    /// Transient status for a running automation (and its failure) — the
+    /// coordinator's phase, rendered as a quiet chip instead of a card.
+    @ViewBuilder
+    private var inboundPhaseChip: some View {
+        if let phase = inboundActions.phase {
+            HStack(spacing: 6) {
+                switch phase {
+                case .running(let message):
+                    ProgressView().controlSize(.mini)
+                    Text(message)
+                case .failed(let message):
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(message)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .accessibilityIdentifier("inbound-phase-chip")
+            .transition(.opacity)
+        }
+    }
+
+    /// The conversation as bounded Markdown — the same rows the screen
+    /// renders, nothing more. Truncated head-first when over budget so the
+    /// newest turns survive.
+    static func transcriptMarkdown(label: String, messages: [ChatMessage]) -> String {
+        var sections: [String] = ["# SLICC — \(label)"]
+        for message in messages {
+            let heading = message.role == .user ? "## You" : "## \(label)"
+            var body = message.content
+            if let tools = message.toolCalls, !tools.isEmpty {
+                let names = tools.map { "`\($0.name)`" }.joined(separator: ", ")
+                body += "\n\n_tools: \(names)_"
+            }
+            sections.append("\(heading)\n\n\(body)")
+        }
+        var rendered = sections.joined(separator: "\n\n")
+        let cap = InboundActionCoordinator.maxTranscriptBytes
+        if rendered.utf8.count > cap {
+            while rendered.utf8.count > cap - 32, sections.count > 2 {
+                sections.remove(at: 1)
+                rendered = sections.joined(separator: "\n\n")
+            }
+            rendered = "_older turns truncated_\n\n" + rendered
+        }
+        return rendered
     }
 
     /// Append our result parameters to the caller-supplied callback and

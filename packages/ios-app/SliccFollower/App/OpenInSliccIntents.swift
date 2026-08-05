@@ -34,6 +34,44 @@ enum InboundOpenError: Error, CustomLocalizedStringResourceConvertible {
     }
 }
 
+/// "Prompt SLICC" — sends a prompt to the connected leader and returns the
+/// completed reply as an intent value, so it can feed the next Shortcut
+/// action (#1918). Invoking the intent is the explicit user action; the
+/// shell executes without a second card and the intent awaits settlement.
+struct PromptSliccIntent: AppIntent {
+    static let title: LocalizedStringResource = "Prompt SLICC"
+    static let description = IntentDescription(
+        "Sends a prompt to the connected SLICC leader and returns the completed reply.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Prompt") var prompt: String
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let reply = try await InboundActionCoordinator.shared.runIntentPrompt(prompt)
+        return .result(value: reply)
+    }
+}
+
+/// "Get Current SLICC Conversation" — returns the selected conversation as
+/// a bounded Markdown file after a fresh leader snapshot (#1918). Exports
+/// exactly what the phone renders on screen; nothing is logged.
+struct GetSliccConversationIntent: AppIntent {
+    static let title: LocalizedStringResource = "Get Current SLICC Conversation"
+    static let description = IntentDescription(
+        "Returns the currently selected SLICC conversation as a Markdown file.")
+    static let openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<IntentFile> {
+        let markdown = try await InboundActionCoordinator.shared.runTranscriptRequest()
+        let file = IntentFile(
+            data: Data(markdown.utf8), filename: "slicc-conversation.md",
+            type: .plainText)
+        return .result(value: file)
+    }
+}
+
 struct SliccAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -41,5 +79,15 @@ struct SliccAppShortcuts: AppShortcutsProvider {
             phrases: ["Open in \(.applicationName)"],
             shortTitle: "Open in Browser",
             systemImageName: "globe")
+        AppShortcut(
+            intent: PromptSliccIntent(),
+            phrases: ["Prompt \(.applicationName)"],
+            shortTitle: "Prompt",
+            systemImageName: "text.bubble")
+        AppShortcut(
+            intent: GetSliccConversationIntent(),
+            phrases: ["Get \(.applicationName) conversation"],
+            shortTitle: "Get Conversation",
+            systemImageName: "doc.text")
     }
 }
