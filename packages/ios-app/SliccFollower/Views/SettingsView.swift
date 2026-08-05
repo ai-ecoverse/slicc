@@ -150,11 +150,7 @@ struct SettingsView: View {
         } header: {
             Text("iCloud Sessions")
         } footer: {
-            Text(
-                "Leaders started with Sliccstart on this Apple ID appear here "
-                    + "automatically. Others (cloud, another Apple ID) still join via a "
-                    + "pasted Join URL below."
-            )
+            Text("Sessions started with Sliccstart on your other devices appear automatically.")
         }
         .onAppear {
             appState.sessionStore.reload()
@@ -233,8 +229,8 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             Text(
                 reason == .iCloudUnavailable
-                    ? "iCloud is unavailable on this device. Sign in to iCloud, or paste a Join URL below."
-                    : "No active sessions. Start a leader with Sliccstart on a Mac using this Apple ID, or paste a Join URL below."
+                    ? "Sign in to iCloud to see sessions from your other devices."
+                    : "No active sessions."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -275,7 +271,7 @@ struct SettingsView: View {
         } header: {
             Text("Connection")
         } footer: {
-            Text("The Join URL pairs this phone with a SLICC desktop browser so it can mirror the conversation.")
+            Text("Connect to a SLICC session with its Join URL.")
         }
     }
 
@@ -520,7 +516,7 @@ private struct SpeechSettingsSection: View {
     private var kokoroInstallationStatus: some View {
         switch kokoroModels.state {
         case .notInstalled:
-            Text("One 83 MB download, Wi-Fi only. Replies use the system voice until it's installed.")
+            Text("83 MB. Downloads over Wi-Fi only.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("kokoro-install-status")
@@ -569,16 +565,17 @@ private struct SpeechSettingsSection: View {
         }
     }
 
-    /// "Downloading · 42% · about 40 s left". The ETA extrapolates from
-    /// elapsed wall-clock and completed fraction; it only appears once 5%
-    /// is in, because earlier extrapolations swing wildly.
+    /// "Downloading · 42% · About 40 seconds remaining" — Apple's download
+    /// phrasing. The ETA extrapolates from elapsed wall-clock and completed
+    /// fraction; it only appears once 5% is in, because earlier
+    /// extrapolations swing wildly.
     private func downloadStatusLine(fraction: Double) -> String {
-        var line = "Downloading on Wi-Fi · \(Int(fraction * 100))%"
+        var line = "Downloading · \(Int(fraction * 100))%"
         if let started = kokoroModels.downloadStartedAt, fraction >= 0.05, fraction < 1 {
             let elapsed = now.timeIntervalSince(started)
             let remaining = elapsed * (1 - fraction) / fraction
             if remaining.isFinite, remaining > 0 {
-                line += " · about \(Self.roundedETA(seconds: remaining)) left"
+                line += " · About \(Self.roundedETA(seconds: remaining)) remaining"
             }
         }
         return line
@@ -586,10 +583,11 @@ private struct SpeechSettingsSection: View {
 
     private static func roundedETA(seconds: Double) -> String {
         if seconds >= 90 {
-            return "\(Int((seconds / 60).rounded())) min"
+            let minutes = Int((seconds / 60).rounded())
+            return minutes == 1 ? "1 minute" : "\(minutes) minutes"
         }
         // Sub-90s counts in tens of seconds so the number does not flicker.
-        return "\(max(10, Int((seconds / 10).rounded()) * 10)) s"
+        return "\(max(10, Int((seconds / 10).rounded()) * 10)) seconds"
     }
 }
 
