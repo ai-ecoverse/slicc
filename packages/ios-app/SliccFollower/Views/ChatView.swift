@@ -25,6 +25,11 @@ struct ChatView: View {
     /// Mirror the rail to the leading edge (`-leftHandedDock` /
     /// Settings toggle) — reachability for left-handed use.
     @AppStorage("leftHandedDock") private var leftHandedDock = false
+    /// Hosts the user chose to always open without the card, comma-joined.
+    @AppStorage("inboundAlwaysOpenHosts") private var alwaysOpenHosts = ""
+    /// Opt-in unattended prompts: the user made this policy call
+    /// explicitly by choosing Always on the prompt card.
+    @AppStorage("inboundAlwaysAllowPrompts") private var alwaysAllowPrompts = false
 
     init() {
         _presentation = StateObject(
@@ -107,14 +112,15 @@ struct ChatView: View {
             }
         }
         .onChange(of: inboundActions.pendingOpen) { action in
-            // The App-Intent route was an explicit user action — execute
-            // without a second confirmation. Deep links keep their card.
-            if let action, !action.needsConfirmation {
+            // The App-Intent route was an explicit user action, and an
+            // always-allowed host carries a standing decision — both
+            // execute without the card. Other deep links keep it.
+            if let action, !action.needsConfirmation || hostAlwaysAllowed(action.url) {
                 executeInboundOpen(action)
             }
         }
         .onChange(of: inboundActions.pendingPrompt) { action in
-            if let action, !action.needsConfirmation {
+            if let action, !action.needsConfirmation || alwaysAllowPrompts {
                 executeInboundPrompt(action)
             }
         }
@@ -144,21 +150,31 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
-                HStack {
+                HStack(spacing: 10) {
                     Button("Dismiss") {
                         inboundActions.consume(action)
                     }
+                    .modifier(GlassButton())
                     .accessibilityIdentifier("inbound-open-dismiss")
                     Spacer()
+                    if let host = action.url.host() {
+                        Button("Always") {
+                            allowHostAlways(host)
+                            executeInboundOpen(action)
+                        }
+                        .modifier(GlassButton())
+                        .accessibilityLabel("Always open \(host)")
+                        .accessibilityIdentifier("inbound-open-always")
+                    }
                     Button("Open") {
                         executeInboundOpen(action)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .modifier(GlassProminentButton())
                     .accessibilityIdentifier("inbound-open-confirm")
                 }
             }
-            .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(16)
+            .modifier(GlassCardBackground())
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
@@ -196,31 +212,54 @@ struct ChatView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                HStack {
+                HStack(spacing: 10) {
                     Button("Dismiss") {
                         inboundActions.consume(prompt: action)
                         fireCallback(action.xCancel, params: [:])
                         inboundActions.resolve(
                             id: action.id, with: .failure(InboundActionError.cancelled))
                     }
+                    .modifier(GlassButton())
                     .accessibilityIdentifier("inbound-prompt-dismiss")
                     Spacer()
+                    Button("Always") {
+                        alwaysAllowPrompts = true
+                        executeInboundPrompt(action)
+                    }
+                    .modifier(GlassButton())
+                    .disabled(
+                        appState.connectionState != .connected || appState.isLeaderStalled
+                    )
+                    .accessibilityLabel("Always send prompts without asking")
+                    .accessibilityIdentifier("inbound-prompt-always")
                     Button("Send") {
                         executeInboundPrompt(action)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .modifier(GlassProminentButton())
                     .disabled(
                         appState.connectionState != .connected || appState.isLeaderStalled
                     )
                     .accessibilityIdentifier("inbound-prompt-send")
                 }
             }
-            .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(16)
+            .modifier(GlassCardBackground())
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
+    }
+
+    /// Standing per-host decision for deep-linked opens.
+    private func hostAlwaysAllowed(_ url: URL) -> Bool {
+        guard let host = url.host()?.lowercased() else { return false }
+        return alwaysOpenHosts.split(separator: ",").map(String.init).contains(host)
+    }
+
+    private func allowHostAlways(_ host: String) {
+        let normalized = host.lowercased()
+        guard !hostAlwaysAllowed(URL(string: "https://\(normalized)")!) else { return }
+        alwaysOpenHosts = alwaysOpenHosts.isEmpty ? normalized : alwaysOpenHosts + "," + normalized
     }
 
     private func executeInboundPrompt(_ action: InboundActionCoordinator.PendingPrompt) {
