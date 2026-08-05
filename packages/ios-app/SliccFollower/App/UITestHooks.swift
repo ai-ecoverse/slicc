@@ -16,6 +16,13 @@ import UIKit
     /// Compiled out of release builds. A shipped binary must not carry an
     /// argument that skips the connection path.
     enum UITestHooks {
+        /// Seed an inbound open request (`-uiTestInboundOpenURL <url>`) so
+        /// the confirmation card renders without Safari or simctl openurl.
+        static var inboundOpenURL: URL? {
+            UserDefaults.standard.string(forKey: "uiTestInboundOpenURL")
+                .flatMap(URL.init(string:))
+        }
+
         /// Route straight to `FixtureConversationView` and skip the join /
         /// connect path entirely, so no test needs a live WebRTC peer.
         static var routesToFixture: Bool {
