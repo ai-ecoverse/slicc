@@ -3,6 +3,7 @@ import XCTest
 
 @testable import SliccFollower
 
+@MainActor
 final class KokoroResourceDownloaderTests: XCTestCase {
     private enum TestError: Error {
         case cacheMiss
@@ -25,9 +26,15 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         init(_ behavior: Behavior) { self.behavior = behavior }
 
         func downloadSnapshot(
-            to destination: URL, matching globs: [String], localFilesOnly: Bool
+            to destination: URL, matching globs: [String], localFilesOnly: Bool,
+            progressHandler: KokoroDownloadProgressHandler?
         ) async throws -> URL {
             modes.append(localFilesOnly)
+            let progress = Progress(totalUnitCount: 100)
+            if !localFilesOnly {
+                progress.completedUnitCount = 35
+                await progressHandler?(progress)
+            }
             switch (behavior, localFilesOnly) {
             case (.cacheHit, true):
                 try populate(destination)
@@ -43,6 +50,10 @@ final class KokoroResourceDownloaderTests: XCTestCase {
                 throw TestError.http
             default:
                 throw TestError.cacheMiss
+            }
+            if !localFilesOnly {
+                progress.completedUnitCount = 100
+                await progressHandler?(progress)
             }
             return destination
         }
@@ -92,10 +103,15 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         let fake = FakeHubDownloader(.coldFetch)
         let downloader = KokoroAneResourceDownloader(hubDownloader: fake)
 
-        _ = try await downloader.ensureModels(variant: .english, directory: directory)
+        var fractions: [Double] = []
+        _ = try await downloader.ensureModels(
+            variant: .english,
+            directory: directory,
+            progressHandler: { fractions.append($0.fractionCompleted) })
 
         let requestedModes = await fake.requestedModes()
         XCTAssertEqual(requestedModes, [true, false])
+        XCTAssertEqual(fractions, [0.35, 1])
         let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
@@ -138,6 +154,25 @@ final class KokoroResourceDownloaderTests: XCTestCase {
         XCTAssertEqual(resolved, directory)
         let requestedModes = await fake.requestedModes()
         XCTAssertEqual(requestedModes, [])
+    }
+
+    func testManagedSnapshotWithMarkerReentersLocalOnlyHubCheck() async throws {
+        let (directory, cleanup) = temporaryDirectory()
+        defer { cleanup() }
+        for entry in KokoroAneResourceDownloader.downloadableEntries {
+            try createEntry(entry, in: directory)
+        }
+        try KokoroAneResourceDownloader.revision.write(
+            to: directory.appendingPathComponent(KokoroAneResourceDownloader.completionMarker),
+            atomically: true,
+            encoding: .utf8)
+        let fake = FakeHubDownloader(.cacheHit)
+        let downloader = KokoroAneResourceDownloader(hubDownloader: fake)
+
+        _ = try await downloader.ensureModels(variant: .english, directory: directory)
+
+        let requestedModes = await fake.requestedModes()
+        XCTAssertEqual(requestedModes, [true])
     }
 
     func testHuggingFaceVocabIndexShapeLoadsAcousticVocabulary() throws {
