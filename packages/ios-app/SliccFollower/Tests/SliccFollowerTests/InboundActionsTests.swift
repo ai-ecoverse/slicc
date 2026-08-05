@@ -108,14 +108,14 @@ final class InboundActionsTests: XCTestCase {
     func testWaiterSettlesOnceAndIgnoresForeignScoop() {
         let waiter = InboundPromptWaiter()
         var outcomes: [InboundPromptWaiter.Outcome] = []
-        waiter.arm(scoopJid: "cone") { outcomes.append($0) }
+        let token = waiter.arm(scoopJid: "cone") { outcomes.append($0) }
 
         waiter.settle(with: "ignored", scoopJid: "other-scoop")
         XCTAssertTrue(outcomes.isEmpty, "a foreign scoop's reply never settles the waiter")
 
         waiter.settle(with: "the reply", scoopJid: "cone")
         waiter.settle(with: "a second reply", scoopJid: "cone")
-        waiter.timeout()
+        XCTAssertFalse(waiter.timeout(token: token))
 
         XCTAssertEqual(outcomes.count, 1, "first settle consumes the waiter")
         guard case .reply(let text) = outcomes[0] else { return XCTFail("expected a reply") }
@@ -126,11 +126,39 @@ final class InboundActionsTests: XCTestCase {
     func testWaiterTimeoutSettlesFailure() {
         let waiter = InboundPromptWaiter()
         var outcomes: [InboundPromptWaiter.Outcome] = []
-        waiter.arm(scoopJid: "cone") { outcomes.append($0) }
-        waiter.timeout()
+        let token = waiter.arm(scoopJid: "cone") { outcomes.append($0) }
+        XCTAssertTrue(waiter.timeout(token: token))
         waiter.settle(with: "late answer", scoopJid: "cone")
         XCTAssertEqual(outcomes.count, 1, "a late answer must not settle a timed-out request")
         guard case .failure = outcomes[0] else { return XCTFail("expected a failure") }
+    }
+
+    @MainActor
+    func testStaleWaiterTimeoutDoesNotSettleReplacement() {
+        let waiter = InboundPromptWaiter()
+        var outcomes: [InboundPromptWaiter.Outcome] = []
+        let staleToken = waiter.arm(scoopJid: "cone") { outcomes.append($0) }
+        let currentToken = waiter.arm(scoopJid: "cone") { outcomes.append($0) }
+
+        XCTAssertFalse(waiter.timeout(token: staleToken))
+        XCTAssertTrue(outcomes.isEmpty, "an earlier timeout must not settle the replacement")
+        XCTAssertTrue(waiter.timeout(token: currentToken))
+        XCTAssertEqual(outcomes.count, 1)
+    }
+
+    // MARK: - Snapshot waiter
+
+    @MainActor
+    func testStaleSnapshotTimeoutDoesNotDisarmReplacement() {
+        let waiter = InboundSnapshotWaiter()
+        var settled = false
+        let staleToken = waiter.arm(scoopJid: "cone") {}
+        let currentToken = waiter.arm(scoopJid: "cone") { settled = true }
+
+        XCTAssertFalse(waiter.timeout(token: staleToken))
+        waiter.settle(scoopJid: "cone")
+        XCTAssertTrue(settled, "the replacement must remain armed after an earlier timeout")
+        XCTAssertFalse(waiter.timeout(token: currentToken))
     }
 
     // MARK: - App Group inbox

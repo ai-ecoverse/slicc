@@ -305,17 +305,23 @@ final class InboundPromptWaiter {
         case failure(String)
     }
 
-    private var armed: (scoopJid: String, settle: (Outcome) -> Void)?
+    private var armed: (token: UUID, scoopJid: String, settle: (Outcome) -> Void)?
 
-    func arm(scoopJid: String, settle: @escaping (Outcome) -> Void) {
-        armed = (scoopJid, settle)
+    @discardableResult
+    func arm(scoopJid: String, settle: @escaping (Outcome) -> Void) -> UUID {
+        let token = UUID()
+        armed = (token, scoopJid, settle)
+        return token
     }
 
-    /// Settle as timed out if still armed; the waiter otherwise won.
-    func timeout() {
-        guard let waiter = armed else { return }
+    /// Settle only the arm that scheduled this timeout. A later request may
+    /// have replaced it while the timeout task was sleeping.
+    @discardableResult
+    func timeout(token: UUID) -> Bool {
+        guard let waiter = armed, waiter.token == token else { return false }
         armed = nil
         waiter.settle(.failure("Timed out waiting for the reply"))
+        return true
     }
 
     func settle(with replyText: String, scoopJid: String) {
@@ -338,14 +344,20 @@ final class InboundPromptWaiter {
 /// `.snapshot` arm to land for the armed scoop (#1918).
 @MainActor
 final class InboundSnapshotWaiter {
-    private var armed: (scoopJid: String, settle: () -> Void)?
+    private var armed: (token: UUID, scoopJid: String, settle: () -> Void)?
 
-    func arm(scoopJid: String, settle: @escaping () -> Void) {
-        armed = (scoopJid, settle)
+    @discardableResult
+    func arm(scoopJid: String, settle: @escaping () -> Void) -> UUID {
+        let token = UUID()
+        armed = (token, scoopJid, settle)
+        return token
     }
 
-    func timeout() {
+    @discardableResult
+    func timeout(token: UUID) -> Bool {
+        guard armed?.token == token else { return false }
         armed = nil
+        return true
     }
 
     func settle(scoopJid: String?) {

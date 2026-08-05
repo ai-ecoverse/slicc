@@ -16,11 +16,13 @@ final class ChatPresentationStateTests: XCTestCase {
             return state
         }
         let appState = AppState()
+        let inboundActions = InboundActionCoordinator()
         func root(for step: LayoutStep) -> AnyView {
             AnyView(
                 ChatView(presentation: makeState())
                     .environment(\.horizontalSizeClass, step.sizeClass)
                     .environmentObject(appState)
+                    .environmentObject(inboundActions)
                     .frame(width: step.width, height: 768)
             )
         }
@@ -92,12 +94,14 @@ final class ChatPresentationStateTests: XCTestCase {
     func testTerminalKeepsItsTypedInputAcrossMultitaskingLayoutTransitions() async throws {
         let steps = multitaskingSteps
         let appState = AppState()
+        let inboundActions = InboundActionCoordinator()
         let owner = ChatPresentationState(activeSurface: .term, terminalWasOpened: true)
         func root(for step: LayoutStep) -> AnyView {
             AnyView(
                 ChatView(presentation: owner)
                     .environment(\.horizontalSizeClass, step.sizeClass)
                     .environmentObject(appState)
+                    .environmentObject(inboundActions)
                     .frame(width: step.width, height: 768)
             )
         }

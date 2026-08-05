@@ -229,7 +229,7 @@ struct ChatView: View {
             return
         }
         inboundActions.phase = .running("Waiting for SLICC's reply…")
-        appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
+        let timeoutToken = appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
             switch outcome {
             case .reply(let text):
                 inboundActions.phase = nil
@@ -245,7 +245,7 @@ struct ChatView: View {
         }
         Task {
             try? await Task.sleep(for: .seconds(180))
-            appState.inboundPrompt.timeout()
+            appState.inboundPrompt.timeout(token: timeoutToken)
         }
         appState.sendMessage(action.prompt)
     }
@@ -260,7 +260,9 @@ struct ChatView: View {
             return
         }
         inboundActions.phase = .running("Refreshing the conversation…")
-        appState.inboundSnapshot.arm(scoopJid: appState.selectedScoopJid ?? "") {
+        let timeoutToken = appState.inboundSnapshot.arm(
+            scoopJid: appState.selectedScoopJid ?? ""
+        ) {
             inboundActions.phase = nil
             let markdown = Self.transcriptMarkdown(
                 label: appState.selectedScoop?.assistantLabel ?? "SLICC",
@@ -269,7 +271,7 @@ struct ChatView: View {
         }
         Task {
             try? await Task.sleep(for: .seconds(30))
-            appState.inboundSnapshot.timeout()
+            guard appState.inboundSnapshot.timeout(token: timeoutToken) else { return }
             inboundActions.phase = nil
             inboundActions.resolve(
                 id: request.id, with: .failure(InboundActionError.timedOut))
@@ -1122,6 +1124,7 @@ private struct ScoopStatusAvatar: View {
     ChatView()
         .preferredColorScheme(.dark)
         .environmentObject(AppState())
+        .environmentObject(InboundActionCoordinator())
 }
 
 #Preview("Scoop status treatments") {
