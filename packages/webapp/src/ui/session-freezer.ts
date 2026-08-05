@@ -185,15 +185,26 @@ async function curateMemoriesBestEffort(
       sessionCount: await readSessionCount(opts.vfs),
     });
   } catch (err) {
-    result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    result = {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+      legacyFallbackSafe: false,
+    };
   }
   if (result.ok) {
     log.info('Agentic memory pass completed', { filename: frozen.filename });
     return;
   }
-  log.warn('Agentic memory pass failed — falling back to legacy extraction', {
+  if (!result.legacyFallbackSafe) {
+    log.warn('Agentic memory pass unfinished — archive retained; skipping legacy extraction', {
+      filename: frozen.filename,
+      reason: result.reason,
+    });
+    return;
+  }
+  log.warn('Agentic memory pass failed after finishing — falling back to legacy extraction', {
     filename: frozen.filename,
-    reason: result.reason ?? 'unknown',
+    reason: result.reason,
   });
   await extractMemoriesBestEffort(opts, agentMessages, true);
 }

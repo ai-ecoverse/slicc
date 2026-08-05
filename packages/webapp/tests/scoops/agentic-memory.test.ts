@@ -119,7 +119,11 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: false, reason: 'bridge unavailable' });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'bridge unavailable',
+      legacyFallbackSafe: true,
+    });
   });
 
   it('returns ok:false for a non-zero agent exit', async () => {
@@ -134,7 +138,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: false, reason: 'curation failed' });
+    expect(result).toEqual({ ok: false, reason: 'curation failed', legacyFallbackSafe: true });
   });
 
   it('returns ok:false when the configured timeout elapses', async () => {
@@ -152,7 +156,11 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     });
     await vi.advanceTimersByTimeAsync(1000);
 
-    await expect(pass).resolves.toEqual({ ok: false, reason: 'timeout' });
+    await expect(pass).resolves.toEqual({
+      ok: false,
+      reason: 'timeout',
+      legacyFallbackSafe: false,
+    });
   });
 
   it('clamps timeoutSeconds to the 600-second maximum', async () => {
@@ -177,6 +185,10 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(pass).resolves.toEqual({ ok: false, reason: 'timeout' });
+    await expect(pass).resolves.toEqual({
+      ok: false,
+      reason: 'timeout',
+      legacyFallbackSafe: false,
+    });
   });
 });

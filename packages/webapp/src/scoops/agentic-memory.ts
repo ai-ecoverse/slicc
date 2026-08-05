@@ -47,10 +47,9 @@ export interface RunAgenticMemoryPassOptions {
   signal?: AbortSignal;
 }
 
-export interface AgenticMemoryPassResult {
-  ok: boolean;
-  reason?: string;
-}
+export type AgenticMemoryPassResult =
+  | { ok: true }
+  | { ok: false; reason: string; legacyFallbackSafe: boolean };
 
 type FrontmatterValue = string | string[];
 type WaitOutcome =
@@ -63,7 +62,9 @@ export async function runAgenticMemoryPass(
   opts: RunAgenticMemoryPassOptions
 ): Promise<AgenticMemoryPassResult> {
   try {
-    if (opts.signal?.aborted) return { ok: false, reason: 'aborted' };
+    if (opts.signal?.aborted) {
+      return { ok: false, reason: 'aborted', legacyFallbackSafe: false };
+    }
     const config = await loadMemoryConfig(opts.vfs);
     const prompt = substitutePlaceholders(config.promptTemplate, {
       MEMORY_PATH: CONE_MEMORY_PATH,
@@ -74,16 +75,26 @@ export async function runAgenticMemoryPass(
     const spawnOptions = buildSpawnOptions(config, prompt);
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
     const outcome = await waitForSpawn(spawnPromise, config.timeoutSeconds * 1000, opts.signal);
-    if (outcome.type === 'timeout') return { ok: false, reason: 'timeout' };
-    if (outcome.type === 'aborted') return { ok: false, reason: 'aborted' };
-    if (outcome.type === 'error') return { ok: false, reason: errorText(outcome.error) };
+    if (outcome.type === 'timeout') {
+      return { ok: false, reason: 'timeout', legacyFallbackSafe: false };
+    }
+    if (outcome.type === 'aborted') {
+      return { ok: false, reason: 'aborted', legacyFallbackSafe: false };
+    }
+    if (outcome.type === 'error') {
+      return { ok: false, reason: errorText(outcome.error), legacyFallbackSafe: true };
+    }
     if (outcome.result.exitCode !== 0) {
-      return { ok: false, reason: outcome.result.finalText || `exit-${outcome.result.exitCode}` };
+      return {
+        ok: false,
+        reason: outcome.result.finalText || `exit-${outcome.result.exitCode}`,
+        legacyFallbackSafe: true,
+      };
     }
     return { ok: true };
   } catch (error) {
     log.warn('Agentic memory pass failed', { error: errorText(error) });
-    return { ok: false, reason: errorText(error) };
+    return { ok: false, reason: errorText(error), legacyFallbackSafe: false };
   }
 }
 

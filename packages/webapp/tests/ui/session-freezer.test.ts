@@ -283,7 +283,11 @@ describe('freezeConeSession', () => {
     mockRunOneOffCompactionCall
       .mockResolvedValueOnce('Agentic fallback session')
       .mockResolvedValueOnce('- durable fallback memory');
-    mockRunAgenticMemoryPass.mockResolvedValueOnce({ ok: false, reason: 'spawn failed' });
+    mockRunAgenticMemoryPass.mockResolvedValueOnce({
+      ok: false,
+      reason: 'spawn failed',
+      legacyFallbackSafe: true,
+    });
     const vfs = makeFakeVfs();
 
     const frozen = await freezeConeSession({
@@ -312,6 +316,40 @@ describe('freezeConeSession', () => {
     ]);
     expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('durable fallback memory');
     expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
+  });
+
+  it('skips legacy extraction when the agentic pass times out', async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Timed out agentic session');
+    mockRunAgenticMemoryPass.mockResolvedValueOnce({
+      ok: false,
+      reason: 'timeout',
+      legacyFallbackSafe: false,
+    });
+    const vfs = makeFakeVfs();
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: vi.fn(),
+    });
+
+    expect(frozen).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
   });
 
   it('round-trips aggregate cost and per-model usage through the index and archive', async () => {
