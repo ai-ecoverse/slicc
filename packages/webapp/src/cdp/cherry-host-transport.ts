@@ -21,6 +21,7 @@ import {
   isCherryVersionMismatch,
   SUPPORTED_CHERRY_PROTOCOL_VERSIONS,
 } from './cherry-host-protocol.js';
+import { PendingRequestTable } from './pending-request-table.js';
 import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
 import type { CDPConnectOptions } from './types.js';
 
@@ -42,10 +43,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
   private opts: CherryHostTransportOptions;
   private channelId: string | null = null;
   private nextId = 1;
-  private pending = new Map<
-    number,
-    { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }
-  >();
+  private pending = new PendingRequestTable<number>();
   private connectResolve: (() => void) | null = null;
   private connectReject: ((err: Error) => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -293,8 +291,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     if (typeof window !== 'undefined') {
       window.removeEventListener('message', this.boundHandler);
     }
-    for (const [, p] of this.pending) p.reject(new Error('Cherry transport disconnected'));
-    this.pending.clear();
+    this.pending.rejectAll('Cherry transport disconnected');
     // Abort any in-flight host-initiated exports so their Promises reject cleanly.
     for (const [, ctrl] of this.pendingHostExports) ctrl.abort();
     this.pendingHostExports.clear();
@@ -312,30 +309,20 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     timeout = DEFAULT_TIMEOUT
   ): Promise<Record<string, unknown>> {
     const id = this.nextId++;
-    return new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Cherry CDP timed out after ${timeout}ms: ${method}`));
-      }, timeout);
-      this.pending.set(id, {
-        resolve: (r) => {
-          clearTimeout(timer);
-          resolve(r);
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-      this.post({
-        cherry: this.negotiatedVersion,
-        channelId: this.channelId!,
-        kind: 'cdp.request',
-        id,
-        method,
-        params,
-      });
+    const response = this.pending.issue(
+      id,
+      timeout,
+      `Cherry CDP timed out after ${timeout}ms: ${method}`
+    );
+    this.post({
+      cherry: this.negotiatedVersion,
+      channelId: this.channelId!,
+      kind: 'cdp.request',
+      id,
+      method,
+      params,
     });
+    return response;
   }
 
   /** Test seam: inject a MessageEvent without a real window. */
@@ -402,12 +389,12 @@ export class CherryHostTransport extends SyntheticCdpTransport {
         this.handleWelcome(env);
         return;
       case 'cdp.response': {
-        const p = this.pending.get(env.id);
-        if (!p) return;
-        this.pending.delete(env.id);
         if (env.error)
-          p.reject(new Error(`Cherry CDP error: ${env.error.message} (${env.error.code})`));
-        else p.resolve(env.result ?? {});
+          this.pending.reject(
+            env.id,
+            new Error(`Cherry CDP error: ${env.error.message} (${env.error.code})`)
+          );
+        else this.pending.resolve(env.id, env.result ?? {});
         return;
       }
       case 'cdp.event':

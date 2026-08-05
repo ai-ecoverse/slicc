@@ -8,6 +8,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
+import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {
   CDPCommand,
@@ -34,13 +35,7 @@ export class CDPClient implements CDPTransport {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private _superseded = false;
-  private pending = new Map<
-    number,
-    {
-      resolve: (result: Record<string, unknown>) => void;
-      reject: (error: Error) => void;
-    }
-  >();
+  private pending = new PendingRequestTable<number>();
   private listeners = new Map<string, Set<CDPEventListener>>();
   private _state: ConnectionState = 'disconnected';
 
@@ -149,24 +144,13 @@ export class CDPClient implements CDPTransport {
 
     log.debug('Send', { method, id, sessionId });
 
-    return new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`CDP command timed out after ${timeout}ms: ${method}`));
-      }, timeout);
-
-      this.pending.set(id, {
-        resolve: (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      this.ws!.send(JSON.stringify(message));
-    });
+    const response = this.pending.issue(
+      id,
+      timeout,
+      `CDP command timed out after ${timeout}ms: ${method}`
+    );
+    this.ws.send(JSON.stringify(message));
+    return response;
   }
 
   /**
@@ -196,20 +180,14 @@ export class CDPClient implements CDPTransport {
    * Wait for a specific CDP event to fire once.
    */
   once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Timed out waiting for event: ${event}`));
-      }, timeout);
-
-      const handler: CDPEventListener = (params) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
-      };
-
-      this.on(event, handler);
-    });
+    return waitForEvent<Record<string, unknown>>(
+      (handler) => {
+        this.on(event, handler);
+        return () => this.off(event, handler);
+      },
+      timeout,
+      `Timed out waiting for event: ${event}`
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -228,19 +206,18 @@ export class CDPClient implements CDPTransport {
     if ('id' in msg && typeof msg.id === 'number') {
       const response = msg as CDPResponse;
       log.debug('Response', { id: response.id, hasError: !!response.error });
-      const p = this.pending.get(response.id);
-      if (p) {
-        this.pending.delete(response.id);
-        if (response.error) {
-          log.error('Command error', {
-            id: response.id,
-            code: response.error.code,
-            message: response.error.message,
-          });
-          p.reject(new Error(`CDP error: ${response.error.message} (${response.error.code})`));
-        } else {
-          p.resolve(response.result ?? {});
-        }
+      if (response.error) {
+        log.error('Command error', {
+          id: response.id,
+          code: response.error.code,
+          message: response.error.message,
+        });
+        this.pending.reject(
+          response.id,
+          new Error(`CDP error: ${response.error.message} (${response.error.code})`)
+        );
+      } else {
+        this.pending.resolve(response.id, response.result ?? {});
       }
       return;
     }
@@ -283,15 +260,13 @@ export class CDPClient implements CDPTransport {
     const reason = superseded
       ? 'CDP connection superseded by another SLICC tab/window on this instance'
       : 'CDP connection closed';
-    for (const [, p] of this.pending) {
-      p.reject(new Error(reason));
-    }
+    this.pending.rejectAll(reason);
     this.cleanup();
   }
 
   private cleanup(): void {
     this.ws = null;
     this._state = 'disconnected';
-    this.pending.clear();
+    this.pending.rejectAll('CDP client disconnected');
   }
 }

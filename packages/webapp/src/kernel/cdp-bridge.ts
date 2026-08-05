@@ -17,6 +17,7 @@
  * itself a leaf module).
  */
 
+import { PendingRequestTable, waitForEvent } from '../cdp/pending-request-table.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cdp/types.js';
 
@@ -107,17 +108,11 @@ export interface CdpBridgeOptions {
   label?: string;
 }
 
-interface PendingCommand {
-  resolve: (result: Record<string, unknown>) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 export class CdpTransportBridge implements CDPTransport {
   private _state: ConnectionState = 'disconnected';
   private nextCommandId = 1;
   private listeners = new Map<string, Set<CDPEventListener>>();
-  private pendingCommands = new Map<number, PendingCommand>();
+  private pendingCommands = new PendingRequestTable<number>();
   private unsubscribe: (() => void) | null = null;
   private readonly opts: CdpBridgeOptions;
   private readonly label: string;
@@ -143,11 +138,7 @@ export class CdpTransportBridge implements CDPTransport {
     this.unsubscribe?.();
     this.unsubscribe = null;
 
-    for (const [, pending] of this.pendingCommands) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error(`${this.label} disconnected`));
-    }
-    this.pendingCommands.clear();
+    this.pendingCommands.rejectAll(`${this.label} disconnected`);
     this.listeners.clear();
     this._state = 'disconnected';
   }
@@ -165,41 +156,20 @@ export class CdpTransportBridge implements CDPTransport {
     const id = this.nextCommandId++;
     const envelope = this.opts.buildCommandEnvelope(id, method, params, sessionId);
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        this.pendingCommands.delete(id);
-        reject(new Error(`CDP command timed out after ${timeout}ms: ${method}`));
-      }, timeout);
+    const response = this.pendingCommands.issue(
+      id,
+      timeout,
+      `CDP command timed out after ${timeout}ms: ${method}`
+    );
 
-      this.pendingCommands.set(id, {
-        resolve: (result) => {
-          if (settled) return;
-          settled = true;
-          resolve(result);
-        },
-        reject: (err) => {
-          if (settled) return;
-          settled = true;
-          reject(err);
-        },
-        timer,
-      });
-
-      this.opts.sendEnvelope(envelope).catch((err: unknown) => {
-        if (settled) return;
-        settled = true;
-        this.pendingCommands.delete(id);
-        clearTimeout(timer);
-        reject(
-          new Error(
-            `Failed to send CDP command: ${err instanceof Error ? err.message : String(err)}`
-          )
-        );
-      });
+    this.opts.sendEnvelope(envelope).catch((err: unknown) => {
+      this.pendingCommands.reject(
+        id,
+        new Error(`Failed to send CDP command: ${err instanceof Error ? err.message : String(err)}`)
+      );
     });
+
+    return response;
   }
 
   on(event: string, listener: CDPEventListener): void {
@@ -226,20 +196,14 @@ export class CdpTransportBridge implements CDPTransport {
   }
 
   once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.off(event, handler);
-        reject(new Error(`Timed out waiting for event: ${event}`));
-      }, timeout);
-
-      const handler: CDPEventListener = (params) => {
-        clearTimeout(timer);
-        this.off(event, handler);
-        resolve(params);
-      };
-
-      this.on(event, handler);
-    });
+    return waitForEvent<Record<string, unknown>>(
+      (handler) => {
+        this.on(event, handler);
+        return () => this.off(event, handler);
+      },
+      timeout,
+      `Timed out waiting for event: ${event}`
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -259,17 +223,14 @@ export class CdpTransportBridge implements CDPTransport {
   }
 
   private handleResponse(resp: ParsedCdpResponse): void {
-    const pending = this.pendingCommands.get(resp.id);
-    if (!pending) {
+    if (!this.pendingCommands.has(resp.id)) {
       this.opts.onUnknownResponseId?.(resp.id);
       return;
     }
-    this.pendingCommands.delete(resp.id);
-    clearTimeout(pending.timer);
     if (resp.error) {
-      pending.reject(new Error(resp.error));
+      this.pendingCommands.reject(resp.id, new Error(resp.error));
     } else {
-      pending.resolve(resp.result ?? {});
+      this.pendingCommands.resolve(resp.id, resp.result ?? {});
     }
   }
 
