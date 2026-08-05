@@ -22,8 +22,8 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ### Memory curator
 
-- Keep `shared/MEMORY.md` byte-for-byte aligned with the exported default in
-  `packages/webapp/src/scoops/agentic-memory.ts`; the drift test enforces this.
+- `shared/MEMORY.md` is the single source for the runner's build-time fallback and the seeded
+  `/shared/MEMORY.md` file.
 - The file is seeded only when absent, so user and skill customizations survive later boots.
 
 ### Skills

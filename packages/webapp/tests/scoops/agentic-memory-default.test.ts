@@ -1,14 +1,7 @@
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { DEFAULT_MEMORY_MD } from '../../src/scoops/agentic-memory.js';
+import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';
 import { createDefaultSharedFiles } from '../../src/scoops/skills.js';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '..', '..', '..', '..');
-const bundledMemory = readFileSync(resolve(repoRoot, 'packages/vfs-root/shared/MEMORY.md'), 'utf8');
 
 let dbCounter = 0;
 let vfs: VirtualFS | undefined;
@@ -19,8 +12,18 @@ afterEach(async () => {
 });
 
 describe('bundled MEMORY.md', () => {
-  it('matches the runner fallback exactly', () => {
-    expect(bundledMemory).toBe(DEFAULT_MEMORY_MD);
+  it('parses as the runner fallback', async () => {
+    const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
+
+    await expect(
+      runAgenticMemoryPass({
+        spawn,
+        vfs: { readFile: async () => DEFAULT_MEMORY_MD },
+        sessionArchivePath: '/sessions/frozen.md',
+        sessionCount: 1,
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(spawn).toHaveBeenCalledOnce();
   });
 
   it('is seeded on a fresh VFS without overwriting user edits', async () => {
