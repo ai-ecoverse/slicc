@@ -165,7 +165,7 @@ function parseArrayValue(
     if (!value.startsWith('[') || !value.endsWith(']')) throw new Error('Expected an array');
     const inner = value.slice(1, -1).trim();
     return {
-      value: inner ? inner.split(',').map(parseScalar) : [],
+      value: inner ? splitInlineArray(inner) : [],
       lastIndex: keyIndex,
     };
   }
@@ -174,10 +174,41 @@ function parseArrayValue(
   for (let index = keyIndex + 1; index < lines.length; index += 1) {
     const item = lines[index].match(/^\s+-\s+(.+)$/);
     if (!item) break;
-    value.push(parseScalar(item[1]));
+    value.push(parseScalar(stripBlockArrayComment(item[1])));
     lastIndex = index;
   }
   return { value, lastIndex };
+}
+
+function splitInlineArray(inner: string): string[] {
+  const items: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < inner.length; index += 1) {
+    const char = inner[index];
+    if (char === '"' || char === "'") {
+      quote = quote === char ? undefined : (quote ?? char);
+    } else if (char === ',' && !quote) {
+      items.push(parseScalar(inner.slice(start, index)));
+      start = index + 1;
+    }
+  }
+  if (quote) throw new Error('Unclosed quoted value');
+  items.push(parseScalar(inner.slice(start)));
+  return items;
+}
+
+function stripBlockArrayComment(raw: string): string {
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === '"' || char === "'") {
+      quote = quote === char ? undefined : (quote ?? char);
+    } else if (char === '#' && !quote && (index === 0 || /\s/.test(raw[index - 1]))) {
+      return raw.slice(0, index).trimEnd();
+    }
+  }
+  return raw;
 }
 
 function parseScalar(raw: string): string {
@@ -215,7 +246,12 @@ function readTimeout(value: FrontmatterValue | undefined): number {
 }
 
 function validatePaths(paths: string[], key: string): void {
-  if (paths.some((path) => !path.startsWith('/') || path.includes('\0'))) {
+  if (
+    paths.some(
+      (path) =>
+        !path.startsWith('/') || path.includes('\0') || (key === 'writablePaths' && path === '/')
+    )
+  ) {
     throw new Error(`${key} must contain absolute VFS paths`);
   }
 }

@@ -37,4 +37,8 @@ Rules:
 
 <!-- How to customize
 Add curator instructions here, for example: also update the knowledge base at /path following its WIKI.md. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
+
+MEMORY.md is user-edited only: the curator intentionally has read-only access to /shared/ and cannot rewrite its own instructions. A bare / is rejected in writablePaths.
+
+Frontmatter supports a strict YAML subset. Arrays may use the block form above (with optional # comment tails) or inline form such as [cat, grep]. Inline entries containing commas must be quoted, for example ["/knowledge/lars,rebecca/"].
 -->

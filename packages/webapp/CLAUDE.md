@@ -211,7 +211,8 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - Path: `ui/session-freezer.ts`, `ui/new-session.ts`.
 - **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops.
 - Archives: `/sessions/<timestamp>-<slug>.md` plus `index.json`. `agentic-memory` writes full
-  archives before its kernel `MEMORY.md` curator; failure/quick/enrichment use legacy.
+  archives before its kernel `MEMORY.md` curator. Finished failures use legacy extraction;
+  timeouts skip it to avoid racing the still-running curator. Quick/enrichment stay legacy.
 - Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ### UI

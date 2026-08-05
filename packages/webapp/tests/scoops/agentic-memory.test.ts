@@ -65,6 +65,52 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     );
   });
 
+  it('strips block-array comments and preserves quoted inline commas', async () => {
+    const memoryMd = `---
+writablePaths: [/workspace/, "/knowledge/lars,rebecca/"]
+visiblePaths:
+  - /sessions/ # durable archives
+  - "/shared/#reference"
+allowedCommands:
+  - cat # read files
+---
+Curate {{MEMORY_PATH}}.`;
+    const spawn = successSpawn();
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(memoryMd),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(spawn.mock.calls[0][0]).toMatchObject({
+      writablePaths: ['/workspace/', '/knowledge/lars,rebecca/'],
+      visiblePaths: ['/sessions/', '/shared/#reference'],
+      allowedCommands: ['cat'],
+    });
+  });
+
+  it.each([
+    ['an unquoted comma in an inline path', 'writablePaths: [/workspace/, /home/lars,rebecca/]'],
+    ['a bare root writable path', 'writablePaths: [/]'],
+  ])('falls back safely for %s', async (_name, frontmatter) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spawn = successSpawn();
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(`---\n${frontmatter}\n---\nCurate {{MEMORY_PATH}}.`),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(warn).toHaveBeenCalled();
+    expect(spawn.mock.calls[0][0].writablePaths).toEqual(['/workspace/']);
+  });
+
   it('uses the built-in default and warns when MEMORY.md is missing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const spawn = successSpawn();
