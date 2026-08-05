@@ -38,6 +38,8 @@ import './overlay/slicc-camera-dialog.js';
 import './overlay/slicc-dialog.js';
 import './overlay/slicc-permissions.js';
 import './overlay/slicc-tooltip.js';
+import './panel/slicc-layout.js';
+import './panel/slicc-panel.js';
 import './primitives/slicc-avatar.js';
 import './primitives/slicc-collapse-btn.js';
 import './primitives/slicc-cost-overlay.js';
@@ -60,14 +62,13 @@ import './switcher/slicc-agent-tabs.js';
 import './switcher/slicc-scoop-overflow.js';
 import './theme/slicc-theme-toggle.js';
 import './theme/slicc-theme.js';
+import './workbench/slicc-dock-tree.js';
 import './workbench/slicc-file-tree.js';
 import './workbench/slicc-surface.js';
 import './workbench/slicc-tab-bar.js';
 import './workbench/slicc-tab.js';
 import './workbench/slicc-terminal.js';
-import './workbench/slicc-workbench-body.js';
 import './workbench/slicc-workbench-header.js';
-import './workbench/slicc-workbench-pane.js';
 
 /** Import every component module for side-effect registration. */
 export function registerAllSliccComponents(): void {}

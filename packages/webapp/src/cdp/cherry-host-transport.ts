@@ -72,6 +72,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     monitor: true,
   };
   private _theme: string | null = null;
+  private _layout: string | null = null;
   private _effortLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null = null;
   /**
    * Wire version negotiated with the host SDK. connect() posts one hello per
@@ -184,6 +185,14 @@ export class CherryHostTransport extends SyntheticCdpTransport {
    */
   get theme(): string | null {
     return this._theme;
+  }
+
+  /**
+   * JSON-serialized `DockTreeSpec` from the host SDK's handshake.welcome.
+   * Null when the host did not supply a layout.
+   */
+  get layout(): string | null {
+    return this._layout;
   }
 
   /**
@@ -472,6 +481,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     this.negotiatedVersion = env.cherry;
     this._joinUrl = env.joinUrl ?? null;
     this._theme = env.theme ?? null;
+    this._layout = env.layout ?? null;
     this._effortLevel = env.effortLevel ?? null;
     this._features = env.features ?? {
       terminal: true,

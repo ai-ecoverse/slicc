@@ -86,12 +86,80 @@ export function sprinkleNameFromId(id: string | null | undefined): string | null
   return id?.startsWith(SPRINKLE_PREFIX) ? id.slice(SPRINKLE_PREFIX.length) : null;
 }
 
-interface TabDescriptor {
-  id: string;
-  label: string;
-  kind: 'tool' | 'sprinkle';
-  closable?: boolean;
-  badge?: string;
+/**
+ * The dock-tree spec types now live in `core/dock-tree-spec.ts` — the shell, scoops
+ * and kernel layers need them and cannot import `ui/` (layer stack). Re-exported here
+ * so this module's existing consumers keep their import path.
+ */
+import type {
+  DockTreeSpecLike,
+  DockZoneName,
+  SurfaceSizeSpecLike,
+} from '../../core/dock-tree-spec.js';
+
+export type { DockTreeSpecLike, DockZoneName, SurfaceSizeSpecLike };
+
+/** The subset of `<slicc-dock-tree>`'s public API the zone drives in tree-layout mode. */
+interface DockTreeLike {
+  setTree(spec: DockTreeSpecLike | null): void;
+  getTree(): DockTreeSpecLike;
+  getSurfaceIds(): string[];
+  placeSurface(surfaceId: string, zone: DockZoneName): void;
+  removeSurface(surfaceId: string): void;
+  moveSurfaceToZone(surfaceId: string, zone: DockZoneName): void;
+  setSurfaceSize(surfaceId: string, size: SurfaceSizeSpecLike): boolean;
+  beginExternalDrag(surfaceId: string, pointerId?: number): void;
+  setPinned(surfaceIds: string[]): void;
+}
+
+/**
+ * Reserved, non-closable dock-tree surface id for the live chat pane —
+ * shared vocabulary across the "chat as a movable panel" feature (mirrors
+ * `CHAT_SURFACE_ID` exported by `@slicc/webcomponents`' `slicc-dock-tree.ts`;
+ * redeclared here, not imported, for the same no-runtime-dependency reason as
+ * `DockZoneName`/`DockTreeSpecLike` above).
+ */
+export const CHAT_SURFACE_ID = 'chat';
+
+/** Zone a newly opened sprinkle (no drag gesture) lands in. */
+const DEFAULT_TREE_ZONE: DockZoneName = 'middle';
+
+/**
+ * Dock-rail ids of the fixed tool panels — each an independent, permanently
+ * mounted `<slicc-surface>` composed directly into the dock-tree (see
+ * `wc-shell.ts`'s `mountWcShell`), opened/closed via `placeSurface`/
+ * `removeSurface` exactly like a sprinkle.
+ */
+const TOOL_PANEL_IDS: ReadonlySet<string> = new Set(['files', 'term', 'memory', 'monitor']);
+
+/** Zone a tool panel lands in the first time it's opened (each one independent — no shared leaf). */
+export const DEFAULT_TOOL_ZONE: DockZoneName = 'right';
+
+/** Whether a dock-rail id is one of the fixed tool panels (not a sprinkle). */
+export function isToolPanelId(id: string): boolean {
+  return TOOL_PANEL_IDS.has(id);
+}
+
+/** A dock-tree node: a single-surface leaf, or a directional split of child nodes. */
+type DockNodeLike =
+  | { type: 'leaf'; surfaceId: string }
+  | { type: 'split'; children: DockNodeLike[] };
+
+/** Whether a `surfaceId` appears anywhere in a node (leaf or nested split). */
+function nodeHasSurface(node: unknown, surfaceId: string): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const n = node as DockNodeLike;
+  if (n.type === 'leaf') return n.surfaceId === surfaceId;
+  if (n.type === 'split') return n.children.some((c) => nodeHasSurface(c, surfaceId));
+  return false;
+}
+
+/** The zone a `surfaceId` currently lives in within a tree spec, or `null` if absent. */
+export function zoneOfSurface(spec: DockTreeSpecLike, surfaceId: string): DockZoneName | null {
+  for (const zone of Object.keys(spec.zones) as DockZoneName[]) {
+    if (nodeHasSurface(spec.zones[zone], surfaceId)) return zone;
+  }
+  return null;
 }
 
 interface DockItemDescriptor {
@@ -102,24 +170,94 @@ interface DockItemDescriptor {
   hue?: string;
 }
 
-const BASE_TABS: readonly TabDescriptor[] = [
-  { id: 'files', label: 'files', kind: 'tool' },
-  { id: 'term', label: 'terminal', kind: 'tool' },
-  { id: 'memory', label: 'memory', kind: 'tool' },
-  { id: 'monitor', label: 'monitor', kind: 'tool' },
-];
+/**
+ * Tool-panel lifecycle hooks a `WcSprinkleZone` fires whenever `placeSurface`/
+ * `removeSurface` places or removes a fixed tool-panel id (files/term/memory/
+ * monitor — see `isToolPanelId`) — start/stop its poller or lazy-mount,
+ * regardless of whether the placement came from a dock-rail click or an
+ * agent-driven `layout open`/`layout close`. A no-op for sprinkle/chat ids.
+ */
+export interface WcSprinkleZoneToolPanelHooks {
+  onToolPanelActivate?: (id: string) => void;
+  onToolPanelDeactivate?: (id: string) => void;
+  /**
+   * Where a newly created sprinkle surface should be hosted, and how it gets
+   * placed. Set by `panelizeShell`, which REMOVES the dock-tree this class
+   * otherwise appends to — without this, every sprinkle surface was created into
+   * a detached element and could never render (the reported "I can't see the
+   * sprinkles"). Absent in the classic shell, which keeps the dock-tree path.
+   */
+  hostSprinkleSurface?: (surfaceId: string, surface: HTMLElement) => void;
+  /** Remove a sprinkle's panel from the panelized layout. */
+  removeSprinkleSurface?: (surfaceId: string) => void;
+}
 
-/** Tab/surface/dock bookkeeping behind `SprinkleManagerCallbacks`. */
+/** Tab/surface/dock bookkeeping behind `SprinkleManagerCallbacks`. The dock-tree is the only layout system — every panel (chat, tool panels, sprinkles) is a permanent, independent tree leaf. */
 export class WcSprinkleZone {
   readonly #refs: WcShellRefs;
-  readonly #tabs = new Map<string, TabDescriptor>();
   readonly #dockItems = new Map<string, DockItemDescriptor>();
   readonly #surfaces = new Map<string, HTMLElement>();
   /** Names seeded from the known-sprinkles ledger, not yet confirmed by discovery. */
   readonly #seeded = new Set<string>();
+  /** Open order (sprinkles only — tool panels are boot-composed, not tracked here). */
+  readonly #openOrder: string[] = [];
+  readonly #toolPanelHooks: WcSprinkleZoneToolPanelHooks;
 
-  constructor(refs: WcShellRefs) {
+  constructor(refs: WcShellRefs, toolPanelHooks: WcSprinkleZoneToolPanelHooks = {}) {
     this.#refs = refs;
+    this.#toolPanelHooks = toolPanelHooks;
+  }
+
+  /**
+   * The dock-tree ref, cast as possibly `undefined` (not the non-optional
+   * `WcShellRefs` type) so a fixture that omits `dockTree` degrades to a
+   * no-op instead of throwing.
+   */
+  #dockTreeApi(): (DockTreeLike & HTMLElement) | undefined {
+    return this.#refs.dockTree as unknown as (DockTreeLike & HTMLElement) | undefined;
+  }
+
+  /** Apply a layout: load the tree, then re-place any already-open sprinkles that aren't in it yet. */
+  applyLayout(tree: DockTreeSpecLike): void {
+    const dockTree = this.#dockTreeApi();
+    dockTree?.setTree(tree);
+    // `placeSurface` no-ops when the surfaceId is already anywhere in the
+    // tree, so this never displaces a drag-drop position the new tree itself
+    // didn't specify (e.g. re-applying a preset while sprinkles are open).
+    for (const name of this.#openOrder) {
+      dockTree?.placeSurface(sprinkleSurfaceId(name), DEFAULT_TREE_ZONE);
+    }
+  }
+
+  /**
+   * Explicit placement (dock-rail click, `layout open`/agent-driven): place a
+   * surface into a zone. Fires `onToolPanelActivate` for a fixed tool-panel
+   * id — its own lazy-mount/poller lifecycle, distinct from the dock-tree
+   * placement itself — regardless of which caller placed it.
+   */
+  placeSurface(zone: DockZoneName, surfaceId: string): void {
+    this.#dockTreeApi()?.placeSurface(surfaceId, zone);
+    if (isToolPanelId(surfaceId)) this.#toolPanelHooks.onToolPanelActivate?.(surfaceId);
+  }
+
+  /** Move a surface already in the tree to a different zone (e.g. `layout chat`/`layout move <id> <zone>`). */
+  moveSurfaceToZone(surfaceId: string, zone: DockZoneName): void {
+    this.#dockTreeApi()?.moveSurfaceToZone(surfaceId, zone);
+  }
+
+  /**
+   * Detach a surface from the tree wherever it sits (dock-rail collapse,
+   * `layout close`/agent-driven). No-op if pinned/locked/absent. Fires
+   * `onToolPanelDeactivate` for a fixed tool-panel id.
+   */
+  removeSurface(surfaceId: string): void {
+    this.#dockTreeApi()?.removeSurface(surfaceId);
+    if (isToolPanelId(surfaceId)) this.#toolPanelHooks.onToolPanelDeactivate?.(surfaceId);
+  }
+
+  /** Resize a placed surface's leaf (e.g. `layout size <id> ...`). Returns whether anything actually changed. */
+  setSurfaceSize(surfaceId: string, size: SurfaceSizeSpecLike): boolean {
+    return this.#dockTreeApi()?.setSurfaceSize(surfaceId, size) ?? false;
   }
 
   /**
@@ -192,40 +330,62 @@ export class WcSprinkleZone {
 
   #add(name: string, title: string, element: HTMLElement, options?: SprinkleAddOptions): void {
     const id = sprinkleSurfaceId(name);
+    const host = this.#toolPanelHooks.hostSprinkleSurface;
     let surface = this.#surfaces.get(name);
+    const isNew = !surface;
     if (!surface) {
       surface = document.createElement('slicc-surface');
       surface.setAttribute('surface-id', id);
       surface.setAttribute('layout', 'flex');
-      this.#refs.workbenchBody.append(surface);
+      // Panelized shells supply a host: the dock-tree this used to append to has
+      // been removed, so appending there would leave the surface detached and
+      // invisible forever.
+      if (!host) (this.#refs.dockTree as unknown as HTMLElement | undefined)?.append(surface);
       this.#surfaces.set(name, surface);
     }
     surface.replaceChildren(element);
-    const icon = this.#resolveIcon(name, options?.icon);
-
-    this.#tabs.set(name, { id, label: title, kind: 'sprinkle', closable: true, badge: icon });
     this.#ensureDockItem(name, title, options?.icon);
-    this.#sync();
-    // Background adds (session restore) keep the current focus: what's on
-    // screen after a reload is the `ws` URL param's call, not the open set.
-    if (!options?.attention && !options?.background) this.#activate(id);
+
+    // Track open order (deterministic re-place on `applyLayout`).
+    if (!this.#openOrder.includes(name)) this.#openOrder.push(name);
+
+    if (host) {
+      // The host owns both mounting and placement in the panel layout.
+      if (isNew) host(id, surface);
+      return;
+    }
+    // A new leaf lands in the default zone unless a drag or a restored/
+    // persisted tree already placed it (`placeSurface` no-ops on a
+    // duplicate surfaceId).
+    (this.#refs.dockTree as unknown as DockTreeLike | undefined)?.placeSurface(
+      id,
+      DEFAULT_TREE_ZONE
+    );
   }
 
   #remove(name: string, opts: { keepDockItem: boolean }): void {
     const id = sprinkleSurfaceId(name);
     this.#surfaces.get(name)?.remove();
     this.#surfaces.delete(name);
-    this.#tabs.delete(name);
     if (!opts.keepDockItem) this.#dockItems.delete(name);
+    const oi = this.#openOrder.indexOf(name);
+    if (oi >= 0) this.#openOrder.splice(oi, 1);
     this.#sync();
-    if (this.#refs.workbenchBody.getAttribute('active') === id) this.#activate('files');
+    if (this.#toolPanelHooks.removeSprinkleSurface) {
+      this.#toolPanelHooks.removeSprinkleSurface(id);
+      return;
+    }
+    (this.#refs.dockTree as unknown as DockTreeLike | undefined)?.removeSurface(id);
   }
 
+  /**
+   * Minimize just clears the dock rail's active indicator — the sprinkle's
+   * surface stays exactly where it is in the tree (every leaf is always
+   * visible now; there's no show-one state to collapse).
+   */
   #minimize(name: string): void {
-    if (this.#refs.workbenchBody.getAttribute('active') === sprinkleSurfaceId(name)) {
-      this.#refs.shell.removeAttribute('open');
-      this.#refs.dock.removeAttribute('active');
-    }
+    void name;
+    this.#refs.dock.removeAttribute('active');
   }
 
   /**
@@ -259,18 +419,7 @@ export class WcSprinkleZone {
   }
 
   #sync(): void {
-    this.#refs.tabBar.tabs = [...BASE_TABS, ...this.#tabs.values()];
     (this.#refs.dock as HTMLElement & { items?: unknown }).items = [...this.#dockItems.values()];
-    // The tab bar renders ONLY sprinkle tabs (tools live in the dock) — keep
-    // the header strip hidden while it would be empty chrome.
-    this.#refs.workbenchHeader.toggleAttribute('hidden', this.#tabs.size === 0);
-  }
-
-  #activate(id: string): void {
-    this.#refs.shell.setAttribute('open', '');
-    this.#refs.workbenchBody.setAttribute('active', id);
-    this.#refs.dock.setAttribute('active', id);
-    this.#refs.tabBar.setAttribute('active', id);
   }
 }
 
@@ -286,6 +435,13 @@ export interface WireWcSprinklesDeps {
   instanceId?: string;
   /** Stage an image attachment from a sprinkle into the chat input. */
   onAttachImage?: (base64: string, name?: string, mimeType?: string) => void;
+  /** A fixed tool panel's leaf was placed into the tree (opened) — start its poller/lazy-mount. */
+  onToolPanelActivate?: (id: string) => void;
+  /** A fixed tool panel's leaf was removed from the tree (closed) — stop its poller. */
+  onToolPanelDeactivate?: (id: string) => void;
+  /** Panelized shells host sprinkle surfaces themselves — see the zone's hooks. */
+  hostSprinkleSurface?: (surfaceId: string, surface: HTMLElement) => void;
+  removeSprinkleSurface?: (surfaceId: string) => void;
   log: BootStageLogger;
 }
 
@@ -309,8 +465,24 @@ export interface WcSprinklesHandle {
  * sprinkle state to followers.
  */
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
-  const { refs, client, fs, instanceId, onAttachImage, log } = deps;
-  const zone = new WcSprinkleZone(refs);
+  const {
+    refs,
+    client,
+    fs,
+    instanceId,
+    onAttachImage,
+    onToolPanelActivate,
+    onToolPanelDeactivate,
+    hostSprinkleSurface,
+    removeSprinkleSurface,
+    log,
+  } = deps;
+  const zone = new WcSprinkleZone(refs, {
+    onToolPanelActivate,
+    onToolPanelDeactivate,
+    hostSprinkleSurface,
+    removeSprinkleSurface,
+  });
   const { loadSprinkleStyles } = await import('../legacy-styles.js');
   await loadSprinkleStyles();
 
@@ -370,14 +542,31 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     });
   }
 
-  // Closing a sprinkle tab closes the sprinkle; clicking a dock launcher
-  // routes through `activate` so an attention-surfaced sprinkle is promoted
-  // to user-opened (and persists) and a closed one reopens.
-  wireSprinkleTabClose(refs.tabBar, (name) => manager.close(name));
+  // Clicking a dock launcher routes through `activate` so an
+  // attention-surfaced sprinkle is promoted to user-opened (and persists)
+  // and a closed one reopens. Tool panels are independent, always-mounted
+  // tree leaves (see `mountWcShell`) opened/closed via `zone.placeSurface`/
+  // `zone.removeSurface` directly, exactly like a sprinkle — the zone itself
+  // fires `onToolPanelActivate`/`onToolPanelDeactivate`, so this path and an
+  // agent-driven `layout open`/`layout close` get identical lifecycle.
   refs.dock.addEventListener('slicc-dock-select', (event) => {
-    const name = sprinkleNameFromId((event as CustomEvent<{ id?: string }>).detail?.id);
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    const name = sprinkleNameFromId(id);
     if (name) {
       manager.activate(name).catch((err) => log.error('WC sprinkle activate failed', err));
+      return;
+    }
+    if (id && isToolPanelId(id)) {
+      zone.placeSurface(DEFAULT_TOOL_ZONE, id);
+    }
+  });
+  // Clicking the ACTIVE dock item emits collapse (not a second select).
+  // `detail.id` gates it to tool-panel collapses so a sprinkle collapse
+  // never touches a tool panel's leaf.
+  refs.dock.addEventListener('slicc-dock-collapse', (event) => {
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (id && isToolPanelId(id)) {
+      zone.removeSurface(id);
     }
   });
 
@@ -450,18 +639,4 @@ export async function enrichSprinkleIcons(
     recordSprinkleIcon(sprinkle.name, icon);
     zone.updateDockIcon(sprinkle.name, icon);
   }
-}
-
-/**
- * Route the tab bar's canonical `tab-close` (detail field `id` — the child
- * tab's own raw event uses `tabId`, the bar re-emits with `id`) to a sprinkle
- * close. Without the manager-side close, the tab disappears from the strip
- * but the sprinkle stays open — it lingers in the `sprinkles` URL param and
- * reopens on the next reload.
- */
-export function wireSprinkleTabClose(tabBar: HTMLElement, close: (name: string) => void): void {
-  tabBar.addEventListener('tab-close', (event) => {
-    const name = sprinkleNameFromId((event as CustomEvent<{ id?: string }>).detail?.id);
-    if (name) close(name);
-  });
 }

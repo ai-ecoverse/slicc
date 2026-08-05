@@ -7,6 +7,7 @@ import {
   matchCommand,
   matchPath,
   mergePolicies,
+  PROTECTED_LAYOUTS_DIR,
   parseSudoers,
   pathGlobToRegExp,
   SUDOERS_D_DIR,
@@ -196,6 +197,49 @@ describe('self-protection invariant', () => {
   it('allows reads of sudoers files (visudo-style)', () => {
     expect(matchPath(allowAll, 'read', SUDOERS_FILE)).toBe('no-match');
     expect(matchPath(emptyPolicy(), 'read', `${SUDOERS_D_DIR}/granted`)).toBe('no-match');
+  });
+});
+
+describe('protected layouts self-protection invariant', () => {
+  // The protected layout root is where an embedder-pushed or user-pinned
+  // arrangement lives. Writes must be gated no matter what the policy says, so a
+  // broad grant over /etc (or a NOPASSWD on the exact path) cannot let the agent
+  // silently rewrite the UI the user pinned.
+  const grant: SudoersPolicy = parseSudoers(
+    `NOPASSWD Write /etc/**\nNOPASSWD Write ${PROTECTED_LAYOUTS_DIR}/**`
+  );
+
+  it('always requires approval for writes under /etc/slicc/layouts, even with NOPASSWD', () => {
+    expect(matchPath(grant, 'write', `${PROTECTED_LAYOUTS_DIR}/pinned.json`)).toBe(
+      'require-approval'
+    );
+    expect(matchPath(grant, 'write', PROTECTED_LAYOUTS_DIR)).toBe('require-approval');
+  });
+
+  it('protects them under an empty policy too', () => {
+    expect(matchPath(emptyPolicy(), 'write', `${PROTECTED_LAYOUTS_DIR}/a.json`)).toBe(
+      'require-approval'
+    );
+  });
+
+  it('allows READS so a layout can be loaded without prompting', () => {
+    // Loading a pinned layout at boot must never prompt — only changing it does.
+    // Both dispositions here mean "not gated": the grant above only covers
+    // writes, so a read falls through to `no-match` rather than matching it.
+    expect(matchPath(grant, 'read', `${PROTECTED_LAYOUTS_DIR}/pinned.json`)).toBe('no-match');
+    expect(matchPath(emptyPolicy(), 'read', `${PROTECTED_LAYOUTS_DIR}/pinned.json`)).toBe(
+      'no-match'
+    );
+  });
+
+  it('does NOT gate the freely-writable user layout root', () => {
+    // Saving a layout is ordinary agent work; SLICC does not prompt for that.
+    expect(matchPath(emptyPolicy(), 'write', '/workspace/layouts/mine.json')).toBe('no-match');
+  });
+
+  it('does not over-reach to a similarly named sibling path', () => {
+    expect(matchPath(emptyPolicy(), 'write', '/etc/slicc/layouts-backup.json')).toBe('no-match');
+    expect(matchPath(emptyPolicy(), 'write', '/etc/slicc/other.json')).toBe('no-match');
   });
 });
 

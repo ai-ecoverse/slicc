@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import '../../src/chat/slicc-chat-thread.js';
-import '../../src/dock/slicc-dock.js';
 import { readUrlState, writeUrlState } from '../../src/internal/url-state.js';
-import '../../src/shell/slicc-shell.js';
 
 function param(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
@@ -139,79 +137,5 @@ describe('slicc-chat-thread url-state', () => {
     writeUrlState('ctx', 'scoop:researcher');
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(routed).toEqual(['scoop:researcher']);
-  });
-});
-
-describe('slicc-shell url-state', () => {
-  beforeEach(() => {
-    clearParams();
-    document.body.replaceChildren();
-  });
-  afterEach(clearParams);
-
-  it('persists the active surface on canonical dock events and clears on collapse', () => {
-    const shell = document.createElement('slicc-shell');
-    shell.setAttribute('url-state', '');
-    document.body.appendChild(shell);
-
-    shell.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
-    );
-    expect(param('ws')).toBe('files');
-    shell.dispatchEvent(new CustomEvent('slicc-dock-collapse', { bubbles: true }));
-    expect(param('ws')).toBeNull();
-  });
-
-  it('reflects the urlState property to the attribute on shell and thread', () => {
-    const shell = document.createElement('slicc-shell');
-    shell.urlState = true;
-    expect(shell.hasAttribute('url-state')).toBe(true);
-    shell.urlState = false;
-    expect(shell.hasAttribute('url-state')).toBe(false);
-    const thread = document.createElement('slicc-chat-thread');
-    thread.urlState = true;
-    expect(thread.hasAttribute('url-state')).toBe(true);
-    expect(thread.urlContext).toBeNull();
-  });
-
-  it('re-applies the workspace on popstate and collapses when the param is gone', () => {
-    const shell = document.createElement('slicc-shell');
-    shell.setAttribute('url-state', '');
-    const dock = document.createElement('slicc-dock');
-    dock.setAttribute('system-tools', '');
-    shell.append(dock);
-    document.body.appendChild(shell);
-
-    // Forward into a state with an open workspace: the dock re-selects.
-    writeUrlState('ws', 'files');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    expect(dock.getAttribute('active')).toBe('files');
-
-    // Back to a state without one: the shell collapses AND the dock unlights.
-    shell.setAttribute('open', '');
-    writeUrlState('ws', null);
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    expect(shell.hasAttribute('open')).toBe(false);
-    expect(dock.getAttribute('active')).toBeNull();
-  });
-
-  it('restores a URL workspace by driving the dock selection on connect', async () => {
-    writeUrlState('ws', 'term');
-    const shell = document.createElement('slicc-shell');
-    shell.setAttribute('url-state', '');
-    const dock = document.createElement('slicc-dock');
-    dock.setAttribute('system-tools', '');
-    shell.append(dock);
-    document.body.appendChild(shell);
-
-    // The microtask-deferred restore calls dock.selectItem('term'), which
-    // re-emits the canonical event every host wires.
-    const selected: string[] = [];
-    shell.addEventListener('slicc-dock-select', (e) =>
-      selected.push((e as CustomEvent<{ id: string }>).detail.id)
-    );
-    await new Promise((r) => queueMicrotask(() => r(null)));
-    expect(selected).toEqual(['term']);
-    expect(dock.getAttribute('active')).toBe('term');
   });
 });

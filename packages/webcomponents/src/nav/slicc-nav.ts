@@ -32,8 +32,8 @@ const STYLE = `
   gap: 14px;
   box-sizing: border-box;
   padding: 0 9px 0 24px;
-  height: var(--barh, 44px);
-  min-height: var(--barh, 44px);
+  height: var(--barh, 36px);
+  min-height: var(--barh, 36px);
   font-family: var(--ui);
   background: color-mix(in srgb, var(--ctx) 12%, color-mix(in srgb, var(--canvas) 68%, transparent));
   backdrop-filter: blur(18px) saturate(1.4);

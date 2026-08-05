@@ -58,6 +58,7 @@ mountSlicc({
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
   theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
+  layout, // DockTreeSpec-shaped object — optional pushed layout, typically with locked: true (serialized in handshake welcome)
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
   uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (follower renders UI but advertises no CDP target)
@@ -107,6 +108,18 @@ disableShader?, components? }`) that the SDK serializes as JSON in the
   This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
   out via a themed `url(...)`) without requiring the host page itself to be
   trusted.
+- `layout` pushes an arrangement into the follower, serialized as JSON in the
+  handshake welcome and applied ONCE at boot — static, like `theme`. Structurally
+  typed as `unknown` (this SDK ships independently, so no cross-package import).
+  `wc-follower.ts` accepts EITHER shape, sniffed on the object: a `LayoutDocument`
+  (has `base`) or the older `DockTreeSpec` (has `zones`) — embedders vendor the SDK
+  and upgrade on their own schedule, so a version field older hosts never sent
+  would be more brittle than sniffing. See `docs/layouts.md`.
+  Set `locked: true` — tree-wide or per panel — so the user can't rearrange what was
+  pushed. Applied WITHOUT a filesystem, so it can't persist or drift, and `layout
+save` in an embed reports it needs one rather than writing your arrangement into
+  the user's profile. An invalid document falls back to the default.
+  `examples/host.html` has a custom-JSON textarea for testing.
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
   is requested under the `'html2canvas'` strategy.

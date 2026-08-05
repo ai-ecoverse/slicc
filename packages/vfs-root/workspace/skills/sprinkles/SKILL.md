@@ -51,6 +51,105 @@ If you genuinely need multi-column UI, do all of the following:
 
 For dashboards with many widgets, prefer a vertical stack of `.sprinkle-card` blocks over a grid. The card stack is responsive by default and looks good in both rail and full-screen.
 
+## Arranging panels with `layout`
+
+The `layout` shell command arranges panels, independent of what's inside each one.
+Every panel is the same kind of thing: chat, each tool panel, and each sprinkle.
+
+```bash
+layout list                         # shipped presets (there is one: the default)
+layout set <preset>                 # reset to a shipped arrangement
+layout save <name>                  # save the CURRENT arrangement as JSON
+layout load <name>                  # load a saved layout or the shipped default
+layout open <surfaceId> <zone>      # place a panel (zone: top|left|middle|right|bottom)
+layout move <surfaceId> <zone>      # relocate a placed panel
+layout close <surfaceId>            # remove it (chat is pinned; it can move, never close)
+layout size <surfaceId> [--width <px|%>] [--height <px|%>]   # exact, pixel-perfect
+layout chat <zone>                  # move the chat panel
+layout reset                        # back to the default
+```
+
+SLICC ships exactly ONE arrangement (the default). To give a skill its own layout,
+arrange the panels and `layout save <name>` — do not expect named presets beyond the
+default to exist.
+
+Opening a sprinkle auto-places it, so `layout open` is only for overriding that.
+`layout size` is the programmatic counterpart to a user dragging a divider — use it
+when you want an exact size rather than a proportion.
+
+The five zones are `top`, `left`, `center`, `right`, `bottom` — Java `BorderLayout`.
+They sit inside the fixed chrome, so `top` is below the scoop/budget strip and
+`left`/`right` are inboard of the rails. A zone holds several panels at once, so
+placing two sprinkles in `left` puts them both there (stacked by default).
+
+### Writing a layout JSON by hand
+
+A layout document has two sections, and **you only ever write `zones`**:
+
+```jsonc
+{
+  "version": 1,
+  "id": "my-layout",
+  "base": {
+    // DO NOT AUTHOR. The fixed chrome — scoop/budget strip, both rails. Copy it
+    // verbatim from an existing document, or omit it to keep the shipped chrome.
+    "docks": [...],
+    // YOURS. Which panels go in which of the five zones.
+    "zones": {
+      "top": ["sprinkle:status-panel"],
+      "left": ["chat"],
+      "right": ["sprinkle:main-window"],
+      "sizes": { "top": "180px", "left": "40%" }
+    }
+  }
+}
+```
+
+A "status bar across the top, below the SLICC bar, between the rails" is
+`zones.top` — NOT a second `docks` entry with `edge: "top"`. `docks` is the app's
+own chrome; adding to it puts your panel in the same strip as the scoop switcher and
+the price counter. Reach for `zones` every time.
+
+Prefer `layout save` over hand-writing JSON: arrange the panels with `layout
+open`/`move`/`size`, then save. Hand-editing is for shipping a layout with a skill.
+
+The user can also rearrange by hand — there is no edit mode to enter. Hovering a
+panel reveals a grip in its top-left corner; grabbing it shows the five zones as a
+compass. Two kinds of seam drag to resize: between panels inside a zone, and
+between the zones themselves. Their arrangement
+persists across reloads, so do NOT re-issue `layout` commands to "restore" a layout
+you set earlier — you would be overwriting what they did.
+
+On a narrow viewport (extension side panel, iOS, ≤700px) multi-panel arrangements
+collapse to chat alone, so still design each sprinkle single-column-safe per the
+table above.
+
+## Are panels always sprinkles?
+
+No — but a sprinkle is the only kind YOU can create, and that is the intended path.
+
+| Kind            | Who makes it     | How                                                            |
+| --------------- | ---------------- | -------------------------------------------------------------- |
+| Sprinkle panel  | you              | write `.shtml`, `sprinkle open <name>` — this section          |
+| Built-in panel  | ships with SLICC | chat, both rails, the top strip, files/terminal/memory/monitor |
+| Layout document | you              | JSON naming which panels go where; `layout save`/`load`        |
+
+So: to add UI, write a sprinkle. To rearrange existing UI, write a layout document
+or issue `layout` commands. There is no third mechanism, and no need for one — a
+sprinkle is a full HTML document with a bridge, which covers what a custom panel
+would.
+
+A sprinkle IS tied to a scoop, and that is deliberate: whoever creates one owns it
+for its lifetime and handles its lick events (see "Handling lick events" below).
+A layout document is not tied to anything — it only names panel ids.
+
+### Shipping UI with a skill
+
+A layout document saved under `/workspace/layouts/<name>.json` can be loaded with
+`layout load <name>`, so a skill can ship both its sprinkles and the arrangement
+that presents them. Write the sprinkles, open them, arrange, then `layout save
+<name>` to capture what is on screen.
+
 ## Creating a sprinkle
 
 1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle.

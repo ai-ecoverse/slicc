@@ -8,7 +8,7 @@ export type FeatureFlagFloat =
   | 'cherry'
   | 'follower';
 
-export type FeatureFlagId = 'experimental-settings';
+export type FeatureFlagId = 'experimental-settings' | 'panel-layouts';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -31,6 +31,16 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     defaultValue: 'on',
     floatDefaults: Object.freeze({ cherry: 'off' }),
     userToggleable: false,
+  }),
+  Object.freeze({
+    id: 'panel-layouts',
+    label: 'Panel layouts',
+    description: 'Arrange the UI as movable, resizable panels instead of the fixed workbench.',
+    // Off everywhere while the dock-tree is still the shipping layout. No
+    // `floatDefaults`: the gate is uniform across floats, including a Cherry embed
+    // pushing its own layout, so there is one answer to "are panels on here".
+    defaultValue: 'off',
+    userToggleable: true,
   }),
 ]);
 

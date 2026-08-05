@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Sprinkle-zone bookkeeping tests: the SprinkleManagerCallbacks contract
- * over workbench tabs / surfaces / dock items, driven without a manager.
+ * over the dock-tree's surfaces/dock items, driven without a manager.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,40 +9,54 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-// Registers the library elements so makeRefs gets a REAL slicc-tab-bar —
-// the tab-close regression test drives its actual event contract.
-import '@slicc/webcomponents';
 import type { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
+import { LAYOUT_PRESETS } from '../../../src/ui/wc/layout-spec.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 import {
+  CHAT_SURFACE_ID,
+  DEFAULT_TOOL_ZONE,
+  type DockTreeSpecLike,
   enrichSprinkleIcons,
   isLucideIconSpec,
+  isToolPanelId,
   pruneSprinkleIconLedger,
   readSprinkleIconLedger,
   recordSprinkleIcon,
   sprinkleNameFromId,
   sprinkleSurfaceId,
   WcSprinkleZone,
-  wireSprinkleTabClose,
   wireWcSprinkles,
+  zoneOfSurface,
 } from '../../../src/ui/wc/wc-sprinkles.js';
+
+// Fake dock-tree ref: a plain div carrying vi.fn() stubs for the dock-tree
+// API (setTree/getTree/getSurfaceIds/placeSurface/removeSurface/
+// moveSurfaceToZone/beginExternalDrag/setPinned). Kept as a real `div` (not a
+// bare object) so `querySelector`/`append` behave exactly like the production
+// `<slicc-dock-tree>` ref.
+function makeDockTreeRef() {
+  return Object.assign(document.createElement('div'), {
+    setTree: vi.fn(),
+    getTree: vi.fn(() => ({ zones: {}, rowFr: {}, colFr: {} })),
+    getSurfaceIds: vi.fn(() => [] as string[]),
+    placeSurface: vi.fn(),
+    removeSurface: vi.fn(),
+    moveSurfaceToZone: vi.fn(),
+    setSurfaceSize: vi.fn(() => true),
+    beginExternalDrag: vi.fn(),
+    setPinned: vi.fn(),
+  });
+}
 
 function makeRefs(): WcShellRefs {
   const shell = document.createElement('slicc-shell');
-  const workbenchBody = document.createElement('slicc-workbench-body');
-  workbenchBody.setAttribute('active', 'files');
-  const workbenchHeader = document.createElement('slicc-workbench-header');
-  workbenchHeader.setAttribute('hidden', '');
+  const dockTree = makeDockTreeRef();
   const dock = document.createElement('slicc-dock') as WcShellRefs['dock'];
-  const tabBar = document.createElement('slicc-tab-bar') as WcShellRefs['tabBar'];
-  document.body.append(shell, workbenchBody, workbenchHeader, dock, tabBar);
-  return { shell, workbenchBody, workbenchHeader, dock, tabBar } as unknown as WcShellRefs;
-}
-
-function tabIds(refs: WcShellRefs): string[] {
-  return (refs.tabBar.tabs as Array<{ id: string }>).map((t) => t.id);
+  shell.append(dockTree, dock);
+  document.body.append(shell);
+  return { shell, dockTree, dock } as unknown as WcShellRefs;
 }
 
 function dockIds(refs: WcShellRefs): string[] {
@@ -54,6 +68,18 @@ function dockItem(refs: WcShellRefs, id: string): { id: string; icon: string } |
   const items =
     (refs.dock as HTMLElement & { items?: Array<{ id: string; icon: string }> }).items ?? [];
   return items.find((i) => i.id === id);
+}
+
+function treeSpies(refs: WcShellRefs) {
+  return refs.dockTree as unknown as {
+    setTree: ReturnType<typeof vi.fn>;
+    getSurfaceIds: ReturnType<typeof vi.fn>;
+    placeSurface: ReturnType<typeof vi.fn>;
+    removeSurface: ReturnType<typeof vi.fn>;
+    moveSurfaceToZone: ReturnType<typeof vi.fn>;
+    setSurfaceSize: ReturnType<typeof vi.fn>;
+    setPinned: ReturnType<typeof vi.fn>;
+  };
 }
 
 describe('wireWcSprinkles boot resilience', () => {
@@ -139,7 +165,7 @@ describe('sprinkle ids', () => {
 });
 
 describe('WcSprinkleZone', () => {
-  it('addSprinkle creates surface + closable tab + dock item and activates', () => {
+  it('addSprinkle creates a dock-tree surface + dock item and places it', () => {
     const refs = makeRefs();
     const zone = new WcSprinkleZone(refs);
     const element = document.createElement('div');
@@ -147,51 +173,33 @@ describe('WcSprinkleZone', () => {
 
     zone.callbacks().addSprinkle('hero', 'Hero studio', element);
 
-    const surface = refs.workbenchBody.querySelector('[surface-id="sprinkle:hero"]');
+    const surface = (refs.dockTree as unknown as HTMLElement).querySelector(
+      '[surface-id="sprinkle:hero"]'
+    );
     expect(surface?.contains(element)).toBe(true);
-    expect(tabIds(refs)).toContain('sprinkle:hero');
     expect(dockIds(refs)).toContain('sprinkle:hero');
-    expect(refs.shell.hasAttribute('open')).toBe(true);
-    expect(refs.workbenchBody.getAttribute('active')).toBe('sprinkle:hero');
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
     expect(zone.isOpen('hero')).toBe(true);
   });
 
-  it('reveals the workbench header only while sprinkle tabs exist', () => {
-    const refs = makeRefs();
-    const zone = new WcSprinkleZone(refs);
-    const callbacks = zone.callbacks();
-    // Tool tabs never render, so the header strip starts hidden (empty chrome).
-    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(true);
-
-    callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
-    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(false);
-
-    callbacks.removeSprinkle('hero');
-    expect(refs.workbenchHeader.hasAttribute('hidden')).toBe(true);
-  });
-
-  it('attention adds without activating', () => {
+  it('attention adds without placing anywhere special (defaults still apply)', () => {
     const refs = makeRefs();
     const zone = new WcSprinkleZone(refs);
     zone.callbacks().addSprinkle('hero', 'Hero', document.createElement('div'), undefined, {
       attention: true,
     });
-    expect(refs.shell.hasAttribute('open')).toBe(false);
-    expect(refs.workbenchBody.getAttribute('active')).toBe('files');
+    expect(zone.isOpen('hero')).toBe(true);
+    expect(dockIds(refs)).toContain('sprinkle:hero');
   });
 
-  it('background adds (session restore) keep the current focus', () => {
+  it('background adds (session restore) still compose the surface', () => {
     const refs = makeRefs();
     const zone = new WcSprinkleZone(refs);
     zone.callbacks().addSprinkle('pomodoro', 'Pomodoro', document.createElement('div'), undefined, {
       background: true,
     });
-    // The panel is open (tab + dock + surface) but nothing was focused —
-    // after a reload the `ws` URL param decides what's on screen.
     expect(zone.isOpen('pomodoro')).toBe(true);
-    expect(tabIds(refs)).toContain('sprinkle:pomodoro');
-    expect(refs.shell.hasAttribute('open')).toBe(false);
-    expect(refs.workbenchBody.getAttribute('active')).toBe('files');
+    expect(dockIds(refs)).toContain('sprinkle:pomodoro');
   });
 
   it('seeds rail launchers from the ledger and prunes unconfirmed seeds', () => {
@@ -210,20 +218,6 @@ describe('WcSprinkleZone', () => {
     expect(dockIds(refs)).not.toContain('sprinkle:stale-uninstalled');
   });
 
-  it('routes the tab bar tab-close (canonical id detail) to a sprinkle close', () => {
-    // Drive the REAL component: removeTab emits `tab-close` with `{ id }`.
-    // The old handler read `detail.tabId` and silently never closed —
-    // the sprinkle lingered in the URL and reopened on the next reload.
-    const refs = makeRefs();
-    const closed: string[] = [];
-    wireSprinkleTabClose(refs.tabBar, (name) => closed.push(name));
-    (refs.tabBar as HTMLElement & { tabs: unknown }).tabs = [
-      { id: 'sprinkle:pomodoro', label: 'Pomodoro', kind: 'sprinkle', closable: true },
-    ];
-    (refs.tabBar as HTMLElement & { removeTab(id: string): void }).removeTab('sprinkle:pomodoro');
-    expect(closed).toEqual(['pomodoro']);
-  });
-
   it('re-adding replaces the surface content in place', () => {
     const refs = makeRefs();
     const zone = new WcSprinkleZone(refs);
@@ -231,21 +225,24 @@ describe('WcSprinkleZone', () => {
     callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
     const next = document.createElement('span');
     callbacks.addSprinkle('hero', 'Hero', next);
-    const surfaces = refs.workbenchBody.querySelectorAll('[surface-id="sprinkle:hero"]');
+    const surfaces = (refs.dockTree as unknown as HTMLElement).querySelectorAll(
+      '[surface-id="sprinkle:hero"]'
+    );
     expect(surfaces).toHaveLength(1);
     expect(surfaces[0].contains(next)).toBe(true);
   });
 
-  it('removeSprinkle drops surface, tab, and dock item, falling back to files', () => {
+  it('removeSprinkle drops the surface, dock item, and calls removeSurface', () => {
     const refs = makeRefs();
     const zone = new WcSprinkleZone(refs);
     const callbacks = zone.callbacks();
     callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
     callbacks.removeSprinkle('hero');
-    expect(refs.workbenchBody.querySelector('[surface-id="sprinkle:hero"]')).toBeNull();
-    expect(tabIds(refs)).not.toContain('sprinkle:hero');
+    expect(
+      (refs.dockTree as unknown as HTMLElement).querySelector('[surface-id="sprinkle:hero"]')
+    ).toBeNull();
     expect(dockIds(refs)).not.toContain('sprinkle:hero');
-    expect(refs.workbenchBody.getAttribute('active')).toBe('files');
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('sprinkle:hero');
     expect(zone.isOpen('hero')).toBe(false);
   });
 
@@ -255,7 +252,6 @@ describe('WcSprinkleZone', () => {
     const callbacks = zone.callbacks();
     callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
     callbacks.closeSprinkleContent?.('hero');
-    expect(tabIds(refs)).not.toContain('sprinkle:hero');
     expect(dockIds(refs)).toContain('sprinkle:hero');
     expect(zone.isOpen('hero')).toBe(false);
   });
@@ -266,7 +262,6 @@ describe('WcSprinkleZone', () => {
     const callbacks = zone.callbacks();
     callbacks.registerSprinkle?.('palette', 'Palette');
     expect(dockIds(refs)).toContain('sprinkle:palette');
-    expect(tabIds(refs)).not.toContain('sprinkle:palette');
     callbacks.unregisterSprinkle?.('palette');
     expect(dockIds(refs)).not.toContain('sprinkle:palette');
   });
@@ -280,24 +275,20 @@ describe('WcSprinkleZone', () => {
     expect(dockIds(refs)).toContain('sprinkle:hero');
   });
 
-  it('minimize collapses the workbench only when the sprinkle is active', () => {
+  it('minimize clears the dock rail active indicator without moving the surface', () => {
     const refs = makeRefs();
+    refs.dock.setAttribute('active', 'sprinkle:hero');
     const zone = new WcSprinkleZone(refs);
     const callbacks = zone.callbacks();
     callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
-    callbacks.minimizeSprinkle('hero');
-    expect(refs.shell.hasAttribute('open')).toBe(false);
 
-    refs.shell.setAttribute('open', '');
-    refs.workbenchBody.setAttribute('active', 'files');
     callbacks.minimizeSprinkle('hero');
-    expect(refs.shell.hasAttribute('open')).toBe(true);
-  });
 
-  it('keeps the base tool tabs first', () => {
-    const refs = makeRefs();
-    new WcSprinkleZone(refs).callbacks().addSprinkle('hero', 'Hero', document.createElement('div'));
-    expect(tabIds(refs).slice(0, 3)).toEqual(['files', 'term', 'memory']);
+    expect(refs.dock.hasAttribute('active')).toBe(false);
+    // The surface stays exactly where it is — no show-one state to collapse.
+    expect(
+      (refs.dockTree as unknown as HTMLElement).querySelector('[surface-id="sprinkle:hero"]')
+    ).not.toBeNull();
   });
 });
 
@@ -378,5 +369,207 @@ describe('rail icons (declared > ledger > sparkles)', () => {
     recordSprinkleIcon('ghost', 'skull');
     pruneSprinkleIconLedger([]);
     expect(readSprinkleIconLedger()).toEqual({});
+  });
+});
+
+describe('WcSprinkleZone applyLayout / placeSurface / moveSurfaceToZone', () => {
+  it('applyLayout loads the tree and re-places already-open sprinkles', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().addSprinkle('hero', 'Hero', document.createElement('div'));
+    treeSpies(refs).placeSurface.mockClear();
+
+    zone.applyLayout(LAYOUT_PRESETS.focus.tree);
+
+    expect(treeSpies(refs).setTree).toHaveBeenCalledWith(LAYOUT_PRESETS.focus.tree);
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
+  });
+
+  it('placeSurface forwards to the dock-tree with (surfaceId, zone) order', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+
+    zone.placeSurface('right', 'sprinkle:x');
+
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:x', 'right');
+  });
+
+  it('moveSurfaceToZone forwards to the dock-tree primitive', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+
+    zone.moveSurfaceToZone(CHAT_SURFACE_ID, 'right');
+
+    expect(treeSpies(refs).moveSurfaceToZone).toHaveBeenCalledWith(CHAT_SURFACE_ID, 'right');
+  });
+
+  it('applyLayout tolerates a missing dockTree ref (defensive no-op, no throw)', () => {
+    const refs = {
+      dock: document.createElement('div'),
+      shell: document.createElement('div'),
+    } as unknown as WcShellRefs;
+    const zone = new WcSprinkleZone(refs);
+
+    expect(() => zone.applyLayout(LAYOUT_PRESETS.focus.tree)).not.toThrow();
+    expect(() =>
+      zone.callbacks().addSprinkle('hero', 'Hero', document.createElement('div'))
+    ).not.toThrow();
+  });
+});
+
+describe('isToolPanelId / zoneOfSurface (v6 helpers)', () => {
+  it('classifies the four fixed tool panels and rejects sprinkles / browser / chat', () => {
+    for (const id of ['files', 'term', 'memory', 'monitor']) expect(isToolPanelId(id)).toBe(true);
+    for (const id of ['sprinkle:hero', 'browser', 'chat', 'tools', ''])
+      expect(isToolPanelId(id)).toBe(false);
+  });
+
+  it('finds the zone a surface lives in (leaf or nested split), null when absent', () => {
+    const spec: DockTreeSpecLike = {
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: null,
+        right: { type: 'split', dir: 'col', children: [{ type: 'leaf', surfaceId: 'files' }] },
+        bottom: null,
+      } as DockTreeSpecLike['zones'],
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    expect(zoneOfSurface(spec, 'chat')).toBe('left');
+    expect(zoneOfSurface(spec, 'files')).toBe('right');
+    expect(zoneOfSurface(spec, 'nope')).toBeNull();
+  });
+});
+
+describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', () => {
+  it('a dock select for a tool id places its surface into the default zone and fires onToolPanelActivate', async () => {
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    const onToolPanelActivate = vi.fn();
+    const onToolPanelDeactivate = vi.fn();
+    await wireWcSprinkles({ refs, client, fs, log, onToolPanelActivate, onToolPanelDeactivate });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { detail: { id: 'files' }, bubbles: true })
+    );
+
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('files', DEFAULT_TOOL_ZONE);
+    expect(onToolPanelActivate).toHaveBeenCalledWith('files');
+    expect(onToolPanelDeactivate).not.toHaveBeenCalled();
+  });
+
+  it('a dock collapse for a tool id removes its surface and fires onToolPanelDeactivate', async () => {
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    const onToolPanelDeactivate = vi.fn();
+    await wireWcSprinkles({ refs, client, fs, log, onToolPanelDeactivate });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-collapse', { detail: { id: 'term' }, bubbles: true })
+    );
+
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('term');
+    expect(onToolPanelDeactivate).toHaveBeenCalledWith('term');
+  });
+
+  it('WcSprinkleZone.placeSurface fires onToolPanelActivate directly — not just via the dock-select event — so an agent-driven `layout open` gets the same lifecycle as a dock-rail click', () => {
+    const refs = makeRefs();
+    const onToolPanelActivate = vi.fn();
+    const zone = new WcSprinkleZone(refs, { onToolPanelActivate });
+
+    zone.placeSurface('right', 'files');
+
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('files', 'right');
+    expect(onToolPanelActivate).toHaveBeenCalledWith('files');
+  });
+
+  it('WcSprinkleZone.placeSurface does not fire onToolPanelActivate for a sprinkle or chat id', () => {
+    const refs = makeRefs();
+    const onToolPanelActivate = vi.fn();
+    const zone = new WcSprinkleZone(refs, { onToolPanelActivate });
+
+    zone.placeSurface('right', 'sprinkle:weather');
+    zone.placeSurface('left', CHAT_SURFACE_ID);
+
+    expect(onToolPanelActivate).not.toHaveBeenCalled();
+  });
+
+  it('WcSprinkleZone.removeSurface fires onToolPanelDeactivate directly — e.g. an agent-driven `layout close`', () => {
+    const refs = makeRefs();
+    const onToolPanelDeactivate = vi.fn();
+    const zone = new WcSprinkleZone(refs, { onToolPanelDeactivate });
+
+    zone.removeSurface('term');
+
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('term');
+    expect(onToolPanelDeactivate).toHaveBeenCalledWith('term');
+  });
+
+  it('WcSprinkleZone omitting the hooks arg is a safe no-op (default {})', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    expect(() => {
+      zone.placeSurface('right', 'files');
+      zone.removeSurface('files');
+    }).not.toThrow();
+  });
+
+  it('WcSprinkleZone.setSurfaceSize forwards to the dock-tree and returns its result — e.g. `layout size`', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+
+    const changed = zone.setSurfaceSize('files', { widthPercent: 40 });
+
+    expect(changed).toBe(true);
+    expect(treeSpies(refs).setSurfaceSize).toHaveBeenCalledWith('files', { widthPercent: 40 });
+  });
+
+  it('a sprinkle collapse does not touch the dock-tree (isToolPanelId gate)', async () => {
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    await wireWcSprinkles({ refs, client, fs, log });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-collapse', { detail: { id: 'sprinkle:hero' }, bubbles: true })
+    );
+
+    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalled();
   });
 });

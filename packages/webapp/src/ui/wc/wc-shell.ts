@@ -3,7 +3,8 @@
  * UI, assembled exactly like the library's full-app showcase (and the
  * `proto/StellarRubySwift.html` prototype it was extracted from): a cone
  * shader background, the fixed freezer rail, and an app column stacking the
- * full-width nav above the chat | workbench split with the dock rail.
+ * full-width nav above the dock-tree (permanently full-span — chat and every
+ * tool panel are independent tree leaves) with the dock rail.
  *
  * `mountWcShell` builds the frame and hands back element refs; the two boot
  * modes wire them differently — `mountWcUiPreview` (here) renders the
@@ -16,6 +17,7 @@ import {
   followSystemTheme,
   type SliccAgentTabs,
   type SliccAvatarMenu,
+  type SliccDockTree,
   type SliccFileTree,
   type SliccMemoryPanel,
   type SliccMonitor,
@@ -26,6 +28,7 @@ import {
 import '../styles/fonts.css';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
+import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
 
 // Side-effect import registers every element composed below.
@@ -69,6 +72,20 @@ export interface WcShellOptions {
 /** Element handles the boot modes wire their behavior onto. */
 export interface WcShellRefs {
   frame: HTMLElement;
+  /**
+   * The clamped container every layout-owned element renders inside — a CSS
+   * stacking context (`isolation:isolate`), so no panel descendant can paint
+   * above `trustedLayer` no matter what `z-index` it sets. See
+   * `trusted-layer.ts` (H2).
+   */
+  panelHost: HTMLElement;
+  /**
+   * The spoof-proof top layer: fixed chrome (the avatar strip) and every
+   * approval/permission overlay. A later sibling of `panelHost`, so it always
+   * composites above it. Mount into it via `mountTrusted`, never
+   * `document.body.append`.
+   */
+  trustedLayer: HTMLElement;
   /** The WebGL background field (`<slicc-shader>`, one of three programs). */
   shader: HTMLElement;
   /** The chat column (`<slicc-chatpane>`) — `position:relative` so it can host
@@ -92,16 +109,19 @@ export interface WcShellRefs {
   switcher: SliccAgentTabs;
   floatbar: HTMLElement;
   shell: HTMLElement;
-  workbenchBody: HTMLElement;
-  /** Hidden while the tab bar has nothing to render (tool tabs never show). */
-  workbenchHeader: HTMLElement;
+  /**
+   * The GUI drag-drop dock-tree layout editor — the sole layout host,
+   * permanently full-span between the nav and the dock rail. Chat and every
+   * fixed tool panel (files/terminal/memory/monitor) are independent,
+   * always-mounted leaves composed directly into it (see `buildWorkbench`).
+   */
+  dockTree: SliccDockTree;
   dock: HTMLElement;
   freezer: HTMLElement;
   fileTree: SliccFileTree;
   termSurface: HTMLElement;
   memoryHost: SliccMemoryPanel;
   monitor: SliccMonitor;
-  tabBar: HTMLElement & { tabs?: unknown };
   avatarMenu: SliccAvatarMenu;
   /**
    * Dock surface ids claimed by a full-screen overlay launcher instead of a
@@ -163,6 +183,9 @@ const CSS = [
   'padding:8px 12px;border:1px solid var(--line);border-radius:14px;',
   'background:var(--canvas);color:var(--txt-2);font-size:12px;line-height:1.4;}',
   '.wcui-backpressure[hidden]{display:none;}',
+  // H2 — the panel host / trusted layer split. See `trusted-layer.ts` for why
+  // this is a stacking context rather than a z-index.
+  TRUSTED_LAYER_CSS,
 ].join('');
 
 function ensureShellStyles(doc: Document): void {
@@ -248,28 +271,24 @@ function buildComposer(options: WcShellOptions): {
   return { composer, inputCard, composerMeta, queuedStack, lickBackpressureNotice };
 }
 
+/**
+ * Build the 4 fixed tool panels (files/terminal/memory/monitor) as
+ * independent `<slicc-surface>` leaves, plus the browser-follower fallback
+ * pane — every one composed directly into the dock-tree at boot, exactly
+ * like a sprinkle. There is no shared "workbench body" anymore: each panel
+ * is its own permanently-mounted, independently draggable/resizable/closable
+ * tree leaf.
+ */
 function buildWorkbench(): {
-  workbench: HTMLElement;
-  body: HTMLElement;
-  header: HTMLElement;
+  dockTree: WcShellRefs['dockTree'];
   tree: WcShellRefs['fileTree'];
   termSurface: HTMLElement;
   memoryHost: WcShellRefs['memoryHost'];
   monitor: SliccMonitor;
-  tabBar: WcShellRefs['tabBar'];
 } {
-  const workbench = el('slicc-workbench-pane');
-  // The documented composition contract: the header is pinned via
-  // `slot="header"` so the pane keeps it above the scrollable body region.
-  // The tab bar never renders `tool` tabs (the dock owns tools), so the
-  // header starts hidden — the sprinkle zone reveals it when sprinkle tabs
-  // exist; an always-empty title strip is dead chrome.
-  const header = el('slicc-workbench-header', { slot: 'header', hidden: '' });
-  const tabs = el('slicc-tab-bar', { active: 'files' }) as HTMLElement & { tabs?: unknown };
-  header.append(tabs);
+  const dockTree = el('slicc-dock-tree') as WcShellRefs['dockTree'];
 
-  const body = el('slicc-workbench-body', { active: 'files' });
-  const filesSurface = el('slicc-surface', { 'surface-id': 'files', layout: 'flex', active: '' });
+  const filesSurface = el('slicc-surface', { 'surface-id': 'files', layout: 'flex' });
   const tree = el('slicc-file-tree') as WcShellRefs['fileTree'];
   filesSurface.append(tree);
 
@@ -288,47 +307,44 @@ function buildWorkbench(): {
   // The dock's system tools include a Browser entry. Floats that wire the
   // full-screen tab switcher claim the surface (see `WcShellRefs.overlaySurfaces`)
   // and never reach this pane; the rest — followers above all — land here.
-  //
-  // So this copy must describe the FALLBACK, not the switcher. It used to
-  // advertise the switcher and tell the reader to click cards that are not
-  // there — harmless while the pane was unreachable, actively wrong now that
-  // followers land on it.
   const browserSurface = el('slicc-surface', { 'surface-id': 'browser', layout: 'flex' });
   const browserNote = el('div', { class: 'wcui-placeholder' });
   browserNote.textContent =
     'The tab switcher runs on the leader. This float has no browser of its own to show — ask the leader to open, focus, or close tabs through chat.';
   browserSurface.append(browserNote);
 
-  body.append(filesSurface, termSurfaceHost, memorySurfaceHost, monitorSurfaceHost, browserSurface);
-  workbench.append(header, body);
-  return { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar: tabs };
+  dockTree.append(
+    filesSurface,
+    termSurfaceHost,
+    memorySurfaceHost,
+    monitorSurfaceHost,
+    browserSurface
+  );
+
+  return { dockTree, tree, termSurface, memoryHost, monitor };
 }
 
 /**
- * Dock clicks open the workbench on the matching surface. The dock owns the
- * toggle semantics: clicking the active item emits `slicc-dock-collapse`
- * (NOT a second select) — that collapses the workbench.
+ * Overlay-launched dock items (see `WcShellRefs.overlaySurfaces`) open a
+ * full-screen view instead of a dock-tree leaf; everything else (tool panels
+ * and sprinkles) is owned entirely by `wireWcSprinkles`' own
+ * `slicc-dock-select`/`slicc-dock-collapse` listeners, which compose leaves
+ * directly into the dock-tree. This listener only has to defend the overlay
+ * carve-out and drive the long-press-to-fullscreen gesture.
  */
 function wireDockToWorkbench(
   dock: HTMLElement,
-  shell: HTMLElement,
-  body: HTMLElement,
+  dockTree: WcShellRefs['dockTree'],
   overlaySurfaces: ReadonlySet<string>,
   onSurfaceActivate?: (surfaceId: string) => void
 ): void {
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
-    if (!id) return;
-    // Overlay-launched surfaces open a full-screen view instead; a workspace
-    // pane underneath it would just be dead chrome. Read at click time, not
-    // mount time — the overlay wiring runs after `mountWcShell`.
-    if (overlaySurfaces.has(id)) return;
-    shell.setAttribute('open', '');
-    body.setAttribute('active', id);
-    onSurfaceActivate?.(id);
-  });
-  dock.addEventListener('slicc-dock-collapse', () => {
-    shell.removeAttribute('open');
+    // Nothing to do here for a non-overlay id — `wireWcSprinkles` handles
+    // it. Read `overlaySurfaces` at click time, not mount time — the overlay
+    // wiring runs after `mountWcShell`. An overlay id never reaches the
+    // dock-tree, so there's nothing to suppress beyond not acting on it.
+    if (!id || !overlaySurfaces.has(id)) return;
   });
   // Click-and-hold on a sprinkle launcher: open its surface in BROWSER
   // fullscreen (the real Fullscreen API — the long-press release is the user
@@ -336,33 +352,43 @@ function wireDockToWorkbench(
   dock.addEventListener('slicc-dock-longpress', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     if (!id?.startsWith('sprinkle:')) return;
-    shell.setAttribute('open', '');
-    body.setAttribute('active', id);
     onSurfaceActivate?.(id);
     // Escape for a double-quoted attribute selector (CSS.escape is for
     // identifiers, and jsdom lacks it).
     const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const surface = body.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
+    const surface = (dockTree as unknown as HTMLElement).querySelector<HTMLElement>(
+      `[surface-id="${quoted}"]`
+    );
     surface?.requestFullscreen?.().catch(() => {
       // Denied / unsupported (e.g. iframe without allowfullscreen) — the
-      // surface is still open in the workbench, just not fullscreen.
+      // surface is still open in the tree, just not fullscreen.
     });
   });
 }
 
-/** Tab selection switches the active workbench surface. */
-function wireTabsToBody(
-  header: HTMLElement,
-  body: HTMLElement,
-  onSurfaceActivate?: (surfaceId: string) => void
-): void {
-  header.addEventListener('tab-select', (event) => {
-    // The library's canonical `tab-select` detail field is `id`
-    // (TabEventDetail) — NOT `tabId`, which is the child tab's raw event.
-    const tabId = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (!tabId) return;
-    body.setAttribute('active', tabId);
-    onSurfaceActivate?.(tabId);
+/**
+ * Bridge a `pointerdown` on a sprinkle launcher chip to
+ * `beginExternalDrag(surfaceId, pointerId)` so the same gesture that would
+ * otherwise just click-open the sprinkle can instead be dragged straight into
+ * a zone. `<slicc-dock-item>` is shadow-DOM but its native pointer events are
+ * `composed`, so a listener on the light-DOM `<slicc-dock>` rail still sees
+ * them (retargeted to the dock-item host, which carries `item-id`).
+ *
+ * A plain click still degrades cleanly: `beginExternalDrag` only arms the
+ * dock-tree's drag state machine — it never calls `preventDefault` or
+ * `stopPropagation`, so the dock-item's own click-driven `select` event (the
+ * existing click-to-open path wired in `wireWcSprinkles`) still fires
+ * unmodified. If no `pointermove` ever lands on a drop target before
+ * `pointerup` (the case for an ordinary click), the dock-tree's own guard
+ * cancels the drag with no mutation and no event.
+ */
+function wireDockExternalDragToTree(dock: HTMLElement, dockTree: WcShellRefs['dockTree']): void {
+  dock.addEventListener('pointerdown', (event) => {
+    const target = event.target as HTMLElement | null;
+    const item = target?.closest?.('slicc-dock-item');
+    const id = item?.getAttribute('item-id');
+    if (!id?.startsWith('sprinkle:')) return;
+    dockTree.beginExternalDrag(id, (event as PointerEvent).pointerId);
   });
 }
 
@@ -392,16 +418,36 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     buildComposer(options);
   pane.append(thread, composer);
 
-  const { workbench, body, header, tree, termSurface, memoryHost, monitor, tabBar } =
-    buildWorkbench();
+  const { dockTree, tree, termSurface, memoryHost, monitor } = buildWorkbench();
+  // Chat is a reserved, non-closable dock-tree leaf (`CHAT_SURFACE_ID` in
+  // `wc-sprinkles.ts`) — the live `<slicc-chatpane>` is composed directly
+  // into the tree, never a separate shell region, so it can be dragged and
+  // resized like any other panel while remaining un-removable.
+  const chatSurface = el('slicc-surface', { 'surface-id': 'chat', layout: 'flex' });
+  chatSurface.append(pane);
+  dockTree.append(chatSurface);
+  const dockTreeApi = dockTree as unknown as {
+    setPinned(ids: string[]): void;
+    placeSurface(surfaceId: string, zone: string): void;
+  };
+  dockTreeApi.setPinned(['chat']);
+  // Default placement for hosts that never call `wireDockTreePersistence`
+  // (the design-time preview). Live floats immediately overwrite this via
+  // `setTree` (restored-or-default tree, which already seats chat), so this
+  // is a no-op there — `placeSurface` never displaces an existing position.
+  dockTreeApi.placeSurface('chat', 'left');
   const dock = el('slicc-dock', { 'system-tools': '' });
-  shell.append(pane, workbench, dock);
+  // `dockTree` is a shell-level region, permanently full-span alongside the
+  // dock rail — see `WcShellRefs.dockTree`.
+  shell.append(dockTree, dock);
   const overlaySurfaces = new Set<string>();
-  wireDockToWorkbench(dock, shell, body, overlaySurfaces, options.onSurfaceActivate);
-  wireTabsToBody(header, body, options.onSurfaceActivate);
+  wireDockToWorkbench(dock, dockTree, overlaySurfaces, options.onSurfaceActivate);
+  wireDockExternalDragToTree(dock, dockTree);
 
   // The freezer rail reserves its width via `--rail-w` on the app column so
-  // the nav + shell slide (not overlap) when the rail expands.
+  // the nav + shell slide (not overlap) when the rail expands. Only meaningful
+  // while the rail is a viewport-fixed overlay; as a docked panel it occupies
+  // real layout space and the engine sizes it (see `panelizeShell`).
   freezer.addEventListener('freezer-toggle', (event) => {
     const open = (event as CustomEvent<{ open?: boolean }>).detail?.open === true;
     appCol.style.setProperty('--rail-w', open ? '260px' : '44px');
@@ -424,11 +470,23 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
-  frame.append(shader, freezer, appCol);
+
+  // H2 — everything layout-owned goes inside `panelHost` (a stacking context,
+  // so no descendant can paint above it); `trustedLayer` is a LATER sibling and
+  // therefore always composites on top. Approval/consent chrome mounts there
+  // via `mountTrusted`. The layer is empty at this point: the fixed avatar
+  // strip moves into it when the nav is panelized (Phase 3) — establishing the
+  // split now means approval surfaces have somewhere trustworthy to land, and
+  // panels are already clamped before any dynamic panel can register.
+  const { panelHost, trustedLayer } = buildTrustedLayers(document);
+  panelHost.append(shader, freezer, appCol);
+  frame.append(panelHost, trustedLayer);
   root.replaceChildren(frame);
 
   return {
     frame,
+    panelHost,
+    trustedLayer,
     shader,
     chatPane: pane,
     thread,
@@ -440,15 +498,13 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     switcher,
     floatbar,
     shell,
-    workbenchBody: body,
-    workbenchHeader: header,
+    dockTree,
     dock,
     freezer,
     fileTree: tree,
     termSurface,
     memoryHost,
     monitor,
-    tabBar,
     avatarMenu,
     overlaySurfaces,
   };

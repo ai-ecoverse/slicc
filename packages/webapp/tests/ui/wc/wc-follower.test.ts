@@ -853,6 +853,204 @@ describe('mountWcUiFollower', () => {
     expect(callOrder.indexOf('prepareWcShell')).toBeLessThan(callOrder.indexOf('applyCherryTheme'));
   });
 
+  it('cherry: loads a host-pushed layout via dockTree.setTree, and a locked leaf in it rejects removeSurface (follower UI cannot close what the host pushed)', async () => {
+    const pushedTree = {
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: { type: 'leaf', surfaceId: 'files', locked: true },
+        right: null,
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify(pushedTree),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+      removeSurface(id: string): void;
+    };
+    expect(dockTree.getSurfaceIds()).toEqual(expect.arrayContaining(['chat', 'files']));
+
+    // Locked, not just pinned: the follower's own UI cannot remove it either.
+    dockTree.removeSurface('files');
+    expect(dockTree.getSurfaceIds()).toContain('files');
+
+    // A locked leaf renders no move button — nothing to drag.
+    const filesTile = [...dockTree.querySelectorAll('.dock-tree__tile')].find((tile) =>
+      tile.querySelector('[surface-id="files"]')
+    );
+    expect(filesTile?.querySelector('.dock-tree__tile-move')).toBeNull();
+  });
+
+  it('cherry: accepts a host-pushed panel LayoutDocument, locked so the user cannot rearrange it', async () => {
+    // Embedders vendor the SDK and upgrade on their own schedule, so the
+    // follower sniffs the shape: `base` → panel document, `zones` → dock-tree.
+    // Both keep working.
+    const pushedDoc = {
+      version: 1,
+      id: 'embed',
+      locked: true,
+      base: {
+        docks: [{ edge: 'top', size: '36px', panels: ['floatbar'] }],
+        center: { panel: 'chat' },
+      },
+    };
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify(pushedDoc),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    // Panelized: a `<slicc-layout>` replaced the dock-tree shell.
+    const layout = app.querySelector('slicc-layout') as HTMLElement & {
+      getLayout(): { id: string; locked?: boolean };
+      isLocked(id: string): boolean;
+    };
+    expect(layout).not.toBeNull();
+    expect(layout.getLayout().id).toBe('embed');
+    // Tree-wide lock reaches every placed panel, so the end user can't rearrange
+    // what the embedder pushed.
+    expect(layout.isLocked('chat')).toBe(true);
+    expect(app.querySelector('slicc-panel[panel-id="chat"]')?.hasAttribute('locked')).toBe(true);
+  });
+
+  it('cherry: IGNORES a pushed layout while the panel-layouts flag is off', async () => {
+    // The gate is uniform across floats — an embed is not an exception. A host that
+    // pushes a document with the flag off gets the default shell and a warning,
+    // never a half-applied arrangement.
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify({
+            version: 1,
+            id: 'embed',
+            base: { center: { panel: 'chat' } },
+          }),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // No `initFeatureFlags` call: the flag falls back to its bundled `off`.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    expect(app.querySelector('slicc-layout')).toBeNull();
+    expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
+  });
+
+  it('cherry: ignores a pushed document that fails schema validation, keeping the default', async () => {
+    // `base` present (so it takes the document path) but no id/version — must
+    // degrade rather than render a half-broken arrangement.
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: JSON.stringify({ base: { center: { panel: 'chat' } } }),
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    // Enable the gate on the POST-reset module instance — `resetModules` discards
+    // the flag state, so initializing before it would silently have no effect.
+    // A pushed layout only applies when `panel-layouts` is on; the gate is uniform
+    // across floats, so an embed is not an exception.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('cherry', { 'panel-layouts': 'on' });
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    // Not panelized — the classic shell stands.
+    expect(app.querySelector('slicc-layout')).toBeNull();
+    expect(app.querySelector('slicc-dock-tree')).not.toBeNull();
+  });
+
+  it('cherry: falls back to the default layout when the pushed layout is invalid JSON', async () => {
+    vi.doMock('../../../src/ui/boot/setup-standalone-prelude.js', () => ({
+      setupStandalonePrelude: vi.fn(async () => ({
+        browser: { getTransport: () => ({}), listPages: async () => [] },
+        realCdpTransport: {},
+        cherryJoinUrl: 'https://www.sliccy.ai/join/tray-c.cap',
+        cherryTransport: {
+          emitSliccEventToHost: vi.fn(),
+          onHostEvent: null,
+          layout: '{not json',
+          features: ALL_CHERRY_FEATURES,
+        },
+        instanceId: 'i',
+      })),
+    }));
+    vi.resetModules();
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await expect(
+      mountWcUiFollower(app, { stage: () => {} } as never, 'cherry')
+    ).resolves.not.toThrow();
+    const dockTree = app.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+    };
+    // Boot never threw and the default chat placement still applied.
+    expect(dockTree.getSurfaceIds()).toContain('chat');
+  });
+
   // Regression (#1706): a hosted-tab follower has no local CDP bridge, so it
   // must not advertise — regardless of `ui-only`, which is a cherry-only
   // parameter. The pre-fix gate (`isCherry && ui-only=1`) evaluated false here

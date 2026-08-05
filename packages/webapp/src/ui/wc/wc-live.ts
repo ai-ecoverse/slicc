@@ -8,6 +8,7 @@
  */
 
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
+import { isFeatureEnabled } from '../../core/feature-flags.js';
 import { SessionStore as AgentSessionStore } from '../../core/session.js';
 import { installPageStorageSync } from '../../kernel/page-storage-sync.js';
 import {
@@ -89,7 +90,7 @@ import {
   submittedText,
   type WcShellRefs,
 } from './wc-shell.js';
-import { createWorkbenchActivator } from './wc-workbench.js';
+import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 
 export {
   effortOverrideForAgent,
@@ -716,7 +717,15 @@ export interface WcShellBoot {
   clearSelection(): void;
   getController(): WcChatController | null;
   setController(controller: WcChatController): void;
-  setActivateSurface(fn: (surfaceId: string) => void): void;
+  /**
+   * Wire the workbench's per-panel poller lifecycle. `wc-sprinkles.ts`'s
+   * tool-panel dock-select/collapse listeners call `activate`/`deactivate`
+   * directly; this setter's own job is only to replay `activate` for every
+   * tool panel the restored dock-tree already placed (their pollers never
+   * started, since the activator didn't exist yet when
+   * `wireDockTreePersistence` ran).
+   */
+  setActivateSurface(activator: WorkbenchActivator): void;
   /**
    * Run `fn` once the kernel reports ready (immediately when it already has).
    * Wiring that reads worker state at attach time re-runs through this — an
@@ -732,13 +741,13 @@ export interface WcShellBoot {
  * the extension popout connects to the offscreen engine.
  */
 export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
-  let activateSurface: ((surfaceId: string) => void) | null = null;
+  let activator: WorkbenchActivator | null = null;
   const refs = mountWcShell(app, {
     messages: [],
     scoops: [],
     floatLabel,
     placeholder: 'Ask sliccy, or describe a change…',
-    onSurfaceActivate: (surfaceId) => activateSurface?.(surfaceId),
+    onSurfaceActivate: (surfaceId) => activator?.activate(surfaceId),
     // Live floats sync UI state with the URL: the thread owns `ctx`/`at`,
     // the shell owns `ws` — each component manages its own params.
     urlState: true,
@@ -818,16 +827,20 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     setController: (next) => {
       controller = next;
     },
-    setActivateSurface: (fn) => {
-      activateSurface = fn;
-      // The shell's connect-time URL restore (`ws` param) ran before the
-      // activator existed — re-fire it so the restored surface lazily mounts.
+    setActivateSurface: (next) => {
+      activator = next;
+      // Every tool panel already placed in the restored dock-tree (persisted
+      // or default) needs its lazy mount fired retroactively — the activator
+      // didn't exist yet when `wireDockTreePersistence` restored the tree.
       // Gate behind kernel ready: VFS RPCs (e.g. file tree load) need the
       // worker's VfsRpcHost to be attached, which only happens after host.ready.
-      const active = refs.workbenchBody.getAttribute('active');
-      if (active && refs.shell.hasAttribute('open')) {
-        if (clientReady) fn(active);
-        else readyListeners.add(() => fn(active));
+      const placed = new Set(
+        (refs.dockTree as unknown as { getSurfaceIds(): string[] }).getSurfaceIds()
+      );
+      for (const id of ['files', 'term', 'memory', 'monitor']) {
+        if (!placed.has(id)) continue;
+        if (clientReady) next.activate(id);
+        else readyListeners.add(() => next.activate(id));
       }
     },
     onClientReady: (fn) => {
@@ -1531,6 +1544,79 @@ function makeDropMountRunner(
   return async (command) => (await getSession()).exec(command);
 }
 
+/**
+ * localStorage key for the persisted dock-tree layout (the GUI drag-drop dock
+ * editor, `tree: true` presets — see `layout-spec.ts`). `default` stands in
+ * for a future multi-profile scheme; today every float has exactly one
+ * implicit profile (this browser/extension origin already scopes storage).
+ */
+export const DOCK_TREE_STORAGE_KEY = 'slicc-dock-tree:default';
+
+/**
+ * The boot-time fallback tree when nothing is persisted yet: a 5-zone tree
+ * seating the reserved, non-closable `chat` leaf in `left` — the exact shape
+ * of the `focus` preset (see `layout-spec.ts`), which has chat and nothing
+ * else. Tool panels (files/terminal/memory/monitor) start closed, exactly
+ * like any sprinkle, and are placed into `right` the first time their dock
+ * icon is clicked (see `DEFAULT_TOOL_ZONE` in `wc-sprinkles.ts`). Kept as an
+ * independent literal here rather than a static import so this module's
+ * bundle doesn't pull in `wc-sprinkles.js`/`layout-spec.js` eagerly — the
+ * `'chat'` surface id is likewise the literal `CHAT_SURFACE_ID` value, not an
+ * import, for the same reason.
+ *
+ * Once a user drags chat elsewhere, `dock-tree-change` persists that tree and
+ * THIS default is never consulted again for that profile — restoring a
+ * persisted tree with `chat` in a different zone is handled entirely by
+ * `setTree` below.
+ */
+export const DEFAULT_DOCK_TREE_ON_BOOT = {
+  zones: {
+    top: null,
+    left: { type: 'leaf', surfaceId: 'chat' },
+    middle: null,
+    right: null,
+    bottom: null,
+  },
+  rowFr: { top: 1, center: 1, bottom: 1 },
+  colFr: { left: 3, middle: 1, right: 1 },
+};
+
+/**
+ * Persist the dock-tree's layout per profile: `dock-tree-change` (drag-drop /
+ * `placeSurface` / `removeSurface` mutations) and `dock-tree-resize` (divider
+ * drags) both carry the full serialized tree in `detail.tree` — write it
+ * straight to `localStorage` (best-effort, try/catch; persistence is a
+ * convenience, never load-bearing for the tree to render). On attach, restore
+ * whatever was last persisted, or fall back to `DEFAULT_DOCK_TREE_ON_BOOT`.
+ * `setTree` does not itself emit a change event, so this restore can never
+ * loop back into a persist write. Runs for BOTH floats (standalone and
+ * extension) via `attachWcClient` — dual-mode by construction.
+ */
+export function wireDockTreePersistence(refs: WcShellRefs, log: BootStageLogger): void {
+  const dockTreeEl = refs.dockTree as unknown as HTMLElement;
+  const dockTree = refs.dockTree as unknown as { setTree(spec: unknown): void };
+  const persist = (tree: unknown): void => {
+    try {
+      localStorage.setItem(DOCK_TREE_STORAGE_KEY, JSON.stringify(tree));
+    } catch {
+      /* best-effort — persistence is a convenience, not load-bearing */
+    }
+  };
+  dockTreeEl.addEventListener('dock-tree-change', (event) => {
+    persist((event as CustomEvent<{ tree?: unknown }>).detail?.tree);
+  });
+  dockTreeEl.addEventListener('dock-tree-resize', (event) => {
+    persist((event as CustomEvent<{ tree?: unknown }>).detail?.tree);
+  });
+  try {
+    const raw = localStorage.getItem(DOCK_TREE_STORAGE_KEY);
+    dockTree.setTree(raw ? JSON.parse(raw) : DEFAULT_DOCK_TREE_ON_BOOT);
+  } catch (err) {
+    log.warn('WC dock-tree restore failed — seeding the default layout', err);
+    dockTree.setTree(DEFAULT_DOCK_TREE_ON_BOOT);
+  }
+}
+
 export function makeSprinkleAttachImage(
   composer: {
     getAttachStage(): import('./wc-attach.js').WcAttachmentStage | null;
@@ -1572,6 +1658,23 @@ export function attachWcClient(
     .catch(() => undefined);
   const { refs } = boot;
   boot.setClient(client);
+  // Panel system: re-parents the shell's chrome into `<slicc-layout>` panels.
+  // Gated by the `panel-layouts` feature flag (off by default) rather than a URL
+  // param, so there is ONE source of truth — a query flag would let a bookmarked
+  // URL contradict the user's own setting with nothing in the UI explaining why.
+  // Resolved once at boot: the flag mechanism has no live refresh, and switching
+  // layout engines mid-session would strand the panels already mounted.
+  //
+  // Read BEFORE `wireDockTreePersistence` so the dock-tree it would restore into
+  // is already superseded when panels are on.
+  const panelsRequested = isFeatureEnabled('panel-layouts');
+  if (!panelsRequested) {
+    // GUI drag-drop dock-tree layout editor: restore any persisted tree (or
+    // seed the default) and wire future mutations back to storage. Runs
+    // regardless of the currently-active layout — the dock-tree element is
+    // always mounted (hidden until a `tree: true` layout activates it).
+    wireDockTreePersistence(refs, log);
+  }
   // Turn-finished hooks: the suggested composer placeholder (assigned by
   // wireWcComposer once its module loads) + a stats refresh.
   let refreshPlaceholder: (() => void) | null = null;
@@ -1615,169 +1718,186 @@ export function attachWcClient(
   wireWcBrowserOverlay(boot, options, log);
   wireWcPermissionsSurface(boot, client, options, log);
   // Workbench: VFS file tree + worker-shell terminal, both lazy on first
-  // surface activation from the dock or tab bar.
-  boot.setActivateSurface(
-    createWorkbenchActivator({
-      fileTree: refs.fileTree,
-      termSurface: refs.termSurface,
-      memoryHost: refs.memoryHost,
-      monitor: refs.monitor,
-      openFs: openReader,
-      openWriter: async () => (await openVfs()).writer,
-      onKernelReady: (fn) => boot.onClientReady(fn),
-      getMonitorDeps: () => ({
-        getScoops: () => client.getScoops(),
-        isProcessing: (jid: string) => client.isProcessing(jid),
-        getCronTasks: async () => {
-          const { getAllCronTasks } = await import('../../scoops/db.js');
-          return getAllCronTasks();
-        },
-        getWebhooks: async () => {
-          const { getAllWebhooks } = await import('../../scoops/db.js');
-          return getAllWebhooks();
-        },
-        getMounts: async () => {
-          const { getAllMountEntries, loadMountHandle } = await import(
-            '../../fs/mount-table-store.js'
-          );
-          const entries = await getAllMountEntries();
-          // Checked fresh on every call (monitor's 5s auto-refresh + manual
-          // "↻ Refresh") — not polled independently. queryPermission() does
-          // NOT require a user gesture (only requestPermission() does), so
-          // this is safe to call here. Mirrors the same check
-          // mount-recovery.ts makes at session-reload time.
-          //
-          // Each local entry below calls loadMountHandle(), which opens (and
-          // closes) its own IndexedDB connection — fine at the 5s monitor
-          // cadence for a normal mount count, but if mount counts grow this
-          // could be batched through a single shared transaction instead.
-          // Deferred: would also change the per-entry error isolation the
-          // try/catch below gives us (one bad handle currently only zeroes
-          // out that one row).
-          return Promise.all(
-            entries.map(async (entry) => {
-              if (entry.descriptor.kind !== 'local') {
-                return entry; // remote backends: no live permission concept, leave `valid` unset
-              }
-              try {
-                const rawHandle = await loadMountHandle(entry.descriptor.idbHandleKey);
-                // queryPermission() is real on Chromium's FileSystemDirectoryHandle but
-                // missing from TS's DOM lib (non-standard across browsers) — one cast.
-                const handle = rawHandle as {
-                  queryPermission?: (desc: { mode: string }) => Promise<string>;
-                } | null;
-                const perm = await handle?.queryPermission?.({ mode: 'readwrite' });
-                return { ...entry, valid: perm === 'granted' };
-              } catch {
-                return { ...entry, valid: false };
-              }
-            })
-          );
-        },
-        getMcpServers: async () => {
-          try {
-            const fs = await openReader();
-            const raw = await fs.readFile('/workspace/.mcp/servers.json', { encoding: 'utf-8' });
-            const parsed = JSON.parse(
-              typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
-            );
-            return parsed.servers ?? {};
-          } catch {
-            return {};
-          }
-        },
-        getOAuthProviders: () => {
-          try {
-            // getAccounts() already validates the localStorage shape;
-            // route through it (and the account-store OAuth helpers) rather
-            // than re-parsing `slicc_accounts` here, so this stays in sync
-            // with the one canonical reader/writer of that key.
-            const seen = new Set<string>();
-            const entries: { providerId: string; valid?: boolean }[] = [];
-            for (const account of getAccounts()) {
-              if (seen.has(account.providerId)) continue;
-              seen.add(account.providerId);
-              // Only OAuth-flavored providers carry a meaningful valid/invalid
-              // status here — plain API-key accounts get `valid: undefined`
-              // (default/neutral dot), same treatment remote mount backends
-              // get in the mounts section above.
-              if (!getProviderConfig(account.providerId)?.isOAuth) {
-                entries.push({ providerId: account.providerId });
-                continue;
-              }
-              // getOAuthAccountInfo derives status purely from locally-held
-              // fields already on the Account record (loggedOut,
-              // tokenExpiresAt vs. Date.now()) — no token value is read out,
-              // and no network call is made. info === null means no
-              // accessToken at all — e.g. a requiresBaseUrl provider's
-              // base-URL-only row saved before the OAuth popup ever
-              // completed (provider-settings.ts's runOAuthLogin). That's a
-              // real OAuth-flavored account that just never finished
-              // authenticating, so it gets the same red dot as logged-out/
-              // expired rather than falling into the "not an OAuth
-              // provider" neutral case below.
-              const info = getOAuthAccountInfo(account.providerId);
-              const valid = account.loggedOut ? false : info ? !info.expired : false;
-              entries.push({ providerId: account.providerId, valid });
-            }
-            return entries;
-          } catch {
-            return [];
-          }
-        },
-        getSessionStats: async () => client.getSessionStats?.() ?? null,
-        getProcesses: async () => {
-          try {
-            const fs = await openReader();
-            const entries = await fs.readDir('/proc');
-            const procs = [];
-            for (const entry of entries.filter(
-              (e) => e.type === 'directory' && /^\d+$/.test(e.name)
-            )) {
-              try {
-                const stat = await fs.readFile(`/proc/${entry.name}/stat`, {
-                  encoding: 'utf-8',
-                });
-                const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
-                  encoding: 'utf-8',
-                });
-                procs.push({
-                  pid: parseInt(entry.name, 10),
-                  argv: String(cmdline).trim(),
-                  status: parseProcStatLine(String(stat)),
-                });
-              } catch {
-                /* process may have exited */
-              }
-            }
-            return procs;
-          } catch {
-            return [];
-          }
-        },
-        getTrayInfo: () => getTrayMonitorInfo(window.localStorage),
-        getConnectedFollowers,
-      }),
-      mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
-      insertReference: (path: string) => {
-        const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
-        const current = card.value.trim();
-        card.value = current ? `${current} @${path}` : `@${path}`;
-        card.focus();
+  // surface activation from the dock or tab bar. `workbenchActivator` is
+  // captured here (not just handed to `boot`) so the sprinkle wiring below
+  // can also call `deactivate` when a tool panel's leaf closes.
+  const workbenchActivator = createWorkbenchActivator({
+    fileTree: refs.fileTree,
+    termSurface: refs.termSurface,
+    memoryHost: refs.memoryHost,
+    monitor: refs.monitor,
+    openFs: openReader,
+    openWriter: async () => (await openVfs()).writer,
+    onKernelReady: (fn) => boot.onClientReady(fn),
+    getMonitorDeps: () => ({
+      getScoops: () => client.getScoops(),
+      isProcessing: (jid: string) => client.isProcessing(jid),
+      getCronTasks: async () => {
+        const { getAllCronTasks } = await import('../../scoops/db.js');
+        return getAllCronTasks();
       },
-      log,
-    })
-  );
-  // Floatbar click toggles the monitor tab
+      getWebhooks: async () => {
+        const { getAllWebhooks } = await import('../../scoops/db.js');
+        return getAllWebhooks();
+      },
+      getMounts: async () => {
+        const { getAllMountEntries, loadMountHandle } = await import(
+          '../../fs/mount-table-store.js'
+        );
+        const entries = await getAllMountEntries();
+        // Checked fresh on every call (monitor's 5s auto-refresh + manual
+        // "↻ Refresh") — not polled independently. queryPermission() does
+        // NOT require a user gesture (only requestPermission() does), so
+        // this is safe to call here. Mirrors the same check
+        // mount-recovery.ts makes at session-reload time.
+        //
+        // Each local entry below calls loadMountHandle(), which opens (and
+        // closes) its own IndexedDB connection — fine at the 5s monitor
+        // cadence for a normal mount count, but if mount counts grow this
+        // could be batched through a single shared transaction instead.
+        // Deferred: would also change the per-entry error isolation the
+        // try/catch below gives us (one bad handle currently only zeroes
+        // out that one row).
+        return Promise.all(
+          entries.map(async (entry) => {
+            if (entry.descriptor.kind !== 'local') {
+              return entry; // remote backends: no live permission concept, leave `valid` unset
+            }
+            try {
+              const rawHandle = await loadMountHandle(entry.descriptor.idbHandleKey);
+              // queryPermission() is real on Chromium's FileSystemDirectoryHandle but
+              // missing from TS's DOM lib (non-standard across browsers) — one cast.
+              const handle = rawHandle as {
+                queryPermission?: (desc: { mode: string }) => Promise<string>;
+              } | null;
+              const perm = await handle?.queryPermission?.({ mode: 'readwrite' });
+              return { ...entry, valid: perm === 'granted' };
+            } catch {
+              return { ...entry, valid: false };
+            }
+          })
+        );
+      },
+      getMcpServers: async () => {
+        try {
+          const fs = await openReader();
+          const raw = await fs.readFile('/workspace/.mcp/servers.json', { encoding: 'utf-8' });
+          const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+          return parsed.servers ?? {};
+        } catch {
+          return {};
+        }
+      },
+      getOAuthProviders: () => {
+        try {
+          // getAccounts() already validates the localStorage shape;
+          // route through it (and the account-store OAuth helpers) rather
+          // than re-parsing `slicc_accounts` here, so this stays in sync
+          // with the one canonical reader/writer of that key.
+          const seen = new Set<string>();
+          const entries: { providerId: string; valid?: boolean }[] = [];
+          for (const account of getAccounts()) {
+            if (seen.has(account.providerId)) continue;
+            seen.add(account.providerId);
+            // Only OAuth-flavored providers carry a meaningful valid/invalid
+            // status here — plain API-key accounts get `valid: undefined`
+            // (default/neutral dot), same treatment remote mount backends
+            // get in the mounts section above.
+            if (!getProviderConfig(account.providerId)?.isOAuth) {
+              entries.push({ providerId: account.providerId });
+              continue;
+            }
+            // getOAuthAccountInfo derives status purely from locally-held
+            // fields already on the Account record (loggedOut,
+            // tokenExpiresAt vs. Date.now()) — no token value is read out,
+            // and no network call is made. info === null means no
+            // accessToken at all — e.g. a requiresBaseUrl provider's
+            // base-URL-only row saved before the OAuth popup ever
+            // completed (provider-settings.ts's runOAuthLogin). That's a
+            // real OAuth-flavored account that just never finished
+            // authenticating, so it gets the same red dot as logged-out/
+            // expired rather than falling into the "not an OAuth
+            // provider" neutral case below.
+            const info = getOAuthAccountInfo(account.providerId);
+            const valid = account.loggedOut ? false : info ? !info.expired : false;
+            entries.push({ providerId: account.providerId, valid });
+          }
+          return entries;
+        } catch {
+          return [];
+        }
+      },
+      getSessionStats: async () => client.getSessionStats?.() ?? null,
+      getProcesses: async () => {
+        try {
+          const fs = await openReader();
+          const entries = await fs.readDir('/proc');
+          const procs = [];
+          for (const entry of entries.filter(
+            (e) => e.type === 'directory' && /^\d+$/.test(e.name)
+          )) {
+            try {
+              const stat = await fs.readFile(`/proc/${entry.name}/stat`, {
+                encoding: 'utf-8',
+              });
+              const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
+                encoding: 'utf-8',
+              });
+              procs.push({
+                pid: parseInt(entry.name, 10),
+                argv: String(cmdline).trim(),
+                status: parseProcStatLine(String(stat)),
+              });
+            } catch {
+              /* process may have exited */
+            }
+          }
+          return procs;
+        } catch {
+          return [];
+        }
+      },
+      getTrayInfo: () => getTrayMonitorInfo(window.localStorage),
+      getConnectedFollowers,
+    }),
+    mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
+    insertReference: (path: string) => {
+      const card = refs.inputCard as HTMLElement & { value: string; focus(): void };
+      const current = card.value.trim();
+      card.value = current ? `${current} @${path}` : `@${path}`;
+      card.focus();
+    },
+    log,
+  });
+  boot.setActivateSurface(workbenchActivator);
+
+  // Panelize when `panel-layouts` is on (see the flag read above).
+  //
+  // Placed after `workbenchActivator` exists because panelization takes over the
+  // dock rail's clicks (the dock-tree it used to drive is gone), and opening a
+  // tool panel must still start its poller / lazy-mount — otherwise the terminal
+  // opens with no session, which is exactly what happened before this was wired.
+  // The VFS arrives later via `attachFs` (see the `openVfs()` block below).
+  if (panelsRequested) {
+    void import('./panelize-shell.js')
+      .then(({ panelizeShell }) =>
+        panelizeShell(refs, undefined, undefined, {
+          onToolPanelActivate: (id) => workbenchActivator.activate(id),
+          onToolPanelDeactivate: (id) => workbenchActivator.deactivate(id),
+        })
+      )
+      .catch((err) => log.error('panelize failed — keeping the classic shell', err));
+  }
+
+  // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {
-    const isOpen =
-      refs.shell.hasAttribute('open') && refs.workbenchBody.getAttribute('active') === 'monitor';
-    if (isOpen) {
-      refs.shell.removeAttribute('open');
-      refs.dock.removeAttribute('active');
-    } else {
-      (refs.dock as HTMLElement & { selectItem(id: string): void }).selectItem('monitor');
-    }
+    const dock = refs.dock as HTMLElement & {
+      active: string | null;
+      selectItem(id: string): void;
+      collapse(): void;
+    };
+    if (dock.active === 'monitor') dock.collapse();
+    else dock.selectItem('monitor');
   });
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
@@ -1818,6 +1938,10 @@ export function attachWcClient(
   void openVfs()
     .then(async ({ reader, writer }) => {
       const { createRemoteSprinkleVfs } = await import('../../kernel/remote-sprinkle-vfs.js');
+      // Resolved before `wireWcSprinkles` so its sprinkle-hosting hooks can be
+      // wired at construction: a panelized shell must host sprinkle surfaces
+      // itself (see `hostSprinkleSurface`).
+      const panelizedForSprinkles = (await import('./panelize-shell.js')).getPanelizedShell();
       const { wireWcSprinkles } = await import('./wc-sprinkles.js');
       const sprinkles = await wireWcSprinkles({
         refs,
@@ -1825,12 +1949,48 @@ export function attachWcClient(
         fs: createRemoteSprinkleVfs({ reader, writer }),
         instanceId: options.instanceId,
         onAttachImage: makeSprinkleAttachImage(composer, log),
+        onToolPanelActivate: (id) => workbenchActivator.activate(id),
+        onToolPanelDeactivate: (id) => workbenchActivator.deactivate(id),
+        // Panelized shells host sprinkle surfaces themselves: the dock-tree
+        // `WcSprinkleZone` would otherwise append to is gone, so a new sprinkle
+        // would be created detached and never render.
+        hostSprinkleSurface: panelizedForSprinkles
+          ? (surfaceId, surface) => panelizedForSprinkles.hostSprinkleSurface(surfaceId, surface)
+          : undefined,
+        removeSprinkleSurface: panelizedForSprinkles
+          ? (surfaceId) => panelizedForSprinkles.removeSprinkleSurface(surfaceId)
+          : undefined,
         log,
       });
       // The wire-up-time discovery/restore races the worker's VfsRpcHost
       // installation (a lost RPC fails 30s late) — re-run on kernel-ready,
       // same recovery the freezer rail uses. resync() is idempotent.
       boot.onClientReady(() => void sprinkles.resync());
+      // Register the page-side layout applier so the kernel worker's
+      // `layout` command (via the `layout-apply` panel-RPC op) can reach
+      // `applyLayout`. This shared boot path covers BOTH floats — standalone
+      // (wc-live's own boot) and extension (`wc-extension.ts` reuses
+      // `attachWcClient`).
+      const { getPanelizedShell } = await import('./panelize-shell.js');
+      const panelized = getPanelizedShell();
+      if (panelized) {
+        // Panels are running: hand it the VFS so the document verbs
+        // (`load`/`save`/`docs`) and the add-panel menu's saved-layout list work,
+        // and register agent-authored panels now that a filesystem exists.
+        // Crucially, do NOT install the dock-tree applier below — it would
+        // overwrite the panel applier `panelizeShell` already registered and
+        // silently route every `layout` command to the wrong engine.
+        const sprinkleFs = createRemoteSprinkleVfs({ reader, writer });
+        panelized.attachFs(sprinkleFs);
+        const { registerAgentPanels } = await import('./agent-panels.js');
+        await registerAgentPanels(sprinkleFs).catch((err) =>
+          log.warn('agent panel discovery failed', err)
+        );
+      } else {
+        const { setLayoutApplier } = await import('./layout-apply-registry.js');
+        const { applyLayout } = await import('./apply-layout.js');
+        setLayoutApplier((msg) => applyLayout(sprinkles.zone, msg));
+      }
       if (options.standalone && options.instanceId) {
         const { wireWcTray } = await import('./wc-tray.js');
         const zoneCallbacks = sprinkles.zone.callbacks();

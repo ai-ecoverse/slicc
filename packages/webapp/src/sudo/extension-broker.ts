@@ -6,7 +6,9 @@
  * the side-panel realm. So the offscreen broker forwards the request to the
  * panel via `chrome.runtime.sendMessage`; the panel's responder (see
  * `panel-responder.ts`) raises the real native modals and sends the decision
- * back.
+ * back. That relay is what keeps the decision out of the agent's reach — note
+ * it does NOT make the decision unforgeable by page-realm code in the panel
+ * itself; see the `NATIVE_CONFIRM` capture note in `panel-responder.ts`.
  *
  * The "Always" pattern suggestion is computed here in the offscreen realm
  * (where `quickLabel` can reach the provider) and shipped as the editable

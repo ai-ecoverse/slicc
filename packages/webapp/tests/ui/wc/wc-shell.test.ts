@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
  * Shell-composition tests for the `?ui=wc` preview mount: structure of the
- * frame (shader / freezer / nav / shell / dock), dock→workbench wiring, and
- * the composer's local echo loop.
+ * frame (shader / freezer / nav / shell / dock-tree / dock), dock→dock-tree
+ * wiring, and the composer's local echo loop.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,7 +48,7 @@ describe('mountWcUiPreview', () => {
     expect(root.children.length).toBe(1);
   });
 
-  it('assembles nav, freezer, shader, shell, and dock', () => {
+  it('assembles nav, freezer, shader, shell, dock-tree, and dock', () => {
     const root = mount();
     const nav = root.querySelector('slicc-nav');
     expect(nav).toBeTruthy();
@@ -66,7 +66,8 @@ describe('mountWcUiPreview', () => {
     expect(nav?.querySelector('slicc-theme-toggle')).toBeNull();
     expect(root.querySelector('slicc-shader')).toBeTruthy();
     expect(root.querySelector('slicc-freezer slicc-freezer-new')).toBeTruthy();
-    expect(root.querySelector('slicc-shell slicc-chatpane')).toBeTruthy();
+    // Chat is a pinned dock-tree leaf, not a separate shell region.
+    expect(root.querySelector('slicc-shell slicc-dock-tree slicc-chatpane')).toBeTruthy();
     expect(root.querySelector('slicc-dock')?.hasAttribute('system-tools')).toBe(true);
   });
 
@@ -85,22 +86,70 @@ describe('mountWcUiPreview', () => {
     expect(thread?.querySelectorAll('slicc-lick-card').length).toBeGreaterThan(5);
   });
 
-  it('opens the workbench on dock select and closes on dock collapse', () => {
+  it('mounts the dock-tree as the sole, permanently full-span layout host', () => {
     const root = mount();
-    const dock = root.querySelector('slicc-dock') as HTMLElement;
+    const dockTree = root.querySelector('slicc-dock-tree') as HTMLElement;
     const shell = root.querySelector('slicc-shell') as HTMLElement;
-    const body = root.querySelector('slicc-workbench-body') as HTMLElement;
+    expect(dockTree).toBeTruthy();
+    // Never hidden — no separate mode to toggle it against.
+    expect(dockTree.hasAttribute('hidden')).toBe(false);
+    expect(dockTree.parentElement).toBe(shell);
+  });
 
-    dock.dispatchEvent(
+  it('composes chat as a pinned dock-tree leaf, left zone', async () => {
+    const { CHAT_SURFACE_ID } = await import('../../../src/ui/wc/wc-sprinkles.js');
+    const root = mount();
+    const dockTree = root.querySelector('slicc-dock-tree') as HTMLElement & {
+      getSurfaceIds(): string[];
+      getTree(): { zones: Record<string, unknown> };
+    };
+    expect(dockTree.getSurfaceIds()).toContain(CHAT_SURFACE_ID);
+    expect(dockTree.getTree().zones.left).toEqual({ type: 'leaf', surfaceId: CHAT_SURFACE_ID });
+    const surface = dockTree.querySelector(`[surface-id="${CHAT_SURFACE_ID}"]`);
+    expect(surface?.querySelector('slicc-chatpane')).toBeTruthy();
+  });
+
+  it('opens a tool panel into the dock-tree on dock select, closes it on collapse (real end-to-end wiring via wireWcSprinkles)', async () => {
+    const { wireWcSprinkles } = await import('../../../src/ui/wc/wc-sprinkles.js');
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 'live',
+      placeholder: 'p',
+    });
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as import('../../../src/fs/virtual-fs.js').VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as import('../../../src/ui/offscreen-client.js').OffscreenClient;
+    const log = {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    } as unknown as import('../../../src/ui/boot/types.js').BootStageLogger;
+    await wireWcSprinkles({ refs, client, fs, log });
+
+    const dockTree = refs.dockTree as unknown as HTMLElement & { getSurfaceIds(): string[] };
+    refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
     );
-    expect(shell.hasAttribute('open')).toBe(true);
-    expect(body.getAttribute('active')).toBe('files');
+    expect(dockTree.getSurfaceIds()).toContain('files');
 
-    // Clicking the active dock item emits `slicc-dock-collapse` (the dock
-    // owns toggle semantics) — the workbench must close on it.
-    dock.dispatchEvent(new CustomEvent('slicc-dock-collapse', { bubbles: true }));
-    expect(shell.hasAttribute('open')).toBe(false);
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-collapse', { bubbles: true, detail: { id: 'files' } })
+    );
+    expect(dockTree.getSurfaceIds()).not.toContain('files');
   });
 
   it('live floats also mount the bare nav', async () => {
@@ -155,7 +204,7 @@ describe('mountWcUiPreview', () => {
     }
   });
 
-  it('urlState option opts the thread and shell into URL state sync (off by default)', async () => {
+  it('urlState option opts the thread into URL state sync (off by default)', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -167,7 +216,6 @@ describe('mountWcUiPreview', () => {
       urlState: true,
     });
     expect(live.thread.hasAttribute('url-state')).toBe(true);
-    expect(live.shell.hasAttribute('url-state')).toBe(true);
 
     // The fixture/preview mount stays URL-clean.
     const fixture = mountWcShell(host, {
@@ -177,7 +225,6 @@ describe('mountWcUiPreview', () => {
       placeholder: 'p',
     });
     expect(fixture.thread.hasAttribute('url-state')).toBe(false);
-    expect(fixture.shell.hasAttribute('url-state')).toBe(false);
   });
 
   it('kills the UA body margin so the frame sits flush', () => {
@@ -186,11 +233,7 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('html,body{margin:0');
   });
 
-  // Regression (#1706): the dock handler used to hardcode `id === 'browser'`
-  // and skip the pane for EVERY float, while only standalone leaders wired the
-  // replacement overlay. Followers were left with an inert globe. The skip is
-  // now driven by `refs.overlaySurfaces`, which the overlay claims for itself.
-  it('an UNCLAIMED browser dock item opens the workspace pane (follower fallback)', async () => {
+  it('an UNCLAIMED browser dock item opens its surface in the dock-tree (follower fallback)', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -201,15 +244,16 @@ describe('mountWcUiPreview', () => {
       placeholder: 'p',
     });
 
-    refs.dock.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    // Browser isn't a tool-panel id (handled separately via overlaySurfaces),
+    // so wireDockToWorkbench's overlay-only listener leaves it untouched —
+    // the surface is already permanently composed by `buildWorkbench`.
+    const surface = (refs.dockTree as unknown as HTMLElement).querySelector(
+      '[surface-id="browser"]'
     );
-
-    expect(refs.shell.hasAttribute('open')).toBe(true);
-    expect(refs.workbenchBody.getAttribute('active')).toBe('browser');
+    expect(surface).not.toBeNull();
   });
 
-  it('a CLAIMED browser dock item opens no pane (the overlay is the surface)', async () => {
+  it('a claimed browser id is ignored by the overlay listener (no dock-tree interaction)', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -221,55 +265,69 @@ describe('mountWcUiPreview', () => {
     });
     refs.overlaySurfaces.add('browser'); // what wireWcBrowser does
 
-    refs.dock.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
-    );
-
-    expect(refs.shell.hasAttribute('open')).toBe(false);
+    // Selecting a claimed id must not throw and must not place/remove anything
+    // in the tree — the overlay owns it entirely.
+    expect(() =>
+      refs.dock.dispatchEvent(
+        new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+      )
+    ).not.toThrow();
   });
 
-  // The claim lands after mountWcShell (the overlay module is imported lazily),
-  // so the handler must read the set at click time, not capture it at wiring.
-  it('a claim registered AFTER mount still suppresses the pane', async () => {
+  it('a pointerdown on a sprinkle dock launcher arms beginExternalDrag', async () => {
     const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
     const host = document.createElement('div');
     document.body.appendChild(host);
     const refs = mountWcShell(host, {
       messages: [],
       scoops: [],
-      floatLabel: 'leader',
+      floatLabel: 't',
       placeholder: 'p',
     });
+    const beginExternalDrag = vi.fn();
+    (
+      refs.dockTree as unknown as { beginExternalDrag: typeof beginExternalDrag }
+    ).beginExternalDrag = beginExternalDrag;
+    const item = document.createElement('slicc-dock-item');
+    item.setAttribute('item-id', 'sprinkle:hero');
+    refs.dock.appendChild(item);
 
-    refs.dock.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'files' } })
+    item.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 7 })
     );
-    expect(refs.shell.hasAttribute('open')).toBe(true);
-
-    refs.overlaySurfaces.add('browser');
-    refs.shell.removeAttribute('open');
-    refs.dock.dispatchEvent(
-      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
-    );
-    expect(refs.shell.hasAttribute('open')).toBe(false);
+    expect(beginExternalDrag).toHaveBeenCalledWith('sprinkle:hero', 7);
   });
 
-  // This pane is what a float WITHOUT the overlay shows, so its copy has to
-  // describe that fallback. It previously advertised the switcher and told the
-  // reader to click cards — unreachable copy before #1706, wrong copy after.
+  it('does not arm a drag for a non-sprinkle (tool) dock item', async () => {
+    const { mountWcShell } = await import('../../../src/ui/wc/wc-shell.js');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const refs = mountWcShell(host, {
+      messages: [],
+      scoops: [],
+      floatLabel: 't',
+      placeholder: 'p',
+    });
+    const beginExternalDrag = vi.fn();
+    (
+      refs.dockTree as unknown as { beginExternalDrag: typeof beginExternalDrag }
+    ).beginExternalDrag = beginExternalDrag;
+    const item = document.createElement('slicc-dock-item');
+    item.setAttribute('item-id', 'term');
+    refs.dock.appendChild(item);
+
+    item.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true, composed: true, pointerId: 1 })
+    );
+
+    expect(beginExternalDrag).not.toHaveBeenCalled();
+  });
+
   it('the browser surface describes the fallback, not the switcher it lacks', () => {
     const root = mount();
     const text = root.querySelector('[surface-id="browser"]')?.textContent ?? '';
     expect(text).toContain('runs on the leader');
     expect(text).not.toMatch(/click a card/i);
-  });
-
-  it('hides the workbench header until sprinkle tabs exist (tool tabs never render)', () => {
-    const root = mount();
-    const header = root.querySelector('slicc-workbench-header') as HTMLElement;
-    // The tab bar refuses `tool`-kind tabs by design, so without sprinkles the
-    // strip is an empty 46px title bar — it must start hidden.
-    expect(header.hasAttribute('hidden')).toBe(true);
   });
 
   it('styles the terminal surface black and lets the file tree fill its pane', () => {
@@ -287,8 +345,7 @@ describe('mountWcUiPreview', () => {
   it('long-pressing a sprinkle dock item opens its surface in browser fullscreen', () => {
     const root = mount();
     const dock = root.querySelector('slicc-dock') as HTMLElement;
-    const shell = root.querySelector('slicc-shell') as HTMLElement;
-    const body = root.querySelector('slicc-workbench-body') as HTMLElement;
+    const dockTree = root.querySelector('slicc-dock-tree') as HTMLElement;
 
     // A sprinkle surface, as the sprinkle zone would have mounted it.
     const surface = document.createElement('slicc-surface');
@@ -296,13 +353,11 @@ describe('mountWcUiPreview', () => {
     const requestFullscreen = vi.fn(() => Promise.resolve());
     (surface as HTMLElement & { requestFullscreen: () => Promise<void> }).requestFullscreen =
       requestFullscreen;
-    body.append(surface);
+    dockTree.append(surface);
 
     dock.dispatchEvent(
       new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'sprinkle:hero' } })
     );
-    expect(shell.hasAttribute('open')).toBe(true);
-    expect(body.getAttribute('active')).toBe('sprinkle:hero');
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
 
     // Non-sprinkle ids (tools) are not fullscreen targets.
@@ -310,24 +365,6 @@ describe('mountWcUiPreview', () => {
       new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'term' } })
     );
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
-  });
-
-  it('switches the active surface on tab select (canonical detail field is id)', () => {
-    const root = mount();
-    const body = root.querySelector('slicc-workbench-body') as HTMLElement;
-    // Drive the REAL tab bar so the event carries the library's canonical
-    // `{ id }` detail — a synthetic `{ tabId }` event would mask the
-    // field-name regression that broke tab clicks in the live shell.
-    const tabBar = root.querySelector('slicc-tab-bar') as HTMLElement & {
-      tabs: unknown;
-      selectTab(id: string): void;
-    };
-    tabBar.tabs = [
-      { id: 'sprinkle:hero', label: 'hero', kind: 'sprinkle' },
-      { id: 'sprinkle:dash', label: 'dash', kind: 'sprinkle' },
-    ];
-    tabBar.selectTab('sprinkle:dash');
-    expect(body.getAttribute('active')).toBe('sprinkle:dash');
   });
 
   it('applyShellContext swaps the shader program and the --ctx accent per mood', async () => {

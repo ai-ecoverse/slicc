@@ -78,15 +78,16 @@ test.describe('live git clone (real network)', () => {
       timeout: 20_000,
     });
 
-    // Activate the term surface via the shell's documented entry point; this
-    // opens the workbench AND fires the lazy mount that publishes
-    // `__slicc_terminal_view`.
+    // Activate the term surface via the dock rail's documented entry point;
+    // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
+    // into the dock-tree, opening the workbench AND firing the lazy mount
+    // that publishes `__slicc_terminal_view`.
     await page.evaluate(() => {
-      const shell = document.querySelector('slicc-shell') as
-        | (HTMLElement & { select?: (id: string) => void })
+      const dock = document.querySelector('slicc-dock') as
+        | (HTMLElement & { selectItem?: (id: string) => void })
         | null;
-      if (!shell?.select) throw new Error('<slicc-shell>.select(id) unavailable');
-      shell.select('term');
+      if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
+      dock.selectItem('term');
     });
     await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
       timeout: 30_000,

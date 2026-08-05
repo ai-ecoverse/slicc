@@ -60,6 +60,14 @@ export interface CherryHandshakeWelcome {
   };
   /** JSON-serialized SliccTheme the follower should apply. */
   theme?: string;
+  /**
+   * JSON-serialized `DockTreeSpec` (see `@slicc/webcomponents`' `slicc-dock-tree.ts`)
+   * the follower should load in place of its own persisted/default layout.
+   * Applied once, at boot — static, like `theme`; there is no runtime
+   * re-layout. Typically carries `locked: true` (tree-wide or per-leaf) so the
+   * follower's own UI can't drag/resize/close what the host pushed.
+   */
+  layout?: string;
   /** Locked effort level. When set, the thinking-level picker is hidden. */
   effortLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 }

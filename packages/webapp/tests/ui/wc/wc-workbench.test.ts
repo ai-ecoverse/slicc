@@ -99,14 +99,19 @@ describe('createWorkbenchActivator', () => {
       fileTree,
       termSurface: document.createElement('div'),
       memoryHost,
+      // createWorkbenchActivator wires the refresh-button listener at
+      // construction time (unconditionally, regardless of whether `monitor`
+      // is ever activated) — needs a real element even when unused.
+      monitor: document.createElement('slicc-monitor'),
       openFs: vi.fn(async () => await seededFs()),
       openWriter: vi.fn(async () => await seededFs()),
       mountTerminal: vi.fn(async () => undefined),
       // In tests the "kernel" is always ready — fire the callback immediately.
       onKernelReady: vi.fn((fn: () => void) => fn()),
+      insertReference: vi.fn(),
       log: { error: vi.fn() },
     };
-    // Partial deps: the activation paths under test never touch `monitor` /
+    // Partial deps: the activation paths under test never touch
     // `getMonitorDeps`, and the seeded VirtualFS is structurally compatible
     // with the VFS clients for the reads these tests perform.
     return deps as unknown as WcWorkbenchDeps & typeof deps;
@@ -114,71 +119,84 @@ describe('createWorkbenchActivator', () => {
 
   it('populates the file tree on files activation and refreshes on re-activation', async () => {
     const deps = makeDeps();
-    const activate = createWorkbenchActivator(deps);
-    activate('files');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
     await vi.waitFor(() => {
       expect(deps.fileTree.items?.length).toBeGreaterThan(0);
     });
-    activate('files');
+    activator.activate('files');
     expect(deps.openFs).toHaveBeenCalledTimes(2);
     expect(deps.mountTerminal).not.toHaveBeenCalled();
   });
 
   it('mounts the terminal once on first term activation', async () => {
     const deps = makeDeps();
-    const activate = createWorkbenchActivator(deps);
-    activate('term');
-    activate('term');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('term');
+    activator.activate('term');
     await vi.waitFor(() => expect(deps.mountTerminal).toHaveBeenCalledTimes(1));
     expect(deps.mountTerminal).toHaveBeenCalledWith(deps.termSurface);
   });
 
   it('hands parsed rows to the memory panel on memory activation', async () => {
     const deps = makeDeps();
-    const activate = createWorkbenchActivator(deps);
-    activate('memory');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('memory');
     await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledWith([]));
   });
 
   it('allows a terminal mount retry after failure', async () => {
     const deps = makeDeps();
     deps.mountTerminal.mockRejectedValueOnce(new Error('no worker'));
-    const activate = createWorkbenchActivator(deps);
-    activate('term');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('term');
     await vi.waitFor(() => expect(deps.log.error).toHaveBeenCalled());
-    activate('term');
+    activator.activate('term');
     await vi.waitFor(() => expect(deps.mountTerminal).toHaveBeenCalledTimes(2));
   });
 
   it('logs file-tree refresh failures', async () => {
     const deps = makeDeps();
     deps.openFs.mockRejectedValueOnce(new Error('idb gone'));
-    const activate = createWorkbenchActivator(deps);
-    activate('files');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
     await vi.waitFor(() => expect(deps.log.error).toHaveBeenCalled());
   });
 
   it('polls the file tree every 3 s while files surface is active', async () => {
     vi.useFakeTimers();
     const deps = makeDeps();
-    const activate = createWorkbenchActivator(deps);
-    activate('files');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
     // Advance past the first tick and let promises settle
     await vi.advanceTimersByTimeAsync(3000);
     expect(deps.openFs.mock.calls.length).toBeGreaterThanOrEqual(2);
     vi.useRealTimers();
   });
 
-  it('stops polling when another surface is activated', async () => {
+  it('activating a second independent panel does not stop the first panel poller (both are permanent leaves now)', async () => {
     vi.useFakeTimers();
     const deps = makeDeps();
-    const activate = createWorkbenchActivator(deps);
-    activate('files');
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
     await vi.advanceTimersByTimeAsync(0);
     const callsAfterFirst = deps.openFs.mock.calls.length;
-    activate('term');
+    activator.activate('term');
     await vi.advanceTimersByTimeAsync(6000);
-    // No additional openFs calls after switching away from files
+    // The files poller keeps running — no more show-one exclusivity.
+    expect(deps.openFs.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    vi.useRealTimers();
+  });
+
+  it('deactivate stops the files poller (leaf closed)', async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps();
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
+    await vi.advanceTimersByTimeAsync(0);
+    const callsAfterFirst = deps.openFs.mock.calls.length;
+    activator.deactivate('files');
+    await vi.advanceTimersByTimeAsync(6000);
     expect(deps.openFs.mock.calls.length).toBe(callsAfterFirst);
     vi.useRealTimers();
   });

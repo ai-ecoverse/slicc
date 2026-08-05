@@ -93,7 +93,7 @@ See `docs/mounts.md`.
 - Path: `packages/webapp/src/shell/`
 - `almost-bash-shell.ts` — just-bash runtime host.
 - `script-catalog.ts` — shared `.jsh`/`.bsh` discovery for the shell and `which`; its
-  `FsWatcher` cache is bypassed for mounted trees where external changes are invisible.
+  `FsWatcher` cache is bypassed for mounted trees, where external changes are invisible.
 - `supplemental-commands/` — built-ins (see `docs/shell-reference.md`).
   `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser
   `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API.
@@ -110,20 +110,15 @@ See `docs/mounts.md`.
   (`onnx-community/whisper-tiny`) once ready. Kokoro TTS (`Kokoro-82M-v1.0-ONNX`) chains
   automatically off the whisper load. Kokoro selects on English + on-device readiness; Web
   Speech is the fallback.
-- **Extension `uiOnly` side panel**: Chrome denies `getUserMedia` (mic prompt keys on the
-  extension origin, not grantable from the cross-origin iframe). `wc-follower.ts` skips `ptt`
-  and drops "Take a photo" from the add-menu. Voice and camera live in the leader tab /
-  detached popout instead.
+- **Extension `uiOnly` side panel**: Chrome denies `getUserMedia` (the mic prompt keys on the
+  extension origin, ungrantable from a cross-origin iframe), so `wc-follower.ts` skips `ptt`
+  and drops "Take a photo". Voice/camera live in the leader tab or detached popout.
 
 ### MCP Servers
 
-- Path: `packages/webapp/src/shell/mcp/`; command: `supplemental-commands/mcp-command.ts`.
-- Subcommands: `mcp add <url> [name]`, `mcp list`, `mcp delete <name>`, `mcp invoke <name>
-[tool]`, `mcp refresh <name>`, `mcp auth <name>` (re-authenticate; `--silent` /
-  `--interactive` to force).
-- `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh`; MCP Apps
-  materialize as sprinkles under `/workspace/.mcp/sprinkles/<name>/`. Registration is lazy
-  from `/workspace/.mcp/servers.json`.
+- Path: `src/shell/mcp/`; command: `supplemental-commands/mcp-command.ts`.
+- Registration is lazy from `/workspace/.mcp/servers.json`. Subcommands, the alias shim,
+  MCP-Apps-as-sprinkles: `docs/shell-reference.md`.
 
 ### CDP
 
@@ -156,36 +151,28 @@ See `docs/mounts.md`.
 
 - Paths: `shell/sudo/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate),
   `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).
-- `SudoManager` (`sudo/sudo-manager.ts`) — per-float policy store. Constructed in
+- `SudoManager` (`sudo/sudo-manager.ts`) — per-float policy store, constructed in
   `Orchestrator.init()` once the shared VFS + `FsWatcher` exist; seeds and live-reloads
-  `/etc/sudoers` and `/etc/sudoers.d/*` so edits and "Always" grants take effect without
-  restart.
+  `/etc/sudoers` + `/etc/sudoers.d/*`, so edits and "Always" grants apply without restart.
 - Wiring: `scoop-context.ts` wraps the agent's FS once with `createSudoFs`; that single
   handle backs both file tools and shell. Panel terminal is intentionally NOT gated.
 - Brokers are float-specific (`createSudoBroker`): extension-delegate relays via the hosted
-  leader tab page; standalone/Electron POSTs `/api/sudo-approve`.
+  leader tab; standalone/Electron POSTs `/api/sudo-approve`.
 - Self-protection: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval,
   hardcoded in `matchPath` regardless of policy.
+- "Agent can't self-approve" does NOT cover page-realm code (which can reassign
+  `globalThis.confirm`): `sudo/panel-responder.ts` captures the natives at module init;
+  approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`.
 
 Deep reference: `docs/approvals.md`.
 
 ### Tray
 
-| Module                 | Responsibility       |
-| ---------------------- | -------------------- |
-| `tray-leader-sync.ts`  | Façade + lifecycle   |
-| `context.ts`           | Dependencies         |
-| `follower-registry.ts` | Registry + keepalive |
-| `follower-dispatch.ts` | Exhaustive dispatch  |
-| `broadcast.ts`         | Snapshot + broadcast |
-| `cdp-router.ts`        | CDP routing          |
-| `fs-router.ts`         | Filesystem routing   |
-| `tab-router.ts`        | Tab-open routing     |
-| `remote-exec.ts`       | Remote execution     |
-| `transcript-export.ts` | Transcript export    |
-| `preview-bridge.ts`    | Preview bridge       |
-| `cherry-router.ts`     | Cherry events        |
-| `teleport-pool.ts`     | Target selection     |
+Modules in `scoops/` — `tray-leader-sync.ts` (façade + lifecycle), `context.ts` (shared
+deps), `follower-registry.ts` (registry + keepalive), `follower-dispatch.ts` (exhaustive
+dispatch), `broadcast.ts` (snapshot + broadcast), `cdp-router.ts`, `fs-router.ts`,
+`tab-router.ts`, `remote-exec.ts`, `transcript-export.ts` (streaming), `preview-bridge.ts`
+(connections), `cherry-router.ts` (events), `teleport-pool.ts` (target selection).
 
 Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; the dedicated
 `wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it.
@@ -234,14 +221,14 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - Path: `packages/webapp/src/ui/`; WC shell in `ui/wc/`.
 - `main.ts` boots the WC shell for every float: standalone/electron/hosted-leader/cherry →
   `wc/wc-live.ts` (kernel worker + tray sync + panel RPC); extension side panel + detached
-  popout → `wc/wc-extension.ts` (`OffscreenClient` over `chrome.runtime`).
-  `resolveUiRuntimeMode()` inspects `window.location.href` + extension flag.
-- `ui/wc/` map: `wc-live.ts`, `wc-shell.ts`, `wc-chat-controller.ts`, `wc-message-view.ts`,
-  `wc-tray.ts`, `wc-sprinkles.ts`, `wc-nav.ts`, `wc-workbench.ts`, `wc-freezer.ts`,
-  `wc-memory.ts`, `wc-extension.ts`.
-- **URL state**: `ctx` (active context, pushed — back/forward walks contexts), `at` (scroll
-  position, debounced replace), `ws` (open workspace surface). No global URL state manager;
-  the host only routes.
+  popout → `wc/wc-extension.ts` (`OffscreenClient`). Float discriminator:
+  `resolveUiRuntimeMode()`.
+- `ui/wc/` map: `wc-live`, `wc-shell`, `wc-chat-controller`, `wc-message-view`, `wc-tray`,
+  `wc-sprinkles`, `wc-nav`, `wc-workbench`, `wc-freezer`, `wc-memory`, `wc-extension`; panels in
+  `panelize-shell`, `builtin-panels`, `panel-visibility`, `layout-store`, `agent-panels`, `add-panel-menu`.
+- **Layouts** (`docs/layouts.md`): all chrome is a `SliccPanel` in `<slicc-layout>` except the fixed avatar strip (trusted layer). Behind the `panel-layouts` flag. `panelize-shell.ts` RE-PARENTS what `mountWcShell` built, so `WcShellRefs` stays valid. Documents save to `/workspace/layouts/` (free) or `/etc/slicc/layouts/` (gated). `setPanelVisible` must add an unplaced panel but never duplicate a placed one; `sanitizeLayoutName` guards the path a name becomes.
+- **URL state**: `ctx` (active context, pushed), `at` (scroll pos, debounced replace),
+  `ws` (open workspace surface). No global manager; the host only routes.
 - **Cherry `?cherry=1`** (`main-cherry.ts`): builds `CherryHostTransport` against
   `window.parent`, reads `joinUrl` from the handshake, wraps `BrowserAPI`. Origin detection:
   see `cherry-host-transport.ts` note in the CDP section.
@@ -249,9 +236,9 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
   advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel).
   Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles
-  accounts from `/api/hosted-bootstrap`; only removes providers tracked in
-  `localStorage['slicc_cloud_managed']`, never user-added accounts. `?connect=1` is a
-  login-only surface (`ui/connect-surface.ts`) with no kernel.
+  accounts from `/api/hosted-bootstrap`, removing only providers tracked in
+  `localStorage['slicc_cloud_managed']` — never user-added ones. `?connect=1` is a login-only
+  surface (`ui/connect-surface.ts`) with no kernel.
 
 ### Skills
 
@@ -266,8 +253,7 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 
 - Main files: `ui/sprinkle-renderer.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`.
 - `.shtml` panels discovered from VFS. CLI: fragments/full docs in `srcdoc` iframes.
-  Extension: renders in the hosted `?cherry=1` follower (sliccy.ai origin) — no extension
-  sandbox.
+  Extension: renders in the hosted `?cherry=1` follower — no extension sandbox.
 
 ### Dips
 

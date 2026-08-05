@@ -34,7 +34,7 @@ permissions:
 jobs:
   screenshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}
       R2_BUCKET: ${{ vars.R2_BUCKET || 'slicc-pr-screenshots' }}
@@ -109,88 +109,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          MANIFEST=.storybook-screenshots/out/manifest.json
-          if [ ! -s "$MANIFEST" ]; then
-            echo "::warning::No manifest produced by capture script; skipping upload."
-            exit 0
-          fi
-          export PREFIX="pr-${PR_NUMBER}/${HEAD_SHA}"
-          export R2_BUCKET
-
-          # Process manifest and upload with content hash deduplication
-          node -e '
-            const fs = require("fs");
-            const { execSync } = require("child_process");
-            const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const shots = m.shots || [];
-
-            // Handle zero-shot case: write empty new-uploads.json and exit
-            if (shots.length === 0) {
-              console.log("No screenshots to upload (zero affected stories).");
-              fs.writeFileSync(".storybook-screenshots/new-uploads.json", "[]");
-              process.exit(0);
-            }
-
-            const uploadData = shots.map(shot => ({
-              file: shot.file,
-              contentHash: shot.contentHash,
-              storyId: shot.storyId,
-              theme: shot.theme
-            }));
-            const prefix = process.env.PREFIX;
-            const bucket = process.env.R2_BUCKET;
-
-            let newCount = 0;
-            let cachedCount = 0;
-            const newUploads = [];
-
-            for (const item of uploadData) {
-              const src = `.storybook-screenshots/out/${item.file}`;
-              const key = `${prefix}/${item.file}`;
-              const hashKey = `hashes/${item.contentHash}`;
-
-              // Check if content hash already exists in R2
-              let exists = false;
-              try {
-                execSync(
-                  `npx wrangler r2 object get "${bucket}/${hashKey}" --remote > /dev/null 2>&1`,
-                  { stdio: "ignore" }
-                );
-                exists = true;
-              } catch (err) {
-                // Object does not exist
-                exists = false;
-              }
-
-              if (exists) {
-                // Content already exists, just create a symlink/reference and bump TTL
-                console.log(`  ⊙ ${item.file} (cached, hash ${item.contentHash.slice(0, 8)}…)`);
-                // Create a reference that points to the hash-based content
-                execSync(
-                  `echo "${item.contentHash}" | npx wrangler r2 object put "${bucket}/${key}.ref" --pipe --content-type text/plain --remote`,
-                  { stdio: "inherit" }
-                );
-                cachedCount++;
-              } else {
-                // New content, upload both the file and the hash reference
-                console.log(`  ↑ ${item.file} -> r2://${bucket}/${key} (new, hash ${item.contentHash.slice(0, 8)}…)`);
-                execSync(
-                  `npx wrangler r2 object put "${bucket}/${key}" --file "${src}" --content-type image/png --remote`,
-                  { stdio: "inherit" }
-                );
-                // Store the content by hash for future deduplication
-                execSync(
-                  `npx wrangler r2 object put "${bucket}/${hashKey}" --file "${src}" --content-type image/png --remote`,
-                  { stdio: "inherit" }
-                );
-                newCount++;
-                newUploads.push(item.file);
-              }
-            }
-
-            console.log(`\nSummary: ${newCount} new, ${cachedCount} cached (total ${uploadData.length})`);
-            fs.writeFileSync(".storybook-screenshots/new-uploads.json", JSON.stringify(newUploads));
-          ' "$MANIFEST" || exit 1
+          node packages/dev-tools/tools/storybook-screenshots-upload.mjs \
+            --manifest=.storybook-screenshots/out/manifest.json \
+            --out-dir=.storybook-screenshots/out \
+            --prefix="pr-${PR_NUMBER}/${HEAD_SHA}" \
+            --bucket="${R2_BUCKET}" \
+            --new-uploads-out=.storybook-screenshots/new-uploads.json \
+            --concurrency=8
 
       - name: Upload screenshots as workflow artifact
         if: always()
