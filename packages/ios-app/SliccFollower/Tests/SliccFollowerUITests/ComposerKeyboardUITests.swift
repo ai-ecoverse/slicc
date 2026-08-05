@@ -34,6 +34,19 @@ final class ComposerKeyboardUITests: XCTestCase {
             "Shift-Return should keep both lines in the composer")
     }
 
+    func testCommandReturnDoesNotSubmit() {
+        let app = launchConnectedApp()
+        let composer = focusedComposer(in: app)
+
+        composer.typeText("keep this draft")
+        app.typeKey(.return, modifierFlags: .command)
+
+        XCTAssertTrue(
+            (composer.value as? String)?.contains("keep this draft") == true,
+            "modified Return should not submit the composed prompt")
+        XCTAssertFalse(app.staticTexts["keep this draft"].exists)
+    }
+
     private func launchConnectedApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-joinUrl", "", "-uiTestConnectionState", "connected"]

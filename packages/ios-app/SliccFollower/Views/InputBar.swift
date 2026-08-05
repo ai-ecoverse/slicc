@@ -291,10 +291,12 @@ struct InputBar: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .focused($isFocused)
                 // TextEditor owns Return as a newline, so onSubmit does not
-                // fire for a hardware keyboard. Consume plain Return here;
-                // let Shift-Return continue to the editor for a line break.
+                // fire for a hardware keyboard. Consume ordinary Return here;
+                // editing/command modifiers continue to the editor instead of
+                // surprise-sending (Shift-Return remains a line break).
                 .onKeyPress(keys: [.return]) { event in
-                    guard !event.modifiers.contains(.shift) else { return .ignored }
+                    let reserved: EventModifiers = [.shift, .command, .control, .option]
+                    guard event.modifiers.intersection(reserved).isEmpty else { return .ignored }
                     sendIfPossible()
                     return .handled
                 }
