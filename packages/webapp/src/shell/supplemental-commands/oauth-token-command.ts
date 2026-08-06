@@ -238,6 +238,12 @@ async function runInteractiveProviderLogin(
     return readSavedProviderToken(providerId, getInfo, launch.succeeded);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // A delegated login (#1915) that found no human reports why. Say so
+    // plainly rather than burying it under a generic "login failed".
+    if (err instanceof Error && err.name === 'OAuthLaunchError') {
+      console.error(`[oauth-token] Provider ${providerId}: login could not be shown:`, msg);
+      return errResult(`oauth-token: ${msg}`);
+    }
     console.error(`[oauth-token] Provider ${providerId}: login failed:`, msg);
     return errResult(`oauth-token: login failed: ${msg}`);
   }

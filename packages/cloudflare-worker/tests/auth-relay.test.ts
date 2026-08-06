@@ -34,14 +34,26 @@ function runRelay(
   html: string,
   search: string,
   hash = '',
-  opts: { origin?: string; hasOpener?: boolean; path?: string } = {}
-): { replaced?: string; error?: string; postedMessage?: any; postedTarget?: string } {
+  opts: {
+    origin?: string;
+    hasOpener?: boolean;
+    path?: string;
+    noBroadcastChannel?: boolean;
+  } = {}
+): {
+  replaced?: string;
+  error?: string;
+  postedMessage?: any;
+  postedTarget?: string;
+  broadcasts: any[];
+} {
   const match = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!match) throw new Error('No <script> in relay HTML');
   let replaced: string | undefined;
   let errorText: string | undefined;
   let postedMessage: any;
   let postedTarget: string | undefined;
+  const broadcasts: any[] = [];
   const origin = opts.origin ?? 'https://www.sliccy.ai';
   const fakeLocation = {
     search,
@@ -66,6 +78,19 @@ function runRelay(
       /* no-op in test */
     },
   };
+  // The relay broadcasts on a same-origin channel so a follower whose
+  // `window.opener` was severed by COOP still receives the callback.
+  class FakeBroadcastChannel {
+    constructor(readonly name: string) {
+      if (opts.noBroadcastChannel) throw new Error('BroadcastChannel unavailable');
+    }
+    postMessage(message: unknown): void {
+      broadcasts.push({ channel: this.name, message });
+    }
+    close(): void {
+      /* no-op in test */
+    }
+  }
   const fn = new Function(
     'location',
     'document',
@@ -76,6 +101,7 @@ function runRelay(
     'JSON',
     'Number',
     'setTimeout',
+    'BroadcastChannel',
     match[1]!
   );
   fn(
@@ -89,14 +115,15 @@ function runRelay(
     Number,
     (_fn: any, _ms: number) => {
       /* no-op setTimeout in test */
-    }
+    },
+    FakeBroadcastChannel
   );
   if (!replaced && msgEl.textContent.startsWith('OAuth redirect failed: ')) {
     errorText = msgEl.textContent
       .replace(/^OAuth redirect failed: /, '')
       .replace(/\. Close.*$/, '');
   }
-  return { replaced, error: errorText, postedMessage, postedTarget };
+  return { replaced, error: errorText, postedMessage, postedTarget, broadcasts };
 }
 
 describe('OAuth callback relay — page response', () => {
@@ -305,10 +332,42 @@ describe('OAuth callback relay — opener source (worker-served SPA)', () => {
     expect(postedTarget).toBe('https://www.sliccy.ai');
   });
 
-  it('errors out when opener is gone', async () => {
+  it('still delivers by broadcast when the opener is gone (COOP-severed popup)', async () => {
+    // GitHub serves COOP `same-origin`, which severs `window.opener` for this
+    // popup. A follower running a leader-delegated login (#1915) has no
+    // loopback result endpoint to fall back on, so the same-origin broadcast
+    // is the delivery path that has to work.
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n' }));
+    const html = await fetchRelayBody(`?state=${state}&code=abc123`);
+    const { replaced, error, broadcasts } = runRelay(html, `?state=${state}&code=abc123`, '', {
+      hasOpener: false,
+    });
+    expect(replaced).toBeUndefined();
+    expect(error).toBeUndefined();
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0].channel).toBe('slicc-oauth-relay');
+    expect(broadcasts[0].message.type).toBe('oauth-callback');
+    // The authorization code must survive the relay.
+    expect(broadcasts[0].message.redirectUrl).toContain('code=abc123');
+    expect(broadcasts[0].message.redirectUrl).toContain('nonce=n');
+  });
+
+  it('broadcasts alongside the opener postMessage when both are available', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n' }));
+    const html = await fetchRelayBody(`?state=${state}&code=abc123`);
+    const { postedMessage, broadcasts } = runRelay(html, `?state=${state}&code=abc123`);
+    expect(postedMessage?.type).toBe('oauth-callback');
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0].message.redirectUrl).toBe(postedMessage.redirectUrl);
+  });
+
+  it('errors out when neither the opener nor a broadcast channel is available', async () => {
     const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n' }));
     const html = await fetchRelayBody(`?state=${state}`);
-    const { replaced, error } = runRelay(html, `?state=${state}`, '', { hasOpener: false });
+    const { replaced, error } = runRelay(html, `?state=${state}`, '', {
+      hasOpener: false,
+      noBroadcastChannel: true,
+    });
     expect(replaced).toBeUndefined();
     expect(error).toContain('No opener window');
   });

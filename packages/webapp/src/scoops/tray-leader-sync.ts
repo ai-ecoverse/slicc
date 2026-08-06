@@ -35,6 +35,10 @@ import {
   labelForFollower,
 } from './tray-leader/follower-registry.js';
 import { FsRouter } from './tray-leader/fs-router.js';
+import {
+  type DelegatedOAuthResult,
+  OAuthPopupDelegation,
+} from './tray-leader/oauth-popup-delegation.js';
 import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { type LastUserMessageOrigin, RequesterTracker } from './tray-leader/requester-tracker.js';
@@ -214,6 +218,7 @@ export class LeaderSyncManager {
   private readonly followerDispatch: FollowerDispatch;
   private readonly requesterTracker = new RequesterTracker();
   private readonly tabTeleportRouter: TabTeleportRouter;
+  private readonly oauthPopupDelegation: OAuthPopupDelegation;
   private get followers(): Map<string, ConnectedFollower> {
     return this.followerRegistry.followers;
   }
@@ -252,6 +257,7 @@ export class LeaderSyncManager {
     this.tabTeleportRouter = new TabTeleportRouter(context, {
       getTargetEntries: () => this.teleportPool.getConnectedEntries(),
     });
+    this.oauthPopupDelegation = new OAuthPopupDelegation(context);
     this.followerDispatch = new FollowerDispatch(context, {
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
@@ -263,6 +269,7 @@ export class LeaderSyncManager {
       cherryRouter: this.cherryRouter,
       requesterTracker: this.requesterTracker,
       tabTeleportRouter: this.tabTeleportRouter,
+      oauthPopupDelegation: this.oauthPopupDelegation,
     });
     this.followerRegistry.onFollowerRemoved({
       afterRegistryCleanup: (bootstrapId) =>
@@ -435,6 +442,58 @@ export class LeaderSyncManager {
   /** Where the most recent user message came from (leader UI or a follower). */
   getLastUserMessageOrigin(): LastUserMessageOrigin | null {
     return this.requesterTracker.get();
+  }
+
+  /**
+   * Can any connected follower host an interactive OAuth popup? Callers use
+   * this to fail fast with an actionable message instead of prompting into a
+   * void (#1915).
+   */
+  hasOAuthPopupCapableFollower(): boolean {
+    return this.pickOAuthPopupFollower() !== null;
+  }
+
+  /**
+   * Should an interactive login run on a follower rather than here? True when
+   * a capable follower exists AND either this leader has no human of its own
+   * or the most recent user message came from a follower.
+   */
+  shouldDelegateOAuthPopup(): boolean {
+    if (!this.hasOAuthPopupCapableFollower()) return false;
+    if (this.options.headlessLeader === true) return true;
+    return this.requesterTracker.get()?.kind === 'follower';
+  }
+
+  /**
+   * Run the interactive half of an OAuth login on a follower. Prefers the
+   * follower whose human sent the most recent user message — that is the
+   * browser they are actually looking at — and otherwise falls back to the
+   * most recently active capable follower.
+   */
+  async delegateOAuthPopup(url: string): Promise<DelegatedOAuthResult> {
+    const bootstrapId = this.pickOAuthPopupFollower();
+    if (!bootstrapId) {
+      return {
+        redirectUrl: null,
+        error: 'no connected follower can show an interactive login',
+      };
+    }
+    log.info('Delegating OAuth popup to a follower', { bootstrapId });
+    return this.oauthPopupDelegation.requestPopup(bootstrapId, url);
+  }
+
+  /** The follower that should host an interactive login, if any. */
+  private pickOAuthPopupFollower(): string | null {
+    const canPopup = (bootstrapId: string): boolean =>
+      this.followerRegistry.followers.get(bootstrapId)?.peerCapabilities?.oauthPopup === true;
+
+    const origin = this.requesterTracker.get();
+    if (origin?.kind === 'follower' && canPopup(origin.bootstrapId)) return origin.bootstrapId;
+
+    const candidates = [...this.followerRegistry.followers.values()]
+      .filter((follower) => canPopup(follower.bootstrapId))
+      .sort((a, b) => b.lastActivity - a.lastActivity);
+    return candidates[0]?.bootstrapId ?? null;
   }
 
   get hasFollowers(): boolean {

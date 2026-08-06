@@ -30,9 +30,9 @@ import {
   type SpeechSessionOptions,
 } from '@slicc/webcomponents/composer/speech';
 import { createLogger } from '../core/logger.js';
+import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
-import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import {
   createDownloadTracker,
   type DownloadSnapshot,

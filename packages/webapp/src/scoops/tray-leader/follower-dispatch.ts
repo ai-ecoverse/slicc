@@ -11,6 +11,7 @@ import type { CherryRouter } from './cherry-router.js';
 import type { LeaderSyncContext } from './context.js';
 import { labelForFollower } from './follower-registry.js';
 import type { FsRouter } from './fs-router.js';
+import type { OAuthPopupDelegation } from './oauth-popup-delegation.js';
 import type { RemoteExecRouter } from './remote-exec.js';
 import type { RequesterTracker } from './requester-tracker.js';
 import type { TabRouter } from './tab-router.js';
@@ -36,6 +37,7 @@ export interface FollowerDispatchCollaborators {
   >;
   teleportPool: Pick<TeleportPool, 'handleFollowerTargetsAdvertise'>;
   tabTeleportRouter: Pick<TabTeleportRouter, 'handleTeleportRequest'>;
+  oauthPopupDelegation: Pick<OAuthPopupDelegation, 'handlePopupResponse'>;
   transcriptExport: Pick<
     TranscriptExportManager,
     | 'handleTranscriptExportRequest'
@@ -58,6 +60,7 @@ export class FollowerDispatch {
     this.noteLegacyPeer(bootstrapId, message);
     const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
     const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
+    const { oauthPopupDelegation } = this.collaborators;
 
     switch (message.type) {
       case 'user_message':
@@ -130,6 +133,14 @@ export class FollowerDispatch {
         break;
       case 'tab.teleport.request':
         void tabTeleportRouter.handleTeleportRequest(bootstrapId, message);
+        break;
+      case 'oauth.popup.response':
+        oauthPopupDelegation.handlePopupResponse(
+          bootstrapId,
+          message.requestId,
+          message.redirectUrl,
+          message.error
+        );
         break;
       case 'fs.request':
         this.routeFsRequest(bootstrapId, message);

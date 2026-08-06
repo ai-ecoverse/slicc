@@ -243,6 +243,13 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       // the WC shell's attach pass), so the resolver must read the live
       // registry binding rather than capture it at install time.
       getPermissionsSurface: () => getLeaderPermissionsSurface(),
+      shouldDelegateOAuth: () => getLeader()?.sync.shouldDelegateOAuthPopup() === true,
+      delegateOAuthPopup: async (url) => {
+        const sync = getLeader()?.sync;
+        if (!sync?.shouldDelegateOAuthPopup()) return { delegated: false as const };
+        const result = await sync.delegateOAuthPopup(url);
+        return { delegated: true as const, ...result };
+      },
     }),
   });
   win.addEventListener(

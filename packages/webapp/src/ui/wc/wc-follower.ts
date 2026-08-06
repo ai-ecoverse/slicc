@@ -1,5 +1,6 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
+import type { SliccPermissions } from '@slicc/webcomponents';
 import { applyHostFlagOverrides, isFeatureEnabled } from '../../core/feature-flags.js';
 import { createLogger } from '../../core/logger.js';
 import {
@@ -23,7 +24,9 @@ import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
+import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { prepareWcShell } from './wc-live.js';
+import { installLeaderPermissionsSurface } from './wc-permissions.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { submittedSteer, submittedText } from './wc-shell.js';
 import {
@@ -632,6 +635,16 @@ export async function mountWcUiFollower(
 
   let follower!: ReturnType<typeof startPageFollowerTray>;
 
+  // A follower mounts no permissions surface at boot (nothing here needs one).
+  // A delegated OAuth login does, so install it on first use and keep it.
+  let permissionsSurface: SliccPermissions | null = null;
+  const ensureFollowerPermissionsSurface = (): SliccPermissions | null => {
+    if (!permissionsSurface) {
+      permissionsSurface = installLeaderPermissionsSurface({ runtimeMode })?.element ?? null;
+    }
+    return permissionsSurface;
+  };
+
   // Browser rail: list every tab in the tray and let the user pull one here.
   // A float with a real CDP surface gets a state-carrying teleport; the
   // ui-only side panel and cherry degrade to window.open inside the click.
@@ -661,6 +674,20 @@ export async function mountWcUiFollower(
       trayTargets = targets;
       followerBrowser.refresh();
     },
+    // #1915: the leader's kernel can't prompt a human. When the user is
+    // driving from here, the interactive OAuth hop runs here too. Cherry and
+    // the ui-only side panel are excluded — a cross-origin iframe cannot
+    // reliably own a provider popup — and omitting the handler is what keeps
+    // `capabilities.oauthPopup` off for them.
+    ...(isCherry || uiOnly
+      ? {}
+      : {
+          onOAuthPopupRequest: (url: string, signal: AbortSignal) =>
+            openDelegatedOAuthPopup(url, signal, {
+              getPermissionsSurface: ensureFollowerPermissionsSurface,
+              window,
+            }),
+        }),
     browserAPI: prelude.browser,
     onSnapshot: (messages, scoopJid) => {
       followerSelectedScoop = scoopJid;

@@ -23,7 +23,12 @@ describe('role-switch follower model controls', () => {
     const sync = { selectModel, setThinkingLevel, selectScoop };
     const options = buildFollowerOptions(
       {
-        refs: { composerMeta, switcher },
+        refs: {
+          composerMeta,
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
         browser: {},
         client: { sendSetFollowerForwarding: vi.fn() },
         window: { localStorage: { getItem: vi.fn(() => null) } },
@@ -82,7 +87,12 @@ describe('role-switch follower model controls', () => {
     const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
     const options = buildFollowerOptions(
       {
-        refs: { composerMeta, switcher },
+        refs: {
+          composerMeta,
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
         browser: {},
         client: { sendSetFollowerForwarding: vi.fn() },
         window: { localStorage: { getItem: vi.fn(() => null) } },
@@ -117,7 +127,12 @@ describe('role-switch follower status', () => {
     const controller = { loadMessages: vi.fn(), setProcessing: vi.fn() };
     const options = buildFollowerOptions(
       {
-        refs: { composerMeta: document.createElement('div'), switcher },
+        refs: {
+          composerMeta: document.createElement('div'),
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
         browser: {},
         client: { sendSetFollowerForwarding: vi.fn() },
         window: { localStorage: { getItem: vi.fn(() => null) } },

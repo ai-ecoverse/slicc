@@ -56,23 +56,29 @@ const log = createLogger('page-follower-tray');
 export { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
 
 /**
- * Shape the page's local browser targets for advertisement to the leader.
- *
- * A cherry follower (`runtime === CHERRY_RUNTIME_TAG`) lends a cooperative host
- * page, not a real browser tab: it can never serve `Network.*`, so every target
- * it advertises is tagged `kind: 'cherry'` with `capabilities.network = false`.
- * That metadata is what lets the leader keep cherry out of flows it cannot
- * satisfy — `canRuntimeOpenTab` (tab.open) reads `kind`, and
- * `getBestFollowerForTeleport` / `selectTeleportPool` read `capabilities.network`.
- * `navigate`/`screenshot` are advisory: the host SDK is the real authority and
- * gates each CDP domain itself, and the iframe never learns the host's exact
- * grants — only `network` (always false) and `kind` drive leader selection here.
- *
- * Non-cherry runtimes advertise `kind: 'browser'` with full capabilities:
- * their targets ride a real CDP transport, so `Network.*` (cookie teleport),
- * navigation, and screenshots all work. Explicit capabilities let the leader
- * treat them as authoritative instead of guessing from the target kind.
+ * Force the follower runtime status to inactive on teardown. When a reconnect
+ * loop has already given up, `cancel()` is a no-op and the page-side status
+ * lingers at `error`. That status is mirrored to the `slicc.followerTrayStatus`
+ * shim, so without this reset the worker-side `host` reports a phantom
+ * `status: follower (error)` after a `host leave` or a switch to leading.
+ * Unconditional and idempotent — a live manager's own stop() also sets
+ * inactive; this guarantees it for the gave-up path too.
  */
+function resetFollowerRuntimeStatus(): void {
+  setFollowerTrayRuntimeStatus({
+    state: 'inactive',
+    joinUrl: null,
+    trayId: null,
+    error: null,
+    lastPingTime: null,
+    reconnectAttempts: 0,
+    attachAttempts: 0,
+    lastAttachCode: null,
+    connectingSince: null,
+    lastError: null,
+  });
+}
+
 /** Hand the freshly wired sync to the page surfaces that consume it. */
 function activateFollowerSync(
   options: Pick<
@@ -93,15 +99,39 @@ function activateFollowerSync(
 }
 
 /**
- * A cherry follower lends a host page, not a browser: it must never advertise
- * itself as a teleport-capable browser host on `hello`.
+ * Capabilities this follower advertises on `hello`.
+ *
+ * A cherry follower lends a host page, not a browser: it must never claim to
+ * be a teleport-capable browser host. `oauthPopup` tracks whether the caller
+ * actually wired an interactive-login handler — one source of truth, so the
+ * leader can never delegate a login to a float that would drop it.
  */
 export function helloCapabilitiesForRuntime(
-  runtime: string | undefined
+  runtime: string | undefined,
+  canHostOAuthPopup = false
 ): TraySyncCapabilities | undefined {
-  return runtime === CHERRY_RUNTIME_TAG ? undefined : { browser: true };
+  if (runtime === CHERRY_RUNTIME_TAG) return undefined;
+  return { browser: true, ...(canHostOAuthPopup ? { oauthPopup: true } : {}) };
 }
 
+/**
+ * Shape the page's local browser targets for advertisement to the leader.
+ *
+ * A cherry follower (`runtime === CHERRY_RUNTIME_TAG`) lends a cooperative host
+ * page, not a real browser tab: it can never serve `Network.*`, so every target
+ * it advertises is tagged `kind: 'cherry'` with `capabilities.network = false`.
+ * That metadata is what lets the leader keep cherry out of flows it cannot
+ * satisfy — `canRuntimeOpenTab` (tab.open) reads `kind`, and
+ * `getBestFollowerForTeleport` / `selectTeleportPool` read `capabilities.network`.
+ * `navigate`/`screenshot` are advisory: the host SDK is the real authority and
+ * gates each CDP domain itself, and the iframe never learns the host's exact
+ * grants — only `network` (always false) and `kind` drive leader selection here.
+ *
+ * Non-cherry runtimes advertise `kind: 'browser'` with full capabilities:
+ * their targets ride a real CDP transport, so `Network.*` (cookie teleport),
+ * navigation, and screenshots all work. Explicit capabilities let the leader
+ * treat them as authoritative instead of guessing from the target kind.
+ */
 export function buildAdvertisedTargets(
   pages: { targetId: string; title: string; url: string }[],
   runtime: string
@@ -151,6 +181,12 @@ export interface StartPageFollowerTrayOptions {
    * so the user can pull one here.
    */
   onTargetsUpdated?: (targets: import('../scoops/tray-sync-protocol.js').TrayTargetEntry[]) => void;
+  /**
+   * Show a leader-delegated OAuth login here (#1915). Wiring this is what
+   * advertises `capabilities.oauthPopup`, so only floats that can really
+   * prompt a human should pass it.
+   */
+  onOAuthPopupRequest?: (url: string, signal: AbortSignal) => Promise<string | null>;
 
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
@@ -371,7 +407,11 @@ export function startPageFollowerTray(
     const sync = new FollowerSyncManager(connection.channel, {
       browserTransport: options.browserAPI.getTransport(),
       browserAPI: options.browserAPI,
-      helloCapabilities: helloCapabilitiesForRuntime(options.runtime),
+      helloCapabilities: helloCapabilitiesForRuntime(
+        options.runtime,
+        !!options.onOAuthPopupRequest
+      ),
+      onOAuthPopupRequest: options.onOAuthPopupRequest,
       onSnapshot: options.onSnapshot,
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
@@ -488,18 +528,7 @@ export function startPageFollowerTray(
       // leading. `stop()` is the teardown boundary, so clearing here is
       // unconditional and idempotent (a live manager's own stop() also sets
       // inactive; this just guarantees it for the gave-up path too).
-      setFollowerTrayRuntimeStatus({
-        state: 'inactive',
-        joinUrl: null,
-        trayId: null,
-        error: null,
-        lastPingTime: null,
-        reconnectAttempts: 0,
-        attachAttempts: 0,
-        lastAttachCode: null,
-        connectingSince: null,
-        lastError: null,
-      });
+      resetFollowerRuntimeStatus();
     },
     get currentSync() {
       return activeSync;

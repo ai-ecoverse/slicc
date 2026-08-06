@@ -131,6 +131,13 @@ export interface FollowerSyncManagerOptions {
    */
   helloCapabilities?: TraySyncCapabilities;
   /**
+   * Show a leader-delegated OAuth login here (#1915) and resolve with the
+   * terminal callback URL, or null when the human cancelled. Wired only by
+   * floats with a window and a permissions surface; its presence is what
+   * `capabilities.oauthPopup` advertises.
+   */
+  onOAuthPopupRequest?: (url: string, signal: AbortSignal) => Promise<string | null>;
+  /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
    * transfer abandoned, leader still connected but stuck), the
@@ -216,6 +223,8 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly remoteCDPSessions = new Set<string>();
   /** Cleanup functions for CDP event listeners registered on the local transport. */
   private readonly cdpEventCleanups: Array<() => void> = [];
+  /** Abort handles for in-flight delegated OAuth popups, keyed by requestId. */
+  private readonly oauthPopupAborts = new Map<string, AbortController>();
   /** Resolvers for outgoing tab.open requests. */
   private readonly tabOpenResolvers = new Map<
     string,
@@ -489,6 +498,11 @@ export class FollowerSyncManager implements AgentHandle {
    */
   private rejectPendingRequests(reason: string): void {
     this.rejectPendingSprinkleFetches(reason);
+    // A delegated OAuth popup outlives nothing: the leader that asked for it
+    // is gone, so abort the surface rather than leaving a prompt on screen
+    // whose answer can never be delivered.
+    for (const controller of this.oauthPopupAborts.values()) controller.abort();
+    this.oauthPopupAborts.clear();
     const err = new Error(reason);
     for (const { reject } of this.tabOpenResolvers.values()) reject(err);
     this.tabOpenResolvers.clear();
@@ -734,6 +748,17 @@ export class FollowerSyncManager implements AgentHandle {
    * Record the leader's `hello`. Warn when the leader is newer than this
    * build — the skew otherwise surfaces only as silently missing features.
    */
+  /** Keepalive bookkeeping for the leader's ping/pong. */
+  private handleKeepaliveMessage(type: 'ping' | 'pong'): void {
+    if (type === 'ping') {
+      this.keepalive.receivePing();
+      this.sync.send({ type: 'pong' });
+      return;
+    }
+    this.keepalive.receivePong();
+    setFollowerLastPingTime(Date.now());
+  }
+
   private handleLeaderHello(protocolVersion: number): void {
     this.leaderProtocolVersion = protocolVersion;
     if (protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
@@ -901,13 +926,12 @@ export class FollowerSyncManager implements AgentHandle {
       case 'transcript.export.approve.request':
         this.handleExportLeaderMessage(message);
         break;
-      case 'ping':
-        this.keepalive.receivePing();
-        this.sync.send({ type: 'pong' });
+      case 'oauth.popup.request':
+        void this.handleOAuthPopupRequest(message.requestId, message.url);
         break;
+      case 'ping':
       case 'pong':
-        this.keepalive.receivePong();
-        setFollowerLastPingTime(Date.now());
+        this.handleKeepaliveMessage(message.type);
         break;
       case 'hello':
         this.handleLeaderHello(message.protocolVersion);
@@ -1235,6 +1259,44 @@ export class FollowerSyncManager implements AgentHandle {
   /** The leader's advertised protocol version, when it sent a `hello`. */
   getLeaderProtocolVersion(): number | undefined {
     return this.leaderProtocolVersion;
+  }
+
+  /**
+   * Run the visible half of a leader-delegated OAuth login here (#1915) and
+   * report the terminal callback URL. Fail-closed: a float with no handler
+   * wired, a throwing handler, and an aborted attempt all send a single
+   * `oauth.popup.response` so the leader never waits out its full timeout.
+   */
+  private async handleOAuthPopupRequest(requestId: string, url: string): Promise<void> {
+    const handler = this.options.onOAuthPopupRequest;
+    if (!handler) {
+      log.warn('Leader delegated an OAuth popup, but this float cannot show one', { requestId });
+      this.sync.send({
+        type: 'oauth.popup.response',
+        requestId,
+        error: 'this follower cannot show an interactive login',
+      });
+      return;
+    }
+    const controller = new AbortController();
+    this.oauthPopupAborts.set(requestId, controller);
+    try {
+      const redirectUrl = await handler(url, controller.signal);
+      this.sync.send({
+        type: 'oauth.popup.response',
+        requestId,
+        ...(redirectUrl ? { redirectUrl } : {}),
+      });
+    } catch (err) {
+      log.warn('Delegated OAuth popup failed', { requestId, error: String(err) });
+      this.sync.send({
+        type: 'oauth.popup.response',
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      this.oauthPopupAborts.delete(requestId);
+    }
   }
 
   /**

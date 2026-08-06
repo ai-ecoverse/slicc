@@ -16,7 +16,7 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
+import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { decodeToMono16k } from './audio.js';
 import {
   getWhisper,

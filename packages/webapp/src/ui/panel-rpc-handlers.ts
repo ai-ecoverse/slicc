@@ -188,6 +188,24 @@ export interface StandalonePanelRpcHandlerOptions {
    * the op reject with a clear "permission surface unavailable" error.
    */
   getPermissionsSurface?: () => SliccPermissions | null;
+  /**
+   * Run the interactive OAuth hop on a follower instead of here (#1915).
+   * Resolves `{ delegated: false }` when the login belongs on this tab —
+   * the leader's own human sent the last message, or no capable follower is
+   * connected — and the caller falls back to the local popup.
+   */
+  delegateOAuthPopup?: (
+    url: string
+  ) => Promise<
+    { delegated: false } | { delegated: true; redirectUrl: string | null; error?: string }
+  >;
+  /**
+   * Whether an OAuth login started right now would be delegated. Providers
+   * consult this BEFORE building the authorize URL, because a delegated flow
+   * needs a callback that comes back to the follower rather than the
+   * leader's loopback.
+   */
+  shouldDelegateOAuth?: () => Promise<boolean> | boolean;
 }
 
 /**
@@ -531,9 +549,18 @@ function buildClipboardCaptureHandlers(options: StandalonePanelRpcHandlerOptions
     },
 
     'oauth-popup': async ({ url }) => {
+      // #1915: when the human is driving from a follower — or the leader is
+      // headless — prompting here puts the login where nobody can click it.
+      // Hand the visible half to that follower instead.
+      const delegated = await options.delegateOAuthPopup?.(url);
+      if (delegated?.delegated) {
+        return { redirectUrl: delegated.redirectUrl, error: delegated.error };
+      }
       const redirectUrl = await openOAuthPopup(url, options.getPermissionsSurface);
       return { redirectUrl };
     },
+
+    'oauth-route': async () => ({ delegate: (await options.shouldDelegateOAuth?.()) === true }),
 
     'capture-camera': async (payload) => {
       const result = await captureCamera(payload);

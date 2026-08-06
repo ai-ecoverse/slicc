@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 6,
-  "leaderVariantCount": 39,
-  "followerVariantCount": 34,
+  "leaderVariantCount": 40,
+  "followerVariantCount": 35,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -179,6 +179,15 @@
             "reasoning": true
           }
         ]
+      }
+    },
+    {
+      "type": "oauth.popup.request",
+      "ios": "unknown",
+      "message": {
+        "type": "oauth.popup.request",
+        "requestId": "oauth-popup-1",
+        "url": "https://github.com/login/oauth/authorize?client_id=abc&state=xyz"
       }
     },
     {
@@ -619,6 +628,15 @@
       "message": {
         "type": "new_session",
         "action": "save"
+      }
+    },
+    {
+      "type": "oauth.popup.response",
+      "ios": "undecodable",
+      "message": {
+        "type": "oauth.popup.response",
+        "requestId": "oauth-popup-1",
+        "redirectUrl": "https://www.sliccy.ai/auth/callback?code=abc123&nonce=n1"
       }
     },
     {

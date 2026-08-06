@@ -309,12 +309,27 @@ try {
   // flow hash that carries the access_token) to the opener instead of
   // self-looping a localhost redirect that doesn't resolve.
   function deliverToOpener() {
-    if (!window.opener) throw new Error('No opener window');
     var redirectUrl = location.origin + path + query + location.hash;
-    window.opener.postMessage(
-      { type: 'oauth-callback', redirectUrl: redirectUrl },
-      location.origin
-    );
+    // Same-origin broadcast FIRST: a provider serving COOP 'same-origin'
+    // (GitHub does) severs window.opener for this popup, and a follower
+    // running a leader-delegated login has no loopback result endpoint to
+    // fall back on. BroadcastChannel is origin-scoped and unaffected by the
+    // browsing-context-group split, so it reaches the waiting SLICC tab.
+    var broadcast = false;
+    try {
+      var channel = new BroadcastChannel('slicc-oauth-relay');
+      channel.postMessage({ type: 'oauth-callback', redirectUrl: redirectUrl });
+      channel.close();
+      broadcast = true;
+    } catch (e) {}
+    if (!window.opener) {
+      if (!broadcast) throw new Error('No opener window');
+    } else {
+      window.opener.postMessage(
+        { type: 'oauth-callback', redirectUrl: redirectUrl },
+        location.origin
+      );
+    }
     setTimeout(function () { try { window.close(); } catch (e) {} }, 300);
   }
   var target = null;

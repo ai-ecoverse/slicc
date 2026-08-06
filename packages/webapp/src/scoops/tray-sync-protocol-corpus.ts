@@ -372,6 +372,17 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     ios: 'decoded',
     message: { type: 'preview.open', requestId: 'prev-1', url: 'https://x.sliccy.now/' },
   },
+  // TS-only delegation (#1915): iOS has no permissions surface and no popup
+  // model, so it never advertises `capabilities.oauthPopup` and a leader will
+  // not route a login to it. Same pattern as transcript.export.approve.request.
+  'oauth.popup.request': {
+    ios: 'unknown',
+    message: {
+      type: 'oauth.popup.request',
+      requestId: 'oauth-popup-1',
+      url: 'https://github.com/login/oauth/authorize?client_id=abc&state=xyz',
+    },
+  },
   // iOS is an fs *requester*: it asks the leader's VFS for content. It serves
   // no filesystem of its own, so a leader-originated `fs.request` decodes only
   // so `AppState` can answer it with an error (the leader has no timeout).
@@ -599,6 +610,16 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   'tab.teleport.request': {
     ios: 'undecodable',
     message: { type: 'tab.teleport.request', requestId: 'tp-1', targetId: 'leader:tab1' },
+  },
+  // The reply half of the delegated login. Carries the callback URL only —
+  // access/refresh tokens never cross the tray.
+  'oauth.popup.response': {
+    ios: 'undecodable',
+    message: {
+      type: 'oauth.popup.response',
+      requestId: 'oauth-popup-1',
+      redirectUrl: `${SLICC_HOSTED_ORIGIN}/auth/callback?code=abc123&nonce=n1`,
+    },
   },
   'fs.request': {
     ios: 'decoded',

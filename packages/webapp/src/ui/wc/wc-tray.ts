@@ -83,6 +83,8 @@ import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
+import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
+import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
 
@@ -314,6 +316,13 @@ export function buildFollowerOptions(
       trayTargets = targets;
       followerBrowser.refresh();
     },
+    // #1915: this float has a mounted permissions surface (it can lead), so
+    // it can host a login the leader's kernel cannot prompt for.
+    onOAuthPopupRequest: (url, signal) =>
+      openDelegatedOAuthPopup(url, signal, {
+        getPermissionsSurface: getLeaderPermissionsSurface,
+        window: deps.window,
+      }),
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,
   };

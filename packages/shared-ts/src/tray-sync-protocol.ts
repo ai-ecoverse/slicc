@@ -110,6 +110,13 @@ export interface TraySyncCapabilities {
    * heuristics.
    */
   browser?: boolean;
+  /**
+   * This peer can host an interactive OAuth popup: it has a window, a
+   * permissions surface, and a human. Leaders use it to pick a follower to
+   * delegate `oauth.popup.request` to (issue #1915). Exec-only followers
+   * (CLI) and iOS never set it.
+   */
+  oauthPopup?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +330,16 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  /**
+   * Delegate an interactive OAuth hop to a follower whose human can actually
+   * click it (issue #1915: `oauth-token` on a headless or unattended leader
+   * used to prompt where nobody could answer). Only the provider's authorize
+   * URL crosses the tray; the follower opens it, captures the terminal
+   * callback URL, and replies with `oauth.popup.response`. Access and refresh
+   * tokens NEVER cross the tray — the leader keeps nonce validation, the code
+   * exchange, and account persistence.
+   */
+  | { type: 'oauth.popup.request'; requestId: string; url: string }
   | { type: 'preview.open'; requestId: string; url: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
@@ -414,6 +431,12 @@ export type FollowerToLeaderMessage =
    * `tab.open.error` legs, keyed by `requestId`.
    */
   | { type: 'tab.teleport.request'; requestId: string; targetId: string }
+  /**
+   * Terminal result of a delegated OAuth popup. `redirectUrl` is the callback
+   * URL the follower captured (carrying `?code=` + nonce) — never a token.
+   * Absent `redirectUrl` with no `error` means the human cancelled.
+   */
+  | { type: 'oauth.popup.response'; requestId: string; redirectUrl?: string; error?: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | TrayExecRequestMessage
