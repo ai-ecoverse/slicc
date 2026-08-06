@@ -32,8 +32,9 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   replace or remove base commands.
 - The curator may rewrite the entire `/workspace/CLAUDE.md`, and the hard character budget
   applies to the entire file with no protected region.
-- Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date. Each pass
-  re-verifies the oldest sections first; undated sections are maximally stale.
+- Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date, in UTC to match
+  archive timestamps. Each pass re-verifies the oldest sections first; undated sections are
+  maximally stale.
 
 ### Skills
 

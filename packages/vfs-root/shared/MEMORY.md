@@ -38,7 +38,7 @@ Rules:
 
 - Keep durable preferences, stable project facts, validated approaches, and named resources.
 - Organize retained information into concise per-topic sections rather than one flat list.
-- End every `##` and `###` section heading with its last-verified date in `YYYY-MM-DD` form, for example `## Deployment pipeline (2026-08-06)`.
+- End every `##` and `###` section heading with its last-verified date in `YYYY-MM-DD` form, for example `## Deployment pipeline (2026-08-06)`. Dates are UTC, matching the session archive timestamps, so a late-evening freeze west of UTC stamps the next day.
 - Stamp sections you write or confirm with today's date, {{TODAY}}.
 - Prioritize re-verifying the oldest-dated sections. Treat undated headings as maximally stale and date them on this pass.
 - Drop ephemera and duplicates. Delete or merge sections that are stale, superseded, or unverifiable.
