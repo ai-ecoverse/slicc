@@ -1,5 +1,6 @@
 import AppKit
 import SliccTraySession
+import SwiftUI
 import XCTest
 
 @testable import Sliccstart
@@ -87,6 +88,16 @@ final class TraySessionLauncherTests: XCTestCase {
         )
     }
 
+    func testRemoteSessionRowDisablesOnlyUnreachableActions() {
+        let reachableButtons = buttons(in: sessionRow(verdict: .reachable))
+        XCTAssertEqual(reachableButtons.count, 3)
+        XCTAssertEqual(reachableButtons.filter(\.isEnabled).count, 3)
+
+        let unreachableButtons = buttons(in: sessionRow(verdict: .unreachable))
+        XCTAssertEqual(unreachableButtons.count, 3)
+        XCTAssertEqual(unreachableButtons.filter(\.isEnabled).count, 1)
+    }
+
     // MARK: - Remote follow override
 
     func testTerminalFollowerUsesOverrideWithoutLocalLeader() async throws {
@@ -139,5 +150,30 @@ final class TraySessionLauncherTests: XCTestCase {
             createdAt: Date(),
             lastSeenAt: Date()
         )
+    }
+
+    private func sessionRow(verdict: SessionReachability.Verdict) -> TraySessionRow {
+        TraySessionRow(
+            session: session(url: "https://example.invalid/join/test", label: "Remote"),
+            isLocal: false,
+            localBrowserIcon: nil,
+            verdict: verdict,
+            canAttachBrowser: true,
+            canFollow: true,
+            onCopy: {},
+            onAttachBrowser: {},
+            onFollow: {}
+        )
+    }
+
+    private func buttons(in row: TraySessionRow) -> [NSButton] {
+        let host = NSHostingView(rootView: row.frame(width: 420, height: 60))
+        host.frame = NSRect(x: 0, y: 0, width: 420, height: 60)
+        host.layoutSubtreeIfNeeded()
+        return descendants(of: host).compactMap { $0 as? NSButton }
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants(of:))
     }
 }
