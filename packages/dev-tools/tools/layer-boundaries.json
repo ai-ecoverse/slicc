@@ -1,0 +1,40 @@
+{
+  "stack": [
+    {
+      "name": "fs",
+      "includes": ["**/packages/webapp/src/fs/**"]
+    },
+    {
+      "name": "shell/git",
+      "includes": ["**/packages/webapp/src/shell/**", "**/packages/webapp/src/git/**"]
+    },
+    {
+      "name": "cdp",
+      "includes": ["**/packages/webapp/src/cdp/**"]
+    },
+    {
+      "name": "tools",
+      "includes": ["**/packages/webapp/src/tools/**"]
+    },
+    {
+      "name": "core",
+      "includes": ["**/packages/webapp/src/core/**"]
+    },
+    {
+      "name": "scoops",
+      "includes": ["**/packages/webapp/src/scoops/**"]
+    },
+    {
+      "name": "ui",
+      "includes": ["**/packages/webapp/src/ui/**"]
+    }
+  ],
+  "zones": [
+    {
+      "name": "providers-built-in-no-ui",
+      "includes": ["**/packages/webapp/src/providers/built-in/**"],
+      "denySegments": ["ui"],
+      "message": "Built-in providers run before the UI exists and must not import from ui/."
+    }
+  ]
+}

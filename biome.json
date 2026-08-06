@@ -1,6 +1,36 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "plugins": ["./.biome-plugins/no-innerhtml-electron-overlay.grit"],
+  "plugins": [
+    "./.biome-plugins/no-innerhtml-electron-overlay.grit",
+    {
+      "path": "./.biome-plugins/generated/layer-cdp.grit",
+      "includes": ["**/packages/webapp/src/cdp/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/layer-core.grit",
+      "includes": ["**/packages/webapp/src/core/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/layer-fs.grit",
+      "includes": ["**/packages/webapp/src/fs/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/layer-scoops.grit",
+      "includes": ["**/packages/webapp/src/scoops/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/layer-shell-git.grit",
+      "includes": ["**/packages/webapp/src/shell/**", "**/packages/webapp/src/git/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/layer-tools.grit",
+      "includes": ["**/packages/webapp/src/tools/**"]
+    },
+    {
+      "path": "./.biome-plugins/generated/zone-providers-built-in-no-ui.grit",
+      "includes": ["**/packages/webapp/src/providers/built-in/**"]
+    }
+  ],
   "vcs": {
     "enabled": true,
     "clientKind": "git",
