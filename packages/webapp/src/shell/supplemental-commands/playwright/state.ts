@@ -4,8 +4,10 @@
  */
 
 import { base64ToUint8 } from '@slicc/shared-ts';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
 import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../core/logger.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';

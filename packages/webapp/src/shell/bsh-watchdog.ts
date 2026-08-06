@@ -8,8 +8,11 @@
  * 3. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../cdp/browser-api.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { CDPTransport } from '../cdp/transport.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { BshDiscoveryFS, BshEntry } from './bsh-discovery.js';
 import type { ScriptCatalog } from './script-catalog.js';

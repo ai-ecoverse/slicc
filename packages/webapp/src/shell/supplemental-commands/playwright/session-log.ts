@@ -3,6 +3,7 @@
  * playwright-cli command family.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { buildSnapshot } from './snapshot.js';

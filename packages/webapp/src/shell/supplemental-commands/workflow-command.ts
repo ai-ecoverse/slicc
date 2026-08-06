@@ -1,8 +1,10 @@
 // packages/webapp/src/shell/supplemental-commands/workflow-command.ts
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import type { CommandContextLike, WorkflowRunManager } from '../../scoops/workflow-run-manager.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { WORKFLOW_PRELUDE } from './workflow-prelude.js';

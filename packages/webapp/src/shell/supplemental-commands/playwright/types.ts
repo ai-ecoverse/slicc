@@ -2,9 +2,11 @@
  * Shared types for the playwright-cli command family.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { HarRecorder } from '../../../cdp/index.js';
 import type { HandoffMatch } from '../../../net/handoff-link.js';
 import type { ParsedLink } from '../../../net/link-header.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { FloatType } from '../../../scoops/tray-leader-sync.js';
 
 export type CmdResult = { stdout: string; stderr: string; exitCode: number };

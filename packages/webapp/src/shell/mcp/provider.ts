@@ -9,6 +9,7 @@
  * after a page reload.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import {
   getAccounts,

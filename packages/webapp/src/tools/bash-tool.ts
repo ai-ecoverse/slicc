@@ -6,6 +6,7 @@
  * which delegates to just-bash's Bash interpreter.
  */
 
+// biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import type { AlmostBashShell } from '../shell/index.js';

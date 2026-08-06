@@ -18,6 +18,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { OAuthLauncher } from '../../providers/types.js';

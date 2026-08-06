@@ -7,6 +7,7 @@
  * callback map instead of temporary onMessage listeners.
  */
 
+// biome-ignore lint/plugin/layer-scoops: migrated from ui-back-edge-baseline.json
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 
 interface Sprinkle {

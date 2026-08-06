@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../scoops/types.js';

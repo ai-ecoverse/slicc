@@ -19,6 +19,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { PYODIDE_RUNTIME_CDN } from '../../kernel/realm/py-realm-shared.js';

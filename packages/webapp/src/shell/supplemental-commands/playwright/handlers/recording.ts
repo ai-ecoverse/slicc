@@ -2,6 +2,7 @@
  * HAR recording subcommands: record, stop-recording.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { HarRecorder } from '../../../../cdp/index.js';
 import { resolveAppTabId } from '../snapshot.js';
 import type { PlaywrightHandler } from '../types.js';

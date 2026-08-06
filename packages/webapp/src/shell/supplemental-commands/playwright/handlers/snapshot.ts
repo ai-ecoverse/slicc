@@ -2,8 +2,11 @@
  * Page inspection subcommands: snapshot, frames, screenshot.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { FrameInfo } from '../../../../cdp/types.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../../../../core/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
 import { renderNode, takeSnapshot } from '../snapshot.js';

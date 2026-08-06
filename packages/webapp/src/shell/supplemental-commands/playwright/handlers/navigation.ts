@@ -2,6 +2,7 @@
  * Navigation subcommands: goto/navigate, go-back, go-forward, reload.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../../core/logger.js';
 import { fetchAndDiscover } from '../discover.js';
 import { requireTab } from '../state.js';

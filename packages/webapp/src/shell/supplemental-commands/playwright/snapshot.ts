@@ -4,7 +4,9 @@
  */
 
 import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { AccessibilityNode } from '../../../cdp/types.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import { listAllTargetsWithRemote } from './state.js';

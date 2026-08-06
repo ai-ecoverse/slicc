@@ -7,6 +7,7 @@
  * - edit_file: Apply a string replacement edit to a file
  */
 
+// biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';

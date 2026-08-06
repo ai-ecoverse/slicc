@@ -13,6 +13,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';

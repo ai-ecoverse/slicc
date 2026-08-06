@@ -1,7 +1,9 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { isValidShellEnvName } from '../../core/secret-env.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { resolveSecretTopology } from '../../core/secret-topology.js';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';

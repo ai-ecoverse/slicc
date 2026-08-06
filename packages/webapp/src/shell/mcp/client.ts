@@ -11,6 +11,7 @@
  * the caller can drive the OAuth flow in `oauth.ts`.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import type { McpAppDef, McpFetchLike, McpRpcError, McpToolDef } from './types.js';
 

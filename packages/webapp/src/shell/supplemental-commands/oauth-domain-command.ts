@@ -37,6 +37,7 @@ export function createOAuthDomainCommand(): Command {
     }
 
     const { getExtraOAuthDomains, setExtraOAuthDomainsAsync, getAllExtraOAuthDomains } =
+      // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
       await import('../../ui/provider-settings.js');
 
     const [subcommand, providerId, domain] = args;

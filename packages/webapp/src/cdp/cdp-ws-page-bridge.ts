@@ -19,6 +19,7 @@
  * `BrowserAPI.withTab(...)`.
  */
 
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { WsSelector } from '../kernel/realm/realm-types.js';
 import { WS_ROUTER_SOURCE } from '../kernel/realm/ws-router-page.js';

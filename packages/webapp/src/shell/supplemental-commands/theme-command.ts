@@ -35,6 +35,7 @@ export function createThemeCommand(): Command {
 }
 
 async function listThemes(): Promise<CommandResult> {
+  // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
   const { PRESETS } = await import('../../ui/theme-presets.js');
   const lines: string[] = ['Presets:'];
   for (const p of PRESETS) {
@@ -74,6 +75,7 @@ async function applyTheme(args: string[], ctx: CommandContext): Promise<CommandR
   const target = args[0];
 
   // Check if it's a known preset id
+  // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
   const { PRESETS } = await import('../../ui/theme-presets.js');
   const preset = PRESETS.find((p) => p.id === target);
   if (preset) {
@@ -119,6 +121,7 @@ async function exportThemeCmd(args: string[], ctx: CommandContext): Promise<Comm
   }
 
   const [id, path] = args;
+  // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
   const { PRESETS } = await import('../../ui/theme-presets.js');
   const preset = PRESETS.find((p) => p.id === id);
   if (!preset) {

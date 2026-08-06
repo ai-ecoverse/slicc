@@ -8,6 +8,7 @@
  *           response-headers, response-body
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
 import type { NetworkEntry, PlaywrightHandler, PlaywrightState } from '../types.js';

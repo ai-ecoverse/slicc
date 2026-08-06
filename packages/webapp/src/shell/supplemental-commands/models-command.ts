@@ -298,6 +298,7 @@ export function createModelsCommand(vfs?: VirtualFS): Command {
       getSelectedProvider,
       getSelectedModelId,
       resolveCurrentModel,
+      // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
     } = await import('../../ui/provider-settings.js');
 
     if (args.includes('--help') || args.includes('-h')) {

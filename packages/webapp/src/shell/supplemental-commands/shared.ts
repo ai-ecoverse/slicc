@@ -1,5 +1,7 @@
 import type { CommandContext } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getMimeType } from '../../core/mime-types.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import { normalizePath, splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';

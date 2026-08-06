@@ -13,7 +13,9 @@
  * as tool results.
  */
 
+// biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
+// biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import type { AgentToolResult } from '../core/types.js';
 
 const log = createLogger('tool-ui');

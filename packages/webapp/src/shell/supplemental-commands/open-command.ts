@@ -1,7 +1,9 @@
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../cdp/index.js';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
 import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
 import {
   basename,

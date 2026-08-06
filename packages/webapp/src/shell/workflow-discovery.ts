@@ -12,6 +12,7 @@
  * are specified in docs/superpowers/specs/2026-06-08-workflow-authoring-design.md §3.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 

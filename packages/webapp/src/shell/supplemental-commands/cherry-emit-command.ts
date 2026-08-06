@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
 import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from './host-command.js';
 

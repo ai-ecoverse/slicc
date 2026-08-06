@@ -2,6 +2,7 @@
  * Tab lifecycle subcommands: open/tab-new, tab-list, tab-close/close, resize.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../../core/logger.js';
 import { fetchAndDiscover } from '../discover.js';
 import { getActionablePages, resolveAppTabId } from '../snapshot.js';

@@ -3,7 +3,9 @@
  * storage snapshotting, init-script installation, and page diagnostics.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../core/logger.js';
 import type { TeleportPageDiagnostics, TeleportStorageSnapshot, TeleportWatcher } from './types.js';
 

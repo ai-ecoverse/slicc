@@ -3,6 +3,7 @@
  * dblclick, hover, select, check, uncheck, drag.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../../cdp/index.js';
 import {
   CLEAR_FOCUSABLE_ELEMENT_FUNCTION,

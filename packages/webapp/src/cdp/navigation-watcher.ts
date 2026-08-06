@@ -19,6 +19,7 @@
  */
 
 import type { DiscoveryKind } from '@slicc/shared-ts';
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import { extractCatalog } from '../net/discovery-link.js';
 import {

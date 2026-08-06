@@ -1,3 +1,4 @@
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { hasLocalNodeServer } from '../../core/float-topology.js';
 
 /** Get the LickManager from globalThis (published by `createKernelHost`). */
@@ -15,6 +16,7 @@ let LickProxy: ReturnType<
 > | null = null;
 async function getLickProxy() {
   if (LickProxy) return LickProxy;
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
   const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
   LickProxy = createLickManagerProxy();
   return LickProxy;
@@ -50,6 +52,7 @@ export async function getLickManagerSurface(): Promise<{
   }
   if (hasLocalNodeServer()) return null;
   const proxy = await getLickProxy();
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
   const { listWebhooksAsync } = await import('../../scoops/lick-manager-proxy.js');
   return {
     createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),

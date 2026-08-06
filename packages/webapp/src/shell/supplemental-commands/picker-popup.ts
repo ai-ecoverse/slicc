@@ -21,6 +21,7 @@
  * its own realm via `navigator.{usb,serial,hid}.getDevices()`.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../../core/runtime-env.js';
 
 const log = (() => {

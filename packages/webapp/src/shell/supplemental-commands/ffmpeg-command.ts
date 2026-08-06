@@ -469,6 +469,7 @@ async function tryPageRealmCapturePermission(
 ): Promise<{ ok: true } | { ok: false; message: string } | null> {
   if (typeof window === 'undefined') return null;
   try {
+    // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
     const { getLeaderPermissionsSurface } = await import('../../ui/wc/wc-permissions-registry.js');
     const surface = getLeaderPermissionsSurface();
     if (!surface) return null;

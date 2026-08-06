@@ -24,6 +24,7 @@
  */
 
 import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { FsError } from '../types.js';

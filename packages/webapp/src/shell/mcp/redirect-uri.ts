@@ -1,3 +1,4 @@
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { resolveFloatTopology } from '../../core/float-topology.js';
 
 /** Hosted callback that treats MCP OAuth `state` as an opaque value. */

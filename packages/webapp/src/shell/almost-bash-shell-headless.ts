@@ -31,6 +31,7 @@
 
 import type { BashExecResult, Command, CommandContext, CommandName, ExecResult } from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../cdp/index.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';

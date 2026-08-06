@@ -13,6 +13,7 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { showToolUIFromContext } from '../../tools/tool-ui.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import type { SprinkleManagerHandle } from '../sprinkle-manager-handle.js';

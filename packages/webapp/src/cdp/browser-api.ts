@@ -6,6 +6,7 @@
  */
 
 import type { TrayTargetEntry } from '@slicc/shared-ts';
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import { CDPClient } from './cdp-client.js';
 import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';

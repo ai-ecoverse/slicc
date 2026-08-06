@@ -7,6 +7,7 @@
  * helpers from here so there is exactly one reader/writer of the file.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { FsError } from '../../fs/types.js';

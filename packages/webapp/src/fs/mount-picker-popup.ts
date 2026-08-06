@@ -16,6 +16,7 @@
  * re-prompt for permission before using the handle.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import {
   type DirectoryPickerResult,

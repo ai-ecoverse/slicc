@@ -16,6 +16,7 @@
  * gates), mirroring `RestrictedFS`'s ACL-correct sync behavior.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import {
   applyDefaultDisposition,

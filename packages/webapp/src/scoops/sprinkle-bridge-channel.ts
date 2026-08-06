@@ -28,7 +28,9 @@
  * open | close | send | openNewAutoOpen`.
  */
 
+// biome-ignore lint/plugin/layer-scoops: migrated from ui-back-edge-baseline.json
 import type { Sprinkle } from '../ui/sprinkle-discovery.js';
+// biome-ignore lint/plugin/layer-scoops: migrated from ui-back-edge-baseline.json
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 
 /**

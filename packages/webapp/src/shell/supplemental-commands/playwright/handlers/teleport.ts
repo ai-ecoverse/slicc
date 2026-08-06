@@ -3,7 +3,9 @@
  * state machine itself lives in `../teleport.ts`.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../../core/logger.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { CHERRY_RUNTIME_TAG } from '../../../../scoops/tray-sync-protocol.js';
 import { requireTab } from '../state.js';
 import {

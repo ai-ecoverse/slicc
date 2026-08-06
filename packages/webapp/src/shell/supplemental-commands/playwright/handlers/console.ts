@@ -5,6 +5,7 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
 import type { ConsoleMessage, PlaywrightHandler, PlaywrightState } from '../types.js';

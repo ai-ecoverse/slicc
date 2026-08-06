@@ -1,6 +1,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { hasLocalNodeServer } from '../../core/float-topology.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getLeaderStatusWithFallback } from '../../scoops/tray-leader.js';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
 import { getLickManagerSurface } from './lick-surface.js';
@@ -75,6 +77,7 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
   }
   // No direct manager → legacy proxy path (unused in the current
   // single-kernel-worker leader tab; kept until confirmed removable).
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
   const { getTrayWebhookUrlAsync } = await import('../../scoops/lick-manager-proxy.js');
   return await getTrayWebhookUrlAsync();
 }

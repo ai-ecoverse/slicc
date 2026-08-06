@@ -6,7 +6,9 @@ import {
   getFollowerStatusWithFallback,
   getFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { FloatType } from '../../scoops/tray-leader/follower-registry.js';
 import {
   getLeaderStatusWithFallback,

@@ -15,7 +15,9 @@
  * Scoop fail-fast lives in LocalMountBackend.create().
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../core/runtime-env.js';
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { getToolExecutionContext } from '../tools/tool-ui.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';

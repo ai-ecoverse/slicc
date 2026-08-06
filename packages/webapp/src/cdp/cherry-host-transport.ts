@@ -11,6 +11,7 @@
  */
 
 import { type TranscriptExportProgress, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import {
   acceptEnvelope,

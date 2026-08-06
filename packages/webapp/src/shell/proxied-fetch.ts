@@ -22,6 +22,7 @@ import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
 import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';

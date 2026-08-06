@@ -5,7 +5,9 @@
  * `teleport-storage.ts`.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../core/logger.js';
 import {
   applyTeleportStorageSnapshot,

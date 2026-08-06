@@ -16,6 +16,7 @@
  * detected — use `mount refresh` to re-index.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('mount-index');

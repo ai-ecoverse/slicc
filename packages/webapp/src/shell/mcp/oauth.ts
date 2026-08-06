@@ -10,6 +10,7 @@
  * webapp's CORS-bypassing transport.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../../providers/pkce.js';
 

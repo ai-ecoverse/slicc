@@ -1,6 +1,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getMimeType } from '../../core/mime-types.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';

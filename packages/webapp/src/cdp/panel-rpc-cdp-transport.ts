@@ -15,6 +15,7 @@
  * `createRemoteTransport()` → `send('Target.attachToTarget', …)`.
  */
 
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import {
   PANEL_RPC_DEFAULT_TIMEOUT_MS,

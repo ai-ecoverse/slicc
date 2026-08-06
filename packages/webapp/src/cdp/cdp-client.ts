@@ -7,6 +7,7 @@
  * - Session management for target-specific commands
  */
 
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';

@@ -24,6 +24,7 @@ import {
   type UsbDeviceFilter,
   type UsbDeviceInfo,
 } from '../../kernel/usb-device-registry.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { parseFlagArgs } from '../arg-parser.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';

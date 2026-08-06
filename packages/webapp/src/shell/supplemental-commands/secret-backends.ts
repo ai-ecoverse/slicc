@@ -14,7 +14,9 @@
  * no extra headers.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { SecretTopology } from '../../core/secret-topology.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { callSecretsBridge } from '../../core/secrets-bridge-client.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 

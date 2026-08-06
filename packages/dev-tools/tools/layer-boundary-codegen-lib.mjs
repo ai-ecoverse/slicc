@@ -58,6 +58,8 @@ function createDescriptor(kind, name, includes, denySegments, message) {
     fileName: `${ruleId}.grit`,
     content: createContent(denySegments, message),
     includes: [...includes],
+    kind,
+    message,
     ruleId,
   };
 }

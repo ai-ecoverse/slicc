@@ -56,6 +56,7 @@ export function createLocalLlmCommand(): Command {
     // Lazy imports — same pattern as other supplemental commands that
     // reach into the browser settings layer.
     const { getApiKeyForProvider, getRawApiKeyForProvider, getBaseUrlForProvider, addAccount } =
+      // biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
       await import('../../ui/provider-settings.js');
     const { verifyConnection } = await import('../../providers/built-in/local-llm.js');
 

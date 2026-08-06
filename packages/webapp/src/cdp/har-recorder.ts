@@ -6,6 +6,7 @@
  * Supports filtering via user-provided JS functions.
  */
 
+// biome-ignore lint/plugin/layer-cdp: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { CDPTransport } from './transport.js';

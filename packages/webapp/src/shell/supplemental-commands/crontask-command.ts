@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { hasLocalNodeServer } from '../../core/float-topology.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 
@@ -72,6 +73,7 @@ let LickProxy: Awaited<
 > | null = null;
 async function getLickProxy() {
   if (LickProxy) return LickProxy;
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
   const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
   LickProxy = createLickManagerProxy();
   return LickProxy;
@@ -195,6 +197,7 @@ async function handleList(): Promise<CommandResult> {
     const tasks = extLm
       ? extLm.listCronTasks()
       : await (async () => {
+          // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
           const { listCronTasksAsync } = await import('../../scoops/lick-manager-proxy.js');
           return listCronTasksAsync();
         })();

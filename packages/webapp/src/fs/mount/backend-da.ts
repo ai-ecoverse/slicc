@@ -18,6 +18,7 @@
  * reconcile via HEAD) mirrors S3MountBackend.writeFile.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { getMimeType } from '../../core/mime-types.js';
 import { FsError } from '../types.js';
 import type {

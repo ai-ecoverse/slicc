@@ -20,6 +20,7 @@
  * approve a picker, so they get an immediate error.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { buildApprovalCardHtml } from '../../shell/supplemental-commands/picker-approval.js';
 import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
 import {

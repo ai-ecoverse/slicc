@@ -11,6 +11,7 @@
  * No UI, no FS, no shell wiring — those live in their own tasks.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../core/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
 import { isNoOpWriteDevicePath } from '../../fs/virtual-device-paths.js';

@@ -4,10 +4,9 @@
 // Computes the PR's changed files via `git diff --name-only <base>...HEAD`
 // and intersects them with EVERY debt list: the per-rule exemption glob lists
 // parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
-// cognitive complexity, floating promises, and misused promises — plus the
-// `ui/` back-edge baseline
-// (`ui-back-edge-baseline.json`, see check-ui-back-edges.mjs), evaluated per
-// file.
+// cognitive complexity, floating promises, and misused promises — plus files
+// carrying inline generated layer-boundary suppressions and the legacy `ui/`
+// back-edge baseline for directories not yet covered by generated stack rules.
 // Exits non-zero with a rule-appropriate fix-it message if any touched file
 // is still on ANY list — the PR author must pay the file's debt down and
 // delete its entry in the same PR.
@@ -28,8 +27,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { relative } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { BASELINE_PATH, baselineFiles } from './check-ui-back-edges.mjs';
+import { findLayerSuppressionFiles } from './layer-boundary-suppressions-lib.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
@@ -43,7 +43,8 @@ import {
 } from './size-exemption-lib.mjs';
 
 const SCRIPT = 'check-touched-exemptions';
-
+const LAYER_SOURCE_REL = 'packages/webapp/src';
+const LAYER_SUPPRESSION = 'biome-ignore lint/plugin/layer-';
 const UI_BASELINE_REL = relative(repoRoot, BASELINE_PATH).split('\\').join('/');
 
 const RULES = [
@@ -154,9 +155,22 @@ function readBaseJson(baseRef, relPath) {
   }
 }
 
-// Read the current ui-back-edge baseline from disk; null on any failure so a
-// missing/broken baseline degrades to "no ui-back-edge debt list" instead of
-// crashing the biome-rule checks.
+function readBaseLayerSuppressions(baseRef) {
+  const result = spawnSync(
+    'git',
+    ['grep', '-l', '--fixed-strings', LAYER_SUPPRESSION, baseRef, '--', LAYER_SOURCE_REL],
+    { cwd: repoRoot, encoding: 'utf8' }
+  );
+  if (result.status === 1) return { files: [], readable: true };
+  if (result.status !== 0) return { files: [], readable: false };
+  const files = result.stdout
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => line.slice(line.indexOf(':') + 1));
+  return { files, readable: true };
+}
+
 function readUiBaseline() {
   try {
     return JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
@@ -188,6 +202,8 @@ function main() {
   const biomeConfig = readBiomeConfig();
   const baseRef = resolveBaseRef(process.argv);
   const baseConfig = readBaseJson(baseRef, 'biome.json');
+  const layerFiles = findLayerSuppressionFiles(resolve(repoRoot, LAYER_SOURCE_REL), repoRoot);
+  const baseLayerFiles = readBaseLayerSuppressions(baseRef);
   const uiBaseline = readUiBaseline();
   const baseUiBaseline = readBaseJson(baseRef, UI_BASELINE_REL);
   const ruleStates = [
@@ -198,17 +214,29 @@ function main() {
       baseReadable: baseConfig !== null,
     })),
     {
-      label: 'ui-back-edge',
+      label: 'layer-boundary',
+      listRef: `inline ${LAYER_SUPPRESSION} comments under ${LAYER_SOURCE_REL}`,
+      fixIt:
+        'Fix: in this same PR, remove every suppressed layer back-edge from the file\n' +
+        '(move the dependency into a lower-layer module), then remove its now-unused\n' +
+        'inline layer-boundary suppression comment.',
+      addFixIt:
+        'Fix: remove the new layer back-edge instead of adding an inline suppression —\n' +
+        'move the dependency into a lower-layer module.',
+      globs: layerFiles,
+      baseGlobs: baseLayerFiles.files,
+      baseReadable: baseLayerFiles.readable,
+    },
+    {
+      label: 'ui-back-edge-legacy',
       listRef: UI_BASELINE_REL,
       fixIt:
         'Fix: in this same PR, remove every `ui/` import from the file (move the pure\n' +
-        'helper into a lower-layer module — see docs/review-patterns.md § Layer-stack\n' +
-        'import direction), then ratchet the baseline:\n' +
+        'helper into a lower-layer module), then ratchet the legacy baseline:\n' +
         '  node packages/dev-tools/tools/check-ui-back-edges.mjs --update',
       addFixIt:
-        'Fix: remove the new `ui/` import instead of growing the baseline — move the\n' +
-        'pure helper into a lower-layer module (see docs/review-patterns.md §\n' +
-        'Layer-stack import direction).',
+        'Fix: remove the new `ui/` import instead of growing the legacy baseline —\n' +
+        'move the dependency into a lower-layer module.',
       globs: baselineFiles(uiBaseline),
       baseGlobs: baselineFiles(baseUiBaseline),
       baseReadable: baseUiBaseline !== null,

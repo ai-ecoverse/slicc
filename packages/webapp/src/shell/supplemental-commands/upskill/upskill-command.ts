@@ -10,6 +10,7 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { isSafeUpskillBranch, isSafeUpskillPath } from '../../../net/handoff-link.js';
