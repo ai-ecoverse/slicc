@@ -1,0 +1,13 @@
+or {
+    `import $_ from $source`,
+    `export $_ from $source`,
+    `import($source)`,
+    `require($source)`
+} where {
+    $source <: r".*(?:\.\./)+(?:ui)/.*",
+    register_diagnostic(
+        span = $source,
+        message = "Built-in providers run before the UI exists and must not import from ui/.",
+        severity = "error"
+    )
+}

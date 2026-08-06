@@ -1,0 +1,13 @@
+or {
+    `import $_ from $source`,
+    `export $_ from $source`,
+    `import($source)`,
+    `require($source)`
+} where {
+    $source <: r".*(?:\.\./)+(?:shell|git|cdp|tools|core|scoops|ui)/.*",
+    register_diagnostic(
+        span = $source,
+        message = "fs/ must not import higher layers: shell/, git/, cdp/, tools/, core/, scoops/, ui/.",
+        severity = "error"
+    )
+}

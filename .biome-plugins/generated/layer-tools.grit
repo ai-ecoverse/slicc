@@ -1,0 +1,13 @@
+or {
+    `import $_ from $source`,
+    `export $_ from $source`,
+    `import($source)`,
+    `require($source)`
+} where {
+    $source <: r".*(?:\.\./)+(?:core|scoops|ui)/.*",
+    register_diagnostic(
+        span = $source,
+        message = "tools/ must not import higher layers: core/, scoops/, ui/.",
+        severity = "error"
+    )
+}
