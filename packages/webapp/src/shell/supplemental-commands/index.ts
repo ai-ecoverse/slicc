@@ -192,7 +192,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebsocatCommand(),
     createCrontaskCommand(),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
-    createPluginCommand({ fs: options.fs }),
+    createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),

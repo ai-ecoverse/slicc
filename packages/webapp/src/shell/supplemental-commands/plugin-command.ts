@@ -3,10 +3,11 @@
  * (agent-plugins.org spec v1.0.0).
  *
  * Subcommands:
- *   install <path>       Validate a plugin directory and register it.
+ *   install <path|ref>   Validate a plugin (local dir or GitHub repo) and
+ *                        register it.
  *   list                 Table of installed plugins.
  *   info <name>          Manifest, skills, and MCP servers of one plugin.
- *   validate <path>      Dry-run: load + report diagnostics, install nothing.
+ *   validate <path|ref>  Dry-run: load + report diagnostics, install nothing.
  *   remove <name>        Unregister a plugin and its MCP servers.
  *
  * The loader (`../plugins/loader.ts`) implements the spec's validation and
@@ -15,9 +16,14 @@
  * (`skills/catalog.ts` reads the same registry). Supported `streamable-http`
  * MCP servers are bridged into the existing `/workspace/.mcp/servers.json`
  * store under the name `<plugin>:<server>`.
+ *
+ * GitHub sources reuse the `upskill` helpers (`upskill/github/`): the repo
+ * ZIP is downloaded via codeload (not rate-limited) and extracted into a
+ * managed directory under `/workspace/.plugins/sources/`, then installed
+ * through the same loader path as a local directory.
  */
 
-import type { Command } from 'just-bash';
+import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
@@ -25,10 +31,15 @@ import type { LoadedPlugin, PluginDiagnostic } from '../plugins/types.js';
 
 const log = createLogger('plugin-command');
 
+/** Managed extraction root for GitHub-sourced plugins. */
+export const PLUGIN_SOURCES_DIR = '/workspace/.plugins/sources';
+
 /** Injection hooks — production code uses defaults, tests pass stubs. */
 export interface PluginCommandDeps {
   /** Shared shell `VirtualFS` (falls back to the global instance). */
   fs?: VirtualFS;
+  /** Proxied/secure fetch for GitHub installs (absent → local paths only). */
+  fetch?: SecureFetch;
 }
 
 interface ExecResult {
@@ -53,15 +64,18 @@ directories bundling Agent Skills (skills/*/SKILL.md) and MCP servers
 (mcp.json) behind a plugin.json manifest.
 
 Commands:
-  install <path>      Validate the plugin at <path> and register it.
-                      Skills surface through the standard skills discovery;
-                      streamable-http MCP servers are added to the MCP store
-                      as "<plugin>:<server>".
-  list                List installed plugins.
-  info <name>         Show manifest, skills, and MCP servers of a plugin.
-  validate <path>     Load + report conformance diagnostics without
-                      installing anything.
-  remove <name>       Unregister a plugin and its bridged MCP servers.
+  install <path|repo>  Validate the plugin and register it. <repo> is a
+                       GitHub reference (owner/repo, owner/repo@branch, or
+                       https://github.com/owner/repo[/tree/branch[/dir]]),
+                       downloaded into ${PLUGIN_SOURCES_DIR}/.
+                       Skills surface through the standard skills discovery;
+                       streamable-http MCP servers are added to the MCP
+                       store as "<plugin>:<server>".
+  list                 List installed plugins.
+  info <name>          Show manifest, skills, and MCP servers of a plugin.
+  validate <path|repo> Load + report conformance diagnostics without
+                       installing anything.
+  remove <name>        Unregister a plugin and its bridged MCP servers.
 
 Transport support: streamable-http only. stdio entries are skipped (no
 subprocesses in the browser) and legacy sse entries are skipped, per the
@@ -69,6 +83,9 @@ spec's single-transport allowance — other components still load.
 
 Examples:
   plugin install /workspace/my-plugin
+  plugin install owner/repo
+  plugin install owner/repo@branch
+  plugin install https://github.com/owner/repo/tree/main/plugins/my-plugin
   plugin list
   plugin info my-plugin
   plugin remove my-plugin
@@ -118,6 +135,101 @@ async function openVfs(deps: PluginCommandDeps): Promise<VirtualFS> {
   return VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
 }
 
+// ── source resolution (local path vs GitHub reference) ─────────────
+
+interface GitHubPluginRef {
+  owner: string;
+  repo: string;
+  branch?: string;
+  path?: string;
+  /** Normalized display string, e.g. `owner/repo@branch/sub/dir`. */
+  display: string;
+}
+
+type ResolvedSource =
+  | { kind: 'local'; root: string }
+  | { kind: 'github'; ref: GitHubPluginRef }
+  | { kind: 'error'; message: string };
+
+/**
+ * Decide whether `<path|repo>` names a local VFS directory or a GitHub
+ * reference. An existing local directory always wins, so `plugin install
+ * foo/bar` prefers `./foo/bar` over the GitHub repo of the same name.
+ */
+async function resolveSource(raw: string, cwd: string, fs: VirtualFS): Promise<ResolvedSource> {
+  const root = resolvePath(cwd, raw);
+  if (await fs.exists(root)) return { kind: 'local', root };
+
+  const { parseGitHubRef } = await import('./upskill/github/github-install.js');
+  const ref = parseGitHubRef(raw);
+  if (ref) {
+    const display = `${ref.owner}/${ref.repo}${ref.branch ? `@${ref.branch}` : ''}${ref.path ? `/${ref.path}` : ''}`;
+    return { kind: 'github', ref: { ...ref, display } };
+  }
+  return {
+    kind: 'error',
+    message: `${root} does not exist and "${raw}" is not a GitHub reference (owner/repo[@branch] or https://github.com/owner/repo[/tree/branch[/dir]])`,
+  };
+}
+
+function sanitizeSourceSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '-');
+}
+
+/** Deterministic managed extraction dir for a GitHub-sourced plugin. */
+function githubSourceDir(ref: GitHubPluginRef): string {
+  const parts = [ref.owner, ref.repo, ...(ref.path ? [ref.path] : [])];
+  return `${PLUGIN_SOURCES_DIR}/${parts.map(sanitizeSourceSegment).join('--')}`;
+}
+
+/**
+ * Download the repo ZIP (codeload, `main`→`master` fallback) and extract
+ * the plugin subtree into `destDir`. Returns an error message on failure;
+ * `destDir` is left absent/unchanged unless extraction started.
+ */
+async function fetchGitHubPluginTo(
+  ref: GitHubPluginRef,
+  destDir: string,
+  fs: VirtualFS,
+  fetchFn: SecureFetch
+): Promise<string | null> {
+  const { fetchRepoZip, stripZipPrefix, writeZipFilesToDir } = await import(
+    './upskill/github/github-zip.js'
+  );
+  const zip = await fetchRepoZip(ref.owner, ref.repo, fetchFn, ref.branch);
+  if (zip.status === 'error') {
+    return `failed to download ${ref.display}: ${zip.message}`;
+  }
+  const files = stripZipPrefix(zip.files);
+  const prefix = ref.path ? ref.path.replace(/^\/|\/$/g, '') + '/' : '';
+  if (!files[`${prefix}plugin.json`]) {
+    return `no plugin.json found at ${ref.display} — not an Agent Plugins package`;
+  }
+  try {
+    await fs.rm(destDir, { recursive: true });
+  } catch {
+    // Didn't exist — fine.
+  }
+  await fs.mkdir(destDir, { recursive: true });
+  const fileCount = await writeZipFilesToDir(files, prefix, destDir, fs);
+  if (fileCount === 0) {
+    return `no files found at ${ref.display}`;
+  }
+  return null;
+}
+
+/** Best-effort recursive delete used for staging/managed-source cleanup. */
+async function removeDirBestEffort(fs: VirtualFS, dir: string): Promise<void> {
+  try {
+    await fs.rm(dir, { recursive: true });
+  } catch (e) {
+    log.warn('plugin: failed to clean up directory', {
+      dir,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
 // ── install ─────────────────────────────────────────────────────────
 
 async function cmdInstall(
@@ -126,9 +238,12 @@ async function cmdInstall(
   deps: PluginCommandDeps
 ): Promise<ExecResult> {
   if (args.includes('--help') || args.includes('-h')) {
-    return ok(`usage: plugin install <path>
+    return ok(`usage: plugin install <path|repo>
 
-Loads the Agent Plugins package at <path>: validates plugin.json (closed
+Loads the Agent Plugins package at <path>, or downloads it from a GitHub
+reference (owner/repo, owner/repo@branch, or
+https://github.com/owner/repo[/tree/branch[/dir]]) into
+${PLUGIN_SOURCES_DIR}/ first. Validates plugin.json (closed
 schema, name constraints), discovers skills/*/SKILL.md, and validates
 mcp.json. On success the plugin is recorded in
 /workspace/.plugins/plugins.json — its skills then surface through the
@@ -137,16 +252,33 @@ is registered in the MCP store as "<plugin>:<server>".
 `);
   }
   const positional = args.filter((a) => !a.startsWith('--'));
-  if (positional.length < 1) return err('plugin install: expected <path>');
+  if (positional.length < 1) return err('plugin install: expected <path|repo>');
 
   const fs = await openVfs(deps);
-  const root = resolvePath(cwd, positional[0]);
+  const source = await resolveSource(positional[0], cwd, fs);
+  if (source.kind === 'error') return err(`plugin install: ${source.message}`);
+
+  let root: string;
+  let origin: string | undefined;
+  if (source.kind === 'github') {
+    if (!deps.fetch) {
+      return err('plugin install: GitHub installs are unavailable (no network fetch configured)');
+    }
+    root = githubSourceDir(source.ref);
+    origin = source.ref.display;
+    const fetchError = await fetchGitHubPluginTo(source.ref, root, fs, deps.fetch);
+    if (fetchError) return err(`plugin install: ${fetchError}`);
+  } else {
+    root = source.root;
+  }
+
   const { loadPluginFromDirectory } = await import('../plugins/loader.js');
   const result = await loadPluginFromDirectory(fs, root);
 
   if (!result.ok) {
+    if (source.kind === 'github') await removeDirBestEffort(fs, root);
     return err(
-      `plugin install: plugin at ${root} was rejected:\n${formatDiagnostics(result.diagnostics)}`
+      `plugin install: plugin at ${origin ?? root} was rejected:\n${formatDiagnostics(result.diagnostics)}`
     );
   }
   const { plugin } = result;
@@ -155,6 +287,7 @@ is registered in the MCP store as "<plugin>:<server>".
   const { getInstalledPlugin, setInstalledPlugin } = await import('../plugins/store.js');
   const existing = await getInstalledPlugin(name, deps.fs);
   if (existing && existing.root !== root) {
+    if (source.kind === 'github') await removeDirBestEffort(fs, root);
     return err(
       `plugin install: a plugin named "${name}" is already installed from ${existing.root} (remove it first)`
     );
@@ -170,13 +303,14 @@ is registered in the MCP store as "<plugin>:<server>".
       description: plugin.manifest.description,
       installedAt: new Date().toISOString(),
       mcpServerNames: mcpNames,
+      ...(origin ? { source: origin } : {}),
     },
     deps.fs
   );
 
   const skipped = plugin.mcp.servers.filter((s) => s.status !== 'supported');
   const lines = [
-    `Installed agent plugin "${name}"${plugin.manifest.version ? ` v${plugin.manifest.version}` : ''} from ${root}`,
+    `Installed agent plugin "${name}"${plugin.manifest.version ? ` v${plugin.manifest.version}` : ''} from ${origin ?? root}`,
     `  skills: ${plugin.skills.length}${plugin.skills.length > 0 ? ` (${plugin.skills.map((s) => s.name).join(', ')})` : ''}`,
     `  mcp:    ${mcpNames.length} registered${mcpNames.length > 0 ? ` (${mcpNames.join(', ')})` : ''}${skipped.length > 0 ? `, ${skipped.length} skipped` : ''}`,
   ];
@@ -306,13 +440,30 @@ async function cmdValidate(
 ): Promise<ExecResult> {
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     return args.length === 0
-      ? err('plugin validate: expected <path>')
-      : ok('usage: plugin validate <path>\n');
+      ? err('plugin validate: expected <path|repo>')
+      : ok('usage: plugin validate <path|repo>\n');
   }
   const fs = await openVfs(deps);
-  const root = resolvePath(cwd, args[0]);
+  const source = await resolveSource(args[0], cwd, fs);
+  if (source.kind === 'error') return err(`plugin validate: ${source.message}`);
+
+  let root: string;
+  let staging: string | null = null;
+  if (source.kind === 'github') {
+    if (!deps.fetch) {
+      return err('plugin validate: GitHub sources are unavailable (no network fetch configured)');
+    }
+    staging = `/tmp/.plugin-validate/${githubSourceDir(source.ref).split('/').pop()}`;
+    const fetchError = await fetchGitHubPluginTo(source.ref, staging, fs, deps.fetch);
+    if (fetchError) return err(`plugin validate: ${fetchError}`);
+    root = staging;
+  } else {
+    root = source.root;
+  }
+
   const { loadPluginFromDirectory } = await import('../plugins/loader.js');
   const result = await loadPluginFromDirectory(fs, root);
+  if (staging) await removeDirBestEffort(fs, staging);
 
   if (!result.ok) {
     return {
@@ -356,12 +507,22 @@ async function cmdRemove(args: string[], deps: PluginCommandDeps): Promise<ExecR
   }
   await deleteInstalledPlugin(name, deps.fs);
 
+  // GitHub-sourced plugins live in the managed sources dir — delete the
+  // extracted files too. Local installs keep their files in place.
+  const managed = entry.root.startsWith(`${PLUGIN_SOURCES_DIR}/`);
+  if (managed) {
+    const fs = await openVfs(deps);
+    await removeDirBestEffort(fs, entry.root);
+  }
+
   return ok(
     [
       `Removed agent plugin "${name}"`,
       `  registry:    removed`,
       `  mcp servers: ${mcpRemoved} removed`,
-      `  files:       left in place (${entry.root})`,
+      managed
+        ? `  files:       removed (${entry.root})`
+        : `  files:       left in place (${entry.root})`,
     ].join('\n') + '\n'
   );
 }

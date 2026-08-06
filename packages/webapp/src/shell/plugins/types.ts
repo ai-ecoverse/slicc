@@ -96,6 +96,8 @@ export interface InstalledPluginEntry {
   installedAt?: string;
   /** MCP store names registered on behalf of this plugin (for cleanup). */
   mcpServerNames?: string[];
+  /** GitHub origin (`owner/repo[@branch][/dir]`) for downloaded plugins. */
+  source?: string;
 }
 
 /** On-disk shape for `/workspace/.plugins/plugins.json`. */

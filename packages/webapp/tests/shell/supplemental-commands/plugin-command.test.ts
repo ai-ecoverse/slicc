@@ -1,6 +1,8 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { zipSync } from 'fflate';
+import type { SecureFetch } from 'just-bash';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { readServersFile, testOnlyResetStoreCache } from '../../../src/shell/mcp/store.js';
@@ -13,7 +15,10 @@ import {
   PLUGIN_MANIFEST_SCHEMA_ID,
   PLUGIN_MCP_SCHEMA_ID,
 } from '../../../src/shell/plugins/types.js';
-import { createPluginCommand } from '../../../src/shell/supplemental-commands/plugin-command.js';
+import {
+  createPluginCommand,
+  PLUGIN_SOURCES_DIR,
+} from '../../../src/shell/supplemental-commands/plugin-command.js';
 import { discoverSkills } from '../../../src/skills/discover.js';
 
 const ROOT = '/workspace/reports-plugin';
@@ -21,9 +26,10 @@ const ROOT = '/workspace/reports-plugin';
 let fs: VirtualFS;
 
 const runCmd = async (
-  args: string[]
+  args: string[],
+  fetchFn?: SecureFetch
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
-  const cmd = createPluginCommand({ fs });
+  const cmd = createPluginCommand({ fs, ...(fetchFn ? { fetch: fetchFn } : {}) });
   return cmd.execute(args, { cwd: '/workspace' } as never);
 };
 
@@ -169,5 +175,128 @@ describe('plugin command', () => {
     const r = await runCmd(['remove', 'nope']);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain('no installed plugin');
+  });
+
+  describe('GitHub sources', () => {
+    function repoZip(prefix = ''): Uint8Array {
+      const p = prefix ? `${prefix}/` : '';
+      return zipSync({
+        [`repo-main/${p}plugin.json`]: new TextEncoder().encode(
+          JSON.stringify({
+            $schema: PLUGIN_MANIFEST_SCHEMA_ID,
+            name: 'gh-plugin',
+            version: '0.1.0',
+          })
+        ),
+        [`repo-main/${p}skills/greet/SKILL.md`]: new TextEncoder().encode(
+          '---\nname: greet\ndescription: Say hello\n---\n# Greet\n'
+        ),
+      });
+    }
+
+    function zipFetch(zip: Uint8Array): SecureFetch {
+      return vi.fn(async (url: string) =>
+        url.startsWith('https://codeload.github.com/')
+          ? { status: 200, statusText: 'OK', headers: {}, body: zip, url }
+          : { status: 404, statusText: 'Not Found', headers: {}, body: '', url }
+      ) as unknown as SecureFetch;
+    }
+
+    it('install: downloads owner/repo into the managed sources dir', async () => {
+      const fetchMock = zipFetch(repoZip());
+      const r = await runCmd(['install', 'acme/repo'], fetchMock);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain('Installed agent plugin "gh-plugin" v0.1.0 from acme/repo');
+      expect(r.stdout).toContain('greet');
+
+      const file = await readPluginsFile(fs);
+      const entry = file.plugins['gh-plugin'];
+      expect(entry.root).toBe(`${PLUGIN_SOURCES_DIR}/acme--repo`);
+      expect(entry.source).toBe('acme/repo');
+      expect(await fs.exists(`${entry.root}/plugin.json`)).toBe(true);
+
+      const skills = await discoverSkills(fs);
+      expect(skills.filter((s) => s.source === 'plugin').map((s) => s.name)).toEqual(['greet']);
+    });
+
+    it('install: supports /tree/<branch>/<subdir> URLs', async () => {
+      const fetchMock = zipFetch(repoZip('plugins/gh-plugin'));
+      const r = await runCmd(
+        ['install', 'https://github.com/acme/repo/tree/main/plugins/gh-plugin'],
+        fetchMock
+      );
+      expect(r.exitCode).toBe(0);
+      const entry = (await readPluginsFile(fs)).plugins['gh-plugin'];
+      expect(entry.root).toBe(`${PLUGIN_SOURCES_DIR}/acme--repo--plugins-gh-plugin`);
+      expect(entry.source).toBe('acme/repo@main/plugins/gh-plugin');
+      expect(await fs.exists(`${entry.root}/skills/greet/SKILL.md`)).toBe(true);
+    });
+
+    it('install: prefers an existing local directory over a GitHub ref', async () => {
+      await fs.mkdir('/workspace/acme/repo', { recursive: true });
+      const fetchMock = vi.fn() as unknown as SecureFetch;
+      const r = await runCmd(['install', 'acme/repo'], fetchMock);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain('rejected'); // local dir has no plugin.json
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('install: errors without a configured fetch', async () => {
+      const r = await runCmd(['install', 'acme/repo']);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain('no network fetch configured');
+    });
+
+    it('install: rejects a repo without plugin.json and leaves nothing behind', async () => {
+      const zip = zipSync({
+        'repo-main/README.md': new TextEncoder().encode('# hi\n'),
+      });
+      const r = await runCmd(['install', 'acme/repo'], zipFetch(zip));
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain('no plugin.json found');
+      expect(await fs.exists(`${PLUGIN_SOURCES_DIR}/acme--repo`)).toBe(false);
+    });
+
+    it('install: cleans up the extracted dir when validation rejects', async () => {
+      const zip = zipSync({
+        'repo-main/plugin.json': new TextEncoder().encode(JSON.stringify({ name: 'Bad--Name' })),
+      });
+      const r = await runCmd(['install', 'acme/repo'], zipFetch(zip));
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain('rejected');
+      expect(await fs.exists(`${PLUGIN_SOURCES_DIR}/acme--repo`)).toBe(false);
+    });
+
+    it('install: surfaces download failures', async () => {
+      const fetchMock = vi.fn(async (url: string) => ({
+        status: 500,
+        statusText: 'Server Error',
+        headers: {},
+        body: '',
+        url,
+      })) as unknown as SecureFetch;
+      const r = await runCmd(['install', 'acme/repo'], fetchMock);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toContain('failed to download acme/repo');
+    });
+
+    it('validate: dry-runs a GitHub ref without installing', async () => {
+      const r = await runCmd(['validate', 'acme/repo'], zipFetch(repoZip()));
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain('plugin validate: OK — "gh-plugin"');
+      expect((await readPluginsFile(fs)).plugins['gh-plugin']).toBeUndefined();
+      expect(await fs.exists(`${PLUGIN_SOURCES_DIR}/acme--repo`)).toBe(false);
+    });
+
+    it('remove: deletes the managed source dir of a GitHub install', async () => {
+      await runCmd(['install', 'acme/repo'], zipFetch(repoZip()));
+      const root = `${PLUGIN_SOURCES_DIR}/acme--repo`;
+      expect(await fs.exists(root)).toBe(true);
+
+      const r = await runCmd(['remove', 'gh-plugin']);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toContain(`files:       removed (${root})`);
+      expect(await fs.exists(root)).toBe(false);
+    });
   });
 });
