@@ -161,7 +161,7 @@ swift format --in-place --parallel --recursive SliccFollower Package.swift
 
 Releases run `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`), path-gated by `release-native.mjs`. The script **soft-skips with exit 0** when `SLICC_SKIP_TESTFLIGHT=1`, an Apple secret is missing/`-`, or default Xcode is below 26. A green release is not proof an ipa shipped.
 
-After upload, `scripts/testflight-distribute.mjs` (gated on the `SLICC_TF_EXTERNAL_GROUP` repo variable; unset = upload-only) waits for processing, sets What to Test notes (appending `SLICC_TF_DEMO_JOIN_URL` when set), submits Beta App Review idempotently, and attaches the build to that tester group.
+After upload, `scripts/testflight-distribute.mjs` (gated on `SLICC_TF_EXTERNAL_GROUP`; unset = upload-only) waits for processing, sets What to Test notes (appending `SLICC_TF_DEMO_JOIN_URL`), submits Beta App Review, and attaches the build to that group. **Submission and attach are independent** — only a `fatal` submit aborts; `deferred` (Apple's review quota) warns and still attaches, so the build ships once review clears. Tests: `scripts/testflight-distribute.test.mjs`.
 
 ## Related Guides
 

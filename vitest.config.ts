@@ -232,6 +232,18 @@ export default defineConfig({
         },
       },
       {
+        // ios-app is an SPM package, not an npm workspace; its Swift code is
+        // covered by the xcodebuild gate. The release-side .mjs scripts
+        // (testflight-distribute.mjs) have no Swift coverage, so co-located
+        // *.test.mjs run under this dedicated project — same shape as
+        // swift-launcher above.
+        extends: true,
+        test: {
+          name: 'ios-app',
+          include: ['packages/ios-app/scripts/*.test.mjs'],
+        },
+      },
+      {
         // Claude Code hook scripts in .claude/hooks/ are plain .mjs, not a
         // workspace. Co-located *.test.mjs so `npm test` covers them.
         extends: true,
