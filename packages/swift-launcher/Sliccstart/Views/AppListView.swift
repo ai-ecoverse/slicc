@@ -10,6 +10,7 @@ struct AppListView: View {
     @Bindable var appManagementPermission: AppManagementPermission
     @ObservedObject var appUpdater: AppUpdater
     let updateCheckStatus: UpdateCheckStatus
+    let hasRecentAgentActivity: Bool
     let onCheckForUpdates: () -> Void
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchBrowserFollower: (AppTarget, String) -> Void
@@ -390,14 +391,14 @@ struct AppListView: View {
 
     @ViewBuilder
     private var fullUpdateButton: some View {
-        if let bundle = appUpdater.downloadedAppBundle {
+        if let bundle = downloadedUpdateBundle {
             if let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
                 Button("Restart to Update to v\(version)") {
                     onBeginUpdate()
                     appUpdater.install(bundle)
                 }
                 .buttonStyle(.borderless).font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(fullUpdateTint)
                 .accessibilityIdentifier("restart-to-update")
             } else {
                 Button("Restart to Update") {
@@ -405,7 +406,7 @@ struct AppListView: View {
                     appUpdater.install(bundle)
                 }
                 .buttonStyle(.borderless).font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(fullUpdateTint)
                 .accessibilityIdentifier("restart-to-update")
             }
         } else {
@@ -434,6 +435,15 @@ struct AppListView: View {
         case .failed:
             return AnyShapeStyle(Color.red)
         }
+    }
+
+    private var fullUpdateTint: AnyShapeStyle {
+        hasRecentAgentActivity ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.green)
+    }
+
+    private var downloadedUpdateBundle: Bundle? {
+        if case .downloaded(_, _, let bundle) = appUpdater.state { return bundle }
+        return nil
     }
 }
 

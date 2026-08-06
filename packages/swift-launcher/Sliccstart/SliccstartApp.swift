@@ -67,6 +67,7 @@ struct SliccstartApp: App {
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
     @State private var updateCheckStatus: UpdateCheckStatus = .idle
+    @State private var hasRecentAgentActivity = false
     @StateObject private var appUpdater = AppUpdater(
         owner: "ai-ecoverse",
         repo: "slicc",
@@ -90,6 +91,10 @@ struct SliccstartApp: App {
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
     private var sessionStore: TraySessionSyncStore { appDelegate.sessionStore }
+    private var isUpdateDownloaded: Bool {
+        if case .downloaded = appUpdater.state { return true }
+        return false
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -116,6 +121,7 @@ struct SliccstartApp: App {
                         appManagementPermission: appManagementPermission,
                         appUpdater: appUpdater,
                         updateCheckStatus: updateCheckStatus,
+                        hasRecentAgentActivity: hasRecentAgentActivity,
                         onCheckForUpdates: { checkForUpdates() },
                         onLaunchStandalone: { target in
                             log.info("onLaunchStandalone: \(target.name, privacy: .public)")
@@ -182,6 +188,14 @@ struct SliccstartApp: App {
             .onReceive(runtimeRefreshTimer) { _ in
                 guard isReady else { return }
                 sliccProcess.refreshRuntimeStates(for: targets)
+                guard isUpdateDownloaded else {
+                    hasRecentAgentActivity = false
+                    return
+                }
+                Task {
+                    let isActive = await sliccProcess.hasRecentAgentActivity()
+                    hasRecentAgentActivity = isUpdateDownloaded ? isActive : false
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 guard isReady else { return }
