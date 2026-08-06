@@ -37,7 +37,7 @@ struct SettingsView: View {
     @State private var hasICloudIdentity: Bool?
     /// Sinks sessions whose leader no longer answers to the bottom of the
     /// iCloud list (KVS keeps advertising them past the leader's death).
-    @StateObject private var reachability = SessionReachability()
+    @State private var reachability = SessionReachability()
     private let staleTicker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
