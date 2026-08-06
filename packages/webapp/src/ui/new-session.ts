@@ -17,6 +17,7 @@ import { SessionStore } from '../scoops/chat-session-store.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
+  curateFrozenSessionMemories,
   enrichPendingSession,
   type FrozenSession,
   type FrozenSessionIndexEntry,
@@ -90,6 +91,39 @@ async function runAgenticMemoryFreeze(
       }
     }
   }
+  const curator = curateFrozenSessionMemories(
+    {
+      sessionStore,
+      vfs: opts.vfs,
+      mode: 'full',
+      model,
+      apiKey,
+      headers,
+      agenticMemorySpawn: spawn,
+    },
+    frozen
+  ).catch((err) => {
+    log.warn('Agentic memory curator threw (entry stays pending)', {
+      filename: frozen.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  });
+  const winner = await raceEnrichmentAgainstTimer(
+    curator,
+    opts.enrichmentRaceMs ?? DEFAULT_ENRICHMENT_RACE_MS,
+    opts.onProgress
+  );
+  if (winner.kind === 'llm') {
+    return winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
+  }
+  void curator.then((updated) => {
+    log.info('Background agentic memory curator resolved after race window', {
+      filename: frozen.filename,
+      memoryPending: updated ? updated.memoryPending === true : true,
+    });
+    opts.onBackgroundEnriched?.(updated);
+  });
   return frozen;
 }
 

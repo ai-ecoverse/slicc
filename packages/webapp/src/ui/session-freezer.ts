@@ -8,8 +8,8 @@
  *      and return null — nothing meaningful to extract or archive.
  *   3. Generate a title and icon, falling back to a heuristic title.
  *   4. Legacy mode extracts memory before writing the archive. Agentic mode
- *      writes the archive first, then lets a curator scoop rewrite memory;
- *      curator failure falls back to legacy extraction.
+ *      writes the archive with a durable pending marker; its caller starts the
+ *      curator after this function returns.
  *
  * Scoops are intentionally untouched — they survive a "New session" reset
  * so the fresh cone inherits the existing scoop roster and decides what
@@ -163,19 +163,26 @@ export async function freezeConeSession(
     (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
     heuristicTitle(session.messages);
   const icon = llmEnabled ? await pickIconBestEffort(opts, title) : undefined;
-  const frozen = await writeFrozenArchive(opts, session, title, mode, icon);
-  if (frozen && llmEnabled && opts.agenticMemorySpawn) {
-    await curateMemoriesBestEffort(opts, frozen, agentMessages);
-  }
-  return frozen;
+  return await writeFrozenArchive(
+    opts,
+    session,
+    title,
+    mode,
+    icon,
+    llmEnabled && Boolean(opts.agenticMemorySpawn)
+  );
 }
 
-/** Run the write-first curator, falling back to legacy extraction on failure. */
-async function curateMemoriesBestEffort(
+/**
+ * Run the curator for an already-durable archive. Success clears the durable
+ * pending marker; failure leaves it for a later recovery pass. A failure that
+ * is known to have finished retains the existing legacy-extraction fallback.
+ */
+export async function curateFrozenSessionMemories(
   opts: FreezeConeSessionOptions,
-  frozen: FrozenSession,
-  agentMessages: AgentMessage[]
-): Promise<void> {
+  frozen: FrozenSession
+): Promise<FrozenSessionIndexEntry | null> {
+  const agentMessages = toAgentMessages(frozen.archive.messages);
   let result: Awaited<ReturnType<typeof runAgenticMemoryPass>>;
   try {
     result = await runAgenticMemoryPass({
@@ -192,21 +199,30 @@ async function curateMemoriesBestEffort(
     };
   }
   if (result.ok) {
+    const updated = await clearMemoryPending(opts.vfs, frozen.filename);
+    if (!updated) {
+      log.warn('Agentic memory pass completed but pending marker could not be cleared', {
+        filename: frozen.filename,
+      });
+      return null;
+    }
+    delete frozen.memoryPending;
     log.info('Agentic memory pass completed', { filename: frozen.filename });
-    return;
+    return updated;
   }
   if (!result.legacyFallbackSafe) {
     log.warn('Agentic memory pass unfinished — archive retained; skipping legacy extraction', {
       filename: frozen.filename,
       reason: result.reason,
     });
-    return;
+    return null;
   }
   log.warn('Agentic memory pass failed after finishing — falling back to legacy extraction', {
     filename: frozen.filename,
     reason: result.reason,
   });
   await extractMemoriesBestEffort(opts, agentMessages, true);
+  return null;
 }
 
 /**
@@ -322,7 +338,8 @@ async function writeFrozenArchive(
   session: Session,
   title: string,
   mode: 'full' | 'quick',
-  icon?: string
+  icon?: string,
+  memoryPending = false
 ): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
   // sessionId is generated BEFORE the filename so it is stable across
@@ -342,6 +359,7 @@ async function writeFrozenArchive(
     ...(usageSummary ?? {}),
     ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
+    ...(memoryPending ? { memoryPending: true } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -1073,6 +1091,39 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
  * single context.
  */
 let indexWriteChain: Promise<void> = Promise.resolve();
+
+/** Clear the agentic-memory marker without racing other index mutations. */
+async function clearMemoryPending(
+  vfs: WritableVfsClient,
+  filename: string
+): Promise<FrozenSessionIndexEntry | null> {
+  let cleared: FrozenSessionIndexEntry | null = null;
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const { memoryPending: _pending, ...updatedEntry } = existing[index];
+    const updated = existing.slice();
+    updated[index] = updatedEntry;
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+    cleared = updatedEntry;
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    await next;
+  } catch (err) {
+    log.warn('Failed to clear agentic memory pending marker', {
+      filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return cleared;
+}
 
 /**
  * Swap one entry in the sessions index by filename. Used by the

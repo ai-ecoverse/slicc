@@ -29,10 +29,12 @@ vi.mock('../../src/scoops/chat-session-store.js', () => ({
 }));
 
 const mockFreezeConeSession = vi.fn();
+const mockCurateFrozenSessionMemories = vi.fn();
 const mockEnrichPendingSession = vi.fn();
 const mockMarkSnapshotUnavailable = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock('../../src/ui/session-freezer.js', () => ({
   freezeConeSession: (...a: unknown[]) => mockFreezeConeSession(...a),
+  curateFrozenSessionMemories: (...a: unknown[]) => mockCurateFrozenSessionMemories(...a),
   enrichPendingSession: (...a: unknown[]) => mockEnrichPendingSession(...a),
   markSnapshotUnavailable: (...a: unknown[]) => mockMarkSnapshotUnavailable(...a),
 }));
@@ -125,6 +127,7 @@ describe('runNewSessionFreeze — write-first + race', () => {
     mockResolveCurrentModel.mockReset().mockReturnValue(fakeModel);
     mockInit.mockReset().mockResolvedValue(undefined);
     mockFreezeConeSession.mockReset().mockResolvedValue(pending);
+    mockCurateFrozenSessionMemories.mockReset();
     mockEnrichPendingSession.mockReset();
     mockPickLucideIcon.mockClear();
   });
@@ -142,13 +145,18 @@ describe('runNewSessionFreeze — write-first + race', () => {
     expect(result).not.toBeNull();
   });
 
-  it('flag on with an agent bridge requests a full agentic freeze and skips enrichment', async () => {
+  it('flag on races one curator pass after the full archive write', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
     const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
     mockFreezeConeSession.mockResolvedValue({
       ...pending,
       filename: '2026-06-16-agentic-memory.md',
       pendingEnrichment: undefined,
+      memoryPending: true,
+    });
+    mockCurateFrozenSessionMemories.mockResolvedValue({
+      ...enriched,
+      filename: '2026-06-16-agentic-memory.md',
     });
 
     const result = await runNewSessionFreeze({
@@ -163,8 +171,40 @@ describe('runNewSessionFreeze — write-first + race', () => {
     expect(freezeOptions).toMatchObject({ mode: 'full', model: fakeModel, apiKey: 'k' });
     await freezeOptions.agenticMemorySpawn({} as never);
     expect(spawn).toHaveBeenCalledOnce();
+    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
+    expect(mockFreezeConeSession.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCurateFrozenSessionMemories.mock.invocationCallOrder[0]
+    );
     expect(mockEnrichPendingSession).not.toHaveBeenCalled();
-    expect(result?.pendingEnrichment).toBeUndefined();
+    expect(result?.memoryPending).toBeUndefined();
+  });
+
+  it('agentic timer leaves the marker while one curator pass finishes in the background', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    const frozen = {
+      ...pending,
+      filename: '2026-06-16-agentic-memory.md',
+      pendingEnrichment: undefined,
+      memoryPending: true as const,
+    };
+    mockFreezeConeSession.mockResolvedValue(frozen);
+    const deferredCurator = deferred<FrozenSessionIndexEntry | null>();
+    mockCurateFrozenSessionMemories.mockReturnValue(deferredCurator.promise);
+    const onBackgroundEnriched = vi.fn();
+
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      agenticMemorySpawn: vi.fn(),
+      onBackgroundEnriched,
+    });
+
+    expect(result?.memoryPending).toBe(true);
+    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
+    deferredCurator.resolve({ ...enriched, filename: frozen.filename });
+    await flush();
+    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
+    expect(onBackgroundEnriched).toHaveBeenCalledOnce();
   });
 
   it('flag on without an agent bridge keeps the legacy quick enrichment flow', async () => {

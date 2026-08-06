@@ -52,6 +52,7 @@ vi.mock('../../src/ui/chat-panel.js', () => ({
 import type { SessionStore } from '../../src/scoops/chat-session-store.js';
 import { applyDictationMarkers } from '../../src/speech/dictation-priming.js';
 import {
+  curateFrozenSessionMemories,
   enrichPendingSession,
   freezeConeSession,
   listPendingEnrichments,
@@ -240,7 +241,7 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
   });
 
-  it('writes the full archive before the agentic pass and skips legacy memory on success', async () => {
+  it('writes memoryPending before the agentic pass and clears it on success', async () => {
     mockRunOneOffCompactionCall.mockResolvedValueOnce('Agentic memory session');
     const vfs = makeFakeVfs();
     const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
@@ -251,7 +252,7 @@ describe('freezeConeSession', () => {
       return { ok: true };
     });
 
-    const frozen = await freezeConeSession({
+    const options = {
       sessionStore: makeFakeStore({
         id: 'session-cone',
         messages: [
@@ -268,9 +269,19 @@ describe('freezeConeSession', () => {
       apiKey: 'k',
       pickIcon: async () => null,
       agenticMemorySpawn: spawn,
-    });
+    };
+    const frozen = await freezeConeSession(options);
 
     expect(frozen).not.toBeNull();
+    expect(frozen?.memoryPending).toBe(true);
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
+    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBe(true);
+
+    const updated = await curateFrozenSessionMemories(options, frozen!);
+
+    expect(updated?.memoryPending).toBeUndefined();
+    expect(frozen?.memoryPending).toBeUndefined();
+    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBeUndefined();
     expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
     expect(spawn).toHaveBeenCalledOnce();
     expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
@@ -290,6 +301,41 @@ describe('freezeConeSession', () => {
     });
     const vfs = makeFakeVfs();
 
+    const options = {
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: vi.fn(),
+    };
+    const frozen = await freezeConeSession(options);
+    await curateFrozenSessionMemories(options, frozen!);
+
+    expect(frozen).not.toBeNull();
+    expect(mockRunOneOffCompactionCall.mock.calls.map(([arg]) => arg.instruction)).toEqual([
+      'TITLE',
+      'MEMORY',
+    ]);
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('durable fallback memory');
+    expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
+    expect(frozen?.memoryPending).toBe(true);
+    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBe(true);
+  });
+
+  it('retains persisted memoryPending when reload interrupts before curation', async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Interrupted agentic session');
+    const vfs = makeFakeVfs();
     const frozen = await freezeConeSession({
       sessionStore: makeFakeStore({
         id: 'session-cone',
@@ -309,13 +355,13 @@ describe('freezeConeSession', () => {
       agenticMemorySpawn: vi.fn(),
     });
 
-    expect(frozen).not.toBeNull();
-    expect(mockRunOneOffCompactionCall.mock.calls.map(([arg]) => arg.instruction)).toEqual([
-      'TITLE',
-      'MEMORY',
-    ]);
-    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('durable fallback memory');
-    expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
+    const filename = frozen!.filename;
+    delete frozen!.memoryPending;
+    const [reloaded] = await readSessionsIndex(vfs as never);
+
+    expect(reloaded).not.toBe(frozen);
+    expect(reloaded).toMatchObject({ filename, memoryPending: true });
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
   });
 
   it('skips legacy extraction when the agentic pass times out', async () => {
@@ -327,7 +373,7 @@ describe('freezeConeSession', () => {
     });
     const vfs = makeFakeVfs();
 
-    const frozen = await freezeConeSession({
+    const options = {
       sessionStore: makeFakeStore({
         id: 'session-cone',
         messages: [
@@ -344,9 +390,13 @@ describe('freezeConeSession', () => {
       apiKey: 'k',
       pickIcon: async () => null,
       agenticMemorySpawn: vi.fn(),
-    });
+    };
+    const frozen = await freezeConeSession(options);
+    await curateFrozenSessionMemories(options, frozen!);
 
     expect(frozen).not.toBeNull();
+    expect(frozen?.memoryPending).toBe(true);
+    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBe(true);
     expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
     expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();

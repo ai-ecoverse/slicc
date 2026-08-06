@@ -68,6 +68,12 @@ export interface FrozenSessionIndexEntry {
    */
   pendingEnrichment?: boolean;
   /**
+   * Agentic-memory marker. Set when the archive is written before its curator
+   * pass starts, then removed only after that pass succeeds. A later boot may
+   * recover entries that still carry the marker.
+   */
+  memoryPending?: true;
+  /**
    * Set to `true` when the `captureCompleteSnapshot` hook failed during
    * freeze. The Markdown archive is still present; only the full sanitized
    * transcript bundle was not produced.
