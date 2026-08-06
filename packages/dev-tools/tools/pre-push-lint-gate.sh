@@ -68,7 +68,7 @@ run_check "custom-lints" bash -c '
   npm run lint:skill-router --silent &&
   npm run lint:no-innerhtml --silent &&
   npm run lint:no-ui-in-providers --silent &&
-  npm run lint:ui-back-edges --silent &&
+  npm run lint:layer-back-edges --silent &&
   npm run lint:patches --silent &&
   npm run lint:no-raw-chrome-runtime-id --silent &&
   npm run lint:hosted-origin --silent &&

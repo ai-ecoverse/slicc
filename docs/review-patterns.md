@@ -268,18 +268,19 @@ URLs by hand. Verify the call works when the UI origin is the hosted origin and 
 the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
 Test in both CLI and extension floats.
 
-### 10. Layer-stack import direction (ui/ back-edges)
+### 10. Layer-stack import direction (back-edges)
 
 **Trigger patterns**
 
-- Any new `import`/`import type`/`import(...)`/`require(...)` of a `packages/webapp/src/ui/`
-  module from a lower layer (`fs/`, `shell/`, `git/`, `cdp/`, `tools/`, `core/`, `scoops/`,
-  `providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`). The layer stack is
-  `fs → shell/git → cdp → tools → core → scoops → ui`; imports must point down, never up.
+- Any new `import`/`import type`/`import(...)`/`require(...)` that points UP the stack
+  `fs → shell/git → cdp → tools → core → scoops → ui` — a `ui/` import from any lower layer,
+  but equally `cdp/` importing `scoops/` or `tools/` importing `core/`. Imports must point
+  down, never up. Unranked directories (`providers/`, `kernel/`, `speech/`, `transcript/`,
+  `sudo/`) sit below `ui/`: they may import any ranked layer except `ui/`.
 - The tell-tale disguise: the imported symbol is a **pure helper** (a parser, a data
-  accessor, a constant, a type) that merely _lives_ in a DOM-heavy `ui/` god module. The
+  accessor, a constant, a type) that merely _lives_ in a higher-layer god module. The
   import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
-- `packages/dev-tools/tools/ui-back-edge-baseline.json` growing in a diff — someone is
+- `packages/dev-tools/tools/layer-back-edge-baseline.json` growing in a diff — someone is
   trying to grandfather a new violation instead of fixing it.
 
 **Historical precedents**
@@ -290,14 +291,18 @@ Test in both CLI and extension floats.
   `parseFrozenArchive`/`readSessionsIndex`). Every one was introduced in a reviewed PR
   (e.g. #1638 shipped the #1772 back-edge) and caught only _after_ merge by nightly triage.
   None was flagged at review time — reviewers had no layering category to check against.
+- **Issue #1950** — the same shape one rung lower: `cdp/` importing `reassembleCDPResponse`
+  and `TrayTargetEntry` from `scoops/`. Invisible to the original ui-only ratchet, which is
+  why the gate now covers every rung of the stack.
 
-**Class size** — 34 grandfathered back-edges across 27 files at baseline freeze (2026-07).
+**Class size** — 155 grandfathered back-edges across 94 files at full-stack baseline freeze
+(2026-08); 34 across 27 files at the original ui-only freeze (2026-07).
 
-**Remediation** — never import `ui/` from a lower layer. If the symbol you need is pure
-(no DOM, no `window`), it is mislocated: move it (or extract it) into the appropriate lower
-layer and have `ui/` re-export it for its existing callers, so the dependency points down.
-Deterministic enforcement: `npm run lint:ui-back-edges`
-(`packages/dev-tools/tools/check-ui-back-edges.mjs`) fails on any back-edge not in the
+**Remediation** — never import from a higher layer. If the symbol you need is pure (no DOM,
+no `window`), it is mislocated: move it (or extract it) into the appropriate lower layer and
+have the higher layer re-export it for its existing callers, so the dependency points down.
+Deterministic enforcement: `npm run lint:layer-back-edges`
+(`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
 frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
 

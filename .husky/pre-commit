@@ -10,8 +10,8 @@ if git diff --cached --name-only | grep -qE '^(CLAUDE\.md|packages/vfs-root/shar
 fi
 
 # Layer-stack back-edge ratchet: when webapp source (or the baseline) is
-# staged, fail on any NEW `ui/` import below the ui layer. Sub-second scan;
+# staged, fail on any NEW import pointing up the layer stack. Sub-second scan;
 # the same gate runs in `npm run lint` / `lint:ci` and pre-push.
-if git diff --cached --name-only | grep -qE '^(packages/webapp/src/|packages/dev-tools/tools/ui-back-edge-baseline\.json)'; then
-  node packages/dev-tools/tools/check-ui-back-edges.mjs
+if git diff --cached --name-only | grep -qE '^(packages/webapp/src/|packages/dev-tools/tools/layer-back-edge-baseline\.json)'; then
+  node packages/dev-tools/tools/check-layer-back-edges.mjs
 fi

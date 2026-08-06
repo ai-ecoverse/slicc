@@ -78,6 +78,6 @@ origin comparisons without trailing-slash normalization. 15 call-site fixes acro
 
 ## 10. Layer import direction (Major)
 
-Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag new imports of
-`webapp/src/ui/` from lower layers — even types or pure helpers; move the helper
-down instead. Flag growth of `ui-back-edge-baseline.json`.
+Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag new imports up
+the stack (`cdp/` → `scoops/`, any layer → `ui/`) — even types or pure helpers;
+move the helper down. Flag growth of `layer-back-edge-baseline.json`.

@@ -185,12 +185,13 @@ jobs:
 
             Two checks are cheap and deterministic — do them on every review:
             - Layering: the webapp layer stack is fs → shell/git → cdp → tools
-              → core → scoops → ui. Scan the diff for any ADDED import of a
-              `packages/webapp/src/ui/` module from a lower-layer file (static,
-              dynamic `import()`, or `import type`). A pure-looking helper does
-              not excuse the back-edge — the helper is mislocated; say so.
+              → core → scoops → ui. Scan the diff for any ADDED import that
+              points UP that stack (static, dynamic `import()`, or
+              `import type`) — e.g. `cdp/` importing `scoops/`, or any lower
+              layer importing `packages/webapp/src/ui/`. A pure-looking helper
+              does not excuse the back-edge — the helper is mislocated; say so.
             - Baseline growth: a diff that adds entries or raises counts in
-              `packages/dev-tools/tools/ui-back-edge-baseline.json` is
+              `packages/dev-tools/tools/layer-back-edge-baseline.json` is
               grandfathering a new violation. Flag it as Major.
 
             You have a full shell. When a finding depends on runtime behaviour,
