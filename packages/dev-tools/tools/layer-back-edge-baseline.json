@@ -1,5 +1,5 @@
 {
-  "packages/webapp/src/cdp/browser-api.ts": 2,
+  "packages/webapp/src/cdp/browser-api.ts": 1,
   "packages/webapp/src/cdp/cdp-client.ts": 1,
   "packages/webapp/src/cdp/cdp-ws-page-bridge.ts": 1,
   "packages/webapp/src/cdp/cherry-host-transport.ts": 1,
@@ -7,8 +7,6 @@
   "packages/webapp/src/cdp/har-recorder.ts": 1,
   "packages/webapp/src/cdp/navigation-watcher.ts": 1,
   "packages/webapp/src/cdp/panel-rpc-cdp-transport.ts": 1,
-  "packages/webapp/src/cdp/panel-rpc-tray-provider.ts": 1,
-  "packages/webapp/src/cdp/remote-cdp-transport.ts": 1,
   "packages/webapp/src/fs/fs-watcher.ts": 1,
   "packages/webapp/src/fs/mount-commands.ts": 2,
   "packages/webapp/src/fs/mount-index.ts": 1,
