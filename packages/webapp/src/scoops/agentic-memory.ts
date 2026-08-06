@@ -53,6 +53,8 @@ export interface RunAgenticMemoryPassOptions {
   vfs: Pick<LocalVfsClient, 'readFile'>;
   sessionArchivePath: string;
   sessionCount: number;
+  /** UTC date override for deterministic tests; defaults to today's date. */
+  today?: string;
   signal?: AbortSignal;
 }
 
@@ -80,6 +82,7 @@ export async function runAgenticMemoryPass(
       SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
       SESSION_COUNT: String(opts.sessionCount),
       BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
+      TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
     });
     const spawnOptions = buildSpawnOptions(config, prompt);
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));

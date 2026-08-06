@@ -1,10 +1,11 @@
 /**
  * Cone memory budget — bound the size of `/workspace/CLAUDE.md` against a
  * logarithmic budget derived from the session count, and run an LLM-driven
- * restructure pass over the auto-extracted tail when an append overshoots.
+ * legacy restructure pass over the auto-extracted tail when an append
+ * overshoots.
  *
- * The header above the first `## Auto-extracted` heading is user-authored
- * and preserved verbatim. Only the auto-extracted tail is consolidated.
+ * Agentic memory curation does not use this split: it can rewrite the entire
+ * file, and the entire file counts against the same budget.
  */
 
 import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
@@ -47,9 +48,9 @@ export function computeBudget(sessionCount: number): number {
 }
 
 /**
- * Split cone-memory content at the first `## Auto-extracted` heading. The
- * header (everything before that heading) is user-authored and preserved
- * verbatim. The tail is the entire auto-extracted region we may restructure.
+ * Split cone-memory content for the legacy append-only consolidator. That
+ * path rewrites only the auto-extracted tail and leaves the preceding content
+ * outside its narrowly scoped LLM call.
  */
 export function splitConeMemory(content: string): { header: string; autoExtracted: string } {
   const match = AUTO_EXTRACTED_HEADING_RE.exec(content);
@@ -71,7 +72,7 @@ export async function readSessionCount(vfs: LocalVfsClient): Promise<number> {
 }
 
 export interface RestructureConeMemoryOptions {
-  /** Current full file content (header + auto-extracted tail). */
+  /** Current full file content (legacy header + auto-extracted tail). */
   currentContent: string;
   /** Computed budget; only used as advisory context in the system prompt. */
   budget: number;
@@ -82,8 +83,8 @@ export interface RestructureConeMemoryOptions {
 }
 
 /**
- * Run the LLM consolidation pass over the auto-extracted tail. Returns the
- * new full file content (header preserved verbatim + consolidated tail).
+ * Run the legacy LLM consolidation pass over the auto-extracted tail. Returns
+ * the new full file content (unchanged prefix + consolidated tail).
  * Throws on LLM error or when the response is empty — callers should treat
  * any failure as best-effort and keep the unrestructured content in place.
  */

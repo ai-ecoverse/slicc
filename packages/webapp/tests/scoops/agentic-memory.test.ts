@@ -63,7 +63,7 @@ allowedCommands: [cat, grep, wc, custom-text]
 model: claude-sonnet-4-6
 timeoutSeconds: 45
 ---
-Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} budget={{BUDGET_CHARS}} unknown={{KEEP_ME}}`;
+Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} budget={{BUDGET_CHARS}} today={{TODAY}} unknown={{KEEP_ME}}`;
     const spawn = successSpawn();
 
     const result = await runAgenticMemoryPass({
@@ -71,6 +71,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       vfs: fakeVfs(memoryMd),
       sessionArchivePath: ARCHIVE_PATH,
       sessionCount: 30,
+      today: '2026-08-06',
     });
 
     expect(result).toEqual({ ok: true });
@@ -83,8 +84,55 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       modelId: 'claude-sonnet-4-6',
     });
     expect(options.prompt).toBe(
-      `Memory=${CONE_MEMORY_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} unknown={{KEEP_ME}}`
+      `Memory=${CONE_MEMORY_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
     );
+  });
+
+  it('passes whole-file budget and freshness rules to the curator', async () => {
+    const spawn = successSpawn();
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 4,
+      today: '2026-08-06',
+    });
+
+    expect(result).toEqual({ ok: true });
+    const prompt = spawn.mock.calls[0][0].prompt;
+    expect(prompt).toContain("Today's date is 2026-08-06");
+    expect(prompt).toContain('Every part of the file is editable and counts toward the budget');
+    expect(prompt).toContain(
+      `hard budget of ${computeBudget(4)} characters, with no exempt region`
+    );
+    expect(prompt).toContain('Prioritize re-verifying the oldest-dated sections');
+    expect(prompt).toContain('Treat undated headings as maximally stale');
+    expect(prompt).not.toContain('Preserve the user-authored header');
+  });
+
+  it('accepts undated headings in a custom curator prompt', async () => {
+    const spawn = successSpawn();
+    const memoryMd = `---
+timeoutSeconds: 5
+---
+# Curator
+
+## Existing instructions
+
+Curate {{MEMORY_PATH}} on {{TODAY}}.`;
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(memoryMd),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+      today: '2026-08-06',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(spawn.mock.calls[0][0].prompt).toContain('## Existing instructions');
+    expect(spawn.mock.calls[0][0].prompt).toContain('Curate /workspace/CLAUDE.md on 2026-08-06.');
   });
 
   it('strips block-array comments and preserves quoted inline commas', async () => {

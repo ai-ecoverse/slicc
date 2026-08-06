@@ -93,7 +93,7 @@ describe('computeBudget', () => {
 });
 
 describe('splitConeMemory', () => {
-  it('returns the whole content as header when no auto-extracted block exists', () => {
+  it('returns the whole content as the legacy header when no auto-extracted block exists', () => {
     const content = '# User memory\n\nHand-curated notes.\n';
     expect(splitConeMemory(content)).toEqual({ header: content, autoExtracted: '' });
   });
@@ -107,7 +107,7 @@ describe('splitConeMemory', () => {
     expect(t).toBe(tail);
   });
 
-  it('emits an empty header when the file starts with the auto-extracted heading', () => {
+  it('emits an empty legacy header when the file starts with the auto-extracted heading', () => {
     const tail = '## Auto-extracted (2024-01-01)\n\n- foo\n';
     expect(splitConeMemory(tail)).toEqual({ header: '', autoExtracted: tail });
   });
@@ -144,7 +144,7 @@ describe('restructureConeMemory', () => {
     mockCompleteSimple.mockReset();
   });
 
-  it('preserves the header verbatim and replaces the auto-extracted tail with the LLM output', async () => {
+  it('leaves the prefix unchanged and replaces the auto-extracted tail with the LLM output', async () => {
     mockCompleteSimple.mockResolvedValueOnce(
       llmResponse('## Auto-extracted (consolidated)\n\n- merged fact')
     );

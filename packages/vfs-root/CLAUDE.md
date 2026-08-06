@@ -30,6 +30,10 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   entries containing commas must be quoted. A bare `/` is rejected from `writablePaths`.
 - Frontmatter `allowedCommands` entries extend the curator's built-in base set; they do not
   replace or remove base commands.
+- The curator may rewrite the entire `/workspace/CLAUDE.md`, and the hard character budget
+  applies to the entire file with no protected region.
+- Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date. Each pass
+  re-verifies the oldest sections first; undated sections are maximally stale.
 
 ### Skills
 
