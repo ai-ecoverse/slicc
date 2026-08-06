@@ -985,16 +985,18 @@ export class SprinkleManager implements SprinkleManagerHandle {
    * Route a rail-icon click to the right action based on current
    * state. When the sprinkle was surfaced in attention mode, promote
    * it to user-opened (`markActivated`). When it has a registered
-   * rail icon but no content yet, open it. Already-open user-driven
-   * entries get no extra work — the rail-zone toggle has already
-   * shown the panel.
+   * rail icon but no content yet, open it. An already-open sprinkle
+   * re-runs `addSprinkle` on its existing (already-rendered) container —
+   * idempotent when it's already shown, and the layout's re-place if it
+   * was minimized/parked.
    */
   async activate(name: string, zone?: string): Promise<void> {
     if (this.attentionOnly.has(name)) {
       this.markActivated(name);
       return;
     }
-    if (!this.openSprinkles.has(name)) {
+    const entry = this.openSprinkles.get(name);
+    if (!entry) {
       try {
         await this.open(name, zone);
       } catch (err) {
@@ -1003,7 +1005,12 @@ export class SprinkleManager implements SprinkleManagerHandle {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      return;
     }
+    const sprinkle = this.availableSprinkles.get(name);
+    this.callbacks.addSprinkle(name, sprinkle?.title ?? name, entry.container, zone, {
+      icon: sprinkle?.icon,
+    });
   }
 
   /** Close a sprinkle by name. */

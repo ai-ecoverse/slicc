@@ -279,7 +279,7 @@ describe('WcSprinkleZone', () => {
     expect(dockIds(refs)).toContain('sprinkle:hero');
   });
 
-  it('minimize clears the dock rail active indicator without moving the surface', () => {
+  it('minimize clears the dock rail active indicator and parks the surface off the tree', () => {
     const refs = makeRefs();
     refs.dock.setAttribute('active', 'sprinkle:hero');
     const zone = new WcSprinkleZone(refs);
@@ -289,10 +289,81 @@ describe('WcSprinkleZone', () => {
     callbacks.minimizeSprinkle('hero');
 
     expect(refs.dock.hasAttribute('active')).toBe(false);
-    // The surface stays exactly where it is — no show-one state to collapse.
-    expect(
-      (refs.dockTree as unknown as HTMLElement).querySelector('[surface-id="sprinkle:hero"]')
-    ).not.toBeNull();
+    // Detached from the tree (mirrors the pre-panels "close the workbench
+    // body" behavior) but NOT destroyed or dropped from bookkeeping — the
+    // rail icon can still reopen it.
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('sprinkle:hero');
+    expect(zone.isOpen('hero')).toBe(true);
+    expect(dockIds(refs)).toContain('sprinkle:hero');
+  });
+
+  it('minimize is a no-op on the dock-tree for a panelized shell (host owns hiding)', () => {
+    const refs = makeRefs();
+    const hostSprinkleSurface = vi.fn();
+    const zone = new WcSprinkleZone(refs, { hostSprinkleSurface });
+    const callbacks = zone.callbacks();
+    callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
+    treeSpies(refs).removeSurface.mockClear();
+
+    callbacks.minimizeSprinkle('hero');
+
+    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalled();
+  });
+
+  it('placeSurface collapses every other non-chat surface first (one panel at a time, classic mode)', () => {
+    const refs = makeRefs();
+    treeSpies(refs).getSurfaceIds.mockReturnValue(['chat', 'files', 'sprinkle:hero']);
+    const zone = new WcSprinkleZone(refs);
+
+    zone.placeSurface('right', 'term');
+
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('files');
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('sprinkle:hero');
+    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalledWith('chat');
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('term', 'right');
+    expect((refs.dock as unknown as { active: string | null }).active).toBe('term');
+  });
+
+  it('opening a new sprinkle collapses whatever tool panel/sprinkle was showing', () => {
+    const refs = makeRefs();
+    treeSpies(refs).getSurfaceIds.mockReturnValue(['chat', 'files']);
+    const zone = new WcSprinkleZone(refs);
+    const callbacks = zone.callbacks();
+
+    callbacks.addSprinkle('hero', 'Hero', document.createElement('div'));
+
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('files');
+    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalledWith('chat');
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', DEFAULT_TOOL_ZONE);
+  });
+
+  it('does not collapse other surfaces in a panelized shell', () => {
+    const refs = makeRefs();
+    treeSpies(refs).getSurfaceIds.mockReturnValue(['chat', 'files']);
+    const hostSprinkleSurface = vi.fn();
+    const zone = new WcSprinkleZone(refs, { hostSprinkleSurface });
+
+    zone.placeSurface('right', 'term');
+
+    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalled();
+  });
+
+  it('attention adds do not place a surface (must not steal the visible slot)', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().addSprinkle('hero', 'Hero', document.createElement('div'), undefined, {
+      attention: true,
+    });
+    expect(treeSpies(refs).placeSurface).not.toHaveBeenCalled();
+  });
+
+  it('background (session-restore) adds do not place a surface either', () => {
+    const refs = makeRefs();
+    const zone = new WcSprinkleZone(refs);
+    zone.callbacks().addSprinkle('pomodoro', 'Pomodoro', document.createElement('div'), undefined, {
+      background: true,
+    });
+    expect(treeSpies(refs).placeSurface).not.toHaveBeenCalled();
   });
 });
 

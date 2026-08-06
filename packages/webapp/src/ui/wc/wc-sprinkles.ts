@@ -231,12 +231,26 @@ export class WcSprinkleZone {
 
   /**
    * Explicit placement (dock-rail click, `layout open`/agent-driven): place a
-   * surface into a zone. Fires `onToolPanelActivate` for a fixed tool-panel
-   * id — its own lazy-mount/poller lifecycle, distinct from the dock-tree
-   * placement itself — regardless of which caller placed it.
+   * surface into a zone. In the classic (non-panelized) dock-tree, only one
+   * non-chat surface is ever visible at a time — mirrors the pre-panels
+   * "one panel open" model, where opening anything replaced whatever was
+   * already showing. Panelized shells (a `hostSprinkleSurface` hook) run
+   * their own model and skip the collapse. Fires `onToolPanelActivate` for a
+   * fixed tool-panel id — its own lazy-mount/poller lifecycle, distinct from
+   * the dock-tree placement itself — regardless of which caller placed it.
    */
   placeSurface(zone: DockZoneName, surfaceId: string): void {
-    this.#dockTreeApi()?.placeSurface(surfaceId, zone);
+    const dockTree = this.#dockTreeApi();
+    if (dockTree && !this.#toolPanelHooks.hostSprinkleSurface) {
+      for (const other of dockTree.getSurfaceIds()) {
+        if (other !== surfaceId && other !== CHAT_SURFACE_ID) this.removeSurface(other);
+      }
+    }
+    dockTree?.placeSurface(surfaceId, zone);
+    if (!this.#toolPanelHooks.hostSprinkleSurface) {
+      const dock = this.#refs.dock as unknown as { active: string | null } | undefined;
+      if (dock) dock.active = surfaceId;
+    }
     if (isToolPanelId(surfaceId)) this.#toolPanelHooks.onToolPanelActivate?.(surfaceId);
   }
 
@@ -354,13 +368,16 @@ export class WcSprinkleZone {
       if (isNew) host(id, surface);
       return;
     }
+    // Passive attention-pulse or background session-restore adds must not
+    // steal the one visible slot — mirrors the pre-panels `#activate` skip
+    // for these two modes (see `AddSprinkleOptions`). The dock item above
+    // still registers so the rail icon is clickable; a later user click
+    // (`activate`) or `ws`-driven restore does the actual placement.
+    if (options?.attention || options?.background) return;
     // A new leaf lands in the default zone unless a drag or a restored/
     // persisted tree already placed it (`placeSurface` no-ops on a
     // duplicate surfaceId).
-    (this.#refs.dockTree as unknown as DockTreeLike | undefined)?.placeSurface(
-      id,
-      DEFAULT_TREE_ZONE
-    );
+    this.placeSurface(DEFAULT_TREE_ZONE, id);
   }
 
   #remove(name: string, opts: { keepDockItem: boolean }): void {
@@ -379,13 +396,18 @@ export class WcSprinkleZone {
   }
 
   /**
-   * Minimize just clears the dock rail's active indicator — the sprinkle's
-   * surface stays exactly where it is in the tree (every leaf is always
-   * visible now; there's no show-one state to collapse).
+   * Minimize (collapse) a sprinkle: detach its leaf from the dock-tree,
+   * parking it offstage (state preserved, not destroyed — dock-tree parking
+   * hides via `display:none` rather than unmounting) so the rail icon can
+   * reopen it later. Mirrors the pre-panels behavior, where minimizing
+   * closed the single shared "workbench body" pane. Panelized shells (a
+   * `hostSprinkleSurface` hook) manage their own hide affordance and are
+   * left untouched here.
    */
   #minimize(name: string): void {
-    void name;
     this.#refs.dock.removeAttribute('active');
+    if (this.#toolPanelHooks.hostSprinkleSurface) return;
+    this.removeSurface(sprinkleSurfaceId(name));
   }
 
   /**
