@@ -16,6 +16,9 @@ import type { LeaderSyncContext } from './context.js';
 /** Cap on one teleport; the primitive's own timeout is shorter (30 s). */
 const TAB_TELEPORT_REQUEST_TIMEOUT_MS = 45_000;
 
+/** Reserved runtime id the registry stamps on the leader's own targets. */
+const LEADER_RUNTIME_ID = 'leader';
+
 export interface TabTeleportRouterOptions {
   getTargetEntries: () => TrayTargetEntry[];
   /** Injected for tests; production passes the real primitive. */
@@ -71,9 +74,18 @@ export class TabTeleportRouter {
         this.fail(requestId, 'leader has no BrowserAPI to drive the teleport');
         return;
       }
+      // Tray ids are composite. Ours carry the reserved `leader` runtime, and
+      // this code runs ON the leader — so those name tabs in THIS browser and
+      // must be addressed by their local id. Passing the composite form makes
+      // `attachToPage` treat it as remote and ask the tray for a transport to
+      // a runtime no follower owns, which never routes and hangs until the
+      // timeout. (The prefix is only "local" here; on a follower the same id
+      // really is remote, which is why this lives in the router.)
+      const sourceTargetId =
+        source.runtimeId === LEADER_RUNTIME_ID ? source.localTargetId : source.targetId;
       const teleport = this.options.teleportTab ?? (await loadTeleportTab());
       const result = await teleport(browser as BrowserAPI, {
-        sourceTargetId: targetId,
+        sourceTargetId,
         destination: { kind: 'runtime', runtimeId },
       });
       this.succeed(requestId, result.targetId, result.degraded);

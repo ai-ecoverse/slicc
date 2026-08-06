@@ -29,7 +29,6 @@ import {
 import type {
   TrayModelCatalogEntry,
   TrayModelSelectionState,
-  TrayTargetEntry,
 } from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
@@ -81,7 +80,6 @@ import {
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
-import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
@@ -252,18 +250,13 @@ export function buildFollowerOptions(
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
   });
   deps.refs.switcher.connection = 'disconnected';
-  // Browser rail while joined as a follower: same tray-wide tab list and
-  // pull-to-me action as the dedicated follower mount. This float always has a
-  // real CDP surface (it can lead), so the teleport path is available.
-  let trayTargets: TrayTargetEntry[] = [];
-  const followerBrowser = wireWcFollowerBrowser({
-    refs: deps.refs,
-    getSync,
-    getTargets: () => trayTargets,
-    hasCdpBrowser: () => true,
-    window: deps.window,
-    log: deps.log,
-  });
+  // No follower browser rail here on purpose. This float is leader-capable, so
+  // `wireWcBrowser` already gave it a tab switcher at boot — and that one is
+  // strictly better while following: it lists local pages AND the tray
+  // registry, and opens a chosen tab in THIS browser, which is what "in front
+  // of me" means on a follower too. Wiring a second rail raced it for the
+  // globe (two listeners, two full-screen overlays on one click). The
+  // dedicated follower mount, which has no switcher of its own, wires it.
   deps.refs.switcher.addEventListener(
     'slicc-scoop-select',
     (event) => {
@@ -311,10 +304,6 @@ export function buildFollowerOptions(
       }
       deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
-    },
-    onTargetsUpdated: (targets) => {
-      trayTargets = targets;
-      followerBrowser.refresh();
     },
     // #1915: this float has a mounted permissions surface (it can lead), so
     // it can host a login the leader's kernel cannot prompt for.

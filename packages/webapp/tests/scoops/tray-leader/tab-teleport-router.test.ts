@@ -90,8 +90,12 @@ describe('TabTeleportRouter', () => {
     });
 
     // The destination comes from the channel identity, never the payload.
+    // The SOURCE is addressed by its local id: `attachToPage` treats any id
+    // with a colon as remote and would ask the tray for a transport to the
+    // `leader` runtime, which no follower owns — so the composite form never
+    // routes and the teleport hangs until it times out.
     expect(teleportTab).toHaveBeenCalledWith(expect.anything(), {
-      sourceTargetId: 'leader:tab1',
+      sourceTargetId: 'tab1',
       destination: { kind: 'runtime', runtimeId: 'runtime-1' },
     });
     expect(sent).toEqual([
