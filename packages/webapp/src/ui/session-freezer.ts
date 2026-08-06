@@ -204,7 +204,9 @@ export async function curateFrozenSessionMemories(
   if (result.ok) {
     const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
     if (!updated) {
-      log.warn('Agentic memory pass completed but pending marker could not be cleared', {
+      // The curated memory is already on disk; only the index bookkeeping
+      // missed, so there is no work left for a retry to redo.
+      log.info('Agentic memory pass completed; index entry already gone', {
         filename: frozen.filename,
       });
       return null;
@@ -214,9 +216,10 @@ export async function curateFrozenSessionMemories(
     return updated;
   }
   if (!result.legacyFallbackSafe) {
-    log.warn('Agentic memory pass unfinished — archive retained; skipping legacy extraction', {
+    log.warn('Agentic memory pass unfinished — entry stays pending for boot catch-up', {
       filename: frozen.filename,
       reason: result.reason,
+      attemptLimit: PENDING_SESSION_ATTEMPT_LIMIT,
     });
     return null;
   }
@@ -679,6 +682,15 @@ function pendingShortId(): string {
   return `${time}-${rand}`;
 }
 
+/**
+ * Whether a filename is a quick-mode draft name (and so safe to rename once
+ * the real title is known). Canonical `<timestamp>-<slug>.md` names are final:
+ * the rail, deep links, and snapshot lookups all key off them.
+ */
+function isPendingDraftFilename(filename: string): boolean {
+  return filename.startsWith('pending-');
+}
+
 async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
   try {
     await vfs.mkdir(path, { recursive: true });
@@ -1086,18 +1098,28 @@ async function commitEnrichedArchive(
   icon?: string
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
-  const newContent = rewriteArchiveTitle(archiveContent, newTitle);
-  const newFilename = `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`;
+  // Only a quick-mode `pending-…md` draft carries a placeholder title and a
+  // throwaway name. A curator archive is written straight to its canonical
+  // name, so when the legacy fallback picks one up (agentic-memory toggled off
+  // before catch-up ran) retitling it would rename the file out from under
+  // deep links that already point at it.
+  const isDraft = isPendingDraftFilename(entry.filename);
+  const resolvedTitle = isDraft ? newTitle : entry.title;
+  const newFilename = isDraft
+    ? `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`
+    : entry.filename;
   const newPath = `${SESSIONS_DIR}/${newFilename}`;
-  try {
-    await ensureDir(vfs, SESSIONS_DIR);
-    await vfs.writeFile(newPath, newContent);
-  } catch (err) {
-    log.warn('Enrichment write failed (entry stays pending)', {
-      filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+  if (isDraft) {
+    try {
+      await ensureDir(vfs, SESSIONS_DIR);
+      await vfs.writeFile(newPath, rewriteArchiveTitle(archiveContent, resolvedTitle));
+    } catch (err) {
+      log.warn('Enrichment write failed (entry stays pending)', {
+        filename: entry.filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
 
   // Carry a freshly-picked icon (single-click "save" path) or preserve an
@@ -1107,7 +1129,7 @@ async function commitEnrichedArchive(
   const resolvedIcon = icon ?? entry.icon;
   const updatedEntry: FrozenSessionIndexEntry = {
     filename: newFilename,
-    title: newTitle,
+    title: resolvedTitle,
     frozenAt: entry.frozenAt,
     messageCount: entry.messageCount,
     ...(entry.cost ? { cost: entry.cost } : {}),
@@ -1144,7 +1166,7 @@ async function commitEnrichedArchive(
   log.info('Pending session enriched', {
     oldFilename: entry.filename,
     newFilename,
-    title: newTitle,
+    title: resolvedTitle,
   });
   return updatedEntry;
 }

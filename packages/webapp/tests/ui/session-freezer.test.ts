@@ -1584,6 +1584,51 @@ describe('processPendingSessions', () => {
     expect(updated.pendingAttemptCount).toBeUndefined();
   });
 
+  it('keeps a canonical curator archive at its name when legacy enrichment runs', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'full',
+    });
+    const canonicalName = frozen!.filename;
+    expect(canonicalName.startsWith('pending-')).toBe(false);
+    const { archive: _archive, ...index } = {
+      ...frozen!,
+      pendingEnrichment: undefined,
+      memoryPending: true as const,
+    };
+    vfs.files.set('/sessions/index.json', JSON.stringify([index]));
+    // A legacy title call still runs, but its output must not rename the file.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('A slightly different title');
+
+    const result = await processPendingSessions({
+      vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+
+    expect(result).toEqual({ attempted: 1, completed: 1 });
+    const [updated] = await readSessionsIndex(vfs as never);
+    expect(updated.filename).toBe(canonicalName);
+    expect(updated.title).toBe(frozen!.title);
+    expect(updated.memoryPending).toBeUndefined();
+    expect(updated.pendingAttemptCount).toBeUndefined();
+    expect(vfs.files.has(`/sessions/${canonicalName}`)).toBe(true);
+  });
+
   it('persists the third failed attempt and skips the archive thereafter', async () => {
     const vfs = makeFakeVfs();
     vfs.files.set(
