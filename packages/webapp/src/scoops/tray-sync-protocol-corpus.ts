@@ -605,10 +605,10 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     ios: 'decoded',
     message: { type: 'tab.open.error', requestId: 'tab-1', error: 'load failed' },
   },
-  // iOS gains its encoder for this in the same release that lands its real
-  // Network domain (a teleport into a cookie-less follower is worse than none).
+  // iOS originates this from its tab carousel; its Network domain is real
+  // (WKHTTPCookieStore), so a teleport there actually carries cookies.
   'tab.teleport.request': {
-    ios: 'undecodable',
+    ios: 'decoded',
     message: { type: 'tab.teleport.request', requestId: 'tp-1', targetId: 'leader:tab1' },
   },
   // The reply half of the delegated login. Carries the callback URL only —

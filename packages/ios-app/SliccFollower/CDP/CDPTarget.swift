@@ -76,8 +76,20 @@ final class CDPTarget: NSObject {
         ]
     }
 
+    /// Advertise this target to the leader.
+    ///
+    /// The capabilities are explicit rather than omitted so the leader's
+    /// teleport selection can treat them as authoritative. `network: true`
+    /// reflects the real `WKHTTPCookieStore`-backed `Network` domain in
+    /// `CDPNetworkDomain` — before that existed the whole domain silently
+    /// answered `{}` and a cookie teleport here would "succeed" with nothing.
     func remoteInfo() -> RemoteTargetInfo {
-        RemoteTargetInfo(targetId: targetId, title: currentTitle, url: currentURL)
+        RemoteTargetInfo(
+            targetId: targetId,
+            title: currentTitle,
+            url: currentURL,
+            kind: "browser",
+            capabilities: CherryCapabilities(navigate: true, network: true, screenshot: true))
     }
 
     // MARK: - Navigation (Page.navigate / reload / goBack / goForward)

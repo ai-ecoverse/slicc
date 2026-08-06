@@ -727,7 +727,7 @@
     },
     {
       "type": "tab.teleport.request",
-      "ios": "undecodable",
+      "ios": "decoded",
       "message": {
         "type": "tab.teleport.request",
         "requestId": "tp-1",

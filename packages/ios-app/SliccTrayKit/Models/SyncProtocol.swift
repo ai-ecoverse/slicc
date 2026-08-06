@@ -266,6 +266,12 @@ public struct CherryCapabilities: Codable, Hashable {
     public let navigate: Bool
     public let network: Bool
     public let screenshot: Bool
+
+    public init(navigate: Bool, network: Bool, screenshot: Bool) {
+        self.navigate = navigate
+        self.network = network
+        self.screenshot = screenshot
+    }
 }
 
 /// Mirrors RemoteTargetInfo from tray-sync-protocol.ts (sent in targets.advertise)
@@ -392,13 +398,24 @@ public struct TraySyncCapabilities: Codable, Equatable {
     /// never interprets the command with a shell.
     public let exec: Bool
 
-    public init(exec: Bool) {
+    /// This peer hosts CDP-driveable browser targets and accepts `tab.open`.
+    /// iOS does, through its WKWebView-backed `CDPBridge`.
+    public let browser: Bool?
+
+    /// This peer can host an interactive OAuth popup (window + permissions
+    /// surface + human). iOS has no popup model, so it never claims this and
+    /// a leader will not delegate a login here.
+    public let oauthPopup: Bool?
+
+    public init(exec: Bool, browser: Bool? = nil, oauthPopup: Bool? = nil) {
         self.exec = exec
+        self.browser = browser
+        self.oauthPopup = oauthPopup
     }
 }
 
 /// What this build tells the leader it can do.
-public let trayFollowerCapabilities = TraySyncCapabilities(exec: true)
+public let trayFollowerCapabilities = TraySyncCapabilities(exec: true, browser: true)
 
 // MARK: - LeaderToFollowerMessage
 
@@ -876,6 +893,12 @@ public enum FollowerToLeaderMessage: Codable {
     case cdpEvent(method: String, params: AnyCodable, sessionId: String?)
     case tabOpened(requestId: String, targetId: String)
     case tabOpenError(requestId: String, error: String)
+    /// "Teleport that tab to me": ask the leader to open a copy of a tray
+    /// target HERE, carrying its cookies + web storage. The destination is
+    /// implicit — the leader derives it from this channel — so there is no
+    /// runtime id in the payload. The reply arrives on `tab.opened` /
+    /// `tab.open.error`, keyed by `requestId`.
+    case tabTeleportRequest(requestId: String, targetId: String)
     /// Ask the leader to run an fs op. `targetRuntimeId: "leader"` routes it to
     /// the leader's own VFS; any other value forwards it to a peer follower.
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
@@ -985,6 +1008,10 @@ public enum FollowerToLeaderMessage: Codable {
             self = .tabOpenError(
                 requestId: try container.decode(String.self, forKey: .requestId),
                 error: try container.decode(String.self, forKey: .error))
+        case "tab.teleport.request":
+            self = .tabTeleportRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                targetId: try container.decode(String.self, forKey: .targetId))
         case "fs.request":
             self = .fsRequest(
                 requestId: try container.decode(String.self, forKey: .requestId),
@@ -1116,6 +1143,10 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode("tab.open.error", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(error, forKey: .error)
+        case .tabTeleportRequest(let requestId, let targetId):
+            try container.encode("tab.teleport.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(targetId, forKey: .targetId)
         case .fsRequest, .fsResponse, .execRequest, .execChunk, .execResponse, .execSignal:
             return
         case .lick(let event):

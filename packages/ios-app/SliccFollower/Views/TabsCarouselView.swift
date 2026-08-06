@@ -254,12 +254,18 @@ struct TabsCarouselView: View {
         pendingAddressFocusTabId = id
     }
 
-    /// A remote card is one tap from becoming local: open its URL in a
-    /// WKWebView tab here and go full screen. The remote original is
-    /// untouched — this is "open a copy", the closest a follower can get
-    /// to teleporting a tab.
+    /// A remote card is one tap from becoming local.
+    ///
+    /// Against a v6+ leader this is a real teleport: the leader opens the tab
+    /// here carrying the source's cookies + web storage, so a logged-in page
+    /// arrives logged in. The tab surfaces through `leaderOpenedTabId` when
+    /// the `tab.opened` reply lands. Against an older leader it degrades to
+    /// the historical bare-URL copy.
     private func openRemoteTabLocally(_ target: TrayTargetEntry) {
         guard canControlTabs, !target.url.isEmpty else { return }
+        if appState.supportsTabTeleport, appState.requestTabTeleport(targetId: target.targetId) {
+            return
+        }
         let id = appState.cdpOpenTab(url: target.url)
         appState.browserViewingTabId = id
     }
