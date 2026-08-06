@@ -75,6 +75,8 @@ Nested horizontal content keeps a drag while it can scroll that way; scoop navig
 
 `AppState.sessionStore` uses **`packages/swift-traysession`**; the launcher publishes and `SettingsView` joins. Liveness requires a connected leader. KVS `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds have no cache; `SLICC_IOS_NO_ICLOUD=1` omits iCloud. Never expose `joinUrl`.
 
+iCloud keeps advertising the **old** tray after a leader reconnects, so `SessionReachability` and both attach loops must follow the `TRAY_SUPERSEDED` chain (`SupersedeRedirect`, which also moves the tray the connection owns) or a row reads live but will not connect.
+
 ## Frozen Sessions
 
 `FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`; its view opens saved transcripts read-only. Hook: `-uiTestFrozenFixture/Empty`.
@@ -127,10 +129,6 @@ Exclude `SliccFileProvider/` from coverage: the appex does not launch in unit te
 
 File Provider reads are memory-bound: `readBinaryFile` holds the complete base64 response and decoded `Data` before writing. Treat very large leader VFS files as unsupported until reads stream to disk.
 
-## Simulator QA path
-
-Hand-running the app for exploratory QA is covered in [`docs/ios-simulator-qa.md`](../../docs/ios-simulator-qa.md).
-
 ## UI tests (`SliccFollowerUITests`)
 
 A `bundle.ui-testing` target remains in the scheme, but the unit coverage gate excludes it. Run `-only-testing:SliccFollowerUITests` when UI changes, as a separate CI job. No test needs a leader: `-uiTestFixtureRoute YES` opens the leaderless **UI Fixture** route; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions in-memory; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` freezes pupil motion and static noise. `UITestHooks` is `#if DEBUG` only. The failure-state test dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS. `-uiTestCompletedTurn YES` feeds `message_start` + `content_delta` + `content_done` + `status: ready` through the real dispatcher.
@@ -148,14 +146,7 @@ Regular-width browser tabs claim the whole iPad window; returning to the tab ove
 
 The CI job ends with an informational Periphery dead-code scan (`|| true`). The app and test targets live in the XcodeGen project, not the SPM manifest, so the scan names the project, scheme, and target explicitly.
 
-## Formatting
-
-SwiftLint lints; `swift format` formats against the repo-root `.swift-format`. Use `npm run lint:swift:format` / `npm run format:swift` from the repo root, or:
-
-```bash
-swift format lint --strict --parallel --recursive SliccFollower Package.swift
-swift format --in-place --parallel --recursive SliccFollower Package.swift
-```
+SwiftLint lints; `swift format` formats against the repo-root `.swift-format` — run `npm run lint:swift:format` / `npm run format:swift` from the repo root, which cover `SliccTrayKit` as well as `SliccFollower`.
 
 ## TestFlight
 
