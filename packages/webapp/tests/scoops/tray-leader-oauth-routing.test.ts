@@ -65,7 +65,7 @@ describe('delegated OAuth routing', () => {
     addFollower(manager, 'b1', { oauthPopup: true });
     manager.noteLeaderUserMessage();
 
-    expect(manager.shouldDelegateOAuthPopup()).toBe(false);
+    expect(manager.shouldDelegateOAuthLogin()).toBe(false);
   });
 
   it('delegates when the last user message came from a follower', () => {
@@ -73,7 +73,7 @@ describe('delegated OAuth routing', () => {
     const channel = addFollower(manager, 'b1', { oauthPopup: true });
     channel.simulate({ type: 'user_message', text: 'log into github', messageId: 'm1' });
 
-    expect(manager.shouldDelegateOAuthPopup()).toBe(true);
+    expect(manager.shouldDelegateOAuthLogin()).toBe(true);
   });
 
   it('never prompts locally on a headless leader, even with no capable follower', async () => {
@@ -81,11 +81,11 @@ describe('delegated OAuth routing', () => {
     // back to its own popup puts the login in a sandbox nobody is watching.
     // It must delegate — and, finding nowhere to delegate to, fail fast.
     const manager = createManager({ headlessLeader: true });
-    expect(manager.hasOAuthPopupCapableFollower()).toBe(false);
-    expect(manager.shouldDelegateOAuthPopup()).toBe(true);
+    expect(manager.hasDelegatableFollower()).toBe(false);
+    expect(manager.shouldDelegateOAuthLogin()).toBe(true);
 
     await expect(
-      manager.delegateOAuthPopup('https://github.com/login/oauth/authorize')
+      manager.delegateOAuthLogin('https://github.com/login/oauth/authorize')
     ).resolves.toEqual({
       redirectUrl: null,
       error: 'no connected follower can show an interactive login',
@@ -98,8 +98,63 @@ describe('delegated OAuth routing', () => {
     addFollower(manager, 'b1', { oauthPopup: false });
     manager.noteLeaderUserMessage();
 
-    expect(manager.hasOAuthPopupCapableFollower()).toBe(false);
-    expect(manager.shouldDelegateOAuthPopup()).toBe(false);
+    expect(manager.hasDelegatableFollower()).toBe(false);
+    expect(manager.shouldDelegateOAuthLogin()).toBe(false);
+  });
+
+  it('drives a CDP-capable follower rather than asking it for a popup', async () => {
+    // The driven path needs no user activation, is immune to COOP severing
+    // window.opener, and needs no shared origin — so it wins whenever the
+    // follower can actually be driven.
+    const browserAPI = {
+      createRemotePage: vi.fn(async () => 'tab-1'),
+      attachToPage: vi.fn(async () => {}),
+      sendCDP: vi.fn(async () => ({})),
+      evaluate: vi.fn(async () => 'https://www.sliccy.ai/auth/callback?code=driven'),
+      closePage: vi.fn(async () => {}),
+      getTransport: vi.fn(() => ({ on: vi.fn(), off: vi.fn() })),
+    };
+    const manager = createManager({ browserAPI: browserAPI as never });
+    const channel = addFollower(manager, 'b1', { oauthPopup: true });
+    channel.simulate({ type: 'user_message', text: 'log in', messageId: 'm1' });
+    // Advertising a network-capable target is what makes it driveable.
+    channel.simulate({
+      type: 'targets.advertise',
+      runtimeId: 'runtime-1',
+      targets: [
+        {
+          targetId: 'tab0',
+          title: 'Tab',
+          url: 'https://example.com',
+          kind: 'browser',
+          capabilities: { navigate: true, network: true, screenshot: true },
+        },
+      ],
+    });
+
+    const authorize =
+      'https://github.com/login/oauth/authorize?client_id=abc&redirect_uri=' +
+      encodeURIComponent('https://www.sliccy.ai/auth/callback');
+    await expect(manager.delegateOAuthLogin(authorize)).resolves.toEqual({
+      redirectUrl: 'https://www.sliccy.ai/auth/callback?code=driven',
+    });
+    expect(browserAPI.createRemotePage).toHaveBeenCalledWith('runtime-1', authorize);
+    // No popup request went out on the wire.
+    expect(channel.sent.map((raw) => JSON.parse(raw) as { type: string })).not.toContainEqual(
+      expect.objectContaining({ type: 'oauth.popup.request' })
+    );
+  });
+
+  it('falls back to the popup for a follower that cannot be driven', () => {
+    // A plain browser tab at a join URL has no CDP surface of its own.
+    const manager = createManager();
+    const channel = addFollower(manager, 'b1', { oauthPopup: true });
+    channel.simulate({ type: 'user_message', text: 'log in', messageId: 'm1' });
+
+    void manager.delegateOAuthLogin('https://github.com/login/oauth/authorize?client_id=abc');
+    expect(channel.sent.map((raw) => JSON.parse(raw) as { type: string })).toContainEqual(
+      expect.objectContaining({ type: 'oauth.popup.request' })
+    );
   });
 
   it('routes to the follower whose human sent the most recent message', () => {
@@ -110,7 +165,7 @@ describe('delegated OAuth routing', () => {
     first.simulate({ type: 'user_message', text: 'hi', messageId: 'm1' });
     second.simulate({ type: 'user_message', text: 'log into github', messageId: 'm2' });
 
-    void manager.delegateOAuthPopup('https://github.com/login/oauth/authorize');
+    void manager.delegateOAuthLogin('https://github.com/login/oauth/authorize');
     const request = second.sent
       .map((raw) => JSON.parse(raw) as { type: string })
       .find((message) => message.type === 'oauth.popup.request');

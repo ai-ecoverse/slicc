@@ -189,12 +189,13 @@ export interface StandalonePanelRpcHandlerOptions {
    */
   getPermissionsSurface?: () => SliccPermissions | null;
   /**
-   * Run the interactive OAuth hop on a follower instead of here (#1915).
-   * Resolves `{ delegated: false }` when the login belongs on this tab —
-   * the leader's own human sent the last message, or no capable follower is
-   * connected — and the caller falls back to the local popup.
+   * Run the interactive OAuth hop on a follower instead of here (#1915) —
+   * by driving that follower's browser where possible, else via a popup on
+   * its page. Resolves `{ delegated: false }` when the login belongs on this
+   * tab (the leader's own human sent the last message, or no capable follower
+   * is connected) and the caller falls back to the local popup.
    */
-  delegateOAuthPopup?: (
+  delegateOAuthLogin?: (
     url: string
   ) => Promise<
     { delegated: false } | { delegated: true; redirectUrl: string | null; error?: string }
@@ -552,7 +553,7 @@ function buildClipboardCaptureHandlers(options: StandalonePanelRpcHandlerOptions
       // #1915: when the human is driving from a follower — or the leader is
       // headless — prompting here puts the login where nobody can click it.
       // Hand the visible half to that follower instead.
-      const delegated = await options.delegateOAuthPopup?.(url);
+      const delegated = await options.delegateOAuthLogin?.(url);
       if (delegated?.delegated) {
         return { redirectUrl: delegated.redirectUrl, error: delegated.error };
       }

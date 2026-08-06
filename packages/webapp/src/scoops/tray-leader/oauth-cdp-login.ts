@@ -1,0 +1,173 @@
+/**
+ * Run a delegated OAuth login by DRIVING the follower's browser (issue #1915),
+ * rather than asking its page to open a popup.
+ *
+ * The leader opens the authorize URL as an ordinary tab on the follower over
+ * federated CDP, watches that tab's navigations for the provider's redirect
+ * back to the registered callback, and reads the authorization code straight
+ * off the URL. The human just signs in in a normal tab.
+ *
+ * Why this is the primary path, with the popup kept only as a fallback:
+ *
+ *  - **No user activation needed.** `window.open` from a message handler is
+ *    blocked, which is why the popup path must borrow a click.
+ *  - **COOP is irrelevant.** Providers that send `Cross-Origin-Opener-Policy:
+ *    same-origin` (GitHub does) sever `window.opener`; we read a URL instead
+ *    of relying on cross-context messaging, so nothing to sever.
+ *  - **No same-origin coupling.** The popup path needs the follower and the
+ *    relay to share an origin to receive the broadcast; this needs nothing.
+ *  - **iOS can serve it.** iOS has no popup model at all, but it does host
+ *    CDP targets and emit `Page.frameNavigated`.
+ *
+ * The token never travels: only the callback URL comes back, and the leader
+ * still validates the nonce and performs the code exchange. SLICC already used
+ * this shape for the controlled browser in `providers/intercepted-oauth.ts`;
+ * this applies it across the tray.
+ */
+
+import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { createLogger } from '../../core/logger.js';
+
+const log = createLogger('oauth-cdp-login');
+
+/** Matches the popup path's budget so both give up together. */
+const CDP_LOGIN_TIMEOUT_MS = 120_000;
+/**
+ * Backstop for transports that do not emit navigation events. `Page.frameNavigated`
+ * fires at commit — before the callback page's own script can redirect or close
+ * it — so polling is only ever the slower of the two.
+ */
+const URL_POLL_INTERVAL_MS = 500;
+
+export interface DelegatedCdpLoginDeps {
+  browser: BrowserAPI;
+  /** Follower runtime to open the tab on. */
+  runtimeId: string;
+  authorizeUrl: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+/**
+ * The provider redirects back to the `redirect_uri` baked into the authorize
+ * URL, so that is what a terminal callback looks like — no provider-specific
+ * knowledge required. Returns null when the URL carries no usable redirect.
+ */
+export function callbackMatcherFor(authorizeUrl: string): ((url: string) => boolean) | null {
+  let redirectUri: string | null;
+  try {
+    redirectUri = new URL(authorizeUrl).searchParams.get('redirect_uri');
+  } catch {
+    return null;
+  }
+  if (!redirectUri) return null;
+  let base: string;
+  try {
+    const parsed = new URL(redirectUri);
+    base = `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return null;
+  }
+  return (candidate: string): boolean => {
+    try {
+      const parsed = new URL(candidate);
+      if (`${parsed.origin}${parsed.pathname}` !== base) return false;
+      // Only a terminal callback carries the grant (or an explicit failure);
+      // the bare callback path mid-flow must not settle the wait.
+      return (
+        parsed.searchParams.has('code') ||
+        parsed.searchParams.has('error') ||
+        parsed.hash.includes('access_token')
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+
+/**
+ * Open the authorize URL on a follower and resolve with the callback URL it
+ * lands on. Resolves null when the human never finished (timeout, abort, or a
+ * closed tab). The tab is always closed on the way out.
+ */
+export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise<string | null> {
+  const { browser, runtimeId, authorizeUrl, signal } = deps;
+  const isCallback = callbackMatcherFor(authorizeUrl);
+  if (!isCallback) {
+    throw new Error('authorize URL has no redirect_uri to watch for');
+  }
+
+  const rawTargetId = await browser.createRemotePage(runtimeId, authorizeUrl);
+  const targetId = rawTargetId.includes(':') ? rawTargetId : `${runtimeId}:${rawTargetId}`;
+  log.info('Opened delegated login tab on follower', { runtimeId });
+
+  return await new Promise<string | null>((resolve) => {
+    const cleanups: Array<() => void> = [];
+    let settled = false;
+    const settle = (value: string | null): void => {
+      if (settled) return;
+      settled = true;
+      for (const cleanup of cleanups) cleanup();
+      // Close in the background: the caller should not wait on teardown, and a
+      // follower that vanished mid-login would otherwise stall the exchange.
+      void browser.closePage(targetId).catch((err) => {
+        log.warn('Could not close delegated login tab', { error: String(err) });
+      });
+      resolve(value);
+    };
+
+    void (async () => {
+      try {
+        await browser.attachToPage(targetId);
+        await browser.sendCDP('Page.enable');
+
+        // Primary signal: navigation commit, before the page's own script runs.
+        const transport = browser.getTransport();
+        const onNavigated = (params: Record<string, unknown>): void => {
+          const frame = (params as { frame?: { url?: string; parentId?: string } }).frame;
+          if (!frame?.url || frame.parentId) return; // main frame only
+          if (isCallback(frame.url)) {
+            log.info('Delegated login reached the callback', { via: 'frameNavigated' });
+            settle(frame.url);
+          }
+        };
+        transport.on('Page.frameNavigated', onNavigated);
+        cleanups.push(() => transport.off('Page.frameNavigated', onNavigated));
+
+        // Backstop for transports that never emit it.
+        const poll = setInterval(() => {
+          void (async () => {
+            if (settled) return;
+            try {
+              await browser.attachToPage(targetId);
+              const raw = await browser.evaluate('window.location.href');
+              const href = typeof raw === 'string' ? raw : String(raw);
+              if (href && isCallback(href)) {
+                log.info('Delegated login reached the callback', { via: 'poll' });
+                settle(href);
+              }
+            } catch {
+              // The tab can be mid-navigation or already gone; the timeout owns
+              // the terminal case.
+            }
+          })();
+        }, URL_POLL_INTERVAL_MS);
+        cleanups.push(() => clearInterval(poll));
+      } catch (err) {
+        log.warn('Delegated CDP login could not start', { error: String(err) });
+        settle(null);
+      }
+    })();
+
+    const timer = setTimeout(() => {
+      log.warn('Delegated CDP login timed out');
+      settle(null);
+    }, deps.timeoutMs ?? CDP_LOGIN_TIMEOUT_MS);
+    cleanups.push(() => clearTimeout(timer));
+
+    const onAbort = (): void => settle(null);
+    signal?.addEventListener('abort', onAbort);
+    cleanups.push(() => signal?.removeEventListener('abort', onAbort));
+    if (signal?.aborted) settle(null);
+  });
+}
