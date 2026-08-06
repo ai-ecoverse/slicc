@@ -17,8 +17,10 @@
  * mirrors a **subset** of this file: federated `fs.*` in both directions is
  * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
- * originate either, so the follower-initiated CDP/tab.open paths are also
- * TS-only. The per-variant iOS decision is MECHANICALLY enforced by the
+ * originate `tab.open` against another runtime, so that path is TS-only. iOS
+ * DOES originate `tab.teleport.request` (pull a tray tab here, with state).
+ * The delegated-OAuth pair (`oauth.popup.*`) is TS-only: iOS has no popup
+ * model and never advertises `capabilities.oauthPopup`. The per-variant iOS decision is MECHANICALLY enforced by the
  * golden-fixture corpus
  * (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
  * `packages/ios-app/.../Fixtures/tray-sync-corpus.json`, decoded by both the
