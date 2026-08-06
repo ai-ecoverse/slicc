@@ -8,7 +8,16 @@ package protocol
 import "encoding/json"
 
 // TraySyncProtocolVersion mirrors TRAY_SYNC_PROTOCOL_VERSION.
-const TraySyncProtocolVersion = 5
+//
+// v6 added `tab.teleport.request` (a follower asking the leader to open a tray
+// tab locally, carrying its cookies + web storage). The CLI is exec-only — it
+// hosts no browser targets and never originates or handles it — so the bump is
+// version bookkeeping, not new surface here. Leaving `capabilities.browser`
+// unset (this struct has no such field) is what keeps a v6 leader from ever
+// selecting this follower as a teleport destination: its `tab.open` would hang
+// rather than fail, so the leader now requires the flag instead of optimistically
+// assuming an un-advertised follower can serve one.
+const TraySyncProtocolVersion = 6
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"
