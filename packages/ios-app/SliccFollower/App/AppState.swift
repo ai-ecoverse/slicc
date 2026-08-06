@@ -604,128 +604,6 @@ class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Private: Signaling Loop
-
-    /// Runs the full attach → poll → offer → answer → ICE → connected flow.
-    private func runSignalingLoop(client: TraySignalingClient, rtc: WebRTCManager) async {
-        do {
-            // Step 1: Attach — may need to retry if leader not yet connected.
-            let plan = try await attachWithRetry(client: client)
-
-            self.trayId = plan.trayId
-            self.participantCount = plan.participantCount
-            self.leaderConnected = plan.leader?.connected ?? false
-
-            guard let bootstrap = plan.bootstrap,
-                let iceServers = plan.iceServers
-            else {
-                self.connectionState = .failed
-                self.lastError = "Attach succeeded but no bootstrap or ICE servers"
-                return
-            }
-
-            // Step 2: Configure WebRTC with TURN servers.
-            rtc.configure(iceServers: iceServers)
-
-            // Step 3: Poll for offer and ICE candidates.
-            let bootstrapId = bootstrap.bootstrapId
-            self.currentBootstrapId = bootstrapId
-            var cursor: Int? = bootstrap.cursor
-
-            // Process any events already present in the attach response.
-            // (The attach response doesn't include events; they come from poll.)
-
-            var gotOffer = false
-            let maxPolls = 60  // Safety limit
-            for _ in 0..<maxPolls {
-                if Task.isCancelled { return }
-
-                let poll = try await client.pollBootstrap(
-                    controllerId: controllerId,
-                    bootstrapId: bootstrapId,
-                    cursor: cursor
-                )
-                cursor = poll.bootstrap.cursor
-
-                self.participantCount = poll.participantCount
-                self.leaderConnected = poll.leader?.connected ?? false
-
-                for event in poll.events {
-                    switch event {
-                    case .offer(_, _, let offer):
-                        let answer = try await rtc.handleOffer(sdp: offer.sdp)
-                        let answerDesc = TraySessionDescription(
-                            type: .answer, sdp: answer.sdp)
-                        _ = try await client.sendAnswer(
-                            controllerId: controllerId,
-                            bootstrapId: bootstrapId,
-                            answer: answerDesc
-                        )
-                        gotOffer = true
-
-                    case .iceCandidate(_, _, let cand):
-                        try await rtc.addIceCandidate(
-                            candidate: cand.candidate,
-                            sdpMid: cand.sdpMid,
-                            sdpMLineIndex: cand.sdpMLineIndex.map { Int32($0) }
-                        )
-
-                    case .failed(_, _, let failure):
-                        self.connectionState = .failed
-                        self.lastError = failure.message
-                        return
-                    }
-                }
-
-                // Check if we're connected now.
-                if poll.bootstrap.state == .connected {
-                    break
-                }
-
-                // If we have the offer + answer, wait for data channel open
-                // (WebRTCManager delegate will call dataChannelOpened).
-                if gotOffer && poll.events.isEmpty {
-                    // Brief pause before next poll.
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                }
-
-                // If no events, the leader hasn't sent anything yet — pause.
-                if poll.events.isEmpty && !gotOffer {
-                    let delay = poll.bootstrap.retryAfterMs ?? 2000
-                    try? await Task.sleep(
-                        nanoseconds: UInt64(delay) * 1_000_000)
-                }
-            }
-
-        } catch is CancellationError {
-            return
-        } catch {
-            self.connectionState = .failed
-            self.lastError = error.localizedDescription
-        }
-    }
-
-    /// Attach to the tray, retrying when the leader isn't connected yet.
-    private func attachWithRetry(client: TraySignalingClient) async throws -> FollowerAttachPlan {
-        let maxAttempts = 30
-        for _ in 0..<maxAttempts {
-            if Task.isCancelled { throw CancellationError() }
-
-            let plan = try await client.attach(controllerId: controllerId)
-
-            switch plan.action {
-            case .signal:
-                return plan
-            case .wait:
-                let delay = plan.retryAfterMs ?? 2000
-                try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
-            case .fail:
-                throw AppStateError.attachFailed(plan.error ?? plan.code)
-            }
-        }
-        throw AppStateError.attachFailed("Max attach retries exceeded")
-    }
-
     // MARK: - Private: Data Channel Message Handling
 
     /// Called from WebRTCBridge when the data channel opens.
@@ -1840,5 +1718,173 @@ enum AppStateError: LocalizedError {
         case .attachFailed(let reason):
             return "Failed to attach to tray: \(reason)"
         }
+    }
+}
+
+// MARK: - Signaling Loop
+
+/// The attach → bootstrap → data-channel flow. An extension rather than a
+/// member of the class body only to keep `AppState` under the
+/// `type_body_length` ceiling; `private` still spans the whole file.
+extension AppState {
+    /// Runs the full attach → poll → offer → answer → ICE → connected flow.
+    private func runSignalingLoop(client: TraySignalingClient, rtc: WebRTCManager) async {
+        do {
+            // Step 1: Attach — may need to retry if leader not yet connected,
+            // and may land on a different tray than we dialed (a superseded
+            // join URL redirects), so the rest of the flow uses the client the
+            // attach settled on rather than the one we were handed.
+            let (plan, client) = try await attachWithRetry(client: client)
+
+            self.trayId = plan.trayId
+            self.participantCount = plan.participantCount
+            self.leaderConnected = plan.leader?.connected ?? false
+
+            guard let bootstrap = plan.bootstrap,
+                let iceServers = plan.iceServers
+            else {
+                self.connectionState = .failed
+                self.lastError = "Attach succeeded but no bootstrap or ICE servers"
+                return
+            }
+
+            // Step 2: Configure WebRTC with TURN servers.
+            rtc.configure(iceServers: iceServers)
+
+            // Step 3: Poll for offer and ICE candidates.
+            let bootstrapId = bootstrap.bootstrapId
+            self.currentBootstrapId = bootstrapId
+            var cursor: Int? = bootstrap.cursor
+
+            // Process any events already present in the attach response.
+            // (The attach response doesn't include events; they come from poll.)
+
+            var gotOffer = false
+            let maxPolls = 60  // Safety limit
+            for _ in 0..<maxPolls {
+                if Task.isCancelled { return }
+
+                let poll = try await client.pollBootstrap(
+                    controllerId: controllerId,
+                    bootstrapId: bootstrapId,
+                    cursor: cursor
+                )
+                cursor = poll.bootstrap.cursor
+
+                self.participantCount = poll.participantCount
+                self.leaderConnected = poll.leader?.connected ?? false
+
+                for event in poll.events {
+                    switch event {
+                    case .offer(_, _, let offer):
+                        let answer = try await rtc.handleOffer(sdp: offer.sdp)
+                        let answerDesc = TraySessionDescription(
+                            type: .answer, sdp: answer.sdp)
+                        _ = try await client.sendAnswer(
+                            controllerId: controllerId,
+                            bootstrapId: bootstrapId,
+                            answer: answerDesc
+                        )
+                        gotOffer = true
+
+                    case .iceCandidate(_, _, let cand):
+                        try await rtc.addIceCandidate(
+                            candidate: cand.candidate,
+                            sdpMid: cand.sdpMid,
+                            sdpMLineIndex: cand.sdpMLineIndex.map { Int32($0) }
+                        )
+
+                    case .failed(_, _, let failure):
+                        self.connectionState = .failed
+                        self.lastError = failure.message
+                        return
+                    }
+                }
+
+                // Check if we're connected now.
+                if poll.bootstrap.state == .connected {
+                    break
+                }
+
+                // If we have the offer + answer, wait for data channel open
+                // (WebRTCManager delegate will call dataChannelOpened).
+                if gotOffer && poll.events.isEmpty {
+                    // Brief pause before next poll.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+
+                // If no events, the leader hasn't sent anything yet — pause.
+                if poll.events.isEmpty && !gotOffer {
+                    let delay = poll.bootstrap.retryAfterMs ?? 2000
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(delay) * 1_000_000)
+                }
+            }
+
+        } catch is CancellationError {
+            return
+        } catch {
+            self.connectionState = .failed
+            self.lastError = error.localizedDescription
+        }
+    }
+
+    /// Attach to the tray, retrying when the leader isn't connected yet and
+    /// following a superseded tray to its replacement.
+    ///
+    /// Returns the client the attach settled on: a redirect swaps it, and
+    /// bootstrap polling has to speak to the tray that issued the bootstrap.
+    private func attachWithRetry(
+        client: TraySignalingClient
+    ) async throws -> (plan: FollowerAttachPlan, client: TraySignalingClient) {
+        let maxWaitAttempts = 30
+        var client = client
+        var waitAttempts = 0
+        var redirectsFollowed = 0
+
+        while waitAttempts < maxWaitAttempts {
+            if Task.isCancelled { throw CancellationError() }
+
+            let plan = try await client.attach(controllerId: controllerId)
+
+            switch plan.action {
+            case .signal:
+                return (plan, client)
+            case .wait:
+                waitAttempts += 1
+                let delay = plan.retryAfterMs ?? 2000
+                try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+            case .fail:
+                let outcome = SupersedeRedirect.outcome(
+                    for: plan, redirectsFollowed: redirectsFollowed)
+                guard case .follow(let replacement) = outcome else {
+                    throw AppStateError.attachFailed(
+                        SupersedeRedirect.failureMessage(for: outcome)
+                            ?? plan.error ?? plan.code)
+                }
+                // A redirect is a different tray, not another try at this one,
+                // so it spends the supersede bound instead of the wait budget.
+                // `SupersedeRedirect` caps the chase, so this cannot spin.
+                redirectsFollowed += 1
+                client = followSuperseded(to: replacement)
+                try await Task.sleep(
+                    nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
+            }
+        }
+        throw AppStateError.attachFailed("Max attach retries exceeded")
+    }
+
+    /// Point this connection at a replacement tray. The controller id is
+    /// regenerated because the previous one is a participant of the tray we are
+    /// leaving, and `activeJoinUrl` moves so reconnects — and the Keychain
+    /// credentials written once we land (`persistTrayCredentials`) — carry the
+    /// live tray rather than resurrecting the superseded one.
+    private func followSuperseded(to replacement: URL) -> TraySignalingClient {
+        logger.info("Tray superseded; following redirect to the replacement tray")
+        controllerId = UUID().uuidString
+        activeJoinUrl = replacement.absoluteString
+        let client = TraySignalingClient(joinUrl: replacement)
+        signalingClient = client
+        return client
     }
 }
