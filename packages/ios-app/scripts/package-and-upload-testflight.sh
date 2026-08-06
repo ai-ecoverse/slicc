@@ -151,6 +151,19 @@ if [ -z "$XCODE_MAJOR" ] || ! [ "$XCODE_MAJOR" -ge 26 ] 2>/dev/null; then
 fi
 echo "  using $XCODE_VERSION (default Xcode)"
 
+# The Xcode project is XcodeGen output and is not committed, so generate it
+# before archiving. This is the one iOS build path that did not already
+# regenerate (every workflow under .github/workflows does), and it goes on to
+# patch the produced pbxproj for codesigning — so it must archive a project
+# that matches project.yml, not whatever a local checkout had lying around.
+# Placed after every soft-skip gate above: a run that is going to skip the
+# upload must not hard-fail here for a missing tool it never needed.
+if ! command -v xcodegen >/dev/null 2>&1; then
+  echo "package-and-upload-testflight: xcodegen not found (brew install xcodegen)" >&2
+  exit 1
+fi
+(cd "$IOS_PROJECT_DIR" && xcodegen generate)
+
 ARCHIVE="$IOS_PROJECT_DIR/.build/SliccFollower.xcarchive"
 EXPORT_DIR="$IOS_PROJECT_DIR/.build/export"
 EXPORT_OPTS="$IOS_PROJECT_DIR/.build/ExportOptions-AppStore.generated.plist"

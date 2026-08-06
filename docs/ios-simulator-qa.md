@@ -29,6 +29,7 @@ UDID=$(xcrun simctl list devices available --json \
     | sort_by(.ver) | last | .devs | first | .udid')
 xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
 open -a Simulator                                # optional: watch live
+xcodegen generate                                # project is generated, not committed
 xcodebuild build -project SliccFollower.xcodeproj -scheme SliccFollower \
   -destination "platform=iOS Simulator,id=$UDID" \
   -derivedDataPath .build/xcodebuild CODE_SIGNING_ALLOWED=NO

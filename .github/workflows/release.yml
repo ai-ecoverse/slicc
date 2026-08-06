@@ -85,6 +85,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
+      # The iOS Xcode project is XcodeGen output and is not committed; the
+      # TestFlight script generates it before archiving, so the tool has to be
+      # on PATH here as it already is in ci.yml / coverage-ratchet.yml /
+      # ios-screenshots.yml.
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
       - name: Import Apple certificates
         if: env.APPLE_CERTIFICATE_BASE64 != ''
         env:

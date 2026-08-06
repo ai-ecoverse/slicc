@@ -4,3 +4,16 @@ xcuserdata/
 DerivedData/
 simulator-screenshot.png
 
+# XcodeGen output — `project.yml` is the source of truth, and every workflow
+# that builds this app regenerates the project before it does. Committing the
+# result only produced merge conflicts (two branches each registering a new
+# source file collide in `project.pbxproj`, which is not hand-mergeable).
+# Run `xcodegen generate` before opening Xcode.
+#
+# `project.xcworkspace/xcshareddata/swiftpm/Package.resolved` stays TRACKED:
+# XcodeGen does not produce it, and it is what pins resolved SwiftPM
+# dependency versions.
+SliccFollower.xcodeproj/project.pbxproj
+SliccFollower.xcodeproj/xcshareddata/
+SliccFollower.xcodeproj/project.xcworkspace/contents.xcworkspacedata
+
