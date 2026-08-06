@@ -66,10 +66,12 @@ export function isWebappSource(name) {
   return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name);
 }
 
-// Match the specifier of any relative static import / re-export, dynamic
-// `import('…')`, or `require('…')`. `\s` spans newlines so Prettier's
-// multiline `await import(\n  '../ui/x.js'\n)` form matches too.
-const RELATIVE_IMPORT_RE = /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](\.\.?\/[^'"]+)['"]/g;
+// Match the specifier of any relative static import / re-export, bare
+// side-effect `import '…'`, dynamic `import('…')`, or `require('…')`.
+// `\s` spans newlines so Prettier's multiline `await import(\n  '../ui/x.js'\n)`
+// form matches too.
+const RELATIVE_IMPORT_RE =
+  /(?:from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)['"](\.\.?\/[^'"]+)['"]/g;
 
 /** The stack layer a `packages/webapp/src`-relative path belongs to. */
 export function layerOf(relPath) {

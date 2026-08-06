@@ -85,6 +85,15 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     expect(findLayerBackEdges('core/session.ts', source).map((h) => h.line)).toEqual([2, 3]);
   });
 
+  it('catches bare side-effect imports (registration/CSS form)', () => {
+    const source = [
+      "import '../ui/wc/foo.js';",
+      "import './same-layer-polyfill.js';",
+      'import "../ui/double-quoted.js";',
+    ].join('\n');
+    expect(findLayerBackEdges('core/session.ts', source).map((h) => h.line)).toEqual([1, 3]);
+  });
+
   // Regression fixtures for the import shapes that slipped past #1960's
   // per-shape text patterns: specifier count and clause shape must not matter.
   it('catches multi-specifier imports and re-exports regardless of clause shape', () => {
