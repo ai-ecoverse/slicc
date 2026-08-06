@@ -5,8 +5,8 @@
  * click, type, waitForSelector, getAccessibilityTree.
  */
 
+import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../core/logger.js';
-import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { CDPClient } from './cdp-client.js';
 import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
@@ -92,9 +92,10 @@ export class BrowserAPI {
    */
   private supersededHandler: (() => void) | null = null;
   private supersededNotified = false;
-  private readonly handleJavaScriptDialogOpening = async (
-    params: Record<string, unknown>
-  ): Promise<void> => {
+  private readonly handleJavaScriptDialogOpening = (params: Record<string, unknown>): void => {
+    void this.dismissJavaScriptDialog(params);
+  };
+  private async dismissJavaScriptDialog(params: Record<string, unknown>): Promise<void> {
     const sessionId =
       typeof params['sessionId'] === 'string' ? (params['sessionId'] as string) : this.sessionId;
     if (!sessionId) return;
@@ -113,7 +114,7 @@ export class BrowserAPI {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  };
+  }
   private readonly handleExecutionContextCreated = (params: Record<string, unknown>): void => {
     const eventSessionId = params['sessionId'];
     if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
