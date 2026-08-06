@@ -428,6 +428,13 @@ export function createLeaderOptionsFactory(
       );
     },
     onFollowerCountChanged: refreshFollowerPresentation,
+    // Advertised targets decide teleport eligibility, and they change without
+    // the follower count changing — an iOS follower opening its first tab goes
+    // from ineligible to eligible. Re-publish so kernel-side selection stops
+    // reading a snapshot that predates the capability.
+    onFollowerTargetsChanged: () => {
+      if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
+    },
     onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     onForwardedLick: (event) => client.sendForwardedLick(event),
     onCherryHostEvent: (runtimeId, name, detail) =>

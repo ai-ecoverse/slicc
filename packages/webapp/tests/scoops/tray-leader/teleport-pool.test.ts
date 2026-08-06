@@ -39,8 +39,10 @@ function createHarness() {
     sendControl: options.sendControl,
   };
   const cleanupOrphanedRemoteTransports = vi.fn();
+  const onTeleportEligibilityChanged = vi.fn();
   const pool = new TeleportPool(context, {
     cleanupOrphanedRemoteTransports,
+    onTeleportEligibilityChanged,
     getPreviewTargetEntries: () => [
       {
         targetId: 'preview:token:conn',
@@ -53,7 +55,7 @@ function createHarness() {
       },
     ],
   });
-  return { cleanupOrphanedRemoteTransports, followers, pool, sent };
+  return { cleanupOrphanedRemoteTransports, followers, onTeleportEligibilityChanged, pool, sent };
 }
 
 describe('TeleportPool', () => {
@@ -181,6 +183,47 @@ describe('TeleportPool', () => {
     expect(pool.getBestFollowerForTeleport()).toEqual(
       expect.objectContaining({ runtimeId: 'ios-runtime', bootstrapId: 'ios-bootstrap' })
     );
+  });
+
+  it('notifies on every advertise, because eligibility flips without a follower-count change', () => {
+    // Found live on the simulator: iOS joins with no tabs open, so it
+    // advertises nothing and is correctly ineligible. Opening its first tab
+    // makes it capable — but kernel-side selection reads a cached snapshot,
+    // which nothing refreshed until an unrelated user message happened to fire,
+    // so `teleport` skipped a follower that could serve it.
+    const { followers, onTeleportEligibilityChanged, pool } = createHarness();
+    followers.followers.set('ios-bootstrap', {
+      bootstrapId: 'ios-bootstrap',
+      runtime: 'slicc-ios',
+      floatType: 'ios',
+      lastActivity: 99999,
+      peerCapabilities: { exec: true, browser: true },
+      sync: { send: vi.fn(() => true) },
+    } as unknown as ConnectedFollower);
+
+    pool.handleFollowerTargetsAdvertise('ios-bootstrap', {
+      type: 'targets.advertise',
+      runtimeId: 'ios-runtime',
+      targets: [],
+    });
+    expect(onTeleportEligibilityChanged).toHaveBeenCalledTimes(1);
+    expect(pool.getTeleportEligibleBootstrapIds().has('ios-bootstrap')).toBe(false);
+
+    pool.handleFollowerTargetsAdvertise('ios-bootstrap', {
+      type: 'targets.advertise',
+      runtimeId: 'ios-runtime',
+      targets: [
+        {
+          targetId: 'wk1',
+          title: 'Tab',
+          url: 'https://example.com',
+          kind: 'browser',
+          capabilities: { navigate: true, network: true, screenshot: true },
+        },
+      ],
+    });
+    expect(onTeleportEligibilityChanged).toHaveBeenCalledTimes(2);
+    expect(pool.getTeleportEligibleBootstrapIds().has('ios-bootstrap')).toBe(true);
     expect(pool.getTeleportEligibleBootstrapIds().has('ios-bootstrap')).toBe(true);
   });
 });

@@ -133,6 +133,12 @@ export interface LeaderSyncManagerOptions {
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
   /**
+   * Called when a follower re-advertises its targets, which can flip its
+   * teleport eligibility without changing the follower count. Lets the host
+   * re-publish any cached follower snapshot kernel-side selection reads from.
+   */
+  onFollowerTargetsChanged?: () => void;
+  /**
    * Deliver an inbound cherry host event (`cherry.host_event`) to the cone as a
    * `'cherry'` lick. The sync manager resolves the owning follower's runtime id
    * and hands it off; the callback owns reaching the LickManager (which lives in
@@ -247,6 +253,7 @@ export class LeaderSyncManager {
       cleanupOrphanedRemoteTransports: (runtimeId) =>
         this.cdpRouter.cleanupOrphanedRemoteTransports(runtimeId),
       getPreviewTargetEntries: () => this.previewBridge.getTargetEntries(),
+      onTeleportEligibilityChanged: () => this.options.onFollowerTargetsChanged?.(),
     });
     this.transcriptExport = new TranscriptExportManager(context);
     this.fsRouter = new FsRouter(context);

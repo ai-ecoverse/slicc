@@ -34,6 +34,15 @@ export function selectTeleportPool<
 export interface TeleportPoolOptions {
   cleanupOrphanedRemoteTransports: (runtimeId: string) => void;
   getPreviewTargetEntries: () => TrayTargetEntry[];
+  /**
+   * A follower's advertised targets changed, so its teleport eligibility may
+   * have flipped. An iOS follower with no tabs open yet advertises nothing and
+   * is correctly ineligible; the moment it opens one it becomes capable, and
+   * kernel-side selection reads a cached snapshot that nothing else refreshes
+   * until an unrelated event (a user message, a follower joining) happens to
+   * fire.
+   */
+  onTeleportEligibilityChanged?: () => void;
 }
 
 export class TeleportPool {
@@ -182,5 +191,6 @@ export class TeleportPool {
       }
     }
     this.broadcastTargetRegistry();
+    this.options.onTeleportEligibilityChanged?.();
   }
 }
