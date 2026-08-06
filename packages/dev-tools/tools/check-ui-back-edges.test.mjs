@@ -10,6 +10,7 @@ import {
   isWebappSource,
   scanBackEdges,
 } from './check-ui-back-edges.mjs';
+import { findUiImports, stripComments } from './ui-back-edge-imports-lib.mjs';
 
 const filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(filename), '..', '..', '..');
@@ -34,6 +35,39 @@ describe('check-ui-back-edges: isWebappSource', () => {
     expect(isWebappSource('export-service.test.ts')).toBe(false);
     expect(isWebappSource('widget.test.tsx')).toBe(false);
     expect(isWebappSource('README.md')).toBe(false);
+  });
+});
+
+describe('check-ui-back-edges: import detection', () => {
+  it('detects every supported static and dynamic ui import form', () => {
+    const samples = [
+      "import { x } from '../ui/foo.js';",
+      "export * from '../../ui/foo.js';",
+      "const x = await import('../ui/foo.js');",
+      "const x = require('../../ui/foo.js');",
+      "type X = typeof import('../../ui/foo.js');",
+      "const x = await import(\n  '../../ui/foo.js'\n);",
+    ];
+    for (const source of samples) expect(findUiImports(source)).toHaveLength(1);
+  });
+
+  it('ignores comments, non-ui paths, and non-literal dynamic imports', () => {
+    const source = [
+      "// import x from '../ui/comment.js';",
+      "import { build } from '@earendil-works/pi-ai/dist/x.js';",
+      "import x from '../guidance/foo.js';",
+      'const x = await import(uiSpec);',
+    ].join('\n');
+    expect(findUiImports(source)).toEqual([]);
+    expect(stripComments(source).split('\n')).toHaveLength(source.split('\n').length);
+  });
+
+  it('preserves comment markers inside strings while stripping real comments', () => {
+    const source =
+      'const help = `pattern: http://127.0.0.1/*`;\n' +
+      "const x = await import('../ui/foo.js'); // forbidden";
+    expect(stripComments(source)).toContain('http://127.0.0.1/*');
+    expect(findUiImports(source)).toEqual([{ line: 2, match: "import('../ui/foo.js'" }]);
   });
 });
 

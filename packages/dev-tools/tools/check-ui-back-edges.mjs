@@ -9,20 +9,20 @@
  * six times (#869, #968, #1071, #1145, #1630, #1772) and was never caught
  * at review time — hence this deterministic gate.
  *
- * Unlike check-no-ui-imports-in-providers.mjs (a zero-tolerance zone),
- * this scan covers ALL of packages/webapp/src/ outside ui/ and enforces a
+ * Unlike the generated providers/built-in zero-tolerance zone, this scan
+ * covers ALL of packages/webapp/src/ outside ui/ and enforces a
  * frozen baseline (ui-back-edge-baseline.json): pre-existing back-edges
  * are grandfathered per file, new ones fail, and fixed ones must be
  * removed from the baseline (`--update` regenerates it). The baseline is
  * a one-way ratchet — counts may only go down.
  *
- * Detection reuses the tested helpers from the providers guard.
+ * Detection reuses the shared tested import-scanning helper.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { argv } from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { findUiImports } from './check-no-ui-imports-in-providers.mjs';
+import { findUiImports } from './ui-back-edge-imports-lib.mjs';
 
 const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');

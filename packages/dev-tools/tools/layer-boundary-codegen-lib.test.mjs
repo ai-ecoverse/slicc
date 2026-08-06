@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +87,10 @@ describe('generateLayerBoundaryPlugins', () => {
     );
     expect(plugin.content).toContain('(?:view)/.*');
     expect(plugin.content).toContain('Isolated code must not import view/.');
+    expect(plugin.content).toContain('`import $_ from $source`');
+    expect(plugin.content).toContain('`export $_ from $source`');
+    expect(plugin.content).toContain('`import($source)`');
+    expect(plugin.content).toContain('`require($source)`');
   });
 
   it('seeds all seven repository stack layers and the provider zone', () => {
@@ -102,7 +106,26 @@ describe('generateLayerBoundaryPlugins', () => {
       'scoops',
       'ui',
     ]);
-    expect(config.zones[0].denySegments).toEqual(['ui']);
+    expect(config.zones).toEqual([
+      {
+        name: 'providers-built-in-no-ui',
+        includes: ['**/packages/webapp/src/providers/built-in/**'],
+        denySegments: ['ui'],
+        message: 'Built-in providers run before the UI exists and must not import from ui/.',
+      },
+    ]);
+  });
+
+  it('keeps the repository provider zone free of suppressions', () => {
+    const providerRoot = resolve(repoRoot, 'packages/webapp/src/providers/built-in');
+    const suppressions = readdirSync(providerRoot, { recursive: true })
+      .filter((path) => path.endsWith('.ts'))
+      .filter((path) =>
+        readFileSync(resolve(providerRoot, path), 'utf8').includes(
+          'biome-ignore lint/plugin/zone-providers-built-in-no-ui'
+        )
+      );
+    expect(suppressions).toEqual([]);
   });
 });
 
