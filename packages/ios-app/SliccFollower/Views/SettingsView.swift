@@ -20,6 +20,9 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("leftHandedDock") private var leftHandedDock = false
+    /// Mirrors `ChatView`: transcript links open as local browser tabs
+    /// unless the user hands them back to the system browser.
+    @AppStorage("openLinksInBuiltInBrowser") private var openLinksInBuiltInBrowser = true
     /// Re-evaluates session staleness and ages while the sheet stays open —
     /// without it, `Date()` in `body` is only sampled on unrelated redraws and
     /// a row crossing the 12h TTL would stay enabled indefinitely.
@@ -465,6 +468,9 @@ struct SettingsView: View {
             // reachability is a hand-dominance question, not a layout one.
             Toggle("Left-handed dock", isOn: $leftHandedDock)
 
+            Toggle("Open links in SLICC", isOn: $openLinksInBuiltInBrowser)
+                .accessibilityIdentifier("open-links-in-app-toggle")
+
             if !appState.joinUrlHistory.isEmpty {
                 DisclosureGroup("Recent URLs") {
                     ForEach(appState.joinUrlHistory, id: \.self) { url in
@@ -486,6 +492,10 @@ struct SettingsView: View {
             }
         } header: {
             Text("Advanced")
+        } footer: {
+            Text(
+                "Links in the conversation open as tabs in SLICC's browser. "
+                    + "Turn that off to hand them to your default browser instead.")
         }
     }
 }

@@ -80,4 +80,30 @@ final class CdpOpenTabTests: XCTestCase {
         XCTAssertEqual(state.cdpTargets.map(\.id), [id])
         XCTAssertNotNil(state.cdpWebView(for: id))
     }
+
+    // MARK: - Transcript link routing
+
+    @MainActor
+    func testWebLinksRouteToTheBuiltInBrowserByDefault() {
+        XCTAssertTrue(
+            ChatView.routesToBuiltInBrowser(URL(string: "https://example.com/docs")!, enabled: true))
+        XCTAssertTrue(
+            ChatView.routesToBuiltInBrowser(URL(string: "HTTP://example.com")!, enabled: true),
+            "scheme comparison is case-insensitive")
+    }
+
+    @MainActor
+    func testNonWebSchemesStayWithTheSystemEvenWhenEnabled() {
+        for raw in ["mailto:someone@example.com", "tel:+15550100", "slicc://open?url=x"] {
+            XCTAssertFalse(
+                ChatView.routesToBuiltInBrowser(URL(string: raw)!, enabled: true),
+                "\(raw) has no meaning in a WKWebView tab")
+        }
+    }
+
+    @MainActor
+    func testDisablingTheSettingHandsWebLinksBackToTheSystem() {
+        XCTAssertFalse(
+            ChatView.routesToBuiltInBrowser(URL(string: "https://example.com")!, enabled: false))
+    }
 }
