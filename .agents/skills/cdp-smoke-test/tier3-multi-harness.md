@@ -100,6 +100,42 @@ _unknown_, not failed — the command may well have run. Confirm through the UI
 or a page eval before concluding anything. A leader-page reload restores a
 wedged kernel session.
 
+## Read the UI through shadow roots, never `body.innerText`
+
+SLICC's UI is web components, so `document.body.innerText` sees almost none of
+it. Checking `innerText.includes(...)` to answer "did the message arrive?" or
+"did the command run?" returns **false for things that are plainly on screen** —
+a false negative that reads exactly like a broken feature. Walk the tree
+instead, recursing into every `shadowRoot`, and read the terminal from the
+`xterm-screen` element's rows:
+
+```js
+const walk = (root, hit) => {
+  for (const el of root.querySelectorAll('*')) {
+    if (hit(el)) return el;
+    if (el.shadowRoot) {
+      const f = walk(el.shadowRoot, hit);
+      if (f) return f;
+    }
+  }
+  return null;
+};
+```
+
+Redact before printing: `oauth-token` and friends emit live credentials, and a
+terminal dump lands verbatim in the transcript
+(`.replace(/gh[oprsu]_[A-Za-z0-9]+/g, '<REDACTED>')`).
+
+## Where a float's logs actually are
+
+`slicc-cdp watch` attaches to page targets. Provider and shell-command logging
+runs in the **kernel worker**, so an empty console log is not evidence the code
+did not run. The harness log (`SLICC_HARNESS_LOG`) is wrangler HTTP traffic
+only — also not app logs. On attach the watcher replays buffered console
+history stamped with the attach time, so entries printed _above_
+`=== watcher attached ===` are from earlier runs; only lines below it belong to
+the run you just triggered.
+
 ## Capabilities that need a real gesture
 
 `window.open` from `Runtime.evaluate` has no user activation and is blocked, so

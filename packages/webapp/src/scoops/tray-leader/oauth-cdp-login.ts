@@ -86,6 +86,39 @@ export function callbackMatcherFor(authorizeUrl: string): ((url: string) => bool
 }
 
 /**
+ * Mirror the worker relay's param handling for a callback we intercept BEFORE
+ * the relay gets to run.
+ *
+ * The relay page lifts `nonce` out of the base64 `state` onto the URL it
+ * delivers, and drops `state` (see `OAUTH_RELAY_HTML` in the cloudflare-worker).
+ * The providers' CSRF check reads the nonce from there. Driving the tab
+ * ourselves means we settle on the relay's ENTRY url — `?code=…&state=…`, no
+ * `nonce` — so without this every delegated login is rejected as a nonce
+ * mismatch.
+ *
+ * This is not a weaker check than the relay's: the relay derives the nonce
+ * from the same `state` param, so a forged callback still carries a nonce that
+ * does not match the one the provider generated for this login.
+ */
+export function liftNonceFromState(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    if (url.searchParams.has('nonce')) return rawUrl;
+    const raw = url.searchParams.get('state');
+    if (!raw) return rawUrl;
+    const parsed: unknown = JSON.parse(atob(raw));
+    const nonce = (parsed as { nonce?: unknown } | null)?.nonce;
+    if (typeof nonce !== 'string' || !nonce) return rawUrl;
+    url.searchParams.delete('state');
+    url.searchParams.set('nonce', nonce);
+    return url.toString();
+  } catch {
+    // Unparseable state is the relay's problem to reject, not ours to guess at.
+    return rawUrl;
+  }
+}
+
+/**
  * Open the authorize URL on a follower and resolve with the callback URL it
  * lands on. Resolves null when the human never finished (timeout, abort, or a
  * closed tab). The tab is always closed on the way out.
@@ -113,7 +146,7 @@ export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise
       void browser.closePage(targetId).catch((err) => {
         log.warn('Could not close delegated login tab', { error: String(err) });
       });
-      resolve(value);
+      resolve(typeof value === 'string' ? liftNonceFromState(value) : value);
     };
 
     void (async () => {

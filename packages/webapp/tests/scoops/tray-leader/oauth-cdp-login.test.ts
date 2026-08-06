@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
 import {
   callbackMatcherFor,
+  liftNonceFromState,
   runDelegatedCdpLogin,
 } from '../../../src/scoops/tray-leader/oauth-cdp-login.js';
 
@@ -61,6 +62,48 @@ describe('callbackMatcherFor', () => {
   it('returns null when there is no redirect_uri to watch', () => {
     expect(callbackMatcherFor('https://github.com/login/oauth/authorize?client_id=abc')).toBeNull();
     expect(callbackMatcherFor('not a url')).toBeNull();
+  });
+});
+
+describe('liftNonceFromState', () => {
+  const stateFor = (nonce: string) =>
+    btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce }));
+
+  it('lifts the nonce out of state, as the relay would have', () => {
+    // Regression (found live): driving the tab ourselves settles on the
+    // relay's ENTRY url, so the provider saw no `nonce` and rejected every
+    // delegated login as "OAuth nonce mismatch — possible CSRF".
+    const lifted = new URL(
+      liftNonceFromState(`${REDIRECT}?code=abc123&state=${encodeURIComponent(stateFor('n-1'))}`)
+    );
+    expect(lifted.searchParams.get('nonce')).toBe('n-1');
+    expect(lifted.searchParams.get('code')).toBe('abc123');
+    expect(lifted.searchParams.has('state')).toBe(false);
+  });
+
+  it('leaves a url the relay already handled untouched', () => {
+    const already = `${REDIRECT}?code=abc123&nonce=n-1`;
+    expect(liftNonceFromState(already)).toBe(already);
+  });
+
+  it('preserves a mismatched nonce so the CSRF check can still fail', () => {
+    // The lift must not invent agreement: a forged state carries its own
+    // nonce, which will not match what the provider generated.
+    const forged = liftNonceFromState(
+      `${REDIRECT}?code=evil&state=${encodeURIComponent(stateFor('attacker'))}`
+    );
+    expect(new URL(forged).searchParams.get('nonce')).toBe('attacker');
+  });
+
+  it('passes through urls with no usable state rather than throwing', () => {
+    expect(liftNonceFromState(`${REDIRECT}?code=abc`)).toBe(`${REDIRECT}?code=abc`);
+    expect(liftNonceFromState(`${REDIRECT}?code=abc&state=not-base64`)).toBe(
+      `${REDIRECT}?code=abc&state=not-base64`
+    );
+    expect(liftNonceFromState(`${REDIRECT}?state=${encodeURIComponent(btoa('{}'))}`)).toContain(
+      'state='
+    );
+    expect(liftNonceFromState('not a url')).toBe('not a url');
   });
 });
 
