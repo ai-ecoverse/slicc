@@ -13,6 +13,9 @@
 // Also exits non-zero if a PR ADDS new entries to any debt list vs the base
 // ref (the debt lists are frozen — additions are only allowed when a list
 // is being introduced, i.e. base had no entries for that rule).
+// During the one-time generated-layer-plugin bootstrap, source files changed
+// only by adding generated layer suppressions are excluded from the touched
+// check. This closes automatically once the base contains generated plugins.
 // Skips gracefully on non-PR events.
 //
 // Usage:
@@ -29,7 +32,11 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { BASELINE_PATH, baselineFiles } from './check-ui-back-edges.mjs';
-import { findLayerSuppressionFiles } from './layer-boundary-suppressions-lib.mjs';
+import {
+  findLayerSuppressionFiles,
+  findLayerSuppressionOnlyDiffFiles,
+  hasGeneratedLayerPlugins,
+} from './layer-boundary-suppressions-lib.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
@@ -136,6 +143,11 @@ function getChangedFilesFromGit(baseRef) {
     .split('\n')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+function getLayerDiffFromGit(baseRef) {
+  const mergeBase = runGit(['merge-base', baseRef, 'HEAD']);
+  return runGit(['diff', '--unified=0', mergeBase, '--', LAYER_SOURCE_REL]);
 }
 
 function isPullRequestEvent() {
@@ -256,8 +268,30 @@ function main() {
   }
   const { changedFiles } = resolved;
 
+  let gatedChangedFiles = changedFiles;
+  const isLayerBootstrap =
+    baseLayerFiles.readable &&
+    baseLayerFiles.files.length === 0 &&
+    !hasGeneratedLayerPlugins(baseConfig) &&
+    hasGeneratedLayerPlugins(biomeConfig);
+  if (isLayerBootstrap) {
+    try {
+      const suppressionOnlyFiles = new Set(
+        findLayerSuppressionOnlyDiffFiles(getLayerDiffFromGit(baseRef))
+      );
+      gatedChangedFiles = changedFiles.filter((file) => !suppressionOnlyFiles.has(file));
+      console.log(
+        `${SCRIPT}: layer bootstrap — allowing ${suppressionOnlyFiles.size} suppression-only source file touch(es)`
+      );
+    } catch {
+      console.log(
+        `${SCRIPT}: notice — could not inspect the layer bootstrap diff; applying the normal touched-file gate`
+      );
+    }
+  }
+
   const touchedViolations = ruleStates
-    .map((rule) => ({ rule, touched: findTouchedExemptions(changedFiles, rule.globs) }))
+    .map((rule) => ({ rule, touched: findTouchedExemptions(gatedChangedFiles, rule.globs) }))
     .filter((v) => v.touched.length > 0);
 
   // Added-entry check: a PR may not GROW any debt list vs the base ref.

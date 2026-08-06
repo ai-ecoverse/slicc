@@ -3,6 +3,48 @@ import { relative, resolve, sep } from 'node:path';
 
 const SOURCE_ROOT = 'packages/webapp/src';
 const LAYER_SUPPRESSION = 'biome-ignore lint/plugin/layer-';
+const GENERATED_LAYER_PLUGIN = '/generated/layer-';
+
+export function hasGeneratedLayerPlugins(config) {
+  const plugins = Array.isArray(config?.plugins) ? config.plugins : [];
+  return plugins.some(
+    (plugin) =>
+      plugin &&
+      typeof plugin === 'object' &&
+      typeof plugin.path === 'string' &&
+      plugin.path.includes(GENERATED_LAYER_PLUGIN)
+  );
+}
+
+export function findLayerSuppressionOnlyDiffFiles(diff) {
+  const files = [];
+  let path = null;
+  let hasChange = false;
+  let suppressionOnly = true;
+
+  const finish = () => {
+    if (path && hasChange && suppressionOnly) files.push(path);
+    path = null;
+    hasChange = false;
+    suppressionOnly = true;
+  };
+
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      finish();
+    } else if (line.startsWith('+++ b/')) {
+      path = line.slice('+++ b/'.length);
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      hasChange = true;
+      if (!line.includes(LAYER_SUPPRESSION)) suppressionOnly = false;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      hasChange = true;
+      suppressionOnly = false;
+    }
+  }
+  finish();
+  return files;
+}
 
 function parseReport(report) {
   const parsed = typeof report === 'string' ? JSON.parse(report) : report;

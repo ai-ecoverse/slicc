@@ -11,6 +11,8 @@ import {
 } from './layer-boundary-codegen-lib.mjs';
 import {
   findLayerSuppressionFiles,
+  findLayerSuppressionOnlyDiffFiles,
+  hasGeneratedLayerPlugins,
   planLayerSuppressions,
   writeLayerSuppressions,
 } from './layer-boundary-suppressions-lib.mjs';
@@ -282,6 +284,37 @@ describe('layer-boundary suppression migration', () => {
       cdpPath,
       scoopsPath,
     ]);
+  });
+
+  it('detects generated layer plugins and suppression-only bootstrap diffs', () => {
+    expect(
+      hasGeneratedLayerPlugins({
+        plugins: [{ path: './.biome-plugins/generated/layer-data.grit' }],
+      })
+    ).toBe(true);
+    expect(hasGeneratedLayerPlugins({ plugins: ['./other.grit'] })).toBe(false);
+
+    const diff = [
+      'diff --git a/packages/a.ts b/packages/a.ts',
+      '--- a/packages/a.ts',
+      '+++ b/packages/a.ts',
+      '@@ -1,0 +2 @@',
+      '+// biome-ignore lint/plugin/layer-data: migrated existing debt',
+      'diff --git a/packages/b.ts b/packages/b.ts',
+      '--- a/packages/b.ts',
+      '+++ b/packages/b.ts',
+      '@@ -1,0 +2,2 @@',
+      '+// biome-ignore lint/plugin/layer-data: migrated existing debt',
+      '+export const changed = true;',
+      'diff --git a/packages/c.ts b/packages/c.ts',
+      '--- a/packages/c.ts',
+      '+++ b/packages/c.ts',
+      '@@ -1 +1 @@',
+      '-export const before = true;',
+      '+// biome-ignore lint/plugin/layer-data: migrated existing debt',
+    ].join('\n');
+
+    expect(findLayerSuppressionOnlyDiffFiles(diff)).toEqual(['packages/a.ts']);
   });
 
   it('fails only for Biome unused diagnostics on generated layer suppressions', () => {
