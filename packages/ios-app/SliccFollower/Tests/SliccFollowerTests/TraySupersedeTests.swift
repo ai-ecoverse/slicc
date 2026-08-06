@@ -66,6 +66,27 @@ final class TraySupersedeTests: XCTestCase {
         }
     }
 
+    func testAttachRejectsSupersededPlanWithABlankJoinUrl() async {
+        // Fail at the wire rather than leaning on the redirect policy to map a
+        // blank replacement to a terminal outcome later.
+        for blank in ["", "   ", "\\n"] {
+            do {
+                let plan = try await attachPlan(
+                    result: """
+                        {"action":"fail","code":"TRAY_SUPERSEDED","error":"moved",
+                         "joinUrl":"\(blank)"}
+                        """)
+                XCTFail("Expected a malformed-response error, got \(plan.code)")
+            } catch let error as TraySignalingError {
+                guard case .invalidAttachResponse = error else {
+                    return XCTFail("Expected invalidAttachResponse, got \(error)")
+                }
+            } catch {
+                XCTFail("Expected TraySignalingError, got \(error)")
+            }
+        }
+    }
+
     func testAttachStillRejectsAnUnknownFailCode() async {
         do {
             let plan = try await attachPlan(

@@ -254,7 +254,8 @@ public actor TraySignalingClient {
             // Callers follow `joinUrl` (see `SupersedeRedirect`), so the URL is
             // as load-bearing as `error` and its absence is a malformed reply.
             if r.code == "TRAY_SUPERSEDED" {
-                guard r.error != nil, r.joinUrl != nil else {
+                let replacement = r.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard r.error != nil, replacement?.isEmpty == false else {
                     throw TraySignalingError.invalidAttachResponse(
                         statusCode: statusCode, body: rawText)
                 }

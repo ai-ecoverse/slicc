@@ -1837,11 +1837,12 @@ extension AppState {
     private func attachWithRetry(
         client: TraySignalingClient
     ) async throws -> (plan: FollowerAttachPlan, client: TraySignalingClient) {
-        let maxAttempts = 30
+        let maxWaitAttempts = 30
         var client = client
+        var waitAttempts = 0
         var redirectsFollowed = 0
 
-        for _ in 0..<maxAttempts {
+        while waitAttempts < maxWaitAttempts {
             if Task.isCancelled { throw CancellationError() }
 
             let plan = try await client.attach(controllerId: controllerId)
@@ -1850,6 +1851,7 @@ extension AppState {
             case .signal:
                 return (plan, client)
             case .wait:
+                waitAttempts += 1
                 let delay = plan.retryAfterMs ?? 2000
                 try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
             case .fail:
@@ -1860,6 +1862,9 @@ extension AppState {
                         SupersedeRedirect.failureMessage(for: outcome)
                             ?? plan.error ?? plan.code)
                 }
+                // A redirect is a different tray, not another try at this one,
+                // so it spends the supersede bound instead of the wait budget.
+                // `SupersedeRedirect` caps the chase, so this cannot spin.
                 redirectsFollowed += 1
                 client = followSuperseded(to: replacement)
                 try await Task.sleep(
