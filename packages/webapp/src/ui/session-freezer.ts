@@ -6,14 +6,10 @@
  *   1. Load `session-cone` from the UI SessionStore.
  *   2. If the session is short (< MIN_MESSAGES_TO_FREEZE), skip everything
  *      and return null — nothing meaningful to extract or archive.
- *   3. Run two LLM calls over the message list with a shared system prompt
- *      (Anthropic prompt cache hits on the prefix for the second call):
- *        - Memory extraction → append bullets to /workspace/CLAUDE.md.
- *        - Title generation → 3-6 word label used to name the archive.
- *      Either call may fail independently; failures fall through to safe
- *      defaults (no memory append, heuristic title).
- *   4. Write the session JSON to `/sessions/<timestamp>-<slug>.json` and
- *      prepend the entry to `/sessions/index.json`.
+ *   3. Generate a title and icon, falling back to a heuristic title.
+ *   4. Legacy mode extracts memory before writing the archive. Agentic mode
+ *      writes the archive first, then lets a curator scoop rewrite memory;
+ *      curator failure falls back to legacy extraction.
  *
  * Scoops are intentionally untouched — they survive a "New session" reset
  * so the fresh cone inherits the existing scoop roster and decides what
@@ -32,8 +28,10 @@ import { createLogger } from '../core/logger.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import type { AgentBridge } from '../scoops/agent-bridge.js';
+import { runAgenticMemoryPass } from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
-import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
+import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -127,6 +125,12 @@ export interface FreezeConeSessionOptions {
    * calls are enabled (`mode: 'full'` with model + apiKey).
    */
   pickIcon?: (opts: { subject: string }) => Promise<string | null>;
+  /**
+   * Agent spawn seam supplied only when agentic memory is enabled. Its
+   * presence selects the write-first curator path for an LLM-enabled full
+   * freeze; quick mode and credential-less freezes remain legacy.
+   */
+  agenticMemorySpawn?: AgentBridge['spawn'];
 }
 
 /**
@@ -152,12 +156,57 @@ export async function freezeConeSession(
   // but additionally marks the index entry as needing later enrichment.
   const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
-  await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
+  if (!llmEnabled || !opts.agenticMemorySpawn) {
+    await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
+  }
   const title =
     (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
     heuristicTitle(session.messages);
   const icon = llmEnabled ? await pickIconBestEffort(opts, title) : undefined;
-  return await writeFrozenArchive(opts, session, title, mode, icon);
+  const frozen = await writeFrozenArchive(opts, session, title, mode, icon);
+  if (frozen && llmEnabled && opts.agenticMemorySpawn) {
+    await curateMemoriesBestEffort(opts, frozen, agentMessages);
+  }
+  return frozen;
+}
+
+/** Run the write-first curator, falling back to legacy extraction on failure. */
+async function curateMemoriesBestEffort(
+  opts: FreezeConeSessionOptions,
+  frozen: FrozenSession,
+  agentMessages: AgentMessage[]
+): Promise<void> {
+  let result: Awaited<ReturnType<typeof runAgenticMemoryPass>>;
+  try {
+    result = await runAgenticMemoryPass({
+      spawn: opts.agenticMemorySpawn!,
+      vfs: opts.vfs,
+      sessionArchivePath: frozenSessionPath(frozen),
+      sessionCount: await readSessionCount(opts.vfs),
+    });
+  } catch (err) {
+    result = {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+      legacyFallbackSafe: false,
+    };
+  }
+  if (result.ok) {
+    log.info('Agentic memory pass completed', { filename: frozen.filename });
+    return;
+  }
+  if (!result.legacyFallbackSafe) {
+    log.warn('Agentic memory pass unfinished — archive retained; skipping legacy extraction', {
+      filename: frozen.filename,
+      reason: result.reason,
+    });
+    return;
+  }
+  log.warn('Agentic memory pass failed after finishing — falling back to legacy extraction', {
+    filename: frozen.filename,
+    reason: result.reason,
+  });
+  await extractMemoriesBestEffort(opts, agentMessages, true);
 }
 
 /**

@@ -49,6 +49,13 @@ const log = createLogger('agent-bridge');
 export interface AgentSpawnOptions {
   /** Absolute VFS path that becomes a read-write prefix for the spawned scoop. */
   cwd: string;
+  /**
+   * Optional writable VFS roots. Pure replace semantics for caller-provided
+   * roots; bridge-owned scratch and `/tmp/` remain available. When omitted,
+   * the historical `[cwd, '/shared/']` roots are used. Invalid non-absolute
+   * entries also fall back to those historical defaults.
+   */
+  writablePaths?: string[];
   /** Bash command allow-list. Omitted / wildcard means "unrestricted." */
   allowedCommands: string[];
   /** Prompt forwarded verbatim to the spawned scoop's agent loop. */
@@ -261,7 +268,8 @@ function buildScoopConfig(
 ): NonNullable<RegisteredScoop['config']> {
   const cwdPrefix = normalizeRwPrefix(options.cwd);
   const visiblePaths = resolveVisiblePaths(options);
-  const writablePaths = dedupePrefixes([cwdPrefix, '/shared/', `${scratchFolder}/`, '/tmp/']);
+  const configuredWritable = resolveWritablePaths(options.writablePaths, cwdPrefix);
+  const writablePaths = dedupePrefixes([...configuredWritable, `${scratchFolder}/`, '/tmp/']);
 
   const scoopConfig: NonNullable<RegisteredScoop['config']> = {
     visiblePaths,
@@ -658,6 +666,17 @@ export function defaultResolveModel(modelId: string): string | null {
 function normalizeRwPrefix(path: string): string {
   const normalized = normalizePath(path);
   return normalized.endsWith('/') ? normalized : `${normalized}/`;
+}
+
+function resolveWritablePaths(paths: string[] | undefined, cwdPrefix: string): string[] {
+  const defaults = [cwdPrefix, '/shared/'];
+  if (paths === undefined) return defaults;
+  if (
+    paths.some((path) => typeof path !== 'string' || !path.startsWith('/') || path.includes('\0'))
+  ) {
+    return defaults;
+  }
+  return paths.map(normalizeRwPrefix);
 }
 
 /**

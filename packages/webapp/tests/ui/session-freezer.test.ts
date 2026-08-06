@@ -14,6 +14,11 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
+const mockRunAgenticMemoryPass = vi.fn();
+vi.mock('../../src/scoops/agentic-memory.js', () => ({
+  runAgenticMemoryPass: (...args: unknown[]) => mockRunAgenticMemoryPass(...args),
+}));
+
 // Mock the budget sink so tests can assert the freezer routes through it
 // (i.e. the post-append budget step actually runs with the credentials the
 // caller passed in). `vi.hoisted` guarantees the spy is initialized BEFORE
@@ -21,14 +26,16 @@ vi.mock('../../src/core/context-compaction.js', () => ({
 // cone-memory-budget). Default impl returns a no-op result; individual tests
 // override via `mockResolvedValue` / `mockRejectedValueOnce` to inspect
 // arguments or simulate throws.
-const { mockApplyConeMemoryBudget } = vi.hoisted(() => ({
+const { mockApplyConeMemoryBudget, mockReadSessionCount } = vi.hoisted(() => ({
   mockApplyConeMemoryBudget: vi.fn(async (..._args: unknown[]) => ({
     restructured: false,
     reason: 'no-llm' as const,
   })),
+  mockReadSessionCount: vi.fn(async (..._args: unknown[]) => 1),
 }));
 vi.mock('../../src/scoops/cone-memory-budget.js', () => ({
   applyConeMemoryBudget: (...args: unknown[]) => mockApplyConeMemoryBudget(...args),
+  readSessionCount: (...args: unknown[]) => mockReadSessionCount(...args),
 }));
 
 // chat-panel imports a wide chunk (incl. SessionStore via indexeddb shims) at
@@ -145,7 +152,9 @@ const fakeModel = { id: 'test-model', provider: 'anthropic' } as unknown as Para
 describe('freezeConeSession', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
+    mockRunAgenticMemoryPass.mockReset();
     mockApplyConeMemoryBudget.mockReset();
+    mockReadSessionCount.mockReset().mockResolvedValue(1);
     mockApplyConeMemoryBudget.mockResolvedValue({
       restructured: false,
       reason: 'no-llm',
@@ -229,6 +238,118 @@ describe('freezeConeSession', () => {
     expect(memoryDoc).toContain('user prefers vim');
     // /shared/CLAUDE.md is not touched by the freezer anymore.
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
+  });
+
+  it('writes the full archive before the agentic pass and skips legacy memory on success', async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Agentic memory session');
+    const vfs = makeFakeVfs();
+    const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
+    mockRunAgenticMemoryPass.mockImplementationOnce(async (options) => {
+      expect(vfs.files.has(options.sessionArchivePath)).toBe(true);
+      expect(options.sessionCount).toBe(1);
+      await options.spawn({} as never);
+      return { ok: true };
+    });
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: spawn,
+    });
+
+    expect(frozen).not.toBeNull();
+    expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
+    expect(mockRunOneOffCompactionCall.mock.calls[0][0].instruction).toBe('TITLE');
+    expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+  });
+
+  it('falls back to legacy extraction and budgeting when the agentic pass fails', async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('Agentic fallback session')
+      .mockResolvedValueOnce('- durable fallback memory');
+    mockRunAgenticMemoryPass.mockResolvedValueOnce({
+      ok: false,
+      reason: 'spawn failed',
+      legacyFallbackSafe: true,
+    });
+    const vfs = makeFakeVfs();
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: vi.fn(),
+    });
+
+    expect(frozen).not.toBeNull();
+    expect(mockRunOneOffCompactionCall.mock.calls.map(([arg]) => arg.instruction)).toEqual([
+      'TITLE',
+      'MEMORY',
+    ]);
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('durable fallback memory');
+    expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
+  });
+
+  it('skips legacy extraction when the agentic pass times out', async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Timed out agentic session');
+    mockRunAgenticMemoryPass.mockResolvedValueOnce({
+      ok: false,
+      reason: 'timeout',
+      legacyFallbackSafe: false,
+    });
+    const vfs = makeFakeVfs();
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: vi.fn(),
+    });
+
+    expect(frozen).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
   });
 
   it('round-trips aggregate cost and per-model usage through the index and archive', async () => {
@@ -1174,7 +1295,9 @@ describe('parseFrozenArchive', () => {
 describe('freezeConeSession quick mode', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
+    mockRunAgenticMemoryPass.mockReset();
     mockApplyConeMemoryBudget.mockReset();
+    mockReadSessionCount.mockReset().mockResolvedValue(1);
     mockApplyConeMemoryBudget.mockResolvedValue({
       restructured: false,
       reason: 'no-llm',
@@ -1201,10 +1324,12 @@ describe('freezeConeSession quick mode', () => {
       model: fakeModel,
       apiKey: 'k',
       mode: 'quick',
+      agenticMemorySpawn: vi.fn(),
     });
 
     expect(result).not.toBeNull();
     expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
     expect(result!.pendingEnrichment).toBe(true);
     // Synthetic filename — `pending-<short-id>.md` shape.
     expect(result!.filename).toMatch(/^pending-[a-z0-9-]+\.md$/);

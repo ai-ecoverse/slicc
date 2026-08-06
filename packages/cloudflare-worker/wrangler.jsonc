@@ -44,7 +44,11 @@
     "CONE_CAP_PAUSED": "5",
     // Feature flag config: base string map plus per-float string-map overlays.
     "FEATURE_FLAGS": {
-      "base": { "experimental-settings": "on", "panel-layouts": "off" },
+      "base": {
+        "experimental-settings": "on",
+        "panel-layouts": "off",
+        "agentic-memory": "off"
+      },
       "floats": {
         "standalone": {},
         "cherry": { "experimental-settings": "off" }
@@ -114,7 +118,11 @@
         "CONE_CAP_PAUSED": "5",
         // Feature flag config: base string map plus per-float string-map overlays.
         "FEATURE_FLAGS": {
-          "base": { "experimental-settings": "on", "panel-layouts": "off" },
+          "base": {
+            "experimental-settings": "on",
+            "panel-layouts": "off",
+            "agentic-memory": "off"
+          },
           "floats": {
             "standalone": {},
             "cherry": { "experimental-settings": "off" }

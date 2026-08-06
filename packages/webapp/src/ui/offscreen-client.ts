@@ -13,6 +13,7 @@ import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,
+  AgentSpawnResultMsg,
   ErrorMsg,
   ExtensionMessage,
   ForwardedLickEvent,
@@ -36,6 +37,7 @@ import type {
 } from '../kernel/messages.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
@@ -144,6 +146,10 @@ export class OffscreenClient implements KernelClientFacade {
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
    */
   private pendingClearAcks = new Map<string, () => void>();
+  private pendingAgentSpawnRequests = new Map<
+    string,
+    { resolve: (result: AgentSpawnResult) => void; reject: (error: Error) => void }
+  >();
   /** Pending thinking updates, resolved only after the worker has applied and persisted them. */
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
   /**
@@ -438,6 +444,16 @@ export class OffscreenClient implements KernelClientFacade {
     this.pendingClearAcks.delete(requestId);
   }
 
+  /** Spawn an isolated agent in the kernel realm through the typed transport. */
+  spawnAgent(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
+    const requestId = `agent-${uid()}`;
+    const result = new Promise<AgentSpawnResult>((resolve, reject) => {
+      this.pendingAgentSpawnRequests.set(requestId, { resolve, reject });
+    });
+    this.send({ type: 'agent-spawn-request', requestId, options });
+    return result;
+  }
+
   clearFilesystem(): void {
     this.send({ type: 'clear-filesystem' });
   }
@@ -717,6 +733,11 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
+      case 'agent-spawn-result': {
+        this.handleAgentSpawnResult(msg);
+        break;
+      }
+
       case 'set-thinking-level-ack':
         this.handleThinkingLevelAck(msg);
         break;
@@ -825,6 +846,14 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
     }
+  }
+
+  private handleAgentSpawnResult(msg: AgentSpawnResultMsg): void {
+    const pending = this.pendingAgentSpawnRequests.get(msg.requestId);
+    if (!pending) return;
+    this.pendingAgentSpawnRequests.delete(msg.requestId);
+    if (msg.ok) pending.resolve(msg.result);
+    else pending.reject(new Error(msg.error));
   }
 
   // -------------------------------------------------------------------------

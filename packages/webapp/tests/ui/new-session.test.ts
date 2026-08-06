@@ -14,6 +14,11 @@ vi.mock('../../src/ui/provider-settings.js', () => ({
   resolveCurrentModel: () => mockResolveCurrentModel(),
 }));
 
+const mockIsFeatureEnabled = vi.fn();
+vi.mock('../../src/core/feature-flags.js', () => ({
+  isFeatureEnabled: (...args: unknown[]) => mockIsFeatureEnabled(...args),
+}));
+
 vi.mock('../../src/scoops/llm-session-id.js', () => ({ getDailyAdobeUuid: () => 'uuid-x' }));
 
 const mockInit = vi.fn(async () => {});
@@ -110,6 +115,10 @@ const enriched: FrozenSessionIndexEntry = {
   icon: 'wrench',
 };
 
+beforeEach(() => {
+  mockIsFeatureEnabled.mockReset().mockReturnValue(false);
+});
+
 describe('runNewSessionFreeze — write-first + race', () => {
   beforeEach(() => {
     mockGetApiKey.mockReset().mockReturnValue('k');
@@ -131,6 +140,41 @@ describe('runNewSessionFreeze — write-first + race', () => {
     );
     // A hung/failing provider never loses the archive — the pending entry is returned.
     expect(result).not.toBeNull();
+  });
+
+  it('flag on with an agent bridge requests a full agentic freeze and skips enrichment', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
+    mockFreezeConeSession.mockResolvedValue({
+      ...pending,
+      filename: '2026-06-16-agentic-memory.md',
+      pendingEnrichment: undefined,
+    });
+
+    const result = await runNewSessionFreeze({
+      vfs: {} as never,
+      enrichmentRaceMs: 10,
+      agenticMemorySpawn: spawn,
+    });
+
+    expect(mockIsFeatureEnabled).toHaveBeenCalledWith('agentic-memory');
+    expect(mockFreezeConeSession).toHaveBeenCalledOnce();
+    const freezeOptions = mockFreezeConeSession.mock.calls[0][0];
+    expect(freezeOptions).toMatchObject({ mode: 'full', model: fakeModel, apiKey: 'k' });
+    await freezeOptions.agenticMemorySpawn({} as never);
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(mockEnrichPendingSession).not.toHaveBeenCalled();
+    expect(result?.pendingEnrichment).toBeUndefined();
+  });
+
+  it('flag on without an agent bridge keeps the legacy quick enrichment flow', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockEnrichPendingSession.mockResolvedValue(enriched);
+
+    await runNewSessionFreeze({ vfs: {} as never, enrichmentRaceMs: 10_000 });
+
+    expect(mockFreezeConeSession.mock.calls[0][0].mode).toBe('quick');
+    expect(mockEnrichPendingSession).toHaveBeenCalledOnce();
   });
 
   it('timer wins → returns pending entry, enrichment finishes in the background', async () => {

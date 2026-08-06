@@ -18,6 +18,7 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from '../core/agent-types.js';
+import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import type { Orchestrator } from '../scoops/orchestrator.js';
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
@@ -237,6 +238,7 @@ export interface KernelClientFacade {
    * extension mode the offscreen document survives the panel reload).
    */
   clearAllMessages(): Promise<void>;
+  spawnAgent(options: AgentSpawnOptions): Promise<AgentSpawnResult>;
   clearFilesystem(): void;
   requestState(): void;
   sendSprinkleLick(

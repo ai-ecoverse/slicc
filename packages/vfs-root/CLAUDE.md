@@ -13,11 +13,21 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 | `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                  |
 | `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS    |
 | `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
+| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md` |
 | `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                              |
 | `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                         |
 | `packages/vfs-root/workspace/skills/` | Default installable workspace skills                               |
 
 ## Adding Default Content
+
+### Memory curator
+
+- `shared/MEMORY.md` is the single source for the runner's build-time fallback and the seeded
+  `/shared/MEMORY.md` file.
+- The file is seeded only when absent, so user and skill customizations survive later boots.
+- `MEMORY.md` is user-edited only; the curator intentionally cannot rewrite its own instructions.
+- Frontmatter uses a strict YAML subset: block-array items may have `#` comment tails; inline
+  entries containing commas must be quoted. A bare `/` is rejected from `writablePaths`.
 
 ### Skills
 

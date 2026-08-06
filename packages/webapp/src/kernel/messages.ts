@@ -9,6 +9,7 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
+import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
 import type { ScoopTabState } from '../scoops/types.js';
 import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-protocol.js';
@@ -216,6 +217,18 @@ export interface ClearChatAckMsg {
   type: 'clear-chat-ack';
   requestId: string;
 }
+
+/** Page → kernel request to spawn an isolated agent through the worker-owned AgentBridge. */
+export interface AgentSpawnRequestMsg {
+  type: 'agent-spawn-request';
+  requestId: string;
+  options: AgentSpawnOptions;
+}
+
+/** Correlated kernel → page reply for {@link AgentSpawnRequestMsg}. */
+export type AgentSpawnResultMsg =
+  | { type: 'agent-spawn-result'; requestId: string; ok: true; result: AgentSpawnResult }
+  | { type: 'agent-spawn-result'; requestId: string; ok: false; error: string };
 
 export interface ClearFilesystemMsg {
   type: 'clear-filesystem';
@@ -739,6 +752,7 @@ export type PanelToOffscreenMessage =
   | RequestScoopChatMessagesMsg
   | RequestSessionStatsMsg
   | ClearChatMsg
+  | AgentSpawnRequestMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
   | SetThinkingLevelMsg
@@ -1114,6 +1128,7 @@ export type OffscreenToPanelMessage =
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
   | ClearChatAckMsg
+  | AgentSpawnResultMsg
   | SetThinkingLevelAckMsg
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg
