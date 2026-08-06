@@ -268,19 +268,21 @@ URLs by hand. Verify the call works when the UI origin is the hosted origin and 
 the local bridge (thin-bridge mode). Normalize trailing slashes before comparing origins.
 Test in both CLI and extension floats.
 
-### 10. Layer-stack import direction (ui/ back-edges)
+### 10. Declarative layer-boundary import direction
 
 **Trigger patterns**
 
-- Any new `import`/`import type`/`import(...)`/`require(...)` of a `packages/webapp/src/ui/`
-  module from a lower layer (`fs/`, `shell/`, `git/`, `cdp/`, `tools/`, `core/`, `scoops/`,
-  `providers/`, `kernel/`, `speech/`, `transcript/`, `sudo/`). The layer stack is
+- Any `import`/`import type`/`import(...)`/`require(...)` that crosses the ordered stack or an
+  explicit zone in `packages/dev-tools/tools/layer-boundaries.json`. The current stack is
   `fs → shell/git → cdp → tools → core → scoops → ui`; imports must point down, never up.
 - The tell-tale disguise: the imported symbol is a **pure helper** (a parser, a data
   accessor, a constant, a type) that merely _lives_ in a DOM-heavy `ui/` god module. The
   import looks harmless; the transitive graph it drags into the kernel-worker bundle is not.
-- `packages/dev-tools/tools/ui-back-edge-baseline.json` growing in a diff — someone is
-  trying to grandfather a new violation instead of fixing it.
+- A hand-written boundary guard or generated `.grit` edit. Add a stack layer or explicit zone
+  to `layer-boundaries.json`, then regenerate; no new script is needed.
+- A new `biome-ignore lint/plugin/layer-*` comment or JSON baseline entry. Declarative-rule
+  debt is grandfathered only by a committed inline suppression, and the debt list must never
+  grow. The legacy `ui-back-edge-baseline.json` remains only for directories not yet modeled.
 
 **Historical precedents**
 
@@ -293,13 +295,15 @@ Test in both CLI and extension floats.
 
 **Class size** — 34 grandfathered back-edges across 27 files at baseline freeze (2026-07).
 
-**Remediation** — never import `ui/` from a lower layer. If the symbol you need is pure
-(no DOM, no `window`), it is mislocated: move it (or extract it) into the appropriate lower
-layer and have `ui/` re-export it for its existing callers, so the dependency points down.
-Deterministic enforcement: `npm run lint:ui-back-edges`
-(`packages/dev-tools/tools/check-ui-back-edges.mjs`) fails on any back-edge not in the
-frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.
-`providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
+**Remediation** — move the dependency into an allowed lower layer. If the symbol is pure (no
+DOM, no `window`), extract it and have the higher layer re-export it for existing callers. To
+add a boundary, edit the `stack` or `zones` in `layer-boundaries.json`, run
+`node packages/dev-tools/tools/generate-layer-boundary-plugins.mjs`, and commit the generated
+`.biome-plugins/generated/` files plus `biome.json`; never hand-edit generated plugins.
+`npm run lint:layers` detects config/output drift, while the existing Biome step in `lint` and
+`lint:ci` enforces the rules. Grandfathered declarative debt is a committed
+`biome-ignore lint/plugin/layer-*` comment, not a JSON file; new suppressions fail the
+boy-scout gate and stale suppressions fail lint. Explicit zones remain zero-tolerance.
 
 ## Transcript export — redaction boundary and protocol parity
 

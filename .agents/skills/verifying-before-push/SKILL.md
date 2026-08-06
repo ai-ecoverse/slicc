@@ -1,7 +1,7 @@
 ---
 name: verifying-before-push
 description: |
-  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout debt gate (check-touched-exemptions.mjs — complexity, promise safety, and ui back-edges; not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
+  Use when committing, pushing, opening or updating a PR, or when CI fails on lint, typecheck, build, or coverage. Covers the full verification pass (lint → typecheck → test → coverage → build), lint:ci strictness, the boy-scout debt gate (check-touched-exemptions.mjs — complexity, promise safety, generated layer suppressions, and legacy ui back-edges; not part of npm run lint, easy to miss locally), and coverage floors. Also triggered by CI error strings like 'check-touched-exemptions' failure, 'biome found errors', or 'below configured minimum coverage'.
 ---
 
 # verifying-before-push
@@ -63,13 +63,12 @@ grandfathered debt that lint alone misses. See the section below for details.
 
 ## Lint
 
-Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
-`prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML),
-then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
-`lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
-`lint:ui-back-edges` (no new `ui/` imports below the ui layer — baseline-ratcheted;
-fix the layering, never grow `ui-back-edge-baseline.json`), `lint:patches`, and
-`lint:duplication`.
+Run `npm run lint`. It first runs `lint:layers` to detect drift between
+`layer-boundaries.json`, `.biome-plugins/generated/`, and `biome.json`. It then runs
+`biome check --write .` over JS/TS/JSON/CSS (which enforces the registered boundary plugins),
+`lint:layer-suppressions`, and `prettier --write .` over Markdown/YAML/HTML. The remaining
+chain includes `lint:docs`, `lint:skills`, `lint:skill-router`, `lint:no-innerhtml`, the legacy
+`lint:ui-back-edges`, `lint:patches`, and `lint:duplication` gates.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
@@ -130,7 +129,7 @@ node packages/dev-tools/tools/check-touched-exemptions.mjs
 CI's `lint` job runs this step **after** `lint:ci`. It is **not** part of `npm run lint`, so
 it is easy to miss locally.
 
-The gate enforces five "debt lists" of files grandfathered out of a rule:
+The gate enforces six debt sources that grandfather files out of a rule:
 
 - `complexity.noExcessiveCognitiveComplexity` (`biome.json` `overrides`; cap: cognitive
   complexity **≤ 25**)
@@ -140,19 +139,22 @@ The gate enforces five "debt lists" of files grandfathered out of a rule:
   returned, or explicitly handled)
 - `nursery.noMisusedPromises` (`biome.json` `overrides`; promises cannot stand in for
   synchronous callbacks or conditions)
+- generated layer-boundary suppressions (inline
+  `biome-ignore lint/plugin/layer-*` comments; fix the import and remove the comment)
 - `ui/` layer back-edges (`packages/dev-tools/tools/ui-back-edge-baseline.json`; cap: **0**
-  imports from `ui/` below the ui layer)
+  imports from `ui/` below the ui layer; legacy directories not yet in the generated stack)
 
-When a PR **touches** any file still on one of those debt lists, this gate **fails** unless,
+When a PR **touches** any file still in one of those debt sources, this gate **fails** unless,
 in the same change, you pay the file's debt down and remove its entry:
 
 - Biome lists: fix every violation of the named rule, then delete the file's entry from the
   corresponding `biome.json` `overrides` block.
+- Generated boundaries: remove every suppressed back-edge, then remove each inline suppression.
 - Back-edge baseline: remove every `ui/` import from the file (move the pure helper into a
   lower-layer module), then run
   `node packages/dev-tools/tools/check-ui-back-edges.mjs --update`.
 
-Treat all five as one-way ratchets: never add a file to a debt list to silence it — the gate
+Treat all six as one-way ratchets: never add a file to a debt source to silence it — the gate
 also fails when a PR grows any list vs the base ref. The gate auto-skips on `merge_group` /
 `push` events (it resolves the merge-base against `$GITHUB_BASE_REF`), so always run it
 locally before pushing if you touched a listed file.
@@ -162,7 +164,8 @@ touch a debt-listed file, you must fully pay down that file's debt in the same P
 touching that file.
 
 To check whether a file is exempt, search `biome.json` for its path under a single-rule
-`"off"` override, and `ui-back-edge-baseline.json` for its path key.
+`"off"` override, its source for `biome-ignore lint/plugin/layer-`, and
+`ui-back-edge-baseline.json` for its path key.
 
 ## Coverage
 

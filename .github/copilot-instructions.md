@@ -76,8 +76,8 @@ origin comparisons without trailing-slash normalization. 15 call-site fixes acro
 - Follower/Cherry paths must call `openTranscriptExportApproval()`; approval is one-time.
 - Unknown follower error codes and SHA-256 mismatches → `transfer-corrupt`.
 
-## 10. Layer import direction (Major)
+## 10. Layer boundaries (Major)
 
-Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag new imports of
-`webapp/src/ui/` from lower layers — even types or pure helpers; move the helper
-down instead. Flag growth of `ui-back-edge-baseline.json`.
+`layer-boundaries.json` defines stack/zones. Flag crossing imports or new
+`biome-ignore lint/plugin/layer-*`; move deps down. Add boundaries there and regenerate.
+Generated debt is inline, not JSON.
