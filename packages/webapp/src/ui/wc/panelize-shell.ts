@@ -195,6 +195,7 @@ const TOOL_PANEL_IDS: ReadonlySet<string> = new Set<string>([
 function wireDockRailToLayout(
   dock: HTMLElement,
   layout: SliccLayout,
+  overlaySurfaces: ReadonlySet<string>,
   hooks?: {
     onToolPanelActivate?: (id: string) => void;
     onToolPanelDeactivate?: (id: string) => void;
@@ -203,6 +204,11 @@ function wireDockRailToLayout(
   const handle = (event: Event, visible: boolean): void => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
     if (!id || !TOOL_PANEL_IDS.has(id)) return;
+    // A surface an overlay has claimed (the leader's full-screen tab switcher)
+    // is a one-shot launcher, not a panel: let the event through to its own
+    // handler instead of parking an empty placeholder panel. Read at click
+    // time — the overlay may wire itself after this listener is installed.
+    if (overlaySurfaces.has(id)) return;
     event.stopImmediatePropagation();
     setPanelVisible(layout, id, visible);
     if (visible) hooks?.onToolPanelActivate?.(id);
@@ -493,7 +499,7 @@ export function panelizeShell(
   // mounted). Capture-phase, and `stopImmediatePropagation` so the pre-existing
   // dock-tree listener installed later by `wireWcSprinkles` never sees the event
   // and cannot fight this one.
-  wireDockRailToLayout(refs.dock, layout, hooks);
+  wireDockRailToLayout(refs.dock, layout, refs.overlaySurfaces, hooks);
 
   // Route the `layout` shell command's document verbs here, replacing the
   // dock-tree applier. Registered AFTER `setLayout` so a command arriving

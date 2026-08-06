@@ -176,6 +176,31 @@ describe('panelizeShell', () => {
     expect(result?.layout.getLayout().panels?.files?.visible).toBe(true);
   });
 
+  it('lets an overlay-claimed surface through instead of parking a placeholder panel', () => {
+    // The leader's full-screen tab switcher is a one-shot launcher, not a
+    // panel. Without this the panelized leader's globe opened an empty
+    // "runs on the leader" placeholder and the overlay never showed.
+    const refs = makeShellRefs();
+    const overlayHandler = vi.fn();
+    refs.dock.addEventListener('slicc-dock-select', overlayHandler);
+
+    const result = panelizeShell(refs);
+    // Claimed AFTER panelization — wc-browser wires itself later in boot.
+    refs.overlaySurfaces.add('browser');
+    refs.dock.dispatchEvent(new CustomEvent('slicc-dock-select', { detail: { id: 'browser' } }));
+
+    expect(overlayHandler).toHaveBeenCalledTimes(1);
+    expect(result?.layout.getLayout().panels?.browser?.visible).not.toBe(true);
+  });
+
+  it('still panelizes an unclaimed browser surface (follower floats have no overlay)', () => {
+    const refs = makeShellRefs();
+    const result = panelizeShell(refs);
+    refs.dock.dispatchEvent(new CustomEvent('slicc-dock-select', { detail: { id: 'browser' } }));
+
+    expect(result?.layout.getLayout().panels?.browser?.visible).toBe(true);
+  });
+
   it('fires the tool-panel activation hook so an opened panel starts its poller', () => {
     // Without this the terminal opens with no session and the file tree with no
     // rows — the exact regression that surfaced when the dock rail was first

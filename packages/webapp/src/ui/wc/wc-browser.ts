@@ -4,11 +4,14 @@
  * browser's pages plus any tray follower's (composite
  * `runtimeId:targetId` ids whose CDP traffic rides the federated channel,
  * i.e. the tray's WebRTC data channel) — each card with a live screenshot
- * thumbnail. Activating a card attaches + foregrounds that tab (locally or
- * on the follower); a card's ✕ closes it.
+ * thumbnail. Activating a local card attaches + foregrounds that tab;
+ * activating a follower's card pulls a state-carrying copy to the leader
+ * (`teleportTabOneWay`) so it lands in front of THIS user. A card's ✕
+ * closes it.
  */
 
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { teleportTabOneWay } from '../../shell/supplemental-commands/playwright/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { WcShellRefs } from './wc-shell.js';
 
@@ -113,10 +116,28 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
     void (async () => {
       try {
+        if (id.includes(':')) {
+          // A follower's tab: focusing it over there wouldn't put it in front
+          // of THIS user. Pull a copy to the leader instead — foreground, with
+          // cookies + storage teleported (degrades to a bare URL open when the
+          // source cannot serve state).
+          const result = await teleportTabOneWay(browser, {
+            sourceTargetId: id,
+            destination: { kind: 'leader' },
+          });
+          log.info('WC browser overlay: pulled remote tab to leader', {
+            source: id,
+            target: result.targetId,
+            degraded: result.degraded,
+          });
+          overlay.hide();
+          return;
+        }
         await browser.attachToPage(id);
         await browser.bringToFront();
         overlay.hide();
       } catch (err) {
+        // Keep the overlay open so the user sees the tap did not take effect.
         log.error('WC browser overlay: tab activate failed', err);
       }
     })();
