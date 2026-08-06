@@ -102,14 +102,53 @@ describe('sidepanel-entry controller', () => {
     const opts = mountSlicc.mock.calls[0]![0] as {
       hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
     };
-    // The follower asks to sign in → the panel hands it off to the leader tab.
+    // The follower asks to sign in → hand off to the leader tab AND its Settings.
     opts.hooks?.onSliccEvent?.('slicc.open-leader-tab');
-    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader' });
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: true });
 
     // An unrelated follower event is NOT relayed as a focus-leader command.
     port.postMessage.mockClear();
     opts.hooks?.onSliccEvent?.('slicc.follower.ready');
-    expect(port.postMessage).not.toHaveBeenCalledWith({ kind: 'focus-leader' });
+    expect(port.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'focus-leader' })
+    );
+  });
+
+  it('the panel-chrome button focuses the leader tab WITHOUT opening Settings', () => {
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    createSidePanelController({
+      connect: () => port as never,
+      mountSlicc: mountSlicc as never,
+      iframe,
+      setStatus: (s) => statuses.push(s),
+      sliccOrigin: 'https://www.sliccy.ai',
+      focusLeaderButton: button,
+    });
+    button.click();
+    // Nothing to sign in to — a plain focus, so the leader keeps its current view.
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: false });
+  });
+
+  it('the focus-leader button survives a dead port and stops working after dispose', () => {
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    const controller = createSidePanelController({
+      connect: () => port as never,
+      mountSlicc: mountSlicc as never,
+      iframe,
+      setStatus: (s) => statuses.push(s),
+      sliccOrigin: 'https://www.sliccy.ai',
+      focusLeaderButton: button,
+    });
+    port.postMessage.mockImplementation(() => {
+      throw new Error('Attempting to use a disconnected port object');
+    });
+    expect(() => button.click()).not.toThrow();
+    port.postMessage.mockReset();
+    controller.dispose();
+    button.click();
+    expect(port.postMessage).not.toHaveBeenCalled();
   });
 
   it('ready → status live (overlay hidden so the follower owns its own sub-status)', () => {

@@ -155,14 +155,15 @@ export async function handleCherryPanelConnect(
   port.onMessage.addListener((raw) => {
     const msg = raw as PanelToSwMessage;
     if (msg?.kind === 'focus-leader') {
-      // The follower asked to sign in — focus/create the leader tab where the
-      // real login UI runs AND tell it to open Settings so the user lands on the
-      // login UI. Fire-and-forget; the panel's card already told the user, so a
-      // focus failure isn't fatal. Focus first (may create the tab), then post
-      // open-settings over the bridge (a just-created leader's bridge Port is not
-      // welcomed yet, so the follower card remains the fallback).
+      // Focus/create the leader tab. Fire-and-forget; the panel's card already
+      // told the user, so a focus failure isn't fatal. For the sign-in hand-off
+      // also tell the leader to open Settings so the user lands on the login UI:
+      // focus first (may create the tab), then post open-settings over the bridge
+      // (a just-created leader's bridge Port is not welcomed yet, so the follower
+      // card remains the fallback). The panel's own "Leader tab" button sends
+      // `openSettings: false` — it is a plain focus with nothing to sign in to.
       void deps.focusLeaderTab?.().catch(() => {});
-      deps.openSettingsOnLeader?.();
+      if (msg.openSettings !== false) deps.openSettingsOnLeader?.();
       return;
     }
     if (msg?.kind !== 'hello') return;

@@ -36,6 +36,9 @@ export interface SidePanelDeps {
   iframe: HTMLIFrameElement;
   setStatus: (s: PanelStatus) => void;
   sliccOrigin: string;
+  /** Panel-chrome button that focuses the pinned leader tab. Optional so tests
+   *  (and a panel document without the toolbar) need not provide it. */
+  focusLeaderButton?: HTMLElement;
 }
 
 export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
@@ -89,6 +92,23 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
   deps.iframe.addEventListener('error', () => {
     if (!disposed && handle) goDisconnected();
   });
+
+  // Only the SW can touch chrome.tabs, so every leader-tab focus goes over the
+  // Port. `openSettings` distinguishes the sign-in hand-off (land the user on
+  // the login UI) from a plain focus.
+  const requestLeaderFocus = (openSettings: boolean) => {
+    try {
+      port?.postMessage({ kind: 'focus-leader', openSettings });
+    } catch {
+      // Port died (SW evicted / context invalidated) — the follower's card still
+      // tells the user to open the SLICC tab manually.
+    }
+  };
+
+  // Panel chrome: the leader tab is pinned in one window only, so a user with
+  // the panel open in another window has no way back to it from the follower.
+  const onFocusLeaderClick = () => requestLeaderFocus(false);
+  deps.focusLeaderButton?.addEventListener('click', onFocusLeaderClick);
 
   const onMessage = (raw: unknown) => {
     const msg = raw as SwToPanelMessage;
@@ -147,14 +167,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         // panel iframe, so focus/open the SLICC leader tab where the real login
         // UI runs. Route it through the SW (which owns the leader tab).
         onSliccEvent: (name) => {
-          if (name === 'slicc.open-leader-tab') {
-            try {
-              port?.postMessage({ kind: 'focus-leader' });
-            } catch {
-              // Port died (SW evicted / context invalidated) — the follower's
-              // card still tells the user to open the SLICC tab manually.
-            }
-          }
+          if (name === 'slicc.open-leader-tab') requestLeaderFocus(true);
         },
       },
     });
@@ -197,6 +210,7 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       disposed = true;
       teardown();
       deps.iframe.removeEventListener('load', onIframeLoad);
+      deps.focusLeaderButton?.removeEventListener('click', onFocusLeaderClick);
       try {
         port?.disconnect();
       } catch {
@@ -222,5 +236,6 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
     iframe,
     setStatus,
     sliccOrigin: sliccOriginDefault,
+    focusLeaderButton: document.getElementById('focus-leader') ?? undefined,
   });
 }
