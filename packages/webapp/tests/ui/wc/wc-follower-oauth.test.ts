@@ -7,7 +7,10 @@
 
 import type { SliccPermissions } from '@slicc/webcomponents';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openDelegatedOAuthPopup } from '../../../src/ui/wc/wc-follower-oauth.js';
+import {
+  expectedNonceFromAuthorizeUrl,
+  openDelegatedOAuthPopup,
+} from '../../../src/ui/wc/wc-follower-oauth.js';
 
 const RELAY_CHANNEL = 'slicc-oauth-relay';
 const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=abc';
@@ -124,6 +127,50 @@ describe('openDelegatedOAuthPopup', () => {
     await expect(pending).resolves.toBeNull();
   });
 
+  it('ignores a broadcast callback belonging to another same-origin flow', async () => {
+    // The relay's channel reaches every SLICC tab on this origin. Without the
+    // nonce filter, a second tab's login would settle this one (and vice
+    // versa) — the wrong URL against the wrong flow.
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'mine' }));
+    const url = `https://github.com/login/oauth/authorize?client_id=abc&state=${state}`;
+    const surface = makeSurface({ status: 'granted' });
+    const pending = openDelegatedOAuthPopup(url, new AbortController().signal, {
+      getPermissionsSurface: () => surface,
+      window,
+    });
+    await vi.waitFor(() => expect(surface.prompt).toHaveBeenCalled());
+
+    const channel = new BroadcastChannel(RELAY_CHANNEL);
+    channel.postMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'https://www.sliccy.ai/auth/callback?code=theirs&nonce=theirs',
+      nonce: 'theirs',
+    });
+    // Ours lands next and must be the one that settles it.
+    channel.postMessage({ type: 'oauth-callback', redirectUrl: CALLBACK_URL, nonce: 'mine' });
+    channel.close();
+
+    await expect(pending).resolves.toBe(CALLBACK_URL);
+  });
+
+  it('accepts an un-correlated callback so an older relay still works', async () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'mine' }));
+    const url = `https://github.com/login/oauth/authorize?client_id=abc&state=${state}`;
+    const surface = makeSurface({ status: 'granted' });
+    const pending = openDelegatedOAuthPopup(url, new AbortController().signal, {
+      getPermissionsSurface: () => surface,
+      window,
+    });
+    await vi.waitFor(() => expect(surface.prompt).toHaveBeenCalled());
+
+    const channel = new BroadcastChannel(RELAY_CHANNEL);
+    // No nonce on the message: a relay that predates the correlation id.
+    channel.postMessage({ type: 'oauth-callback', redirectUrl: CALLBACK_URL });
+    channel.close();
+
+    await expect(pending).resolves.toBe(CALLBACK_URL);
+  });
+
   it('gives up after the shared 120s budget', async () => {
     vi.useFakeTimers();
     const surface = makeSurface({ status: 'granted' });
@@ -133,5 +180,24 @@ describe('openDelegatedOAuthPopup', () => {
     });
     await vi.advanceTimersByTimeAsync(121_000);
     await expect(pending).resolves.toBeNull();
+  });
+});
+
+describe('expectedNonceFromAuthorizeUrl', () => {
+  it('reads the nonce the leader embedded in the OAuth state', () => {
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n1' }));
+    expect(
+      expectedNonceFromAuthorizeUrl(`https://github.com/login/oauth/authorize?state=${state}`)
+    ).toBe('n1');
+  });
+
+  it('returns null when there is nothing to correlate on', () => {
+    // No state, opaque state, and a malformed URL all fall back to accepting
+    // any callback rather than rejecting every one.
+    expect(expectedNonceFromAuthorizeUrl('https://github.com/login/oauth/authorize')).toBeNull();
+    expect(
+      expectedNonceFromAuthorizeUrl('https://provider.example/authorize?state=opaque-token')
+    ).toBeNull();
+    expect(expectedNonceFromAuthorizeUrl('not a url')).toBeNull();
   });
 });

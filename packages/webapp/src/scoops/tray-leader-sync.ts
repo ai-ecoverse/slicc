@@ -454,13 +454,22 @@ export class LeaderSyncManager {
   }
 
   /**
-   * Should an interactive login run on a follower rather than here? True when
-   * a capable follower exists AND either this leader has no human of its own
-   * or the most recent user message came from a follower.
+   * Should an interactive login run on a follower rather than here?
+   *
+   * A headless leader answers yes unconditionally — even with no capable
+   * follower connected. It has no human of its own, so falling back to a local
+   * popup would put the prompt in a sandbox nobody is watching: the exact
+   * #1915 failure this delegation exists to remove. Saying yes routes the
+   * attempt through `delegateOAuthPopup`, which reports "no connected follower
+   * can show an interactive login" and lets the command fail fast instead.
+   *
+   * A leader WITH a human only delegates when there is somewhere to delegate
+   * to and the human is demonstrably elsewhere (the last user message came
+   * from a follower).
    */
   shouldDelegateOAuthPopup(): boolean {
-    if (!this.hasOAuthPopupCapableFollower()) return false;
     if (this.options.headlessLeader === true) return true;
+    if (!this.hasOAuthPopupCapableFollower()) return false;
     return this.requesterTracker.get()?.kind === 'follower';
   }
 

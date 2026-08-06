@@ -613,6 +613,16 @@ final class CDPBridge {
             if unmappable > 0 {
                 logger.warning("Network.setCookies: \(unmappable) cookie(s) could not be mapped")
             }
+            // HttpOnly cannot be set through the public HTTPCookiePropertyKey
+            // API, so those cookies are recreated readable by page JS in this
+            // WebView. They still authenticate, but it IS a downgrade of the
+            // flag the origin asked for — count it so what actually crossed
+            // the tray is auditable rather than silent.
+            let downgraded = raw.filter { ($0["httpOnly"] as? Bool) == true }.count
+            if downgraded > 0 {
+                logger.warning(
+                    "Network.setCookies: \(downgraded) HttpOnly cookie(s) recreated without the flag")
+            }
             guard !cookies.isEmpty else {
                 respond(requestId: requestId, result: ["success": raw.isEmpty])
                 return

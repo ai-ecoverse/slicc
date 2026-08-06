@@ -315,10 +315,14 @@ try {
     // running a leader-delegated login has no loopback result endpoint to
     // fall back on. BroadcastChannel is origin-scoped and unaffected by the
     // browsing-context-group split, so it reaches the waiting SLICC tab.
+    //
+    // The channel reaches EVERY same-origin listener, not just this flow's,
+    // so carry the nonce: a receiver with a different pending login filters
+    // this out instead of settling on someone else's callback.
     var broadcast = false;
     try {
       var channel = new BroadcastChannel('slicc-oauth-relay');
-      channel.postMessage({ type: 'oauth-callback', redirectUrl: redirectUrl });
+      channel.postMessage({ type: 'oauth-callback', redirectUrl: redirectUrl, nonce: nonce });
       channel.close();
       broadcast = true;
     } catch (e) {}

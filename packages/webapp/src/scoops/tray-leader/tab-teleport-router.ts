@@ -47,6 +47,10 @@ export class TabTeleportRouter {
     this.context.log.info('Follower requested a tab teleport', { bootstrapId, targetId });
     this.inFlight.set(requestId, { bootstrapId, settled: false });
 
+    // Defense in depth only: the primitive caps itself at 30 s, so this fires
+    // just if that leaks. It does NOT cancel the in-flight teleport (no
+    // AbortController is threaded through) — the reply is already settled, so
+    // the late `succeed` finds no waiter and stays silent.
     const timer = setTimeout(
       () => this.fail(requestId, 'tab teleport timed out'),
       TAB_TELEPORT_REQUEST_TIMEOUT_MS

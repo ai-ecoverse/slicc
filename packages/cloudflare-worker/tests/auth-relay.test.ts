@@ -352,6 +352,15 @@ describe('OAuth callback relay — opener source (worker-served SPA)', () => {
     expect(broadcasts[0].message.redirectUrl).toContain('nonce=n');
   });
 
+  it('carries the nonce so concurrent same-origin flows can tell callbacks apart', async () => {
+    // The channel reaches every SLICC tab on this origin, so a receiver with
+    // its own pending login needs a correlation id to filter on.
+    const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n7' }));
+    const html = await fetchRelayBody(`?state=${state}&code=abc123`);
+    const { broadcasts } = runRelay(html, `?state=${state}&code=abc123`);
+    expect(broadcasts[0].message.nonce).toBe('n7');
+  });
+
   it('broadcasts alongside the opener postMessage when both are available', async () => {
     const state = btoa(JSON.stringify({ source: 'opener', path: '/auth/callback', nonce: 'n' }));
     const html = await fetchRelayBody(`?state=${state}&code=abc123`);

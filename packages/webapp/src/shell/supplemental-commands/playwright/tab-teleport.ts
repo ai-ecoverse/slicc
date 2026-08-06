@@ -47,10 +47,13 @@ export interface TabTeleportResult {
    * How much session state actually traveled:
    * - `none`: cookies + storage captured and injected.
    * - `no-source-state`: nothing could be captured — bare URL open.
+   * - `no-source-cookies`: the source refused cookie capture but storage
+   *   travelled. A cookie-authenticated site still lands logged out, so this
+   *   is reported rather than folded into `none`.
    * - `no-dest-cookies`: captured, but the destination rejected cookie
    *   injection (storage may still have replayed via the init script).
    */
-  degraded: 'none' | 'no-source-state' | 'no-dest-cookies';
+  degraded: 'none' | 'no-source-state' | 'no-source-cookies' | 'no-dest-cookies';
 }
 
 interface SourceCapture {
@@ -168,9 +171,11 @@ async function runTabTeleport(
 
   const degraded = sourceStateEmpty
     ? 'no-source-state'
-    : cookiesInjected
-      ? 'none'
-      : 'no-dest-cookies';
+    : !source.cookiesCaptured
+      ? 'no-source-cookies'
+      : cookiesInjected
+        ? 'none'
+        : 'no-dest-cookies';
   log.info('Tab teleport completed', {
     destTargetId,
     cookieCount: source.cookies.length,

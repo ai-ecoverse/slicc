@@ -1282,6 +1282,11 @@ export class FollowerSyncManager implements AgentHandle {
     this.oauthPopupAborts.set(requestId, controller);
     try {
       const redirectUrl = await handler(url, controller.signal);
+      // A disconnect mid-login aborts the controller above, so this resolves
+      // with null and the send lands on a closed channel — a silent no-op.
+      // That is fine and deliberate: the leader does not wait on it, because
+      // `OAuthPopupDelegation` settles every waiter for a departed follower
+      // from its own `onFollowerRemoved` hook.
       this.sync.send({
         type: 'oauth.popup.response',
         requestId,

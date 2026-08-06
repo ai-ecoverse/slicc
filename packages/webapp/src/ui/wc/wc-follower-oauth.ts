@@ -38,6 +38,30 @@ export interface DelegatedOAuthPopupDeps {
 interface CallbackMessage {
   type?: string;
   redirectUrl?: string;
+  nonce?: string;
+}
+
+/**
+ * The CSRF nonce the leader embedded in this login's `state`.
+ *
+ * The relay's broadcast reaches every same-origin listener, so a second SLICC
+ * tab with its own pending login would otherwise settle on this flow's
+ * callback (and this one on its). Both sides already have the nonce — the
+ * leader put it in `state`, the relay echoes it — so it is the natural
+ * correlation id. Returns null for an authorize URL we cannot parse, in which
+ * case the receiver falls back to accepting any callback.
+ */
+export function expectedNonceFromAuthorizeUrl(authorizeUrl: string): string | null {
+  try {
+    const state = new URL(authorizeUrl).searchParams.get('state');
+    if (!state) return null;
+    const decoded = JSON.parse(atob(state)) as { nonce?: unknown };
+    return typeof decoded.nonce === 'string' && decoded.nonce ? decoded.nonce : null;
+  } catch {
+    // Opaque or non-JSON state (a provider we do not shape): no correlation
+    // available, so the caller accepts any callback as before.
+    return null;
+  }
 }
 
 /**
@@ -47,7 +71,8 @@ interface CallbackMessage {
 function runFollowerOAuthRace(
   popup: Window | null,
   deps: DelegatedOAuthPopupDeps,
-  signal: AbortSignal
+  signal: AbortSignal,
+  expectedNonce: string | null
 ): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     const cleanups: Array<() => void> = [];
@@ -66,6 +91,13 @@ function runFollowerOAuthRace(
 
     const accept = (data: CallbackMessage | undefined, via: string): void => {
       if (data?.type !== 'oauth-callback' || typeof data.redirectUrl !== 'string') return;
+      // Another same-origin SLICC tab's login: not ours to settle on. Only
+      // filter when both sides supplied a nonce — an older relay sends none,
+      // and an opaque provider state gives us nothing to compare.
+      if (expectedNonce && data.nonce && data.nonce !== expectedNonce) {
+        log.debug('Ignoring an OAuth callback for a different flow', { via });
+        return;
+      }
       log.info('Delegated OAuth callback received', { via });
       settle(data.redirectUrl);
     };
@@ -139,5 +171,5 @@ export async function openDelegatedOAuthPopup(
   const grant = result.grants.find((g) => g.kind === 'popup');
   const popup = grant && grant.kind === 'popup' ? grant.window : null;
 
-  return runFollowerOAuthRace(popup, deps, signal);
+  return runFollowerOAuthRace(popup, deps, signal, expectedNonceFromAuthorizeUrl(url));
 }

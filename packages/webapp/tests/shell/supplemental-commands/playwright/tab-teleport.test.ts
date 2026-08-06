@@ -113,6 +113,20 @@ describe('teleportTabOneWay', () => {
     expect(calls.map((c) => c.method)).not.toContain('Network.setCookies');
   });
 
+  it('reports no-source-cookies when only the cookies could not be captured', async () => {
+    // Storage travelled, so this is not `no-source-state` — but a
+    // cookie-authenticated site still lands logged out, which the caller
+    // must be able to see rather than reading `none`.
+    const { browser, calls } = createFakeBrowser({ failGetCookies: true });
+    const result = await teleportTabOneWay(browser, {
+      sourceTargetId: 'runtime-1:tab-9',
+      destination: { kind: 'leader' },
+    });
+    expect(result.degraded).toBe('no-source-cookies');
+    expect(result.storageEntryCount).toBe(1);
+    expect(calls.map((c) => c.method)).toContain('Page.addScriptToEvaluateOnNewDocument');
+  });
+
   it('reports no-dest-cookies when the destination rejects cookie injection', async () => {
     const { browser, calls } = createFakeBrowser({ failSetCookies: true });
     const result = await teleportTabOneWay(browser, {
