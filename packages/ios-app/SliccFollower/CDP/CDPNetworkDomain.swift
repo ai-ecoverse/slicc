@@ -87,14 +87,54 @@ enum CDPNetworkDomain {
 
     /// Keep only cookies whose domain matches one of `urls`, mirroring the
     /// filtering CDP applies to `Network.getCookies { urls }`.
+    ///
+    /// Empty `urls` yields NOTHING, not everything. CDP scopes an omitted
+    /// `urls` to the attached page and its subframes; every target here shares
+    /// one app-wide `WKWebsiteDataStore`, so returning the unfiltered store
+    /// would hand the caller every cookie on the device. `Network.getAllCookies`
+    /// is the method that means "all of them" — the caller resolves the page
+    /// URL and passes it, and a target with no resolvable URL gets no cookies
+    /// rather than all of them.
     static func filter(_ cookies: [HTTPCookie], urls: [String]) -> [HTTPCookie] {
-        guard !urls.isEmpty else { return cookies }
         let hosts = urls.compactMap { URL(string: $0)?.host?.lowercased() }
-        guard !hosts.isEmpty else { return cookies }
+        guard !hosts.isEmpty else { return [] }
         return cookies.filter { cookie in
-            let domain = cookie.domain.lowercased()
-            let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
-            return hosts.contains { host in host == bare || host.hasSuffix(".\(bare)") }
+            hosts.contains { domainMatches(cookieDomain: cookie.domain, host: $0) }
         }
+    }
+
+    /// Host-vs-cookie-domain match: exact, or a subdomain of a `.example.com`
+    /// style domain cookie.
+    private static func domainMatches(cookieDomain: String, host: String) -> Bool {
+        let domain = cookieDomain.lowercased()
+        let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+        return host == bare || host.hasSuffix(".\(bare)")
+    }
+
+    /// Should `Network.deleteCookies { name, url, domain, path }` remove this
+    /// cookie?
+    ///
+    /// Name alone is not enough: the store is app-wide, so deleting every
+    /// `session` cookie would sign the user out of unrelated sites. `domain`
+    /// (explicit, or the host of `url`) and `path` narrow it the way CDP does.
+    /// An explicit `path` must match exactly; a path derived from `url` uses
+    /// the standard cookie path-match (the cookie's path is a prefix of it),
+    /// because that is the set the URL would actually send.
+    static func matchesDeletion(
+        _ cookie: HTTPCookie,
+        name: String,
+        domain: String?,
+        path: String?,
+        pathIsExact: Bool
+    ) -> Bool {
+        guard cookie.name == name else { return false }
+        if let domain, !domain.isEmpty {
+            let want = domain.lowercased()
+            let wantBare = want.hasPrefix(".") ? String(want.dropFirst()) : want
+            guard domainMatches(cookieDomain: cookie.domain, host: wantBare) else { return false }
+        }
+        guard let path, !path.isEmpty else { return true }
+        if pathIsExact { return cookie.path == path }
+        return path == cookie.path || path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path : "\(cookie.path)/")
     }
 }

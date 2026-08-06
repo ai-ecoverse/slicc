@@ -143,7 +143,8 @@ final class CDPBridge {
                 try requireTarget(target, method: method, requestId: requestId, sessionId: sessionId)
                 handleEmulationDomain(target: target!, method: method, params: paramsDict, requestId: requestId)
             case "Network":
-                handleNetworkDomain(method: method, params: paramsDict, requestId: requestId)
+                handleNetworkDomain(
+                    target: target, method: method, params: paramsDict, requestId: requestId)
             case "Log", "Performance", "Security":
                 // Lightweight no-ops to keep clients happy. Unlike Network
                 // these carry no state a caller can silently lose.
@@ -588,14 +589,21 @@ final class CDPBridge {
     /// returns not-implemented rather than an empty success, so a caller can
     /// never mistake "unsupported" for "no cookies".
     private func handleNetworkDomain(
-        method: String, params: [String: Any], requestId: String
+        target: CDPTarget?, method: String, params: [String: Any], requestId: String
     ) {
         let store = WKWebsiteDataStore.default().httpCookieStore
         switch method {
         case "Network.enable", "Network.disable":
             respond(requestId: requestId, result: [:])
         case "Network.getCookies", "Network.getAllCookies":
-            let urls = (params["urls"] as? [String]) ?? []
+            // Omitted `urls` means "this page", not "the whole device". Every
+            // target shares one app-wide store, so falling back to the
+            // attached target's URL is what keeps a teleport of one tab from
+            // exporting every other site's session cookies.
+            var urls = (params["urls"] as? [String]) ?? []
+            if urls.isEmpty, let current = target?.currentURL, URL(string: current)?.host != nil {
+                urls = [current]
+            }
             store.getAllCookies { cookies in
                 let scoped =
                     method == "Network.getCookies"
@@ -638,9 +646,22 @@ final class CDPBridge {
                 self.respond(requestId: requestId, result: ["success": true])
             }
         case "Network.deleteCookies":
-            let name = params["name"] as? String
+            // CDP requires `name`; without it the old code deleted every
+            // cookie in the app-wide store. Refuse instead of guessing.
+            guard let name = params["name"] as? String, !name.isEmpty else {
+                respondError(requestId: requestId, error: "Network.deleteCookies requires `name`")
+                return
+            }
+            let scopeURL = (params["url"] as? String).flatMap { URL(string: $0) }
+            let domain = (params["domain"] as? String) ?? scopeURL?.host
+            let explicitPath = params["path"] as? String
+            let path = explicitPath ?? scopeURL?.path
             store.getAllCookies { cookies in
-                let doomed = cookies.filter { name == nil || $0.name == name }
+                let doomed = cookies.filter {
+                    CDPNetworkDomain.matchesDeletion(
+                        $0, name: name, domain: domain, path: path,
+                        pathIsExact: explicitPath != nil)
+                }
                 let group = DispatchGroup()
                 for cookie in doomed {
                     group.enter()

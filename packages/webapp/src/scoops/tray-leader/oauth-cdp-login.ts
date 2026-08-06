@@ -119,6 +119,24 @@ export function liftNonceFromState(rawUrl: string): string {
 }
 
 /**
+ * Read the tab's current URL, or null when it cannot be read right now.
+ *
+ * Goes through `withTab`: attaching swaps the shared CDP client's session, so
+ * a bare `attachToPage` on a 500 ms timer would keep retargeting any
+ * concurrent operation's transport at the OAuth tab. A tab mid-navigation or
+ * already gone simply yields null — the caller's timeout owns the terminal
+ * case.
+ */
+async function readCurrentHref(browser: BrowserAPI, targetId: string): Promise<string | null> {
+  try {
+    const raw = await browser.withTab(targetId, () => browser.evaluate('window.location.href'));
+    return typeof raw === 'string' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Open the authorize URL on a follower and resolve with the callback URL it
  * lands on. Resolves null when the human never finished (timeout, abort, or a
  * closed tab). The tab is always closed on the way out.
@@ -151,8 +169,14 @@ export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise
 
     void (async () => {
       try {
-        await browser.attachToPage(targetId);
-        await browser.sendCDP('Page.enable');
+        // Every attach here goes through `withTab`. Attaching replaces the
+        // shared CDP client's session, so a bare `attachToPage` — especially
+        // one on a 500 ms timer, running for up to two minutes while a human
+        // signs in — can retarget a concurrent operation's transport at the
+        // OAuth tab mid-command.
+        await browser.withTab(targetId, async () => {
+          await browser.sendCDP('Page.enable');
+        });
 
         // Primary signal: navigation commit, before the page's own script runs.
         const transport = browser.getTransport();
@@ -168,23 +192,14 @@ export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise
         cleanups.push(() => transport.off('Page.frameNavigated', onNavigated));
 
         // Backstop for transports that never emit it.
-        const poll = setInterval(() => {
-          void (async () => {
-            if (settled) return;
-            try {
-              await browser.attachToPage(targetId);
-              const raw = await browser.evaluate('window.location.href');
-              const href = typeof raw === 'string' ? raw : String(raw);
-              if (href && isCallback(href)) {
-                log.info('Delegated login reached the callback', { via: 'poll' });
-                settle(href);
-              }
-            } catch {
-              // The tab can be mid-navigation or already gone; the timeout owns
-              // the terminal case.
-            }
-          })();
-        }, URL_POLL_INTERVAL_MS);
+        const pollOnce = async (): Promise<void> => {
+          if (settled) return;
+          const href = await readCurrentHref(browser, targetId);
+          if (settled || !href || !isCallback(href)) return;
+          log.info('Delegated login reached the callback', { via: 'poll' });
+          settle(href);
+        };
+        const poll = setInterval(() => void pollOnce(), URL_POLL_INTERVAL_MS);
         cleanups.push(() => clearInterval(poll));
       } catch (err) {
         log.warn('Delegated CDP login could not start', { error: String(err) });

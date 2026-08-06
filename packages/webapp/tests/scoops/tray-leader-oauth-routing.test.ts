@@ -113,6 +113,13 @@ describe('delegated OAuth routing', () => {
       evaluate: vi.fn(async () => 'https://www.sliccy.ai/auth/callback?code=driven'),
       closePage: vi.fn(async () => {}),
       getTransport: vi.fn(() => ({ on: vi.fn(), off: vi.fn() })),
+      // Mirrors the real `BrowserAPI.withTab` (attach, then run): the login
+      // driver holds this tab for minutes and polls it, so every attach is
+      // serialized rather than swapping the shared client's session directly.
+      withTab: vi.fn(async (_targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+        await browserAPI.attachToPage();
+        return await fn('session-1');
+      }),
     };
     const manager = createManager({ browserAPI: browserAPI as never });
     const channel = addFollower(manager, 'b1', { oauthPopup: true });

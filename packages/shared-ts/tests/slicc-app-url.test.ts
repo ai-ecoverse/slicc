@@ -16,6 +16,25 @@ describe('isSliccAppUrl', () => {
     expect(isSliccAppUrl('https://host.example/embed?cherry=1')).toBe(true);
   });
 
+  it('matches mode flags only at the value the app actually reads', () => {
+    // `cherry` and `connect` are mode flags, not capabilities: the app tests
+    // them for exactly '1'. Matching on mere presence hid ordinary pages —
+    // an OAuth URL carrying `?connect=oauth2` is a tab the user may want to
+    // move, and blocking it is a bug, not caution.
+    expect(isSliccAppUrl('https://auth.example.com/authorize?connect=oauth2')).toBe(false);
+    expect(isSliccAppUrl('https://shop.example/fruit?cherry=please')).toBe(false);
+    expect(isSliccAppUrl('https://shop.example/fruit?cherry')).toBe(false);
+    // The real flags still match.
+    expect(isSliccAppUrl('https://host.example/embed?cherry=1&ui-only=1')).toBe(true);
+    expect(isSliccAppUrl('https://host.example/x?connect=1')).toBe(true);
+  });
+
+  it('still rejects a capability param whatever its value', () => {
+    // These carry the secret in the value, so any value is disqualifying.
+    expect(isSliccAppUrl('https://example.test/?tray=anything')).toBe(true);
+    expect(isSliccAppUrl('https://example.test/?bridgeToken=')).toBe(true);
+  });
+
   it('recognizes the app shell on the hosted and staging origins', () => {
     expect(isSliccAppUrl('https://www.sliccy.ai/')).toBe(true);
     expect(isSliccAppUrl('https://www.sliccy.ai')).toBe(true);

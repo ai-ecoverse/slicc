@@ -92,9 +92,60 @@ final class CDPNetworkDomainTests: XCTestCase {
             "a host matches both its own cookies and its parent domain's")
     }
 
-    func testFilterWithNoUrlsReturnsEverything() {
+    func testFilterWithNoUrlsReturnsNothing() {
+        // Fail closed. Every target shares one app-wide WKWebsiteDataStore, so
+        // returning the unfiltered store for an omitted `urls` exported every
+        // site's cookies off the device on a single-tab teleport. The bridge
+        // substitutes the attached page's URL; a target with no resolvable URL
+        // must yield nothing rather than everything.
         let cookies = [cookie(name: "a"), cookie(name: "b", domain: "other.test")]
-        XCTAssertEqual(CDPNetworkDomain.filter(cookies, urls: []).count, 2)
+        XCTAssertEqual(CDPNetworkDomain.filter(cookies, urls: []).count, 0)
+        XCTAssertEqual(CDPNetworkDomain.filter(cookies, urls: ["about:blank"]).count, 0)
+    }
+
+    func testDeletionNeedsMoreThanAName() {
+        // A page-scoped `session` delete must not sign the user out of every
+        // other site that happens to use that cookie name.
+        let mine = cookie(name: "session", domain: "app.example.com")
+        let theirs = cookie(name: "session", domain: "unrelated.test")
+        XCTAssertTrue(
+            CDPNetworkDomain.matchesDeletion(
+                mine, name: "session", domain: "app.example.com", path: nil, pathIsExact: false))
+        XCTAssertFalse(
+            CDPNetworkDomain.matchesDeletion(
+                theirs, name: "session", domain: "app.example.com", path: nil, pathIsExact: false))
+        XCTAssertFalse(
+            CDPNetworkDomain.matchesDeletion(
+                mine, name: "other", domain: "app.example.com", path: nil, pathIsExact: false))
+    }
+
+    func testDeletionMatchesDomainCookiesOnSubdomains() {
+        let wide = cookie(name: "sso", domain: ".example.com")
+        XCTAssertTrue(
+            CDPNetworkDomain.matchesDeletion(
+                wide, name: "sso", domain: "app.example.com", path: nil, pathIsExact: false))
+        XCTAssertFalse(
+            CDPNetworkDomain.matchesDeletion(
+                wide, name: "sso", domain: "example.org", path: nil, pathIsExact: false))
+    }
+
+    func testDeletionPathScoping() {
+        let scoped = cookie(name: "t", domain: "example.com", path: "/app")
+        // Derived from a url: the cookie's path must be a prefix of it (the
+        // set that url would actually send).
+        XCTAssertTrue(
+            CDPNetworkDomain.matchesDeletion(
+                scoped, name: "t", domain: "example.com", path: "/app/inner", pathIsExact: false))
+        XCTAssertFalse(
+            CDPNetworkDomain.matchesDeletion(
+                scoped, name: "t", domain: "example.com", path: "/", pathIsExact: false))
+        // An explicit `path` param is an exact match.
+        XCTAssertTrue(
+            CDPNetworkDomain.matchesDeletion(
+                scoped, name: "t", domain: "example.com", path: "/app", pathIsExact: true))
+        XCTAssertFalse(
+            CDPNetworkDomain.matchesDeletion(
+                scoped, name: "t", domain: "example.com", path: "/app/inner", pathIsExact: true))
     }
 
     func testOnlyTheCookieSurfaceClaimsSupport() {

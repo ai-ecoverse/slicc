@@ -21,11 +21,20 @@
 import { SLICC_HOSTED_ORIGIN, SLICC_STAGING_HUB_ORIGIN } from './bridge-protocol.js';
 
 /**
- * Query params that mark a URL as a SLICC app shell carrying a capability.
- * Any one of them is disqualifying regardless of origin, because a float can
- * be served from any origin (local wrangler, a preview, a staging deploy).
+ * Params that CARRY a capability: the value is the secret (a bridge token, a
+ * bridge endpoint, a join URL). Presence alone is disqualifying regardless of
+ * origin, because a float can be served from any origin (local wrangler, a
+ * preview, a staging deploy) and any value here is one worth not copying.
  */
-const CAPABILITY_PARAMS = ['bridgeToken', 'bridge', 'tray', 'cherry', 'connect'] as const;
+const CAPABILITY_PARAMS = ['bridgeToken', 'bridge', 'tray'] as const;
+
+/**
+ * Params that are SLICC *mode flags* rather than capabilities. The app reads
+ * these as exactly `1` (`ui/runtime-mode.ts`), so match that and nothing more:
+ * an ordinary page carrying `?connect=oauth2` is somebody's OAuth URL, not a
+ * SLICC shell, and hiding it would block a tab the user does want to move.
+ */
+const MODE_FLAG_PARAMS = ['cherry', 'connect'] as const;
 
 /** Path prefixes that serve the app shell on a SLICC-hosting origin. */
 const APP_SHELL_PREFIXES = ['/join/', '/tray/'] as const;
@@ -62,6 +71,9 @@ export function isSliccAppUrl(rawUrl: string, options: SliccAppUrlOptions = {}):
   // A capability-bearing URL is disqualified wherever it is served from.
   for (const param of CAPABILITY_PARAMS) {
     if (url.searchParams.has(param)) return true;
+  }
+  for (const flag of MODE_FLAG_PARAMS) {
+    if (url.searchParams.get(flag) === '1') return true;
   }
 
   const origins = new Set<string>([

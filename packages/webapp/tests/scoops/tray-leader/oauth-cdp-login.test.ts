@@ -29,6 +29,15 @@ function createBrowser(opts: { href?: string } = {}) {
     evaluate: vi.fn(async () => opts.href ?? 'https://github.com/login'),
     closePage: vi.fn(async () => {}),
     getTransport: vi.fn(() => transport),
+    // Mirrors the real `BrowserAPI.withTab`: attach, then run the body. The
+    // login driver must go through this rather than a bare `attachToPage`,
+    // because attaching swaps the shared client's session out from under any
+    // concurrent operation.
+    withTab: vi.fn(async (targetId: string, fn: (sessionId: string) => Promise<unknown>) => {
+      await browser.attachToPage();
+      void targetId;
+      return await fn('session-1');
+    }),
   };
   const emit = (event: string, params: Record<string, unknown>) => {
     for (const cb of listeners.get(event) ?? []) cb(params);
@@ -148,6 +157,16 @@ describe('runDelegatedCdpLogin', () => {
     await expect(
       runDelegatedCdpLogin({ browser, runtimeId: 'runtime-1', authorizeUrl: AUTHORIZE })
     ).resolves.toBe(`${REDIRECT}?code=polled`);
+  });
+
+  it('never attaches outside withTab, including from the poll', async () => {
+    // Attaching replaces the shared CDP client's session. This driver holds a
+    // tab for up to two minutes and polls it twice a second, so a bare attach
+    // would repeatedly retarget any concurrent operation's transport.
+    const { browser, fake } = createBrowser({ href: `${REDIRECT}?code=polled` });
+    await runDelegatedCdpLogin({ browser, runtimeId: 'runtime-1', authorizeUrl: AUTHORIZE });
+    expect(fake.withTab).toHaveBeenCalled();
+    expect(fake.attachToPage.mock.calls.length).toBe(fake.withTab.mock.calls.length);
   });
 
   it('gives up and closes the tab when the human never finishes', async () => {
