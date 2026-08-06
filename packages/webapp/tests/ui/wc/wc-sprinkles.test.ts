@@ -624,14 +624,14 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     expect(treeSpies(refs).setSurfaceSize).toHaveBeenCalledWith('files', { widthPercent: 40 });
   });
 
-  it('a sprinkle collapse does not touch the dock-tree (isToolPanelId gate)', async () => {
+  it("clicking an open sprinkle's active dock icon minimizes it (collapse routes to manager.minimize)", async () => {
     const refs = makeRefs();
     const fs = {
-      exists: async () => false,
+      exists: async () => true,
       async *walk(): AsyncGenerator<string> {
-        /* empty */
+        yield '/shared/sprinkles/hero/hero.shtml';
       },
-      readFile: async () => '',
+      readFile: async () => '<title>Hero</title><div>hi</div>',
     } as unknown as VirtualFS;
     const client = {
       sendSprinkleLick: () => {},
@@ -639,12 +639,15 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
       stopScoop: () => {},
     } as unknown as OffscreenClient;
     const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
-    await wireWcSprinkles({ refs, client, fs, log });
+    const { manager } = await wireWcSprinkles({ refs, client, fs, log });
+    await manager.open('hero');
+    treeSpies(refs).removeSurface.mockClear();
 
     refs.dock.dispatchEvent(
       new CustomEvent('slicc-dock-collapse', { detail: { id: 'sprinkle:hero' }, bubbles: true })
     );
 
-    expect(treeSpies(refs).removeSurface).not.toHaveBeenCalled();
+    expect(treeSpies(refs).removeSurface).toHaveBeenCalledWith('sprinkle:hero');
+    expect(manager.opened()).toContain('hero');
   });
 });

@@ -583,13 +583,18 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     }
   });
   // Clicking the ACTIVE dock item emits collapse (not a second select).
-  // `detail.id` gates it to tool-panel collapses so a sprinkle collapse
-  // never touches a tool panel's leaf.
+  // Tool panels detach their leaf directly; a sprinkle routes through
+  // `manager.minimize` so it goes through the same path as its own in-panel
+  // minimize button (bookkeeping stays, only the leaf gets parked).
   refs.dock.addEventListener('slicc-dock-collapse', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (id && isToolPanelId(id)) {
+    if (!id) return;
+    if (isToolPanelId(id)) {
       zone.removeSurface(id);
+      return;
     }
+    const name = sprinkleNameFromId(id);
+    if (name) manager.minimize(name);
   });
 
   let enriching = false;
