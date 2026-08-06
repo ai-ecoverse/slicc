@@ -106,9 +106,13 @@ export class TeleportPool {
     }
     const entries = this.registry.getEntries().filter((entry) => entry.runtimeId === runtimeId);
     if (entries.length === 0) {
-      // No targets advertised yet: trust the hello capability. Exec-only
-      // followers (CLI) never set `browser` and must not be selected — their
-      // `tab.open` would hang, not fail.
+      // Advertised an EMPTY target list (a browser with no open tabs yet):
+      // trust the hello capability. Exec-only followers (CLI) never set
+      // `browser` and must not be selected — their `tab.open` would hang, not
+      // fail. Note this branch is only reachable after an advertise, because
+      // selection enumerates `runtimeToBootstrap`, which nothing populates
+      // until the first `targets.advertise` arrives; a follower that has never
+      // advertised has no runtime id to address and is excluded earlier.
       return follower.peerCapabilities?.browser === true;
     }
     return selectTeleportPool(entries, { requireNetwork: true }).length > 0;

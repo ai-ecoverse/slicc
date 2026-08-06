@@ -49,6 +49,18 @@ export interface WcFollowerBrowserHandle {
 
 export function wireWcFollowerBrowser(deps: WireWcFollowerBrowserDeps): WcFollowerBrowserHandle {
   const { refs, getSync, getTargets, hasCdpBrowser, log } = deps;
+
+  // A leader-capable float that JOINS a tray keeps its own tab switcher
+  // (`wireWcBrowser`) wired from boot, and that one already opens tabs locally
+  // — which is the right destination here, since "in front of me" means this
+  // machine either way. Mounting a second overlay would give the globe two
+  // listeners and two full-screen surfaces racing on one click. First claim
+  // wins; only floats with no switcher of their own (the dedicated follower
+  // mount, cherry, the extension side panel) reach the wiring below.
+  if (refs.overlaySurfaces.has('browser')) {
+    return { overlay: document.createElement('slicc-tab-overlay'), refresh: () => {} };
+  }
+
   const overlay = document.createElement('slicc-tab-overlay') as TabOverlayLike;
   overlay.setAttribute('heading', 'Browser · tabs in this tray');
   document.body.append(overlay);

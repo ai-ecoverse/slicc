@@ -74,6 +74,32 @@ describe('wireWcFollowerBrowser', () => {
     expect(refs.overlaySurfaces.has('browser')).toBe(true);
   });
 
+  it('stands down when the float already has its own tab switcher', () => {
+    // A leader-capable float that joins a tray keeps `wireWcBrowser` from
+    // boot. Two overlays would mean two listeners and two full-screen
+    // surfaces racing on one globe click.
+    const refs = makeRefs();
+    refs.overlaySurfaces.add('browser');
+    const before = document.querySelectorAll('slicc-tab-overlay').length;
+
+    const handle = wireWcFollowerBrowser({
+      refs,
+      getSync: () => makeSync(),
+      getTargets: () => TARGETS,
+      hasCdpBrowser: () => true,
+      window: { open: vi.fn() } as unknown as Window,
+      log,
+    });
+
+    expect(document.querySelectorAll('slicc-tab-overlay').length).toBe(before);
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { bubbles: true, detail: { id: 'browser' } })
+    );
+    expect(handle.overlay.hasAttribute('open')).toBe(false);
+    // refresh() stays callable so callers need no special-casing.
+    expect(() => handle.refresh()).not.toThrow();
+  });
+
   it('opens the overlay with the tray-wide tab list on the globe', () => {
     const { handle, refs } = wire({});
     refs.dock.dispatchEvent(
