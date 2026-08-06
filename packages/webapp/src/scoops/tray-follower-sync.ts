@@ -168,6 +168,8 @@ export interface FollowerSyncManagerOptions {
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
+/** Client-side cap; sits outside the leader router's own 45 s budget. */
+const TAB_TELEPORT_CLIENT_TIMEOUT_MS = 60_000;
 
 /** Internal buffer for chunked sprinkle.content reassembly. Mirrors the
  *  `SprinkleFetchBuffer` Swift struct nested inside the `AppState` class in
@@ -1191,6 +1193,48 @@ export class FollowerSyncManager implements AgentHandle {
       this.tabOpenResolvers.set(requestId, { resolve, reject });
       this.sync.send({ type: 'tab.open', requestId, targetRuntimeId, url });
     });
+  }
+
+  /**
+   * Ask the leader to teleport an existing tray tab HERE — a foreground copy
+   * carrying the source tab's cookies + web storage. Resolves with the local
+   * composite targetId. The leader replies on the shared `tab.opened` /
+   * `tab.open.error` legs, so this reuses `tabOpenResolvers` (already drained
+   * on disconnect by `rejectPendingRequests`).
+   */
+  requestTabTeleport(sourceTargetId: string): Promise<string> {
+    const requestId = `tab-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.tabOpenResolvers.delete(requestId)) return;
+        reject(new Error('tab teleport timed out'));
+      }, TAB_TELEPORT_CLIENT_TIMEOUT_MS);
+      const settle = <T>(fn: (value: T) => void) => {
+        return (value: T): void => {
+          clearTimeout(timer);
+          fn(value);
+        };
+      };
+      this.tabOpenResolvers.set(requestId, {
+        resolve: settle(resolve),
+        reject: settle(reject),
+      });
+      const sent = this.sync.send({
+        type: 'tab.teleport.request',
+        requestId,
+        targetId: sourceTargetId,
+      });
+      if (sent === false) {
+        clearTimeout(timer);
+        this.tabOpenResolvers.delete(requestId);
+        reject(new Error('not connected to a leader'));
+      }
+    });
+  }
+
+  /** The leader's advertised protocol version, when it sent a `hello`. */
+  getLeaderProtocolVersion(): number | undefined {
+    return this.leaderProtocolVersion;
   }
 
   /**

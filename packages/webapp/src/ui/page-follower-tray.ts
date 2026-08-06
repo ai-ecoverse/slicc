@@ -145,6 +145,12 @@ export interface StartPageFollowerTrayOptions {
    * Callers: `wc-follower.ts` derives this via `followerAdvertisesCdpTargets`.
    */
   advertisesCdpTargets?: boolean;
+  /**
+   * The leader's tray-wide target registry changed. Drives the follower's own
+   * browser rail (`wireWcFollowerBrowser`), which lists every tab in the tray
+   * so the user can pull one here.
+   */
+  onTargetsUpdated?: (targets: import('../scoops/tray-sync-protocol.js').TrayTargetEntry[]) => void;
 
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
@@ -370,6 +376,7 @@ export function startPageFollowerTray(
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
+      onTargetsUpdated: options.onTargetsUpdated,
       onScoopsList: options.onScoopsList,
       onModelsList: options.onModelsList,
       onModelState: options.onModelState,

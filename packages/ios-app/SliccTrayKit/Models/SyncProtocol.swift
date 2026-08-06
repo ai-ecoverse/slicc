@@ -9,7 +9,7 @@ public enum NewSessionAction: String, Codable {
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-public let traySyncProtocolVersion = 5
+public let traySyncProtocolVersion = 6
 
 // MARK: - AgentEvent
 

@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 5,
+  "traySyncProtocolVersion": 6,
   "leaderVariantCount": 39,
-  "followerVariantCount": 33,
+  "followerVariantCount": 34,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -705,6 +705,15 @@
         "type": "tab.opened",
         "requestId": "tab-1",
         "targetId": "wk2"
+      }
+    },
+    {
+      "type": "tab.teleport.request",
+      "ios": "undecodable",
+      "message": {
+        "type": "tab.teleport.request",
+        "requestId": "tp-1",
+        "targetId": "leader:tab1"
       }
     },
     {

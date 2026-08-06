@@ -29,6 +29,7 @@ import {
 import type {
   TrayModelCatalogEntry,
   TrayModelSelectionState,
+  TrayTargetEntry,
 } from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
@@ -80,6 +81,7 @@ import {
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
@@ -248,6 +250,18 @@ export function buildFollowerOptions(
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
   });
   deps.refs.switcher.connection = 'disconnected';
+  // Browser rail while joined as a follower: same tray-wide tab list and
+  // pull-to-me action as the dedicated follower mount. This float always has a
+  // real CDP surface (it can lead), so the teleport path is available.
+  let trayTargets: TrayTargetEntry[] = [];
+  const followerBrowser = wireWcFollowerBrowser({
+    refs: deps.refs,
+    getSync,
+    getTargets: () => trayTargets,
+    hasCdpBrowser: () => true,
+    window: deps.window,
+    log: deps.log,
+  });
   deps.refs.switcher.addEventListener(
     'slicc-scoop-select',
     (event) => {
@@ -295,6 +309,10 @@ export function buildFollowerOptions(
       }
       deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
+    },
+    onTargetsUpdated: (targets) => {
+      trayTargets = targets;
+      followerBrowser.refresh();
     },
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,

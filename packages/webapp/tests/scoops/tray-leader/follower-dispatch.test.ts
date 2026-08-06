@@ -47,6 +47,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
     },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
     requesterTracker: { noteFollowerUserMessage: vi.fn() },
+    tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
   };
 }
 

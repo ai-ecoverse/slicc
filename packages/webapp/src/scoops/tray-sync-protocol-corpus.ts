@@ -594,6 +594,12 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     ios: 'decoded',
     message: { type: 'tab.open.error', requestId: 'tab-1', error: 'load failed' },
   },
+  // iOS gains its encoder for this in the same release that lands its real
+  // Network domain (a teleport into a cookie-less follower is worse than none).
+  'tab.teleport.request': {
+    ios: 'undecodable',
+    message: { type: 'tab.teleport.request', requestId: 'tp-1', targetId: 'leader:tab1' },
+  },
   'fs.request': {
     ios: 'decoded',
     message: {

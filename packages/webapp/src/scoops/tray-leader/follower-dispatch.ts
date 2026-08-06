@@ -14,6 +14,7 @@ import type { FsRouter } from './fs-router.js';
 import type { RemoteExecRouter } from './remote-exec.js';
 import type { RequesterTracker } from './requester-tracker.js';
 import type { TabRouter } from './tab-router.js';
+import type { TabTeleportRouter } from './tab-teleport-router.js';
 import type { TeleportPool } from './teleport-pool.js';
 import type { TranscriptExportManager } from './transcript-export.js';
 
@@ -34,6 +35,7 @@ export interface FollowerDispatchCollaborators {
     'executeLocalTabOpen' | 'forwardTabOpen' | 'handleTabOpenResponse' | 'handleTabOpenError'
   >;
   teleportPool: Pick<TeleportPool, 'handleFollowerTargetsAdvertise'>;
+  tabTeleportRouter: Pick<TabTeleportRouter, 'handleTeleportRequest'>;
   transcriptExport: Pick<
     TranscriptExportManager,
     | 'handleTranscriptExportRequest'
@@ -55,7 +57,7 @@ export class FollowerDispatch {
   dispatch(bootstrapId: string, message: FollowerToLeaderMessage): void {
     this.noteLegacyPeer(bootstrapId, message);
     const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
-    const { teleportPool, transcriptExport, cherryRouter } = this.collaborators;
+    const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
 
     switch (message.type) {
       case 'user_message':
@@ -125,6 +127,9 @@ export class FollowerDispatch {
         break;
       case 'tab.open.error':
         tabRouter.handleTabOpenError(message.requestId, message.error);
+        break;
+      case 'tab.teleport.request':
+        void tabTeleportRouter.handleTeleportRequest(bootstrapId, message);
         break;
       case 'fs.request':
         this.routeFsRequest(bootstrapId, message);

@@ -9,6 +9,7 @@ import {
 } from '../../scoops/tray-follower-status.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
+import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -20,6 +21,7 @@ import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { prepareWcShell } from './wc-live.js';
 import type { WcShellRefs } from './wc-shell.js';
@@ -629,6 +631,20 @@ export async function mountWcUiFollower(
   boot.refs.switcher.connection = 'disconnected';
 
   let follower!: ReturnType<typeof startPageFollowerTray>;
+
+  // Browser rail: list every tab in the tray and let the user pull one here.
+  // A float with a real CDP surface gets a state-carrying teleport; the
+  // ui-only side panel and cherry degrade to window.open inside the click.
+  let trayTargets: TrayTargetEntry[] = [];
+  const followerBrowser = wireWcFollowerBrowser({
+    refs: boot.refs,
+    getSync: () => follower.currentSync,
+    getTargets: () => trayTargets,
+    hasCdpBrowser: () => followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
+    window,
+    log,
+  });
+
   const modelSurface = createFollowerModelSurface({
     composerMeta,
     getSync: () => follower.currentSync,
@@ -641,6 +657,10 @@ export async function mountWcUiFollower(
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
     advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
+    onTargetsUpdated: (targets) => {
+      trayTargets = targets;
+      followerBrowser.refresh();
+    },
     browserAPI: prelude.browser,
     onSnapshot: (messages, scoopJid) => {
       followerSelectedScoop = scoopJid;

@@ -55,7 +55,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 5;
+export const TRAY_SYNC_PROTOCOL_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -405,6 +405,15 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  /**
+   * "Teleport that tab to me": the follower asks the leader to open a copy of
+   * an existing tray target HERE, carrying its cookies + web storage. The
+   * destination is always the requesting follower, derived from the channel
+   * identity — never from the payload — so one follower cannot push tabs into
+   * another. The leader replies on the existing `tab.opened` /
+   * `tab.open.error` legs, keyed by `requestId`.
+   */
+  | { type: 'tab.teleport.request'; requestId: string; targetId: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | TrayExecRequestMessage

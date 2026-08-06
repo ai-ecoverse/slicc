@@ -16,7 +16,10 @@ import type {
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
-import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
+import {
+  CHERRY_RUNTIME_TAG,
+  TRAY_SYNC_PROTOCOL_VERSION,
+} from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 
 // ---------------------------------------------------------------------------
@@ -2784,7 +2787,7 @@ describe('version handshake', () => {
       capabilities: { exec: boolean };
     };
     expect(first.type).toBe('hello');
-    expect(first.protocolVersion).toBe(5);
+    expect(first.protocolVersion).toBe(TRAY_SYNC_PROTOCOL_VERSION);
     expect(first.capabilities).toEqual({ exec: true });
   });
 

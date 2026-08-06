@@ -39,6 +39,7 @@ import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { type LastUserMessageOrigin, RequesterTracker } from './tray-leader/requester-tracker.js';
 import { TabRouter } from './tray-leader/tab-router.js';
+import { TabTeleportRouter } from './tray-leader/tab-teleport-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
 import { TranscriptExportManager } from './tray-leader/transcript-export.js';
 import {
@@ -212,6 +213,7 @@ export class LeaderSyncManager {
   private readonly transcriptExport: TranscriptExportManager;
   private readonly followerDispatch: FollowerDispatch;
   private readonly requesterTracker = new RequesterTracker();
+  private readonly tabTeleportRouter: TabTeleportRouter;
   private get followers(): Map<string, ConnectedFollower> {
     return this.followerRegistry.followers;
   }
@@ -247,6 +249,9 @@ export class LeaderSyncManager {
       isCherryTarget,
     });
     this.cherryRouter = new CherryRouter(context);
+    this.tabTeleportRouter = new TabTeleportRouter(context, {
+      getTargetEntries: () => this.teleportPool.getConnectedEntries(),
+    });
     this.followerDispatch = new FollowerDispatch(context, {
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
@@ -257,6 +262,7 @@ export class LeaderSyncManager {
       transcriptExport: this.transcriptExport,
       cherryRouter: this.cherryRouter,
       requesterTracker: this.requesterTracker,
+      tabTeleportRouter: this.tabTeleportRouter,
     });
     this.followerRegistry.onFollowerRemoved({
       afterRegistryCleanup: (bootstrapId) =>
