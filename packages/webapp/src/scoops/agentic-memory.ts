@@ -15,16 +15,25 @@ export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
 const DEFAULT_WRITABLE_PATHS = ['/workspace/'];
 const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/'];
 const DEFAULT_ALLOWED_COMMANDS = [
+  'awk',
   'cat',
+  'cut',
+  'date',
+  'diff',
+  'echo',
   'find',
   'grep',
   'head',
   'ls',
   'mkdir',
   'mv',
+  'printf',
   'sed',
+  'sort',
   'tail',
   'touch',
+  'tr',
+  'uniq',
   'wc',
 ];
 const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
@@ -126,7 +135,9 @@ function parseMemoryDocument(content: string): MemoryConfig {
   return {
     writablePaths,
     visiblePaths,
-    allowedCommands: readArray(values, 'allowedCommands', DEFAULT_ALLOWED_COMMANDS),
+    allowedCommands: [
+      ...new Set([...DEFAULT_ALLOWED_COMMANDS, ...readArray(values, 'allowedCommands', [])]),
+    ],
     ...(model ? { model } : {}),
     timeoutSeconds,
     promptTemplate: match[2].trim(),

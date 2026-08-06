@@ -28,6 +28,8 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 - `MEMORY.md` is user-edited only; the curator intentionally cannot rewrite its own instructions.
 - Frontmatter uses a strict YAML subset: block-array items may have `#` comment tails; inline
   entries containing commas must be quoted. A bare `/` is rejected from `writablePaths`.
+- Frontmatter `allowedCommands` entries extend the curator's built-in base set; they do not
+  replace or remove base commands.
 
 ### Skills
 

@@ -5,16 +5,25 @@ visiblePaths:
   - /sessions/
   - /shared/
 allowedCommands:
+  - awk
   - cat
+  - cut
+  - date
+  - diff
+  - echo
   - find
   - grep
   - head
   - ls
   - mkdir
   - mv
+  - printf
   - sed
+  - sort
   - tail
   - touch
+  - tr
+  - uniq
   - wc
 timeoutSeconds: 120
 ---
@@ -40,5 +49,5 @@ Add curator instructions here, for example: also update the knowledge base at /p
 
 MEMORY.md is user-edited only: the curator intentionally has read-only access to /shared/ and cannot rewrite its own instructions. A bare / is rejected in writablePaths.
 
-Frontmatter supports a strict YAML subset. Arrays may use the block form above (with optional # comment tails) or inline form such as [cat, grep]. Inline entries containing commas must be quoted, for example ["/knowledge/lars,rebecca/"].
+Frontmatter supports a strict YAML subset. Arrays may use the block form above (with optional # comment tails) or inline form such as [cat, grep]. `allowedCommands` is additive: listed commands extend the built-in base set without replacing it. Inline entries containing commas must be quoted, for example ["/knowledge/lars,rebecca/"].
 -->

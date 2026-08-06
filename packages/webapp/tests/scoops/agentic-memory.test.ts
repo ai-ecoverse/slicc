@@ -6,6 +6,28 @@ import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agenti
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
 
 const ARCHIVE_PATH = '/sessions/2026-08-05-memory.md';
+const BASE_ALLOWED_COMMANDS = [
+  'awk',
+  'cat',
+  'cut',
+  'date',
+  'diff',
+  'echo',
+  'find',
+  'grep',
+  'head',
+  'ls',
+  'mkdir',
+  'mv',
+  'printf',
+  'sed',
+  'sort',
+  'tail',
+  'touch',
+  'tr',
+  'uniq',
+  'wc',
+];
 
 function fakeVfs(content: string | Error): Pick<LocalVfsClient, 'readFile'> {
   return {
@@ -37,7 +59,7 @@ visiblePaths:
   - /sessions/
   - /shared/
   - /knowledge/
-allowedCommands: [cat, grep, wc]
+allowedCommands: [cat, grep, wc, custom-text]
 model: claude-sonnet-4-6
 timeoutSeconds: 45
 ---
@@ -57,7 +79,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       cwd: '/workspace',
       writablePaths: ['/workspace/', '/knowledge/'],
       visiblePaths: ['/sessions/', '/shared/', '/knowledge/'],
-      allowedCommands: ['cat', 'grep', 'wc'],
+      allowedCommands: [...BASE_ALLOWED_COMMANDS, 'custom-text'],
       modelId: 'claude-sonnet-4-6',
     });
     expect(options.prompt).toBe(
@@ -88,8 +110,26 @@ Curate {{MEMORY_PATH}}.`;
     expect(spawn.mock.calls[0][0]).toMatchObject({
       writablePaths: ['/workspace/', '/knowledge/lars,rebecca/'],
       visiblePaths: ['/sessions/', '/shared/#reference'],
-      allowedCommands: ['cat'],
+      allowedCommands: BASE_ALLOWED_COMMANDS,
     });
+  });
+
+  it('preserves the base command set when frontmatter lists only a subset', async () => {
+    const memoryMd = `---
+allowedCommands: [cat, grep]
+---
+Curate {{MEMORY_PATH}}.`;
+    const spawn = successSpawn();
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(memoryMd),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(spawn.mock.calls[0][0].allowedCommands).toEqual(BASE_ALLOWED_COMMANDS);
   });
 
   it.each([
