@@ -84,6 +84,38 @@ describe('check-layer-back-edges: findLayerBackEdges', () => {
     ].join('\n');
     expect(findLayerBackEdges('core/session.ts', source).map((h) => h.line)).toEqual([2, 3]);
   });
+
+  // Regression fixtures for the import shapes that slipped past #1960's
+  // per-shape text patterns: specifier count and clause shape must not matter.
+  it('catches multi-specifier imports and re-exports regardless of clause shape', () => {
+    const source = [
+      "import { a, b, type C } from '../ui/multi.js';",
+      "import def, { d } from '../ui/mixed.js';",
+      "export { e, f } from '../ui/re-export.js';",
+      "export * from '../ui/star.js';",
+      "import type { G } from '../ui/types.js';",
+    ].join('\n');
+    expect(findLayerBackEdges('core/session.ts', source).map((h) => h.line)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+  });
+
+  it("matches Prettier's multiline dynamic import form (line = the import keyword)", () => {
+    const source = "const irrelevant = 1;\nconst m = await import(\n  '../ui/lazy.js'\n);";
+    expect(findLayerBackEdges('core/session.ts', source)).toEqual([
+      { line: 2, specifier: '../ui/lazy.js', from: 'core', to: 'ui' },
+    ]);
+  });
+
+  it('resolves specifiers against the importer dir, not by specifier text', () => {
+    // scoops/sub/x.ts + '../ui/y.js' → scoops/ui/y.js: same layer, NOT a back-edge
+    // (a '../ui/' text match would false-positive here).
+    expect(findLayerBackEdges('scoops/sub/x.ts', "import y from '../ui/y.js';")).toEqual([]);
+    // One more rung up it really is ui/: back-edge.
+    expect(findLayerBackEdges('scoops/sub/x.ts', "import y from '../../ui/y.js';")).toEqual([
+      { line: 1, specifier: '../../ui/y.js', from: 'scoops', to: 'ui' },
+    ]);
+  });
 });
 
 describe('check-layer-back-edges: isWebappSource', () => {

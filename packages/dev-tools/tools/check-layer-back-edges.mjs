@@ -182,6 +182,17 @@ function main() {
 
   if (failures.length > 0) {
     for (const failure of failures) process.stderr.write(`::error::${failure}\n`);
+    const srcPrefix = 'packages/webapp/src/';
+    for (const [file, count] of Object.entries(current)) {
+      if (count <= (baseline[file] ?? 0)) continue;
+      const hits = findLayerBackEdges(
+        file.slice(srcPrefix.length),
+        readFileSync(resolve(repoRoot, file), 'utf8')
+      );
+      for (const h of hits) {
+        process.stderr.write(`  ${file}:${h.line} ${h.from} → ${h.to}: '${h.specifier}'\n`);
+      }
+    }
     process.stderr.write(
       `\n${failures.length} layer-stack violation(s). The webapp layer stack ` +
         '(fs → shell/git → cdp → tools → core → scoops → ui) requires imports to point ' +
