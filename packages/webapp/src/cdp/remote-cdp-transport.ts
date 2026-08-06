@@ -3,7 +3,7 @@
  * to a remote runtime that owns the target browser tab.
  */
 
-import { reassembleCDPResponse } from '../scoops/tray-sync-protocol.js';
+import { reassembleCDPResponse } from '@slicc/shared-ts';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPEventListener, ConnectionState } from './types.js';

@@ -8,7 +8,12 @@ import type {
   TranscriptExportProgress,
   TranscriptExportSelector,
 } from '@slicc/shared-ts';
-import { TranscriptExportError, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
+import {
+  reassembleCDPResponse,
+  sendCDPResponse,
+  TranscriptExportError,
+  VALID_EXPORT_ERROR_CODES,
+} from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
@@ -34,11 +39,9 @@ import {
   type FollowerToLeaderMessage,
   type LeaderToFollowerMessage,
   type RemoteTargetInfo,
-  reassembleCDPResponse,
   reassembleSnapshot,
   type ScoopSummary,
   type SprinkleSummary,
-  sendCDPResponse,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayExecChunkMessage,
   type TrayExecRequestMessage,

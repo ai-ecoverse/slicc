@@ -10,8 +10,8 @@
  * is no listing regression — this provider's job is driving, not listing.
  */
 
+import type { TrayTargetEntry } from '@slicc/shared-ts';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
-import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import type { TrayTargetProvider } from './browser-api.js';
 import { PanelRpcCdpTransport } from './panel-rpc-cdp-transport.js';
 

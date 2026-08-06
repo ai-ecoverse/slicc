@@ -1,7 +1,7 @@
+import { reassembleCDPResponse, sendCDPResponse } from '@slicc/shared-ts';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../../cdp/transport.js';
 import type { FollowerToLeaderMessage } from '../tray-sync-protocol.js';
-import { reassembleCDPResponse, sendCDPResponse } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
 
 const FOLLOWER_PREVIEW_SETTLE_MS = 150;
