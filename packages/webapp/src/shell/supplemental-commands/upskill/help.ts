@@ -8,7 +8,7 @@
 import type { DiscoveredSkill } from '../../../skills/types.js';
 
 export function formatDiscoveryScope(): string {
-  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, and **/.claude-plugin/marketplace.json skill collections anywhere in the VFS.\n';
+  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/*, **/.claude/skills/*, **/.claude-plugin/marketplace.json skill collections anywhere in the VFS, and installed agent plugins (`plugin list`).\n';
 }
 
 export function formatSkillSource(source: DiscoveredSkill['source']): string {
@@ -21,6 +21,8 @@ export function formatSkillSource(source: DiscoveredSkill['source']): string {
       return '.claude';
     case 'marketplace':
       return 'marketplace';
+    case 'plugin':
+      return 'plugin';
   }
 }
 

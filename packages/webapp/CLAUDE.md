@@ -242,7 +242,7 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 ### Skills
 
 - Path: `packages/webapp/src/skills/`
-- Precedence: native `/workspace/skills/` → `.agents/skills/*/SKILL.md` → `.claude/skills/*/SKILL.md` → marketplace (`.claude-plugin/marketplace.json`).
+- Precedence: native `/workspace/skills/` → `.agents/skills/*/SKILL.md` → `.claude/skills/*/SKILL.md` → marketplace (`.claude-plugin/marketplace.json`) → agent plugins (`plugin` command, `shell/plugins/`).
 - **Never monkeypatch a method on a get/set-asymmetric Proxy.** The sudo-fs Proxy advertises
   `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` marker); `getCompatibilitySkillCandidates` skips
   hooks and cache for it (always re-discovers). Reassigning a gated method creates an

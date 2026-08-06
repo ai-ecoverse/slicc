@@ -276,6 +276,54 @@ describe('discoverSkillCandidates', () => {
     }
   });
 
+  it('discovers skills from installed agent plugins via /workspace/.plugins/plugins.json', async () => {
+    await fs.mkdir('/workspace/my-plugin/skills/summarize', { recursive: true });
+    await fs.writeFile(
+      '/workspace/my-plugin/skills/summarize/SKILL.md',
+      '---\nname: summarize\ndescription: d\n---\n'
+    );
+    await fs.mkdir('/workspace/.plugins', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.plugins/plugins.json',
+      JSON.stringify({ version: 1, plugins: { 'my-plugin': { root: '/workspace/my-plugin' } } })
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    const pluginCandidates = candidates.filter((c) => c.source === 'plugin');
+    expect(pluginCandidates).toHaveLength(1);
+    expect(pluginCandidates[0].path).toBe('/workspace/my-plugin/skills/summarize');
+    expect(pluginCandidates[0].skillFilePath).toBe(
+      '/workspace/my-plugin/skills/summarize/SKILL.md'
+    );
+  });
+
+  it('ignores a malformed plugins.json registry without throwing', async () => {
+    await fs.mkdir('/workspace/.plugins', { recursive: true });
+    await fs.writeFile('/workspace/.plugins/plugins.json', 'not json {{{');
+
+    const candidates = await discoverSkillCandidates(fs);
+    expect(candidates.filter((c) => c.source === 'plugin')).toHaveLength(0);
+  });
+
+  it('plugin skills rank below native and compatibility sources in precedence order', async () => {
+    await fs.mkdir('/workspace/skills/shared-name', { recursive: true });
+    await fs.writeFile('/workspace/skills/shared-name/SKILL.md', '# native');
+    await fs.mkdir('/workspace/my-plugin/skills/shared-name', { recursive: true });
+    await fs.writeFile('/workspace/my-plugin/skills/shared-name/SKILL.md', '# plugin');
+    await fs.mkdir('/workspace/.plugins', { recursive: true });
+    await fs.writeFile(
+      '/workspace/.plugins/plugins.json',
+      JSON.stringify({ version: 1, plugins: { 'my-plugin': { root: '/workspace/my-plugin' } } })
+    );
+
+    const candidates = await discoverSkillCandidates(fs);
+    const shared = candidates.filter((c) => c.path.endsWith('/shared-name'));
+    expect(shared.map((c) => c.source)).toEqual(['native', 'plugin']);
+
+    const { winners } = resolveSkillNameCollisions(shared, (c) => c.path.split('/').pop() ?? '');
+    expect(winners[0].source).toBe('native');
+  });
+
   it('terminates on a cyclic VFS (mount self-reference) instead of hanging, and still finds real skills', async () => {
     // Regression for the substrate boot wedge: a profile whose VFS contains a
     // directory cycle — e.g. a self-referential /mnt mount that re-exposes one

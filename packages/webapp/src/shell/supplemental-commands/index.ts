@@ -48,6 +48,7 @@ import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
+import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createRsyncCommand } from './rsync-command.js';
@@ -191,6 +192,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebsocatCommand(),
     createCrontaskCommand(),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
+    createPluginCommand({ fs: options.fs }),
     createFsWatchCommand(),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),

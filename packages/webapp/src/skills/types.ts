@@ -12,7 +12,7 @@ export interface DiscoveredSkill {
   /** Skill name (directory name) */
   name: string;
   /** Discovery source bucket */
-  source: 'native' | 'agents' | 'claude' | 'marketplace';
+  source: 'native' | 'agents' | 'claude' | 'marketplace' | 'plugin';
   /** Root directory that yielded this skill */
   sourceRoot: string;
   /** Path to skill directory */
