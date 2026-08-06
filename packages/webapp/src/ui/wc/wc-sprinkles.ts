@@ -121,9 +121,6 @@ interface DockTreeLike {
  */
 export const CHAT_SURFACE_ID = 'chat';
 
-/** Zone a newly opened sprinkle (no drag gesture) lands in. */
-const DEFAULT_TREE_ZONE: DockZoneName = 'middle';
-
 /**
  * Dock-rail ids of the fixed tool panels — each an independent, permanently
  * mounted `<slicc-surface>` composed directly into the dock-tree (see
@@ -134,6 +131,9 @@ const TOOL_PANEL_IDS: ReadonlySet<string> = new Set(['files', 'term', 'memory', 
 
 /** Zone a tool panel lands in the first time it's opened (each one independent — no shared leaf). */
 export const DEFAULT_TOOL_ZONE: DockZoneName = 'right';
+
+/** Zone a newly opened sprinkle (no drag gesture) lands in — same zone as the tool panels, so sprinkles tab alongside VFS/terminal instead of claiming their own column. */
+const DEFAULT_TREE_ZONE: DockZoneName = DEFAULT_TOOL_ZONE;
 
 /** Whether a dock-rail id is one of the fixed tool panels (not a sprinkle). */
 export function isToolPanelId(id: string): boolean {

@@ -181,7 +181,7 @@ describe('WcSprinkleZone', () => {
       );
       expect(surface?.contains(element)).toBe(true);
       expect(dockIds(refs)).toContain('sprinkle:hero');
-      expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
+      expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', DEFAULT_TOOL_ZONE);
       expect(zone.isOpen('hero')).toBe(true);
     }
   );
@@ -386,7 +386,7 @@ describe('WcSprinkleZone applyLayout / placeSurface / moveSurfaceToZone', () => 
     zone.applyLayout(LAYOUT_PRESETS.focus.tree);
 
     expect(treeSpies(refs).setTree).toHaveBeenCalledWith(LAYOUT_PRESETS.focus.tree);
-    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', 'middle');
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('sprinkle:hero', DEFAULT_TOOL_ZONE);
   });
 
   it('placeSurface forwards to the dock-tree with (surfaceId, zone) order', () => {
