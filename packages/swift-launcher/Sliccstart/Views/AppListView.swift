@@ -31,6 +31,7 @@ struct AppListView: View {
     @State private var terminalOrder: [String] = []
     @State private var draggingBundleId: String?
     @State private var browserDialogTarget: AppTarget?
+    @State private var sessionReachability = SessionReachability()
 
     private let orderStore = AppOrderStore()
 
@@ -240,33 +241,45 @@ struct AppListView: View {
 
     @ViewBuilder
     private var sessionsSection: some View {
-        let remote = sessionStore.remoteSessions
+        let remote = TraySessionPresentation.sortedRemoteSessions(
+            sessionStore.remoteSessions,
+            verdicts: sessionReachability.verdicts
+        )
         let local = sessionStore.localSessions
         if !remote.isEmpty || !local.isEmpty {
-            SectionHeader("iCloud Sessions")
-            ForEach(remote) { session in
-                TraySessionRow(
-                    session: session,
-                    isLocal: false,
-                    localBrowserIcon: localBrowserIcon(for: session),
-                    canAttachBrowser: orderedBrowsers.first != nil,
-                    canFollow: !orderedTerminals.isEmpty,
-                    onCopy: { copyJoinURL(session) },
-                    onAttachBrowser: { attachBrowser(to: session) },
-                    onFollow: { beginRemoteFollow(session) }
-                )
+            VStack(alignment: .leading, spacing: 0) {
+                SectionHeader("iCloud Sessions")
+                ForEach(remote) { session in
+                    TraySessionRow(
+                        session: session,
+                        isLocal: false,
+                        localBrowserIcon: localBrowserIcon(for: session),
+                        verdict: sessionReachability.verdicts[session.id],
+                        canAttachBrowser: orderedBrowsers.first != nil,
+                        canFollow: !orderedTerminals.isEmpty,
+                        onCopy: { copyJoinURL(session) },
+                        onAttachBrowser: { attachBrowser(to: session) },
+                        onFollow: { beginRemoteFollow(session) }
+                    )
+                }
+                ForEach(local) { session in
+                    TraySessionRow(
+                        session: session,
+                        isLocal: true,
+                        localBrowserIcon: localBrowserIcon(for: session),
+                        verdict: nil,
+                        canAttachBrowser: false,
+                        canFollow: false,
+                        onCopy: { copyJoinURL(session) },
+                        onAttachBrowser: {},
+                        onFollow: {}
+                    )
+                }
             }
-            ForEach(local) { session in
-                TraySessionRow(
-                    session: session,
-                    isLocal: true,
-                    localBrowserIcon: localBrowserIcon(for: session),
-                    canAttachBrowser: false,
-                    canFollow: false,
-                    onCopy: { copyJoinURL(session) },
-                    onAttachBrowser: {},
-                    onFollow: {}
-                )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear { sessionReachability.probe(sessionStore.remoteSessions) }
+            .onChange(of: sessionStore.remoteSessions) { _, sessions in
+                sessionReachability.probe(sessions)
             }
         }
     }
@@ -451,6 +464,7 @@ struct TraySessionRow: View {
     let session: SyncedTraySession
     let isLocal: Bool
     let localBrowserIcon: NSImage?
+    let verdict: SessionReachability.Verdict?
     let canAttachBrowser: Bool
     let canFollow: Bool
     let onCopy: () -> Void
@@ -478,25 +492,31 @@ struct TraySessionRow: View {
                     Image(systemName: "globe")
                 }
                 .buttonStyle(.borderless)
-                .disabled(!canAttachBrowser)
-                .help(canAttachBrowser ? "Attach a browser to this session" : "Install a supported browser to attach")
+                .disabled(!attachBrowserEnabled)
+                .help(attachBrowserHelp)
                 .accessibilityIdentifier("session-attach-browser-\(session.id)")
                 Button(action: onFollow) {
                     Image(systemName: "terminal")
                 }
                 .buttonStyle(.borderless)
-                .disabled(!canFollow)
-                .help(canFollow ? "Follow in a terminal" : "Install a supported terminal to follow")
+                .disabled(!followEnabled)
+                .help(followHelp)
                 .accessibilityIdentifier("session-follow-\(session.id)")
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+        .opacity(isUnreachable ? 0.55 : 1)
     }
 
     @ViewBuilder
     private var icon: some View {
-        if let localBrowserIcon {
+        if isUnreachable {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 15))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.secondary)
+        } else if let localBrowserIcon {
             ZStack(alignment: .bottomTrailing) {
                 Image(nsImage: localBrowserIcon)
                     .resizable()
@@ -517,29 +537,37 @@ struct TraySessionRow: View {
     }
 
     private var subtitle: String {
-        TraySessionRow.subtitle(
+        TraySessionPresentation.subtitle(
             isLocal: isLocal,
             deviceName: session.deviceName,
-            lastSeenAt: session.lastSeenAt
+            lastSeenAt: session.lastSeenAt,
+            verdict: verdict
         )
     }
 
-    static func subtitle(
-        isLocal: Bool,
-        deviceName: String,
-        lastSeenAt: Date,
-        now: Date = Date()
-    ) -> String {
-        let origin = isLocal ? "This device" : deviceName
-        return "\(origin) · \(age(of: lastSeenAt, now: now))"
+    private var isUnreachable: Bool {
+        verdict == .unreachable
     }
 
-    static func age(of date: Date, now: Date = Date()) -> String {
-        let seconds = max(0, now.timeIntervalSince(date))
-        if seconds < 60 { return "just now" }
-        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
-        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
-        return "\(Int(seconds / 86400))d ago"
+    private var attachBrowserEnabled: Bool {
+        TraySessionPresentation.remoteActionEnabled(
+            available: canAttachBrowser,
+            verdict: verdict
+        )
+    }
+
+    private var followEnabled: Bool {
+        TraySessionPresentation.remoteActionEnabled(available: canFollow, verdict: verdict)
+    }
+
+    private var attachBrowserHelp: String {
+        if isUnreachable { return "Session is not responding" }
+        return canAttachBrowser ? "Attach a browser to this session" : "Install a supported browser to attach"
+    }
+
+    private var followHelp: String {
+        if isUnreachable { return "Session is not responding" }
+        return canFollow ? "Follow in a terminal" : "Install a supported terminal to follow"
     }
 }
 

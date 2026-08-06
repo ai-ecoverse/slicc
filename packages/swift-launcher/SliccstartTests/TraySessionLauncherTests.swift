@@ -13,31 +13,77 @@ final class TraySessionLauncherTests: XCTestCase {
 
     func testAgeFormatting() {
         let now = Date(timeIntervalSince1970: 100_000)
-        XCTAssertEqual(TraySessionRow.age(of: now, now: now), "just now")
-        XCTAssertEqual(TraySessionRow.age(of: now.addingTimeInterval(-120), now: now), "2m ago")
-        XCTAssertEqual(TraySessionRow.age(of: now.addingTimeInterval(-7200), now: now), "2h ago")
-        XCTAssertEqual(TraySessionRow.age(of: now.addingTimeInterval(-172_800), now: now), "2d ago")
+        XCTAssertEqual(TraySessionPresentation.age(of: now, now: now), "just now")
+        XCTAssertEqual(TraySessionPresentation.age(of: now.addingTimeInterval(-120), now: now), "2m ago")
+        XCTAssertEqual(TraySessionPresentation.age(of: now.addingTimeInterval(-7200), now: now), "2h ago")
+        XCTAssertEqual(TraySessionPresentation.age(of: now.addingTimeInterval(-172_800), now: now), "2d ago")
     }
 
     func testTraySessionRowSubtitle() {
         let now = Date()
         XCTAssertEqual(
-            TraySessionRow.subtitle(
+            TraySessionPresentation.subtitle(
                 isLocal: true,
                 deviceName: "Ignored",
                 lastSeenAt: now,
+                verdict: nil,
                 now: now
             ),
             "This device · just now"
         )
         XCTAssertEqual(
-            TraySessionRow.subtitle(
+            TraySessionPresentation.subtitle(
                 isLocal: false,
                 deviceName: "MacBook",
                 lastSeenAt: now.addingTimeInterval(-120),
+                verdict: .reachable,
                 now: now
             ),
             "MacBook · 2m ago"
+        )
+    }
+
+    func testUnreachableSessionsSortLastWithoutReorderingCohorts() {
+        let firstUnprobed = session(url: "https://one.invalid/join/a", label: "One")
+        let firstUnreachable = session(url: "https://two.invalid/join/b", label: "Two")
+        let reachable = session(url: "https://three.invalid/join/c", label: "Three")
+        let secondUnreachable = session(url: "https://four.invalid/join/d", label: "Four")
+        let sessions = [firstUnprobed, firstUnreachable, reachable, secondUnreachable]
+        let verdicts: [String: SessionReachability.Verdict] = [
+            firstUnreachable.id: .unreachable,
+            reachable.id: .reachable,
+            secondUnreachable.id: .unreachable,
+        ]
+
+        let sorted = TraySessionPresentation.sortedRemoteSessions(sessions, verdicts: verdicts)
+
+        XCTAssertEqual(sorted.map(\.id), [firstUnprobed.id, reachable.id, firstUnreachable.id, secondUnreachable.id])
+    }
+
+    func testUnreachableSubtitleIncludesNotRespondingHint() {
+        let now = Date()
+
+        XCTAssertEqual(
+            TraySessionPresentation.subtitle(
+                isLocal: false,
+                deviceName: "MacBook",
+                lastSeenAt: now.addingTimeInterval(-120),
+                verdict: .unreachable,
+                now: now
+            ),
+            "MacBook · 2m ago · not responding"
+        )
+    }
+
+    func testUnreachableSessionDisablesRemoteActions() {
+        XCTAssertFalse(
+            TraySessionPresentation.remoteActionEnabled(available: true, verdict: .unreachable)
+        )
+        XCTAssertTrue(
+            TraySessionPresentation.remoteActionEnabled(available: true, verdict: .reachable)
+        )
+        XCTAssertTrue(
+            TraySessionPresentation.remoteActionEnabled(available: true, verdict: nil)
         )
     }
 
@@ -81,6 +127,17 @@ final class TraySessionLauncherTests: XCTestCase {
             debugSupport: .unknown,
             isDebugBuild: false,
             originalAppPath: nil
+        )
+    }
+
+    private func session(url: String, label: String) -> SyncedTraySession {
+        SyncedTraySession(
+            joinUrl: url,
+            label: label,
+            deviceId: "remote-device",
+            deviceName: "MacBook",
+            createdAt: Date(),
+            lastSeenAt: Date()
         )
     }
 }
