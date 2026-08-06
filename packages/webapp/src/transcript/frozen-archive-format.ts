@@ -74,6 +74,11 @@ export interface FrozenSessionIndexEntry {
    */
   memoryPending?: true;
   /**
+   * Number of boot-time catch-up attempts already started for either pending
+   * marker. Persisted before the LLM call; entries at the retry cap are skipped.
+   */
+  pendingAttemptCount?: number;
+  /**
    * Set to `true` when the `captureCompleteSnapshot` hook failed during
    * freeze. The Markdown archive is still present; only the full sanitized
    * transcript bundle was not produced.

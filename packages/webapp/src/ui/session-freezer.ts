@@ -77,6 +77,9 @@ const MEMORY_MAX_TOKENS = 2048;
 /** Max output tokens for the title call — a short label. */
 const TITLE_MAX_TOKENS = 40;
 
+/** Permanently skip a pending archive after this many boot-time attempts. */
+export const PENDING_SESSION_ATTEMPT_LIMIT = 3;
+
 /** Where per-freeze attachments land beneath the sessions dir. */
 const SESSION_ATTACHMENTS_DIR = `${SESSIONS_DIR}/attachments`;
 
@@ -199,7 +202,7 @@ export async function curateFrozenSessionMemories(
     };
   }
   if (result.ok) {
-    const updated = await clearMemoryPending(opts.vfs, frozen.filename);
+    const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
     if (!updated) {
       log.warn('Agentic memory pass completed but pending marker could not be cleared', {
         filename: frozen.filename,
@@ -763,16 +766,99 @@ async function updateSessionsIndex(
 }
 
 /**
- * Subset of the sessions index that still needs the LLM-driven enrichment
- * pass (memory extraction + title rewrite). Returns `[]` when the index
- * is missing, empty, or malformed — never throws. Read-only, so typed
- * against `LocalVfsClient`.
+ * Subset of the sessions index that still needs either legacy enrichment or
+ * agentic-memory curation. Entries at the retry cap are permanently skipped.
+ * Returns `[]` when the index is missing, empty, or malformed — never throws.
  */
 export async function listPendingEnrichments(
   vfs: LocalVfsClient
 ): Promise<FrozenSessionIndexEntry[]> {
   const all = await readSessionsIndex(vfs);
-  return all.filter((e) => e.pendingEnrichment === true);
+  return all.filter(
+    (entry) =>
+      (entry.pendingEnrichment === true || entry.memoryPending === true) &&
+      pendingAttemptCount(entry) < PENDING_SESSION_ATTEMPT_LIMIT
+  );
+}
+
+export interface ProcessPendingSessionsOptions {
+  vfs: WritableVfsClient;
+  model?: Model<Api>;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  /** Presence selects the agentic-memory curator path. */
+  agenticMemorySpawn?: AgentBridge['spawn'];
+}
+
+export interface PendingSessionProcessingResult {
+  attempted: number;
+  completed: number;
+}
+
+/**
+ * Process every eligible pending archive serially. Attempts are persisted
+ * before work starts so reloads and permanently failing archives cannot cause
+ * an unbounded LLM call on every boot. Best-effort: this function never throws.
+ */
+export async function processPendingSessions(
+  opts: ProcessPendingSessionsOptions
+): Promise<PendingSessionProcessingResult> {
+  const result = { attempted: 0, completed: 0 };
+  if (!opts.agenticMemorySpawn && (!opts.model || !opts.apiKey)) return result;
+  try {
+    const entries = await listPendingEnrichments(opts.vfs);
+    for (const listedEntry of entries) {
+      try {
+        const entry = await recordPendingAttempt(opts.vfs, listedEntry.filename);
+        if (!entry) continue;
+        result.attempted += 1;
+        const updated = opts.agenticMemorySpawn
+          ? await runPendingAgenticMemoryPass(opts.vfs, entry, opts.agenticMemorySpawn)
+          : await enrichPendingSession(opts.vfs, entry, {
+              model: opts.model!,
+              apiKey: opts.apiKey!,
+              headers: opts.headers,
+            });
+        if (updated) result.completed += 1;
+      } catch (err) {
+        log.warn('Pending session catch-up attempt failed', {
+          filename: listedEntry.filename,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } catch (err) {
+    log.warn('Pending session catch-up failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return result;
+}
+
+async function runPendingAgenticMemoryPass(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry,
+  spawn: AgentBridge['spawn']
+): Promise<FrozenSessionIndexEntry | null> {
+  const result = await runAgenticMemoryPass({
+    spawn,
+    vfs,
+    sessionArchivePath: frozenSessionPath(entry),
+    sessionCount: await readSessionCount(vfs),
+  });
+  if (!result.ok) {
+    log.warn('Pending agentic memory pass failed (entry stays pending)', {
+      filename: entry.filename,
+      reason: result.reason,
+    });
+    return null;
+  }
+  return clearPendingMarkers(vfs, entry.filename);
+}
+
+function pendingAttemptCount(entry: FrozenSessionIndexEntry): number {
+  const count = entry.pendingAttemptCount;
+  return typeof count === 'number' && Number.isInteger(count) && count > 0 ? count : 0;
 }
 
 export interface EnrichPendingSessionOptions {
@@ -813,7 +899,7 @@ export async function enrichPendingSession(
   opts: EnrichPendingSessionOptions
 ): Promise<FrozenSessionIndexEntry | null> {
   // 1. Idempotency guard — entry no longer pending, nothing to do.
-  if (!entry.pendingEnrichment) {
+  if (!entry.pendingEnrichment && !entry.memoryPending) {
     return null;
   }
   const archiveContent = await readPendingArchive(vfs, entry);
@@ -1028,6 +1114,7 @@ async function commitEnrichedArchive(
     ...(entry.models ? { models: entry.models } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+    ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
   };
   try {
     await replaceIndexEntry(vfs, entry.filename, updatedEntry);
@@ -1092,8 +1179,8 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
  */
 let indexWriteChain: Promise<void> = Promise.resolve();
 
-/** Clear the agentic-memory marker without racing other index mutations. */
-async function clearMemoryPending(
+/** Clear every catch-up marker and its attempt counter after successful work. */
+async function clearPendingMarkers(
   vfs: WritableVfsClient,
   filename: string
 ): Promise<FrozenSessionIndexEntry | null> {
@@ -1102,7 +1189,12 @@ async function clearMemoryPending(
     const existing = await readSessionsIndex(vfs);
     const index = existing.findIndex((entry) => entry.filename === filename);
     if (index === -1) return;
-    const { memoryPending: _pending, ...updatedEntry } = existing[index];
+    const {
+      memoryPending: _memoryPending,
+      pendingEnrichment: _pendingEnrichment,
+      pendingAttemptCount: _pendingAttemptCount,
+      ...updatedEntry
+    } = existing[index];
     const updated = existing.slice();
     updated[index] = updatedEntry;
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
@@ -1123,6 +1215,35 @@ async function clearMemoryPending(
     });
   }
   return cleared;
+}
+
+/** Persist one attempt before its LLM call, serialized with every index mutation. */
+async function recordPendingAttempt(
+  vfs: WritableVfsClient,
+  filename: string
+): Promise<FrozenSessionIndexEntry | null> {
+  let attempted: FrozenSessionIndexEntry | null = null;
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const current = existing[index];
+    if (!current.pendingEnrichment && !current.memoryPending) return;
+    const attempts = pendingAttemptCount(current);
+    if (attempts >= PENDING_SESSION_ATTEMPT_LIMIT) return;
+    attempted = { ...current, pendingAttemptCount: attempts + 1 };
+    const updated = existing.slice();
+    updated[index] = attempted;
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  await next;
+  return attempted;
 }
 
 /**

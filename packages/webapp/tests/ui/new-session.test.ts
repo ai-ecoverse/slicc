@@ -31,11 +31,13 @@ vi.mock('../../src/scoops/chat-session-store.js', () => ({
 const mockFreezeConeSession = vi.fn();
 const mockCurateFrozenSessionMemories = vi.fn();
 const mockEnrichPendingSession = vi.fn();
+const mockProcessPendingSessions = vi.fn();
 const mockMarkSnapshotUnavailable = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {});
 vi.mock('../../src/ui/session-freezer.js', () => ({
   freezeConeSession: (...a: unknown[]) => mockFreezeConeSession(...a),
   curateFrozenSessionMemories: (...a: unknown[]) => mockCurateFrozenSessionMemories(...a),
   enrichPendingSession: (...a: unknown[]) => mockEnrichPendingSession(...a),
+  processPendingSessions: (...a: unknown[]) => mockProcessPendingSessions(...a),
   markSnapshotUnavailable: (...a: unknown[]) => mockMarkSnapshotUnavailable(...a),
 }));
 
@@ -46,6 +48,8 @@ import {
   resetNewSessionTmp,
   runNewSessionFreeze,
   runNewSessionFreezeQuick,
+  runPendingSessionCatchup,
+  schedulePendingSessionCatchup,
 } from '../../src/ui/new-session.js';
 
 function deferred<T>() {
@@ -119,6 +123,47 @@ const enriched: FrozenSessionIndexEntry = {
 
 beforeEach(() => {
   mockIsFeatureEnabled.mockReset().mockReturnValue(false);
+  mockProcessPendingSessions.mockReset().mockResolvedValue({ attempted: 0, completed: 0 });
+});
+
+describe('pending session boot catch-up', () => {
+  it('uses the flag-off legacy path with current provider credentials', async () => {
+    const vfs = {} as never;
+    mockGetApiKey.mockReturnValue('k');
+    mockResolveCurrentModel.mockReturnValue(fakeModel);
+    const onComplete = vi.fn();
+
+    await runPendingSessionCatchup({ openVfs: async () => vfs, onComplete });
+
+    expect(mockProcessPendingSessions).toHaveBeenCalledWith({
+      vfs,
+      model: fakeModel,
+      apiKey: 'k',
+      headers: undefined,
+    });
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
+  it('runs only after the idle callback and never surfaces catch-up failures', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    mockProcessPendingSessions.mockRejectedValue(new Error('index write failed'));
+    const openVfs = vi.fn(async () => ({}) as never);
+    const scheduled: Array<() => void> = [];
+
+    expect(() =>
+      schedulePendingSessionCatchup({
+        openVfs,
+        agenticMemorySpawn: vi.fn(),
+        schedule: (callback) => scheduled.push(callback),
+      })
+    ).not.toThrow();
+    expect(openVfs).not.toHaveBeenCalled();
+
+    scheduled[0]();
+    await flush();
+    expect(openVfs).toHaveBeenCalledOnce();
+    expect(mockProcessPendingSessions).toHaveBeenCalledOnce();
+  });
 });
 
 describe('runNewSessionFreeze — write-first + race', () => {

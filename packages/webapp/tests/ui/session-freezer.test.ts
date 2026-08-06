@@ -54,10 +54,12 @@ import { applyDictationMarkers } from '../../src/speech/dictation-priming.js';
 import {
   curateFrozenSessionMemories,
   enrichPendingSession,
+  type FrozenSessionIndexEntry,
   freezeConeSession,
   listPendingEnrichments,
   markSnapshotUnavailable,
   parseFrozenArchive,
+  processPendingSessions,
   readSessionsIndex,
 } from '../../src/ui/session-freezer.js';
 
@@ -1441,7 +1443,7 @@ describe('listPendingEnrichments', () => {
     expect(out).toEqual([]);
   });
 
-  it('returns only the pendingEnrichment=true subset of the index', async () => {
+  it('returns both pending marker types below the retry cap', async () => {
     const vfs = makeFakeVfs();
     vfs.files.set(
       '/sessions/index.json',
@@ -1454,6 +1456,21 @@ describe('listPendingEnrichments', () => {
           pendingEnrichment: true,
         },
         {
+          filename: 'memory-pending.md',
+          title: 'memory pending',
+          frozenAt: '2026-05-13T18:00:00.000Z',
+          messageCount: 5,
+          memoryPending: true,
+        },
+        {
+          filename: 'retry-capped.md',
+          title: 'capped',
+          frozenAt: '2026-05-13T17:00:00.000Z',
+          messageCount: 5,
+          memoryPending: true,
+          pendingAttemptCount: 3,
+        },
+        {
           filename: '2026-05-12T10-00-00-000Z-done.md',
           title: 'done',
           frozenAt: '2026-05-12T10:00:00.000Z',
@@ -1464,9 +1481,133 @@ describe('listPendingEnrichments', () => {
     const out = await listPendingEnrichments(
       vfs as unknown as Parameters<typeof listPendingEnrichments>[0]
     );
-    expect(out).toHaveLength(1);
-    expect(out[0].filename).toBe('pending-abc.md');
-    expect(out[0].pendingEnrichment).toBe(true);
+    expect(out.map((entry) => entry.filename)).toEqual(['pending-abc.md', 'memory-pending.md']);
+  });
+});
+
+describe('processPendingSessions', () => {
+  const indexEntry = (
+    filename: string,
+    pending: Partial<Pick<FrozenSessionIndexEntry, 'pendingEnrichment' | 'memoryPending'>>
+  ): FrozenSessionIndexEntry => ({
+    filename,
+    title: filename,
+    frozenAt: '2026-08-06T12:00:00.000Z',
+    messageCount: 4,
+    ...pending,
+  });
+
+  beforeEach(() => {
+    mockRunAgenticMemoryPass.mockReset();
+    mockRunOneOffCompactionCall.mockReset();
+    mockReadSessionCount.mockReset().mockResolvedValue(3);
+    mockApplyConeMemoryBudget.mockReset().mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
+  });
+
+  it('serially processes all pending marker types in one agentic catch-up pass', async () => {
+    const vfs = makeFakeVfs();
+    const entries = [
+      indexEntry('pending-one.md', { pendingEnrichment: true }),
+      indexEntry('pending-two.md', { memoryPending: true }),
+      indexEntry('pending-three.md', { pendingEnrichment: true, memoryPending: true }),
+    ];
+    vfs.files.set('/sessions/index.json', JSON.stringify(entries));
+    let active = 0;
+    let maxActive = 0;
+    mockRunAgenticMemoryPass.mockImplementation(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return { ok: true };
+    });
+
+    const result = await processPendingSessions({
+      vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
+      agenticMemorySpawn: vi.fn(),
+    });
+
+    expect(result).toEqual({ attempted: 3, completed: 3 });
+    expect(maxActive).toBe(1);
+    expect(mockRunAgenticMemoryPass).toHaveBeenCalledTimes(3);
+    const index = await readSessionsIndex(vfs as never);
+    expect(index).toHaveLength(3);
+    expect(
+      index.every(
+        (entry) =>
+          entry.pendingEnrichment === undefined &&
+          entry.memoryPending === undefined &&
+          entry.pendingAttemptCount === undefined
+      )
+    ).toBe(true);
+  });
+
+  it('uses legacy enrichment for a memoryPending archive when no curator is supplied', async () => {
+    const vfs = makeFakeVfs();
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+    const entry = { ...frozen!, pendingEnrichment: undefined, memoryPending: true as const };
+    const { archive: _archive, ...index } = entry;
+    vfs.files.set('/sessions/index.json', JSON.stringify([index]));
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('NONE')
+      .mockResolvedValueOnce('Recovered archive');
+
+    const result = await processPendingSessions({
+      vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+
+    expect(result).toEqual({ attempted: 1, completed: 1 });
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledTimes(2);
+    const [updated] = await readSessionsIndex(vfs as never);
+    expect(updated.title).toBe('Recovered archive');
+    expect(updated.memoryPending).toBeUndefined();
+    expect(updated.pendingAttemptCount).toBeUndefined();
+  });
+
+  it('persists the third failed attempt and skips the archive thereafter', async () => {
+    const vfs = makeFakeVfs();
+    vfs.files.set(
+      '/sessions/index.json',
+      JSON.stringify([
+        { ...indexEntry('always-fails.md', { memoryPending: true }), pendingAttemptCount: 2 },
+      ])
+    );
+    mockRunAgenticMemoryPass.mockResolvedValue({
+      ok: false,
+      reason: 'provider unavailable',
+      legacyFallbackSafe: false,
+    });
+    const opts = {
+      vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
+      agenticMemorySpawn: vi.fn(),
+    };
+
+    expect(await processPendingSessions(opts)).toEqual({ attempted: 1, completed: 0 });
+    expect(await processPendingSessions(opts)).toEqual({ attempted: 0, completed: 0 });
+    expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
+    const [failed] = await readSessionsIndex(vfs as never);
+    expect(failed).toMatchObject({ memoryPending: true, pendingAttemptCount: 3 });
+    expect(await listPendingEnrichments(vfs as never)).toEqual([]);
   });
 });
 

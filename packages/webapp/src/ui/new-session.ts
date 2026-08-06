@@ -23,6 +23,7 @@ import {
   type FrozenSessionIndexEntry,
   freezeConeSession,
   markSnapshotUnavailable,
+  processPendingSessions,
 } from './session-freezer.js';
 
 const log = createLogger('new-session');
@@ -45,6 +46,60 @@ const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
 
 /** How often the race timer reports progress (ms) to drive the spinner ring. */
 const ENRICHMENT_PROGRESS_TICK_MS = 250;
+
+export interface PendingSessionCatchupOptions {
+  openVfs: () => Promise<WritableVfsClient>;
+  agenticMemorySpawn?: AgentBridge['spawn'];
+  onComplete?: () => void;
+  schedule?: (callback: () => void) => void;
+}
+
+/** Run the boot catch-up with the current feature flag and provider credentials. */
+export async function runPendingSessionCatchup(opts: PendingSessionCatchupOptions): Promise<void> {
+  try {
+    const vfs = await opts.openVfs();
+    if (isFeatureEnabled('agentic-memory') && opts.agenticMemorySpawn) {
+      await processPendingSessions({ vfs, agenticMemorySpawn: opts.agenticMemorySpawn });
+      opts.onComplete?.();
+      return;
+    }
+
+    const apiKey = getApiKey() ?? undefined;
+    if (!apiKey) return;
+    let model: Model<Api>;
+    try {
+      model = resolveCurrentModel();
+    } catch {
+      return;
+    }
+    const headers =
+      model.provider === 'adobe'
+        ? { 'X-Session-Id': getDailyAdobeUuid(FREEZER_SESSION_ANCHOR) }
+        : undefined;
+    await processPendingSessions({ vfs, model, apiKey, headers });
+    opts.onComplete?.();
+  } catch (err) {
+    log.warn('Pending session catch-up failed (boot continues)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Schedule catch-up after first paint without returning a boot-blocking promise. */
+export function schedulePendingSessionCatchup(opts: PendingSessionCatchupOptions): void {
+  const schedule = opts.schedule ?? scheduleIdle;
+  schedule(() => {
+    void runPendingSessionCatchup(opts);
+  });
+}
+
+function scheduleIdle(callback: () => void): void {
+  if (typeof globalThis.requestIdleCallback === 'function') {
+    globalThis.requestIdleCallback(callback, { timeout: 5_000 });
+    return;
+  }
+  setTimeout(callback, 0);
+}
 
 function resolveAgenticMemorySpawn(
   opts: RunNewSessionFreezeOptions

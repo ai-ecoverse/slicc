@@ -203,17 +203,15 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - Path: `packages/webapp/src/core/context-compaction.ts`
 - `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus reserve,
   falling back to 200K when absent/zero.
-- Cone memory extraction is best-effort and appends to `/workspace/CLAUDE.md`.
-  `cone-memory-budget.ts` bounds it; overflow restructures only `## Auto-extracted`.
+- Cone memory appends to `/workspace/CLAUDE.md`; agentic budget covers the whole file, while
+  legacy restructuring covers only `## Auto-extracted`.
 
 ### Frozen Sessions ("New session" flow)
 
 - Path: `ui/session-freezer.ts`, `ui/new-session.ts`.
 - **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops.
-- Archives: `/sessions/<timestamp>-<slug>.md` plus `index.json`. `agentic-memory` writes full
-  archives with `memoryPending` before starting its kernel `MEMORY.md` curator behind the UI's
-  bounded progress race. Success clears the marker; finished failures use legacy extraction,
-  while timeouts leave it set and skip fallback. Quick/enrichment stay legacy.
+- Archives use `/sessions/<timestamp>-<slug>.md` plus `index.json`. Idle live-kernel boot retries
+  both pending markers serially up to three times (curator flag on, legacy off).
 - Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ### UI
