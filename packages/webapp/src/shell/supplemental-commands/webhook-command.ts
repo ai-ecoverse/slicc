@@ -4,6 +4,7 @@ import { defineCommand } from 'just-bash';
 import { hasLocalNodeServer } from '../../core/float-topology.js';
 // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getLeaderStatusWithFallback } from '../../scoops/tray-leader.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated from ui-back-edge-baseline.json
 import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
 import { getLickManagerSurface } from './lick-surface.js';
 

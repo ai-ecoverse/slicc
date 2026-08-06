@@ -37,6 +37,7 @@ function createContent(denySegments, message) {
   return [
     'or {',
     '    `import $_ from $source`,',
+    '    JsImportNamedClause(source = $source),',
     '    `export $_ from $source`,',
     '    `import($source)`,',
     '    `require($source)`',

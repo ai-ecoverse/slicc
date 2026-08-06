@@ -5,6 +5,7 @@ import {
   type FollowerTrayRuntimeStatus,
   getFollowerStatusWithFallback,
   getFollowerTrayRuntimeStatus,
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 } from '../../scoops/tray-follower-status.js';
 // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
@@ -13,11 +14,14 @@ import type { FloatType } from '../../scoops/tray-leader/follower-registry.js';
 import {
   getLeaderStatusWithFallback,
   type LeaderTrayRuntimeStatus,
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 } from '../../scoops/tray-leader.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
 import {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 } from '../../scoops/tray-runtime-config.js';
 
 export interface ConnectedFollowerInfo {

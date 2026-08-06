@@ -26,6 +26,7 @@
  * is down rather than wondering why their webhook never fires.
  */
 import { createLogger } from '../core/logger.js';
+// biome-ignore lint/plugin/layer-scoops: migrated from ui-back-edge-baseline.json
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
 import type { LickEvent, LickManager } from './lick-manager.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';

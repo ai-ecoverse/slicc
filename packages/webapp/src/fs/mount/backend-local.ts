@@ -22,6 +22,7 @@
 
 // biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { buildApprovalCardHtml } from '../../shell/supplemental-commands/picker-approval.js';
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
 import {
   loadAndClearPendingHandle,

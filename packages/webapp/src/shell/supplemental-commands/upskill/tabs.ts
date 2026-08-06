@@ -11,6 +11,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { extractHandoff, UPSKILL_REL } from '../../../net/handoff-link.js';

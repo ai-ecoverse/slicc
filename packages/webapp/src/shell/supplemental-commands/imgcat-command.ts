@@ -1,5 +1,6 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { getMimeType, isTerminalPreviewableMimeType } from '../../core/mime-types.js';
 
 export interface MediaPreviewItem {

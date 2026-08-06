@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -39,7 +40,7 @@ function testConfig() {
   };
 }
 
-function createFixtureRoot() {
+function createFixtureRoot({ includeManualPlugin = true } = {}) {
   const root = mkdtempSync(resolve(tmpdir(), 'layer-codegen-'));
   tempRoots.push(root);
   mkdirSync(resolve(root, 'packages/dev-tools/tools'), { recursive: true });
@@ -47,8 +48,23 @@ function createFixtureRoot() {
     resolve(root, 'packages/dev-tools/tools/layer-boundaries.json'),
     JSON.stringify(testConfig())
   );
-  writeFileSync(root + '/biome.json', '{\n  "plugins": ["./manual.grit"]\n}\n');
+  const plugins = includeManualPlugin ? '["./manual.grit"]' : '[]';
+  writeFileSync(root + '/biome.json', `{\n  "plugins": ${plugins}\n}\n`);
   return root;
+}
+
+function runBiomePluginLint(root, path) {
+  const executable = resolve(
+    repoRoot,
+    'node_modules/.bin',
+    process.platform === 'win32' ? 'biome.cmd' : 'biome'
+  );
+  const result = spawnSync(executable, ['lint', '--only=plugin', '--reporter=json', path], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  return { report: JSON.parse(result.stdout), status: result.status };
 }
 
 function pluginDiagnostic(plugin, path, line, sourceLine, importSource) {
@@ -93,6 +109,26 @@ describe('generateLayerBoundaryPlugins', () => {
     expect(plugin.content).toContain('`export $_ from $source`');
     expect(plugin.content).toContain('`import($source)`');
     expect(plugin.content).toContain('`require($source)`');
+  });
+
+  it('reports a multi-specifier named import through Biome', () => {
+    const root = createFixtureRoot({ includeManualPlugin: false });
+    runLayerBoundaryGeneration(root);
+    const path = 'packages/webapp/src/data/client.ts';
+    mkdirSync(dirname(resolve(root, path)), { recursive: true });
+    writeFileSync(resolve(root, path), "import { a,\n  b } from '../view/x.js';\n");
+
+    const { report, status } = runBiomePluginLint(root, path);
+
+    expect(status).toBe(1);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'plugin',
+          message: 'data/ must not import higher layers: service/, worker/, view/.',
+        }),
+      ])
+    );
   });
 
   it('seeds all seven repository stack layers and the provider zone', () => {

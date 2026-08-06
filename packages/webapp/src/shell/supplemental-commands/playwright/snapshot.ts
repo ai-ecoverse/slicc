@@ -3,6 +3,7 @@
  * playwright-cli command family.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';

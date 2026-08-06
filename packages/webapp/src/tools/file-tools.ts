@@ -9,6 +9,7 @@
 
 // biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import { createLogger } from '../core/logger.js';
+// biome-ignore lint/plugin/layer-tools: migrated existing layer-boundary debt
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';
 

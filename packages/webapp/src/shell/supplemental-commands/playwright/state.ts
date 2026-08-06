@@ -6,6 +6,7 @@
 import { base64ToUint8 } from '@slicc/shared-ts';
 // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { BrowserAPI } from '../../../cdp/index.js';
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
 // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { createLogger } from '../../../core/logger.js';
@@ -14,6 +15,7 @@ import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 } from '../../../scoops/tray-runtime-config.js';
 import type { PlaywrightState } from './types.js';
 

@@ -26,6 +26,7 @@ import {
   getPreset,
   LAYOUT_PRESETS,
   type SurfaceSizeSpecLike,
+  // biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 } from '../../core/dock-tree-spec.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 

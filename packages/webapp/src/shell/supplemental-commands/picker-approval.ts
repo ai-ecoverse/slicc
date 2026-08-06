@@ -15,6 +15,7 @@
  * comes from {@link PICKER_KIND_TEXT}.
  */
 
+// biome-ignore lint/plugin/layer-shell-git: migrated existing layer-boundary debt
 import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
 import type { PickerKind } from './picker-popup.js';
 

@@ -21,6 +21,7 @@ import { createLogger } from '../core/logger.js';
 import {
   type DirectoryPickerResult,
   openPickerPopup,
+  // biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 } from '../shell/supplemental-commands/picker-popup.js';
 
 const log = createLogger('mount-picker-popup');

@@ -27,6 +27,7 @@ import {
   SUDOERS_D_DIR,
   type SudoersPolicy,
   sanitizeGrantPattern,
+  // biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 } from '../shell/sudo/sudoers.js';
 import type { SudoBroker, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';

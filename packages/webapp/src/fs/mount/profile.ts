@@ -12,6 +12,7 @@
  * Profile name is accepted for symmetry but only `default` has meaning.
  */
 
+// biome-ignore lint/plugin/layer-fs: migrated existing layer-boundary debt
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 
 /**
