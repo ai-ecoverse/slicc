@@ -93,25 +93,23 @@ Terminal.app and iTerm2 launch through Apple Events. `assemble-app.mjs` supplies
 
 ## iCloud Sync (Tray Sessions)
 
-Cross-device discovery of active tray join URLs so a leader on one Mac can be
-joined from another without hand-copying. The model and store
-(`SyncedTraySession`, `TraySessionSyncStore`) live in the shared
-**`packages/swift-traysession`** package (`import SliccTraySession`), consumed
-here and by the iOS follower — see that package's `CLAUDE.md` for the data
-model, per-device key scheme, TTL/cap, and its tests. Launcher-side pieces:
+Cross-device discovery of active tray join URLs. Shared models
+(`SyncedTraySession`, `TraySessionSyncStore`, `SessionReachability`) live in
+**`packages/swift-traysession`**; its `CLAUDE.md` documents storage, TTL, and tests.
 
-- **Producer** — `SliccstartApp` publishes when `leaderJoinUrl` becomes non-nil
-  and withdraws when it clears; a 4-hour timer re-publishes a live leader so it
-  never ages out of the TTL. `applicationWillTerminate` withdraws on clean quit
-  but **not** on update/detach (the browser survives; the relaunch republishes).
-- **Consumer** — `AppListView`'s "iCloud Sessions" section lists remote sessions
-  with Copy, Attach-browser, Follow-in-Terminal (own sessions are copy-only).
-  Follow reuses `launchTerminalFollower(_:joinURLOverride:)` (override attaches
-  to a **remote** leader); Attach-browser uses `launchBrowserFollower`.
-- **Security** — join URLs carry the session secret and sync only through the
-  user's own (encrypted, same-Apple-ID) iCloud KVS. Launcher-side tests
-  (`TraySessionRow` formatting, remote follow override):
-  `TraySessionLauncherTests`.
+`SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only terminal
+HTTP 200 with `leader.connected == true` is live. Replacement URLs stay private.
+
+- **Producer** — `SliccstartApp` publishes non-nil `leaderJoinUrl`, withdraws
+  when cleared, and refreshes every 4 hours. Clean quit withdraws; update/detach
+  does not because the browser survives and relaunch republishes.
+- **Consumer** — `AppListView` probes remote rows on section appearance/store
+  reload and stably sorts live/unprobed first. Unreachable rows use
+  `icloud.slash`, `· not responding`, 0.55 opacity, and disable Attach/Follow,
+  not Copy; local rows skip probing. Remote Follow passes a join URL override;
+  Attach-browser uses `launchBrowserFollower`.
+- **Security** — secret-bearing join URLs sync only through same-Apple-ID,
+  encrypted iCloud KVS. `TraySessionLauncherTests` covers row state and Follow.
 
 ### Headless CLI (`Sliccstart --list-sessions`)
 

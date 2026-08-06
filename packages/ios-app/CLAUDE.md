@@ -73,7 +73,7 @@ Nested horizontal content keeps a drag while it can scroll that way; scoop navig
 
 ## iCloud Sessions
 
-`AppState.sessionStore` reads **`packages/swift-traysession`**; the launcher publishes, the phone joins, and `SettingsView` selects sessions. KVS id `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds use an empty cache; `SLICC_IOS_NO_ICLOUD=1` omits the entitlement. Never expose `joinUrl`.
+`AppState.sessionStore` uses **`packages/swift-traysession`**; the launcher publishes and `SettingsView` joins. Liveness requires a connected leader. KVS `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds have no cache; `SLICC_IOS_NO_ICLOUD=1` omits iCloud. Never expose `joinUrl`.
 
 ## Frozen Sessions
 
