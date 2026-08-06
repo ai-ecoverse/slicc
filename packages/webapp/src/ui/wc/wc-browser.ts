@@ -10,6 +10,7 @@
  * closes it.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
 import { teleportTabOneWay } from '../../shell/supplemental-commands/playwright/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -67,6 +68,12 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
       return;
     }
     if (seq !== refreshSeq) return;
+    // Hide SLICC's own app tabs — ours and any federated peer's. They are the
+    // window you are looking at, not somewhere to go, and their URLs carry a
+    // bridge capability. Filtering here also covers a peer running an older
+    // build that still advertises its shell.
+    const selfOrigins = location?.origin ? [location.origin] : undefined;
+    pages = pages.filter((p) => !isSliccAppUrl(p.url ?? '', { selfOrigins }));
     overlay.tabs = pages.map((p) => ({
       id: p.targetId,
       title: p.title || p.url || p.targetId,
@@ -80,8 +87,12 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
         await browser.attachToPage(p.targetId);
         const shot = await browser.screenshot({
           format: 'jpeg',
-          quality: 55,
-          maxWidth: deps.thumbWidth ?? 480,
+          quality: 72,
+          // Cards are `minmax(220px, 1fr)` and stretch well past that in a
+          // wide window, so a 480px capture was being upscaled — the reason
+          // thumbnails looked soft. Capture at device resolution for the
+          // widest realistic card instead of CSS pixels.
+          maxWidth: deps.thumbWidth ?? Math.round(560 * Math.min(devicePixelRatio || 1, 2)),
           // Never wake suspended tabs via bringToFront here — that steals
           // window focus from SLICC; they keep the globe placeholder.
           foregroundFallback: false,

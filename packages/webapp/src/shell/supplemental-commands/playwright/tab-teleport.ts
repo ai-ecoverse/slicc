@@ -10,6 +10,7 @@
  * `teleport-storage.ts`.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../../cdp/index.js';
 import { createLogger } from '../../../core/logger.js';
 import {
@@ -21,6 +22,15 @@ import {
 import type { TeleportStorageSnapshot } from './types.js';
 
 const log = createLogger('tab-teleport');
+
+/**
+ * The origin serving this float's own UI. In development that is a local
+ * wrangler rather than a hosted origin, so it has to be discovered rather
+ * than assumed. Undefined in the kernel worker, where `location` is absent.
+ */
+function selfUiOrigins(): string[] | undefined {
+  return typeof location !== 'undefined' && location.origin ? [location.origin] : undefined;
+}
 
 /** Overall cap on capture + open + inject + navigation start. */
 const TAB_TELEPORT_TIMEOUT_MS = 30_000;
@@ -76,6 +86,14 @@ async function captureSourceState(
   }
   if (!url || url === 'about:blank') {
     throw new Error(`source tab ${sourceTargetId} has no usable URL`);
+  }
+  // Hard stop, not just a UI filter: SLICC's own app shell carries
+  // `bridgeToken` in its URL, so teleporting it would copy a capability for
+  // this machine's CDP bridge into another browser. Enforced here because
+  // every path — both rails and the tray router — funnels through this
+  // capture.
+  if (isSliccAppUrl(url, { selfOrigins: selfUiOrigins() })) {
+    throw new Error('refusing to teleport SLICC’s own app tab (it carries a bridge capability)');
   }
 
   let cookies: Array<Record<string, unknown>> = [];

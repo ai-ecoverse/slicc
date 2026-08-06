@@ -25,6 +25,7 @@
  * Spec: `docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md`.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
@@ -136,8 +137,15 @@ export function buildAdvertisedTargets(
   pages: { targetId: string; title: string; url: string }[],
   runtime: string
 ): RemoteTargetInfo[] {
+  // Never advertise our own app shell. Its URL carries `bridgeToken` (and the
+  // join URL), so federating it would publish a capability to every peer and
+  // offer a "tab" whose only effect is booting a second UI. See
+  // `isSliccAppUrl`; the iOS mirror is `BrowserTargets.isSliccAppPage`.
+  const selfOrigins =
+    typeof location !== 'undefined' && location.origin ? [location.origin] : undefined;
+  const advertisable = pages.filter((p) => !isSliccAppUrl(p.url, { selfOrigins }));
   if (runtime !== CHERRY_RUNTIME_TAG) {
-    return pages.map((p) => ({
+    return advertisable.map((p) => ({
       targetId: p.targetId,
       title: p.title,
       url: p.url,
@@ -145,7 +153,7 @@ export function buildAdvertisedTargets(
       capabilities: { navigate: true, network: true, screenshot: true },
     }));
   }
-  return pages.map((p) => ({
+  return advertisable.map((p) => ({
     targetId: p.targetId,
     title: p.title,
     url: p.url,

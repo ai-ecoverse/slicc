@@ -139,6 +139,21 @@ describe('teleportTabOneWay', () => {
     expect(calls.map((c) => c.method)).toContain('Page.navigate');
   });
 
+  it("refuses to teleport SLICC's own app tab (it carries a bridge capability)", async () => {
+    // The float's URL carries `bridgeToken`; copying that tab would hand the
+    // capability to another machine. Enforced in the primitive so every path
+    // — both rails and the tray router — is covered.
+    const { browser, fake } = createFakeBrowser({
+      sourceUrl:
+        'https://www.sliccy.ai/?bridge=ws%3A%2F%2Flocalhost%3A5715%2Fcdp&bridgeToken=s3cret',
+    });
+    await expect(
+      teleportTabOneWay(browser, { sourceTargetId: 't1', destination: { kind: 'leader' } })
+    ).rejects.toThrow(/refusing to teleport/i);
+    expect(fake.createPage).not.toHaveBeenCalled();
+    expect(fake.createRemotePage).not.toHaveBeenCalled();
+  });
+
   it('rejects a source without a usable URL before creating any tab', async () => {
     const { browser, fake } = createFakeBrowser({ sourceUrl: 'about:blank' });
     await expect(
