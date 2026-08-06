@@ -295,7 +295,7 @@ Test in both CLI and extension floats.
   and `TrayTargetEntry` from `scoops/`. Invisible to the original ui-only ratchet, which is
   why the gate now covers every rung of the stack.
 
-**Class size** — 155 grandfathered back-edges across 94 files at full-stack baseline freeze
+**Class size** — 152 grandfathered back-edges across 92 files at full-stack baseline freeze
 (2026-08); 34 across 27 files at the original ui-only freeze (2026-07).
 
 **Remediation** — never import from a higher layer. If the symbol you need is pure (no DOM,
