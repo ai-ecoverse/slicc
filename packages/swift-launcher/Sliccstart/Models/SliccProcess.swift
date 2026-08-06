@@ -161,16 +161,19 @@ final class SliccProcess {
     let recordStore: LaunchRecordStore
     let cdpLiveProbe: CDPLiveProbe
     let trayStatusProbe: TrayStatusProbe
+    let agentActivityProbe: AgentActivityProbe
 
     init(
         recordStore: LaunchRecordStore = LaunchRecordStore(),
         cdpLiveProbe: CDPLiveProbe = .default,
         trayStatusProbe: TrayStatusProbe = .default,
+        agentActivityProbe: AgentActivityProbe = .default,
         terminalFollowerLaunchService: TerminalFollowerLaunchService = .live
     ) {
         self.recordStore = recordStore
         self.cdpLiveProbe = cdpLiveProbe
         self.trayStatusProbe = trayStatusProbe
+        self.agentActivityProbe = agentActivityProbe
         self.terminalFollowerLaunchService = terminalFollowerLaunchService
     }
 
@@ -247,6 +250,13 @@ final class SliccProcess {
     func isLeaderReady() -> Bool {
         guard let url = leaderJoinUrl, !url.isEmpty else { return false }
         return launchRecords.values.contains { $0.targetType == .chromiumBrowser && !$0.isFollower }
+    }
+
+    func hasRecentAgentActivity() async -> Bool {
+        let servePorts = launchRecords.values.compactMap { record in
+            record.process.isRunning ? record.servePort : nil
+        }
+        return await agentActivityProbe.hasRecentActivity(servePorts: servePorts)
     }
 
     /// Display name of the running chromium leader, if any. Used to label

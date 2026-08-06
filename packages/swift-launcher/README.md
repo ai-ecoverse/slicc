@@ -128,7 +128,10 @@ overlay hot-swap — was removed along with `UpdateManifest`,
    swap in the new app and relaunch. Persisted launch records
    (`~/Library/Application Support/Sliccstart/launch-records.json`) let the
    relaunched app reattach to any browser/Electron CDP sessions that are
-   still live (probed via `/json/version`).
+   still live (probed via `/json/version`). While the update is ready, the
+   launcher polls each running server's `/api/agent-activity` endpoint and
+   renders the restart action grey instead of green when agent traffic was
+   observed in the last minute.
 
 ### `--update-host` (testing / staging)
 

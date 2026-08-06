@@ -8,9 +8,11 @@ import {
   FETCH_PROXY_SKIP_RESPONSE_PREFIXES,
 } from '../fetch-proxy-headers.js';
 import type { SecretProxyManager } from '../secrets/proxy-manager.js';
+import { AgentActivityTracker, registerAgentActivityRoute } from './agent-activity.js';
 
 export interface FetchProxyDeps {
   secretProxy: SecretProxyManager;
+  activityTracker?: AgentActivityTracker;
   /**
    * Optional logger sink for per-request observability. Defaults to
    * `console`. Tests pass a silent sink so the route's logging doesn't
@@ -317,9 +319,11 @@ function streamUpstreamBody(
  * checks req.body first.
  */
 export function registerFetchProxyRoute(app: Express, deps: FetchProxyDeps): void {
-  const { secretProxy, logger = console } = deps;
+  const { secretProxy, activityTracker = new AgentActivityTracker(), logger = console } = deps;
+  registerAgentActivityRoute(app, activityTracker);
 
   app.all('/api/fetch-proxy', async (req, res) => {
+    if (req.method !== 'OPTIONS') activityTracker.recordActivity();
     const rawBody = await collectRawBody(req);
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {

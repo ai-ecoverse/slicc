@@ -68,6 +68,7 @@ func registerAPIRoutes(
     lickSystem: LickSystem,
     config: ServerConfig,
     httpClient: HTTPClient,
+    agentActivityTracker: AgentActivityTracker = AgentActivityTracker(),
     secretInjector: SecretInjector = SecretInjector(secrets: []),
     oauthStore: OAuthSecretStore? = nil
 ) {
@@ -105,6 +106,8 @@ func registerAPIRoutes(
             headers: [cacheControlHeader: "no-store"]
         )
     }
+
+    registerAgentActivityRoute(router: router, tracker: agentActivityTracker)
 
     router.get("/api/tray-status") { _, _ in
         do {
@@ -423,7 +426,7 @@ func registerAPIRoutes(
 
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
-            guard let initialTargetURLValue = request.headers[targetURLHeader] else {
+            guard let initialTargetURLValue = await trackedTargetURL(request, tracker: agentActivityTracker) else {
                 return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
 
@@ -669,6 +672,25 @@ private func decodeJSON<T: Decodable>(from buffer: ByteBuffer, as type: T.Type) 
     var body = buffer
     let data = body.readData(length: body.readableBytes) ?? Data()
     return try JSONDecoder().decode(T.self, from: data)
+}
+
+private func registerAgentActivityRoute(
+    router: Router<some RequestContext>,
+    tracker: AgentActivityTracker
+) {
+    router.get("/api/agent-activity") { _, _ in
+        try jsonResponse(
+            .object(["activeInLastMinute": .bool(await tracker.isActiveInLastMinute())]),
+            headers: [cacheControlHeader: "no-store"]
+        )
+    }
+}
+
+private func trackedTargetURL(_ request: Request, tracker: AgentActivityTracker) async -> String? {
+    if request.method != .options {
+        await tracker.recordActivity()
+    }
+    return request.headers[targetURLHeader]
 }
 
 private func jsonStringOrNull(_ value: String?) -> LickSystem.JSONValue {

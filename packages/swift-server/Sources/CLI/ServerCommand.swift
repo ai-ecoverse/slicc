@@ -225,6 +225,7 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         let lickSystem = LickSystem()
+        let agentActivityTracker = AgentActivityTracker()
         let cdpProxy = CDPProxy(
             logger: Logger(label: "slicc.cdp-proxy"),
             secretInjector: secretInjector
@@ -254,6 +255,7 @@ struct ServerCommand: AsyncParsableCommand {
             lickSystem: lickSystem,
             config: config,
             httpClient: httpClient,
+            agentActivityTracker: agentActivityTracker,
             secretInjector: secretInjector,
             oauthStore: oauthStore
         )

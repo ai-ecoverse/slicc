@@ -52,6 +52,48 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testAgentActivityEndpointTracksRequestsButNotOptions() async throws {
+        try await self.withHTTPClient { httpClient in
+            let tracker = AgentActivityTracker()
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                agentActivityTracker: tracker
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/api/fetch-proxy", method: .options) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+                try await client.execute(uri: "/api/agent-activity", method: .get) { response in
+                    XCTAssertEqual(response.headers[HTTPField.Name("Cache-Control")!], "no-store")
+                    XCTAssertEqual(
+                        try self.decodeJSONObject(from: response.body),
+                        ["activeInLastMinute": .bool(false)]
+                    )
+                }
+
+                try await client.execute(
+                    uri: "/api/fetch-proxy",
+                    method: .get,
+                    headers: [HTTPField.Name("X-Target-URL")!: "http://127.0.0.1:1/never"]
+                ) { response in
+                    XCTAssertEqual(response.status, .badGateway)
+                }
+                try await client.execute(uri: "/api/agent-activity", method: .get) { response in
+                    XCTAssertEqual(
+                        try self.decodeJSONObject(from: response.body),
+                        ["activeInLastMinute": .bool(true)]
+                    )
+                }
+            }
+        }
+    }
+
     func testRuntimeConfigReturnsConfiguredValues() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()
