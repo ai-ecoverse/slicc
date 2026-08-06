@@ -190,6 +190,7 @@ export interface PageLeaderFollowerState {
   bootstrapId: string;
   runtime?: string;
   connectedAt?: string;
+  lastActivity?: number;
   floatType?: FloatType;
   hostOrigin?: string;
   selectedScoopJid?: string;
@@ -212,6 +213,7 @@ export function getLeaderFollowerStates(
       bootstrapId: peer.bootstrapId,
       runtime: follower?.runtime ?? peer.runtime,
       connectedAt: follower?.connectedAt ?? peer.connectedAt ?? undefined,
+      lastActivity: follower?.lastActivity,
       floatType: follower?.floatType ?? deriveFloatType(peer.runtime),
       hostOrigin: follower?.hostOrigin,
       selectedScoopJid: follower?.selectedScoopJid,

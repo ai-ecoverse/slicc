@@ -43,6 +43,7 @@ vi.mock('../../../src/ui/page-leader-tray.js', () => ({
         broadcastTheme: vi.fn(),
         getExecCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
+        getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
       },
     };

@@ -176,17 +176,24 @@ describe('buildAdvertisedTargets', () => {
     { targetId: 't2', title: 'Two', url: 'https://a.example/2' },
   ];
 
-  it('advertises bare targets for non-cherry runtimes (registry defaults kind to browser)', () => {
+  it('advertises browser targets with explicit full capabilities for non-cherry runtimes', () => {
     const out = buildAdvertisedTargets(pages, 'slicc-standalone');
     expect(out).toEqual([
-      { targetId: 't1', title: 'One', url: 'https://a.example/1' },
-      { targetId: 't2', title: 'Two', url: 'https://a.example/2' },
+      {
+        targetId: 't1',
+        title: 'One',
+        url: 'https://a.example/1',
+        kind: 'browser',
+        capabilities: { navigate: true, network: true, screenshot: true },
+      },
+      {
+        targetId: 't2',
+        title: 'Two',
+        url: 'https://a.example/2',
+        kind: 'browser',
+        capabilities: { navigate: true, network: true, screenshot: true },
+      },
     ]);
-    // No cherry tagging or capabilities leak onto normal browser targets.
-    for (const t of out) {
-      expect(t.kind).toBeUndefined();
-      expect(t.capabilities).toBeUndefined();
-    }
   });
 
   it("tags cherry runtime targets with kind:'cherry' and network:false capabilities", () => {

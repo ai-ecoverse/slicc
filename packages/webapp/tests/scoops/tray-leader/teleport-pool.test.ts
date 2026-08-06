@@ -95,4 +95,92 @@ describe('TeleportPool', () => {
       selectTeleportPool(targets, { requireNetwork: true }).map((target) => target.targetId)
     ).toEqual(['browser']);
   });
+
+  it('treats advertised capabilities as authoritative for every kind', () => {
+    // An iOS-style browser target that says network:false must be excluded
+    // even though its kind is not cherry — the historical cherry-only check
+    // let it through and teleport "succeeded" with zero cookies.
+    const targets = [
+      {
+        targetId: 'ios-tab',
+        kind: 'browser' as const,
+        capabilities: { navigate: true, network: false, screenshot: true },
+      },
+      {
+        targetId: 'desktop-tab',
+        kind: 'browser' as const,
+        capabilities: { navigate: true, network: true, screenshot: true },
+      },
+      // Legacy peer: no capabilities advertised — optimistic acceptance stays.
+      { targetId: 'legacy-tab', kind: 'browser' as const },
+    ];
+    expect(
+      selectTeleportPool(targets, { requireNetwork: true }).map((target) => target.targetId)
+    ).toEqual(['desktop-tab', 'legacy-tab']);
+  });
+
+  it('gates zero-target followers on the hello browser capability', () => {
+    const { followers, pool } = createHarness();
+    // Exec-only follower (Go CLI): connected, mapped, zero advertised targets,
+    // no browser capability. Its tab.open would hang — must never be selected.
+    followers.followers.set('cli-bootstrap', {
+      bootstrapId: 'cli-bootstrap',
+      runtime: 'slicc-cli',
+      floatType: 'unknown',
+      lastActivity: 99999,
+      peerCapabilities: { exec: true },
+      sync: { send: vi.fn(() => true) },
+    } as unknown as ConnectedFollower);
+    followers.runtimeToBootstrap.set('cli-runtime', 'cli-bootstrap');
+    expect(pool.getBestFollowerForTeleport()).toBeNull();
+
+    // A browser follower that has said hello but not yet advertised targets
+    // IS eligible: the capability vouches for it during the advertise window.
+    const cli = followers.followers.get('cli-bootstrap');
+    if (!cli) throw new Error('missing follower');
+    cli.peerCapabilities = { exec: true, browser: true };
+    expect(pool.getBestFollowerForTeleport()).toEqual(
+      expect.objectContaining({ runtimeId: 'cli-runtime', bootstrapId: 'cli-bootstrap' })
+    );
+  });
+
+  it('requires an explicit network-capable target from iOS followers (skew guard)', () => {
+    const { followers, pool } = createHarness();
+    followers.followers.set('ios-bootstrap', {
+      bootstrapId: 'ios-bootstrap',
+      runtime: 'slicc-ios',
+      floatType: 'ios',
+      lastActivity: 99999,
+      peerCapabilities: { exec: true, browser: true },
+      sync: { send: vi.fn(() => true) },
+    } as unknown as ConnectedFollower);
+    // Pre-capability iOS app: bare targets, silent Network no-op. Hello
+    // capability alone must NOT qualify it.
+    pool.handleFollowerTargetsAdvertise('ios-bootstrap', {
+      type: 'targets.advertise',
+      runtimeId: 'ios-runtime',
+      targets: [{ targetId: 'wk1', title: 'Tab', url: 'https://example.com' }],
+    });
+    expect(pool.getBestFollowerForTeleport()).toBeNull();
+    expect(pool.getTeleportEligibleBootstrapIds().has('ios-bootstrap')).toBe(false);
+
+    // Capability-advertising iOS app with a real Network domain qualifies.
+    pool.handleFollowerTargetsAdvertise('ios-bootstrap', {
+      type: 'targets.advertise',
+      runtimeId: 'ios-runtime',
+      targets: [
+        {
+          targetId: 'wk1',
+          title: 'Tab',
+          url: 'https://example.com',
+          kind: 'browser',
+          capabilities: { navigate: true, network: true, screenshot: true },
+        },
+      ],
+    });
+    expect(pool.getBestFollowerForTeleport()).toEqual(
+      expect.objectContaining({ runtimeId: 'ios-runtime', bootstrapId: 'ios-bootstrap' })
+    );
+    expect(pool.getTeleportEligibleBootstrapIds().has('ios-bootstrap')).toBe(true);
+  });
 });

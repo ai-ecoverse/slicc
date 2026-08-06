@@ -37,6 +37,7 @@ import {
 import { FsRouter } from './tray-leader/fs-router.js';
 import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
+import { type LastUserMessageOrigin, RequesterTracker } from './tray-leader/requester-tracker.js';
 import { TabRouter } from './tray-leader/tab-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
 import { TranscriptExportManager } from './tray-leader/transcript-export.js';
@@ -210,6 +211,7 @@ export class LeaderSyncManager {
   private readonly teleportPool: TeleportPool;
   private readonly transcriptExport: TranscriptExportManager;
   private readonly followerDispatch: FollowerDispatch;
+  private readonly requesterTracker = new RequesterTracker();
   private get followers(): Map<string, ConnectedFollower> {
     return this.followerRegistry.followers;
   }
@@ -254,6 +256,11 @@ export class LeaderSyncManager {
       teleportPool: this.teleportPool,
       transcriptExport: this.transcriptExport,
       cherryRouter: this.cherryRouter,
+      requesterTracker: this.requesterTracker,
+    });
+    this.followerRegistry.onFollowerRemoved({
+      afterRegistryCleanup: (bootstrapId) =>
+        this.requesterTracker.handleFollowerRemoved(bootstrapId),
     });
     Object.defineProperties(this, {
       activeExports: { get: () => this.transcriptExport.activeExports },
@@ -364,6 +371,10 @@ export class LeaderSyncManager {
     return this.followerRegistry.getBrowserCapableBootstrapIds();
   }
 
+  getTeleportEligibleBootstrapIds(): Set<string> {
+    return this.teleportPool.getTeleportEligibleBootstrapIds();
+  }
+
   getFollowerMotds(): Map<string, string> {
     return this.followerRegistry.getFollowerMotds();
   }
@@ -408,6 +419,16 @@ export class LeaderSyncManager {
     floatType: FloatType;
   } | null {
     return this.teleportPool.getBestFollowerForTeleport();
+  }
+
+  /** Record that the leader's own UI submitted a user message. */
+  noteLeaderUserMessage(): void {
+    this.requesterTracker.noteLeaderUserMessage();
+  }
+
+  /** Where the most recent user message came from (leader UI or a follower). */
+  getLastUserMessageOrigin(): LastUserMessageOrigin | null {
+    return this.requesterTracker.get();
   }
 
   get hasFollowers(): boolean {

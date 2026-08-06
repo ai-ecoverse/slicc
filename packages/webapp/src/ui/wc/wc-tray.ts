@@ -38,6 +38,10 @@ import {
   setTrayResetter,
   writeConnectedFollowersToShim,
 } from '../../shell/supplemental-commands/host-command.js';
+import {
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from '../../shell/supplemental-commands/playwright/teleport.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -124,12 +128,15 @@ interface TrayRoleState {
 export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): ConnectedFollowerInfo[] {
   const execIds = handle.sync.getExecCapableBootstrapIds();
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
+  const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
   return getLeaderFollowerStates(handle.peers, handle.sync).map((follower) => {
     return {
       runtimeId: canonicalRuntimeId(follower.bootstrapId),
+      bootstrapId: follower.bootstrapId,
       runtime: follower.runtime,
       connectedAt: follower.connectedAt,
+      lastActivity: follower.lastActivity,
       floatType: follower.floatType,
       hostOrigin: follower.hostOrigin,
       selectedScoopJid: follower.selectedScoopJid,
@@ -137,6 +144,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Conne
       peerState: follower.peerState,
       exec: execIds.has(follower.bootstrapId),
       cdp: cdpIds.has(follower.bootstrapId),
+      teleportEligible: teleportIds.has(follower.bootstrapId),
       motd: motds.get(follower.bootstrapId),
     };
   });
@@ -386,6 +394,10 @@ export function createLeaderOptionsFactory(
       deps.getController()?.addUserMessage(text, attachments);
       deps.agentHandle.sendMessage(text, messageId, attachments, options);
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
+      // The message bumped the sender's lastActivity — mirror it into the
+      // worker-realm shim so kernel-side follower selection sees fresh recency
+      // (the shim otherwise only refreshes on follower-count changes).
+      if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
     },
     onFollowerAbort: () => deps.agentHandle.stop(),
     onFollowerNewSession: (action) => {
@@ -469,15 +481,18 @@ function createLeaderHookSetup(
     wireLeaderHooks: (handle) => {
       setConnectedFollowersGetter(() => getLeaderConnectedFollowers(handle));
       setTrayResetter(() => handle.reset());
+      // Page-realm teleport selection: the kernel-worker realm covers itself
+      // via the `slicc.leaderTrayFollowers` shim (`teleport-follower-shim.ts`).
+      setPlaywrightTeleportBestFollower(() => () => handle.sync.getBestFollowerForTeleport());
+      setPlaywrightTeleportConnectedFollowers(() => () => getLeaderConnectedFollowers(handle));
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)
       );
       deps.sprinkleManager.setReloadHook((name) => handle.sync.broadcastSprinkleReloaded(name));
-      deps
-        .getController()
-        ?.setOnLocalUserMessage((text, messageId, attachments) =>
-          handle.sync.broadcastUserMessage(text, messageId, attachments)
-        );
+      deps.getController()?.setOnLocalUserMessage((text, messageId, attachments) => {
+        handle.sync.noteLeaderUserMessage();
+        handle.sync.broadcastUserMessage(text, messageId, attachments);
+      });
       // Mirror the leader's turn lifecycle to followers. The live float
       // emits no `turn_end` agent event, so the follower's `onStatus`
       // mapping (→ `setProcessing`) is the only signal that clears its send
@@ -506,6 +521,8 @@ function createLeaderHookSetup(
       setConnectedFollowersGetter(null);
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);
+      setPlaywrightTeleportBestFollower(null);
+      setPlaywrightTeleportConnectedFollowers(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
       deps.getController()?.setOnLocalProcessingChange(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);

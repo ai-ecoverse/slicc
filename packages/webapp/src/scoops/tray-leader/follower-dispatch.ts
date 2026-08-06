@@ -12,6 +12,7 @@ import type { LeaderSyncContext } from './context.js';
 import { labelForFollower } from './follower-registry.js';
 import type { FsRouter } from './fs-router.js';
 import type { RemoteExecRouter } from './remote-exec.js';
+import type { RequesterTracker } from './requester-tracker.js';
 import type { TabRouter } from './tab-router.js';
 import type { TeleportPool } from './teleport-pool.js';
 import type { TranscriptExportManager } from './transcript-export.js';
@@ -41,6 +42,7 @@ export interface FollowerDispatchCollaborators {
     | 'handleTranscriptExportApprovalResponse'
   >;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
+  requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
 }
 
 /** Exhaustive follower-to-leader wire-message dispatcher. */
@@ -197,6 +199,15 @@ export class FollowerDispatch {
       bootstrapId,
       messageId: message.messageId,
     });
+    // A user message is real human activity — unlike ping/pong keepalives —
+    // so it both marks this follower as the interaction origin and makes
+    // lastActivity a meaningful recency signal for follower selection.
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (follower) follower.lastActivity = Date.now();
+    this.collaborators.requesterTracker.noteFollowerUserMessage(
+      bootstrapId,
+      this.context.followers.runtimeIdForBootstrap(bootstrapId)
+    );
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;

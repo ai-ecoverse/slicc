@@ -51,6 +51,7 @@ import {
   type TrayFsResponse,
   type TrayModelCatalogEntry,
   type TrayModelSelectionState,
+  type TraySyncCapabilities,
   type TraySyncChannel,
   type TrayTargetEntry,
   type TrayThinkingLevel,
@@ -124,6 +125,11 @@ export interface FollowerSyncManagerOptions {
    * by this field, so it is informational only. Only a cherry follower sets it.
    */
   selfRuntimeId?: string;
+  /**
+   * Capabilities to advertise on the `hello` handshake (e.g. `browser: true`
+   * for a follower whose local CDP transport can host teleported tabs).
+   */
+  helloCapabilities?: TraySyncCapabilities;
   /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
@@ -314,6 +320,7 @@ export class FollowerSyncManager implements AgentHandle {
       type: 'hello',
       protocolVersion: TRAY_SYNC_PROTOCOL_VERSION,
       ...(this.options.selfRuntimeId ? { runtime: this.options.selfRuntimeId } : {}),
+      ...(this.options.helloCapabilities ? { capabilities: this.options.helloCapabilities } : {}),
     });
     this.keepalive = new DataChannelKeepalive({
       sendPing: () => this.sync.send({ type: 'ping' }),

@@ -102,6 +102,14 @@ export interface TraySyncCapabilities {
    * a restricted verb set; its MOTD documents the supported surface.
    */
   exec?: boolean;
+  /**
+   * This peer hosts CDP-driveable browser targets and accepts `tab.open`.
+   * Leaders use it to keep exec-only followers (CLI) out of teleport
+   * selection even before any `targets.advertise` arrives. Additive — legacy
+   * peers omit it, and the leader then falls back to advertised-target
+   * heuristics.
+   */
+  browser?: boolean;
 }
 
 // ---------------------------------------------------------------------------

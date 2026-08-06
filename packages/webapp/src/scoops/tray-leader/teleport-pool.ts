@@ -17,9 +17,17 @@ export function selectTeleportPool<
 >(targets: T[], opts: { requireNetwork: boolean }): T[] {
   return targets.filter((target) => {
     if (target.kind === 'preview') return false;
+    // Advertised capabilities are authoritative for EVERY kind: a target that
+    // says network:false cannot serve a cookie teleport no matter what kind it
+    // claims (iOS advertises browser targets whose Network domain is absent).
+    if (opts.requireNetwork && target.capabilities) {
+      return target.capabilities.network === true;
+    }
+    // Legacy peers advertise no capabilities: keep the historical rule
+    // (cherry excluded, everything else optimistically accepted) so a new
+    // leader doesn't strand an old standalone follower mid-skew.
     if (!isCherryTarget(target)) return true;
-    if (opts.requireNetwork) return target.capabilities?.network === true;
-    return true;
+    return !opts.requireNetwork;
   });
 }
 
@@ -87,9 +95,35 @@ export class TeleportPool {
 
   canRuntimeServeTeleport(runtimeId: string, follower: ConnectedFollower): boolean {
     if (follower.runtime === CHERRY_RUNTIME_TAG) return false;
+    // Skew guard: iOS apps predating capability advertisement expose targets
+    // whose Network domain silently no-ops — a teleport would "succeed" with
+    // zero cookies. Require an explicit network-capable target from iOS.
+    if (follower.floatType === 'ios') {
+      const iosEntries = this.registry
+        .getEntries()
+        .filter((entry) => entry.runtimeId === runtimeId);
+      return iosEntries.some((entry) => entry.capabilities?.network === true);
+    }
     const entries = this.registry.getEntries().filter((entry) => entry.runtimeId === runtimeId);
-    if (entries.length === 0) return true;
+    if (entries.length === 0) {
+      // No targets advertised yet: trust the hello capability. Exec-only
+      // followers (CLI) never set `browser` and must not be selected — their
+      // `tab.open` would hang, not fail.
+      return follower.peerCapabilities?.browser === true;
+    }
     return selectTeleportPool(entries, { requireNetwork: true }).length > 0;
+  }
+
+  /** Bootstrap ids of followers currently able to host a cookie teleport. */
+  getTeleportEligibleBootstrapIds(): Set<string> {
+    const eligible = new Set<string>();
+    for (const [runtimeId, bootstrapId] of this.context.followers.runtimeToBootstrap) {
+      const follower = this.context.followers.followers.get(bootstrapId);
+      if (follower && this.canRuntimeServeTeleport(runtimeId, follower)) {
+        eligible.add(bootstrapId);
+      }
+    }
+    return eligible;
   }
 
   getBestFollowerForTeleport(): {

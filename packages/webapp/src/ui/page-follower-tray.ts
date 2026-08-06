@@ -35,7 +35,11 @@ import {
   type FollowerSyncManagerOptions,
 } from '../scoops/tray-follower-sync.js';
 import type { ScoopSummary, SprinkleSummary } from '../scoops/tray-sync-protocol.js';
-import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
+import {
+  CHERRY_RUNTIME_TAG,
+  type RemoteTargetInfo,
+  type TraySyncCapabilities,
+} from '../scoops/tray-sync-protocol.js';
 import {
   type FollowerAutoReconnectHandle,
   type FollowerTrayConnection,
@@ -64,15 +68,52 @@ export { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
  * gates each CDP domain itself, and the iframe never learns the host's exact
  * grants — only `network` (always false) and `kind` drive leader selection here.
  *
- * Non-cherry runtimes advertise bare `{ targetId, title, url }` (the registry
- * defaults `kind` to `'browser'`), unchanged from before.
+ * Non-cherry runtimes advertise `kind: 'browser'` with full capabilities:
+ * their targets ride a real CDP transport, so `Network.*` (cookie teleport),
+ * navigation, and screenshots all work. Explicit capabilities let the leader
+ * treat them as authoritative instead of guessing from the target kind.
  */
+/** Hand the freshly wired sync to the page surfaces that consume it. */
+function activateFollowerSync(
+  options: Pick<
+    StartPageFollowerTrayOptions,
+    | 'browserAPI'
+    | 'setChatAgent'
+    | 'onForwardingToggle'
+    | 'onConnectionChange'
+    | 'getSelectedScoopJid'
+  >,
+  sync: FollowerSyncManager
+): void {
+  options.browserAPI.setTrayTargetProvider(sync);
+  options.setChatAgent(sync);
+  options.onForwardingToggle?.(true);
+  options.onConnectionChange?.(true);
+  sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
+}
+
+/**
+ * A cherry follower lends a host page, not a browser: it must never advertise
+ * itself as a teleport-capable browser host on `hello`.
+ */
+export function helloCapabilitiesForRuntime(
+  runtime: string | undefined
+): TraySyncCapabilities | undefined {
+  return runtime === CHERRY_RUNTIME_TAG ? undefined : { browser: true };
+}
+
 export function buildAdvertisedTargets(
   pages: { targetId: string; title: string; url: string }[],
   runtime: string
 ): RemoteTargetInfo[] {
   if (runtime !== CHERRY_RUNTIME_TAG) {
-    return pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }));
+    return pages.map((p) => ({
+      targetId: p.targetId,
+      title: p.title,
+      url: p.url,
+      kind: 'browser' as const,
+      capabilities: { navigate: true, network: true, screenshot: true },
+    }));
   }
   return pages.map((p) => ({
     targetId: p.targetId,
@@ -324,6 +365,7 @@ export function startPageFollowerTray(
     const sync = new FollowerSyncManager(connection.channel, {
       browserTransport: options.browserAPI.getTransport(),
       browserAPI: options.browserAPI,
+      helloCapabilities: helloCapabilitiesForRuntime(options.runtime),
       onSnapshot: options.onSnapshot,
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
@@ -392,11 +434,7 @@ export function startPageFollowerTray(
     };
 
     activeSync = sync;
-    options.browserAPI.setTrayTargetProvider(sync);
-    options.setChatAgent(sync);
-    options.onForwardingToggle?.(true);
-    options.onConnectionChange?.(true);
-    sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
+    activateFollowerSync(options, sync);
 
     if (options.advertisesCdpTargets !== false) {
       targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
