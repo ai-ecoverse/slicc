@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { AgentActivityTracker } from '../../src/routes/agent-activity.js';
 import { registerFetchProxyRoute } from '../../src/routes/fetch-proxy.js';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
@@ -80,7 +81,8 @@ async function setup(handler: UpstreamHandler, secretDomains?: string): Promise<
     warn: vi.fn<(...args: unknown[]) => void>(),
     error: vi.fn<(...args: unknown[]) => void>(),
   };
-  registerFetchProxyRoute(app, { secretProxy: proxyManager, logger });
+  const activityTracker = new AgentActivityTracker();
+  registerFetchProxyRoute(app, { secretProxy: proxyManager, activityTracker, logger });
   const proxyPort = await listen(proxy === undefined ? (proxy = createServer(app)) : proxy);
   proxyBase = `http://127.0.0.1:${proxyPort}`;
 }
@@ -93,6 +95,27 @@ afterEach(async () => {
 });
 
 describe('registerFetchProxyRoute', () => {
+  it('exposes recent non-OPTIONS activity', async () => {
+    await setup((_req, res) => res.end('ok'));
+    const proxied = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(proxied.status).toBe(200);
+
+    const activity = await fetch(`${proxyBase}/api/agent-activity`);
+    expect(activity.headers.get('cache-control')).toBe('no-store');
+    await expect(activity.json()).resolves.toEqual({ activeInLastMinute: true });
+  });
+
+  it('does not record OPTIONS preflight requests as activity', async () => {
+    await setup((_req, res) => res.end('ignored'));
+    const preflight = await fetch(`${proxyBase}/api/fetch-proxy`, { method: 'OPTIONS' });
+    expect(preflight.status).toBe(400);
+
+    const activity = await fetch(`${proxyBase}/api/agent-activity`);
+    await expect(activity.json()).resolves.toEqual({ activeInLastMinute: false });
+  });
+
   it('returns 400 + X-Proxy-Error when X-Target-URL is missing', async () => {
     await setup((_req, res) => res.end('ignored'));
     const res = await fetch(`${proxyBase}/api/fetch-proxy`);

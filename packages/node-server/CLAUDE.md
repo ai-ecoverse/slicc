@@ -77,6 +77,11 @@ Each instance gets its own browser profile and CDP port.
 - `src/release-package.ts` — release packaging
 - `src/tray-url-shared.ts` — tray URL helpers shared with browser runtime code
 
+## API Routes
+
+- `GET /api/agent-activity` — returns `{ activeInLastMinute: boolean }` for non-OPTIONS `/api/fetch-proxy` traffic in the fixed 60-second window
+- `ALL /api/fetch-proxy` — forwards browser requests across origins, injects masked secrets, and records agent activity before forwarding
+
 ## Secrets Architecture
 
 Node-server includes `OauthSecretStore` (in-memory writable store for OAuth token replicas), `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints. The sessionId is persisted to `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is specified). The secret masking primitives (`masking.ts`, `domain-match.ts`) were moved to `@slicc/shared-ts`; node-server now imports from the shared package.

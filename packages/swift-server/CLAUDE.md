@@ -77,6 +77,7 @@ Hoist the interpolated expression into a local instead.
 `Sources/Server/APIRoutes.swift` is the main route registry. Important routes include:
 
 - `GET /api/status` — health doc mirroring the Node server's; `service: "slicc-server"` is the float fingerprint the UI uses to label the floatbar `sliccstart` (vs `npx` for the Node CLI)
+- `GET /api/agent-activity` — returns whether a non-OPTIONS `/api/fetch-proxy` request started within the fixed 60-second activity window
 - `GET /api/runtime-config`
 - `GET /api/tray-status`
 - `GET|POST|DELETE /api/webhooks...`
