@@ -42,7 +42,13 @@ enum TrayFollowerConnectorError: LocalizedError {
 // MARK: - TrayFollowerConnector
 
 public class TrayFollowerConnector: NSObject {
+    /// The join URL this connector was created for. Kept as dialed; the tray
+    /// actually in use is `currentJoinUrl`, which moves on a supersede redirect.
     public let joinUrl: URL
+
+    /// The tray currently being dialed — `joinUrl` until a `TRAY_SUPERSEDED`
+    /// attach moves it, after which reconnects use the replacement.
+    private var currentJoinUrl: URL
 
     private var signaling: TraySignalingClient?
     private var webrtc: WebRTCManager?
@@ -68,6 +74,7 @@ public class TrayFollowerConnector: NSObject {
 
     public init(joinUrl: URL) {
         self.joinUrl = joinUrl
+        self.currentJoinUrl = joinUrl
         super.init()
     }
 
@@ -78,7 +85,8 @@ public class TrayFollowerConnector: NSObject {
         stopped = false
         reconnecting = false
         controllerId = UUID().uuidString
-        signaling = TraySignalingClient(joinUrl: joinUrl)
+        currentJoinUrl = joinUrl
+        signaling = TraySignalingClient(joinUrl: currentJoinUrl)
 
         try await connectOnce()
     }
@@ -101,12 +109,13 @@ public class TrayFollowerConnector: NSObject {
 
     /// Runs the attach loop → bootstrap → data channel open flow once.
     private func connectOnce() async throws {
-        guard let signaling = signaling else { return }
+        guard var signaling = signaling else { return }
         try ensureNotStopped()
 
         // --- Phase 1: Attach loop ---
         var attachAttempt = 0
         var attachPlan: FollowerAttachPlan!
+        var redirectsFollowed = 0
 
         while true {
             try ensureNotStopped()
@@ -122,8 +131,25 @@ public class TrayFollowerConnector: NSObject {
                 try await Task.sleep(nanoseconds: UInt64(retryMs) * 1_000_000)
                 continue
             case .fail:
-                let message = plan.error ?? "Attach failed (\(plan.code))"
-                throw TrayFollowerConnectorError.attachFailed(code: plan.code, message: message)
+                let outcome = SupersedeRedirect.outcome(
+                    for: plan, redirectsFollowed: redirectsFollowed)
+                guard case .follow(let replacement) = outcome else {
+                    let message =
+                        SupersedeRedirect.failureMessage(for: outcome)
+                        ?? plan.error ?? "Attach failed (\(plan.code))"
+                    throw TrayFollowerConnectorError.attachFailed(code: plan.code, message: message)
+                }
+                redirectsFollowed += 1
+                // The replacement outlives this attempt: the reconnect loop
+                // re-dials `currentJoinUrl`, and resurrecting the superseded
+                // tray would just walk the same chain again.
+                currentJoinUrl = replacement
+                controllerId = UUID().uuidString
+                signaling = TraySignalingClient(joinUrl: replacement)
+                self.signaling = signaling
+                try await Task.sleep(
+                    nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
+                continue
             case .signal:
                 attachPlan = plan
             }
@@ -292,7 +318,7 @@ public class TrayFollowerConnector: NSObject {
             // Attempt reconnection
             do {
                 controllerId = UUID().uuidString
-                signaling = TraySignalingClient(joinUrl: joinUrl)
+                signaling = TraySignalingClient(joinUrl: currentJoinUrl)
                 try await connectOnce()
 
                 // Success — exit reconnect loop

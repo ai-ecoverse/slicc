@@ -42,6 +42,8 @@ private struct RawFollowerAttachResponse: Codable {
         let retryAfterMs: Int?
         let error: String?
         let bootstrap: TrayBootstrapStatus?
+        /// Only present on `TRAY_SUPERSEDED` — the replacement tray to attach to.
+        let joinUrl: String?
     }
 }
 
@@ -74,6 +76,8 @@ public struct FollowerAttachPlan: Sendable {
     public var error: String?
     public var bootstrap: TrayBootstrapStatus?
     public var iceServers: [TurnIceServer]?
+    /// Set when `code == "TRAY_SUPERSEDED"` — the join URL to attach to instead.
+    public var supersededByJoinUrl: String?
 }
 
 public struct FollowerBootstrapPlan: Sendable {
@@ -88,12 +92,20 @@ public struct FollowerBootstrapPlan: Sendable {
 // MARK: - Signaling Client
 
 public actor TraySignalingClient {
+    /// Seam over `URLSession.data(for:)` so the attach/bootstrap state machines
+    /// can be exercised without a live tray hub.
+    public typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
     public let joinUrl: URL
-    private let session: URLSession
+    private let transport: Transport
 
     public init(joinUrl: URL, session: URLSession = .shared) {
+        self.init(joinUrl: joinUrl) { try await session.data(for: $0) }
+    }
+
+    public init(joinUrl: URL, transport: @escaping Transport) {
         self.joinUrl = joinUrl
-        self.session = session
+        self.transport = transport
     }
 
     // MARK: - 1. Attach
@@ -187,7 +199,7 @@ public actor TraySignalingClient {
 
         let (data, urlResponse): (Data, URLResponse)
         do {
-            (data, urlResponse) = try await session.data(for: request)
+            (data, urlResponse) = try await transport(request)
         } catch {
             throw TraySignalingError.networkError(underlying: error)
         }
@@ -237,6 +249,17 @@ public actor TraySignalingClient {
                 throw TraySignalingError.invalidAttachResponse(statusCode: statusCode, body: rawText)
             }
         case "fail":
+            // A superseded tray is a redirect dressed as a failure: the leader
+            // reconnected into a fresh tray and this one will never come back.
+            // Callers follow `joinUrl` (see `SupersedeRedirect`), so the URL is
+            // as load-bearing as `error` and its absence is a malformed reply.
+            if r.code == "TRAY_SUPERSEDED" {
+                guard r.error != nil, r.joinUrl != nil else {
+                    throw TraySignalingError.invalidAttachResponse(
+                        statusCode: statusCode, body: rawText)
+                }
+                break
+            }
             guard r.code == "INVALID_JOIN_CAPABILITY" || r.code == "TRAY_EXPIRED",
                 r.error != nil
             else {
@@ -260,7 +283,8 @@ public actor TraySignalingClient {
             retryAfterMs: raw.result.retryAfterMs,
             error: raw.result.error,
             bootstrap: raw.result.bootstrap,
-            iceServers: raw.iceServers
+            iceServers: raw.iceServers,
+            supersededByJoinUrl: raw.result.code == "TRAY_SUPERSEDED" ? raw.result.joinUrl : nil
         )
     }
 }

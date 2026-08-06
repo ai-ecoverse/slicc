@@ -3,6 +3,13 @@ import Foundation
 // Swift mirror of a subset of the canonical tray signaling wire contract in
 // `packages/shared-ts/src/tray-signaling.ts` — update this file when that
 // contract changes.
+//
+// The follower attach/bootstrap *envelopes* are deliberately NOT here. They are
+// decoded once, by the private `Raw…` structs in `Networking/TraySignaling.swift`
+// that back `FollowerAttachPlan`/`FollowerBootstrapPlan`. A second mirror of the
+// same envelopes used to live here and drifted unnoticed for exactly as long as
+// nothing decoded it (it never grew the `TRAY_SUPERSEDED` variant), so keep the
+// envelopes single-sourced next to their decoder.
 
 // MARK: - TraySessionDescription
 
@@ -152,83 +159,4 @@ public enum TrayBootstrapEvent: Codable, Sendable {
             try container.encode(fail, forKey: .failure)
         }
     }
-}
-
-// MARK: - FollowerAttachResult
-
-enum FollowerAttachResult: Codable, Sendable {
-    case wait(code: String, retryAfterMs: Int)
-    case signal(code: String, bootstrap: TrayBootstrapStatus)
-    case fail(code: String, error: String)
-
-    private enum CodingKeys: String, CodingKey {
-        case action, code, retryAfterMs, bootstrap, error
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let action = try container.decode(String.self, forKey: .action)
-        switch action {
-        case "wait":
-            self = .wait(
-                code: try container.decode(String.self, forKey: .code),
-                retryAfterMs: try container.decode(Int.self, forKey: .retryAfterMs))
-        case "signal":
-            self = .signal(
-                code: try container.decode(String.self, forKey: .code),
-                bootstrap: try container.decode(TrayBootstrapStatus.self, forKey: .bootstrap))
-        case "fail":
-            self = .fail(
-                code: try container.decode(String.self, forKey: .code),
-                error: try container.decode(String.self, forKey: .error))
-        default:
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "Unknown action: \(action)"))
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .wait(let code, let retryAfterMs):
-            try container.encode("wait", forKey: .action)
-            try container.encode(code, forKey: .code)
-            try container.encode(retryAfterMs, forKey: .retryAfterMs)
-        case .signal(let code, let bootstrap):
-            try container.encode("signal", forKey: .action)
-            try container.encode(code, forKey: .code)
-            try container.encode(bootstrap, forKey: .bootstrap)
-        case .fail(let code, let error):
-            try container.encode("fail", forKey: .action)
-            try container.encode(code, forKey: .code)
-            try container.encode(error, forKey: .error)
-        }
-    }
-}
-
-// MARK: - FollowerAttachResponse
-
-struct FollowerAttachResponse: Codable, Sendable {
-    let trayId: String
-    let controllerId: String
-    let role: String
-    let leader: TrayLeaderSummary?
-    let participantCount: Int
-    let result: FollowerAttachResult
-    let iceServers: [TurnIceServer]?
-}
-
-// MARK: - FollowerBootstrapResponse
-
-struct FollowerBootstrapResponse: Codable, Sendable {
-    let trayId: String
-    let controllerId: String
-    let role: String
-    let leader: TrayLeaderSummary?
-    let participantCount: Int
-    let bootstrap: TrayBootstrapStatus
-    let events: [TrayBootstrapEvent]
-    let iceServers: [TurnIceServer]?
 }
