@@ -83,6 +83,33 @@ function diagTail(diagnostics: { entries: string[] }): string {
   return tail || '(no browser diagnostics captured)';
 }
 
+/**
+ * Origin storage usage vs quota, for the failure message.
+ *
+ * This run writes ~92 MB of kokoro weights into OPFS and lets transformers.js
+ * cache fetched assets in CacheStorage — both billed against one per-origin
+ * quota that Chromium derives from FREE DISK on the volume holding the browser
+ * profile. When that quota is short, the failure surfaces far from the cause:
+ * the model still loads (`voice engine: ready`), then synthesis reports an
+ * empty voice/language list, with only a `QuotaExceededError` console warning
+ * to connect the two. Print the numbers so a red run says which it was instead
+ * of leaving the next reader to infer it.
+ */
+async function storageReport(page: import('@playwright/test').Page): Promise<string> {
+  try {
+    const est = await page.evaluate(async () => {
+      const e = await navigator.storage?.estimate?.();
+      return e ? { usage: e.usage ?? null, quota: e.quota ?? null } : null;
+    });
+    if (!est) return 'storage: navigator.storage.estimate() unavailable';
+    const mb = (n: number | null) => (n == null ? '?' : `${(n / 1024 / 1024).toFixed(1)} MB`);
+    const headroom = est.usage != null && est.quota != null ? mb(est.quota - est.usage) : 'unknown';
+    return `storage: usage ${mb(est.usage)} / quota ${mb(est.quota)} (headroom ${headroom})`;
+  } catch (err) {
+    return `storage: estimate failed — ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 /** Poll a status command until its stdout matches `readyMarker`. */
 async function waitForReady(
   page: import('@playwright/test').Page,
@@ -100,6 +127,7 @@ async function waitForReady(
     if (/failed/i.test(r.stdout)) {
       throw new Error(
         `${statusCmd} reported failure: ${r.stdout}` +
+          `\n${await storageReport(page)}` +
           `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
       );
     }
@@ -107,6 +135,7 @@ async function waitForReady(
   }
   throw new Error(
     `${statusCmd} did not reach ready within ${timeoutMs}ms; last: ${last}` +
+      `\n${await storageReport(page)}` +
       `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
   );
 }
@@ -212,10 +241,21 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    the kerium bug).
     const outPath = '/tmp/say-out.wav';
     const synth = await exec(page, `say -l en-US -o ${outPath} "hello world"`);
-    expect(
-      synth.exitCode,
-      `synth stderr: ${synth.stderr}\n--- diag ---\n${diagTail(diagnostics)}`
-    ).toBe(0);
+    if (synth.exitCode !== 0) {
+      // `say` reports an unusable engine as `Invalid language identifier:
+      // "en-us". Should be one of: .` — an EMPTY set, which says the phonemizer
+      // came up with no languages but not why. The voice list and the storage
+      // numbers are what separate "assets never landed" from "engine loaded but
+      // has no voices", so gather both before failing.
+      const voices = await exec(page, 'say --list');
+      expect(
+        synth.exitCode,
+        `synth stderr: ${synth.stderr}` +
+          `\nsay --list (exit ${voices.exitCode}): ${voices.stdout.trim() || '(no voices listed)'}` +
+          `\n${await storageReport(page)}` +
+          `\n--- diag ---\n${diagTail(diagnostics)}`
+      ).toBe(0);
+    }
     expect(synth.stdout).toMatch(/wrote \d+ KB to \/tmp\/say-out\.wav/);
 
     // 4. File should be a non-trivial WAV — guards against silent
