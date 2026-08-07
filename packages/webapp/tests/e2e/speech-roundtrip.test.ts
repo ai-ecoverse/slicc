@@ -276,8 +276,14 @@ test.describe('say -o WAV output (real kokoro)', () => {
       );
       if (kokoroDl.exitCode === 0) break;
       if (!/Cannot set property message|EINVAL/.test(kokoroDl.stderr)) break; // a real failure
+      // Clear the half-written weights before retrying. The failed write leaves
+      // a truncated `model_quantized.onnx` behind, and downloading over it
+      // yields a file whose size does not match its metadata — the model then
+      // fails to load with `EIO … Unexpected mismatch in file data size`, which
+      // reads like a corrupt download rather than a retried one.
+      await exec(page, 'rm -rf /workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX');
       // eslint-disable-next-line no-console
-      console.warn(`hf download hit the kerium OPFS bug (attempt ${attempt}/3); retrying`);
+      console.warn(`hf download hit the kerium OPFS bug (attempt ${attempt}/3); retrying clean`);
     }
     expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
 
