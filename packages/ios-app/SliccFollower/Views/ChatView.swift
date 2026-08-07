@@ -32,6 +32,10 @@ struct ChatView: View {
     /// Opt-in unattended prompts: the user made this policy call
     /// explicitly by choosing Always on the prompt card.
     @AppStorage("inboundAlwaysAllowPrompts") private var alwaysAllowPrompts = false
+    /// Transcript links stay in SLICC's own browser by default — a tap on a
+    /// link the agent sent should not evict the user from the session.
+    /// Settings → Advanced hands them back to the system browser.
+    @AppStorage("openLinksInBuiltInBrowser") private var openLinksInBuiltInBrowser = true
 
     init() {
         _presentation = StateObject(
@@ -186,10 +190,37 @@ struct ChatView: View {
     /// user in full-screen browsing, exactly like tapping a remote card.
     private func executeInboundOpen(_ action: InboundActionCoordinator.PendingOpen) {
         inboundActions.consume(action)
+        openInBuiltInBrowser(action.url)
+    }
+
+    // MARK: - Transcript links
+
+    /// Only web links are ours to keep. `mailto:`, `tel:`, and app schemes
+    /// have no meaning in a WKWebView tab, so they stay with the system even
+    /// when the setting is on.
+    static func routesToBuiltInBrowser(_ url: URL, enabled: Bool) -> Bool {
+        guard enabled, let scheme = url.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
+    }
+
+    /// Scoped to the conversation subtree so only transcript links are
+    /// redirected — the shell's own `openURL` (x-callback bounces) and the
+    /// Settings sheet keep the system action.
+    private var transcriptLinkAction: OpenURLAction {
+        OpenURLAction { url in
+            guard Self.routesToBuiltInBrowser(url, enabled: openLinksInBuiltInBrowser) else {
+                return .systemAction
+            }
+            openInBuiltInBrowser(url)
+            return .handled
+        }
+    }
+
+    private func openInBuiltInBrowser(_ url: URL) {
         withAnimation {
             presentation.activeSurface = .browser
         }
-        let id = appState.cdpOpenTab(url: action.url.absoluteString)
+        let id = appState.cdpOpenTab(url: url.absoluteString)
         appState.browserViewingTabId = id
     }
 
@@ -409,7 +440,9 @@ struct ChatView: View {
                             // toolbar items would keep rendering over the
                             // workbench surface and merge with any items it
                             // contributes into a synthesized `…` (#1916).
-                            toolbarSuppressed: presentation.activeSurface != nil)
+                            toolbarSuppressed: presentation.activeSurface != nil
+                        )
+                        .environment(\.openURL, transcriptLinkAction)
                     }
                     // The workbench covers the chat, not the rail — the
                     // same full-bleed overlay the web shell uses at ≤560px,
@@ -511,7 +544,9 @@ struct ChatView: View {
                     inputText: $presentation.composerDraft,
                     stagedAttachments: $presentation.stagedAttachments,
                     transcriptPosition: $presentation.transcriptPosition,
-                    ptt: ptt)
+                    ptt: ptt
+                )
+                .environment(\.openURL, transcriptLinkAction)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
