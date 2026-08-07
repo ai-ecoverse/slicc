@@ -440,14 +440,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           df -h /
-      # TEMPORARY (remove before merge): does the espeak phonemizer work on
-      # this runner at all? It returns 8 voices on a developer laptop and an
-      # empty set inside the failing e2e, and a 25-minute run is a poor
-      # instrument for telling "runner browser" apart from "how the app loads
-      # it". Seconds, and it never gates.
-      - name: Probe the phonemizer primitive (temporary diagnostic)
-        run: node packages/dev-tools/tools/phonemizer-probe.mjs
-        continue-on-error: true
       - name: E2E say -o WAV (real Kokoro)
         run: npm run test:e2e -- speech-roundtrip
         env:

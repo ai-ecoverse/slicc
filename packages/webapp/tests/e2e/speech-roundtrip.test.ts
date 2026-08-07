@@ -147,6 +147,14 @@ async function waitForReady(
 }
 
 test.describe('say -o WAV output (real kokoro)', () => {
+  // No retries here, against the config's CI-wide `retries: 2`. This spec takes
+  // ~7 minutes, so a deterministic failure spent 21 minutes pretending to be
+  // flaky — and "green on attempt 3" is exactly how a load-sensitive race hides.
+  // The engine race this spec exists to catch (see the espeak readiness note in
+  // `vite-plugins/fix-kokoro-espeak-readiness.ts`) is one of those. Fail once,
+  // fast, and honestly. Other e2e specs keep the CI retries.
+  test.describe.configure({ retries: 0 });
+
   test.skip(
     !RUN,
     'set RUN_REAL_SPEECH_E2E=1 to opt in (downloads ~100 MB of kokoro weights on a cold OPFS)'
@@ -265,26 +273,10 @@ test.describe('say -o WAV output (real kokoro)', () => {
       // numbers are what separate "assets never landed" from "engine loaded but
       // has no voices", so gather both before failing.
       const voices = await exec(page, 'say --list');
-      // Two more questions the failure cannot answer on its own.
-      //
-      // A SECOND en-US attempt separates a transient miss from a permanently
-      // dead registry: `phonemizer` builds its language set ONCE
-      // (`oe = ne.then(...)`) and every later call awaits that same promise, so
-      // if the espeak FS was still empty when it resolved, no retry can ever
-      // recover it for this page.
-      //
-      // es-ES says WHICH engine died: Spanish goes through SLICC's staged
-      // espeak-ng (`espeak-phonemizer.ts`), English through the copy bundled
-      // inside kokoro-js. If Spanish works while English does not, the fault is
-      // isolated to the bundled one.
-      const retry = await exec(page, `say -l en-US -o /tmp/say-retry.wav "hello again"`);
-      const spanish = await exec(page, `say -l es-ES -o /tmp/say-es.wav "hola mundo"`);
       expect(
         synth.exitCode,
         `synth stderr: ${synth.stderr}` +
           `\nsay --list (exit ${voices.exitCode}): ${voices.stdout.trim() || '(no voices listed)'}` +
-          `\nsecond en-US attempt (exit ${retry.exitCode}): ${retry.stderr.trim() || retry.stdout.trim()}` +
-          `\nes-ES via staged espeak-ng (exit ${spanish.exitCode}): ${spanish.stderr.trim() || spanish.stdout.trim()}` +
           `\n${await storageReport(page)}` +
           `\n--- diag ---\n${diagTail(diagnostics)}`
       ).toBe(0);

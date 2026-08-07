@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
+import { fixKokoroEspeakReadinessPlugin } from './vite-plugins/fix-kokoro-espeak-readiness';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 import { stripFfmpegCoreCdnLiteralPlugin } from './vite-plugins/strip-ffmpeg-core-cdn-literal';
 import { stripOrtWasmAssetPlugin } from './vite-plugins/strip-ort-wasm-asset';
@@ -294,6 +295,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     stripBiomeWasmAssetPlugin(),
     stripOrtWasmAssetPlugin(),
+    fixKokoroEspeakReadinessPlugin(),
     stubPiNodeInternalsPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
