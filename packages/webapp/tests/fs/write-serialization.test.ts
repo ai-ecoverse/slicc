@@ -15,10 +15,11 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
  * These tests drive `withWriteLock` directly: the defect is overlapping
  * critical sections, and no assertion on the resulting bytes can see that.
  *
- * The cross-context half of the fix (a Web Lock spanning page, kernel worker
- * and the Python realm's own worker) is out of reach here — these run on the
- * memory backend in Node, where there is no shared index to corrupt and no
- * `navigator.locks`. The browser harness in #1979 covers it.
+ * The cross-context half (a Web Lock spanning every context of the origin) is
+ * out of reach here — these run on the memory backend in Node, where there is
+ * no shared index to corrupt and no `navigator.locks`. It is insurance rather
+ * than a fix for a live path: every ZenFS writer currently lives in the kernel
+ * worker. The browser harness in #1979 covers it.
  */
 
 /** `withWriteLock` is private; the race it prevents is only visible from inside. */

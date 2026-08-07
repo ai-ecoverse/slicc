@@ -354,15 +354,19 @@ that plainly exist — so the error never names the real cause:
 | `QuotaExceededError` far below the reported quota     | index race, orphaned swap files    |
 | `EIO: Unexpected mismatch in file data size`          | index size disagrees with the file |
 
-Two independent scopes must be serialized, and getting only one is a silent
-half-fix:
+Two scopes:
 
-- **In-realm**: key the lock on `dbName`, never per instance. Same-`dbName`
+- **In-realm** — key the lock on `dbName`, never per instance. Same-`dbName`
   `VirtualFS` instances share one resolved `WebAccessFS`, so a per-instance lock
-  leaves them free to interleave on one index.
-- **Cross-realm**: a Web Lock (`navigator.locks`), which spans page, kernel
-  worker, and realm workers of one origin. The Python realm mounts the same
-  subtree from its own `DedicatedWorker`, so an in-realm chain cannot see it.
+  leaves them free to interleave on one index. Several instances really are
+  constructed on `GLOBAL_FS_DB_NAME` (plugins, MCP, git, upskill), so this is
+  the scope that matters today.
+- **Cross-context** — a Web Lock (`navigator.locks`) spanning every context of
+  the origin. Insurance: all ZenFS writers currently live in the kernel worker,
+  so it is uncontended and costs one async hop. It does **not** cover the Python
+  realm, which mounts the same subtree through emscripten's `OPFS_SYNC_FS`
+  (sync access handles) and bypasses the ZenFS index entirely — a writer this
+  lock cannot see.
 
 Lock **mutations only**. Locking reads too measured 4× slower and prevented no
 failures. Measured on five contexts writing 92 MB + 800 small files into one

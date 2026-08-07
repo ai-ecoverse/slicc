@@ -1485,15 +1485,21 @@ export class VirtualFS {
    * the shape of `hf download` racing `ipk add`) failed 3 of 5 runs, and 0 of
    * 5 once serialized.
    *
-   * Two scopes, because there are two ways to race:
+   * Two scopes:
    *
-   *  - **In-realm**: keyed by `dbName`, NOT per instance. Same-`dbName`
-   *    instances share one resolved `WebAccessFS` (see `opfsBackends`), so a
-   *    per-instance chain leaves them free to interleave on the same index.
-   *  - **Cross-realm**: a Web Lock, which spans page, kernel worker and realm
-   *    workers of one origin. The Python realm mounts this very subtree in its
-   *    own `DedicatedWorker` (`python-command.ts`), so an in-realm chain alone
-   *    cannot see the other writer.
+   *  - **In-realm**: keyed by `dbName`, NOT per instance. This is the one that
+   *    fixes a live bug — several instances are constructed on
+   *    `GLOBAL_FS_DB_NAME` (plugins, MCP, git, upskill), they share one
+   *    resolved `WebAccessFS` (see `opfsBackends`) and therefore one index,
+   *    and a per-instance chain left them free to interleave on it.
+   *  - **Cross-context**: a Web Lock, which spans every context of the origin.
+   *    Insurance, not a fix for a path that exists today: every ZenFS writer
+   *    currently lives in the kernel worker, so this lock is uncontended and
+   *    costs one async hop. It is what would catch a second context mounting
+   *    the same subtree through ZenFS. Note it does NOT cover the Python
+   *    realm — that mounts this subtree through emscripten's `OPFS_SYNC_FS`
+   *    (sync access handles, see `python-command.ts`), bypassing the ZenFS
+   *    index entirely, so it never takes this lock.
    *
    * Mutations only. Locking reads as well measured 4x slower with no failures
    * prevented. Memory-backed instances skip the Web Lock: they share nothing
