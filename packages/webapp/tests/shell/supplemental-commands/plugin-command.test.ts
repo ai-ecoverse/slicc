@@ -5,7 +5,11 @@ import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import { readServersFile, testOnlyResetStoreCache } from '../../../src/shell/mcp/store.js';
+import {
+  readServersFile,
+  setServer,
+  testOnlyResetStoreCache,
+} from '../../../src/shell/mcp/store.js';
 import {
   PLUGINS_STORE_PATH,
   readPluginsFile,
@@ -142,6 +146,39 @@ describe('plugin command', () => {
     expect(servers.servers['reports-plugin:api2'].url).toBe('https://api2.example.com/mcp');
     const file = await readPluginsFile(fs);
     expect(file.plugins['reports-plugin'].mcpServerNames).toEqual(['reports-plugin:api2']);
+  });
+
+  it('install: refuses to overwrite a user-added MCP server sharing the bridged name', async () => {
+    await setServer('reports-plugin:api', { url: 'https://user.example.com/mcp' }, fs);
+    await writeFixturePlugin({ mcp: true });
+
+    const r = await runCmd(['install', 'reports-plugin']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('0 registered');
+    expect(r.stdout).toContain('not bridged');
+    expect(r.stdout).toContain('reports-plugin:api');
+
+    // The user's entry is untouched, and the registry doesn't claim it.
+    const servers = await readServersFile(fs);
+    expect(servers.servers['reports-plugin:api'].url).toBe('https://user.example.com/mcp');
+    const file = await readPluginsFile(fs);
+    expect(file.plugins['reports-plugin'].mcpServerNames).toEqual([]);
+  });
+
+  it('remove: leaves a user-added MCP server alone even if listed in mcpServerNames', async () => {
+    await writeFixturePlugin({ mcp: true });
+    await runCmd(['install', 'reports-plugin']);
+    // Simulate the entry losing its plugin ownership (user re-added it).
+    await setServer(
+      'reports-plugin:api',
+      { url: 'https://user.example.com/mcp', pluginOrigin: undefined },
+      fs
+    );
+
+    const r = await runCmd(['remove', 'reports-plugin']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('0 removed');
+    expect((await readServersFile(fs)).servers['reports-plugin:api']).toBeDefined();
   });
 
   it('list: empty + populated output', async () => {

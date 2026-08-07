@@ -26,7 +26,7 @@
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import type { LoadedPlugin, PluginDiagnostic } from '../plugins/types.js';
+import type { LoadedPlugin, PluginDiagnostic, PluginLoadResult } from '../plugins/types.js';
 
 /** Managed extraction root for GitHub-sourced plugins. */
 export const PLUGIN_SOURCES_DIR = '/workspace/.plugins/sources';
@@ -169,7 +169,11 @@ async function resolveSource(raw: string, cwd: string, fs: VirtualFS): Promise<R
 }
 
 function sanitizeSourceSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '-');
+  const cleaned = value.replace(/[^A-Za-z0-9._-]+/g, '-');
+  // A pure-dot segment (".", "..") survives the allowlist unchanged and would
+  // reintroduce traversal characters if downstream code ever splits on `--`
+  // or normalizes the joined name — neutralize it defensively.
+  return /^\.+$/.test(cleaned) ? cleaned.replace(/\./g, '_') : cleaned;
 }
 
 /** Deterministic managed extraction dir for a GitHub-sourced plugin. */
@@ -286,8 +290,13 @@ is registered in the MCP store as "<plugin>:<server>".
     );
   }
 
-  const mcpNames = await bridgeMcpServers(plugin, deps);
-  const staleRemoved = await removeStaleMcpServers(existing?.mcpServerNames, mcpNames, deps);
+  const bridge = await bridgeMcpServers(plugin, deps);
+  const staleRemoved = await removeStaleMcpServers(
+    name,
+    existing?.mcpServerNames,
+    bridge.registered,
+    deps
+  );
 
   await setInstalledPlugin(
     name,
@@ -296,32 +305,36 @@ is registered in the MCP store as "<plugin>:<server>".
       version: plugin.manifest.version,
       description: plugin.manifest.description,
       installedAt: new Date().toISOString(),
-      mcpServerNames: mcpNames,
+      mcpServerNames: bridge.registered,
       ...(origin ? { source: origin } : {}),
     },
     deps.fs
   );
 
-  return ok(
-    formatInstallSummary(plugin, mcpNames, staleRemoved, origin ?? root, result.diagnostics)
-  );
+  return ok(formatInstallSummary(plugin, bridge, staleRemoved, origin ?? root, result.diagnostics));
 }
 
 /** Render the multi-line success output of `plugin install`. */
 function formatInstallSummary(
   plugin: LoadedPlugin,
-  mcpNames: string[],
+  bridge: McpBridgeResult,
   staleRemoved: number,
   from: string,
   diagnostics: PluginDiagnostic[]
 ): string {
   const name = plugin.manifest.name;
+  const mcpNames = bridge.registered;
   const skipped = plugin.mcp.servers.filter((s) => s.status !== 'supported');
   const lines = [
     `Installed agent plugin "${name}"${plugin.manifest.version ? ` v${plugin.manifest.version}` : ''} from ${from}`,
     `  skills: ${plugin.skills.length}${plugin.skills.length > 0 ? ` (${plugin.skills.map((s) => s.name).join(', ')})` : ''}`,
     `  mcp:    ${mcpNames.length} registered${mcpNames.length > 0 ? ` (${mcpNames.join(', ')})` : ''}${skipped.length > 0 ? `, ${skipped.length} skipped` : ''}${staleRemoved > 0 ? `, ${staleRemoved} removed from previous install` : ''}`,
   ];
+  if (bridge.conflicts.length > 0) {
+    lines.push(
+      `  warning: not bridged — MCP server name(s) already in use and not owned by this plugin: ${bridge.conflicts.join(', ')} (remove them with \`mcp remove\` first)`
+    );
+  }
   if (diagnostics.length > 0) {
     lines.push('Diagnostics:', formatDiagnostics(diagnostics));
   }
@@ -332,40 +345,64 @@ function formatInstallSummary(
  * Reinstall at the same root: drop MCP entries bridged by the previous
  * install that are no longer in the manifest, so they don't orphan in the
  * shared MCP store (`plugin remove` only deletes the *current* list).
+ * Only entries whose `pluginOrigin` matches this plugin are deleted, so a
+ * user-added server sharing the name shape is never touched.
  * Returns the number of stale entries actually deleted.
  */
 async function removeStaleMcpServers(
+  pluginName: string,
   previousNames: string[] | undefined,
   currentNames: string[],
   deps: PluginCommandDeps
 ): Promise<number> {
   const stale = (previousNames ?? []).filter((n) => !currentNames.includes(n));
   if (stale.length === 0) return 0;
-  const { deleteServer } = await import('../mcp/store.js');
+  const { deleteServer, getServer } = await import('../mcp/store.js');
   let removed = 0;
   for (const serverName of stale) {
+    const entry = await getServer(serverName, deps.fs);
+    if (entry?.pluginOrigin !== pluginName) continue;
     if (await deleteServer(serverName, deps.fs)) removed += 1;
   }
   return removed;
 }
 
+interface McpBridgeResult {
+  /** Store names registered (or refreshed) by this install. */
+  registered: string[];
+  /** Store names left untouched because a non-plugin entry already owns them. */
+  conflicts: string[];
+}
+
 /**
  * Register the plugin's supported streamable-http servers into the MCP
- * store as `<plugin>:<server>`. Per §7.2.2 rule 5, a connect failure is
- * reported but never blocks the install — the entry is persisted and the
- * tool catalog is fetched best-effort.
+ * store as `<plugin>:<server>`, tagging each entry with `pluginOrigin`.
+ * A pre-existing entry not owned by this plugin (e.g. user-added via
+ * `mcp add`) is never overwritten — it is reported as a conflict instead.
+ * Per §7.2.2 rule 5, a connect failure is reported but never blocks the
+ * install — the entry is persisted and the tool catalog is fetched
+ * best-effort.
  */
-async function bridgeMcpServers(plugin: LoadedPlugin, deps: PluginCommandDeps): Promise<string[]> {
+async function bridgeMcpServers(
+  plugin: LoadedPlugin,
+  deps: PluginCommandDeps
+): Promise<McpBridgeResult> {
   const supported = plugin.mcp.servers.filter((s) => s.status === 'supported');
-  if (supported.length === 0) return [];
+  if (supported.length === 0) return { registered: [], conflicts: [] };
 
-  const { setServer } = await import('../mcp/store.js');
+  const { getServer, setServer } = await import('../mcp/store.js');
   const { McpClient } = await import('../mcp/client.js');
   const registered: string[] = [];
+  const conflicts: string[] = [];
 
   for (const server of supported) {
     const config = server.config!;
     const storeName = `${plugin.manifest.name}:${server.name}`;
+    const existingEntry = await getServer(storeName, deps.fs);
+    if (existingEntry && existingEntry.pluginOrigin !== plugin.manifest.name) {
+      conflicts.push(storeName);
+      continue;
+    }
     let tools: unknown[] = [];
     try {
       const client = new McpClient({ url: config.url, headers: config.headers });
@@ -382,12 +419,13 @@ async function bridgeMcpServers(plugin: LoadedPlugin, deps: PluginCommandDeps): 
         ...(config.headers ? { headers: config.headers } : {}),
         tools: tools as never,
         addedAt: new Date().toISOString(),
+        pluginOrigin: plugin.manifest.name,
       },
       deps.fs
     );
     registered.push(storeName);
   }
-  return registered;
+  return { registered, conflicts };
 }
 
 // ── list ────────────────────────────────────────────────────────────
@@ -489,8 +527,14 @@ async function cmdValidate(
   }
 
   const { loadPluginFromDirectory } = await import('../plugins/loader.js');
-  const result = await loadPluginFromDirectory(fs, root);
-  if (staging) await removeDirBestEffort(fs, staging);
+  let result: PluginLoadResult;
+  try {
+    result = await loadPluginFromDirectory(fs, root);
+  } finally {
+    // The loader claims to never throw, but a loader bug or fs error would
+    // otherwise leak the staging dir past the top-level catch.
+    if (staging) await removeDirBestEffort(fs, staging);
+  }
 
   if (!result.ok) {
     return {
@@ -527,8 +571,12 @@ async function cmdRemove(args: string[], deps: PluginCommandDeps): Promise<ExecR
 
   let mcpRemoved = 0;
   if (entry.mcpServerNames && entry.mcpServerNames.length > 0) {
-    const { deleteServer } = await import('../mcp/store.js');
+    const { deleteServer, getServer } = await import('../mcp/store.js');
     for (const serverName of entry.mcpServerNames) {
+      // Only delete entries this plugin bridged (`pluginOrigin` matches) —
+      // never a user-added server that happens to share the name.
+      const serverEntry = await getServer(serverName, deps.fs);
+      if (serverEntry?.pluginOrigin !== name) continue;
       if (await deleteServer(serverName, deps.fs)) mcpRemoved += 1;
     }
   }

@@ -53,6 +53,13 @@ export interface McpServerEntry {
   addedAt?: string;
   lastRefreshedAt?: string;
   auth?: McpAuthEntry;
+  /**
+   * Name of the agent plugin that bridged this entry (`plugin install`).
+   * Absent for user-added servers; plugin install/remove never touches an
+   * entry whose `pluginOrigin` doesn't match, so a user-added server that
+   * happens to share the `<plugin>:<server>` name shape is safe.
+   */
+  pluginOrigin?: string;
 }
 
 /** On-disk shape for `/workspace/.mcp/servers.json`. */

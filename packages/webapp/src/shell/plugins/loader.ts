@@ -274,14 +274,43 @@ function parseSkillFrontmatter(content: string): { name?: string; description?: 
   const fm = normalized.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!fm) return {};
   const out: { name?: string; description?: string } = {};
-  for (const line of fm[1].split('\n')) {
-    const m = line.match(/^(name|description):\s*(.*)$/);
+  const lines = fm[1].split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(/^(name|description):\s*(.*)$/);
     if (!m) continue;
-    const value = m[2].trim().replace(/^["']|["']$/g, '');
+    const rawValue = m[2].trim();
+    // YAML block scalar (`>` folded / `|` literal, with optional chomping
+    // indicator): collect the indented continuation lines.
+    const block = rawValue.match(/^([>|])[+-]?$/);
+    const value = block
+      ? collectBlockScalar(lines, i + 1, block[1] === '>' ? ' ' : '\n')
+      : unquoteScalar(rawValue);
     if (m[1] === 'name') out.name = value;
     else out.description = value;
   }
   return out;
+}
+
+/** Strip one matching pair of surrounding quotes (never a lone quote). */
+function unquoteScalar(value: string): string {
+  const q = value[0];
+  if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) {
+    const inner = value.slice(1, -1);
+    return q === '"' ? inner.replace(/\\(["\\])/g, '$1') : inner.replace(/''/g, "'");
+  }
+  return value;
+}
+
+/** Join the indented continuation lines of a YAML block scalar. */
+function collectBlockScalar(lines: string[], start: number, separator: string): string {
+  const collected: string[] = [];
+  for (let i = start; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === '') continue;
+    if (!/^\s/.test(line)) break;
+    collected.push(line.trim());
+  }
+  return collected.join(separator);
 }
 
 // ── MCP servers (§7.2) ──────────────────────────────────────────────

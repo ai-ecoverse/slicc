@@ -146,6 +146,25 @@ describe('loadPluginFromDirectory', () => {
     expect(result.diagnostics.some((d) => d.message.includes('no-frontmatter'))).toBe(true);
   });
 
+  it('parses quoted and block-scalar SKILL.md frontmatter values', async () => {
+    await writePlugin(fs, minimalManifest, {
+      'skills/quoted/SKILL.md': `---\nname: quoted\ndescription: 'Skill for X: does Y'\n---\nBody`,
+      'skills/escaped/SKILL.md': `---\nname: escaped\ndescription: "Nested \\"quote\\""\n---\nBody`,
+      'skills/folded/SKILL.md':
+        '---\nname: folded\ndescription: >\n  A multi-line description\n  that spans several lines.\n---\nBody',
+      'skills/literal/SKILL.md':
+        '---\nname: literal\ndescription: |-\n  Line one\n  Line two\n---\nBody',
+    });
+    const result = await loadPluginFromDirectory(fs, ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byName = new Map(result.plugin.skills.map((s) => [s.name, s.description]));
+    expect(byName.get('quoted')).toBe('Skill for X: does Y');
+    expect(byName.get('escaped')).toBe('Nested "quote"');
+    expect(byName.get('folded')).toBe('A multi-line description that spans several lines.');
+    expect(byName.get('literal')).toBe('Line one\nLine two');
+  });
+
   it('loads mcp.json, keeping streamable-http and skipping stdio/sse (§7.2)', async () => {
     await writePlugin(fs, minimalManifest, {
       'mcp.json': JSON.stringify({
