@@ -5,9 +5,9 @@
 // and intersects them with EVERY debt list: the per-rule exemption glob lists
 // parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
 // cognitive complexity, floating promises, and misused promises — plus the
-// `ui/` back-edge baseline
-// (`ui-back-edge-baseline.json`, see check-ui-back-edges.mjs), evaluated per
-// file.
+// layer-stack back-edge baseline
+// (`layer-back-edge-baseline.json`, see check-layer-back-edges.mjs),
+// evaluated per file.
 // Exits non-zero with a rule-appropriate fix-it message if any touched file
 // is still on ANY list — the PR author must pay the file's debt down and
 // delete its entry in the same PR.
@@ -29,7 +29,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { BASELINE_PATH, baselineFiles } from './check-ui-back-edges.mjs';
+import { BASELINE_PATH, baselineFiles } from './check-layer-back-edges.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
@@ -44,7 +44,7 @@ import {
 
 const SCRIPT = 'check-touched-exemptions';
 
-const UI_BASELINE_REL = relative(repoRoot, BASELINE_PATH).split('\\').join('/');
+const LAYER_BASELINE_REL = relative(repoRoot, BASELINE_PATH).split('\\').join('/');
 
 const RULES = [
   {
@@ -154,10 +154,10 @@ function readBaseJson(baseRef, relPath) {
   }
 }
 
-// Read the current ui-back-edge baseline from disk; null on any failure so a
-// missing/broken baseline degrades to "no ui-back-edge debt list" instead of
+// Read the current layer back-edge baseline from disk; null on any failure so
+// a missing/broken baseline degrades to "no back-edge debt list" instead of
 // crashing the biome-rule checks.
-function readUiBaseline() {
+function readLayerBaseline() {
   try {
     return JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
   } catch {
@@ -188,8 +188,8 @@ function main() {
   const biomeConfig = readBiomeConfig();
   const baseRef = resolveBaseRef(process.argv);
   const baseConfig = readBaseJson(baseRef, 'biome.json');
-  const uiBaseline = readUiBaseline();
-  const baseUiBaseline = readBaseJson(baseRef, UI_BASELINE_REL);
+  const layerBaseline = readLayerBaseline();
+  const baseLayerBaseline = readBaseJson(baseRef, LAYER_BASELINE_REL);
   const ruleStates = [
     ...RULES.map((rule) => ({
       ...rule,
@@ -198,20 +198,20 @@ function main() {
       baseReadable: baseConfig !== null,
     })),
     {
-      label: 'ui-back-edge',
-      listRef: UI_BASELINE_REL,
+      label: 'layer-back-edge',
+      listRef: LAYER_BASELINE_REL,
       fixIt:
-        'Fix: in this same PR, remove every `ui/` import from the file (move the pure\n' +
-        'helper into a lower-layer module — see docs/review-patterns.md § Layer-stack\n' +
+        'Fix: in this same PR, remove every up-the-stack import from the file (move the\n' +
+        'pure helper into the lower layer — see docs/review-patterns.md § Layer-stack\n' +
         'import direction), then ratchet the baseline:\n' +
-        '  node packages/dev-tools/tools/check-ui-back-edges.mjs --update',
+        '  node packages/dev-tools/tools/check-layer-back-edges.mjs --update',
       addFixIt:
-        'Fix: remove the new `ui/` import instead of growing the baseline — move the\n' +
-        'pure helper into a lower-layer module (see docs/review-patterns.md §\n' +
+        'Fix: remove the new up-the-stack import instead of growing the baseline — move\n' +
+        'the pure helper into the lower layer (see docs/review-patterns.md §\n' +
         'Layer-stack import direction).',
-      globs: baselineFiles(uiBaseline),
-      baseGlobs: baselineFiles(baseUiBaseline),
-      baseReadable: baseUiBaseline !== null,
+      globs: baselineFiles(layerBaseline),
+      baseGlobs: baselineFiles(baseLayerBaseline),
+      baseReadable: baseLayerBaseline !== null,
     },
   ];
 
