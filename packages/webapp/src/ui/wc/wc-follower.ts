@@ -793,10 +793,16 @@ export async function mountWcUiFollower(
   // Task 8: add "Export transcript" to the follower avatar menu.
   // Experimental features are deliberately excluded: the centrally gated
   // dialog currently has no user-toggleable flags, so this menu stays minimal.
+  // "Bring leader to front" is extension-side-panel-only: the pinned leader tab
+  // lives in exactly one window, and only that host can focus it (see
+  // `isExtensionSidePanel`).
   let exportInFlight = false;
   const syncFollowerMenuItems = (): void => {
     boot.refs.avatarMenu.items = [
       { kind: 'separator' },
+      ...(isExtensionSidePanel
+        ? [{ id: 'focus-leader-tab', label: 'Bring leader to front', icon: 'external-link' }]
+        : []),
       {
         id: 'export-transcript',
         label: exportInFlight ? 'Exporting…' : 'Export transcript',
@@ -810,6 +816,10 @@ export async function mountWcUiFollower(
 
   boot.refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (id === 'focus-leader-tab') {
+      prelude.cherryTransport?.emitSliccEventToHost('slicc.focus-leader-tab');
+      return;
+    }
     if (id === 'tray-stop') {
       window.dispatchEvent(
         new CustomEvent('slicc:tray-leave', { detail: { workerBaseUrl: null } })

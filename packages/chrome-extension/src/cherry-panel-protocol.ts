@@ -20,10 +20,14 @@ export interface PanelHelloMessage {
  * Panel → SW: focus (or create) the pinned SLICC leader tab. Sent when the
  * follower asks to sign in — provider login (OAuth / device-code / settings)
  * can't complete in the cross-origin side-panel iframe, so the panel hands the
- * user off to the leader tab where the real login UI runs.
+ * user off to the leader tab where the real login UI runs — and by the follower
+ * avatar menu's "Bring leader to front", a plain focus with nothing to sign in to.
  */
 export interface PanelFocusLeaderMessage {
   kind: 'focus-leader';
+  /** Also open the leader's Settings dialog (the sign-in hand-off). Defaults to
+   *  true so an omitted field keeps the sign-in behaviour. */
+  openSettings?: boolean;
 }
 export type PanelToSwMessage = PanelHelloMessage | PanelFocusLeaderMessage;
 

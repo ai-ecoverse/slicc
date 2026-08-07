@@ -102,14 +102,40 @@ describe('sidepanel-entry controller', () => {
     const opts = mountSlicc.mock.calls[0]![0] as {
       hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
     };
-    // The follower asks to sign in → the panel hands it off to the leader tab.
+    // The follower asks to sign in → hand off to the leader tab AND its Settings.
     opts.hooks?.onSliccEvent?.('slicc.open-leader-tab');
-    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader' });
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: true });
 
     // An unrelated follower event is NOT relayed as a focus-leader command.
     port.postMessage.mockClear();
     opts.hooks?.onSliccEvent?.('slicc.follower.ready');
-    expect(port.postMessage).not.toHaveBeenCalledWith({ kind: 'focus-leader' });
+    expect(port.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'focus-leader' })
+    );
+  });
+
+  it('follower "slicc.focus-leader-tab" event focuses the leader tab WITHOUT opening Settings', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    const opts = mountSlicc.mock.calls[0]![0] as {
+      hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
+    };
+    // The avatar menu's "Bring leader to front" — nothing to sign in to, so the
+    // leader keeps its current view.
+    opts.hooks?.onSliccEvent?.('slicc.focus-leader-tab');
+    expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: false });
+  });
+
+  it('a leader-focus request survives a dead port', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    const opts = mountSlicc.mock.calls[0]![0] as {
+      hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
+    };
+    port.postMessage.mockImplementation(() => {
+      throw new Error('Attempting to use a disconnected port object');
+    });
+    expect(() => opts.hooks?.onSliccEvent?.('slicc.focus-leader-tab')).not.toThrow();
   });
 
   it('ready → status live (overlay hidden so the follower owns its own sub-status)', () => {

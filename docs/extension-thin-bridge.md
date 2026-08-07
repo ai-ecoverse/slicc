@@ -187,11 +187,21 @@ The side panel is opened on demand by the toolbar icon. Full flow:
    SLICC tab" card (`showSignInRedirect`). A general cherry embed in a
    third-party page keeps its own onboarding untouched. In both card cases the
    follower emits `slicc.open-leader-tab`; `sidepanel-entry`'s `onSliccEvent`
-   hook relays it to the SW as a `cherry-panel` `focus-leader` message, and
-   `cherry-panel-sw` both `focusLeaderTab()`s (focus/create the leader tab)
-   and `postOpenSettingsToWelcomedLeaderPorts()`s (bridge
+   hook relays it to the SW as a `cherry-panel`
+   `{ kind:'focus-leader', openSettings: true }` message, and `cherry-panel-sw`
+   both `focusLeaderTab()`s (focus/create the leader tab) and
+   `postOpenSettingsToWelcomedLeaderPorts()`s (bridge
    `extension.open-settings` → leader opens its Settings dialog) so the user
    lands on the login UI, not a bare focused tab.
+7. **"Bring leader to front"**: the follower's avatar menu carries this item in
+   the side panel only. The leader is pinned in exactly one window, so a panel
+   open in any other window has no other way back to it — and the follower
+   iframe cannot reach `chrome.tabs` itself. Selecting it emits
+   `slicc.focus-leader-tab`, which `sidepanel-entry` relays as the same
+   `focus-leader` message with `openSettings: false`: focus only, leaving the
+   leader on whatever view it is showing. An omitted `openSettings` still means
+   "open Settings", so a panel document from before an extension update keeps
+   the sign-in behaviour.
 
 **Tri-state panel UI:**
 

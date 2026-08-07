@@ -72,6 +72,21 @@ describe('cherry-panel-sw', () => {
     expect(p._sent).toEqual([]);
   });
 
+  it('a focus-leader message with openSettings:false focuses WITHOUT opening Settings', async () => {
+    const focusLeaderTab = vi.fn(async () => {});
+    const openSettingsOnLeader = vi.fn();
+    const p = fakePort();
+    await handleCherryPanelConnect(p as never, {
+      ensureLeaderTab: vi.fn(async () => {}),
+      focusLeaderTab,
+      openSettingsOnLeader,
+    });
+    // The avatar menu's "Bring leader to front" — just the tab, not login.
+    p._rx({ kind: 'focus-leader', openSettings: false });
+    expect(focusLeaderTab).toHaveBeenCalledTimes(1);
+    expect(openSettingsOnLeader).not.toHaveBeenCalled();
+  });
+
   it('a focus-leader message with no openSettingsOnLeader dep still focuses (no throw)', async () => {
     const focusLeaderTab = vi.fn(async () => {});
     const p = fakePort();

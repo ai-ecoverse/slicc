@@ -90,6 +90,18 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     if (!disposed && handle) goDisconnected();
   });
 
+  // Only the SW can touch chrome.tabs, so every leader-tab focus goes over the
+  // Port. `openSettings` distinguishes the sign-in hand-off (land the user on
+  // the login UI) from a plain focus.
+  const requestLeaderFocus = (openSettings: boolean) => {
+    try {
+      port?.postMessage({ kind: 'focus-leader', openSettings });
+    } catch {
+      // Port died (SW evicted / context invalidated) — the follower's card still
+      // tells the user to open the SLICC tab manually.
+    }
+  };
+
   const onMessage = (raw: unknown) => {
     const msg = raw as SwToPanelMessage;
     if (msg?.kind !== 'join-url') return;
@@ -146,15 +158,11 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         // The follower asks to sign in — provider login can't complete in the
         // panel iframe, so focus/open the SLICC leader tab where the real login
         // UI runs. Route it through the SW (which owns the leader tab).
+        // `slicc.focus-leader-tab` is the follower avatar menu's "Bring leader
+        // to front" — a plain focus, with nothing to sign in to.
         onSliccEvent: (name) => {
-          if (name === 'slicc.open-leader-tab') {
-            try {
-              port?.postMessage({ kind: 'focus-leader' });
-            } catch {
-              // Port died (SW evicted / context invalidated) — the follower's
-              // card still tells the user to open the SLICC tab manually.
-            }
-          }
+          if (name === 'slicc.open-leader-tab') requestLeaderFocus(true);
+          if (name === 'slicc.focus-leader-tab') requestLeaderFocus(false);
         },
       },
     });
