@@ -373,7 +373,6 @@
       "includes": [
         "packages/chrome-extension/src/fetch-proxy-shared.ts",
         "packages/webapp/providers/adobe.ts",
-        "packages/webapp/src/fs/virtual-fs.ts",
         "packages/webapp/src/kernel/cdp-worker-proxy.ts",
         "packages/webapp/src/providers/index.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts",

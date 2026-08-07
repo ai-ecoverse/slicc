@@ -338,6 +338,49 @@ All paths in VirtualFS must follow these rules:
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
+## OPFS Writes: Serialize Per Mount, Across Contexts
+
+**Files**: `packages/webapp/src/fs/virtual-fs.ts` (`withWriteLock`),
+`patches/@zenfs+dom+*.patch`.
+
+ZenFS' `WebAccess` backend keeps a **per-context in-memory directory index** and
+mutates it non-atomically across `await` points. Two writers racing that index
+hand Chromium stale `FileSystemFileHandle`s, and the failure surfaces on paths
+that plainly exist — so the error never names the real cause:
+
+| Symptom                                               | Actually means                     |
+| ----------------------------------------------------- | ---------------------------------- |
+| `NotFoundError` / `ENOENT` on a path you just created | index race                         |
+| `QuotaExceededError` far below the reported quota     | index race, orphaned swap files    |
+| `EIO: Unexpected mismatch in file data size`          | index size disagrees with the file |
+
+Two scopes:
+
+- **In-realm** — key the lock on `dbName`, never per instance. Same-`dbName`
+  `VirtualFS` instances share one resolved `WebAccessFS`, so a per-instance lock
+  leaves them free to interleave on one index. Several instances really are
+  constructed on `GLOBAL_FS_DB_NAME` (plugins, MCP, git, upskill), so this is
+  the scope that matters today.
+- **Cross-context** — a Web Lock (`navigator.locks`) spanning every context of
+  the origin. Insurance: all ZenFS writers currently live in the kernel worker,
+  so it is uncontended and costs one async hop. It does **not** cover the Python
+  realm, which mounts the same subtree through emscripten's `OPFS_SYNC_FS`
+  (sync access handles) and bypasses the ZenFS index entirely — a writer this
+  lock cannot see.
+
+Lock **mutations only**. Locking reads too measured 4× slower and prevented no
+failures. Measured on five contexts writing 92 MB + 800 small files into one
+mount: 5/5 runs failed unserialized, 0/5 serialized, at ~4× the wall clock.
+
+**Never open a full overwrite with `keepExistingData: true`.** Chromium honors it
+by copying the entire existing file into the swap file before the first byte is
+written — O(file size) per write even when the write replaces the file (92 MB
+rewrite: 480 ms → 240 ms without it). Worse, `IndexFS.touch` only narrows the
+in-memory inode and nothing truncates the handle, so a shrink's tail survives on
+disk forever: a 92 MB file rewritten as 4 MB left 92 MB of unreclaimable OPFS
+quota. The patch keeps the copy only where the write needs it — a non-zero
+offset, or a buffer that does not span the indexed size.
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`

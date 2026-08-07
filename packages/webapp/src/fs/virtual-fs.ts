@@ -42,6 +42,11 @@ import type {
 import { FsError } from './types.js';
 import { walk } from './walker.js';
 
+/** The sliver of the Web Locks API {@link VirtualFS.withWriteLock} uses. */
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
 /** Backend identifier for {@link VirtualFS}. */
 export type VfsBackend = 'memory' | 'opfs';
 
@@ -190,20 +195,21 @@ export class VirtualFS {
   /** Index of files in mounted directories for fast discovery. */
   private mountIndex = new MountIndex();
   /**
-   * Serializes local backend mutations that create directories and the
-   * writes that depend on them (`mkdir` / `writeFile` / `symlink`). The
-   * ZenFS `WebAccess` (OPFS) backend keeps a single in-memory directory
-   * index that it mutates non-atomically across `await` points, so
-   * isomorphic-git's concurrent checkout `writeFile`/`symlink` calls —
-   * each ensuring its parent via `mkdir(recursive)` — could interleave
-   * such that a write ran against a not-yet-materialized parent and threw
-   * spurious `ENOENT` (aggregated into `MultipleGitError`, non-deterministic
-   * across runs). Funneling those mutations through this promise-chain lock
-   * makes parent-creation-then-write a single critical section. Reads and
-   * mount-backend ops stay off the lock, so the uncontended fast path costs
-   * only one extra microtask. Mirrors `BrowserAPI._tabLock`.
+   * Serializes local backend mutations that create directories and the writes
+   * that depend on them (`mkdir` / `writeFile` / `symlink`), so
+   * parent-creation-then-write is one critical section. The original symptom
+   * was isomorphic-git's concurrent checkout: `writeFile`/`symlink` calls each
+   * ensuring their parent via `mkdir(recursive)` could interleave such that a
+   * write ran against a not-yet-materialized parent and threw spurious
+   * `ENOENT` (aggregated into `MultipleGitError`, non-deterministic across
+   * runs). Reads and mount-backend ops stay off the lock, so the uncontended
+   * fast path costs only one extra microtask. Mirrors `BrowserAPI._tabLock`.
+   *
+   * Keyed by `dbName` rather than held per instance: same-`dbName` instances
+   * share one resolved `WebAccessFS`, and therefore one index to corrupt.
+   * See {@link withWriteLock} for the cross-realm half.
    */
-  private _writeLock: Promise<void> = Promise.resolve();
+  private static writeChains = new Map<string, Promise<void>>();
 
   private constructor(
     dbName: string,
@@ -450,7 +456,9 @@ export class VirtualFS {
     { backendFs: { index?: { toJSON: () => unknown } }; refs: number }
   > = new Map();
   private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
-    if (VirtualFS.rootMountReady) return VirtualFS.rootMountReady;
+    // Testing the memo for presence, not for a result — a promise is always
+    // truthy, so say so explicitly rather than leaning on that.
+    if (VirtualFS.rootMountReady !== null) return VirtualFS.rootMountReady;
     VirtualFS.rootMountReady = (async () => {
       await zenfs.configureSingle({ backend: zenfs.InMemory, label: '__vfs_root__' });
     })();
@@ -1325,7 +1333,7 @@ export class VirtualFS {
     // section under the write lock: on the ZenFS OPFS backend the parent
     // must be fully materialized before the write, and concurrent
     // mkdir/write ops interleaving on the shared index would otherwise let a
-    // write hit a not-yet-created parent (spurious ENOENT). See _writeLock.
+    // write hit a not-yet-created parent (spurious ENOENT). See withWriteLock.
     const { dir } = splitPath(resolved);
     await this.withWriteLock(async () => {
       if (dir !== '/') {
@@ -1465,27 +1473,64 @@ export class VirtualFS {
   }
 
   /**
-   * Run a local backend mutation under {@link _writeLock} so directory
-   * creation and dependent writes never interleave on ZenFS' shared
-   * in-memory index. Mirrors {@link BrowserAPI.withTab}.
+   * Run a local backend mutation serialized against every other writer of the
+   * same OPFS subtree — in this realm AND in any other.
+   *
+   * ZenFS' `WebAccess` backend keeps a per-context in-memory directory index
+   * that it mutates non-atomically across `await` points. Two writers racing
+   * it hand Chromium stale `FileSystemFileHandle`s, which surface as
+   * `NotFoundError` / `NotReadableError` / `EACCES` on operations whose paths
+   * plainly exist. Measured in a headless-Chromium harness: five contexts
+   * writing distinct paths into one shared mount (92 MB + 800 small files —
+   * the shape of `hf download` racing `ipk add`) failed 3 of 5 runs, and 0 of
+   * 5 once serialized.
+   *
+   * Two scopes:
+   *
+   *  - **In-realm**: keyed by `dbName`, NOT per instance. This is the one that
+   *    fixes a live bug — several instances are constructed on
+   *    `GLOBAL_FS_DB_NAME` (plugins, MCP, git, upskill), they share one
+   *    resolved `WebAccessFS` (see `opfsBackends`) and therefore one index,
+   *    and a per-instance chain left them free to interleave on it.
+   *  - **Cross-context**: a Web Lock, which spans every context of the origin.
+   *    Insurance, not a fix for a path that exists today: every ZenFS writer
+   *    currently lives in the kernel worker, so this lock is uncontended and
+   *    costs one async hop. It is what would catch a second context mounting
+   *    the same subtree through ZenFS. Note it does NOT cover the Python
+   *    realm — that mounts this subtree through emscripten's `OPFS_SYNC_FS`
+   *    (sync access handles, see `python-command.ts`), bypassing the ZenFS
+   *    index entirely, so it never takes this lock.
+   *
+   * Mutations only. Locking reads as well measured 4x slower with no failures
+   * prevented. Memory-backed instances skip the Web Lock: they share nothing
+   * across contexts.
+   *
+   * NOT re-entrant, like the chain it replaces — callers already inside the
+   * lock use the `*Unlocked` helpers.
    */
   private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const key = this.dbName;
     let release!: () => void;
     const next = new Promise<void>((r) => {
       release = r;
     });
-    const prev = this._writeLock;
-    this._writeLock = next;
+    const prev = VirtualFS.writeChains.get(key) ?? Promise.resolve();
+    VirtualFS.writeChains.set(key, next);
     await prev;
     try {
-      return await fn();
+      const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+      if (this.backend !== 'opfs' || typeof locks?.request !== 'function') return await fn();
+      return await locks.request(`slicc-vfs:${key}`, () => fn());
     } finally {
       release();
+      // Drop the chain entry once this was the last waiter, so a long-lived
+      // page does not retain a promise per dbName forever.
+      if (VirtualFS.writeChains.get(key) === next) VirtualFS.writeChains.delete(key);
     }
   }
 
   /**
-   * Recursive local `mkdir` walk WITHOUT acquiring {@link _writeLock}. The
+   * Recursive local `mkdir` walk WITHOUT acquiring {@link withWriteLock}. The
    * caller must already hold the lock — used by {@link mkdir}, {@link
    * writeFile}, and {@link symlink} so parent-ensure-then-write is one
    * critical section (and so re-entrant lock acquisition can't deadlock).
@@ -1600,7 +1645,7 @@ export class VirtualFS {
     this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
 
-  /** Recursive local removal. The caller must already hold {@link _writeLock}. */
+  /** Recursive local removal. The caller must already hold {@link withWriteLock}. */
   private async rmRecursiveUnlocked(path: string): Promise<void> {
     const entries = await this.lfs.readdir(path);
     for (const name of entries) {
@@ -1795,7 +1840,7 @@ export class VirtualFS {
     }
     // Ensure the parent directory exists and create the link as ONE critical
     // section under the write lock — same ZenFS concurrent-checkout race as
-    // writeFile (see _writeLock).
+    // writeFile (see withWriteLock).
     const { dir } = splitPath(normalizedLinkPath);
     await this.withWriteLock(async () => {
       if (dir !== '/') {
