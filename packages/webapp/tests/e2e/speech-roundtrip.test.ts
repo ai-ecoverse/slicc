@@ -161,10 +161,13 @@ test.describe('say -o WAV output (real kokoro)', () => {
   );
 
   test('writes a valid kokoro-synthesized WAV', async ({ page }) => {
-    // Cold-OPFS weight download dwarfs the 30s default; bound the whole
-    // run at 10 minutes. Per-call exec budgets are bounded by the
-    // panel-RPC ceiling inside `say` (5 min).
-    test.setTimeout(10 * 60_000);
+    // Cold-OPFS weight download dwarfs the 30s default. 10 minutes was too
+    // tight once the download could be retried: observed CI runs land between
+    // 9 and 15 minutes, so the cap was itself producing failures
+    // (`Test timeout of 600000ms exceeded`) that looked like product bugs.
+    // Per-call exec budgets are still bounded by the panel-RPC ceiling inside
+    // `say` (5 min).
+    test.setTimeout(20 * 60_000);
 
     const diagnostics = attachBrowserDiagnostics(page);
 
@@ -258,11 +261,24 @@ test.describe('say -o WAV output (real kokoro)', () => {
       'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
-    const kokoroDl = await exec(
-      page,
-      'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
-        'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx'
-    );
+    // The 92 MB `model_quantized.onnx` write intermittently trips the same
+    // `@zenfs/dom` + kerium bug this file's header documents for whisper's
+    // 188 MB decoder (`EINVAL: Cannot set property message of … which has only
+    // a getter`). Retry ONLY this write — it is a known upstream defect in one
+    // operation, not a licence to re-run the spec until it passes. The
+    // phonemizer assertions below stay single-shot.
+    let kokoroDl = { exitCode: 1, stdout: '', stderr: 'not attempted' };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      kokoroDl = await exec(
+        page,
+        'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
+          'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx'
+      );
+      if (kokoroDl.exitCode === 0) break;
+      if (!/Cannot set property message|EINVAL/.test(kokoroDl.stderr)) break; // a real failure
+      // eslint-disable-next-line no-console
+      console.warn(`hf download hit the kerium OPFS bug (attempt ${attempt}/3); retrying`);
+    }
     expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
 
     // 2. `say --warmup` is fire-and-forget on the page; the kokoro load

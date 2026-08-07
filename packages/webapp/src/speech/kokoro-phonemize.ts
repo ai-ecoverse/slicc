@@ -39,6 +39,46 @@ export function espeakVoiceForKokoroVoice(voiceId: string): string | null {
   return KOKORO_PREFIX_ESPEAK[voiceId[0]] ?? null;
 }
 
+/**
+ * English prefixes, for the FALLBACK path only.
+ *
+ * English normally keeps kokoro-js's native route, which phonemizes with the
+ * English-only `phonemizer` it bundles. That copy can come up with an empty
+ * voice table: its emscripten build registers espeak's dictionaries through a
+ * `preRun` callback that is queued after `run()` has already drained the list,
+ * so the data silently never lands. Nothing throws, the language registry is
+ * built once and cached empty, and every later call fails with
+ * `Invalid language identifier: "en-us". Should be one of: .`
+ *
+ * We cannot fix that from outside the module — but we do not have to. The
+ * staged multilingual `espeak-ng` already phonemizes the other five languages
+ * through `generate_from_ids`, and it can phonemize English just as well.
+ */
+export const KOKORO_PREFIX_ESPEAK_ENGLISH: Readonly<Record<string, string>> = Object.freeze({
+  a: 'en-us',
+  b: 'en-gb',
+});
+
+/** The espeak voice for an English kokoro voice id, else null. */
+export function englishEspeakVoiceForKokoroVoice(voiceId: string): string | null {
+  return KOKORO_PREFIX_ESPEAK_ENGLISH[voiceId[0]] ?? null;
+}
+
+/**
+ * Is this the bundled phonemizer reporting that it has no languages at all?
+ *
+ * Matched on the message because the module exposes no state to inspect — it
+ * throws from a closure over a registry it built once and cached. An empty
+ * "should be one of" list is the distinguishing part: a genuinely unsupported
+ * language would name the ones it does have.
+ */
+export function isUnusablePhonemizerError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    /Invalid language identifier/i.test(message) && /Should be one of:\s*\.?\s*$/i.test(message)
+  );
+}
+
 /** The punctuation kokoro-js splits on before phonemizing — kept verbatim in
  *  the output so prosody/pauses survive (same set as kokoro-js' `m()`). */
 const PUNCT = ';:,.!?¡¿—…"«»“”(){}[]';
