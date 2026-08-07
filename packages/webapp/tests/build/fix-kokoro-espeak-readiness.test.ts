@@ -25,12 +25,21 @@ describe('fixKokoroEspeakReadiness', () => {
     expect(code).toContain(`function ${READY_HELPER_NAME}(`);
   });
 
-  it('waits on a non-empty voice list, then gives up rather than hanging', () => {
+  it('waits for a voice that actually carries an `en` language', () => {
+    // Counting voices was not enough: a half-loaded espeak returns entries with
+    // empty `languages`, which passes a length check and still filters down to
+    // an empty registry — the first version of this plugin shipped that and CI
+    // failed identically.
     const { code } = fixKokoroEspeakReadiness(EMITTED);
-    expect(code).toContain('list_voices().length > 0');
-    // A genuinely voiceless build must still surface kokoro's own error
-    // instead of a promise that never settles.
-    expect(code).toMatch(/--attempts <= 0\) return resolve\(worker\)/);
+    expect(code).toContain("split('-')[0] === 'en'");
+    expect(code).not.toContain('list_voices().length > 0');
+  });
+
+  it('gives up loudly rather than hanging, and says what it saw', () => {
+    const { code } = fixKokoroEspeakReadiness(EMITTED);
+    expect(code).toMatch(/--attempts <= 0/);
+    expect(code).toMatch(/return resolve\(worker\)/);
+    expect(code).toContain('gave up waiting for a usable voice list');
   });
 
   it('is idempotent — a second pass leaves the chunk alone', () => {

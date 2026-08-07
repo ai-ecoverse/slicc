@@ -75,14 +75,35 @@ export const READY_HELPER_NAME = '__sliccEspeakVoicesReady';
 const READY_HELPER = `
 function ${READY_HELPER_NAME}(resolve, worker) {
   let attempts = 400;
+  let seen = 'never polled';
+  const usable = () => {
+    const voices = worker.list_voices();
+    seen = voices.length + ' voice(s), languages: ' +
+      JSON.stringify(voices.slice(0, 3).map((v) => (v.languages || []).map((l) => l && l.name)));
+    // Mirror what the language registry actually needs. Counting voices is not
+    // enough: a half-loaded espeak returns entries whose \`languages\` are empty,
+    // which passes a length check and still filters down to an empty registry
+    // (kokoro keeps only voices with an \`en\` language).
+    return voices.some((v) =>
+      (v.languages || []).some((l) => l && String(l.name || '').split('-')[0] === 'en')
+    );
+  };
   const tick = () => {
     let ready = false;
     try {
-      ready = worker.list_voices().length > 0;
-    } catch {
+      ready = usable();
+    } catch (err) {
+      seen = 'list_voices threw: ' + ((err && err.message) || err);
       ready = false;
     }
-    if (ready || --attempts <= 0) return resolve(worker);
+    if (ready) return resolve(worker);
+    if (--attempts <= 0) {
+      // Resolving anyway keeps kokoro's own error as the failure surface rather
+      // than a hung promise — but say WHY, or the next reader is back to
+      // guessing from "Should be one of: ." alone.
+      console.warn('[espeak] gave up waiting for a usable voice list; last saw ' + seen);
+      return resolve(worker);
+    }
     setTimeout(tick, 25);
   };
   tick();
