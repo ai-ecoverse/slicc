@@ -7,12 +7,9 @@
  * `plugin` command share one source of truth.
  */
 
-import { createLogger } from '../../core/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { FsError } from '../../fs/types.js';
 import type { InstalledPluginEntry, PluginsFile } from './types.js';
-
-const log = createLogger('plugins-store');
 
 /** Absolute VFS path of the persisted plugin registry. */
 export const PLUGINS_STORE_PATH = '/workspace/.plugins/plugins.json';
@@ -76,17 +73,13 @@ export async function readPluginsFile(injectedFs?: MinimalFs | null): Promise<Pl
     const content = (await fs.readFile(PLUGINS_STORE_PATH, { encoding: 'utf-8' })) as string;
     try {
       return normalize(JSON.parse(content));
-    } catch (err) {
-      log.warn('plugins.json is not valid JSON; treating as empty', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+    } catch {
+      // Not valid JSON — treat as empty rather than blocking the shell.
       return emptyFile();
     }
   } catch (err) {
     if (err instanceof FsError && err.code === 'ENOENT') return emptyFile();
-    log.warn('Failed to read plugins.json', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    // Unreadable registry — treat as empty rather than blocking the shell.
     return emptyFile();
   }
 }

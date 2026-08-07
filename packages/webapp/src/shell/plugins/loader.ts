@@ -9,7 +9,6 @@
  * §8.1; component failures are isolated per §11.3.
  */
 
-import { createLogger } from '../../core/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import {
   type LoadedPlugin,
@@ -22,8 +21,6 @@ import {
   type PluginMcpServer,
   type PluginSkill,
 } from './types.js';
-
-const log = createLogger('agent-plugins');
 
 const MANIFEST_FILE = 'plugin.json';
 const SKILLS_DIR = 'skills';
@@ -78,12 +75,6 @@ export async function loadPluginFromDirectory(
   const mcp = await loadMcpComponent(fs, root, diagnostics);
 
   const plugin: LoadedPlugin = { root, manifest, skills, mcp };
-  log.info('Loaded agent plugin', {
-    name: manifest.name,
-    root,
-    skills: skills.length,
-    mcpServers: mcp.servers.filter((s) => s.status === 'supported').length,
-  });
   return { ok: true, plugin, diagnostics };
 }
 

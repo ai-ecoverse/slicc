@@ -25,11 +25,8 @@
 
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { createLogger } from '../../core/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { LoadedPlugin, PluginDiagnostic } from '../plugins/types.js';
-
-const log = createLogger('plugin-command');
 
 /** Managed extraction root for GitHub-sourced plugins. */
 export const PLUGIN_SOURCES_DIR = '/workspace/.plugins/sources';
@@ -121,7 +118,6 @@ export function createPluginCommand(deps: PluginCommandDeps = {}): Command {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      log.error('plugin subcommand failed', { sub, error: msg });
       return err(`plugin ${sub}: ${msg}`);
     }
   });
@@ -222,11 +218,8 @@ async function fetchGitHubPluginTo(
 async function removeDirBestEffort(fs: VirtualFS, dir: string): Promise<void> {
   try {
     await fs.rm(dir, { recursive: true });
-  } catch (e) {
-    log.warn('plugin: failed to clean up directory', {
-      dir,
-      error: e instanceof Error ? e.message : String(e),
-    });
+  } catch {
+    // Best-effort cleanup — a leftover staging dir is harmless.
   }
 }
 
@@ -342,11 +335,9 @@ async function bridgeMcpServers(plugin: LoadedPlugin, deps: PluginCommandDeps): 
       const client = new McpClient({ url: config.url, headers: config.headers });
       await client.initialize();
       tools = await client.toolsList();
-    } catch (e) {
-      log.warn('plugin install: MCP probe failed (registered anyway)', {
-        server: storeName,
-        error: e instanceof Error ? e.message : String(e),
-      });
+    } catch {
+      // §7.2.2 rule 5: a connect failure never blocks the install — the
+      // server is registered anyway and its tool catalog stays empty.
     }
     await setServer(
       storeName,
