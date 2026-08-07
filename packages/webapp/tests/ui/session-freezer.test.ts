@@ -1507,42 +1507,29 @@ describe('processPendingSessions', () => {
     });
   });
 
-  it('serially processes all pending marker types in one agentic catch-up pass', async () => {
+  // The boot catch-up must never re-drive a curator pass: it is an unbounded
+  // multi-turn agent run that `timeoutSeconds` cannot stop, and one measured
+  // pass billed $53.81 over 163 turns. Recovery still happens, through the
+  // single bounded legacy call.
+  it('recovers every pending marker serially without ever running the curator', async () => {
     const vfs = makeFakeVfs();
-    const entries = [
-      indexEntry('pending-one.md', { pendingEnrichment: true }),
-      indexEntry('pending-two.md', { memoryPending: true }),
-      indexEntry('pending-three.md', { pendingEnrichment: true, memoryPending: true }),
-    ];
-    vfs.files.set('/sessions/index.json', JSON.stringify(entries));
-    let active = 0;
-    let maxActive = 0;
-    mockRunAgenticMemoryPass.mockImplementation(async () => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await Promise.resolve();
-      active -= 1;
-      return { ok: true };
-    });
+    vfs.files.set(
+      '/sessions/index.json',
+      JSON.stringify([
+        indexEntry('pending-one.md', { pendingEnrichment: true }),
+        indexEntry('pending-two.md', { memoryPending: true }),
+        indexEntry('pending-three.md', { pendingEnrichment: true, memoryPending: true }),
+      ])
+    );
 
     const result = await processPendingSessions({
       vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
-      agenticMemorySpawn: vi.fn(),
+      model: {} as never,
+      apiKey: 'k',
     });
 
-    expect(result).toEqual({ attempted: 3, completed: 3 });
-    expect(maxActive).toBe(1);
-    expect(mockRunAgenticMemoryPass).toHaveBeenCalledTimes(3);
-    const index = await readSessionsIndex(vfs as never);
-    expect(index).toHaveLength(3);
-    expect(
-      index.every(
-        (entry) =>
-          entry.pendingEnrichment === undefined &&
-          entry.memoryPending === undefined &&
-          entry.pendingAttemptCount === undefined
-      )
-    ).toBe(true);
+    expect(result.attempted).toBe(3);
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
   });
 
   it('uses legacy enrichment for a memoryPending archive when no curator is supplied', async () => {
@@ -1637,19 +1624,16 @@ describe('processPendingSessions', () => {
         { ...indexEntry('always-fails.md', { memoryPending: true }), pendingAttemptCount: 2 },
       ])
     );
-    mockRunAgenticMemoryPass.mockResolvedValue({
-      ok: false,
-      reason: 'provider unavailable',
-      legacyFallbackSafe: false,
-    });
+    mockRunOneOffCompactionCall.mockRejectedValue(new Error('provider unavailable'));
     const opts = {
       vfs: vfs as unknown as Parameters<typeof processPendingSessions>[0]['vfs'],
-      agenticMemorySpawn: vi.fn(),
+      model: fakeModel,
+      apiKey: 'k',
     };
 
     expect(await processPendingSessions(opts)).toEqual({ attempted: 1, completed: 0 });
     expect(await processPendingSessions(opts)).toEqual({ attempted: 0, completed: 0 });
-    expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
     const [failed] = await readSessionsIndex(vfs as never);
     expect(failed).toMatchObject({ memoryPending: true, pendingAttemptCount: 3 });
     expect(await listPendingEnrichments(vfs as never)).toEqual([]);

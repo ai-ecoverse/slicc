@@ -49,21 +49,23 @@ const ENRICHMENT_PROGRESS_TICK_MS = 250;
 
 export interface PendingSessionCatchupOptions {
   openVfs: () => Promise<WritableVfsClient>;
-  agenticMemorySpawn?: AgentBridge['spawn'];
   onComplete?: () => void;
   schedule?: (callback: () => void) => void;
 }
 
-/** Run the boot catch-up with the current feature flag and provider credentials. */
+/**
+ * Run the boot catch-up for archives whose inline enrichment never finished.
+ *
+ * Deliberately drives only the legacy single-call enrichment. A curator pass is
+ * an unbounded multi-turn agent run — one measured pass billed $53.81 over 163
+ * turns and 30 minutes, and `timeoutSeconds` cannot stop it because
+ * `AgentSpawnOptions` has no cancellation path. Retrying that automatically on
+ * every boot multiplies the bill, so `memoryPending` archives are left for the
+ * next freeze to pick up instead.
+ */
 export async function runPendingSessionCatchup(opts: PendingSessionCatchupOptions): Promise<void> {
   try {
     const vfs = await opts.openVfs();
-    if (isFeatureEnabled('agentic-memory') && opts.agenticMemorySpawn) {
-      await processPendingSessions({ vfs, agenticMemorySpawn: opts.agenticMemorySpawn });
-      opts.onComplete?.();
-      return;
-    }
-
     const apiKey = getApiKey() ?? undefined;
     if (!apiKey) return;
     let model: Model<Api>;

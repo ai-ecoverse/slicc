@@ -778,9 +778,9 @@ async function updateSessionsIndex(
 }
 
 /**
- * Subset of the sessions index that still needs either legacy enrichment or
- * agentic-memory curation. Entries at the retry cap are permanently skipped.
- * Returns `[]` when the index is missing, empty, or malformed — never throws.
+ * Subset of the sessions index that still needs recovery, under either pending
+ * marker. Entries at the retry cap are permanently skipped. Returns `[]` when
+ * the index is missing, empty, or malformed — never throws.
  */
 export async function listPendingEnrichments(
   vfs: LocalVfsClient
@@ -798,8 +798,6 @@ export interface ProcessPendingSessionsOptions {
   model?: Model<Api>;
   apiKey?: string;
   headers?: Record<string, string>;
-  /** Presence selects the agentic-memory curator path. */
-  agenticMemorySpawn?: AgentBridge['spawn'];
 }
 
 export interface PendingSessionProcessingResult {
@@ -808,15 +806,21 @@ export interface PendingSessionProcessingResult {
 }
 
 /**
- * Process every eligible pending archive serially. Attempts are persisted
- * before work starts so reloads and permanently failing archives cannot cause
- * an unbounded LLM call on every boot. Best-effort: this function never throws.
+ * Process every eligible pending archive serially, always through the legacy
+ * single-call enrichment — never by re-running the curator. A curator pass is an
+ * unbounded multi-turn agent run (one measured pass billed $53.81 over 163 turns
+ * and 30 minutes) and `AgentSpawnOptions` has no cancellation path, so
+ * `timeoutSeconds` cannot stop it. Recovering a `memoryPending` archive with one
+ * bounded call is the cheap substitute for re-driving that agent.
+ *
+ * Attempts are persisted before work starts so reloads and permanently failing
+ * archives cannot cause an LLM call on every boot. Best-effort: never throws.
  */
 export async function processPendingSessions(
   opts: ProcessPendingSessionsOptions
 ): Promise<PendingSessionProcessingResult> {
   const result = { attempted: 0, completed: 0 };
-  if (!opts.agenticMemorySpawn && (!opts.model || !opts.apiKey)) return result;
+  if (!opts.model || !opts.apiKey) return result;
   try {
     const entries = await listPendingEnrichments(opts.vfs);
     for (const listedEntry of entries) {
@@ -824,13 +828,11 @@ export async function processPendingSessions(
         const entry = await recordPendingAttempt(opts.vfs, listedEntry.filename);
         if (!entry) continue;
         result.attempted += 1;
-        const updated = opts.agenticMemorySpawn
-          ? await runPendingAgenticMemoryPass(opts.vfs, entry, opts.agenticMemorySpawn)
-          : await enrichPendingSession(opts.vfs, entry, {
-              model: opts.model!,
-              apiKey: opts.apiKey!,
-              headers: opts.headers,
-            });
+        const updated = await enrichPendingSession(opts.vfs, entry, {
+          model: opts.model,
+          apiKey: opts.apiKey,
+          headers: opts.headers,
+        });
         if (updated) result.completed += 1;
       } catch (err) {
         log.warn('Pending session catch-up attempt failed', {
@@ -845,27 +847,6 @@ export async function processPendingSessions(
     });
   }
   return result;
-}
-
-async function runPendingAgenticMemoryPass(
-  vfs: WritableVfsClient,
-  entry: FrozenSessionIndexEntry,
-  spawn: AgentBridge['spawn']
-): Promise<FrozenSessionIndexEntry | null> {
-  const result = await runAgenticMemoryPass({
-    spawn,
-    vfs,
-    sessionArchivePath: frozenSessionPath(entry),
-    sessionCount: await readSessionCount(vfs),
-  });
-  if (!result.ok) {
-    log.warn('Pending agentic memory pass failed (entry stays pending)', {
-      filename: entry.filename,
-      reason: result.reason,
-    });
-    return null;
-  }
-  return clearPendingMarkers(vfs, entry.filename);
 }
 
 function pendingAttemptCount(entry: FrozenSessionIndexEntry): number {

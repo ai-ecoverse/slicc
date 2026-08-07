@@ -153,7 +153,6 @@ describe('pending session boot catch-up', () => {
     expect(() =>
       schedulePendingSessionCatchup({
         openVfs,
-        agenticMemorySpawn: vi.fn(),
         schedule: (callback) => scheduled.push(callback),
       })
     ).not.toThrow();

@@ -69,8 +69,9 @@ export interface FrozenSessionIndexEntry {
   pendingEnrichment?: boolean;
   /**
    * Agentic-memory marker. Set when the archive is written before its curator
-   * pass starts, then removed only after that pass succeeds. A later boot may
-   * recover entries that still carry the marker.
+   * pass starts, then removed only after that pass succeeds. A later boot
+   * recovers surviving entries through the bounded legacy enrichment call — it
+   * never re-runs the curator, which has no working timeout.
    */
   memoryPending?: true;
   /**

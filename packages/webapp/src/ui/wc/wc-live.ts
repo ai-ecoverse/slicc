@@ -2128,7 +2128,6 @@ export function attachWcClient(
       .then(({ schedulePendingSessionCatchup }) =>
         schedulePendingSessionCatchup({
           openVfs: async () => (await openVfs()).writer,
-          agenticMemorySpawn: (spawnOptions) => client.spawnAgent(spawnOptions),
           onComplete: refreshFreezer,
         })
       )
