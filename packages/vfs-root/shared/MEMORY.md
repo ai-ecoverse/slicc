@@ -7,6 +7,7 @@ visiblePaths:
 allowedCommands:
   - awk
   - cat
+  - cp
   - cut
   - date
   - diff

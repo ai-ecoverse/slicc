@@ -14,9 +14,19 @@ export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
 
 const DEFAULT_WRITABLE_PATHS = ['/workspace/'];
 const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/'];
+/**
+ * Commands the curator may run without escalating. Non-cone scoops run under
+ * `defaultDisposition: 'require-approval'`, so a command missing here does not
+ * fail — it raises a sudo request against the cone mid-conversation. The
+ * curator runs unattended and its scoop folder (and any "always" grant the
+ * cone persists into it) is destroyed when the run ends, so every gap becomes
+ * a recurring interruption that can never be granted away. Keep this list
+ * ahead of what the prompt in `vfs-root/shared/MEMORY.md` asks for.
+ */
 const DEFAULT_ALLOWED_COMMANDS = [
   'awk',
   'cat',
+  'cp',
   'cut',
   'date',
   'diff',

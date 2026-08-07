@@ -9,6 +9,7 @@ const ARCHIVE_PATH = '/sessions/2026-08-05-memory.md';
 const BASE_ALLOWED_COMMANDS = [
   'awk',
   'cat',
+  'cp',
   'cut',
   'date',
   'diff',
@@ -178,6 +179,37 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result).toEqual({ ok: true });
     expect(spawn.mock.calls[0][0].allowedCommands).toEqual(BASE_ALLOWED_COMMANDS);
+  });
+
+  // Observed live: a stale workspace whose seeded MEMORY.md predates the wider
+  // list still escalated `awk`, `sort` and `echo` to the cone, which killed the
+  // run. Missing commands do not fail — they raise a sudo request — so the base
+  // set must cover them from code, independent of the on-disk frontmatter.
+  it.each(['awk', 'cp', 'echo', 'printf', 'sort'])(
+    'grants %s from the base set even when frontmatter omits it',
+    async (command) => {
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(`---\nallowedCommands: [cat]\n---\nCurate {{MEMORY_PATH}}.`),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+      });
+
+      expect(spawn.mock.calls[0][0].allowedCommands).toContain(command);
+    }
+  );
+
+  it('grants every command the seeded curator prompt is configured to use', async () => {
+    const seeded = DEFAULT_MEMORY_MD.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
+    const seededCommands = seeded
+      .match(/allowedCommands:\n((?:\s+-\s+\S+\n)+)/)?.[1]
+      .split('\n')
+      .map((line) => line.replace(/^\s*-\s*/, '').trim())
+      .filter(Boolean);
+    expect(seededCommands?.length).toBeGreaterThan(0);
+    expect(BASE_ALLOWED_COMMANDS).toEqual(expect.arrayContaining(seededCommands ?? []));
   });
 
   it.each([

@@ -214,6 +214,15 @@ on `/scoops/<folder>/etc/sudoers`). `kind: 'secret'` cannot be persisted because
 there is no matching sudoers directive — the cone tool surfaces this as
 "approved but not persisted" so the agent retries the request next time.
 
+An "always" grant is only as durable as the folder it lands in. One-shot agents
+spawned through `AgentBridge` get a random `agent-<adjective>-<flavor>` folder
+that is dropped when the run ends, so a grant persisted into
+`/scoops/agent-<name>/etc/sudoers` dies with it and the next run starts from
+zero under a name the cone has never seen. For a recurring unattended agent such
+as the memory curator, that makes escalation a permanent interruption rather
+than a one-time cost: configure its `allowedCommands` to cover the work up
+front instead of relying on the cone to grant its way out.
+
 #### Unified enforcement (sudo is the single surface)
 
 The per-scoop sudo policy is the **single enforcement surface** for non-cone
