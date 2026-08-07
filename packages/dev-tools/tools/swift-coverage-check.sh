@@ -149,6 +149,20 @@ if [[ -n "$XCODE_SCHEME" ]]; then
   XCODEBUILD_LOG=$(mktemp -t swift-coverage-xcodebuild)
   trap 'rm -f "$XCODEBUILD_LOG"' EXIT
 
+  # The Xcode project is XcodeGen output and is not committed. CI generates it
+  # in an earlier step; a local run on a fresh clone would otherwise fail deep
+  # inside xcodebuild with "does not exist" rather than saying what to do.
+  if [ ! -d "${XCODE_SCHEME}.xcodeproj" ]; then
+    if command -v xcodegen >/dev/null 2>&1; then
+      echo "generating ${XCODE_SCHEME}.xcodeproj from project.yml"
+      xcodegen generate
+    else
+      echo "error: ${XCODE_SCHEME}.xcodeproj is missing and xcodegen is not installed." >&2
+      echo "       brew install xcodegen && (cd $(pwd) && xcodegen generate)" >&2
+      exit 1
+    fi
+  fi
+
   run_single_xcodebuild_attempt() {
     # xcodebuild refuses to overwrite an existing result bundle, so every
     # attempt (and a second local run) must clear it first.
