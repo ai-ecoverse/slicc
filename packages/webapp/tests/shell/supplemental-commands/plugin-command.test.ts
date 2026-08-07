@@ -118,6 +118,32 @@ describe('plugin command', () => {
     expect(servers.servers['reports-plugin:local']).toBeUndefined();
   });
 
+  it('install: reinstall at the same root removes MCP servers dropped from the manifest', async () => {
+    await writeFixturePlugin({ mcp: true });
+    await runCmd(['install', 'reports-plugin']);
+    expect((await readServersFile(fs)).servers['reports-plugin:api']).toBeDefined();
+
+    // The plugin's mcp.json replaces "api" with "api2" between installs.
+    await fs.writeFile(
+      `${ROOT}/mcp.json`,
+      JSON.stringify({
+        $schema: PLUGIN_MCP_SCHEMA_ID,
+        mcpServers: {
+          api2: { type: 'streamable-http', url: 'https://api2.example.com/mcp' },
+        },
+      })
+    );
+    const r = await runCmd(['install', 'reports-plugin']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('1 removed from previous install');
+
+    const servers = await readServersFile(fs);
+    expect(servers.servers['reports-plugin:api']).toBeUndefined();
+    expect(servers.servers['reports-plugin:api2'].url).toBe('https://api2.example.com/mcp');
+    const file = await readPluginsFile(fs);
+    expect(file.plugins['reports-plugin'].mcpServerNames).toEqual(['reports-plugin:api2']);
+  });
+
   it('list: empty + populated output', async () => {
     const empty = await runCmd(['list']);
     expect(empty.exitCode).toBe(0);

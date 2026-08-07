@@ -287,6 +287,7 @@ is registered in the MCP store as "<plugin>:<server>".
   }
 
   const mcpNames = await bridgeMcpServers(plugin, deps);
+  const staleRemoved = await removeStaleMcpServers(existing?.mcpServerNames, mcpNames, deps);
 
   await setInstalledPlugin(
     name,
@@ -301,16 +302,51 @@ is registered in the MCP store as "<plugin>:<server>".
     deps.fs
   );
 
+  return ok(
+    formatInstallSummary(plugin, mcpNames, staleRemoved, origin ?? root, result.diagnostics)
+  );
+}
+
+/** Render the multi-line success output of `plugin install`. */
+function formatInstallSummary(
+  plugin: LoadedPlugin,
+  mcpNames: string[],
+  staleRemoved: number,
+  from: string,
+  diagnostics: PluginDiagnostic[]
+): string {
+  const name = plugin.manifest.name;
   const skipped = plugin.mcp.servers.filter((s) => s.status !== 'supported');
   const lines = [
-    `Installed agent plugin "${name}"${plugin.manifest.version ? ` v${plugin.manifest.version}` : ''} from ${origin ?? root}`,
+    `Installed agent plugin "${name}"${plugin.manifest.version ? ` v${plugin.manifest.version}` : ''} from ${from}`,
     `  skills: ${plugin.skills.length}${plugin.skills.length > 0 ? ` (${plugin.skills.map((s) => s.name).join(', ')})` : ''}`,
-    `  mcp:    ${mcpNames.length} registered${mcpNames.length > 0 ? ` (${mcpNames.join(', ')})` : ''}${skipped.length > 0 ? `, ${skipped.length} skipped` : ''}`,
+    `  mcp:    ${mcpNames.length} registered${mcpNames.length > 0 ? ` (${mcpNames.join(', ')})` : ''}${skipped.length > 0 ? `, ${skipped.length} skipped` : ''}${staleRemoved > 0 ? `, ${staleRemoved} removed from previous install` : ''}`,
   ];
-  if (result.diagnostics.length > 0) {
-    lines.push('Diagnostics:', formatDiagnostics(result.diagnostics));
+  if (diagnostics.length > 0) {
+    lines.push('Diagnostics:', formatDiagnostics(diagnostics));
   }
-  return ok(lines.join('\n') + '\n');
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Reinstall at the same root: drop MCP entries bridged by the previous
+ * install that are no longer in the manifest, so they don't orphan in the
+ * shared MCP store (`plugin remove` only deletes the *current* list).
+ * Returns the number of stale entries actually deleted.
+ */
+async function removeStaleMcpServers(
+  previousNames: string[] | undefined,
+  currentNames: string[],
+  deps: PluginCommandDeps
+): Promise<number> {
+  const stale = (previousNames ?? []).filter((n) => !currentNames.includes(n));
+  if (stale.length === 0) return 0;
+  const { deleteServer } = await import('../mcp/store.js');
+  let removed = 0;
+  for (const serverName of stale) {
+    if (await deleteServer(serverName, deps.fs)) removed += 1;
+  }
+  return removed;
 }
 
 /**
