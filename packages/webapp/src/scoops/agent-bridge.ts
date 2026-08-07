@@ -117,6 +117,15 @@ export interface AgentSpawnOptions {
    * result in the specified schema shape.
    */
   structuredOutputSchema?: Record<string, unknown>;
+  /**
+   * Announce completion to the cone on the `scoop-notify` lick channel.
+   * Defaults to `false`: a one-shot `agent` call is synchronous for its
+   * caller, which already has the result, so notifying would duplicate it.
+   * Set this when the spawn is detached and nobody is waiting for the
+   * return value — a background pass whose report would otherwise be
+   * dropped, leaving the cone with no idea it ran.
+   */
+  notifyOnComplete?: boolean;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -456,7 +465,7 @@ export function createAgentBridge(
       addedAt: new Date().toISOString(),
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-      notifyOnComplete: false,
+      notifyOnComplete: options.notifyOnComplete === true,
       // Propagate the invoking scoop's JID for delegation-chain reconstruction.
       // Only set when AgentSpawnOptions.parentJid is provided; never inferred.
       ...(options.parentJid !== undefined ? { parentJid: options.parentJid } : {}),

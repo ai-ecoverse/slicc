@@ -194,13 +194,14 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'curated' });
     expect(spawn).toHaveBeenCalledOnce();
     expect(spawn).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/workspace',
-        writablePaths: ['/workspace/'],
-        visiblePaths: ['/sessions/', '/shared/'],
+        writablePaths: ['/workspace/CLAUDE.md'],
+        visiblePaths: ['/sessions/', '/shared/', '/workspace/'],
+        notifyOnComplete: true,
       })
     );
 
