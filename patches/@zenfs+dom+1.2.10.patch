@@ -1,0 +1,23 @@
+diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
+index ec02258..5bc2f23 100644
+--- a/node_modules/@zenfs/dom/dist/access.js
++++ b/node_modules/@zenfs/dom/dist/access.js
+@@ -165,7 +165,17 @@ export class WebAccessFS extends Async(IndexFS) {
+             log.crit(withErrno('EIO', 'Mismatch in entry kind on write'));
+             return;
+         }
+-        const writable = await handle.createWritable({ keepExistingData: true });
++        // A write that starts at 0 and spans the whole file needs none of the
++        // existing bytes, and `keepExistingData` makes Chromium copy every one
++        // of them into the swap file first - O(file size) on each write (92 MB
++        // rewrite: 480ms -> 240ms without it). It also leaves a shrink's tail
++        // behind forever, because IndexFS.touch only narrows the in-memory
++        // inode and nothing ever truncates the handle: rewriting a 92 MB file
++        // as 4 MB left 92 MB on disk and 88 MB of OPFS quota unreclaimable.
++        // Note vnode flushes touch({ size: 0 }) before an O_TRUNC write, so
++        // inode.size is 0 here for the ordinary writeFile path.
++        const fullWrite = !offset && buffer.byteLength >= inode.size;
++        const writable = await handle.createWritable({ keepExistingData: !fullWrite });
+         if (offset) {
+             try {
+                 await writable.seek(offset);

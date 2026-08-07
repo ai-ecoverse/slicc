@@ -1,12 +1,20 @@
 {
-  "//": "Metadata for the patch-package patches in this directory \u2014 one key per patched npm package. Consumed by the orphaned-patch guard (packages/dev-tools/patch-reconcile/check-patches.mjs, run as `npm run lint:patches`) and the renovate-patch-reconcile workflow. Every patches/<pkg>+<version>.patch MUST have an entry here with a matching patchedVersion. When a patch is removed, delete its entry. See patches/README.md.",
+  "//": "Metadata for the patch-package patches in this directory — one key per patched npm package. Consumed by the orphaned-patch guard (packages/dev-tools/patch-reconcile/check-patches.mjs, run as `npm run lint:patches`) and the renovate-patch-reconcile workflow. Every patches/<pkg>+<version>.patch MUST have an entry here with a matching patchedVersion. When a patch is removed, delete its entry. See patches/README.md.",
   "@zenfs/core": {
     "patchedVersion": "2.6.2",
     "upstream": "https://github.com/zen-fs/core",
     "issue": null,
     "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs)) instead of a prototype view, so the fs export's enumerable members are reliably visible on the global probe.",
-    "removeWhen": "Local workaround \u2014 no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
+    "removeWhen": "Local workaround — no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
     "verify": "npm run typecheck"
+  },
+  "@zenfs/dom": {
+    "patchedVersion": "1.2.10",
+    "upstream": "https://github.com/zen-fs/dom",
+    "issue": null,
+    "reason": "WebAccessFS.write opened every write with createWritable({ keepExistingData: true }), so Chromium copied the whole existing file into the swap file first — O(file size) per write even when the write replaces the file (92 MB rewrite: 480ms -> 240ms without the copy). Worse, IndexFS.touch only narrows the in-memory inode and nothing truncates the handle, so a shrink left its tail on disk forever (92 MB file rewritten as 4 MB kept 92 MB of OPFS quota). The patch keeps the copy only where the write needs it: a non-zero offset, or a buffer that does not span the indexed size.",
+    "removeWhen": "Local workaround — no upstream PR is tracked. Remove once @zenfs/dom decides keepExistingData per write (or truncates the handle on a narrowing touch) upstream.",
+    "verify": "npm run test -w @slicc/webapp -- zenfs-dom-overwrite-patch"
   },
   "e2b": {
     "patchedVersion": "2.35.1",
