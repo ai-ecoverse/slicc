@@ -53,9 +53,12 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'ls',
   'mkdir',
   // Bare `mount` lists mount state, which the curator records (dropped
-  // mounts are a recurring session fact). Mutating `mount <args>` calls
-  // stay safe in practice: local mounts need a user folder-picker gesture
-  // and remote mounts need credentials the curator cannot read.
+  // mounts are a recurring session fact). Mutating calls stay contained by
+  // the FS grant, not by this list: mounting needs a user picker gesture
+  // (local) or credentials the curator cannot read (remote), and `mount
+  // unmount <path>` hits `RestrictedFS.checkWrite` on the mount path —
+  // EACCES under the curator's single-file `writablePaths`. If that
+  // checkWrite ever moves out of `RestrictedFS.unmount`, revisit this entry.
   'mount',
   'mv',
   'nl',

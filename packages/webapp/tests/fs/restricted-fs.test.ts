@@ -286,6 +286,23 @@ describe('RestrictedFS', () => {
       await expect(rfs.mount('/workspace/external', fakeMountBackend())).rejects.toThrow('EACCES');
     });
 
+    it('unmount throws EACCES when the mount path is outside writable paths', async () => {
+      // Load-bearing guard for the curator command whitelist: `mount` is
+      // allowed for its read-only listing, and `mount unmount <path>` is a
+      // plain `fs.unmount` — this checkWrite is what turns it into EACCES
+      // under a narrow grant (e.g. the memory curator's single writable
+      // file). If this guard moves out of `RestrictedFS.unmount`, the
+      // whitelist entry in `scoops/agentic-memory.ts` must be revisited.
+      await mountOpVfs.mount('/workspace/external', fakeMountBackend());
+      try {
+        const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'hard');
+        await expect(rfs.unmount('/workspace/external')).rejects.toThrow('EACCES');
+        expect(mountOpVfs.listMounts()).toContain('/workspace/external');
+      } finally {
+        await mountOpVfs.unmount('/workspace/external');
+      }
+    });
+
     it('mount passes through RestrictedFS under sudo-delegated (SudoFS gates via cone approval)', async () => {
       const rfs = new RestrictedFS(mountOpVfs, ['/scoops/editor/'], [], 'sudo-delegated');
       // RestrictedFS layer passes through — SudoFS is responsible for gating
