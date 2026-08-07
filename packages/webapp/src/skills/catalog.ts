@@ -5,7 +5,7 @@ import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 const log = createLogger('skills-discovery');
 
-export type SkillDiscoverySource = 'native' | 'agents' | 'claude' | 'marketplace';
+export type SkillDiscoverySource = 'native' | 'agents' | 'claude' | 'marketplace' | 'plugin';
 
 export interface DiscoveredSkillCandidate {
   /** Discovery source bucket used for precedence. */
@@ -24,12 +24,21 @@ export interface SkillNameCollision<T> {
   shadowed: T[];
 }
 
-const DISCOVERY_ORDER: SkillDiscoverySource[] = ['native', 'agents', 'claude', 'marketplace'];
+const DISCOVERY_ORDER: SkillDiscoverySource[] = [
+  'native',
+  'agents',
+  'claude',
+  'marketplace',
+  'plugin',
+];
 const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySource, 'native'>>([
   ['.agents', 'agents'],
   ['.claude', 'claude'],
 ]);
 const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc', 'node_modules']);
+// Mirror of shell/plugins/store.ts PLUGINS_STORE_PATH — duplicated here to
+// keep the skills layer free of shell-layer imports.
+const PLUGINS_REGISTRY_PATH = '/workspace/.plugins/plugins.json';
 
 // Bound the compatibility-root walk. Skills/marketplaces live within a few
 // directories of their root; a directory cycle (e.g. a self-referential mount
@@ -59,16 +68,55 @@ export async function discoverSkillCandidates(
 ): Promise<DiscoveredSkillCandidate[]> {
   const nativeCandidates = await discoverNativeSkillCandidates(fs, nativeSkillsDir);
   const compatibilityCandidates = await getCompatibilitySkillCandidates(fs);
+  const pluginCandidates = await discoverPluginSkillCandidates(fs);
 
   return [
     ...DISCOVERY_ORDER.flatMap((source) => {
       const candidates =
         source === 'native'
           ? nativeCandidates
-          : compatibilityCandidates.filter((candidate) => candidate.source === source);
+          : source === 'plugin'
+            ? pluginCandidates
+            : compatibilityCandidates.filter((candidate) => candidate.source === source);
       return candidates.sort((a, b) => a.path.localeCompare(b.path));
     }),
   ];
+}
+
+/**
+ * Discover skills provided by installed Agent Plugins (agent-plugins.org).
+ * Reads the plugin registry at /workspace/.plugins/plugins.json and surfaces
+ * `skills/<dir>/SKILL.md` from each recorded plugin root (§7.1 fixed
+ * location, immediate children only). Not cached — the registry is a single
+ * small file, and `plugin install`/`plugin remove` must be visible on the
+ * next discovery pass.
+ */
+async function discoverPluginSkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  let roots: string[];
+  try {
+    const raw = await fs.readTextFile(PLUGINS_REGISTRY_PATH);
+    const parsed = JSON.parse(raw) as { plugins?: Record<string, { root?: unknown }> };
+    if (!parsed || typeof parsed !== 'object' || !parsed.plugins) return [];
+    roots = Object.values(parsed.plugins)
+      .map((entry) => entry?.root)
+      .filter((root): root is string => typeof root === 'string');
+  } catch {
+    return [];
+  }
+
+  const discovered: DiscoveredSkillCandidate[] = [];
+  for (const root of roots) {
+    const skillRoot = `${root}/skills`;
+    const skillEntries = await readSortedDir(fs, skillRoot);
+    for (const skillEntry of skillEntries) {
+      if (skillEntry.type !== 'directory') continue;
+      const skillPath = `${skillRoot}/${skillEntry.name}`;
+      const skillFilePath = `${skillPath}/${SKILL_FILE}`;
+      if (!(await pathExists(fs, skillFilePath))) continue;
+      discovered.push({ source: 'plugin', sourceRoot: skillRoot, path: skillPath, skillFilePath });
+    }
+  }
+  return discovered;
 }
 
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {

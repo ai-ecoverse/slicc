@@ -46,7 +46,6 @@
   "packages/webapp/src/shell/supplemental-commands/hid-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/host-command.ts": 7,
   "packages/webapp/src/shell/supplemental-commands/imgcat-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/index.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/layout-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/lick-surface.ts": 8,
   "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts": 1,

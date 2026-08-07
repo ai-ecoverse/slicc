@@ -1,5 +1,4 @@
 import type { Command, SecureFetch } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import type { JshProcessConfig } from '../jsh-executor.js';
@@ -48,6 +47,7 @@ import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
+import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createRsyncCommand } from './rsync-command.js';
@@ -83,6 +83,13 @@ export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
 } from './imgcat-command.js';
+
+/**
+ * Browser automation backend accepted by the serve/open/playwright command
+ * factories. Derived from a same-layer factory signature instead of importing
+ * `BrowserAPI` from `cdp/`, which would be a shell → cdp layer back-edge.
+ */
+type BrowserAPI = NonNullable<Parameters<typeof createOpenCommand>[0]>;
 
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
@@ -191,6 +198,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebsocatCommand(),
     createCrontaskCommand(),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
+    createPluginCommand({ fs: options.fs, fetch: options.fetch }),
     createFsWatchCommand(),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),
