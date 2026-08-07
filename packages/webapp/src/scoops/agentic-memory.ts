@@ -3,6 +3,7 @@ import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { AgentBridge, AgentSpawnOptions, AgentSpawnResult } from './agent-bridge.js';
 import { CONE_MEMORY_PATH, computeBudget } from './cone-memory-budget.js';
+import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from './types.js';
 
 export { DEFAULT_MEMORY_MD };
 
@@ -47,13 +48,23 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'wc',
 ];
 const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
-const SCALAR_KEYS = new Set(['model', 'timeoutSeconds']);
+const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);
+
+/**
+ * Spawned agents resolve an absent thinking level to `'off'`. That is wrong for
+ * curation: without reasoning the curator converges on the budget by trial and
+ * error, and because every turn re-reads the whole context as a cache read, turn
+ * count is what the pass actually costs. Paying for reasoning once is cheaper
+ * than paying for the turns it removes.
+ */
+const DEFAULT_MEMORY_THINKING_LEVEL: ThinkingLevel = 'medium';
 
 interface MemoryConfig {
   writablePaths: string[];
   visiblePaths: string[];
   allowedCommands: string[];
   model?: string;
+  thinkingLevel: ThinkingLevel;
   timeoutSeconds: number;
   promptTemplate: string;
 }
@@ -152,9 +163,18 @@ function parseMemoryDocument(content: string): MemoryConfig {
       ...new Set([...DEFAULT_ALLOWED_COMMANDS, ...readArray(values, 'allowedCommands', [])]),
     ],
     ...(model ? { model } : {}),
+    thinkingLevel: readThinkingLevel(values.thinkingLevel),
     timeoutSeconds,
     promptTemplate: match[2].trim(),
   };
+}
+
+function readThinkingLevel(value: FrontmatterValue | undefined): ThinkingLevel {
+  if (value === undefined) return DEFAULT_MEMORY_THINKING_LEVEL;
+  if (typeof value !== 'string' || !isThinkingLevel(value)) {
+    throw new Error(`thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}`);
+  }
+  return value;
 }
 
 function parseFrontmatter(frontmatter: string): Record<string, FrontmatterValue> {
@@ -288,6 +308,7 @@ function buildSpawnOptions(config: MemoryConfig, prompt: string): AgentSpawnOpti
     visiblePaths: config.visiblePaths,
     allowedCommands: config.allowedCommands,
     prompt,
+    thinkingLevel: config.thinkingLevel,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }
@@ -300,6 +321,13 @@ function substitutePlaceholders(template: string, values: Record<string, string>
   return prompt;
 }
 
+/**
+ * Stops *waiting* on the spawn; it cannot stop the agent. `AgentSpawnOptions`
+ * carries no turn bound, deadline or signal, so a timed-out pass keeps taking
+ * turns and billing — one measured run overran its 120s timeout by 14.9x and
+ * cost $53.81. Tracked in ai-ecoverse/slicc#1972; until that lands, treat a
+ * `timeout` outcome as "still running", never as "stopped".
+ */
 function waitForSpawn(
   spawnPromise: Promise<AgentSpawnResult>,
   timeoutMs: number,

@@ -35,6 +35,11 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 - Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date, in UTC to match
   archive timestamps. Each pass re-verifies the oldest sections first; undated sections are
   maximally stale.
+- Turn count is what a pass costs, because every turn re-reads the whole context as a cache read.
+  Two things keep it down, and both belong to the prompt rather than the runtime: `thinkingLevel`
+  (default `medium`; spawned agents otherwise resolve to `off`) so the curator plans the cut
+  instead of converging by trial and error, and the archive reading recipes so it never `cat`s a
+  multi-megabyte archive whose `slicc:session-data` block is a single line holding half the file.
 
 ### Skills
 

@@ -201,6 +201,55 @@ Curate {{MEMORY_PATH}}.`;
     }
   );
 
+  // Spawned agents resolve an absent level to 'off'. Reasoning is what keeps the
+  // turn count (and therefore the bill) down, so the curator must never inherit
+  // that default silently.
+  it('spawns with a reasoning level by default', async () => {
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs('---\nallowedCommands: [cat]\n---\nCurate {{MEMORY_PATH}}.'),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(spawn.mock.calls[0][0].thinkingLevel).toBe('medium');
+  });
+
+  it('honours a frontmatter thinkingLevel override', async () => {
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs('---\nthinkingLevel: high\n---\nCurate {{MEMORY_PATH}}.'),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(spawn.mock.calls[0][0].thinkingLevel).toBe('high');
+  });
+
+  it('rejects an unknown thinkingLevel and falls back to the built-in default', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const spawn = successSpawn();
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs('---\nthinkingLevel: turbo\n---\nCurate {{MEMORY_PATH}}.'),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(spawn.mock.calls[0][0].thinkingLevel).toBe('medium');
+    warn.mockRestore();
+  });
+
+  it('tells the curator not to read the archive whole', () => {
+    expect(DEFAULT_MEMORY_MD).toMatch(/Never `cat` the archive/);
+    expect(DEFAULT_MEMORY_MD).toContain('slicc:session-data');
+  });
+
   it('grants every command the seeded curator prompt is configured to use', async () => {
     const seeded = DEFAULT_MEMORY_MD.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? '';
     const seededCommands = seeded
