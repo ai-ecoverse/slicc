@@ -117,14 +117,26 @@ export function generateScoopSudoers(config?: ScoopConfig | null): string {
     }
   }
 
+  // Each root grants the subtree AND the bare path. Without the bare form a
+  // single-file root (e.g. `/workspace/CLAUDE.md`) would emit only
+  // `…/CLAUDE.md/**`, which never matches the file itself, so the write would
+  // escalate despite being configured. Emitting both is what lets a sandbox
+  // grant exactly one file — the way to keep a scoop out of sibling paths it
+  // must not touch, such as `/workspace/skills/`.
   for (const raw of config?.writablePaths ?? []) {
     const safe = sanitizeGrantPattern(raw);
-    if (safe) lines.push(`NOPASSWD Write ${trimTrailingSlash(safe)}/**`);
+    if (safe) {
+      lines.push(`NOPASSWD Write ${trimTrailingSlash(safe)}`);
+      lines.push(`NOPASSWD Write ${trimTrailingSlash(safe)}/**`);
+    }
   }
 
   for (const raw of config?.visiblePaths ?? []) {
     const safe = sanitizeGrantPattern(raw);
-    if (safe) lines.push(`NOPASSWD Read ${trimTrailingSlash(safe)}/**`);
+    if (safe) {
+      lines.push(`NOPASSWD Read ${trimTrailingSlash(safe)}`);
+      lines.push(`NOPASSWD Read ${trimTrailingSlash(safe)}/**`);
+    }
   }
 
   return `${lines.join('\n')}\n`;
