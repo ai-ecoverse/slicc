@@ -179,6 +179,45 @@ describe('slicc-freezer-new', () => {
     }
   });
 
+  it('no-skip: reflects the noSkip property to the attribute and back', () => {
+    const el = mount();
+    expect(el.noSkip).toBe(false);
+    el.noSkip = true;
+    expect(el.hasAttribute('no-skip')).toBe(true);
+    el.removeAttribute('no-skip');
+    expect(el.noSkip).toBe(false);
+  });
+
+  it('no-skip: hides the skip row — only save and erase remain in the legend', () => {
+    const el = mount((n) => {
+      n.setAttribute('expanded', '');
+      n.setAttribute('no-skip', '');
+    });
+    expect(optionOf(el, 'save')).toBeTruthy();
+    expect(optionOf(el, 'erase')).toBeTruthy();
+    expect(optionOf(el, 'skip')).toBeFalsy();
+  });
+
+  it('no-skip: a short click commits new-chat-save immediately (no double-click window)', () => {
+    vi.useFakeTimers();
+    try {
+      const el = mount((n) => n.setAttribute('no-skip', ''));
+      const evts: string[] = [];
+      for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+        el.addEventListener(t, () => evts.push(t));
+      }
+      buttonOf(el).click();
+      // No deferral — the save fires synchronously on the click.
+      expect(evts).toEqual(['new-chat-save']);
+      // A rapid second click can never turn into a skip.
+      buttonOf(el).click();
+      vi.advanceTimersByTime(500);
+      expect(evts).toEqual(['new-chat-save', 'new-chat-save']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('long press commits new-chat-erase', () => {
     vi.useFakeTimers();
     try {

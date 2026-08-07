@@ -637,6 +637,10 @@ function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   for (const action of ['save', 'skip', 'erase'] as const) {
     refs.freezer.addEventListener(`new-chat-${action}`, () => runNewSession(action));
   }
+  // Agentic memory makes the memory decision in the background, so "skip
+  // memory" stops being a user choice: reduce the affordance to two outcomes —
+  // new session with a saved transcript (save) or without (erase).
+  if (isFeatureEnabled('agentic-memory')) freezerNew()?.setAttribute('no-skip', '');
 
   // A follower's freezer new-chat routes through the leader (the follower has
   // no cone / VFS to freeze). wc-tray's LeaderSyncManager relays the request

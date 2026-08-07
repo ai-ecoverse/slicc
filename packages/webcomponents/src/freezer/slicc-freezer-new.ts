@@ -236,8 +236,17 @@ const SHEET = sheet(STYLE);
  * happening" feedback before the save + reload completes; the spin is held static
  * under `prefers-reduced-motion: reduce`.
  *
+ * When the memory decision is not the user's to make (the host runs a
+ * background memory curator — agentic memory), the `no-skip` attribute reduces
+ * the affordance to TWO outcomes: with a saved transcript (`save`) and without
+ * (`erase`). The skip row disappears from the legend, and a short click commits
+ * `save` immediately — no double-click deferral window, so the common gesture
+ * gets faster too. Long press / modifier-click stays `erase`.
+ *
  * @attr expanded - boolean; reveals the fading "New chat" label + the options legend
  * @attr label - the label text / accessible name (default "New chat")
+ * @attr no-skip - boolean; two-outcome mode — hides the skip row and commits a
+ *   short click as `save` immediately (no double-click window)
  * @attr busy - boolean; swaps the badge glyph for a spinning loader (entered
  *   optimistically on a save click; also host-drivable)
  * @attr progress - number 0..1; while busy, draws a determinate countdown ring
@@ -258,7 +267,7 @@ const SHEET = sheet(STYLE);
  * @fires new-chat-erase - long press / modifier-click: new chat erasing this one
  */
 export class SliccFreezerNew extends HTMLElement {
-  static readonly observedAttributes = ['expanded', 'label', 'busy', 'progress'];
+  static readonly observedAttributes = ['expanded', 'label', 'busy', 'progress', 'no-skip'];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -308,6 +317,18 @@ export class SliccFreezerNew extends HTMLElement {
   set label(value: string | null) {
     if (value == null) this.removeAttribute('label');
     else this.setAttribute('label', value);
+  }
+
+  /**
+   * Two-outcome mode: the skip row is hidden and a short click commits `save`
+   * immediately (no double-click window). Reflected to the `no-skip` attribute.
+   */
+  get noSkip(): boolean {
+    return this.hasAttribute('no-skip');
+  }
+
+  set noSkip(value: boolean) {
+    this.toggleAttribute('no-skip', value);
   }
 
   /**
@@ -402,7 +423,8 @@ export class SliccFreezerNew extends HTMLElement {
    */
   #buildOptions(): HTMLElement {
     const wrap = h('div', { class: 'fznew-options', part: 'options' });
-    for (const [action, icon, text] of OPTIONS) {
+    const options = this.noSkip ? OPTIONS.filter(([action]) => action !== 'skip') : OPTIONS;
+    for (const [action, icon, text] of options) {
       const optBtn = h(
         'button',
         { class: `fznew-opt fznew-opt--${action}`, part: `option-${action}`, type: 'button' },
@@ -437,6 +459,13 @@ export class SliccFreezerNew extends HTMLElement {
         this.#emit('erase');
       },
       onShortClick: () => {
+        // Two-outcome mode: no skip exists, so there is nothing to
+        // disambiguate — commit the save immediately instead of holding the
+        // click for the double-click window.
+        if (this.noSkip) {
+          this.#emit('save');
+          return;
+        }
         if (this.#pendingShortTimer !== null) {
           this.#clearPendingShort();
           this.#emit('skip');

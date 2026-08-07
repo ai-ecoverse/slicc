@@ -6,6 +6,7 @@ interface FreezerNewArgs {
   expanded?: boolean;
   label?: string;
   busy?: boolean;
+  noSkip?: boolean;
 }
 
 /**
@@ -30,12 +31,17 @@ const meta: Meta<FreezerNewArgs> = {
     expanded: { control: 'boolean', description: 'Reveal the fading "New chat" label' },
     label: { control: 'text', description: 'Label text / accessible name (default "New chat")' },
     busy: { control: 'boolean', description: 'Spinning loader glyph (work-in-progress state)' },
+    noSkip: {
+      control: 'boolean',
+      description: 'Two-outcome mode: hide the skip row, short click saves immediately',
+    },
   },
-  render: ({ expanded, label, busy }) => {
+  render: ({ expanded, label, busy, noSkip }) => {
     const el = document.createElement('slicc-freezer-new');
     if (expanded) el.setAttribute('expanded', '');
     if (label) el.setAttribute('label', label);
     if (busy) el.setAttribute('busy', '');
+    if (noSkip) el.setAttribute('no-skip', '');
     // The three-state gesture (single / double / long-press) + the expanded
     // legend buttons all surface as distinct events — log each for review.
     for (const type of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
@@ -68,6 +74,17 @@ export const Expanded: Story = { args: { expanded: true } };
  */
 export const Hover: Story = {
   args: { expanded: true },
+  parameters: { pseudo: { hover: true } },
+};
+
+/**
+ * Two-outcome mode (`no-skip`) — used when a background memory curator owns
+ * the memory decision (agentic memory): the legend reduces to "with a saved
+ * transcript" (save) and "without" (erase), and a short click saves
+ * immediately with no double-click window.
+ */
+export const TwoOutcomeHover: Story = {
+  args: { expanded: true, noSkip: true },
   parameters: { pseudo: { hover: true } },
 };
 
