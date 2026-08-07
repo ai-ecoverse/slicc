@@ -215,9 +215,20 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    in `wc-live.ts`), so without the cd the install lands at
     //    `/node_modules/...` and `buildOrtWasmPathsFromVfs` surfaces the
     //    canonical "onnxruntime-web is not installed" guidance.
+    //
+    //    `espeak-ng` is staged here for the same reason ort is: SLICC
+    //    phonemizes **English too** through espeak-ng (`kokoro-engine.ts`:
+    //    en/es/fr/it/hi/pt), reading the wasm from the fixed
+    //    `ESPEAK_DIST_VFS_PATH = '/workspace/node_modules/espeak-ng/dist/'`.
+    //    Warmup's `ensureSpeechAssets` would normally stage it, but this test
+    //    deliberately runs without the whisper repo, so that staging throws
+    //    before it reaches espeak and the run falls through to `getKokoro()`.
+    //    Without an explicit install the model loads and every voice lists
+    //    fine, then synthesis fails on an espeak with zero languages:
+    //    `Invalid language identifier: "en-us". Should be one of: .`
     const pkgs = await exec(
       page,
-      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js'
+      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
     const kokoroDl = await exec(
