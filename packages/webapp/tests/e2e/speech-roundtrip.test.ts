@@ -62,7 +62,10 @@ function attachBrowserDiagnostics(page: import('@playwright/test').Page): { entr
     if (
       type === 'error' ||
       type === 'warning' ||
-      /(speech|kokoro|whisper|ort|onnx|hf|ipk|panel-rpc)/i.test(msg.text())
+      // `espeak`/`phonem` were missing, which is why a run that fails INSIDE
+      // the phonemizer showed nothing but WebGL noise. Anything the speech
+      // stack says on the way up is worth keeping.
+      /(speech|kokoro|whisper|espeak|phonem|ort|onnx|hf|ipk|panel-rpc)/i.test(msg.text())
     ) {
       entries.push(`[console.${type}] ${msg.text()}`);
     }
@@ -79,7 +82,10 @@ function attachBrowserDiagnostics(page: import('@playwright/test').Page): { entr
 }
 
 function diagTail(diagnostics: { entries: string[] }): string {
-  const tail = diagnostics.entries.slice(-50).join('\n');
+  // 50 was too few: headless Chromium emits a burst of WebGL driver warnings
+  // that pushed every speech line out of the window, so a failure deep in the
+  // engine reported only GPU noise.
+  const tail = diagnostics.entries.slice(-120).join('\n');
   return tail || '(no browser diagnostics captured)';
 }
 
