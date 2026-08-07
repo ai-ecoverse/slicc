@@ -73,6 +73,22 @@ export const READY_HELPER_NAME = '__sliccEspeakVoicesReady';
  * and appending cannot disturb the ESM import prologue.
  */
 const READY_HELPER = `
+// The espeak dictionaries are gunzipped by an async IIFE with no \`catch\`, so a
+// throw there vanishes and the only symptom is a phonemizer with zero voices.
+// This chunk is emitted into BOTH the page and the worker graph, so listen from
+// inside it — a page-side listener cannot see a rejection raised in the worker.
+try {
+  if (typeof self !== 'undefined' && self.addEventListener) {
+    self.addEventListener('unhandledrejection', (event) => {
+      const reason = event && event.reason;
+      console.error(
+        '[espeak] unhandled rejection during module init: ' +
+          ((reason && (reason.stack || reason.message)) || String(reason))
+      );
+    });
+  }
+} catch {}
+
 function ${READY_HELPER_NAME}(resolve, worker) {
   let attempts = 400;
   let seen = 'never polled';
