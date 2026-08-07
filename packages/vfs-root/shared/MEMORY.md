@@ -12,22 +12,31 @@ allowedCommands:
   - cut
   - date
   - diff
+  - du
   - echo
+  - file
   - find
   - grep
   - head
+  - jq # structured reads of JSON stores such as /shared/loose-ends.json
   - ls
   - mkdir
+  - mount # listing mount state; mutations still need a user gesture/credentials
   - mv
+  - nl
+  - od # read-only byte inspection of corrupted stores
   - printf
+  - readlink
   - sed
   - sort
+  - stat
   - tail
   - touch
   - tr
   - uniq
   - upskill
   - wc
+  - xxd
 timeoutSeconds: 120
 thinkingLevel: medium
 ---
