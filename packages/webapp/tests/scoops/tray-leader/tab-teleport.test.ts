@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BrowserAPI } from '../../../../src/cdp/browser-api.js';
-import { teleportTabOneWay } from '../../../../src/shell/supplemental-commands/playwright/tab-teleport.js';
+import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
+import { teleportTabOneWay } from '../../../src/scoops/tray-leader/tab-teleport.js';
 
 interface FakeBrowserOptions {
   sourceUrl?: string;

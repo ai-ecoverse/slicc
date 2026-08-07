@@ -11,15 +11,15 @@
  */
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
-import type { BrowserAPI } from '../../../cdp/index.js';
-import { createLogger } from '../../../core/logger.js';
+import type { BrowserAPI } from '../../cdp/index.js';
+import { createLogger } from '../../core/logger.js';
 import {
   captureTeleportStorageSnapshot,
   countTeleportStorageEntries,
   EMPTY_TELEPORT_STORAGE,
   installTeleportStorageInitScript,
-} from './teleport-storage.js';
-import type { TeleportStorageSnapshot } from './types.js';
+} from '../../shell/supplemental-commands/playwright/teleport-storage.js';
+import type { TeleportStorageSnapshot } from '../../shell/supplemental-commands/playwright/types.js';
 
 const log = createLogger('tab-teleport');
 

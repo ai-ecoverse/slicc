@@ -32,7 +32,6 @@ import type {
 } from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
-  type ConnectedFollowerInfo,
   getConnectedFollowers,
   setConnectedFollowersGetter,
   setTrayResetter,
@@ -42,6 +41,7 @@ import {
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
 } from '../../shell/supplemental-commands/playwright/teleport.js';
+import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -127,7 +127,7 @@ interface TrayRoleState {
   lockRelease: (() => void) | null;
 }
 
-export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): ConnectedFollowerInfo[] {
+export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): TeleportFollowerInfo[] {
   const execIds = handle.sync.getExecCapableBootstrapIds();
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
   const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();

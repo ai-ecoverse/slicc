@@ -1,19 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  type ConnectedFollowerInfo,
-  setConnectedFollowersGetter,
-} from '../../../../src/shell/supplemental-commands/host-command.js';
+import { setConnectedFollowersGetter } from '../../../../src/shell/supplemental-commands/host-command.js';
 import {
   resolveConnectedFollowers,
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
 } from '../../../../src/shell/supplemental-commands/playwright/teleport.js';
+import type { TeleportFollowerInfo } from '../../../../src/shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import {
   selectBestFollowerFromShim,
   wireTeleportSelectionFromShim,
 } from '../../../../src/shell/supplemental-commands/playwright/teleport-follower-shim.js';
 
-function follower(overrides: Partial<ConnectedFollowerInfo>): ConnectedFollowerInfo {
+function follower(overrides: Partial<TeleportFollowerInfo>): TeleportFollowerInfo {
   return {
     runtimeId: 'runtime',
     bootstrapId: 'bootstrap',

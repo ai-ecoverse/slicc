@@ -20,19 +20,13 @@ import {
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
-  /** Leader-side channel id — teleport selection needs it alongside runtimeId. */
-  bootstrapId?: string;
   runtime?: string;
   connectedAt?: string;
-  /** Last real user activity (message send), not keepalive traffic. */
-  lastActivity?: number;
   floatType?: FloatType;
   hostOrigin?: string;
   selectedScoopJid?: string;
   health?: 'live' | 'stalled';
   peerState?: 'connecting' | 'connected';
-  /** Leader-computed: this follower can host a cookie teleport right now. */
-  teleportEligible?: boolean;
   /** True when the follower advertised `exec` capability (a `slicc … follow` CLI) — reach it with `ssh`. */
   exec?: boolean;
   /** True when the follower advertised browser targets — reach its tabs with `playwright-cli`. */

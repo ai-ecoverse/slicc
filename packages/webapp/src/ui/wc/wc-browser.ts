@@ -12,7 +12,7 @@
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import { teleportTabOneWay } from '../../shell/supplemental-commands/playwright/tab-teleport.js';
+import { teleportTabOneWay } from '../../scoops/tray-leader/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { WcShellRefs } from './wc-shell.js';
 

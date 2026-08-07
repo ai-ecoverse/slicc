@@ -22,7 +22,6 @@
   "packages/webapp/src/kernel/remote-terminal-view.ts": 2,
   "packages/webapp/src/kernel/spawn.ts": 1,
   "packages/webapp/src/providers/adobe-oauth-state.ts": 1,
-  "packages/webapp/src/providers/oauth-service.ts": 1,
   "packages/webapp/src/scoops/agent-message-to-chat.ts": 1,
   "packages/webapp/src/scoops/lick-ws-bridge.ts": 1,
   "packages/webapp/src/scoops/sprinkle-bridge-channel.ts": 2,
@@ -85,8 +84,6 @@
   "packages/webapp/src/shell/supplemental-commands/webhook-command.ts": 6,
   "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3,
   "packages/webapp/src/shell/workflow-discovery.ts": 1,
-  "packages/webapp/src/speech/composer-speech.ts": 1,
-  "packages/webapp/src/speech/hear.ts": 1,
   "packages/webapp/src/tools/bash-tool.ts": 2,
   "packages/webapp/src/tools/file-tools.ts": 2,
   "packages/webapp/src/tools/tool-ui.ts": 2

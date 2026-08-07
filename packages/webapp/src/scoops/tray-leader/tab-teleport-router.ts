@@ -22,7 +22,7 @@ const LEADER_RUNTIME_ID = 'leader';
 export interface TabTeleportRouterOptions {
   getTargetEntries: () => TrayTargetEntry[];
   /** Injected for tests; production passes the real primitive. */
-  teleportTab?: typeof import('../../shell/supplemental-commands/playwright/tab-teleport.js').teleportTabOneWay;
+  teleportTab?: typeof import('./tab-teleport.js').teleportTabOneWay;
 }
 
 interface InFlight {
@@ -132,9 +132,7 @@ export class TabTeleportRouter {
   }
 }
 
-async function loadTeleportTab(): Promise<
-  typeof import('../../shell/supplemental-commands/playwright/tab-teleport.js').teleportTabOneWay
-> {
-  const mod = await import('../../shell/supplemental-commands/playwright/tab-teleport.js');
+async function loadTeleportTab(): Promise<typeof import('./tab-teleport.js').teleportTabOneWay> {
+  const mod = await import('./tab-teleport.js');
   return mod.teleportTabOneWay;
 }

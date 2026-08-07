@@ -18,9 +18,28 @@ import {
 } from './teleport.js';
 import type { GetBestFollowerFn } from './types.js';
 
+/**
+ * The teleport-relevant fields the leader adds to each shim entry.
+ *
+ * Declared here rather than on `ConnectedFollowerInfo` itself: that interface
+ * lives in `host-command.ts`, which carries grandfathered layer back-edges, and
+ * the boy-scout gate requires a PR touching such a file to pay ALL of them down
+ * (`layer-back-edge-baseline.json`). Extending the shape from the consumer that
+ * needs it keeps this change out of that file — and the extra keys ride along
+ * through the shim regardless, since it is JSON.
+ */
+export interface TeleportFollowerInfo extends ConnectedFollowerInfo {
+  /** Leader-side channel id — teleport selection needs it alongside runtimeId. */
+  bootstrapId?: string;
+  /** Last real user activity (message send), not keepalive traffic. */
+  lastActivity?: number;
+  /** Leader-computed: this follower can host a cookie teleport right now. */
+  teleportEligible?: boolean;
+}
+
 /** Mirror of `TeleportPool.getBestFollowerForTeleport()` over the shim roster. */
 export function selectBestFollowerFromShim(
-  followers: ConnectedFollowerInfo[]
+  followers: TeleportFollowerInfo[]
 ): ReturnType<GetBestFollowerFn> {
   const candidates = followers.filter(
     (f) => f.teleportEligible === true && f.bootstrapId && f.floatType
@@ -33,7 +52,7 @@ export function selectBestFollowerFromShim(
   return {
     runtimeId: best.runtimeId,
     bootstrapId: best.bootstrapId as string,
-    floatType: best.floatType as NonNullable<ConnectedFollowerInfo['floatType']>,
+    floatType: best.floatType as NonNullable<TeleportFollowerInfo['floatType']>,
   };
 }
 

@@ -12,11 +12,11 @@ installWcDomStubs();
 
 import '@slicc/webcomponents';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
-import { teleportTabOneWay } from '../../../src/shell/supplemental-commands/playwright/tab-teleport.js';
+import { teleportTabOneWay } from '../../../src/scoops/tray-leader/tab-teleport.js';
 import { wireWcBrowser } from '../../../src/ui/wc/wc-browser.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
-vi.mock('../../../src/shell/supplemental-commands/playwright/tab-teleport.js', () => ({
+vi.mock('../../../src/scoops/tray-leader/tab-teleport.js', () => ({
   teleportTabOneWay: vi.fn(async () => ({
     targetId: 'pulled-tab',
     url: 'https://dash.example',
