@@ -133,6 +133,14 @@ export type PanelRpcRequest =
       payload: { url: string };
     }
   | {
+      // Whether an interactive login started now would be delegated to a
+      // follower (#1915). Providers consult this before building the
+      // authorize URL: a delegated flow needs a callback that reaches the
+      // follower, not the leader's loopback result endpoint.
+      op: 'oauth-route';
+      payload: Record<string, never>;
+    }
+  | {
       // Drive a provider's `onSilentRenew()` from the page realm on behalf
       // of the kernel worker. The worker has no `window` to run the IMS
       // popup/iframe flow, so a worker-realm provider (e.g. Adobe) bridges
@@ -599,7 +607,8 @@ export interface PanelRpcResults {
   'clipboard-write-text': { done: true };
   'clipboard-write-image': { done: true };
   'window-open': { opened: boolean };
-  'oauth-popup': { redirectUrl: string | null };
+  'oauth-popup': { redirectUrl: string | null; error?: string };
+  'oauth-route': { delegate: boolean };
   'silent-renew': { accessToken: string | null };
   'capture-camera': CameraCaptureResult;
   'enumerate-media-devices': {

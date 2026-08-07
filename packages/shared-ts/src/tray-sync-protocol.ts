@@ -17,8 +17,10 @@
  * mirrors a **subset** of this file: federated `fs.*` in both directions is
  * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
- * originate either, so the follower-initiated CDP/tab.open paths are also
- * TS-only. The per-variant iOS decision is MECHANICALLY enforced by the
+ * originate `tab.open` against another runtime, so that path is TS-only. iOS
+ * DOES originate `tab.teleport.request` (pull a tray tab here, with state).
+ * The delegated-OAuth pair (`oauth.popup.*`) is TS-only: iOS has no popup
+ * model and never advertises `capabilities.oauthPopup`. The per-variant iOS decision is MECHANICALLY enforced by the
  * golden-fixture corpus
  * (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
  * `packages/ios-app/.../Fixtures/tray-sync-corpus.json`, decoded by both the
@@ -55,7 +57,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 5;
+export const TRAY_SYNC_PROTOCOL_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -102,6 +104,21 @@ export interface TraySyncCapabilities {
    * a restricted verb set; its MOTD documents the supported surface.
    */
   exec?: boolean;
+  /**
+   * This peer hosts CDP-driveable browser targets and accepts `tab.open`.
+   * Leaders use it to keep exec-only followers (CLI) out of teleport
+   * selection even before any `targets.advertise` arrives. Additive — legacy
+   * peers omit it, and the leader then falls back to advertised-target
+   * heuristics.
+   */
+  browser?: boolean;
+  /**
+   * This peer can host an interactive OAuth popup: it has a window, a
+   * permissions surface, and a human. Leaders use it to pick a follower to
+   * delegate `oauth.popup.request` to (issue #1915). Exec-only followers
+   * (CLI) and iOS never set it.
+   */
+  oauthPopup?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +332,16 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  /**
+   * Delegate an interactive OAuth hop to a follower whose human can actually
+   * click it (issue #1915: `oauth-token` on a headless or unattended leader
+   * used to prompt where nobody could answer). Only the provider's authorize
+   * URL crosses the tray; the follower opens it, captures the terminal
+   * callback URL, and replies with `oauth.popup.response`. Access and refresh
+   * tokens NEVER cross the tray — the leader keeps nonce validation, the code
+   * exchange, and account persistence.
+   */
+  | { type: 'oauth.popup.request'; requestId: string; url: string }
   | { type: 'preview.open'; requestId: string; url: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
@@ -397,6 +424,21 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  /**
+   * "Teleport that tab to me": the follower asks the leader to open a copy of
+   * an existing tray target HERE, carrying its cookies + web storage. The
+   * destination is always the requesting follower, derived from the channel
+   * identity — never from the payload — so one follower cannot push tabs into
+   * another. The leader replies on the existing `tab.opened` /
+   * `tab.open.error` legs, keyed by `requestId`.
+   */
+  | { type: 'tab.teleport.request'; requestId: string; targetId: string }
+  /**
+   * Terminal result of a delegated OAuth popup. `redirectUrl` is the callback
+   * URL the follower captured (carrying `?code=` + nonce) — never a token.
+   * Absent `redirectUrl` with no `error` means the human cancelled.
+   */
+  | { type: 'oauth.popup.response'; requestId: string; redirectUrl?: string; error?: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | TrayExecRequestMessage

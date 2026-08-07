@@ -254,6 +254,11 @@ class AppState: ObservableObject {
     /// tab overview grid. Published because the shell reacts too: full
     /// screen hides the dock rail and the navigation bar.
     @Published var browserViewingTabId: String?
+    /// A tab the LEADER just opened here. Published so the shell can bring it
+    /// to the front: before this, `tab.open` created a WKWebView target the
+    /// user never saw, so a teleported login sat waiting behind the chat with
+    /// nothing to indicate it existed. The shell clears it once presented.
+    @Published var leaderOpenedTabId: String?
 
     // MARK: - Connection Lifecycle
 
@@ -845,7 +850,10 @@ class AppState: ObservableObject {
         case .tabOpen(let requestId, let url):
             logger.info(
                 "\(SafeLeaderMessageLog.urlEventSummary("Leader requested new tab", url: url))")
-            cdpBridge?.handleTabOpen(requestId: requestId, url: url)
+            // Surface it: a leader opens a tab here so a human can act on it
+            // (an auth hand-off above all), which only works if the tab is
+            // actually in front of them.
+            leaderOpenedTabId = cdpBridge?.handleTabOpen(requestId: requestId, url: url)
 
         case .previewOpen(let requestId, let url):
             // Worker-hosted preview URL pushed by the leader after `serve`.
@@ -1536,6 +1544,21 @@ extension AppState {
 
     var supportsModelControls: Bool {
         (leaderProtocolVersion ?? 0) >= 5
+    }
+
+    /// Whether the leader understands `tab.teleport.request` (protocol v6):
+    /// a tray tab opened here carrying its cookies + web storage, rather than
+    /// the bare-URL copy an older leader can offer.
+    var supportsTabTeleport: Bool {
+        (leaderProtocolVersion ?? 0) >= 6
+    }
+
+    /// Ask the leader to teleport a tray tab here. The reply arrives as
+    /// `tab.opened`, which surfaces the new tab through `leaderOpenedTabId`.
+    func requestTabTeleport(targetId: String) -> Bool {
+        sendToLeader(
+            .tabTeleportRequest(
+                requestId: "tab-teleport-\(UUID().uuidString)", targetId: targetId))
     }
 
     var activeModel: TrayModelCatalogEntry? {

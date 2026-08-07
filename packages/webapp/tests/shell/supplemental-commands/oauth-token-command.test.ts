@@ -95,13 +95,14 @@ describe('oauth-token command', () => {
   });
 
   it('triggers login when no token exists, returns new token', async () => {
-    const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess) => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       // Simulate login saving a token
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'new-token-after-login',
         maskedValue: 'masked-new-token-after-login',
         expired: false,
       });
+      onSuccess();
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
@@ -124,12 +125,13 @@ describe('oauth-token command', () => {
   });
 
   it('triggers login when token is expired', async () => {
-    const mockOnOAuthLogin = vi.fn(async () => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'refreshed-token',
         maskedValue: 'masked-refreshed-token',
         expired: false,
       });
+      onSuccess();
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
@@ -193,12 +195,13 @@ describe('oauth-token command', () => {
       }),
     ],
   ])('falls back to login when silent renewal %s', async (_description, onSilentRenew) => {
-    const onOAuthLogin = vi.fn(async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'interactive-token',
         maskedValue: 'masked-interactive-token',
         expired: false,
       });
+      onSuccess();
     });
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'github',
@@ -273,8 +276,9 @@ describe('oauth-token command', () => {
   });
 
   it('returns error when login completes but no token saved', async () => {
-    const mockOnOAuthLogin = vi.fn(async () => {
-      // Login succeeds but doesn't save a token (unusual edge case)
+    const mockOnOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
+      // Login reports success but doesn't save a token (unusual edge case)
+      onSuccess();
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
@@ -293,6 +297,87 @@ describe('oauth-token command', () => {
     const result = await cmd.execute(['adobe'], createMockCtx());
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('no token was saved');
+  });
+
+  it('does not fall back to a stale token when the login attempt never completes (#1915)', async () => {
+    // The popup was cancelled / timed out / nobody could click: the provider
+    // hook returns WITHOUT calling onSuccess. The expired token that forced
+    // this login is still stored — it must not be reported as success.
+    const mockOnOAuthLogin = vi.fn(async () => {});
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'stale-expired-token',
+      maskedValue: 'masked-stale-expired-token',
+      expiresAt: Date.now() - 120000,
+      expired: true,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('interactive login was not completed');
+    expect(result.stdout).not.toContain('masked-stale-expired-token');
+  });
+
+  it('does not report a still-valid cached token as the outcome of an incomplete forced login', async () => {
+    const mockOnOAuthLogin = vi.fn(async () => {});
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'valid-cached-token',
+      maskedValue: 'masked-valid-cached-token',
+      expired: false,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(
+      ['github', '--force-login'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('interactive login was not completed');
+  });
+
+  it('fails when a completed login leaves only an expired token behind', async () => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'immediately-expired-token',
+        maskedValue: 'masked-immediately-expired-token',
+        expiresAt: Date.now() - 1000,
+        expired: true,
+      });
+      onSuccess();
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue(null);
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const result = await createOAuthTokenCommand().execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('already expired');
   });
 
   it('--list shows providers with status', async () => {
@@ -467,12 +552,13 @@ describe('oauth-token command', () => {
 
   it('--scope triggers login when the granted scopes are unknown', async () => {
     const onSilentRenew = vi.fn(async () => 'silently-renewed-token');
-    const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, onSuccess, _options) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'scoped-token',
         maskedValue: 'masked-scoped-token',
         expired: false,
       });
+      onSuccess();
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
@@ -534,13 +620,14 @@ describe('oauth-token command', () => {
   });
 
   it('--scope triggers login when the granted scopes fall short', async () => {
-    const onOAuthLogin = vi.fn(async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'widened-token',
         maskedValue: 'masked-widened-token',
         scopes: 'repo,admin:org',
         expired: false,
       });
+      onSuccess();
     });
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'github',
@@ -601,13 +688,14 @@ describe('oauth-token command', () => {
   });
 
   it('--force-login logs in even when the cached scopes are satisfied', async () => {
-    const onOAuthLogin = vi.fn(async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'forced-token',
         maskedValue: 'masked-forced-token',
         scopes: 'repo',
         expired: false,
       });
+      onSuccess();
     });
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'github',
@@ -638,12 +726,13 @@ describe('oauth-token command', () => {
   });
 
   it('--force-login without --scope skips a valid cached token', async () => {
-    const onOAuthLogin = vi.fn(async () => {
+    const onOAuthLogin = vi.fn(async (_launcher, onSuccess) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'forced-token',
         maskedValue: 'masked-forced-token',
         expired: false,
       });
+      onSuccess();
     });
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'github',

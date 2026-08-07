@@ -22,6 +22,7 @@
  * keeps the helper's import graph small.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
@@ -190,6 +191,7 @@ export interface PageLeaderFollowerState {
   bootstrapId: string;
   runtime?: string;
   connectedAt?: string;
+  lastActivity?: number;
   floatType?: FloatType;
   hostOrigin?: string;
   selectedScoopJid?: string;
@@ -212,6 +214,7 @@ export function getLeaderFollowerStates(
       bootstrapId: peer.bootstrapId,
       runtime: follower?.runtime ?? peer.runtime,
       connectedAt: follower?.connectedAt ?? peer.connectedAt ?? undefined,
+      lastActivity: follower?.lastActivity,
       floatType: follower?.floatType ?? deriveFloatType(peer.runtime),
       hostOrigin: follower?.hostOrigin,
       selectedScoopJid: follower?.selectedScoopJid,
@@ -450,11 +453,19 @@ function createRefreshLeaderTargets(
     }
     cdpThrottle.reportSuccess();
     try {
-      const targets: RemoteTargetInfo[] = pages.map((p) => ({
-        targetId: p.targetId,
-        title: p.title,
-        url: p.url,
-      }));
+      // The leader's own app-shell tab must not be federated: its URL carries
+      // `bridgeToken`, so publishing it would hand every follower a capability
+      // for this machine's CDP bridge — and a follower "opening" it would just
+      // boot a second UI. Same rule the follower applies before advertising.
+      const selfOrigins =
+        typeof location !== 'undefined' && location.origin ? [location.origin] : undefined;
+      const targets: RemoteTargetInfo[] = pages
+        .filter((p) => !isSliccAppUrl(p.url, { selfOrigins }))
+        .map((p) => ({
+          targetId: p.targetId,
+          title: p.title,
+          url: p.url,
+        }));
       sync.setLocalTargets(targets);
     } catch (err) {
       // Distinct from the CDP-failure path above so the message

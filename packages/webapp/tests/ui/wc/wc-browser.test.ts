@@ -12,8 +12,19 @@ installWcDomStubs();
 
 import '@slicc/webcomponents';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
+import { teleportTabOneWay } from '../../../src/scoops/tray-leader/tab-teleport.js';
 import { wireWcBrowser } from '../../../src/ui/wc/wc-browser.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
+
+vi.mock('../../../src/scoops/tray-leader/tab-teleport.js', () => ({
+  teleportTabOneWay: vi.fn(async () => ({
+    targetId: 'pulled-tab',
+    url: 'https://dash.example',
+    cookieCount: 1,
+    storageEntryCount: 0,
+    degraded: 'none' as const,
+  })),
+}));
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
@@ -85,7 +96,26 @@ describe('wireWcBrowser', () => {
     expect(browser.listAllTargets).not.toHaveBeenCalled();
   });
 
-  it('activating a card attaches + foregrounds the tab and closes the overlay', async () => {
+  it('activating a local card attaches + foregrounds the tab and closes the overlay', async () => {
+    const refs = makeRefs();
+    const browser = makeFakeBrowser();
+    const { overlay, refresh } = wireWcBrowser({
+      refs,
+      browser: browser as unknown as BrowserAPI,
+      log,
+    });
+    await refresh();
+
+    overlay.dispatchEvent(new CustomEvent('tab-activate', { detail: { id: 'local-1' } }));
+    await vi.waitFor(() => {
+      expect(browser.bringToFront).toHaveBeenCalled();
+    });
+    expect(browser.attachToPage).toHaveBeenCalledWith('local-1');
+    expect(overlay.hasAttribute('open')).toBe(false);
+    expect(vi.mocked(teleportTabOneWay)).not.toHaveBeenCalled();
+  });
+
+  it("activating a follower's card pulls a state-carrying copy to the leader", async () => {
     const refs = makeRefs();
     const browser = makeFakeBrowser();
     const { overlay, refresh } = wireWcBrowser({
@@ -97,10 +127,35 @@ describe('wireWcBrowser', () => {
 
     overlay.dispatchEvent(new CustomEvent('tab-activate', { detail: { id: 'follower-9:tab-2' } }));
     await vi.waitFor(() => {
-      expect(browser.bringToFront).toHaveBeenCalled();
+      expect(vi.mocked(teleportTabOneWay)).toHaveBeenCalledWith(browser, {
+        sourceTargetId: 'follower-9:tab-2',
+        destination: { kind: 'leader' },
+      });
     });
-    expect(browser.attachToPage).toHaveBeenCalledWith('follower-9:tab-2');
     expect(overlay.hasAttribute('open')).toBe(false);
+    // Focusing the follower's tab over there would not help THIS user.
+    expect(browser.bringToFront).not.toHaveBeenCalled();
+  });
+
+  it('keeps the overlay open when the pull fails', async () => {
+    const refs = makeRefs();
+    const browser = makeFakeBrowser();
+    vi.mocked(teleportTabOneWay).mockRejectedValueOnce(new Error('no eligible source'));
+    const { overlay, refresh } = wireWcBrowser({
+      refs,
+      browser: browser as unknown as BrowserAPI,
+      log,
+    });
+    await refresh();
+
+    overlay.dispatchEvent(new CustomEvent('tab-activate', { detail: { id: 'follower-9:tab-2' } }));
+    await vi.waitFor(() => {
+      expect(log.error).toHaveBeenCalledWith(
+        'WC browser overlay: tab activate failed',
+        expect.any(Error)
+      );
+    });
+    expect(overlay.hasAttribute('open')).toBe(true);
   });
 
   it('closing a card closes the tab and refreshes the grid', async () => {

@@ -32,12 +32,16 @@ import type {
 } from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
-  type ConnectedFollowerInfo,
   getConnectedFollowers,
   setConnectedFollowersGetter,
   setTrayResetter,
   writeConnectedFollowersToShim,
 } from '../../shell/supplemental-commands/host-command.js';
+import {
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from '../../shell/supplemental-commands/playwright/teleport.js';
+import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -77,6 +81,8 @@ import {
 import type { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
+import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
+import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
 
@@ -121,15 +127,18 @@ interface TrayRoleState {
   lockRelease: (() => void) | null;
 }
 
-export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): ConnectedFollowerInfo[] {
+export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): TeleportFollowerInfo[] {
   const execIds = handle.sync.getExecCapableBootstrapIds();
   const cdpIds = handle.sync.getBrowserCapableBootstrapIds();
+  const teleportIds = handle.sync.getTeleportEligibleBootstrapIds();
   const motds = handle.sync.getFollowerMotds();
   return getLeaderFollowerStates(handle.peers, handle.sync).map((follower) => {
     return {
       runtimeId: canonicalRuntimeId(follower.bootstrapId),
+      bootstrapId: follower.bootstrapId,
       runtime: follower.runtime,
       connectedAt: follower.connectedAt,
+      lastActivity: follower.lastActivity,
       floatType: follower.floatType,
       hostOrigin: follower.hostOrigin,
       selectedScoopJid: follower.selectedScoopJid,
@@ -137,6 +146,7 @@ export function getLeaderConnectedFollowers(handle: PageLeaderTrayHandle): Conne
       peerState: follower.peerState,
       exec: execIds.has(follower.bootstrapId),
       cdp: cdpIds.has(follower.bootstrapId),
+      teleportEligible: teleportIds.has(follower.bootstrapId),
       motd: motds.get(follower.bootstrapId),
     };
   });
@@ -240,6 +250,13 @@ export function buildFollowerOptions(
     getLockedEffortLevel: () => deps.window.localStorage.getItem('slicc_locked_effort_level'),
   });
   deps.refs.switcher.connection = 'disconnected';
+  // No follower browser rail here on purpose. This float is leader-capable, so
+  // `wireWcBrowser` already gave it a tab switcher at boot — and that one is
+  // strictly better while following: it lists local pages AND the tray
+  // registry, and opens a chosen tab in THIS browser, which is what "in front
+  // of me" means on a follower too. Wiring a second rail raced it for the
+  // globe (two listeners, two full-screen overlays on one click). The
+  // dedicated follower mount, which has no switcher of its own, wires it.
   deps.refs.switcher.addEventListener(
     'slicc-scoop-select',
     (event) => {
@@ -288,6 +305,13 @@ export function buildFollowerOptions(
       deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
     },
+    // #1915: this float has a mounted permissions surface (it can lead), so
+    // it can host a login the leader's kernel cannot prompt for.
+    onOAuthPopupRequest: (url, signal) =>
+      openDelegatedOAuthPopup(url, signal, {
+        getPermissionsSurface: getLeaderPermissionsSurface,
+        window: deps.window,
+      }),
     onModelsList: modelSurface.onModelsList,
     onModelState: modelSurface.onModelState,
   };
@@ -386,6 +410,10 @@ export function createLeaderOptionsFactory(
       deps.getController()?.addUserMessage(text, attachments);
       deps.agentHandle.sendMessage(text, messageId, attachments, options);
       state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
+      // The message bumped the sender's lastActivity — mirror it into the
+      // worker-realm shim so kernel-side follower selection sees fresh recency
+      // (the shim otherwise only refreshes on follower-count changes).
+      if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
     },
     onFollowerAbort: () => deps.agentHandle.stop(),
     onFollowerNewSession: (action) => {
@@ -400,6 +428,13 @@ export function createLeaderOptionsFactory(
       );
     },
     onFollowerCountChanged: refreshFollowerPresentation,
+    // Advertised targets decide teleport eligibility, and they change without
+    // the follower count changing — an iOS follower opening its first tab goes
+    // from ineligible to eligible. Re-publish so kernel-side selection stops
+    // reading a snapshot that predates the capability.
+    onFollowerTargetsChanged: () => {
+      if (state.leader) writeConnectedFollowersToShim(getLeaderConnectedFollowers(state.leader));
+    },
     onRemoteTransportsCleaned: (runtimeId) => remoteCdpBridge.cleanupRuntime(runtimeId),
     onForwardedLick: (event) => client.sendForwardedLick(event),
     onCherryHostEvent: (runtimeId, name, detail) =>
@@ -469,15 +504,18 @@ function createLeaderHookSetup(
     wireLeaderHooks: (handle) => {
       setConnectedFollowersGetter(() => getLeaderConnectedFollowers(handle));
       setTrayResetter(() => handle.reset());
+      // Page-realm teleport selection: the kernel-worker realm covers itself
+      // via the `slicc.leaderTrayFollowers` shim (`teleport-follower-shim.ts`).
+      setPlaywrightTeleportBestFollower(() => () => handle.sync.getBestFollowerForTeleport());
+      setPlaywrightTeleportConnectedFollowers(() => () => getLeaderConnectedFollowers(handle));
       deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
         handle.sync.broadcastSprinkleUpdate(name, data)
       );
       deps.sprinkleManager.setReloadHook((name) => handle.sync.broadcastSprinkleReloaded(name));
-      deps
-        .getController()
-        ?.setOnLocalUserMessage((text, messageId, attachments) =>
-          handle.sync.broadcastUserMessage(text, messageId, attachments)
-        );
+      deps.getController()?.setOnLocalUserMessage((text, messageId, attachments) => {
+        handle.sync.noteLeaderUserMessage();
+        handle.sync.broadcastUserMessage(text, messageId, attachments);
+      });
       // Mirror the leader's turn lifecycle to followers. The live float
       // emits no `turn_end` agent event, so the follower's `onStatus`
       // mapping (→ `setProcessing`) is the only signal that clears its send
@@ -506,6 +544,8 @@ function createLeaderHookSetup(
       setConnectedFollowersGetter(null);
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);
+      setPlaywrightTeleportBestFollower(null);
+      setPlaywrightTeleportConnectedFollowers(null);
       deps.getController()?.setOnLocalUserMessage(undefined);
       deps.getController()?.setOnLocalProcessingChange(undefined);
       deps.sprinkleManager.setSendToSprinkleHook(undefined);

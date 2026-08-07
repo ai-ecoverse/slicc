@@ -233,11 +233,17 @@ async function runInteractiveProviderLogin(
   getInfo: ProviderSettings['getOAuthAccountInfo']
 ): Promise<CommandResult> {
   try {
-    const launchError = await launchProviderLogin(providerId, config, scopeOverride);
-    if (launchError) return launchError;
-    return readSavedProviderToken(providerId, getInfo);
+    const launch = await launchProviderLogin(providerId, config, scopeOverride);
+    if (launch.error) return launch.error;
+    return readSavedProviderToken(providerId, getInfo, launch.succeeded);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // A delegated login (#1915) that found no human reports why. Say so
+    // plainly rather than burying it under a generic "login failed".
+    if (err instanceof Error && err.name === 'OAuthLaunchError') {
+      console.error(`[oauth-token] Provider ${providerId}: login could not be shown:`, msg);
+      return errResult(`oauth-token: ${msg}`);
+    }
     console.error(`[oauth-token] Provider ${providerId}: login failed:`, msg);
     return errResult(`oauth-token: login failed: ${msg}`);
   }
@@ -247,35 +253,63 @@ async function launchProviderLogin(
   providerId: string,
   config: ProviderConfig,
   scopeOverride: string | undefined
-): Promise<CommandResult | null> {
+): Promise<{ error: CommandResult | null; succeeded: boolean }> {
   const options = scopeOverride ? { scopes: scopeOverride } : undefined;
+  // Every provider login hook invokes its onSuccess callback only after the
+  // token is exchanged and persisted. That explicit signal — not the mere
+  // presence of a stored token afterwards — is what distinguishes a completed
+  // login from a cancelled/timed-out popup with a stale token left behind.
+  let succeeded = false;
+  const onSuccess = (): void => {
+    succeeded = true;
+  };
   if (config.onOAuthLoginIntercepted) {
     const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
       '../../providers/oauth-service.js'
     );
     const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
     if (!launcher) {
-      return errResult(
-        `oauth-token: provider "${providerId}" needs the controlled-browser interceptor, but no CDP transport is available in this runtime.`
-      );
+      return {
+        error: errResult(
+          `oauth-token: provider "${providerId}" needs the controlled-browser interceptor, but no CDP transport is available in this runtime.`
+        ),
+        succeeded: false,
+      };
     }
-    await config.onOAuthLoginIntercepted(launcher, () => {}, options);
-    return null;
+    await config.onOAuthLoginIntercepted(launcher, onSuccess, options);
+    return { error: null, succeeded };
   }
   if (config.onOAuthLogin) {
     const { createOAuthLauncher } = await import('../../providers/oauth-service.js');
-    await config.onOAuthLogin(createOAuthLauncher(), () => {}, options);
-    return null;
+    await config.onOAuthLogin(createOAuthLauncher(), onSuccess, options);
+    return { error: null, succeeded };
   }
-  return errResult(`oauth-token: provider "${providerId}" has no OAuth login hook`);
+  return {
+    error: errResult(`oauth-token: provider "${providerId}" has no OAuth login hook`),
+    succeeded: false,
+  };
 }
 
 function readSavedProviderToken(
   providerId: string,
-  getInfo: ProviderSettings['getOAuthAccountInfo']
+  getInfo: ProviderSettings['getOAuthAccountInfo'],
+  launchSucceeded: boolean
 ): CommandResult {
+  if (!launchSucceeded) {
+    // The interactive attempt never completed (popup cancelled, timed out, or
+    // nobody could approve it). An earlier token may still be stored —
+    // possibly the expired one that forced this attempt — and returning it
+    // with exit 0 would report success for a login that never happened.
+    console.error(`[oauth-token] Provider ${providerId}: interactive login was not completed`);
+    return errResult(
+      'oauth-token: interactive login was not completed (cancelled, timed out, or no one could approve it)'
+    );
+  }
   const info = getInfo(providerId);
-  if (info?.token) return maskedTokenResult(providerId, info.maskedValue);
+  if (info?.token && !info.expired) return maskedTokenResult(providerId, info.maskedValue);
+  if (info?.token) {
+    return errResult('oauth-token: login completed but the saved token is already expired');
+  }
   console.error(`[oauth-token] Provider ${providerId}: login completed but no token was saved`);
   return errResult('oauth-token: login completed but no token was saved');
 }

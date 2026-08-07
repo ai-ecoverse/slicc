@@ -142,8 +142,12 @@ final class CDPBridge {
             case "Emulation":
                 try requireTarget(target, method: method, requestId: requestId, sessionId: sessionId)
                 handleEmulationDomain(target: target!, method: method, params: paramsDict, requestId: requestId)
-            case "Network", "Log", "Performance", "Security":
-                // Lightweight no-ops to keep clients happy.
+            case "Network":
+                handleNetworkDomain(
+                    target: target, method: method, params: paramsDict, requestId: requestId)
+            case "Log", "Performance", "Security":
+                // Lightweight no-ops to keep clients happy. Unlike Network
+                // these carry no state a caller can silently lose.
                 respond(requestId: requestId, result: [:])
             default:
                 respondNotImplemented(requestId: requestId, method: method)
@@ -182,9 +186,19 @@ final class CDPBridge {
     }
 
     /// Dispatch a `tab.open` from the leader.
-    func handleTabOpen(requestId: String, url: String) {
+    /// Open a leader-requested tab and ack it. Returns the new target id so
+    /// the caller can present it; nil when the URL was unusable, in which
+    /// case the leader gets `tab.open.error` instead of a false success.
+    @discardableResult
+    func handleTabOpen(requestId: String, url: String) -> String? {
+        guard let parsed = URL(string: url), parsed.scheme != nil else {
+            logger.warning("Rejecting tab.open with an unusable URL")
+            send(.tabOpenError(requestId: requestId, error: "unusable URL"))
+            return nil
+        }
         let id = openTab(url: url)
         send(.tabOpened(requestId: requestId, targetId: id))
+        return id
     }
 
     // MARK: - Domain handlers
@@ -562,6 +576,112 @@ final class CDPBridge {
             "Emulation.clearDeviceMetricsOverride":
             // No-op: viewport size on iOS depends on the host view bounds.
             respond(requestId: requestId, result: [:])
+        default:
+            respondNotImplemented(requestId: requestId, method: method)
+        }
+    }
+
+    /// `Network` domain — cookies only, backed by `WKHTTPCookieStore`.
+    ///
+    /// This is what makes an iOS follower a real teleport destination: the
+    /// leader plants its session cookies here before navigating, and reads the
+    /// post-auth cookies back out. Everything outside the cookie surface
+    /// returns not-implemented rather than an empty success, so a caller can
+    /// never mistake "unsupported" for "no cookies".
+    private func handleNetworkDomain(
+        target: CDPTarget?, method: String, params: [String: Any], requestId: String
+    ) {
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        switch method {
+        case "Network.enable", "Network.disable":
+            respond(requestId: requestId, result: [:])
+        case "Network.getCookies", "Network.getAllCookies":
+            // Omitted `urls` means "this page", not "the whole device". Every
+            // target shares one app-wide store, so falling back to the
+            // attached target's URL is what keeps a teleport of one tab from
+            // exporting every other site's session cookies.
+            var urls = (params["urls"] as? [String]) ?? []
+            if urls.isEmpty, let current = target?.currentURL, URL(string: current)?.host != nil {
+                urls = [current]
+            }
+            store.getAllCookies { cookies in
+                let scoped =
+                    method == "Network.getCookies"
+                    ? CDPNetworkDomain.filter(cookies, urls: urls) : cookies
+                self.respond(
+                    requestId: requestId,
+                    result: ["cookies": scoped.map(CDPNetworkDomain.encode)])
+            }
+        case "Network.setCookie", "Network.setCookies":
+            let raw =
+                method == "Network.setCookie"
+                ? [params] : ((params["cookies"] as? [[String: Any]]) ?? [])
+            let cookies = raw.compactMap(CDPNetworkDomain.decode)
+            let unmappable = raw.count - cookies.count
+            if unmappable > 0 {
+                logger.warning("Network.setCookies: \(unmappable) cookie(s) could not be mapped")
+            }
+            // HttpOnly cannot be set through the public HTTPCookiePropertyKey
+            // API, so those cookies are recreated readable by page JS in this
+            // WebView. They still authenticate, but it IS a downgrade of the
+            // flag the origin asked for — count it so what actually crossed
+            // the tray is auditable rather than silent.
+            let downgraded = raw.filter { ($0["httpOnly"] as? Bool) == true }.count
+            if downgraded > 0 {
+                logger.warning(
+                    "Network.setCookies: \(downgraded) HttpOnly cookie(s) recreated without the flag")
+            }
+            guard !cookies.isEmpty else {
+                respond(requestId: requestId, result: ["success": raw.isEmpty])
+                return
+            }
+            // Respond only once every write has landed: the leader navigates
+            // immediately after, and a cookie set later than that is useless.
+            let group = DispatchGroup()
+            for cookie in cookies {
+                group.enter()
+                store.setCookie(cookie) { group.leave() }
+            }
+            group.notify(queue: .main) {
+                self.respond(requestId: requestId, result: ["success": true])
+            }
+        case "Network.deleteCookies":
+            // CDP requires `name`; without it the old code deleted every
+            // cookie in the app-wide store. Refuse instead of guessing.
+            guard let name = params["name"] as? String, !name.isEmpty else {
+                respondError(requestId: requestId, error: "Network.deleteCookies requires `name`")
+                return
+            }
+            let scopeURL = (params["url"] as? String).flatMap { URL(string: $0) }
+            let domain = (params["domain"] as? String) ?? scopeURL?.host
+            let explicitPath = params["path"] as? String
+            let path = explicitPath ?? scopeURL?.path
+            store.getAllCookies { cookies in
+                let doomed = cookies.filter {
+                    CDPNetworkDomain.matchesDeletion(
+                        $0, name: name, domain: domain, path: path,
+                        pathIsExact: explicitPath != nil)
+                }
+                let group = DispatchGroup()
+                for cookie in doomed {
+                    group.enter()
+                    store.delete(cookie) { group.leave() }
+                }
+                group.notify(queue: .main) {
+                    self.respond(requestId: requestId, result: [:])
+                }
+            }
+        case "Network.clearBrowserCookies":
+            store.getAllCookies { cookies in
+                let group = DispatchGroup()
+                for cookie in cookies {
+                    group.enter()
+                    store.delete(cookie) { group.leave() }
+                }
+                group.notify(queue: .main) {
+                    self.respond(requestId: requestId, result: [:])
+                }
+            }
         default:
             respondNotImplemented(requestId: requestId, method: method)
         }

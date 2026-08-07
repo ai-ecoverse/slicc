@@ -31,7 +31,7 @@ import {
   refreshOAuthToken,
   revokeOAuthToken,
 } from '../src/providers/oauth-code-exchange.js';
-import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { getOAuthPageOrigin, resolveOAuthDelegation } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
 import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
 import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
@@ -97,6 +97,13 @@ export function resolveGithubOAuthRedirect(opts: {
    * caller from `getLocalApiBaseUrl()` so the helper stays pure.
    */
   bridgeApiBaseUrl?: string | null;
+  /**
+   * The interactive hop runs on a FOLLOWER (#1915), not this leader. Forces
+   * the relay to deliver the callback on its own origin, where the follower
+   * is listening — every leader-local path (loopback bounce,
+   * `/api/oauth-result`) is unreachable from another machine.
+   */
+  delegated?: boolean;
   extensionId: string;
   nonce: string;
 }): { redirectUri: string; state: Record<string, unknown> } {
@@ -114,6 +121,18 @@ export function resolveGithubOAuthRedirect(opts: {
     return {
       redirectUri: `${workerBaseUrl}/auth/callback`,
       state: { source: 'extension', extensionId, path: '/github', nonce },
+    };
+  }
+  // Delegated to a follower (#1915): the popup opens on another machine, so
+  // every leader-local delivery path is unreachable — the loopback bounce
+  // resolves to the FOLLOWER's localhost and the leader's `/api/oauth-result`
+  // is not addressable from there. `source:'opener'` keeps the callback on
+  // the relay origin, where the follower (same origin) receives it over the
+  // relay's BroadcastChannel + opener postMessage.
+  if (opts.delegated) {
+    return {
+      redirectUri: `${opts.runtimeWorkerBaseUrl ?? workerBaseUrl}/auth/callback`,
+      state: { source: 'opener', path: '/auth/callback', nonce },
     };
   }
   if (isConnectMode) {
@@ -485,6 +504,9 @@ export const config: ProviderConfig = {
     // logic. `getOAuthPageOrigin()` resolves origin/href even when invoked from a
     // shell command inside the kernel DedicatedWorker (which has no `window`).
     const pageInfo = isExtension ? null : await getOAuthPageOrigin();
+    // Ask BEFORE building the URL: a delegated login needs a callback that
+    // comes back to the follower rather than this leader (#1915).
+    const delegated = isExtension ? false : await resolveOAuthDelegation();
     const nonce = crypto.randomUUID();
     const extensionId = isExtension
       ? (chrome as unknown as { runtime: { id: string } }).runtime.id
@@ -503,6 +525,7 @@ export const config: ProviderConfig = {
       // `/api/oauth-result` (postMessage can't reach the SPA cross-origin
       // regardless of `window.opener` state — see `resolveGithubOAuthRedirect`).
       bridgeApiBaseUrl: getLocalApiBaseUrl(),
+      delegated,
       extensionId,
       nonce,
     });

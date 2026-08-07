@@ -31,6 +31,7 @@ describe('WC tray connected follower mapping', () => {
       sync: {
         getExecCapableBootstrapIds: () => new Set(['browser-1']),
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
+        getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
         getFollowerDetails: () => [
           {
@@ -78,8 +79,10 @@ describe('WC tray connected follower mapping', () => {
     expect(getLeaderConnectedFollowers(handle)).toEqual([
       {
         runtimeId: 'follower-browser-1',
+        bootstrapId: 'browser-1',
         runtime: 'slicc-extension-offscreen',
         connectedAt: '2026-08-03T08:00:00.000Z',
+        lastActivity: 1,
         floatType: 'extension',
         hostOrigin: 'https://host.example',
         selectedScoopJid: 'research',
@@ -87,12 +90,15 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: true,
         cdp: true,
+        teleportEligible: true,
         motd: 'remote browser',
       },
       {
         runtimeId: 'follower-cli-1',
+        bootstrapId: 'cli-1',
         runtime: 'slicc-cli',
         connectedAt: '2026-08-03T08:01:00.000Z',
+        lastActivity: 2,
         floatType: 'unknown',
         hostOrigin: undefined,
         selectedScoopJid: undefined,
@@ -100,6 +106,8 @@ describe('WC tray connected follower mapping', () => {
         peerState: 'connected',
         exec: false,
         cdp: false,
+        // Exec-only CLI follower: never a teleport destination.
+        teleportEligible: false,
         motd: undefined,
       },
     ]);
@@ -171,6 +179,7 @@ describe('WC tray connected follower mapping', () => {
       sync: {
         getExecCapableBootstrapIds: () => new Set(),
         getBrowserCapableBootstrapIds: () => new Set(),
+        getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
         getFollowerDetails: () => [],
       },

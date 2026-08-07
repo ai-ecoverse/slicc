@@ -4,11 +4,15 @@
  * browser's pages plus any tray follower's (composite
  * `runtimeId:targetId` ids whose CDP traffic rides the federated channel,
  * i.e. the tray's WebRTC data channel) — each card with a live screenshot
- * thumbnail. Activating a card attaches + foregrounds that tab (locally or
- * on the follower); a card's ✕ closes it.
+ * thumbnail. Activating a local card attaches + foregrounds that tab;
+ * activating a follower's card pulls a state-carrying copy to the leader
+ * (`teleportTabOneWay`) so it lands in front of THIS user. A card's ✕
+ * closes it.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { teleportTabOneWay } from '../../scoops/tray-leader/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { WcShellRefs } from './wc-shell.js';
 
@@ -64,6 +68,12 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
       return;
     }
     if (seq !== refreshSeq) return;
+    // Hide SLICC's own app tabs — ours and any federated peer's. They are the
+    // window you are looking at, not somewhere to go, and their URLs carry a
+    // bridge capability. Filtering here also covers a peer running an older
+    // build that still advertises its shell.
+    const selfOrigins = location?.origin ? [location.origin] : undefined;
+    pages = pages.filter((p) => !isSliccAppUrl(p.url ?? '', { selfOrigins }));
     overlay.tabs = pages.map((p) => ({
       id: p.targetId,
       title: p.title || p.url || p.targetId,
@@ -77,8 +87,12 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
         await browser.attachToPage(p.targetId);
         const shot = await browser.screenshot({
           format: 'jpeg',
-          quality: 55,
-          maxWidth: deps.thumbWidth ?? 480,
+          quality: 72,
+          // Cards are `minmax(220px, 1fr)` and stretch well past that in a
+          // wide window, so a 480px capture was being upscaled — the reason
+          // thumbnails looked soft. Capture at device resolution for the
+          // widest realistic card instead of CSS pixels.
+          maxWidth: deps.thumbWidth ?? Math.round(560 * Math.min(devicePixelRatio || 1, 2)),
           // Never wake suspended tabs via bringToFront here — that steals
           // window focus from SLICC; they keep the globe placeholder.
           foregroundFallback: false,
@@ -113,10 +127,28 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     const id = (event as CustomEvent<{ id: string }>).detail.id;
     void (async () => {
       try {
+        if (id.includes(':')) {
+          // A follower's tab: focusing it over there wouldn't put it in front
+          // of THIS user. Pull a copy to the leader instead — foreground, with
+          // cookies + storage teleported (degrades to a bare URL open when the
+          // source cannot serve state).
+          const result = await teleportTabOneWay(browser, {
+            sourceTargetId: id,
+            destination: { kind: 'leader' },
+          });
+          log.info('WC browser overlay: pulled remote tab to leader', {
+            source: id,
+            target: result.targetId,
+            degraded: result.degraded,
+          });
+          overlay.hide();
+          return;
+        }
         await browser.attachToPage(id);
         await browser.bringToFront();
         overlay.hide();
       } catch (err) {
+        // Keep the overlay open so the user sees the tap did not take effect.
         log.error('WC browser overlay: tab activate failed', err);
       }
     })();

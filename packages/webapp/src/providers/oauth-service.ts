@@ -9,14 +9,46 @@
  *   Extension: chrome.identity.launchWebAuthFlow via service worker
  */
 
+import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
-import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 
 const isExtension = isExtensionRealm();
+
+/**
+ * A login attempt that failed for a reportable reason rather than being
+ * cancelled — e.g. it was delegated to a follower (#1915) and no connected
+ * follower could show it. Callers surface the message; a plain `null` still
+ * means "the human declined or timed out".
+ */
+export class OAuthLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OAuthLaunchError';
+  }
+}
+
+/**
+ * Would an interactive login run on a follower rather than here? Providers
+ * ask BEFORE building the authorize URL: a delegated flow needs a callback
+ * that returns to the follower, not the leader's loopback endpoint.
+ */
+export async function resolveOAuthDelegation(): Promise<boolean> {
+  if (typeof window !== 'undefined') return false;
+  const rpcClient = getPanelRpcClient();
+  if (!rpcClient) return false;
+  try {
+    const result = await rpcClient.call('oauth-route', {}, { timeoutMs: 5_000 });
+    return result.delegate === true;
+  } catch {
+    // Unknown route (older page) or a timeout: assume the local flow, which
+    // is what every pre-#1915 build did.
+    return false;
+  }
+}
 
 /** Create an OAuthLauncher appropriate for the current runtime. */
 export function createOAuthLauncher(): OAuthLauncher {
@@ -98,8 +130,15 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
       { url: authorizeUrl },
       { timeoutMs: 130_000 }
     );
+    // A delegated login (#1915) that never found a human reports WHY. Surface
+    // it: the caller turns this into a non-zero exit with an actionable
+    // message instead of a silent null that looks like a plain cancel.
+    if (!result.redirectUrl && result.error) {
+      throw new OAuthLaunchError(result.error);
+    }
     return result.redirectUrl;
   } catch (err) {
+    if (err instanceof OAuthLaunchError) throw err;
     console.error(
       '[oauth-service] oauth-popup RPC failed:',
       err instanceof Error ? err.message : String(err)

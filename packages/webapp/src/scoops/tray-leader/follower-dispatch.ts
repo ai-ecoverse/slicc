@@ -11,8 +11,11 @@ import type { CherryRouter } from './cherry-router.js';
 import type { LeaderSyncContext } from './context.js';
 import { labelForFollower } from './follower-registry.js';
 import type { FsRouter } from './fs-router.js';
+import type { OAuthPopupDelegation } from './oauth-popup-delegation.js';
 import type { RemoteExecRouter } from './remote-exec.js';
+import type { RequesterTracker } from './requester-tracker.js';
 import type { TabRouter } from './tab-router.js';
+import type { TabTeleportRouter } from './tab-teleport-router.js';
 import type { TeleportPool } from './teleport-pool.js';
 import type { TranscriptExportManager } from './transcript-export.js';
 
@@ -33,6 +36,8 @@ export interface FollowerDispatchCollaborators {
     'executeLocalTabOpen' | 'forwardTabOpen' | 'handleTabOpenResponse' | 'handleTabOpenError'
   >;
   teleportPool: Pick<TeleportPool, 'handleFollowerTargetsAdvertise'>;
+  tabTeleportRouter: Pick<TabTeleportRouter, 'handleTeleportRequest'>;
+  oauthPopupDelegation: Pick<OAuthPopupDelegation, 'handlePopupResponse'>;
   transcriptExport: Pick<
     TranscriptExportManager,
     | 'handleTranscriptExportRequest'
@@ -41,6 +46,7 @@ export interface FollowerDispatchCollaborators {
     | 'handleTranscriptExportApprovalResponse'
   >;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
+  requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
 }
 
 /** Exhaustive follower-to-leader wire-message dispatcher. */
@@ -53,7 +59,8 @@ export class FollowerDispatch {
   dispatch(bootstrapId: string, message: FollowerToLeaderMessage): void {
     this.noteLegacyPeer(bootstrapId, message);
     const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
-    const { teleportPool, transcriptExport, cherryRouter } = this.collaborators;
+    const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
+    const { oauthPopupDelegation } = this.collaborators;
 
     switch (message.type) {
       case 'user_message':
@@ -123,6 +130,17 @@ export class FollowerDispatch {
         break;
       case 'tab.open.error':
         tabRouter.handleTabOpenError(message.requestId, message.error);
+        break;
+      case 'tab.teleport.request':
+        void tabTeleportRouter.handleTeleportRequest(bootstrapId, message);
+        break;
+      case 'oauth.popup.response':
+        oauthPopupDelegation.handlePopupResponse(
+          bootstrapId,
+          message.requestId,
+          message.redirectUrl,
+          message.error
+        );
         break;
       case 'fs.request':
         this.routeFsRequest(bootstrapId, message);
@@ -197,6 +215,15 @@ export class FollowerDispatch {
       bootstrapId,
       messageId: message.messageId,
     });
+    // A user message is real human activity — unlike ping/pong keepalives —
+    // so it both marks this follower as the interaction origin and makes
+    // lastActivity a meaningful recency signal for follower selection.
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (follower) follower.lastActivity = Date.now();
+    this.collaborators.requesterTracker.noteFollowerUserMessage(
+      bootstrapId,
+      this.context.followers.runtimeIdForBootstrap(bootstrapId)
+    );
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;

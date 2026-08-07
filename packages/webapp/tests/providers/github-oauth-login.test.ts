@@ -564,6 +564,25 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     expect(r.state).toMatchObject({ source: 'extension', path: '/github' });
   });
 
+  it('delegated to a follower → relay-origin callback via source:opener (#1915)', async () => {
+    const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
+    const r = resolveGithubOAuthRedirect({
+      ...base,
+      isExtension: false,
+      isConnectMode: false,
+      delegated: true,
+      // A thin-bridge leader would normally pin the callback to its own
+      // loopback — unreachable from the follower running the popup.
+      pageOrigin: 'https://www.sliccy.ai',
+      pageHref: 'https://www.sliccy.ai/?bridge=http%3A%2F%2Flocalhost%3A5710',
+      bridgeApiBaseUrl: 'http://localhost:5710',
+    });
+    expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
+    expect(r.state).toMatchObject({ source: 'opener', path: '/auth/callback', nonce: 'n1' });
+    // Explicitly NOT the leader loopback bounce.
+    expect(r.state).not.toHaveProperty('port');
+  });
+
   it('connect mode on localhost → registered relay + source:local with the page port', async () => {
     const { resolveGithubOAuthRedirect } = await import('../../providers/github.js');
     const r = resolveGithubOAuthRedirect({

@@ -36,7 +36,8 @@
         "packages/*/src/**/*.test.ts",
         "packages/shared-ts/src/secret-env-schema.ts",
         "packages/shared-ts/src/transcript-export.ts",
-        "packages/shared-ts/src/transcript-redaction.ts"
+        "packages/shared-ts/src/transcript-redaction.ts",
+        "packages/shared-ts/src/slicc-app-url.ts"
       ]
     },
     "chrome-extension": {

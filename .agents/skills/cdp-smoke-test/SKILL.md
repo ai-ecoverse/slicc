@@ -2,13 +2,16 @@
 name: cdp-smoke-test
 description: |
   Launch a local SLICC dev instance in a controllable browser (CDP) and run
-  smoke tests against the latest build. Two tiers: Tier 1 needs no AI
+  smoke tests against the latest build. Three tiers: Tier 1 needs no AI
   provider (boot, panels, terminal, accounts dialog); Tier 2 exercises the
   agent loop through a connected provider (chat, shell tool, browser
-  control, scoops, sprinkles, transcript export). Use when asked to start a
-  SLICC dev instance in a browser you control, smoke-test a build, run an
-  autonomous debugging session against the UI, or send a prompt to a running
-  SLICC and read its assistant reply.
+  control, scoops, sprinkles, transcript export); Tier 3 pairs a leader with
+  a real follower runtime for tray features (teleport, delegated OAuth,
+  federated CDP, follower rails). Use when asked to start a SLICC dev
+  instance in a browser you control, smoke-test a build, test a
+  leader/follower or tray feature end to end, run an autonomous debugging
+  session against the UI, or send a prompt to a running SLICC and read its
+  assistant reply.
 ---
 
 # CDP Smoke Test
@@ -77,10 +80,21 @@ streaming, tool use, scoops, sprinkles, and transcript export (cone + scoop
 bundle via `session export`). Checks and tier-specific pitfalls:
 [tier2-agent-loop.md](tier2-agent-loop.md).
 
+## Tier 3 — leader + follower (tray features)
+
+Needed for anything crossing the tray: teleport, delegated OAuth, federated
+CDP, follower rails. Two SLICC runtimes, not two browser windows — and the
+follower must both _advertise the capability under test_ and _run your build_.
+Follower selection, the origin rule, the port map, and the terminal-driving
+pitfalls: [tier3-multi-harness.md](tier3-multi-harness.md).
+
 ## Report
 
 Summarize pass/fail per tier, console-watcher findings, harness-log
-anomalies, and the total session cost from the header counter.
+anomalies, and the total session cost from the header counter. For Tier 3 also
+state which build each runtime ran and which capabilities each follower
+advertised — a result from a follower running released code, or one that never
+advertised the capability, is not evidence.
 
 ## Pitfalls
 

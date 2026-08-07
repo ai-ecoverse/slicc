@@ -148,6 +148,8 @@ playwright-cli goto --tab=<id> <url> --teleport-start=<regex> --teleport-return=
 
 Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab — only commands targeting the teleporting tab are blocked; other tabs remain operational.
 
+`--runtime` is optional: without it, teleport picks the most recently active eligible follower (preferring standalone floats). Only followers that can actually serve cookies are eligible — cherry hosts, exec-only CLI followers, and any target advertising `network: false` are excluded, so a teleport fails fast instead of "succeeding" with zero cookies.
+
 ### Screenshots
 
 ```bash

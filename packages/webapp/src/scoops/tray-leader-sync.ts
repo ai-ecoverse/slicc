@@ -35,9 +35,16 @@ import {
   labelForFollower,
 } from './tray-leader/follower-registry.js';
 import { FsRouter } from './tray-leader/fs-router.js';
+import { runDelegatedCdpLogin } from './tray-leader/oauth-cdp-login.js';
+import {
+  type DelegatedOAuthResult,
+  OAuthPopupDelegation,
+} from './tray-leader/oauth-popup-delegation.js';
 import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
+import { type LastUserMessageOrigin, RequesterTracker } from './tray-leader/requester-tracker.js';
 import { TabRouter } from './tray-leader/tab-router.js';
+import { TabTeleportRouter } from './tray-leader/tab-teleport-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
 import { TranscriptExportManager } from './tray-leader/transcript-export.js';
 import {
@@ -126,6 +133,12 @@ export interface LeaderSyncManagerOptions {
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
   /**
+   * Called when a follower re-advertises its targets, which can flip its
+   * teleport eligibility without changing the follower count. Lets the host
+   * re-publish any cached follower snapshot kernel-side selection reads from.
+   */
+  onFollowerTargetsChanged?: () => void;
+  /**
    * Deliver an inbound cherry host event (`cherry.host_event`) to the cone as a
    * `'cherry'` lick. The sync manager resolves the owning follower's runtime id
    * and hands it off; the callback owns reaching the LickManager (which lives in
@@ -210,6 +223,9 @@ export class LeaderSyncManager {
   private readonly teleportPool: TeleportPool;
   private readonly transcriptExport: TranscriptExportManager;
   private readonly followerDispatch: FollowerDispatch;
+  private readonly requesterTracker = new RequesterTracker();
+  private readonly tabTeleportRouter: TabTeleportRouter;
+  private readonly oauthPopupDelegation: OAuthPopupDelegation;
   private get followers(): Map<string, ConnectedFollower> {
     return this.followerRegistry.followers;
   }
@@ -237,6 +253,7 @@ export class LeaderSyncManager {
       cleanupOrphanedRemoteTransports: (runtimeId) =>
         this.cdpRouter.cleanupOrphanedRemoteTransports(runtimeId),
       getPreviewTargetEntries: () => this.previewBridge.getTargetEntries(),
+      onTeleportEligibilityChanged: () => this.options.onFollowerTargetsChanged?.(),
     });
     this.transcriptExport = new TranscriptExportManager(context);
     this.fsRouter = new FsRouter(context);
@@ -245,6 +262,10 @@ export class LeaderSyncManager {
       isCherryTarget,
     });
     this.cherryRouter = new CherryRouter(context);
+    this.tabTeleportRouter = new TabTeleportRouter(context, {
+      getTargetEntries: () => this.teleportPool.getConnectedEntries(),
+    });
+    this.oauthPopupDelegation = new OAuthPopupDelegation(context);
     this.followerDispatch = new FollowerDispatch(context, {
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
@@ -254,6 +275,13 @@ export class LeaderSyncManager {
       teleportPool: this.teleportPool,
       transcriptExport: this.transcriptExport,
       cherryRouter: this.cherryRouter,
+      requesterTracker: this.requesterTracker,
+      tabTeleportRouter: this.tabTeleportRouter,
+      oauthPopupDelegation: this.oauthPopupDelegation,
+    });
+    this.followerRegistry.onFollowerRemoved({
+      afterRegistryCleanup: (bootstrapId) =>
+        this.requesterTracker.handleFollowerRemoved(bootstrapId),
     });
     Object.defineProperties(this, {
       activeExports: { get: () => this.transcriptExport.activeExports },
@@ -364,6 +392,10 @@ export class LeaderSyncManager {
     return this.followerRegistry.getBrowserCapableBootstrapIds();
   }
 
+  getTeleportEligibleBootstrapIds(): Set<string> {
+    return this.teleportPool.getTeleportEligibleBootstrapIds();
+  }
+
   getFollowerMotds(): Map<string, string> {
     return this.followerRegistry.getFollowerMotds();
   }
@@ -408,6 +440,130 @@ export class LeaderSyncManager {
     floatType: FloatType;
   } | null {
     return this.teleportPool.getBestFollowerForTeleport();
+  }
+
+  /** Record that the leader's own UI submitted a user message. */
+  noteLeaderUserMessage(): void {
+    this.requesterTracker.noteLeaderUserMessage();
+  }
+
+  /** Where the most recent user message came from (leader UI or a follower). */
+  getLastUserMessageOrigin(): LastUserMessageOrigin | null {
+    return this.requesterTracker.get();
+  }
+
+  /**
+   * Can any connected follower host an interactive OAuth popup? Callers use
+   * this to fail fast with an actionable message instead of prompting into a
+   * void (#1915).
+   */
+  hasDelegatableFollower(): boolean {
+    return this.pickDriveableFollower() !== null || this.pickOAuthPopupFollower() !== null;
+  }
+
+  /**
+   * Should an interactive login run on a follower rather than here?
+   *
+   * A headless leader answers yes unconditionally — even with no capable
+   * follower connected. It has no human of its own, so falling back to a local
+   * popup would put the prompt in a sandbox nobody is watching: the exact
+   * #1915 failure this delegation exists to remove. Saying yes routes the
+   * attempt through `delegateOAuthLogin`, which reports "no connected follower
+   * can show an interactive login" and lets the command fail fast instead.
+   *
+   * A leader WITH a human only delegates when there is somewhere to delegate
+   * to and the human is demonstrably elsewhere (the last user message came
+   * from a follower).
+   */
+  shouldDelegateOAuthLogin(): boolean {
+    if (this.options.headlessLeader === true) return true;
+    if (!this.hasDelegatableFollower()) return false;
+    return this.requesterTracker.get()?.kind === 'follower';
+  }
+
+  /**
+   * Run the interactive half of an OAuth login on a follower.
+   *
+   * Two mechanisms, preferred in this order:
+   *
+   *  1. **Drive the follower's browser** (`runDelegatedCdpLogin`) — open the
+   *     authorize URL as a normal tab and read the callback off its
+   *     navigation. No popup, so no user-activation problem; no
+   *     `window.opener`, so COOP cannot sever it; no same-origin requirement.
+   *  2. **Ask the follower's page to open a popup** — for floats with no CDP
+   *     surface of their own (a plain browser tab at a join URL, cherry, the
+   *     extension side panel), where there is nothing to drive.
+   *
+   * Either way only the callback URL comes back; nonce validation, the code
+   * exchange and persistence stay here.
+   */
+  async delegateOAuthLogin(url: string): Promise<DelegatedOAuthResult> {
+    const driveable = this.pickDriveableFollower();
+    if (driveable && this.options.browserAPI) {
+      log.info('Delegating OAuth login by driving a follower browser', {
+        runtimeId: driveable.runtimeId,
+      });
+      try {
+        const redirectUrl = await runDelegatedCdpLogin({
+          browser: this.options.browserAPI,
+          runtimeId: driveable.runtimeId,
+          authorizeUrl: url,
+        });
+        return { redirectUrl };
+      } catch (err) {
+        // Fall through to the popup rather than failing the login outright:
+        // a follower can lose its CDP surface between advertisement and use.
+        log.warn('Driven login failed; trying the popup path', { error: String(err) });
+      }
+    }
+
+    const bootstrapId = this.pickOAuthPopupFollower();
+    if (!bootstrapId) {
+      return {
+        redirectUrl: null,
+        error: 'no connected follower can show an interactive login',
+      };
+    }
+    log.info('Delegating OAuth popup to a follower', { bootstrapId });
+    return this.oauthPopupDelegation.requestPopup(bootstrapId, url);
+  }
+
+  /**
+   * A follower whose browser the leader can drive: it must be able to host a
+   * tab AND serve `Network.*`, which is exactly the teleport bar.
+   */
+  private pickDriveableFollower(): { bootstrapId: string; runtimeId: string } | null {
+    const eligible = this.teleportPool.getTeleportEligibleBootstrapIds();
+    const runtimeFor = (bootstrapId: string): string | undefined =>
+      this.followerRegistry.runtimeIdForBootstrap(bootstrapId);
+
+    const origin = this.requesterTracker.get();
+    if (origin?.kind === 'follower' && eligible.has(origin.bootstrapId)) {
+      const runtimeId = runtimeFor(origin.bootstrapId);
+      if (runtimeId) return { bootstrapId: origin.bootstrapId, runtimeId };
+    }
+    const candidates = [...this.followerRegistry.followers.values()]
+      .filter((follower) => eligible.has(follower.bootstrapId))
+      .sort((a, b) => b.lastActivity - a.lastActivity);
+    for (const candidate of candidates) {
+      const runtimeId = runtimeFor(candidate.bootstrapId);
+      if (runtimeId) return { bootstrapId: candidate.bootstrapId, runtimeId };
+    }
+    return null;
+  }
+
+  /** The follower that should host a popup-based login, if any. */
+  private pickOAuthPopupFollower(): string | null {
+    const canPopup = (bootstrapId: string): boolean =>
+      this.followerRegistry.followers.get(bootstrapId)?.peerCapabilities?.oauthPopup === true;
+
+    const origin = this.requesterTracker.get();
+    if (origin?.kind === 'follower' && canPopup(origin.bootstrapId)) return origin.bootstrapId;
+
+    const candidates = [...this.followerRegistry.followers.values()]
+      .filter((follower) => canPopup(follower.bootstrapId))
+      .sort((a, b) => b.lastActivity - a.lastActivity);
+    return candidates[0]?.bootstrapId ?? null;
   }
 
   get hasFollowers(): boolean {

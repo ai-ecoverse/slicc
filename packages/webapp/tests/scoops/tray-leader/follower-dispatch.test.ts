@@ -46,6 +46,9 @@ function createCollaborators(): FollowerDispatchCollaborators {
       handleTranscriptExportApprovalResponse: vi.fn(),
     },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
+    requesterTracker: { noteFollowerUserMessage: vi.fn() },
+    tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
+    oauthPopupDelegation: { handlePopupResponse: vi.fn() },
   };
 }
 
@@ -358,8 +361,13 @@ describe('FollowerDispatch', () => {
     expect(followers.followers.get('follower')?.peerCapabilities).toEqual({ exec: true });
     expect(options.onFollowerCountChanged).toHaveBeenCalledWith(1);
 
+    const activityBefore = followers.followers.get('follower')?.lastActivity ?? 0;
     dispatch.dispatch('follower', { type: 'user_message', text: 'hi', messageId: 'message' });
     expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'message', undefined);
+    // A user message is real human activity: it must bump lastActivity (the
+    // fixture seeds it at 1) and record this follower as the requester origin.
+    expect(followers.followers.get('follower')?.lastActivity ?? 0).toBeGreaterThan(activityBefore);
+    expect(c.requesterTracker.noteFollowerUserMessage).toHaveBeenCalledWith('follower', undefined);
     dispatch.dispatch('follower', { type: 'abort' });
     expect(options.onFollowerAbort).toHaveBeenCalledOnce();
     dispatch.dispatch('follower', { type: 'new_session', action: 'save' });

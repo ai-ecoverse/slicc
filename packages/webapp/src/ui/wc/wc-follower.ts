@@ -1,5 +1,6 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
+import type { SliccPermissions } from '@slicc/webcomponents';
 import { applyHostFlagOverrides, isFeatureEnabled } from '../../core/feature-flags.js';
 import { createLogger } from '../../core/logger.js';
 import {
@@ -9,6 +10,7 @@ import {
 } from '../../scoops/tray-follower-status.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
+import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -20,8 +22,11 @@ import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
+import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { prepareWcShell } from './wc-live.js';
+import { installLeaderPermissionsSurface } from './wc-permissions.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { submittedSteer, submittedText } from './wc-shell.js';
 import {
@@ -629,6 +634,30 @@ export async function mountWcUiFollower(
   boot.refs.switcher.connection = 'disconnected';
 
   let follower!: ReturnType<typeof startPageFollowerTray>;
+
+  // A follower mounts no permissions surface at boot (nothing here needs one).
+  // A delegated OAuth login does, so install it on first use and keep it.
+  let permissionsSurface: SliccPermissions | null = null;
+  const ensureFollowerPermissionsSurface = (): SliccPermissions | null => {
+    if (!permissionsSurface) {
+      permissionsSurface = installLeaderPermissionsSurface({ runtimeMode })?.element ?? null;
+    }
+    return permissionsSurface;
+  };
+
+  // Browser rail: list every tab in the tray and let the user pull one here.
+  // A float with a real CDP surface gets a state-carrying teleport; the
+  // ui-only side panel and cherry degrade to window.open inside the click.
+  let trayTargets: TrayTargetEntry[] = [];
+  const followerBrowser = wireWcFollowerBrowser({
+    refs: boot.refs,
+    getSync: () => follower.currentSync,
+    getTargets: () => trayTargets,
+    hasCdpBrowser: () => followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
+    window,
+    log,
+  });
+
   const modelSurface = createFollowerModelSurface({
     composerMeta,
     getSync: () => follower.currentSync,
@@ -641,6 +670,24 @@ export async function mountWcUiFollower(
     joinUrl,
     runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
     advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
+    onTargetsUpdated: (targets) => {
+      trayTargets = targets;
+      followerBrowser.refresh();
+    },
+    // #1915: the leader's kernel can't prompt a human. When the user is
+    // driving from here, the interactive OAuth hop runs here too. Cherry and
+    // the ui-only side panel are excluded — a cross-origin iframe cannot
+    // reliably own a provider popup — and omitting the handler is what keeps
+    // `capabilities.oauthPopup` off for them.
+    ...(isCherry || uiOnly
+      ? {}
+      : {
+          onOAuthPopupRequest: (url: string, signal: AbortSignal) =>
+            openDelegatedOAuthPopup(url, signal, {
+              getPermissionsSurface: ensureFollowerPermissionsSurface,
+              window,
+            }),
+        }),
     browserAPI: prelude.browser,
     onSnapshot: (messages, scoopJid) => {
       followerSelectedScoop = scoopJid;

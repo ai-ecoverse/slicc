@@ -16,7 +16,10 @@ import type {
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
-import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
+import {
+  CHERRY_RUNTIME_TAG,
+  TRAY_SYNC_PROTOCOL_VERSION,
+} from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 
 // ---------------------------------------------------------------------------
@@ -1802,6 +1805,12 @@ describe('LeaderSyncManager', () => {
       const { manager } = createManager();
       const ch = new FakeChannel();
       manager.addFollower('b1', ch, { runtime: 'slicc-extension' });
+      ch.simulateMessage({
+        type: 'hello',
+        protocolVersion: 6,
+        runtime: 'slicc-extension',
+        capabilities: { browser: true },
+      });
       ch.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f1' });
 
       const best = manager.getBestFollowerForTeleport();
@@ -1815,10 +1824,22 @@ describe('LeaderSyncManager', () => {
 
       const ch1 = new FakeChannel();
       manager.addFollower('b1', ch1, { runtime: 'slicc-extension' });
+      ch1.simulateMessage({
+        type: 'hello',
+        protocolVersion: 6,
+        runtime: 'slicc-extension',
+        capabilities: { browser: true },
+      });
       ch1.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-ext' });
 
       const ch2 = new FakeChannel();
       manager.addFollower('b2', ch2, { runtime: 'slicc-standalone' });
+      ch2.simulateMessage({
+        type: 'hello',
+        protocolVersion: 6,
+        runtime: 'slicc-standalone',
+        capabilities: { browser: true },
+      });
       ch2.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-std' });
 
       const best = manager.getBestFollowerForTeleport();
@@ -1831,6 +1852,12 @@ describe('LeaderSyncManager', () => {
 
       const ch1 = new FakeChannel();
       manager.addFollower('b1', ch1, { runtime: 'slicc-extension' });
+      ch1.simulateMessage({
+        type: 'hello',
+        protocolVersion: 6,
+        runtime: 'slicc-extension',
+        capabilities: { browser: true },
+      });
       ch1.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-ext' });
 
       const best = manager.getBestFollowerForTeleport();
@@ -1868,6 +1895,12 @@ describe('LeaderSyncManager', () => {
 
       const chStd = new FakeChannel();
       manager.addFollower('b2', chStd, { runtime: 'slicc-standalone' });
+      chStd.simulateMessage({
+        type: 'hello',
+        protocolVersion: 6,
+        runtime: 'slicc-standalone',
+        capabilities: { browser: true },
+      });
       chStd.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-std' });
 
       const best = manager.getBestFollowerForTeleport();
@@ -2754,7 +2787,7 @@ describe('version handshake', () => {
       capabilities: { exec: boolean };
     };
     expect(first.type).toBe('hello');
-    expect(first.protocolVersion).toBe(5);
+    expect(first.protocolVersion).toBe(TRAY_SYNC_PROTOCOL_VERSION);
     expect(first.capabilities).toEqual({ exec: true });
   });
 

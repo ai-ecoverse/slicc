@@ -46,6 +46,7 @@ import { createOAuthDomainCommand } from './oauth-domain-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
+import { wireTeleportSelectionFromShim } from './playwright/teleport-follower-shim.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPluginCommand } from './plugin-command.js';
 import { createPsCommand } from './ps-command.js';
@@ -255,6 +256,11 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
   ];
 
   if (options.fs) {
+    // Follower selection for `teleport`: default to the leader page's
+    // `slicc.leaderTrayFollowers` shim so the kernel-worker shell can pick a
+    // follower. On the leader page itself, `wc-tray.ts` overrides these with
+    // live leader-sync getters when leadership starts.
+    wireTeleportSelectionFromShim();
     commands.push(
       ...PLAYWRIGHT_COMMAND_NAMES.map((name) =>
         createPlaywrightCommand(name, options.browserAPI, options.fs!)

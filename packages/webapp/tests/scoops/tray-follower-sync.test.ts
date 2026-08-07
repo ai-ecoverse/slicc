@@ -10,10 +10,11 @@ import {
   FollowerSyncManager,
   shouldApplyFollowerStatus,
 } from '../../src/scoops/tray-follower-sync.js';
-import type {
-  FollowerToLeaderMessage,
-  LeaderToFollowerMessage,
-  TrayTargetEntry,
+import {
+  type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
+  TRAY_SYNC_PROTOCOL_VERSION,
+  type TrayTargetEntry,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 
@@ -1143,6 +1144,42 @@ describe('FollowerSyncManager', () => {
       }
 
       await expect(promise).rejects.toThrow('not connected');
+    });
+
+    it('requestTabTeleport asks the leader to pull a tab here and resolves on tab.opened', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const promise = follower.requestTabTeleport('leader:tab1');
+
+      const sent = channel.parseSent().filter((m) => m.type === 'tab.teleport.request');
+      expect(sent).toHaveLength(1);
+      // The destination is implicit — the leader derives it from this channel.
+      expect((sent[0] as any).targetId).toBe('leader:tab1');
+      expect(sent[0]).not.toHaveProperty('targetRuntimeId');
+
+      channel.simulateLeaderMessage({
+        type: 'tab.opened',
+        requestId: (sent[0] as any).requestId,
+        targetId: 'follower-1:pulled',
+      } as any);
+
+      await expect(promise).resolves.toBe('follower-1:pulled');
+    });
+
+    it('requestTabTeleport rejects on tab.open.error', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const promise = follower.requestTabTeleport('leader:ghost');
+      const sent = channel.parseSent().filter((m) => m.type === 'tab.teleport.request');
+      channel.simulateLeaderMessage({
+        type: 'tab.open.error',
+        requestId: (sent[0] as any).requestId,
+        error: 'source tab leader:ghost is not in the tray registry',
+      } as any);
+
+      await expect(promise).rejects.toThrow('not in the tray registry');
     });
   });
 
@@ -2614,7 +2651,7 @@ describe('FollowerSyncManager', () => {
         runtime?: string;
       };
       expect(first.type).toBe('hello');
-      expect(first.protocolVersion).toBe(5);
+      expect(first.protocolVersion).toBe(TRAY_SYNC_PROTOCOL_VERSION);
       expect(first.runtime).toBe('follower-1');
     });
 

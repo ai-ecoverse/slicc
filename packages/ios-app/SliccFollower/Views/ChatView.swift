@@ -131,6 +131,9 @@ struct ChatView: View {
         .onChange(of: presentation.activeSurface) { surface in
             if surface == .term { presentation.terminalWasOpened = true }
         }
+        .onChange(of: appState.leaderOpenedTabId) { _, tabId in
+            presentLeaderOpenedTab(tabId)
+        }
         .overlay(alignment: .top) {
             inboundPhaseChip
         }
@@ -182,6 +185,21 @@ struct ChatView: View {
                 executeTranscriptExport(request)
             }
         }
+    }
+
+    /// Bring a leader-opened tab to the front. The leader opens a tab here so
+    /// a human can act on it — an auth hand-off above all — which only works
+    /// if it is actually visible; before this it was created behind the chat
+    /// with nothing to indicate it existed.
+    private func presentLeaderOpenedTab(_ tabId: String?) {
+        guard let tabId else { return }
+        withAnimation {
+            presentation.activeSurface = .browser
+        }
+        appState.browserViewingTabId = tabId
+        // One-shot: consume it so a later re-render doesn't yank the user
+        // back to a tab they have already navigated away from.
+        appState.leaderOpenedTabId = nil
     }
 
     // MARK: - Inbound open (#1918)

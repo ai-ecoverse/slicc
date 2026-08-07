@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 5,
-  "leaderVariantCount": 39,
-  "followerVariantCount": 33,
+  "traySyncProtocolVersion": 6,
+  "leaderVariantCount": 40,
+  "followerVariantCount": 35,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -179,6 +179,15 @@
             "reasoning": true
           }
         ]
+      }
+    },
+    {
+      "type": "oauth.popup.request",
+      "ios": "unknown",
+      "message": {
+        "type": "oauth.popup.request",
+        "requestId": "oauth-popup-1",
+        "url": "https://github.com/login/oauth/authorize?client_id=abc&state=xyz"
       }
     },
     {
@@ -622,6 +631,15 @@
       }
     },
     {
+      "type": "oauth.popup.response",
+      "ios": "undecodable",
+      "message": {
+        "type": "oauth.popup.response",
+        "requestId": "oauth-popup-1",
+        "redirectUrl": "https://www.sliccy.ai/auth/callback?code=abc123&nonce=n1"
+      }
+    },
+    {
       "type": "ping",
       "ios": "decoded",
       "message": {
@@ -705,6 +723,15 @@
         "type": "tab.opened",
         "requestId": "tab-1",
         "targetId": "wk2"
+      }
+    },
+    {
+      "type": "tab.teleport.request",
+      "ios": "decoded",
+      "message": {
+        "type": "tab.teleport.request",
+        "requestId": "tp-1",
+        "targetId": "leader:tab1"
       }
     },
     {

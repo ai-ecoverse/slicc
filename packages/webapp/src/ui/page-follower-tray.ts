@@ -25,6 +25,7 @@
  * Spec: `docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md`.
  */
 
+import { isSliccAppUrl } from '@slicc/shared-ts';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
@@ -35,7 +36,11 @@ import {
   type FollowerSyncManagerOptions,
 } from '../scoops/tray-follower-sync.js';
 import type { ScoopSummary, SprinkleSummary } from '../scoops/tray-sync-protocol.js';
-import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
+import {
+  CHERRY_RUNTIME_TAG,
+  type RemoteTargetInfo,
+  type TraySyncCapabilities,
+} from '../scoops/tray-sync-protocol.js';
 import {
   type FollowerAutoReconnectHandle,
   type FollowerTrayConnection,
@@ -52,6 +57,65 @@ const log = createLogger('page-follower-tray');
 export { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
 
 /**
+ * Force the follower runtime status to inactive on teardown. When a reconnect
+ * loop has already given up, `cancel()` is a no-op and the page-side status
+ * lingers at `error`. That status is mirrored to the `slicc.followerTrayStatus`
+ * shim, so without this reset the worker-side `host` reports a phantom
+ * `status: follower (error)` after a `host leave` or a switch to leading.
+ * Unconditional and idempotent — a live manager's own stop() also sets
+ * inactive; this guarantees it for the gave-up path too.
+ */
+function resetFollowerRuntimeStatus(): void {
+  setFollowerTrayRuntimeStatus({
+    state: 'inactive',
+    joinUrl: null,
+    trayId: null,
+    error: null,
+    lastPingTime: null,
+    reconnectAttempts: 0,
+    attachAttempts: 0,
+    lastAttachCode: null,
+    connectingSince: null,
+    lastError: null,
+  });
+}
+
+/** Hand the freshly wired sync to the page surfaces that consume it. */
+function activateFollowerSync(
+  options: Pick<
+    StartPageFollowerTrayOptions,
+    | 'browserAPI'
+    | 'setChatAgent'
+    | 'onForwardingToggle'
+    | 'onConnectionChange'
+    | 'getSelectedScoopJid'
+  >,
+  sync: FollowerSyncManager
+): void {
+  options.browserAPI.setTrayTargetProvider(sync);
+  options.setChatAgent(sync);
+  options.onForwardingToggle?.(true);
+  options.onConnectionChange?.(true);
+  sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
+}
+
+/**
+ * Capabilities this follower advertises on `hello`.
+ *
+ * A cherry follower lends a host page, not a browser: it must never claim to
+ * be a teleport-capable browser host. `oauthPopup` tracks whether the caller
+ * actually wired an interactive-login handler — one source of truth, so the
+ * leader can never delegate a login to a float that would drop it.
+ */
+export function helloCapabilitiesForRuntime(
+  runtime: string | undefined,
+  canHostOAuthPopup = false
+): TraySyncCapabilities | undefined {
+  if (runtime === CHERRY_RUNTIME_TAG) return undefined;
+  return { browser: true, ...(canHostOAuthPopup ? { oauthPopup: true } : {}) };
+}
+
+/**
  * Shape the page's local browser targets for advertisement to the leader.
  *
  * A cherry follower (`runtime === CHERRY_RUNTIME_TAG`) lends a cooperative host
@@ -64,17 +128,32 @@ export { CHERRY_RUNTIME_TAG } from '../scoops/tray-sync-protocol.js';
  * gates each CDP domain itself, and the iframe never learns the host's exact
  * grants — only `network` (always false) and `kind` drive leader selection here.
  *
- * Non-cherry runtimes advertise bare `{ targetId, title, url }` (the registry
- * defaults `kind` to `'browser'`), unchanged from before.
+ * Non-cherry runtimes advertise `kind: 'browser'` with full capabilities:
+ * their targets ride a real CDP transport, so `Network.*` (cookie teleport),
+ * navigation, and screenshots all work. Explicit capabilities let the leader
+ * treat them as authoritative instead of guessing from the target kind.
  */
 export function buildAdvertisedTargets(
   pages: { targetId: string; title: string; url: string }[],
   runtime: string
 ): RemoteTargetInfo[] {
+  // Never advertise our own app shell. Its URL carries `bridgeToken` (and the
+  // join URL), so federating it would publish a capability to every peer and
+  // offer a "tab" whose only effect is booting a second UI. See
+  // `isSliccAppUrl`; the iOS mirror is `BrowserTargets.isSliccAppPage`.
+  const selfOrigins =
+    typeof location !== 'undefined' && location.origin ? [location.origin] : undefined;
+  const advertisable = pages.filter((p) => !isSliccAppUrl(p.url, { selfOrigins }));
   if (runtime !== CHERRY_RUNTIME_TAG) {
-    return pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }));
+    return advertisable.map((p) => ({
+      targetId: p.targetId,
+      title: p.title,
+      url: p.url,
+      kind: 'browser' as const,
+      capabilities: { navigate: true, network: true, screenshot: true },
+    }));
   }
-  return pages.map((p) => ({
+  return advertisable.map((p) => ({
     targetId: p.targetId,
     title: p.title,
     url: p.url,
@@ -104,6 +183,18 @@ export interface StartPageFollowerTrayOptions {
    * Callers: `wc-follower.ts` derives this via `followerAdvertisesCdpTargets`.
    */
   advertisesCdpTargets?: boolean;
+  /**
+   * The leader's tray-wide target registry changed. Drives the follower's own
+   * browser rail (`wireWcFollowerBrowser`), which lists every tab in the tray
+   * so the user can pull one here.
+   */
+  onTargetsUpdated?: (targets: import('../scoops/tray-sync-protocol.js').TrayTargetEntry[]) => void;
+  /**
+   * Show a leader-delegated OAuth login here (#1915). Wiring this is what
+   * advertises `capabilities.oauthPopup`, so only floats that can really
+   * prompt a human should pass it.
+   */
+  onOAuthPopupRequest?: (url: string, signal: AbortSignal) => Promise<string | null>;
 
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
@@ -324,10 +415,16 @@ export function startPageFollowerTray(
     const sync = new FollowerSyncManager(connection.channel, {
       browserTransport: options.browserAPI.getTransport(),
       browserAPI: options.browserAPI,
+      helloCapabilities: helloCapabilitiesForRuntime(
+        options.runtime,
+        !!options.onOAuthPopupRequest
+      ),
+      onOAuthPopupRequest: options.onOAuthPopupRequest,
       onSnapshot: options.onSnapshot,
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
+      onTargetsUpdated: options.onTargetsUpdated,
       onScoopsList: options.onScoopsList,
       onModelsList: options.onModelsList,
       onModelState: options.onModelState,
@@ -392,11 +489,7 @@ export function startPageFollowerTray(
     };
 
     activeSync = sync;
-    options.browserAPI.setTrayTargetProvider(sync);
-    options.setChatAgent(sync);
-    options.onForwardingToggle?.(true);
-    options.onConnectionChange?.(true);
-    sync.requestSnapshot(options.getSelectedScoopJid?.() ?? undefined);
+    activateFollowerSync(options, sync);
 
     if (options.advertisesCdpTargets !== false) {
       targetRefreshInterval = setInterval(() => void refreshTargets(), refreshIntervalMs);
@@ -443,18 +536,7 @@ export function startPageFollowerTray(
       // leading. `stop()` is the teardown boundary, so clearing here is
       // unconditional and idempotent (a live manager's own stop() also sets
       // inactive; this just guarantees it for the gave-up path too).
-      setFollowerTrayRuntimeStatus({
-        state: 'inactive',
-        joinUrl: null,
-        trayId: null,
-        error: null,
-        lastPingTime: null,
-        reconnectAttempts: 0,
-        attachAttempts: 0,
-        lastAttachCode: null,
-        connectingSince: null,
-        lastError: null,
-      });
+      resetFollowerRuntimeStatus();
     },
     get currentSync() {
       return activeSync;
