@@ -1,11 +1,48 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyKokoroPhonemeFixups,
+  englishEspeakVoiceForKokoroVoice,
   espeakVoiceForKokoroVoice,
+  isUnusablePhonemizerError,
   KOKORO_PREFIX_ESPEAK,
   phonemizeForKokoro,
   splitOnPunctuation,
 } from '../../src/speech/kokoro-phonemize.js';
+
+describe('English espeak fallback', () => {
+  // kokoro-js bundles an English-only phonemizer whose emscripten build can
+  // register espeak's dictionaries into a `preRun` list that has already been
+  // drained — silently, so the module reports ready with an empty language
+  // table and every en-US call fails for the page's lifetime. English then
+  // borrows the staged espeak-ng the other five languages already use.
+  it('maps the English prefixes, and nothing else', () => {
+    expect(englishEspeakVoiceForKokoroVoice('af_heart')).toBe('en-us');
+    expect(englishEspeakVoiceForKokoroVoice('bm_george')).toBe('en-gb');
+    expect(englishEspeakVoiceForKokoroVoice('ef_dora')).toBeNull();
+    expect(englishEspeakVoiceForKokoroVoice('jf_alpha')).toBeNull();
+  });
+
+  it('recognizes only an EMPTY language list as the broken-phonemizer signal', () => {
+    expect(
+      isUnusablePhonemizerError(
+        new Error('Invalid language identifier: "en-us". Should be one of: .')
+      )
+    ).toBe(true);
+    // A genuinely unsupported language names the ones it does have — that is a
+    // real error and must reach the caller, not trigger a silent reroute.
+    expect(
+      isUnusablePhonemizerError(
+        new Error('Invalid language identifier: "xx". Should be one of: gmw/en, gmw/en-GB.')
+      )
+    ).toBe(false);
+  });
+
+  it('ignores unrelated failures', () => {
+    expect(isUnusablePhonemizerError(new Error('out of memory'))).toBe(false);
+    expect(isUnusablePhonemizerError('not an error')).toBe(false);
+    expect(isUnusablePhonemizerError(undefined)).toBe(false);
+  });
+});
 
 describe('espeakVoiceForKokoroVoice', () => {
   it('maps the five on-device non-English prefixes to espeak codes', () => {

@@ -28,7 +28,9 @@ import { createDownloadTracker, type DownloadSnapshot } from './download-progres
 import { getEspeakPhonemize } from './espeak-phonemizer.js';
 import {
   type EspeakPhonemize,
+  englishEspeakVoiceForKokoroVoice,
   espeakVoiceForKokoroVoice,
+  isUnusablePhonemizerError,
   phonemizeForKokoro,
 } from './kokoro-phonemize.js';
 import {
@@ -476,11 +478,24 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
         const phonemize = await getEspeakPhonemize();
         return synthesizeWithEspeak(tts, text, espeakLang, voiceId, opts?.speed, phonemize);
       }
-      const audio = await tts.generate(text, {
-        ...(opts?.voice ? { voice: opts.voice as never } : {}),
-        ...(opts?.speed ? { speed: opts.speed } : {}),
-      });
-      return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+      try {
+        const audio = await tts.generate(text, {
+          ...(opts?.voice ? { voice: opts.voice as never } : {}),
+          ...(opts?.speed ? { speed: opts.speed } : {}),
+        });
+        return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+      } catch (err) {
+        const fallback = await englishEspeakFallback(err, voiceId);
+        if (!fallback) throw err;
+        return synthesizeWithEspeak(
+          tts,
+          text,
+          fallback.lang,
+          voiceId,
+          opts?.speed,
+          fallback.phonemize
+        );
+      }
     },
     async *synthesizeStream(text, opts) {
       const voiceId = opts?.voice ?? 'af_heart';
@@ -523,15 +538,66 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
         splitter.push(text);
       }
       splitter.close();
-      for await (const chunk of tts.stream(splitter, streamOpts)) {
-        yield {
-          audio: chunk.audio.audio as Float32Array,
-          sampleRate: chunk.audio.sampling_rate,
-        };
+      try {
+        for await (const chunk of tts.stream(splitter, streamOpts)) {
+          yield {
+            audio: chunk.audio.audio as Float32Array,
+            sampleRate: chunk.audio.sampling_rate,
+          };
+        }
+      } catch (err) {
+        const fallback = await englishEspeakFallback(err, voiceId);
+        if (!fallback) throw err;
+        // Restart from the top: kokoro's stream dies on the first sentence it
+        // cannot phonemize, so there is no partial output to resume from.
+        for (const sentence of splitKokoroStreamText(text, opts?.splitPattern)) {
+          yield await synthesizeWithEspeak(
+            tts,
+            sentence,
+            fallback.lang,
+            voiceId,
+            opts?.speed,
+            fallback.phonemize
+          );
+        }
       }
     },
     voices: () => voiceInfos,
   };
+}
+
+/**
+ * Should this failure be retried through the staged espeak-ng, and with what?
+ *
+ * Only for English, and only for the one failure that means kokoro's bundled
+ * phonemizer has no languages at all (see `isUnusablePhonemizerError`). Any
+ * other error, or a non-English voice, is returned as null so the caller
+ * rethrows — a broken synthesis must not be silently reinterpreted as a
+ * phonemizer problem.
+ *
+ * Returns null too when the staged espeak-ng is unavailable, since falling back
+ * to something that is not installed just swaps one error for a worse one.
+ */
+async function englishEspeakFallback(
+  err: unknown,
+  voiceId: string
+): Promise<{ lang: string; phonemize: EspeakPhonemize } | null> {
+  if (!isUnusablePhonemizerError(err)) return null;
+  const lang = englishEspeakVoiceForKokoroVoice(voiceId);
+  if (!lang) return null;
+  try {
+    const phonemize = await getEspeakPhonemize();
+    log.warn(
+      'kokoro bundled phonemizer reported no languages; phonemizing English with the staged espeak-ng',
+      { voiceId, lang }
+    );
+    return { lang, phonemize };
+  } catch (stagingErr) {
+    log.warn('staged espeak-ng unavailable, cannot recover English synthesis', {
+      error: String(stagingErr),
+    });
+    return null;
+  }
 }
 
 /** Test-only: drop the cached engine promise + state. */

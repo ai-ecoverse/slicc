@@ -62,7 +62,10 @@ function attachBrowserDiagnostics(page: import('@playwright/test').Page): { entr
     if (
       type === 'error' ||
       type === 'warning' ||
-      /(speech|kokoro|whisper|ort|onnx|hf|ipk|panel-rpc)/i.test(msg.text())
+      // `espeak`/`phonem` were missing, which is why a run that fails INSIDE
+      // the phonemizer showed nothing but WebGL noise. Anything the speech
+      // stack says on the way up is worth keeping.
+      /(speech|kokoro|whisper|espeak|phonem|ort|onnx|hf|ipk|panel-rpc)/i.test(msg.text())
     ) {
       entries.push(`[console.${type}] ${msg.text()}`);
     }
@@ -79,8 +82,38 @@ function attachBrowserDiagnostics(page: import('@playwright/test').Page): { entr
 }
 
 function diagTail(diagnostics: { entries: string[] }): string {
-  const tail = diagnostics.entries.slice(-50).join('\n');
+  // 50 was too few: headless Chromium emits a burst of WebGL driver warnings
+  // that pushed every speech line out of the window, so a failure deep in the
+  // engine reported only GPU noise.
+  const tail = diagnostics.entries.slice(-120).join('\n');
   return tail || '(no browser diagnostics captured)';
+}
+
+/**
+ * Origin storage usage vs quota, for the failure message.
+ *
+ * This run writes ~92 MB of kokoro weights into OPFS and lets transformers.js
+ * cache fetched assets in CacheStorage — both billed against one per-origin
+ * quota that Chromium derives from FREE DISK on the volume holding the browser
+ * profile. When that quota is short, the failure surfaces far from the cause:
+ * the model still loads (`voice engine: ready`), then synthesis reports an
+ * empty voice/language list, with only a `QuotaExceededError` console warning
+ * to connect the two. Print the numbers so a red run says which it was instead
+ * of leaving the next reader to infer it.
+ */
+async function storageReport(page: import('@playwright/test').Page): Promise<string> {
+  try {
+    const est = await page.evaluate(async () => {
+      const e = await navigator.storage?.estimate?.();
+      return e ? { usage: e.usage ?? null, quota: e.quota ?? null } : null;
+    });
+    if (!est) return 'storage: navigator.storage.estimate() unavailable';
+    const mb = (n: number | null) => (n == null ? '?' : `${(n / 1024 / 1024).toFixed(1)} MB`);
+    const headroom = est.usage != null && est.quota != null ? mb(est.quota - est.usage) : 'unknown';
+    return `storage: usage ${mb(est.usage)} / quota ${mb(est.quota)} (headroom ${headroom})`;
+  } catch (err) {
+    return `storage: estimate failed — ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 /** Poll a status command until its stdout matches `readyMarker`. */
@@ -100,6 +133,7 @@ async function waitForReady(
     if (/failed/i.test(r.stdout)) {
       throw new Error(
         `${statusCmd} reported failure: ${r.stdout}` +
+          `\n${await storageReport(page)}` +
           `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
       );
     }
@@ -107,21 +141,33 @@ async function waitForReady(
   }
   throw new Error(
     `${statusCmd} did not reach ready within ${timeoutMs}ms; last: ${last}` +
+      `\n${await storageReport(page)}` +
       `\n--- browser diagnostics (last 50) ---\n${diagTail(diagnostics)}`
   );
 }
 
 test.describe('say -o WAV output (real kokoro)', () => {
+  // No retries here, against the config's CI-wide `retries: 2`. This spec takes
+  // ~7 minutes, so a deterministic failure spent 21 minutes pretending to be
+  // flaky — and "green on attempt 3" is exactly how a load-sensitive race hides.
+  // The engine race this spec exists to catch (see the espeak readiness note in
+  // `vite-plugins/fix-kokoro-espeak-readiness.ts`) is one of those. Fail once,
+  // fast, and honestly. Other e2e specs keep the CI retries.
+  test.describe.configure({ retries: 0 });
+
   test.skip(
     !RUN,
     'set RUN_REAL_SPEECH_E2E=1 to opt in (downloads ~100 MB of kokoro weights on a cold OPFS)'
   );
 
   test('writes a valid kokoro-synthesized WAV', async ({ page }) => {
-    // Cold-OPFS weight download dwarfs the 30s default; bound the whole
-    // run at 10 minutes. Per-call exec budgets are bounded by the
-    // panel-RPC ceiling inside `say` (5 min).
-    test.setTimeout(10 * 60_000);
+    // Cold-OPFS weight download dwarfs the 30s default. 10 minutes was too
+    // tight once the download could be retried: observed CI runs land between
+    // 9 and 15 minutes, so the cap was itself producing failures
+    // (`Test timeout of 600000ms exceeded`) that looked like product bugs.
+    // Per-call exec budgets are still bounded by the panel-RPC ceiling inside
+    // `say` (5 min).
+    test.setTimeout(20 * 60_000);
 
     const diagnostics = attachBrowserDiagnostics(page);
 
@@ -139,6 +185,19 @@ test.describe('say -o WAV output (real kokoro)', () => {
       } catch {
         /* best-effort — engine still falls through on WASM if alloc fails */
       }
+      // The espeak dictionaries are decompressed by an async IIFE with no
+      // `catch`, so if it throws the data silently never lands and the only
+      // downstream symptom is a phonemizer with zero voices. An unhandled
+      // rejection is not a `pageerror`, so Playwright never sees it — park
+      // them somewhere the failure path can read.
+      const rejections: string[] = [];
+      (window as unknown as { __sliccRejections: string[] }).__sliccRejections = rejections;
+      window.addEventListener('unhandledrejection', (event) => {
+        const reason = (event as PromiseRejectionEvent).reason;
+        rejections.push(
+          reason instanceof Error ? `${reason.message}\n${reason.stack ?? ''}` : String(reason)
+        );
+      });
     });
 
     await seedSkipSwReload(page);
@@ -186,16 +245,46 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    in `wc-live.ts`), so without the cd the install lands at
     //    `/node_modules/...` and `buildOrtWasmPathsFromVfs` surfaces the
     //    canonical "onnxruntime-web is not installed" guidance.
+    //
+    //    `espeak-ng` is staged here for the same reason ort is: SLICC
+    //    phonemizes **English too** through espeak-ng (`kokoro-engine.ts`:
+    //    en/es/fr/it/hi/pt), reading the wasm from the fixed
+    //    `ESPEAK_DIST_VFS_PATH = '/workspace/node_modules/espeak-ng/dist/'`.
+    //    Warmup's `ensureSpeechAssets` would normally stage it, but this test
+    //    deliberately runs without the whisper repo, so that staging throws
+    //    before it reaches espeak and the run falls through to `getKokoro()`.
+    //    Without an explicit install the model loads and every voice lists
+    //    fine, then synthesis fails on an espeak with zero languages:
+    //    `Invalid language identifier: "en-us". Should be one of: .`
     const pkgs = await exec(
       page,
-      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js'
+      'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
-    const kokoroDl = await exec(
-      page,
-      'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
-        'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx'
-    );
+    // The 92 MB `model_quantized.onnx` write intermittently trips the same
+    // `@zenfs/dom` + kerium bug this file's header documents for whisper's
+    // 188 MB decoder (`EINVAL: Cannot set property message of … which has only
+    // a getter`). Retry ONLY this write — it is a known upstream defect in one
+    // operation, not a licence to re-run the spec until it passes. The
+    // phonemizer assertions below stay single-shot.
+    let kokoroDl = { exitCode: 1, stdout: '', stderr: 'not attempted' };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      kokoroDl = await exec(
+        page,
+        'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
+          'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx'
+      );
+      if (kokoroDl.exitCode === 0) break;
+      if (!/Cannot set property message|EINVAL/.test(kokoroDl.stderr)) break; // a real failure
+      // Clear the half-written weights before retrying. The failed write leaves
+      // a truncated `model_quantized.onnx` behind, and downloading over it
+      // yields a file whose size does not match its metadata — the model then
+      // fails to load with `EIO … Unexpected mismatch in file data size`, which
+      // reads like a corrupt download rather than a retried one.
+      await exec(page, 'rm -rf /workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX');
+      // eslint-disable-next-line no-console
+      console.warn(`hf download hit the kerium OPFS bug (attempt ${attempt}/3); retrying clean`);
+    }
     expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
 
     // 2. `say --warmup` is fire-and-forget on the page; the kokoro load
@@ -212,10 +301,25 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    the kerium bug).
     const outPath = '/tmp/say-out.wav';
     const synth = await exec(page, `say -l en-US -o ${outPath} "hello world"`);
-    expect(
-      synth.exitCode,
-      `synth stderr: ${synth.stderr}\n--- diag ---\n${diagTail(diagnostics)}`
-    ).toBe(0);
+    if (synth.exitCode !== 0) {
+      // `say` reports an unusable engine as `Invalid language identifier:
+      // "en-us". Should be one of: .` — an EMPTY set, which says the phonemizer
+      // came up with no languages but not why. The voice list and the storage
+      // numbers are what separate "assets never landed" from "engine loaded but
+      // has no voices", so gather both before failing.
+      const voices = await exec(page, 'say --list');
+      const rejections = await page.evaluate(
+        () => (window as unknown as { __sliccRejections?: string[] }).__sliccRejections ?? []
+      );
+      expect(
+        synth.exitCode,
+        `synth stderr: ${synth.stderr}` +
+          `\nsay --list (exit ${voices.exitCode}): ${voices.stdout.trim() || '(no voices listed)'}` +
+          `\nunhandled rejections (${rejections.length}):\n${rejections.slice(0, 5).join('\n---\n') || '(none)'}` +
+          `\n${await storageReport(page)}` +
+          `\n--- diag ---\n${diagTail(diagnostics)}`
+      ).toBe(0);
+    }
     expect(synth.stdout).toMatch(/wrote \d+ KB to \/tmp\/say-out\.wav/);
 
     // 4. File should be a non-trivial WAV — guards against silent
