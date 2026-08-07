@@ -17,11 +17,13 @@ import { SessionStore } from '../scoops/chat-session-store.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
+  curateFrozenSessionMemories,
   enrichPendingSession,
   type FrozenSession,
   type FrozenSessionIndexEntry,
   freezeConeSession,
   markSnapshotUnavailable,
+  processPendingSessions,
 } from './session-freezer.js';
 
 const log = createLogger('new-session');
@@ -44,6 +46,62 @@ const DEFAULT_ENRICHMENT_RACE_MS = 20_000;
 
 /** How often the race timer reports progress (ms) to drive the spinner ring. */
 const ENRICHMENT_PROGRESS_TICK_MS = 250;
+
+export interface PendingSessionCatchupOptions {
+  openVfs: () => Promise<WritableVfsClient>;
+  onComplete?: () => void;
+  schedule?: (callback: () => void) => void;
+}
+
+/**
+ * Run the boot catch-up for archives whose inline enrichment never finished.
+ *
+ * Deliberately drives only the legacy single-call enrichment. A curator pass is
+ * an unbounded multi-turn agent run — one measured pass billed $53.81 over 163
+ * turns and 30 minutes, and `timeoutSeconds` cannot stop it because
+ * `AgentSpawnOptions` has no cancellation path. Retrying that automatically on
+ * every boot multiplies the bill, so `memoryPending` archives are left for the
+ * next freeze to pick up instead.
+ */
+export async function runPendingSessionCatchup(opts: PendingSessionCatchupOptions): Promise<void> {
+  try {
+    const vfs = await opts.openVfs();
+    const apiKey = getApiKey() ?? undefined;
+    if (!apiKey) return;
+    let model: Model<Api>;
+    try {
+      model = resolveCurrentModel();
+    } catch {
+      return;
+    }
+    const headers =
+      model.provider === 'adobe'
+        ? { 'X-Session-Id': getDailyAdobeUuid(FREEZER_SESSION_ANCHOR) }
+        : undefined;
+    await processPendingSessions({ vfs, model, apiKey, headers });
+    opts.onComplete?.();
+  } catch (err) {
+    log.warn('Pending session catch-up failed (boot continues)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Schedule catch-up after first paint without returning a boot-blocking promise. */
+export function schedulePendingSessionCatchup(opts: PendingSessionCatchupOptions): void {
+  const schedule = opts.schedule ?? scheduleIdle;
+  schedule(() => {
+    void runPendingSessionCatchup(opts);
+  });
+}
+
+function scheduleIdle(callback: () => void): void {
+  if (typeof globalThis.requestIdleCallback === 'function') {
+    globalThis.requestIdleCallback(callback, { timeout: 5_000 });
+    return;
+  }
+  setTimeout(callback, 0);
+}
 
 function resolveAgenticMemorySpawn(
   opts: RunNewSessionFreezeOptions
@@ -90,6 +148,39 @@ async function runAgenticMemoryFreeze(
       }
     }
   }
+  const curator = curateFrozenSessionMemories(
+    {
+      sessionStore,
+      vfs: opts.vfs,
+      mode: 'full',
+      model,
+      apiKey,
+      headers,
+      agenticMemorySpawn: spawn,
+    },
+    frozen
+  ).catch((err) => {
+    log.warn('Agentic memory curator threw (entry stays pending)', {
+      filename: frozen.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  });
+  const winner = await raceEnrichmentAgainstTimer(
+    curator,
+    opts.enrichmentRaceMs ?? DEFAULT_ENRICHMENT_RACE_MS,
+    opts.onProgress
+  );
+  if (winner.kind === 'llm') {
+    return winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
+  }
+  void curator.then((updated) => {
+    log.info('Background agentic memory curator resolved after race window', {
+      filename: frozen.filename,
+      memoryPending: updated ? updated.memoryPending === true : true,
+    });
+    opts.onBackgroundEnriched?.(updated);
+  });
   return frozen;
 }
 

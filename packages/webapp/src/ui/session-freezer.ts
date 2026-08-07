@@ -8,8 +8,8 @@
  *      and return null — nothing meaningful to extract or archive.
  *   3. Generate a title and icon, falling back to a heuristic title.
  *   4. Legacy mode extracts memory before writing the archive. Agentic mode
- *      writes the archive first, then lets a curator scoop rewrite memory;
- *      curator failure falls back to legacy extraction.
+ *      writes the archive with a durable pending marker; its caller starts the
+ *      curator after this function returns.
  *
  * Scoops are intentionally untouched — they survive a "New session" reset
  * so the fresh cone inherits the existing scoop roster and decides what
@@ -76,6 +76,9 @@ const MEMORY_MAX_TOKENS = 2048;
 
 /** Max output tokens for the title call — a short label. */
 const TITLE_MAX_TOKENS = 40;
+
+/** Permanently skip a pending archive after this many boot-time attempts. */
+export const PENDING_SESSION_ATTEMPT_LIMIT = 3;
 
 /** Where per-freeze attachments land beneath the sessions dir. */
 const SESSION_ATTACHMENTS_DIR = `${SESSIONS_DIR}/attachments`;
@@ -163,19 +166,26 @@ export async function freezeConeSession(
     (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
     heuristicTitle(session.messages);
   const icon = llmEnabled ? await pickIconBestEffort(opts, title) : undefined;
-  const frozen = await writeFrozenArchive(opts, session, title, mode, icon);
-  if (frozen && llmEnabled && opts.agenticMemorySpawn) {
-    await curateMemoriesBestEffort(opts, frozen, agentMessages);
-  }
-  return frozen;
+  return await writeFrozenArchive(
+    opts,
+    session,
+    title,
+    mode,
+    icon,
+    llmEnabled && Boolean(opts.agenticMemorySpawn)
+  );
 }
 
-/** Run the write-first curator, falling back to legacy extraction on failure. */
-async function curateMemoriesBestEffort(
+/**
+ * Run the curator for an already-durable archive. Success clears the durable
+ * pending marker; failure leaves it for a later recovery pass. A failure that
+ * is known to have finished retains the existing legacy-extraction fallback.
+ */
+export async function curateFrozenSessionMemories(
   opts: FreezeConeSessionOptions,
-  frozen: FrozenSession,
-  agentMessages: AgentMessage[]
-): Promise<void> {
+  frozen: FrozenSession
+): Promise<FrozenSessionIndexEntry | null> {
+  const agentMessages = toAgentMessages(frozen.archive.messages);
   let result: Awaited<ReturnType<typeof runAgenticMemoryPass>>;
   try {
     result = await runAgenticMemoryPass({
@@ -192,21 +202,33 @@ async function curateMemoriesBestEffort(
     };
   }
   if (result.ok) {
+    const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
+    if (!updated) {
+      // The curated memory is already on disk; only the index bookkeeping
+      // missed, so there is no work left for a retry to redo.
+      log.info('Agentic memory pass completed; index entry already gone', {
+        filename: frozen.filename,
+      });
+      return null;
+    }
+    delete frozen.memoryPending;
     log.info('Agentic memory pass completed', { filename: frozen.filename });
-    return;
+    return updated;
   }
   if (!result.legacyFallbackSafe) {
-    log.warn('Agentic memory pass unfinished — archive retained; skipping legacy extraction', {
+    log.warn('Agentic memory pass unfinished — entry stays pending for boot catch-up', {
       filename: frozen.filename,
       reason: result.reason,
+      attemptLimit: PENDING_SESSION_ATTEMPT_LIMIT,
     });
-    return;
+    return null;
   }
   log.warn('Agentic memory pass failed after finishing — falling back to legacy extraction', {
     filename: frozen.filename,
     reason: result.reason,
   });
   await extractMemoriesBestEffort(opts, agentMessages, true);
+  return null;
 }
 
 /**
@@ -322,7 +344,8 @@ async function writeFrozenArchive(
   session: Session,
   title: string,
   mode: 'full' | 'quick',
-  icon?: string
+  icon?: string,
+  memoryPending = false
 ): Promise<FrozenSession | null> {
   const frozenAt = new Date().toISOString();
   // sessionId is generated BEFORE the filename so it is stable across
@@ -342,6 +365,7 @@ async function writeFrozenArchive(
     ...(usageSummary ?? {}),
     ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
+    ...(memoryPending ? { memoryPending: true } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -658,6 +682,15 @@ function pendingShortId(): string {
   return `${time}-${rand}`;
 }
 
+/**
+ * Whether a filename is a quick-mode draft name (and so safe to rename once
+ * the real title is known). Canonical `<timestamp>-<slug>.md` names are final:
+ * the rail, deep links, and snapshot lookups all key off them.
+ */
+function isPendingDraftFilename(filename: string): boolean {
+  return filename.startsWith('pending-');
+}
+
 async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
   try {
     await vfs.mkdir(path, { recursive: true });
@@ -745,16 +778,80 @@ async function updateSessionsIndex(
 }
 
 /**
- * Subset of the sessions index that still needs the LLM-driven enrichment
- * pass (memory extraction + title rewrite). Returns `[]` when the index
- * is missing, empty, or malformed — never throws. Read-only, so typed
- * against `LocalVfsClient`.
+ * Subset of the sessions index that still needs recovery, under either pending
+ * marker. Entries at the retry cap are permanently skipped. Returns `[]` when
+ * the index is missing, empty, or malformed — never throws.
  */
 export async function listPendingEnrichments(
   vfs: LocalVfsClient
 ): Promise<FrozenSessionIndexEntry[]> {
   const all = await readSessionsIndex(vfs);
-  return all.filter((e) => e.pendingEnrichment === true);
+  return all.filter(
+    (entry) =>
+      (entry.pendingEnrichment === true || entry.memoryPending === true) &&
+      pendingAttemptCount(entry) < PENDING_SESSION_ATTEMPT_LIMIT
+  );
+}
+
+export interface ProcessPendingSessionsOptions {
+  vfs: WritableVfsClient;
+  model?: Model<Api>;
+  apiKey?: string;
+  headers?: Record<string, string>;
+}
+
+export interface PendingSessionProcessingResult {
+  attempted: number;
+  completed: number;
+}
+
+/**
+ * Process every eligible pending archive serially, always through the legacy
+ * single-call enrichment — never by re-running the curator. A curator pass is an
+ * unbounded multi-turn agent run (one measured pass billed $53.81 over 163 turns
+ * and 30 minutes) and `AgentSpawnOptions` has no cancellation path, so
+ * `timeoutSeconds` cannot stop it. Recovering a `memoryPending` archive with one
+ * bounded call is the cheap substitute for re-driving that agent.
+ *
+ * Attempts are persisted before work starts so reloads and permanently failing
+ * archives cannot cause an LLM call on every boot. Best-effort: never throws.
+ */
+export async function processPendingSessions(
+  opts: ProcessPendingSessionsOptions
+): Promise<PendingSessionProcessingResult> {
+  const result = { attempted: 0, completed: 0 };
+  if (!opts.model || !opts.apiKey) return result;
+  try {
+    const entries = await listPendingEnrichments(opts.vfs);
+    for (const listedEntry of entries) {
+      try {
+        const entry = await recordPendingAttempt(opts.vfs, listedEntry.filename);
+        if (!entry) continue;
+        result.attempted += 1;
+        const updated = await enrichPendingSession(opts.vfs, entry, {
+          model: opts.model,
+          apiKey: opts.apiKey,
+          headers: opts.headers,
+        });
+        if (updated) result.completed += 1;
+      } catch (err) {
+        log.warn('Pending session catch-up attempt failed', {
+          filename: listedEntry.filename,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } catch (err) {
+    log.warn('Pending session catch-up failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return result;
+}
+
+function pendingAttemptCount(entry: FrozenSessionIndexEntry): number {
+  const count = entry.pendingAttemptCount;
+  return typeof count === 'number' && Number.isInteger(count) && count > 0 ? count : 0;
 }
 
 export interface EnrichPendingSessionOptions {
@@ -795,7 +892,7 @@ export async function enrichPendingSession(
   opts: EnrichPendingSessionOptions
 ): Promise<FrozenSessionIndexEntry | null> {
   // 1. Idempotency guard — entry no longer pending, nothing to do.
-  if (!entry.pendingEnrichment) {
+  if (!entry.pendingEnrichment && !entry.memoryPending) {
     return null;
   }
   const archiveContent = await readPendingArchive(vfs, entry);
@@ -982,18 +1079,28 @@ async function commitEnrichedArchive(
   icon?: string
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
-  const newContent = rewriteArchiveTitle(archiveContent, newTitle);
-  const newFilename = `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`;
+  // Only a quick-mode `pending-…md` draft carries a placeholder title and a
+  // throwaway name. A curator archive is written straight to its canonical
+  // name, so when the legacy fallback picks one up (agentic-memory toggled off
+  // before catch-up ran) retitling it would rename the file out from under
+  // deep links that already point at it.
+  const isDraft = isPendingDraftFilename(entry.filename);
+  const resolvedTitle = isDraft ? newTitle : entry.title;
+  const newFilename = isDraft
+    ? `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`
+    : entry.filename;
   const newPath = `${SESSIONS_DIR}/${newFilename}`;
-  try {
-    await ensureDir(vfs, SESSIONS_DIR);
-    await vfs.writeFile(newPath, newContent);
-  } catch (err) {
-    log.warn('Enrichment write failed (entry stays pending)', {
-      filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+  if (isDraft) {
+    try {
+      await ensureDir(vfs, SESSIONS_DIR);
+      await vfs.writeFile(newPath, rewriteArchiveTitle(archiveContent, resolvedTitle));
+    } catch (err) {
+      log.warn('Enrichment write failed (entry stays pending)', {
+        filename: entry.filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
 
   // Carry a freshly-picked icon (single-click "save" path) or preserve an
@@ -1003,13 +1110,14 @@ async function commitEnrichedArchive(
   const resolvedIcon = icon ?? entry.icon;
   const updatedEntry: FrozenSessionIndexEntry = {
     filename: newFilename,
-    title: newTitle,
+    title: resolvedTitle,
     frozenAt: entry.frozenAt,
     messageCount: entry.messageCount,
     ...(entry.cost ? { cost: entry.cost } : {}),
     ...(entry.models ? { models: entry.models } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+    ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
   };
   try {
     await replaceIndexEntry(vfs, entry.filename, updatedEntry);
@@ -1039,7 +1147,7 @@ async function commitEnrichedArchive(
   log.info('Pending session enriched', {
     oldFilename: entry.filename,
     newFilename,
-    title: newTitle,
+    title: resolvedTitle,
   });
   return updatedEntry;
 }
@@ -1073,6 +1181,73 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
  * single context.
  */
 let indexWriteChain: Promise<void> = Promise.resolve();
+
+/** Clear every catch-up marker and its attempt counter after successful work. */
+async function clearPendingMarkers(
+  vfs: WritableVfsClient,
+  filename: string
+): Promise<FrozenSessionIndexEntry | null> {
+  let cleared: FrozenSessionIndexEntry | null = null;
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const {
+      memoryPending: _memoryPending,
+      pendingEnrichment: _pendingEnrichment,
+      pendingAttemptCount: _pendingAttemptCount,
+      ...updatedEntry
+    } = existing[index];
+    const updated = existing.slice();
+    updated[index] = updatedEntry;
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+    cleared = updatedEntry;
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    await next;
+  } catch (err) {
+    log.warn('Failed to clear agentic memory pending marker', {
+      filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return cleared;
+}
+
+/** Persist one attempt before its LLM call, serialized with every index mutation. */
+async function recordPendingAttempt(
+  vfs: WritableVfsClient,
+  filename: string
+): Promise<FrozenSessionIndexEntry | null> {
+  let attempted: FrozenSessionIndexEntry | null = null;
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const current = existing[index];
+    if (!current.pendingEnrichment && !current.memoryPending) return;
+    const attempts = pendingAttemptCount(current);
+    if (attempts >= PENDING_SESSION_ATTEMPT_LIMIT) return;
+    attempted = { ...current, pendingAttemptCount: attempts + 1 };
+    const updated = existing.slice();
+    updated[index] = attempted;
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  await next;
+  return attempted;
+}
 
 /**
  * Swap one entry in the sessions index by filename. Used by the

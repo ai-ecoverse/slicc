@@ -3,6 +3,7 @@ import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { AgentBridge, AgentSpawnOptions, AgentSpawnResult } from './agent-bridge.js';
 import { CONE_MEMORY_PATH, computeBudget } from './cone-memory-budget.js';
+import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from './types.js';
 
 export { DEFAULT_MEMORY_MD };
 
@@ -12,29 +13,72 @@ export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
 export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 120;
 export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
 
-const DEFAULT_WRITABLE_PATHS = ['/workspace/'];
-const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/'];
+/**
+ * Exactly the memory file, not `/workspace/`. The curator is given `upskill` so
+ * it can look up skills, and `upskill <owner>/<repo> --all` installs into
+ * `/workspace/skills/`, which a `/workspace/` root would have permitted. A
+ * single-file root grants the one write the curator actually needs and turns
+ * any other write — an install, a stray backup — into a cone escalation.
+ */
+const DEFAULT_WRITABLE_PATHS = [CONE_MEMORY_PATH];
+/** `/workspace/` is readable so the curator can still orient; only writes narrow. */
+const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/', '/workspace/'];
+/** Directory the curator starts in; `writablePaths` may be a bare file. */
+const CURATOR_CWD = '/workspace';
+/**
+ * Commands the curator may run without escalating. Non-cone scoops run under
+ * `defaultDisposition: 'require-approval'`, so a command missing here does not
+ * fail — it raises a sudo request against the cone mid-conversation. The
+ * curator runs unattended and its scoop folder (and any "always" grant the
+ * cone persists into it) is destroyed when the run ends, so every gap becomes
+ * a recurring interruption that can never be granted away. Keep this list
+ * ahead of what the prompt in `vfs-root/shared/MEMORY.md` asks for.
+ */
 const DEFAULT_ALLOWED_COMMANDS = [
+  'awk',
   'cat',
+  'cp',
+  'cut',
+  'date',
+  'diff',
+  'echo',
   'find',
   'grep',
   'head',
   'ls',
   'mkdir',
   'mv',
+  'printf',
   'sed',
+  'sort',
   'tail',
   'touch',
+  'tr',
+  'uniq',
+  // Read-only skill discovery for the pitfalls it finds. Installing is not
+  // reachable: `writablePaths` grants the memory file alone, so a write into
+  // `/workspace/skills/` matches no grant and escalates instead of landing.
+  'upskill',
   'wc',
 ];
 const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
-const SCALAR_KEYS = new Set(['model', 'timeoutSeconds']);
+const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);
+
+/**
+ * Spawned agents resolve an absent thinking level to `'off'`. That is wrong for
+ * curation: without reasoning the curator converges on the budget by trial and
+ * error, and because every turn re-reads the whole context as a cache read, turn
+ * count is what the pass actually costs. Paying for reasoning once is cheaper
+ * than paying for the turns it removes.
+ */
+const DEFAULT_MEMORY_THINKING_LEVEL: ThinkingLevel = 'medium';
 
 interface MemoryConfig {
   writablePaths: string[];
   visiblePaths: string[];
   allowedCommands: string[];
   model?: string;
+  thinkingLevel: ThinkingLevel;
   timeoutSeconds: number;
   promptTemplate: string;
 }
@@ -44,12 +88,18 @@ export interface RunAgenticMemoryPassOptions {
   vfs: Pick<LocalVfsClient, 'readFile'>;
   sessionArchivePath: string;
   sessionCount: number;
+  /** UTC date override for deterministic tests; defaults to today's date. */
+  today?: string;
   signal?: AbortSignal;
 }
 
 export type AgenticMemoryPassResult =
-  | { ok: true }
-  | { ok: false; reason: string; legacyFallbackSafe: boolean };
+  /**
+   * `report` is the curator's closing message — what it curated and any skill
+   * it found worth suggesting. The cone receives it directly over
+   * `scoop-notify`; it is surfaced here too so callers can log it.
+   */
+  { ok: true; report: string } | { ok: false; reason: string; legacyFallbackSafe: boolean };
 
 type FrontmatterValue = string | string[];
 type WaitOutcome =
@@ -71,6 +121,7 @@ export async function runAgenticMemoryPass(
       SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
       SESSION_COUNT: String(opts.sessionCount),
       BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
+      TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
     });
     const spawnOptions = buildSpawnOptions(config, prompt);
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
@@ -91,7 +142,7 @@ export async function runAgenticMemoryPass(
         legacyFallbackSafe: true,
       };
     }
-    return { ok: true };
+    return { ok: true, report: outcome.result.finalText };
   } catch (error) {
     log.warn('Agentic memory pass failed', { error: errorText(error) });
     return { ok: false, reason: errorText(error), legacyFallbackSafe: false };
@@ -126,11 +177,22 @@ function parseMemoryDocument(content: string): MemoryConfig {
   return {
     writablePaths,
     visiblePaths,
-    allowedCommands: readArray(values, 'allowedCommands', DEFAULT_ALLOWED_COMMANDS),
+    allowedCommands: [
+      ...new Set([...DEFAULT_ALLOWED_COMMANDS, ...readArray(values, 'allowedCommands', [])]),
+    ],
     ...(model ? { model } : {}),
+    thinkingLevel: readThinkingLevel(values.thinkingLevel),
     timeoutSeconds,
     promptTemplate: match[2].trim(),
   };
+}
+
+function readThinkingLevel(value: FrontmatterValue | undefined): ThinkingLevel {
+  if (value === undefined) return DEFAULT_MEMORY_THINKING_LEVEL;
+  if (typeof value !== 'string' || !isThinkingLevel(value)) {
+    throw new Error(`thinkingLevel must be one of ${THINKING_LEVELS.join(', ')}`);
+  }
+  return value;
 }
 
 function parseFrontmatter(frontmatter: string): Record<string, FrontmatterValue> {
@@ -259,11 +321,16 @@ function validatePaths(paths: string[], key: string): void {
 function buildSpawnOptions(config: MemoryConfig, prompt: string): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   return {
-    cwd: config.writablePaths[0].replace(/\/+$/, '') || '/',
+    cwd: CURATOR_CWD,
     writablePaths: config.writablePaths,
     visiblePaths: config.visiblePaths,
     allowedCommands: config.allowedCommands,
     prompt,
+    thinkingLevel: config.thinkingLevel,
+    // The pass is detached, so the caller's return value goes nowhere. Without
+    // this the curator's report — including any skill it found — is discarded
+    // and the cone never learns the pass happened at all.
+    notifyOnComplete: true,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }
@@ -276,6 +343,13 @@ function substitutePlaceholders(template: string, values: Record<string, string>
   return prompt;
 }
 
+/**
+ * Stops *waiting* on the spawn; it cannot stop the agent. `AgentSpawnOptions`
+ * carries no turn bound, deadline or signal, so a timed-out pass keeps taking
+ * turns and billing — one measured run overran its 120s timeout by 14.9x and
+ * cost $53.81. Tracked in ai-ecoverse/slicc#1972; until that lands, treat a
+ * `timeout` outcome as "still running", never as "stopped".
+ */
 function waitForSpawn(
   spawnPromise: Promise<AgentSpawnResult>,
   timeoutMs: number,

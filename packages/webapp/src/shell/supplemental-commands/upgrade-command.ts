@@ -8,10 +8,15 @@ import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 const REPO = 'ai-ecoverse/slicc';
 const BUNDLED_PREFIX = 'packages/vfs-root';
 const FETCH_TIMEOUT_MS = 30_000;
+// Directory prefixes plus one single-file scope. `MEMORY.md` is seeded only
+// when absent, so a curator-contract change would otherwise never reach an
+// existing workspace; the three-way merge is what makes that safe to ship,
+// since the file is meant to be user-edited.
 const SCOPES = [
   `${BUNDLED_PREFIX}/workspace/skills/`,
   `${BUNDLED_PREFIX}/shared/sprinkles/`,
   `${BUNDLED_PREFIX}/shared/sounds/`,
+  `${BUNDLED_PREFIX}/shared/MEMORY.md`,
 ] as const;
 const CLASSIFICATIONS = [
   'auto-applied',

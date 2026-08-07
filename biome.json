@@ -358,7 +358,6 @@
         "packages/webapp/tests/shell/di/di.test.ts",
         "packages/webapp/tests/shell/supplemental-commands/esbuild-command.test.ts",
         "packages/webapp/tests/shell/supplemental-commands/v86-command.test.ts",
-        "packages/webapp/tests/sudo/sudo-manager.test.ts",
         "packages/webapp/tests/ui/provider-settings.test.ts",
         "packages/webcomponents/src/primitives/slicc-image-preview.stories.ts"
       ],

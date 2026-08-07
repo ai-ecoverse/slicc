@@ -38,8 +38,8 @@ describe('SudoManager', () => {
     watcher = new FsWatcher();
     vfs.setWatcher(watcher);
   });
-  afterEach(() => {
-    vfs.dispose?.();
+  afterEach(async () => {
+    await vfs.dispose?.();
   });
 
   it('seeds the default /etc/sudoers template and gates nothing by default', async () => {
@@ -193,6 +193,29 @@ describe('generateScoopSudoers', () => {
     expect(matchCommand(policy, 'catnap')).toBe('no-match');
   });
 
+  // A single-file writable root is how a sandbox grants one file without its
+  // siblings — the memory curator writes /workspace/CLAUDE.md but must not be
+  // able to install into /workspace/skills/. Emitting only the `/**` form made
+  // that impossible to express, since it never matches the file itself.
+  it('grants a single-file writable root without granting its directory', () => {
+    const policy = parseSudoers(
+      generateScoopSudoers({ writablePaths: ['/workspace/CLAUDE.md'], allowedCommands: ['cat'] })
+    );
+
+    expect(matchPath(policy, 'write', '/workspace/CLAUDE.md')).toBe('nopasswd-allow');
+    expect(matchPath(policy, 'write', '/workspace/skills/evil/SKILL.md')).toBe('no-match');
+    expect(matchPath(policy, 'write', '/workspace/other.md')).toBe('no-match');
+  });
+
+  it('still grants the whole subtree for a directory writable root', () => {
+    const policy = parseSudoers(
+      generateScoopSudoers({ writablePaths: ['/workspace/'], allowedCommands: ['cat'] })
+    );
+
+    expect(matchPath(policy, 'write', '/workspace')).toBe('nopasswd-allow');
+    expect(matchPath(policy, 'write', '/workspace/skills/ok/SKILL.md')).toBe('nopasswd-allow');
+  });
+
   it('emits no Cmnd grants for an explicit empty allowedCommands list', () => {
     const text = generateScoopSudoers({ allowedCommands: [] });
     expect(text).not.toMatch(/^NOPASSWD Cmnd /m);
@@ -253,8 +276,8 @@ describe('SudoManager per-scoop policy view', () => {
     watcher = new FsWatcher();
     vfs.setWatcher(watcher);
   });
-  afterEach(() => {
-    vfs.dispose?.();
+  afterEach(async () => {
+    await vfs.dispose?.();
   });
 
   it('getPolicyForScoop returns the global policy when no scoop file has been seeded', async () => {

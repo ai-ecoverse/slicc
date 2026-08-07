@@ -1652,7 +1652,7 @@ export function attachWcClient(
   client: OffscreenClient,
   log: BootStageLogger,
   options: AttachWcClientOptions = {}
-): void {
+): (() => void) | undefined {
   // Apply persisted timestamp visibility preference (both standalone + extension).
   void import('../timestamp-preference.js')
     .then(({ initTimestampPreference }) => initTimestampPreference())
@@ -2121,6 +2121,18 @@ export function attachWcClient(
   void import('../../speech/speak.js')
     .then(({ setSpeakAssetsInstanceId }) => setSpeakAssetsInstanceId(options.instanceId))
     .catch((err) => log.error('WC say warmup wiring failed', err));
+
+  if (!options.standalone) return undefined;
+  return () => {
+    void import('../new-session.js')
+      .then(({ schedulePendingSessionCatchup }) =>
+        schedulePendingSessionCatchup({
+          openVfs: async () => (await openVfs()).writer,
+          onComplete: refreshFreezer,
+        })
+      )
+      .catch((err) => log.warn('Pending session catch-up scheduling failed', err));
+  };
 }
 
 /** Boot the standalone live WC shell: prelude → kernel spawn → attach. */
@@ -2221,7 +2233,7 @@ export async function mountWcUiLive(
   // extension-bridge `onLick` handler so forwarded handoff/upskill licks reach
   // the worker `LickManager`. No-op on every other CDP path.
   attachLickForwardingClient?.(host.client);
-  attachWcClient(boot, host.client, log, {
+  const schedulePendingCatchup = attachWcClient(boot, host.client, log, {
     instanceId,
     standalone: {
       browser,
@@ -2241,6 +2253,7 @@ export async function mountWcUiLive(
   // into nobody. Re-notify so boot reads (freezer rail) finally land.
   boot.wiring.notifyReady?.();
   log.info('WC live shell ready', { scoops: host.client.getScoops().length });
+  schedulePendingCatchup?.();
 
   // Auto-submit: `node-server --prompt "..."` appends `?prompt=<text>` to
   // the launch URL. Consume it exactly once now that the kernel + controller

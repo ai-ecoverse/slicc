@@ -60,7 +60,7 @@ Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, .
 upgrade apply --from="${FROM_VERSION}" --to="${TO_VERSION}"
 ```
 
-The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, and `/shared/sounds`; prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
+The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, and `/shared/sounds`, plus the single file `/shared/MEMORY.md` (the memory-curator contract, seeded only when absent — this merge is the only way a curator-rule change reaches an existing workspace); prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
 
 An exit code of `1` means discovery/fetch failed or at least one path needs review. Conflicts are written to the reported collision-safe sidecar while the live file remains unchanged. Show the JSON summary and sidecar paths to the user; never copy conflict markers into the live file automatically. The command never deletes local-only files.
 
@@ -70,5 +70,5 @@ The command can also be run directly with explicit release versions for manual r
 
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
-- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, and `/shared/sounds/` without the user explicitly extending the scope.
+- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, and `/shared/MEMORY.md` without the user explicitly extending the scope.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

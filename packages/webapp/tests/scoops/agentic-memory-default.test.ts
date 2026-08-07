@@ -22,7 +22,7 @@ describe('bundled MEMORY.md', () => {
         sessionArchivePath: '/sessions/frozen.md',
         sessionCount: 1,
       })
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, report: 'done' });
     expect(spawn).toHaveBeenCalledOnce();
   });
 
