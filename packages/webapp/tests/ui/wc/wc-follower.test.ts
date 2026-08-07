@@ -721,6 +721,43 @@ describe('mountWcUiFollower', () => {
     expect(app.querySelector('.wc-signin-redirect')).toBeTruthy();
   });
 
+  it('extension side panel: the avatar menu offers "Bring leader to front" and focuses the tab', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    setCherryLocation('chrome-extension://abcdef');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const avatarMenu = app.querySelector('slicc-avatar-menu') as HTMLElement & {
+      items?: Array<{ id?: string; label?: string }>;
+    };
+    expect(avatarMenu.items?.some((i) => i.id === 'focus-leader-tab')).toBe(true);
+
+    // A plain focus — the panel host relays it as focus-leader WITHOUT Settings.
+    avatarMenu.dispatchEvent(
+      new CustomEvent('slicc-avatar-action', { detail: { id: 'focus-leader-tab' } })
+    );
+    expect(emit).toHaveBeenCalledWith('slicc.focus-leader-tab');
+  });
+
+  it('general cherry embed (NOT side panel): no "Bring leader to front" item', async () => {
+    const emit = vi.fn();
+    mockCherryPrelude(emit);
+    vi.resetModules();
+    setCherryLocation('https://third-party.example');
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'cherry');
+
+    const avatarMenu = app.querySelector('slicc-avatar-menu') as HTMLElement & {
+      items?: Array<{ id?: string }>;
+    };
+    // No pinned leader tab to focus outside the extension side panel.
+    expect(avatarMenu.items?.some((i) => i.id === 'focus-leader-tab')).toBe(false);
+  });
+
   it('general cherry embed (NOT side panel): does NOT route the error-card CTA to a leader tab', async () => {
     const emit = vi.fn();
     mockCherryPrelude(emit);

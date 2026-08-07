@@ -10,40 +10,15 @@
         height: 100%;
         background: #1e1e1e;
       }
-      body {
-        display: flex;
-        flex-direction: column;
-      }
-      /* Panel chrome: extension-only actions the follower iframe cannot perform
-         itself (it has no access to chrome.tabs). */
-      #panel-toolbar {
-        flex: 0 0 auto;
-        display: flex;
-        justify-content: flex-end;
-        padding: 2px 4px;
-      }
-      #focus-leader {
-        background: transparent;
-        border: 0;
-        border-radius: 4px;
-        color: #aaa;
-        cursor: pointer;
-        font: 12px system-ui;
-        padding: 2px 6px;
-      }
-      #focus-leader:hover {
-        background: #2f2f2f;
-        color: #ddd;
-      }
       #cherry-follower {
         border: 0;
         width: 100%;
-        flex: 1 1 auto;
+        height: 100%;
         display: block;
       }
       #cherry-status {
         position: absolute;
-        inset: 24px 0 0;
+        inset: 0;
         display: none;
         align-items: center;
         justify-content: center;
@@ -57,13 +32,6 @@
     </style>
   </head>
   <body>
-    <!-- The leader tab is pinned in exactly one window; from any other window
-         this button is the only way back to it. -->
-    <div id="panel-toolbar">
-      <button id="focus-leader" type="button" title="Focus the SLICC leader tab">
-        ⌂ Leader tab
-      </button>
-    </div>
     <div id="cherry-status" data-state="starting">Starting SLICC…</div>
     <!--
       Permissions-Policy delegation to the cross-origin follower iframe. The

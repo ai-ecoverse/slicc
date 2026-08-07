@@ -81,7 +81,7 @@ describe('cherry-panel-sw', () => {
       focusLeaderTab,
       openSettingsOnLeader,
     });
-    // The panel's own "Leader tab" button — the user just wants the tab, not login.
+    // The avatar menu's "Bring leader to front" — just the tab, not login.
     p._rx({ kind: 'focus-leader', openSettings: false });
     expect(focusLeaderTab).toHaveBeenCalledTimes(1);
     expect(openSettingsOnLeader).not.toHaveBeenCalled();

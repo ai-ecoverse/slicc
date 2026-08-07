@@ -54,9 +54,10 @@ toast dedup, QA scenarios, and dev-watch details.
   on-demand `chrome.sidePanel` surface that iframes the hosted ui-only cherry
   follower (`?cherry=1&ui-only=1`) and runs the tri-state
   (booting → ready → disconnected) controller over a `cherry-panel` Port to
-  the service worker. Its panel chrome carries a "Leader tab" button that
-  sends `focus-leader` with `openSettings: false` — the follower iframe has no
-  `chrome.tabs` access, and the pinned leader lives in one window only.
+  the service worker. It relays the follower avatar menu's "Bring leader to
+  front" (`slicc.focus-leader-tab`) as `focus-leader` with
+  `openSettings: false` — the follower iframe has no `chrome.tabs` access, and
+  the pinned leader lives in one window only.
 - **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`): user-
   facing CRUD over `chrome.storage.local` credentials consumed by the SW's
   fetch-proxy and sign-and-forward backends.

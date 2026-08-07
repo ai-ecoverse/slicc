@@ -114,41 +114,28 @@ describe('sidepanel-entry controller', () => {
     );
   });
 
-  it('the panel-chrome button focuses the leader tab WITHOUT opening Settings', () => {
-    const button = document.createElement('button');
-    document.body.appendChild(button);
-    createSidePanelController({
-      connect: () => port as never,
-      mountSlicc: mountSlicc as never,
-      iframe,
-      setStatus: (s) => statuses.push(s),
-      sliccOrigin: 'https://www.sliccy.ai',
-      focusLeaderButton: button,
-    });
-    button.click();
-    // Nothing to sign in to — a plain focus, so the leader keeps its current view.
+  it('follower "slicc.focus-leader-tab" event focuses the leader tab WITHOUT opening Settings', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    const opts = mountSlicc.mock.calls[0]![0] as {
+      hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
+    };
+    // The avatar menu's "Bring leader to front" — nothing to sign in to, so the
+    // leader keeps its current view.
+    opts.hooks?.onSliccEvent?.('slicc.focus-leader-tab');
     expect(port.postMessage).toHaveBeenCalledWith({ kind: 'focus-leader', openSettings: false });
   });
 
-  it('the focus-leader button survives a dead port and stops working after dispose', () => {
-    const button = document.createElement('button');
-    document.body.appendChild(button);
-    const controller = createSidePanelController({
-      connect: () => port as never,
-      mountSlicc: mountSlicc as never,
-      iframe,
-      setStatus: (s) => statuses.push(s),
-      sliccOrigin: 'https://www.sliccy.ai',
-      focusLeaderButton: button,
-    });
+  it('a leader-focus request survives a dead port', () => {
+    make();
+    port._emit({ kind: 'join-url', state: 'ready', joinUrl: 'https://tray/join/t.s' });
+    const opts = mountSlicc.mock.calls[0]![0] as {
+      hooks?: { onSliccEvent?: (name: string, detail?: unknown) => void };
+    };
     port.postMessage.mockImplementation(() => {
       throw new Error('Attempting to use a disconnected port object');
     });
-    expect(() => button.click()).not.toThrow();
-    port.postMessage.mockReset();
-    controller.dispose();
-    button.click();
-    expect(port.postMessage).not.toHaveBeenCalled();
+    expect(() => opts.hooks?.onSliccEvent?.('slicc.focus-leader-tab')).not.toThrow();
   });
 
   it('ready → status live (overlay hidden so the follower owns its own sub-status)', () => {

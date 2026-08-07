@@ -160,8 +160,8 @@ export async function handleCherryPanelConnect(
       // also tell the leader to open Settings so the user lands on the login UI:
       // focus first (may create the tab), then post open-settings over the bridge
       // (a just-created leader's bridge Port is not welcomed yet, so the follower
-      // card remains the fallback). The panel's own "Leader tab" button sends
-      // `openSettings: false` — it is a plain focus with nothing to sign in to.
+      // card remains the fallback). The avatar menu's "Bring leader to front"
+      // sends `openSettings: false` — a plain focus with nothing to sign in to.
       void deps.focusLeaderTab?.().catch(() => {});
       if (msg.openSettings !== false) deps.openSettingsOnLeader?.();
       return;

@@ -193,14 +193,15 @@ The side panel is opened on demand by the toolbar icon. Full flow:
    `postOpenSettingsToWelcomedLeaderPorts()`s (bridge
    `extension.open-settings` → leader opens its Settings dialog) so the user
    lands on the login UI, not a bare focused tab.
-7. **Focus-leader button**: the panel chrome renders a "⌂ Leader tab" button
-   above the follower iframe (`#focus-leader` in `sidepanel.html`). The leader
-   is pinned in exactly one window, so a panel open in any other window has no
-   other way back to it — and the follower iframe cannot reach `chrome.tabs`
-   itself. The click sends the same `focus-leader` message with
-   `openSettings: false`: focus only, leaving the leader on whatever view it is
-   showing. An omitted `openSettings` still means "open Settings", so a panel
-   document from before an extension update keeps the sign-in behaviour.
+7. **"Bring leader to front"**: the follower's avatar menu carries this item in
+   the side panel only. The leader is pinned in exactly one window, so a panel
+   open in any other window has no other way back to it — and the follower
+   iframe cannot reach `chrome.tabs` itself. Selecting it emits
+   `slicc.focus-leader-tab`, which `sidepanel-entry` relays as the same
+   `focus-leader` message with `openSettings: false`: focus only, leaving the
+   leader on whatever view it is showing. An omitted `openSettings` still means
+   "open Settings", so a panel document from before an extension update keeps
+   the sign-in behaviour.
 
 **Tri-state panel UI:**
 

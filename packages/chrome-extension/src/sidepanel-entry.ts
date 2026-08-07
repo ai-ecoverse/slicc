@@ -36,9 +36,6 @@ export interface SidePanelDeps {
   iframe: HTMLIFrameElement;
   setStatus: (s: PanelStatus) => void;
   sliccOrigin: string;
-  /** Panel-chrome button that focuses the pinned leader tab. Optional so tests
-   *  (and a panel document without the toolbar) need not provide it. */
-  focusLeaderButton?: HTMLElement;
 }
 
 export function createSidePanelController(deps: SidePanelDeps): { dispose(): void } {
@@ -105,11 +102,6 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
     }
   };
 
-  // Panel chrome: the leader tab is pinned in one window only, so a user with
-  // the panel open in another window has no way back to it from the follower.
-  const onFocusLeaderClick = () => requestLeaderFocus(false);
-  deps.focusLeaderButton?.addEventListener('click', onFocusLeaderClick);
-
   const onMessage = (raw: unknown) => {
     const msg = raw as SwToPanelMessage;
     if (msg?.kind !== 'join-url') return;
@@ -166,8 +158,11 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
         // The follower asks to sign in — provider login can't complete in the
         // panel iframe, so focus/open the SLICC leader tab where the real login
         // UI runs. Route it through the SW (which owns the leader tab).
+        // `slicc.focus-leader-tab` is the follower avatar menu's "Bring leader
+        // to front" — a plain focus, with nothing to sign in to.
         onSliccEvent: (name) => {
           if (name === 'slicc.open-leader-tab') requestLeaderFocus(true);
+          if (name === 'slicc.focus-leader-tab') requestLeaderFocus(false);
         },
       },
     });
@@ -210,7 +205,6 @@ export function createSidePanelController(deps: SidePanelDeps): { dispose(): voi
       disposed = true;
       teardown();
       deps.iframe.removeEventListener('load', onIframeLoad);
-      deps.focusLeaderButton?.removeEventListener('click', onFocusLeaderClick);
       try {
         port?.disconnect();
       } catch {
@@ -236,6 +230,5 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.id) {
     iframe,
     setStatus,
     sliccOrigin: sliccOriginDefault,
-    focusLeaderButton: document.getElementById('focus-leader') ?? undefined,
   });
 }
