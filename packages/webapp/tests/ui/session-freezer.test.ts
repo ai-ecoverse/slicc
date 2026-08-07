@@ -1394,13 +1394,40 @@ describe('freezeConeSession quick mode', () => {
     expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
 
-    // Index entry carries the pendingEnrichment flag for the boot scanner.
+    // Index entry carries the pendingEnrichment flag for the boot scanner,
+    // and — because a curator spawn was supplied (agentic quick snapshot) —
+    // the durable memoryPending marker as well.
     const index = await readSessionsIndex(
       vfs as unknown as Parameters<typeof readSessionsIndex>[0]
     );
     expect(index).toHaveLength(1);
     expect(index[0].pendingEnrichment).toBe(true);
+    expect(index[0].memoryPending).toBe(true);
+    expect(result!.memoryPending).toBe(true);
     expect(index[0].filename).toBe(result!.filename);
+  });
+
+  it('quick mode without a curator spawn never sets memoryPending', async () => {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('q'), assistantMessage('a'), userMessage('r'), assistantMessage('b')],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.memoryPending).toBeUndefined();
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].memoryPending).toBeUndefined();
   });
 });
 
@@ -1812,6 +1839,44 @@ describe('enrichPendingSession', () => {
     expect(lastCall.vfs).toBe(vfs);
     expect(lastCall.model).toBe(fakeModel);
     expect(lastCall.apiKey).toBe('k');
+  });
+
+  it('skipMemory: title-only pass skips the memory call and keeps memoryPending across the rename', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    // Only the TITLE call runs — a single mock resolution must satisfy the pass.
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+        memoryPending: true,
+      },
+      { model: fakeModel!, apiKey: 'k', skipMemory: true }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
+    expect(mockRunOneOffCompactionCall.mock.calls[0][0].instruction).toBe('TITLE');
+    // No memory extraction, no append — the curator owns memory in this mode.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
+    // The rename landed, pendingEnrichment dropped — but the curator marker
+    // survives so an unfinished curator stays recoverable via boot catch-up.
+    expect(updated!.filename).toMatch(/build-pipeline-debug\.md$/);
+    expect(updated!.pendingEnrichment).toBeUndefined();
+    expect(updated!.memoryPending).toBe(true);
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].memoryPending).toBe(true);
+    expect(index[0].pendingEnrichment).toBeUndefined();
   });
 
   it('records a picked lucide icon on the renamed entry when pickIcon is supplied', async () => {

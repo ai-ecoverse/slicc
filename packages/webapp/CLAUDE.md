@@ -212,7 +212,8 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 - **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops.
 - Archives use `/sessions/<timestamp>-<slug>.md` plus `index.json`. Idle boot recovers both
   pending markers serially, up to three times, through the bounded legacy enrichment call —
-  never the curator, whose unbounded multi-turn run `timeoutSeconds` cannot stop.
+  never the unbounded curator, which `timeoutSeconds` cannot stop.
+- Agentic Save: quick snapshot then clear; title (`skipMemory`) + curator in background.
 - Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ### UI
