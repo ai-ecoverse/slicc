@@ -182,6 +182,19 @@ test.describe('say -o WAV output (real kokoro)', () => {
       } catch {
         /* best-effort — engine still falls through on WASM if alloc fails */
       }
+      // The espeak dictionaries are decompressed by an async IIFE with no
+      // `catch`, so if it throws the data silently never lands and the only
+      // downstream symptom is a phonemizer with zero voices. An unhandled
+      // rejection is not a `pageerror`, so Playwright never sees it — park
+      // them somewhere the failure path can read.
+      const rejections: string[] = [];
+      (window as unknown as { __sliccRejections: string[] }).__sliccRejections = rejections;
+      window.addEventListener('unhandledrejection', (event) => {
+        const reason = (event as PromiseRejectionEvent).reason;
+        rejections.push(
+          reason instanceof Error ? `${reason.message}\n${reason.stack ?? ''}` : String(reason)
+        );
+      });
     });
 
     await seedSkipSwReload(page);
@@ -273,10 +286,14 @@ test.describe('say -o WAV output (real kokoro)', () => {
       // numbers are what separate "assets never landed" from "engine loaded but
       // has no voices", so gather both before failing.
       const voices = await exec(page, 'say --list');
+      const rejections = await page.evaluate(
+        () => (window as unknown as { __sliccRejections?: string[] }).__sliccRejections ?? []
+      );
       expect(
         synth.exitCode,
         `synth stderr: ${synth.stderr}` +
           `\nsay --list (exit ${voices.exitCode}): ${voices.stdout.trim() || '(no voices listed)'}` +
+          `\nunhandled rejections (${rejections.length}):\n${rejections.slice(0, 5).join('\n---\n') || '(none)'}` +
           `\n${await storageReport(page)}` +
           `\n--- diag ---\n${diagTail(diagnostics)}`
       ).toBe(0);
