@@ -45,6 +45,7 @@ jobs:
       slicc-cli: ${{ steps.filter.outputs.slicc-cli }}
       swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
+      native-root-config: ${{ steps.filter.outputs.native-root-config }}
       speech: ${{ steps.filter.outputs.speech }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
@@ -118,6 +119,17 @@ jobs:
               - 'coverage-thresholds.json'
               - 'packages/dev-tools/tools/coverage-gate.mjs'
               - 'packages/dev-tools/tools/coverage-ratchet-lib.mjs'
+            # The `root-config` set above is TS-shaped: tsconfigs, vitest
+            # configs, the TS coverage gate, and the npm dependency graph.
+            # None of it reaches a Swift compile, so the slow `macos-latest`
+            # `swift-launcher` job uses this narrower set instead.
+            # `patches/**` stays because patch-package rewrites the installed
+            # node_modules that the bundled overlay build reads; the lockfile
+            # does not, and a lockfile break surfaces on the fast ubuntu jobs
+            # first.
+            native-root-config:
+              - 'patches/**'
+              - '.github/workflows/ci.yml'
             # Real-model `say -o` WAV (gated; see `speech-e2e` job).
             # Trigger on the synthesis engine, the `say` command, the
             # page-side panel RPC handlers that bridge it out of the
@@ -1245,7 +1257,10 @@ jobs:
     # general webapp UI change). Assets still matter: `assemble-app.mjs` reads the
     # macOS icon from `packages/assets/`, so an asset-only PR must still build
     # Sliccstart.app. A pure webapp/vfs-root PR now skips swift-launcher entirely
-    # (skipped = passing in the `ci` summary gate).
+    # (skipped = passing in the `ci` summary gate). The root-config trigger is
+    # the narrower `native-root-config`: a tsconfig/vitest/lockfile-only PR
+    # (mostly renovate bumps) cannot change a Swift compile, and the npm side of
+    # this job is validated by the fast ubuntu jobs first.
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
@@ -1256,7 +1271,7 @@ jobs:
       needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.root-config == 'true')
+      needs.changes.outputs.native-root-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1267,6 +1282,27 @@ jobs:
       - uses: ./.github/actions/npm-ci
       - name: Install SwiftLint
         run: brew install swiftlint
+      # Artifacts from a mismatched toolchain are the classic way an SPM cache
+      # turns a green build red, and `macos-latest` rolls its Xcode without
+      # notice — so the toolchain identity is part of the cache key, not a hope.
+      - name: Record Swift toolchain fingerprint
+        id: swift-toolchain
+        run: echo "id=$(swift --version 2>&1 | shasum -a 256 | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      # This job builds swift-server from scratch on every run — ~6 of its ~10
+      # minutes — even when swift-server itself is unchanged and its own job is
+      # skipped. Keying `.build` on the Swift sources plus the toolchain makes
+      # the common case incremental. `coverage/` is excluded so a restored cache
+      # can never hand a stale profile to the upload steps below.
+      - name: Cache Swift build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/swift-launcher/.build
+            !packages/swift-launcher/.build/coverage
+            packages/swift-server/.build
+          key: swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*') }}-${{ hashFiles('packages/swift-launcher/Sliccstart/**', 'packages/swift-launcher/SliccstartTests/**', 'packages/swift-server/Sources/**', 'packages/swift-server/Tests/**', 'packages/swift-optel/Sources/**', 'packages/swift-traysession/Sources/**') }}
+          restore-keys: |
+            swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*') }}-
       - name: Lint (SwiftLint)
         run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
       # swift-format ships with the toolchain; config is the root .swift-format.
