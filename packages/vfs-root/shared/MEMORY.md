@@ -1,9 +1,10 @@
 ---
 writablePaths:
-  - /workspace/
+  - /workspace/CLAUDE.md
 visiblePaths:
   - /sessions/
   - /shared/
+  - /workspace/
 allowedCommands:
   - awk
   - cat
@@ -25,6 +26,7 @@ allowedCommands:
   - touch
   - tr
   - uniq
+  - upskill
   - wc
 timeoutSeconds: 120
 thinkingLevel: medium
@@ -36,30 +38,54 @@ Curate the durable memory for session {{SESSION_COUNT}}. Today's date is {{TODAY
 
 Read the entire current memory at {{MEMORY_PATH}} if it exists. Then mine the archived session at {{SESSION_ARCHIVE_PATH}} using the reading recipes below. Rewrite the entire {{MEMORY_PATH}} file with the durable information worth carrying into future sessions. Every part of the file is editable and counts toward the budget.
 
+## What to look for
+
+Three things carry across sessions, and each has its own place in the archive:
+
+| Look for        | Where it lives                                                         |
+| --------------- | ---------------------------------------------------------------------- |
+| **Preferences** | the user's own messages — how they want things done, and what to avoid |
+| **Projects**    | tool-call arguments — the paths, repos and files actually worked on    |
+| **Pitfalls**    | failed tool calls — what broke, and the error that proves it           |
+
+Pitfalls are the highest-value and most-often-lost category: a failure that cost half an hour is worth one line next time. Keep the error text that identifies it, not the stack trace.
+
 ## Reading the session archive
 
-**Never `cat` the archive and never `head` it.** Archives reach several megabytes, and the machine-readable `<!-- slicc:session-data ... -->` block is a _single line_ holding the whole session as JSON — roughly half the file. Reading it costs a fortune and tells you nothing the prose below it does not.
+**Never `cat` the archive and never `head` it.** Archives reach several megabytes, and the machine-readable `<!-- slicc:session-data ... -->` block is a _single line_ holding the whole session as JSON — roughly half the file. Reading it costs a fortune and tells you nothing the prose below it does not. Whole `### Tool` result bodies are the other half and are equally not worth reading.
 
-Check the size first, then extract only what you need:
+Check the size first, then pull the three signals separately. Together they run about 1% of the archive, so these work on a 2.5 MB file as happily as on a small one.
 
 ```bash
 wc -c {{SESSION_ARCHIVE_PATH}}
-```
 
-The prose transcript uses `## User`, `## Assistant` and `### Tool` headings. Tool blocks are the overwhelming bulk of the bytes and almost never hold durable memory, so drop them.
-
-```bash
-# 1. Orient: metadata and what the user actually asked. Usually well under 1%
-#    of the file — start here, on any archive, however large.
+# Preferences — what the user asked for, in their words.
 sed '/^<!-- slicc:session-data$/,/^-->$/d' {{SESSION_ARCHIVE_PATH}} \
   | awk '/^## User/{p=1;next} /^## (Assistant|Summary)/{p=0} /^### Tool/{p=0} p'
 
-# 2. Read the full conversation without tool output. Usually 2-4% of the file.
+# Projects — the paths touched most, which name the work.
 sed '/^<!-- slicc:session-data$/,/^-->$/d' {{SESSION_ARCHIVE_PATH}} \
-  | awk '/^### Tool/{p=0;next} /^## (User|Assistant)/{p=1} p'
+  | grep -o '/[A-Za-z0-9_][A-Za-z0-9_./-]\{3,\}' \
+  | sort | uniq -c | sort -rn | head -40
+
+# Pitfalls — failed calls with the input that caused them.
+sed '/^<!-- slicc:session-data$/,/^-->$/d' {{SESSION_ARCHIVE_PATH}} \
+  | grep -B6 '^Result:.*\(rror\|not found\|failed\|denied\|ENOENT\|fatal\)' \
+  | cut -c1-200
 ```
 
-Recipe 1 on a 2.5 MB archive returns about 5 KB; recipe 2 returns about 96 KB. Reach into a specific tool block with `grep -n` plus a bounded `sed -n 'START,ENDp'` only when a detail you need is genuinely missing from recipe 2.
+Only if something is still missing, reach into one specific block with `grep -n` plus a bounded `sed -n 'START,ENDp'`. Never widen these to the whole file.
+
+## Suggesting a skill
+
+A recurring pitfall is often a missing skill. Once you know what broke and what the work was, spend **one** lookup on it — no more, and skip it entirely when the session had no failures:
+
+```bash
+upskill search <a few words from the pitfall>
+upskill list                      # what is already installed — never suggest a duplicate
+```
+
+`upskill ai-ecoverse/skills` and `upskill adobe/skills` list a repo's skills without installing anything. **Never install.** You have no write access outside {{MEMORY_PATH}}, so an install attempt will fail or interrupt the user for approval; recommending is your job, deciding is theirs. Put any suggestion in your closing message, with the pitfall it addresses — that message is delivered to the main agent.
 
 ## Working within the budget
 
@@ -72,8 +98,9 @@ Measure, decide, then write once. Do not converge on the budget by trial and err
 
 Rules:
 
-- Keep durable preferences, stable project facts, validated approaches, and named resources.
-- Organize retained information into concise per-topic sections rather than one flat list.
+- Keep durable preferences, stable project facts, validated approaches, named resources, and the pitfalls worth not repeating.
+- Organize retained information into concise per-topic sections rather than one flat list. Let the topic lead the heading; preferences, projects and pitfalls are what to look for, not a required table of contents.
+- Write the memory file only. Do not create backups or scratch copies next to it — the file is versioned, and you have no write access anywhere else.
 - End every `##` and `###` section heading with its last-verified date in `YYYY-MM-DD` form, for example `## Deployment pipeline (2026-08-06)`. Dates are UTC, matching the session archive timestamps, so a late-evening freeze west of UTC stamps the next day.
 - Stamp sections you write or confirm with today's date, {{TODAY}}.
 - Prioritize re-verifying the oldest-dated sections. Treat undated headings as maximally stale and date them on this pass.
@@ -84,6 +111,8 @@ Rules:
 
 <!-- How to customize
 Add curator instructions here, for example: also update the knowledge base at /path following its WIKI.md. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
+
+writablePaths defaults to the memory file alone rather than /workspace/, because the curator can run upskill and a directory-wide grant would also let it install skills into /workspace/skills. Widen it only as far as a task genuinely needs; a single file is a valid entry, not just a directory.
 
 thinkingLevel accepts off, minimal, low, medium, high, or xhigh. Curation is cheaper with reasoning than without: an unreasoned pass converges on the budget by trial and error, and because every turn re-reads the whole context, turn count is what the pass costs. Lower it to off only if you also shrink the prompt to a single mechanical instruction.
 

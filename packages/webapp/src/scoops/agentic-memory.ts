@@ -13,8 +13,18 @@ export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
 export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 120;
 export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
 
-const DEFAULT_WRITABLE_PATHS = ['/workspace/'];
-const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/'];
+/**
+ * Exactly the memory file, not `/workspace/`. The curator is given `upskill` so
+ * it can look up skills, and `upskill <owner>/<repo> --all` installs into
+ * `/workspace/skills/`, which a `/workspace/` root would have permitted. A
+ * single-file root grants the one write the curator actually needs and turns
+ * any other write — an install, a stray backup — into a cone escalation.
+ */
+const DEFAULT_WRITABLE_PATHS = [CONE_MEMORY_PATH];
+/** `/workspace/` is readable so the curator can still orient; only writes narrow. */
+const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/', '/workspace/'];
+/** Directory the curator starts in; `writablePaths` may be a bare file. */
+const CURATOR_CWD = '/workspace';
 /**
  * Commands the curator may run without escalating. Non-cone scoops run under
  * `defaultDisposition: 'require-approval'`, so a command missing here does not
@@ -45,6 +55,10 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  // Read-only skill discovery for the pitfalls it finds. Installing is not
+  // reachable: `writablePaths` grants the memory file alone, so a write into
+  // `/workspace/skills/` matches no grant and escalates instead of landing.
+  'upskill',
   'wc',
 ];
 const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
@@ -80,8 +94,12 @@ export interface RunAgenticMemoryPassOptions {
 }
 
 export type AgenticMemoryPassResult =
-  | { ok: true }
-  | { ok: false; reason: string; legacyFallbackSafe: boolean };
+  /**
+   * `report` is the curator's closing message — what it curated and any skill
+   * it found worth suggesting. The cone receives it directly over
+   * `scoop-notify`; it is surfaced here too so callers can log it.
+   */
+  { ok: true; report: string } | { ok: false; reason: string; legacyFallbackSafe: boolean };
 
 type FrontmatterValue = string | string[];
 type WaitOutcome =
@@ -124,7 +142,7 @@ export async function runAgenticMemoryPass(
         legacyFallbackSafe: true,
       };
     }
-    return { ok: true };
+    return { ok: true, report: outcome.result.finalText };
   } catch (error) {
     log.warn('Agentic memory pass failed', { error: errorText(error) });
     return { ok: false, reason: errorText(error), legacyFallbackSafe: false };
@@ -303,12 +321,16 @@ function validatePaths(paths: string[], key: string): void {
 function buildSpawnOptions(config: MemoryConfig, prompt: string): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   return {
-    cwd: config.writablePaths[0].replace(/\/+$/, '') || '/',
+    cwd: CURATOR_CWD,
     writablePaths: config.writablePaths,
     visiblePaths: config.visiblePaths,
     allowedCommands: config.allowedCommands,
     prompt,
     thinkingLevel: config.thinkingLevel,
+    // The pass is detached, so the caller's return value goes nowhere. Without
+    // this the curator's report — including any skill it found — is discarded
+    // and the cone never learns the pass happened at all.
+    notifyOnComplete: true,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }

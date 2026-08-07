@@ -27,6 +27,7 @@ const BASE_ALLOWED_COMMANDS = [
   'touch',
   'tr',
   'uniq',
+  'upskill',
   'wc',
 ];
 
@@ -75,7 +76,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       today: '2026-08-06',
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     const options = spawn.mock.calls[0][0];
     expect(options).toMatchObject({
       cwd: '/workspace',
@@ -100,7 +101,7 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       today: '2026-08-06',
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     const prompt = spawn.mock.calls[0][0].prompt;
     expect(prompt).toContain("Today's date is 2026-08-06");
     expect(prompt).toContain('Every part of the file is editable and counts toward the budget');
@@ -131,7 +132,7 @@ Curate {{MEMORY_PATH}} on {{TODAY}}.`;
       today: '2026-08-06',
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     expect(spawn.mock.calls[0][0].prompt).toContain('## Existing instructions');
     expect(spawn.mock.calls[0][0].prompt).toContain('Curate /workspace/CLAUDE.md on 2026-08-06.');
   });
@@ -155,7 +156,7 @@ Curate {{MEMORY_PATH}}.`;
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     expect(spawn.mock.calls[0][0]).toMatchObject({
       writablePaths: ['/workspace/', '/knowledge/lars,rebecca/'],
       visiblePaths: ['/sessions/', '/shared/#reference'],
@@ -177,7 +178,7 @@ Curate {{MEMORY_PATH}}.`;
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     expect(spawn.mock.calls[0][0].allowedCommands).toEqual(BASE_ALLOWED_COMMANDS);
   });
 
@@ -275,9 +276,9 @@ Curate {{MEMORY_PATH}}.`;
       sessionCount: 1,
     });
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, report: 'done' });
     expect(warn).toHaveBeenCalled();
-    expect(spawn.mock.calls[0][0].writablePaths).toEqual(['/workspace/']);
+    expect(spawn.mock.calls[0][0].writablePaths).toEqual(['/workspace/CLAUDE.md']);
   });
 
   it('uses the built-in default and warns when MEMORY.md is missing', async () => {
@@ -293,10 +294,14 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result.ok).toBe(true);
     expect(warn).toHaveBeenCalled();
+    // The write grant is the memory file alone: the curator can run `upskill`,
+    // and a `/workspace/` root would also let it install into
+    // `/workspace/skills/`. `/workspace/` stays readable so it can orient.
     expect(spawn.mock.calls[0][0]).toMatchObject({
       cwd: '/workspace',
-      writablePaths: ['/workspace/'],
-      visiblePaths: ['/sessions/', '/shared/'],
+      writablePaths: ['/workspace/CLAUDE.md'],
+      visiblePaths: ['/sessions/', '/shared/', '/workspace/'],
+      notifyOnComplete: true,
     });
     expect(spawn.mock.calls[0][0].prompt).toContain(
       'Organize retained information into concise per-topic'

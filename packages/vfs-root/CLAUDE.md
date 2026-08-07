@@ -35,6 +35,13 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 - Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date, in UTC to match
   archive timestamps. Each pass re-verifies the oldest sections first; undated sections are
   maximally stale.
+- The curator's write grant is `/workspace/CLAUDE.md` alone, not `/workspace/`. It can run `upskill`
+  to look up a skill for a pitfall it found, and a directory-wide grant would also let it install
+  into `/workspace/skills/`. Reads still cover `/workspace/`. Single-file entries in
+  `writablePaths` work because `generateScoopSudoers` emits both the bare path and the `/**` form.
+- The pass is detached, so it spawns with `notifyOnComplete`. Its closing message reaches the cone
+  on the `scoop-notify` channel; that is where a skill suggestion lands. Without it the report is
+  discarded and the cone never learns the pass ran.
 - Turn count is what a pass costs, because every turn re-reads the whole context as a cache read.
   Two things keep it down, and both belong to the prompt rather than the runtime: `thinkingLevel`
   (default `medium`; spawned agents otherwise resolve to `off`) so the curator plans the cut
