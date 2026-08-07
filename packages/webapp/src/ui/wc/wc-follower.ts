@@ -793,6 +793,13 @@ export async function mountWcUiFollower(
       follower.currentSync?.requestNewSession(action);
     });
   }
+  // Parity with the leader (wc-live): under agentic memory the memory decision
+  // is the background curator's, so the follower's affordance must also reduce
+  // to two outcomes — a forwarded `skip` would quick-freeze on the leader with
+  // no curator and no `memoryPending` marker, silently losing the memory pass.
+  if (isFeatureEnabled('agentic-memory')) {
+    boot.refs.freezer.querySelector('slicc-freezer-new')?.setAttribute('no-skip', '');
+  }
 
   boot.refs.switcher.addEventListener('slicc-scoop-select', (event) => {
     const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;

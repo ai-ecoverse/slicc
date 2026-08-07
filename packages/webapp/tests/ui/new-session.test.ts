@@ -189,66 +189,105 @@ describe('runNewSessionFreeze — write-first + race', () => {
     expect(result).not.toBeNull();
   });
 
-  it('flag on races one curator pass after the full archive write', async () => {
+  it('flag on takes a quick no-LLM snapshot and returns before any background work', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
     const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
-    mockFreezeConeSession.mockResolvedValue({
-      ...pending,
-      filename: '2026-06-16-agentic-memory.md',
-      pendingEnrichment: undefined,
-      memoryPending: true,
-    });
-    mockCurateFrozenSessionMemories.mockResolvedValue({
-      ...enriched,
-      filename: '2026-06-16-agentic-memory.md',
-    });
+    const frozen = { ...pending, memoryPending: true as const };
+    mockFreezeConeSession.mockResolvedValue(frozen);
+    const deferredEnrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(deferredEnrich.promise);
+    mockCurateFrozenSessionMemories.mockResolvedValue({ ...enriched, memoryPending: undefined });
 
     const result = await runNewSessionFreeze({
       vfs: {} as never,
-      enrichmentRaceMs: 10,
       agenticMemorySpawn: spawn,
     });
 
     expect(mockIsFeatureEnabled).toHaveBeenCalledWith('agentic-memory');
     expect(mockFreezeConeSession).toHaveBeenCalledOnce();
     const freezeOptions = mockFreezeConeSession.mock.calls[0][0];
-    expect(freezeOptions).toMatchObject({ mode: 'full', model: fakeModel, apiKey: 'k' });
+    // Quick snapshot — no model/key handed to the freeze, no LLM inside it.
+    expect(freezeOptions).toMatchObject({ mode: 'quick' });
+    expect(freezeOptions.model).toBeUndefined();
     await freezeOptions.agenticMemorySpawn({} as never);
     expect(spawn).toHaveBeenCalledOnce();
-    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
-    expect(mockFreezeConeSession.mock.invocationCallOrder[0]).toBeLessThan(
-      mockCurateFrozenSessionMemories.mock.invocationCallOrder[0]
-    );
-    expect(mockEnrichPendingSession).not.toHaveBeenCalled();
-    expect(result?.memoryPending).toBeUndefined();
+    // The freeze resolved while enrichment is still pending: the caller may
+    // clear the chat now, with both markers intact on the returned entry.
+    expect(result?.filename).toBe('pending-abc.md');
+    expect(result?.memoryPending).toBe(true);
+    expect(mockCurateFrozenSessionMemories).not.toHaveBeenCalled();
+    deferredEnrich.resolve(null);
   });
 
-  it('agentic timer leaves the marker while one curator pass finishes in the background', async () => {
+  it('agentic background pass: title enrichment (memory skipped) then curator, rail refreshed after each', async () => {
     mockIsFeatureEnabled.mockReturnValue(true);
-    const frozen = {
-      ...pending,
-      filename: '2026-06-16-agentic-memory.md',
-      pendingEnrichment: undefined,
-      memoryPending: true as const,
-    };
+    const frozen = { ...pending, memoryPending: true as const };
     mockFreezeConeSession.mockResolvedValue(frozen);
+    const deferredEnrich = deferred<FrozenSessionIndexEntry | null>();
+    mockEnrichPendingSession.mockReturnValue(deferredEnrich.promise);
+    const deferredCurator = deferred<FrozenSessionIndexEntry | null>();
+    mockCurateFrozenSessionMemories.mockReturnValue(deferredCurator.promise);
+    const onBackgroundEnriched = vi.fn();
+
+    await runNewSessionFreeze({
+      vfs: {} as never,
+      agenticMemorySpawn: vi.fn(),
+      onBackgroundEnriched,
+    });
+    await flush();
+
+    // Title/icon enrichment runs first, with memory extraction skipped — the
+    // curator owns memory in agentic mode.
+    expect(mockEnrichPendingSession).toHaveBeenCalledOnce();
+    const enrichOpts = mockEnrichPendingSession.mock.calls[0][2] as {
+      skipMemory?: boolean;
+      pickIcon?: unknown;
+    };
+    expect(enrichOpts.skipMemory).toBe(true);
+    expect(typeof enrichOpts.pickIcon).toBe('function');
+    // The curator waits for the rename so it mines the canonical filename.
+    expect(mockCurateFrozenSessionMemories).not.toHaveBeenCalled();
+
+    const renamed = { ...enriched, memoryPending: true as const };
+    deferredEnrich.resolve(renamed);
+    await flush();
+    expect(onBackgroundEnriched).toHaveBeenCalledWith(renamed);
+    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
+    const curatedTarget = mockCurateFrozenSessionMemories.mock.calls[0][1] as FrozenSession;
+    expect(curatedTarget.filename).toBe(enriched.filename);
+
+    const curated = { ...enriched };
+    deferredCurator.resolve(curated);
+    await flush();
+    expect(onBackgroundEnriched).toHaveBeenCalledTimes(2);
+    expect(onBackgroundEnriched).toHaveBeenLastCalledWith(curated);
+  });
+
+  it('agentic background pass survives a failed title enrichment and still curates the draft', async () => {
+    mockIsFeatureEnabled.mockReturnValue(true);
+    const frozen = { ...pending, memoryPending: true as const };
+    mockFreezeConeSession.mockResolvedValue(frozen);
+    mockEnrichPendingSession.mockRejectedValue(new Error('provider 502'));
     const deferredCurator = deferred<FrozenSessionIndexEntry | null>();
     mockCurateFrozenSessionMemories.mockReturnValue(deferredCurator.promise);
     const onBackgroundEnriched = vi.fn();
 
     const result = await runNewSessionFreeze({
       vfs: {} as never,
-      enrichmentRaceMs: 10,
       agenticMemorySpawn: vi.fn(),
       onBackgroundEnriched,
     });
-
-    expect(result?.memoryPending).toBe(true);
-    expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
-    deferredCurator.resolve({ ...enriched, filename: frozen.filename });
     await flush();
+
+    expect(result?.filename).toBe('pending-abc.md');
+    // Enrichment failed → curator still runs, against the pending draft name.
     expect(mockCurateFrozenSessionMemories).toHaveBeenCalledOnce();
-    expect(onBackgroundEnriched).toHaveBeenCalledOnce();
+    const curatedTarget = mockCurateFrozenSessionMemories.mock.calls[0][1] as FrozenSession;
+    expect(curatedTarget.filename).toBe('pending-abc.md');
+    deferredCurator.resolve(null);
+    await flush();
+    // Rail still notified (with null) so the pending badge can refresh.
+    expect(onBackgroundEnriched).toHaveBeenCalledWith(null);
   });
 
   it('flag on without an agent bridge keeps the legacy quick enrichment flow', async () => {

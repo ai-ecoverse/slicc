@@ -41,16 +41,36 @@ const DEFAULT_ALLOWED_COMMANDS = [
   'cut',
   'date',
   'diff',
+  'du',
   'echo',
+  'file',
   'find',
   'grep',
   'head',
+  // Structured reads of JSON stores the curator mines (e.g.
+  // /shared/loose-ends.json) — without it every jq read escalates.
+  'jq',
   'ls',
   'mkdir',
+  // Bare `mount` lists mount state, which the curator records (dropped
+  // mounts are a recurring session fact). Mutating calls stay contained by
+  // the FS grant, not by this list: mounting needs a user picker gesture
+  // (local) or credentials the curator cannot read (remote), and `mount
+  // unmount <path>` hits `RestrictedFS.checkWrite` on the mount path —
+  // EACCES under the curator's single-file `writablePaths`. If that
+  // checkWrite ever moves out of `RestrictedFS.unmount`, revisit this entry.
+  'mount',
   'mv',
+  'nl',
+  // Byte-level inspection (od/xxd) of corrupted stores — e.g. verifying the
+  // OPFS write-race residue pitfall — is read-only and recurred as a sudo
+  // interruption in real curator runs (2026-08-07).
+  'od',
   'printf',
+  'readlink',
   'sed',
   'sort',
+  'stat',
   'tail',
   'touch',
   'tr',
@@ -60,6 +80,7 @@ const DEFAULT_ALLOWED_COMMANDS = [
   // `/workspace/skills/` matches no grant and escalates instead of landing.
   'upskill',
   'wc',
+  'xxd',
 ];
 const ARRAY_KEYS = new Set(['writablePaths', 'visiblePaths', 'allowedCommands']);
 const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);

@@ -8,8 +8,10 @@
  *      and return null — nothing meaningful to extract or archive.
  *   3. Generate a title and icon, falling back to a heuristic title.
  *   4. Legacy mode extracts memory before writing the archive. Agentic mode
- *      writes the archive with a durable pending marker; its caller starts the
- *      curator after this function returns.
+ *      takes a fast quick-mode snapshot (no LLM calls) with durable
+ *      `pendingEnrichment` + `memoryPending` markers; its caller clears the
+ *      chat immediately and runs title enrichment + the curator in the
+ *      background.
  *
  * Scoops are intentionally untouched — they survive a "New session" reset
  * so the fresh cone inherits the existing scoop roster and decides what
@@ -159,20 +161,25 @@ export async function freezeConeSession(
   // but additionally marks the index entry as needing later enrichment.
   const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
-  if (!llmEnabled || !opts.agenticMemorySpawn) {
+  // A supplied curator spawn owns memory regardless of mode — the legacy
+  // extraction call would double up with the curator's rewrite.
+  if (!opts.agenticMemorySpawn) {
     await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
   }
   const title =
     (await generateTitleBestEffort(opts, agentMessages, llmEnabled)) ||
     heuristicTitle(session.messages);
   const icon = llmEnabled ? await pickIconBestEffort(opts, title) : undefined;
+  // The durable `memoryPending` marker is set whenever a curator pass is
+  // owed — including the agentic quick-snapshot path, where the caller
+  // starts the curator only after the chat has already cleared.
   return await writeFrozenArchive(
     opts,
     session,
     title,
     mode,
     icon,
-    llmEnabled && Boolean(opts.agenticMemorySpawn)
+    Boolean(opts.agenticMemorySpawn)
   );
 }
 
@@ -869,6 +876,15 @@ export interface EnrichPendingSessionOptions {
    * the boot-time pass, which leaves icons to the rail's lazy enrichment.
    */
   pickIcon?: (opts: { subject: string }) => Promise<string | null>;
+  /**
+   * Skip the memory-extraction LLM call and its append: title + icon only.
+   * Set by the agentic background pass, where the curator owns memory —
+   * running the legacy extraction as well would append duplicate bullets on
+   * top of the curator's rewrite. The `memoryPending` marker survives the
+   * rename in this mode so a curator that never finishes stays recoverable
+   * by the boot catch-up.
+   */
+  skipMemory?: boolean;
 }
 
 /**
@@ -907,7 +923,14 @@ export async function enrichPendingSession(
   // written yet, so the boot retry runs once with no duplicate memory.
   const icon = await pickEnrichmentIcon(opts, calls.newTitle);
   await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
-  return await commitEnrichedArchive(vfs, entry, archiveContent, calls.newTitle, icon);
+  return await commitEnrichedArchive(
+    vfs,
+    entry,
+    archiveContent,
+    calls.newTitle,
+    icon,
+    opts.skipMemory === true
+  );
 }
 
 /**
@@ -998,21 +1021,23 @@ async function runEnrichmentCalls(
   opts: EnrichPendingSessionOptions
 ): Promise<{ bullets: string; newTitle: string } | null> {
   let bullets = '';
-  try {
-    bullets = await runOneOffCompactionCall({
-      messages: agentMessages,
-      instruction: COMPACTION_MEMORY_INSTRUCTION,
-      model: opts.model,
-      apiKey: opts.apiKey,
-      maxTokens: MEMORY_MAX_TOKENS,
-      headers: opts.headers,
-    });
-  } catch (err) {
-    log.warn('Enrichment memory call failed (entry stays pending)', {
-      filename: entry.filename,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+  if (!opts.skipMemory) {
+    try {
+      bullets = await runOneOffCompactionCall({
+        messages: agentMessages,
+        instruction: COMPACTION_MEMORY_INSTRUCTION,
+        model: opts.model,
+        apiKey: opts.apiKey,
+        maxTokens: MEMORY_MAX_TOKENS,
+        headers: opts.headers,
+      });
+    } catch (err) {
+      log.warn('Enrichment memory call failed (entry stays pending)', {
+        filename: entry.filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
   }
   let newTitle = '';
   try {
@@ -1071,12 +1096,44 @@ async function appendEnrichmentMemory(
  * the final unlink fails — at worst we leak a stale pending-… file,
  * no data loss.
  */
+/**
+ * Rebuild the index entry for a just-enriched archive. Carries a
+ * freshly-picked icon (single-click "save" path) or preserves an existing
+ * one, and keeps `sessionId` across the rename so the snapshot data
+ * directory stays reachable. A title-only pass (agentic `skipMemory`) has
+ * not run the curator yet: `preserveMemoryPending` keeps that marker so a
+ * curator that never finishes leaves a recoverable entry, while the legacy
+ * pass — which just extracted memory — drops it by omission as before.
+ */
+function buildEnrichedIndexEntry(
+  entry: FrozenSessionIndexEntry,
+  newFilename: string,
+  resolvedTitle: string,
+  icon: string | undefined,
+  preserveMemoryPending: boolean
+): FrozenSessionIndexEntry {
+  const resolvedIcon = icon ?? entry.icon;
+  return {
+    filename: newFilename,
+    title: resolvedTitle,
+    frozenAt: entry.frozenAt,
+    messageCount: entry.messageCount,
+    ...(entry.cost ? { cost: entry.cost } : {}),
+    ...(entry.models ? { models: entry.models } : {}),
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+    ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+    ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
+    ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
+  };
+}
+
 async function commitEnrichedArchive(
   vfs: WritableVfsClient,
   entry: FrozenSessionIndexEntry,
   archiveContent: string,
   newTitle: string,
-  icon?: string
+  icon?: string,
+  preserveMemoryPending = false
 ): Promise<FrozenSessionIndexEntry | null> {
   const oldPath = frozenSessionPath(entry);
   // Only a quick-mode `pending-…md` draft carries a placeholder title and a
@@ -1103,22 +1160,13 @@ async function commitEnrichedArchive(
     }
   }
 
-  // Carry a freshly-picked icon (single-click "save" path) or preserve an
-  // existing one; absent on the boot pass, where the rail backfills lazily.
-  // Preserve sessionId across the rename so the snapshot data directory
-  // remains reachable without knowing the current filename.
-  const resolvedIcon = icon ?? entry.icon;
-  const updatedEntry: FrozenSessionIndexEntry = {
-    filename: newFilename,
-    title: resolvedTitle,
-    frozenAt: entry.frozenAt,
-    messageCount: entry.messageCount,
-    ...(entry.cost ? { cost: entry.cost } : {}),
-    ...(entry.models ? { models: entry.models } : {}),
-    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-    ...(resolvedIcon ? { icon: resolvedIcon } : {}),
-    ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
-  };
+  const updatedEntry = buildEnrichedIndexEntry(
+    entry,
+    newFilename,
+    resolvedTitle,
+    icon,
+    preserveMemoryPending
+  );
   try {
     await replaceIndexEntry(vfs, entry.filename, updatedEntry);
   } catch (err) {

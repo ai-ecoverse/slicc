@@ -114,6 +114,21 @@ function resolveAgenticMemorySpawn(
   return opts.agenticMemorySpawn;
 }
 
+/**
+ * Agentic freeze: snapshot fast, clear fast, curate in the background.
+ *
+ * 1. **Quick snapshot.** A `mode: 'quick'` freeze (heuristic title, no LLM
+ *    calls) writes the durable `pending-…md` draft carrying BOTH markers:
+ *    `pendingEnrichment` (title/icon still heuristic) and `memoryPending`
+ *    (curator still owed). A reload at any later point leaves a recoverable
+ *    entry for the boot catch-up.
+ * 2. **Return immediately.** The caller clears the chat as soon as the
+ *    archive is durable — no enrichment race, no waiting on the curator.
+ * 3. **Background pass.** Title + icon enrichment (`skipMemory` — the
+ *    curator owns memory) renames the draft, then the curator agent runs
+ *    over the renamed archive. `onBackgroundEnriched` fires after each step
+ *    so the freezer rail refreshes as results land.
+ */
 async function runAgenticMemoryFreeze(
   opts: RunNewSessionFreezeOptions,
   sessionStore: SessionStore,
@@ -125,13 +140,8 @@ async function runAgenticMemoryFreeze(
   const frozen = await freezeConeSession({
     sessionStore,
     vfs: opts.vfs,
-    mode: 'full',
-    model,
-    apiKey,
-    headers,
+    mode: 'quick',
     agenticMemorySpawn: spawn,
-    pickIcon: (iconOpts) =>
-      import('../providers/quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
   });
   if (!frozen) return null;
   if (opts.captureCompleteSnapshot) {
@@ -148,7 +158,49 @@ async function runAgenticMemoryFreeze(
       }
     }
   }
-  const curator = curateFrozenSessionMemories(
+  void runAgenticBackgroundPass(opts, sessionStore, model, apiKey, headers, spawn, frozen);
+  return frozen;
+}
+
+/**
+ * Background half of the agentic freeze — runs entirely after the caller has
+ * cleared the chat. Best-effort end to end: a failed title enrichment leaves
+ * the pending draft for the boot catch-up; a failed curator leaves
+ * `memoryPending` for the same. Never throws.
+ */
+async function runAgenticBackgroundPass(
+  opts: RunNewSessionFreezeOptions,
+  sessionStore: SessionStore,
+  model: Model<Api>,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  spawn: AgentBridge['spawn'],
+  frozen: FrozenSession
+): Promise<void> {
+  // Title + icon first (two bounded LLM calls, seconds): the rail shows the
+  // real name long before the multi-turn curator finishes, and the curator
+  // then mines the archive under its canonical filename.
+  let current: FrozenSession = frozen;
+  try {
+    const updated = await enrichPendingSession(opts.vfs, frozen, {
+      model,
+      apiKey,
+      headers,
+      skipMemory: true,
+      pickIcon: (iconOpts) =>
+        import('../providers/quick-llm.js').then(({ pickLucideIcon }) => pickLucideIcon(iconOpts)),
+    });
+    if (updated) {
+      current = { ...updated, archive: frozen.archive };
+      opts.onBackgroundEnriched?.(updated);
+    }
+  } catch (err) {
+    log.warn('Agentic title enrichment threw (draft stays pending)', {
+      filename: frozen.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const curated = await curateFrozenSessionMemories(
     {
       sessionStore,
       vfs: opts.vfs,
@@ -158,30 +210,19 @@ async function runAgenticMemoryFreeze(
       headers,
       agenticMemorySpawn: spawn,
     },
-    frozen
+    current
   ).catch((err) => {
     log.warn('Agentic memory curator threw (entry stays pending)', {
-      filename: frozen.filename,
+      filename: current.filename,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
   });
-  const winner = await raceEnrichmentAgainstTimer(
-    curator,
-    opts.enrichmentRaceMs ?? DEFAULT_ENRICHMENT_RACE_MS,
-    opts.onProgress
-  );
-  if (winner.kind === 'llm') {
-    return winner.updated ? { ...winner.updated, archive: frozen.archive } : frozen;
-  }
-  void curator.then((updated) => {
-    log.info('Background agentic memory curator resolved after race window', {
-      filename: frozen.filename,
-      memoryPending: updated ? updated.memoryPending === true : true,
-    });
-    opts.onBackgroundEnriched?.(updated);
+  log.info('Agentic memory curator finished', {
+    filename: current.filename,
+    memoryPending: curated ? curated.memoryPending === true : true,
   });
-  return frozen;
+  opts.onBackgroundEnriched?.(curated);
 }
 
 export interface RunNewSessionFreezeOptions {
@@ -199,13 +240,15 @@ export interface RunNewSessionFreezeOptions {
    * Race window in ms: how long to wait for LLM enrichment before resolving
    * (so the caller can clear the chat) and continuing enrichment in the
    * background. Injectable so tests don't block on the real 20s timer.
-   * Defaults to {@link DEFAULT_ENRICHMENT_RACE_MS}.
+   * Defaults to {@link DEFAULT_ENRICHMENT_RACE_MS}. Legacy path only — the
+   * agentic path resolves as soon as the quick snapshot is durable.
    */
   enrichmentRaceMs?: number;
   /**
    * Progress callback driven by the race timer: a 0..1 fraction of the race
    * window elapsed, then `null` once the race resolves (LLM done or timer
-   * fired). The freezer button maps this to its busy/progress ring.
+   * fired). The freezer button maps this to its busy/progress ring. Legacy
+   * path only — the agentic path never waits, so it drives no progress ring.
    */
   onProgress?: (fraction: number | null) => void;
   /**
