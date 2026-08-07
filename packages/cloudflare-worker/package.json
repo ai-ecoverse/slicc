@@ -14,7 +14,7 @@
     "jose": "^6.2.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260730.1",
+    "@cloudflare/workers-types": "5.20260731.1",
     "wrangler": "4.115.0"
   }
 }
