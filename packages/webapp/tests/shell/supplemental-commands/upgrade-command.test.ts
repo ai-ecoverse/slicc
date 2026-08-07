@@ -191,6 +191,39 @@ describe('upgrade apply', () => {
     expect(await fs.readFile(second)).toBe('second base\n');
   });
 
+  // `/shared/MEMORY.md` is the memory-curator contract. It is seeded only when
+  // absent, so this merge is the only route by which a curator-rule change
+  // reaches a workspace that already has one.
+  it('merges the curator contract at /shared/MEMORY.md while keeping local edits', async () => {
+    const path = '/shared/MEMORY.md';
+    await fs.writeFile(path, 'intro\nlocal rule\noutro\n');
+
+    const { result, json } = await run(
+      fs,
+      makeFetch({
+        'v1.0.0': { [path]: 'intro\nbase rule\noutro\n' },
+        'v2.0.0': { [path]: 'intro\nbase rule\noutro\nupstream rule\n' },
+      })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(json.results).toEqual([{ path, status: 'merged-clean' }]);
+    expect(await fs.readFile(path)).toBe('intro\nlocal rule\noutro\nupstream rule\n');
+  });
+
+  it('ignores bundled files outside the upgrade scopes', async () => {
+    const path = '/shared/CLAUDE.md';
+    await fs.writeFile(path, 'local\n');
+
+    const { json } = await run(
+      fs,
+      makeFetch({ 'v1.0.0': { [path]: 'base\n' }, 'v2.0.0': { [path]: 'upstream\n' } })
+    );
+
+    expect(json.results).toEqual([]);
+    expect(await fs.readFile(path)).toBe('local\n');
+  });
+
   it('returns JSON and a nonzero exit for discovery errors', async () => {
     const { result, json } = await run(fs, makeFetch({ 'v1.0.0': {} }));
     expect(result.exitCode).toBe(1);
