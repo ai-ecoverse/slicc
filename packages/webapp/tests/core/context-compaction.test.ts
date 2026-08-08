@@ -1233,6 +1233,38 @@ describe('createCompactContext image elision (#1986)', () => {
     expect(elisionStubs(keptToolResult)).toHaveLength(1);
   });
 
+  it('strips images (except the latest) when the oversized-tool-result early return fires (Codex P1 on #2013)', async () => {
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 2000,
+      reserveTokens: 500,
+      keepRecentTokens: 600,
+    });
+    // A giant tool result triggers the #2011 size-elision early return. Images
+    // ride along but estimateTokens under-counts them (~1,200 tokens each
+    // regardless of base64 size), so before the fix they passed through
+    // untouched and could re-overflow the real backend on the next turn.
+    const messages = [
+      createMessageWithImage('user', 'earlier screenshot', 40_000),
+      createAssistantWithToolCalls('running', ['big-1']),
+      createToolResult('x'.repeat(20_000), 'big-1'),
+      createMessageWithImage('user', 'latest screenshot', 40_000),
+    ];
+
+    const result = await compact(messages);
+
+    // Early return: elision alone sufficed, no LLM summary call.
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+    // The giant tool result is stubbed in place.
+    expect(result.some((m) => firstText(m).includes('Tool result elided'))).toBe(true);
+    // The OLD image is stubbed; the LATEST user image is kept — parity with the
+    // summarize path, so no oversized image survives the early return.
+    const users = result.filter((m) => asTestMessage(m).role === 'user');
+    expect(imageBlocks(users[0])).toHaveLength(0);
+    expect(imageBlocks(users[users.length - 1])).toHaveLength(1);
+  });
+
   it('hopeless branch strips image blocks from user messages', async () => {
     const compact = createCompactContext({
       model: mockModel,
