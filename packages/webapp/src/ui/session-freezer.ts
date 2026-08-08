@@ -33,7 +33,11 @@ import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
 import { runAgenticMemoryPass } from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
-import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
+import {
+  applyConeMemoryBudget,
+  CONE_MEMORY_PATH,
+  readSessionCount,
+} from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -915,14 +919,28 @@ export async function enrichPendingSession(
   if (archiveContent === null) return null;
   const agentMessages = recoverPendingMessages(entry, archiveContent);
   if (agentMessages === null) return null;
-  const calls = await runEnrichmentCalls(entry, agentMessages, opts);
+  // #1989: the agentic background pass clears `memoryPending` only AFTER
+  // the curator's rewrite lands — a tab closing between the two leaves a
+  // marker whose memory work is already done. If the cone memory file was
+  // rewritten after the freeze, run title-only recovery instead of
+  // appending legacy-extracted duplicates on top of the curated memory,
+  // and let the marker drop (the curator evidently ran).
+  const curatorAlreadyRan =
+    entry.memoryPending === true &&
+    opts.skipMemory !== true &&
+    (await memoryRewrittenSinceFreeze(vfs, entry));
+  const effectiveOpts = curatorAlreadyRan ? { ...opts, skipMemory: true } : opts;
+  const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
   if (calls === null) return null;
   // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
   // that can hang, while the append is non-idempotent. Running it first means
   // a hung/aborted pick leaves the archive cleanly pending with NO memory
   // written yet, so the boot retry runs once with no duplicate memory.
-  const icon = await pickEnrichmentIcon(opts, calls.newTitle);
-  await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
+  const icon = await pickEnrichmentIcon(effectiveOpts, calls.newTitle);
+  await appendEnrichmentMemory(vfs, entry, calls.bullets, effectiveOpts);
+  // `preserveMemoryPending` follows the CALLER's skipMemory, not the
+  // effective one: the agentic save path (curator still owed) keeps the
+  // marker, while the curator-already-ran case drops it by omission.
   return await commitEnrichedArchive(
     vfs,
     entry,
@@ -931,6 +949,27 @@ export async function enrichPendingSession(
     icon,
     opts.skipMemory === true
   );
+}
+
+/**
+ * #1989 discriminator: `true` when the cone memory file was modified
+ * after this archive's freeze — the curator's rewrite (the only
+ * freeze-adjacent writer in the agentic flow) landed even though the
+ * marker survived. Fail-closed: a missing file or unparsable timestamp
+ * reports `false`, keeping the legacy extraction.
+ */
+async function memoryRewrittenSinceFreeze(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry
+): Promise<boolean> {
+  const frozenAt = Date.parse(entry.frozenAt);
+  if (!Number.isFinite(frozenAt)) return false;
+  try {
+    const stats = await vfs.stat(CONE_MEMORY_PATH);
+    return stats.mtime > frozenAt;
+  } catch {
+    return false;
+  }
 }
 
 /**
