@@ -72,6 +72,9 @@ test.describe('compaction robustness', () => {
   test('pre-call compaction runs visibly and the turn continues (#1986 pipeline)', async ({
     page,
   }) => {
+    // Boot + two ~60K-char streamed story turns + a real compaction pass
+    // exceed the suite's default 30s per-test budget on CI machines.
+    test.setTimeout(240_000);
     await loadFakeLlmFixture(fixture('compaction-success'));
     await bootLeader(page);
     await fillHistoryPastThreshold(page);
@@ -91,6 +94,8 @@ test.describe('compaction robustness', () => {
   test('summary-call failure degrades to naive drop; the turn still completes (#1985)', async ({
     page,
   }) => {
+    // Same long-flow headroom as the success scenario above.
+    test.setTimeout(240_000);
     await loadFakeLlmFixture(fixture('compaction-fallback'));
     await bootLeader(page);
     await fillHistoryPastThreshold(page);
@@ -108,6 +113,9 @@ test.describe('compaction robustness', () => {
   });
 
   test('an errored turn keeps its completed messages across a reload (#1987)', async ({ page }) => {
+    // Two boots (initial + reload) plus the agent's retry loop need more
+    // than the suite's default 30s on CI machines.
+    test.setTimeout(120_000);
     await loadFakeLlmFixture(fixture('compaction-persistence'));
     await bootLeader(page);
 
