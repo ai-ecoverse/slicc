@@ -37,7 +37,8 @@
         "packages/shared-ts/src/secret-env-schema.ts",
         "packages/shared-ts/src/transcript-export.ts",
         "packages/shared-ts/src/transcript-redaction.ts",
-        "packages/shared-ts/src/slicc-app-url.ts"
+        "packages/shared-ts/src/slicc-app-url.ts",
+        "packages/node-server/src/electron-tray-follower.ts"
       ]
     },
     "chrome-extension": {
