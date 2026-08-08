@@ -279,4 +279,71 @@ describe('bootstrapKernelWorker', () => {
       }
     });
   });
+
+  describe('boot-progress watchdog (#2007)', () => {
+    /** Post `init`, then N progress heartbeats spaced `gap` ms apart, then ready. */
+    function makeProgressWorker(opts: {
+      heartbeats: number;
+      gap: number;
+      thenReady: boolean;
+    }): WorkerLike {
+      return {
+        postMessage: (message: unknown) => {
+          const data = message as { type?: string; kernelPort?: MessagePort };
+          if (data?.type !== 'kernel-worker-init' || !data.kernelPort) return;
+          const port = data.kernelPort;
+          port.start();
+          for (let i = 1; i <= opts.heartbeats; i++) {
+            setTimeout(
+              () => port.postMessage({ type: 'kernel-worker-boot-progress', stage: `s${i}` }),
+              opts.gap * i
+            );
+          }
+          if (opts.thenReady) {
+            setTimeout(
+              () => port.postMessage({ type: 'kernel-worker-ready' }),
+              opts.gap * (opts.heartbeats + 1)
+            );
+          }
+        },
+        terminate: () => {},
+      };
+    }
+
+    // The heartbeat gap is a small FRACTION of the watchdog window (80 ms vs
+    // 300 ms → 220 ms of slack per gap), so ordinary test-suite CPU
+    // contention cannot delay a heartbeat past the window and flake the
+    // re-arm. `readyTimeoutMs` stays real (the MessagePort delivery these
+    // heartbeats ride is a task source fake timers do not drive, so faking
+    // the clock here would deadlock rather than determinize).
+    it('a slow-but-advancing boot resolves — total time exceeds the base timeout', async () => {
+      // 5 heartbeats 80 ms apart (~400 ms) then ready — past the 300 ms base
+      // window, but each gap is well under it, so the watchdog keeps re-arming.
+      const worker = makeProgressWorker({ heartbeats: 5, gap: 80, thenReady: true });
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: makeStubCdpTransport(),
+        makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+        readyTimeoutMs: 300,
+      });
+
+      await expect(host.ready).resolves.toBeUndefined();
+      host.dispose();
+    });
+
+    it('progress then a stall past the window still rejects (watchdog, not a hard cap)', async () => {
+      // Two heartbeats, then silence — no ready. The clock re-arms on the
+      // heartbeats but must still fire once the worker goes quiet for >window.
+      const worker = makeProgressWorker({ heartbeats: 2, gap: 80, thenReady: false });
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: makeStubCdpTransport(),
+        makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+        readyTimeoutMs: 300,
+      });
+
+      await expect(host.ready).rejects.toThrow(/did not signal ready/);
+      host.dispose();
+    });
+  });
 });

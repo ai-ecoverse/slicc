@@ -7,8 +7,8 @@
  * (tray-join, auto-join) stay on the legacy dialog via the connect surface.
  */
 
+import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../core/discovery-preference.js';
 import { isFeatureEnabled, listFlags, setFeatureFlagOverride } from '../../core/feature-flags.js';
-import { getDiscoveryEnabled, setDiscoveryEnabled } from '../discovery-preference.js';
 import type { Account, ProviderConfig } from '../provider-settings.js';
 import { applyTheme } from '../theme.js';
 import {

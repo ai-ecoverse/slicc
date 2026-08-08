@@ -166,6 +166,19 @@ export interface KernelWorkerReadyMsg {
 }
 
 /**
+ * Posted over the kernel port at each boot milestone (orchestrator up,
+ * each restored scoop, lick manager, cone bootstrap). The page re-arms
+ * its kernel-ready watchdog on each, so a slow-but-advancing boot — a
+ * large restored session whose scoop-context init exceeds 30 s in total
+ * — is never killed mid-progress; only a genuine stall (no heartbeat for
+ * the window) still surfaces the timeout (#2007). `stage` is advisory.
+ */
+export interface KernelWorkerBootProgressMsg {
+  type: 'kernel-worker-boot-progress';
+  stage?: string;
+}
+
+/**
  * Posted back over the kernel port when `boot()` fails. Without this the
  * page only ever sees the generic 30s ready-timeout: the real error lands
  * in the worker console, which current Chrome DevTools/CDP cannot even
@@ -361,6 +374,14 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // instanceId-scoped reload request to the owning page.
   setStaleAssetInstanceId(init.instanceId);
   const beaconMixedBuildGraph = checkMixedBuildGraph(init);
+  // Boot-progress heartbeat (#2007): re-arms the page's ready watchdog at
+  // each awaited milestone so a slow-but-advancing boot is not killed.
+  const emitBootProgress = (stage: string): void => {
+    init.kernelPort.postMessage({
+      type: 'kernel-worker-boot-progress',
+      stage,
+    } satisfies KernelWorkerBootProgressMsg);
+  };
   try {
     configureWorkerEnvironment(init);
 
@@ -378,6 +399,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // Register providers first — kernel host construction reads the
     // provider registry (via scoop-context → provider-settings).
     await registerProviders();
+    emitBootProgress('providers-registered');
 
     const bridgeTransport = createBridgeMessageChannelTransport(init.kernelPort);
     const bridge = new Bridge(bridgeTransport);
@@ -385,6 +407,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
 
     const cdpProxy = new WorkerCdpProxy(init.cdpPort);
     await cdpProxy.connect();
+    emitBootProgress('cdp-connected');
     const browser = new BrowserAPI(cdpProxy);
 
     // The orchestrator's `container` parameter is stored but never read
@@ -403,6 +426,9 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       logger: console,
       localLickWsUrl: init.localLickWsUrl ?? null,
       syncFsChannelNonce: init.syncFsChannelNonce ?? null,
+      // Forward boot milestones to the page so it re-arms the ready
+      // watchdog on progress instead of killing a slow boot (#2007).
+      onBootProgress: emitBootProgress,
     });
 
     // Publish a sprinkle-manager proxy on the worker's globalThis so the

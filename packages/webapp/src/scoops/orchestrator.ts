@@ -344,7 +344,13 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /** Initialize orchestrator and load saved scoops */
-  async init(): Promise<void> {
+  /**
+   * @param onBootProgress Optional heartbeat fired after each restored
+   *   scoop's context init — the boot's main time sink for a large
+   *   session. Lets the page re-arm its kernel-ready watchdog so a
+   *   slow-but-advancing boot isn't killed by the timeout (#2007).
+   */
+  async init(onBootProgress?: (stage: string) => void): Promise<void> {
     await db.initDB();
 
     // Create the single shared VirtualFS
@@ -439,6 +445,11 @@ export class Orchestrator implements ConeApprovalRouter {
         if (!scoop.isCone) {
           this.lifecycle.markTabError(scoop.jid, message);
         }
+      } finally {
+        // Heartbeat per scoop (success OR skip) so the page's ready
+        // watchdog keeps resetting through a slow multi-scoop restore
+        // instead of firing mid-progress (#2007).
+        onBootProgress?.(`scoop-restored:${scoop.jid}`);
       }
     }
 
