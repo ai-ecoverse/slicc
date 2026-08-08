@@ -828,7 +828,7 @@ export interface ScoopStatusMsg {
 export interface CompactionStateMsg {
   type: 'compaction-state';
   scoopJid: string;
-  state: 'summarizing' | 'extracting-memory' | 'idle';
+  state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
 }
 
 /**

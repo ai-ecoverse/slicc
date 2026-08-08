@@ -1,0 +1,18 @@
+{
+  "model": "fake-coder-compaction",
+  "onOverflow": "error",
+  "turns": [
+    {
+      "whenUserMessageMatches": "create the marker file",
+      "content": "PERSIST-TOOL-TURN: creating the marker now.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "echo 'persisted-e2e-marker' > /tmp/persist-marker.txt"
+          }
+        }
+      ]
+    }
+  ]
+}

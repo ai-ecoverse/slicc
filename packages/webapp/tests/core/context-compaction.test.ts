@@ -979,3 +979,162 @@ describe('createCompactContext hopeless branch', () => {
     expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('createCompactContext image elision (#1986)', () => {
+  const mockModel = { id: 'test-model' } as unknown as Model<Api>;
+
+  beforeEach(() => {
+    mockCompleteSimple.mockReset();
+  });
+
+  /** User/toolResult message carrying text plus one image block. */
+  function createMessageWithImage(
+    role: 'user' | 'toolResult',
+    text: string,
+    imageChars = 4096
+  ): AgentMessage {
+    return {
+      role,
+      ...(role === 'toolResult' ? { toolCallId: 'img-tool-1', toolName: 'test_tool' } : {}),
+      content: [
+        { type: 'text' as const, text },
+        { type: 'image' as const, source: { data: 'A'.repeat(imageChars) } },
+      ],
+      timestamp: 0,
+    } as unknown as AgentMessage;
+  }
+
+  function imageBlocks(message: AgentMessage): TestContentBlock[] {
+    const content = asTestMessage(message).content;
+    return Array.isArray(content) ? content.filter((b) => b.type === 'image') : [];
+  }
+
+  function elisionStubs(message: AgentMessage): TestContentBlock[] {
+    const content = asTestMessage(message).content;
+    return Array.isArray(content)
+      ? content.filter((b) => b.type === 'text' && b.text?.includes('[image elided'))
+      : [];
+  }
+
+  it('elides images kept BEFORE the latest user message; the latest user message keeps its image', async () => {
+    mockCompleteSimple.mockResolvedValue(llmResponse('SUMMARY'));
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 2000,
+      reserveTokens: 500,
+      keepRecentTokens: 600,
+    });
+    // Old bulk to summarize, then a kept toolResult carrying an image and a
+    // small final user message carrying its own image.
+    const messages = [
+      createMessage('user', 'x'.repeat(10_000)),
+      createMessage('assistant', 'working on it'),
+      createAssistantWithToolCalls('running tool', ['img-tool-1']),
+      createMessageWithImage('toolResult', 'screenshot taken'),
+      createMessageWithImage('user', 'here is my photo, use it'),
+    ];
+
+    const result = await compact(messages);
+
+    expect(firstText(result[0])).toContain('<context-summary>');
+    const keptToolResult = result.find(
+      (m) => asTestMessage(m).role === 'toolResult'
+    ) as AgentMessage;
+    const keptUser = result[result.length - 1];
+    // Pre-last-user image → stubbed with re-fetch guidance.
+    expect(imageBlocks(keptToolResult)).toHaveLength(0);
+    expect(elisionStubs(keptToolResult)).toHaveLength(1);
+    expect(elisionStubs(keptToolResult)[0]?.text).toContain('~4 KB');
+    // The latest user message keeps its image — the model has not seen it yet.
+    expect(asTestMessage(keptUser).role).toBe('user');
+    expect(imageBlocks(keptUser)).toHaveLength(1);
+    expect(elisionStubs(keptUser)).toHaveLength(0);
+  });
+
+  it('progressively elides the latest user image too when the result is still over the threshold', async () => {
+    mockCompleteSimple.mockResolvedValue(llmResponse('SUMMARY'));
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 2000,
+      reserveTokens: 500,
+      // Tail large enough that even post-summary the total stays over the
+      // (window - reserve) threshold, forcing the progressive second pass.
+      keepRecentTokens: 1900,
+    });
+    const messages = [
+      createMessage('user', 'x'.repeat(10_000)),
+      createMessage('assistant', 'y'.repeat(6_500)),
+      createMessageWithImage('user', 'z'.repeat(500)),
+    ];
+
+    const result = await compact(messages);
+
+    const keptUser = result[result.length - 1];
+    expect(asTestMessage(keptUser).role).toBe('user');
+    expect(imageBlocks(keptUser)).toHaveLength(0);
+    expect(elisionStubs(keptUser)).toHaveLength(1);
+  });
+
+  it('naive fallback emits the fallback state and still elides kept images', async () => {
+    mockCompleteSimple.mockRejectedValue(new Error('provider 500'));
+    const states: string[] = [];
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 2000,
+      reserveTokens: 500,
+      keepRecentTokens: 600,
+      onCompactionStateChange: (state) => states.push(state),
+    });
+    const messages = [
+      createMessage('user', 'x'.repeat(10_000)),
+      createMessage('assistant', 'ok'),
+      createAssistantWithToolCalls('running tool', ['img-tool-1']),
+      createMessageWithImage('toolResult', 'screenshot taken'),
+      createMessage('user', 'and now?'),
+    ];
+
+    const result = await compact(messages);
+
+    // Degradation is observable (#1985): summarizing → fallback → idle, in order.
+    expect(states.indexOf('summarizing')).toBeGreaterThanOrEqual(0);
+    expect(states.indexOf('fallback')).toBeGreaterThan(states.indexOf('summarizing'));
+    expect(states[states.length - 1]).toBe('idle');
+    expect(firstText(result[0])).toContain('compacted to save context space');
+    const keptToolResult = result.find(
+      (m) => asTestMessage(m).role === 'toolResult'
+    ) as AgentMessage;
+    expect(imageBlocks(keptToolResult)).toHaveLength(0);
+    expect(elisionStubs(keptToolResult)).toHaveLength(1);
+  });
+
+  it('hopeless branch strips image blocks from user messages', async () => {
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 1000,
+      reserveTokens: 200,
+      keepRecentTokens: 200,
+      hopelessMultiplier: 2,
+    });
+    // Total far beyond window*multiplier → hopeless; no LLM call may happen.
+    // Images ride on BOTH ends so the kept tail provably carries a stub —
+    // the head image is summarized/dropped along with its message.
+    const messages = [
+      createMessageWithImage('user', 'x'.repeat(20_000)),
+      createMessage('assistant', 'ack'),
+      createMessageWithImage('user', 'y'.repeat(20_000)),
+    ];
+
+    const result = await compact(messages);
+
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+    for (const m of result) {
+      expect(imageBlocks(m)).toHaveLength(0);
+    }
+    const withStub = result.filter((m) => elisionStubs(m).length > 0);
+    expect(withStub.length).toBeGreaterThan(0);
+  });
+});

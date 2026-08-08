@@ -119,7 +119,7 @@ export interface OffscreenClientCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
   ) => void;
   /**
    * Fired when any scoop (selected or not) produces meaningful agent
