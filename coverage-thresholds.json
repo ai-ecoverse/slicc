@@ -44,7 +44,7 @@
       "lines": 85,
       "statements": 84,
       "functions": 76,
-      "branches": 72,
+      "branches": 73,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -90,7 +90,7 @@
       "lines": 89,
       "statements": 87,
       "functions": 98,
-      "branches": 75
+      "branches": 76
     },
     "cloud-core": {
       "lines": 85,
@@ -111,7 +111,7 @@
       ]
     },
     "shared": {
-      "lines": 96,
+      "lines": 97,
       "statements": 94,
       "functions": 94,
       "branches": 87
@@ -136,9 +136,9 @@
       "regions": 59
     },
     "swift-launcher": {
-      "lines": 40,
-      "functions": 44,
-      "regions": 51
+      "lines": 41,
+      "functions": 45,
+      "regions": 52
     },
     "swift-optel": {
       "lines": 75,
@@ -146,14 +146,14 @@
       "regions": 79
     },
     "swift-traysession": {
-      "lines": 85,
-      "functions": 83,
+      "lines": 88,
+      "functions": 84,
       "regions": 83
     },
     "ios-app": {
-      "lines": 66,
-      "functions": 58,
-      "regions": 59
+      "lines": 70,
+      "functions": 67,
+      "regions": 68
     }
   }
 }
