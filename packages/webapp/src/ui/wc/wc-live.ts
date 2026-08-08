@@ -2270,3 +2270,4 @@ export async function mountWcUiLive(
     log.info('Auto-prompt submitted', { length: autoPrompt.length });
   }
 }
+// speech-e2e trigger probe: main + no functional change (bisecting #1995 CI failure)
