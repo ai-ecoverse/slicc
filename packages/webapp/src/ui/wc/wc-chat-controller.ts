@@ -6,6 +6,7 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
+import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
   applyDictationMarkers,
   consumeDictationFirst,
@@ -14,7 +15,6 @@ import {
 import { TOOL_UI_MOUNTED_ACTION } from '../../tools/tool-ui.js';
 import { consumeStaleAssetReplayPending } from '../boot/setup-preload-error-reload.js';
 import { type DipInstance, mountDip } from '../dip.js';
-import { trackChatSend, trackError, trackLickBackpressure } from '../telemetry.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {

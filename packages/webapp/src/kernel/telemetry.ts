@@ -13,11 +13,11 @@
  * - navigate: page load with deployment mode
  */
 
+import { isUserFixableError } from '../core/error-families.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { setAgentErrorTelemetrySink } from '../core/telemetry-hook.js';
 import { type ScoopLifecycleEvent, setScoopTelemetrySink } from '../scoops/scoop-telemetry-hook.js';
 import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
-import { isUserFixableError } from './error-families.js';
 
 type SampleRUM = (checkpoint: string, data?: { source?: string; target?: string }) => void;
 

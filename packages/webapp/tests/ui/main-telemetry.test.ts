@@ -22,7 +22,9 @@ const source = readFileSync(mainPath, 'utf8');
 
 describe('ui/main.ts telemetry wiring', () => {
   it('imports initTelemetry from the telemetry module', () => {
-    expect(source).toMatch(/import\s+\{\s*initTelemetry\s*\}\s+from\s+['"]\.\/telemetry\.js['"]/);
+    expect(source).toMatch(
+      /import\s+\{\s*initTelemetry\s*\}\s+from\s+['"]\.\.\/kernel\/telemetry\.js['"]/
+    );
   });
 
   it('calls initTelemetry() with a swallowed catch', () => {

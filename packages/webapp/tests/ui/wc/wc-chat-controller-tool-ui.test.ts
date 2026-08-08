@@ -15,9 +15,9 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-vi.mock('../../../src/ui/telemetry.js', async () => {
-  const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
-    '../../../src/ui/telemetry.js'
+vi.mock('../../../src/kernel/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/kernel/telemetry.js')>(
+    '../../../src/kernel/telemetry.js'
   );
   return { ...actual, trackChatSend: vi.fn() };
 });

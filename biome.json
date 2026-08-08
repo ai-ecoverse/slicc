@@ -377,7 +377,6 @@
         "packages/webapp/src/providers/index.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts",
         "packages/webapp/src/shell/supplemental-commands/upskill/registries/browse-sh.ts",
-        "packages/webapp/src/ui/sprinkle-manager.ts",
         "packages/webapp/tests/kernel/realm/js-realm-drain.test.ts",
         "packages/webapp/tests/providers/adobe-provider.test.ts",
         "packages/webcomponents/src/composer/slicc-composer.ts"

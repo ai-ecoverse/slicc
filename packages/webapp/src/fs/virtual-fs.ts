@@ -342,15 +342,39 @@ export class VirtualFS {
       entry = undefined;
     }
     if (!entry) {
-      const backendFs = (await (
-        zenfs as unknown as {
-          resolveMountConfig: (opts: unknown) => Promise<unknown>;
-        }
-      ).resolveMountConfig({
-        backend: WebAccess,
-        handle,
-        metadata: '/.metadata.json',
-      })) as { index?: { toJSON: () => unknown } };
+      // Self-heal (#1984): the mount's `crossCopy` trusts the sidecar, so a
+      // poisoned entry (kind flip, stale size, missing path) throws EISDIR
+      // here and bricks EVERY boot until the file is fixed. Validate the
+      // sidecar against the real tree and retry once instead of failing the
+      // whole kernel; an unrepairable failure rethrows the original error.
+      const resolveBackend = (): Promise<unknown> =>
+        (
+          zenfs as unknown as {
+            resolveMountConfig: (opts: unknown) => Promise<unknown>;
+          }
+        ).resolveMountConfig({
+          backend: WebAccess,
+          handle,
+          metadata: '/.metadata.json',
+        });
+      const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
+        './sidecar-repair.js'
+      );
+      const backendFs = (await resolveWithSidecarRepair(
+        resolveBackend,
+        // The repair's read-mutate-write shares the sidecar with every
+        // context of the origin: run it under the same cross-context Web
+        // Lock as `writeOpfsMetadataSidecarUnlocked`, so a realm that is
+        // already booted and flushing cannot be clobbered mid-repair.
+        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle)),
+        (summary) =>
+          console.warn('[virtual-fs] repaired poisoned metadata sidecar; retrying mount', {
+            dbName: vfs.dbName,
+            kindFixed: summary.kindFixed,
+            sizesFixed: summary.sizesFixed,
+            dropped: summary.dropped,
+          })
+      )) as { index?: { toJSON: () => unknown } };
       try {
         (zenfs.mount as unknown as (p: string, fs: unknown) => void)(mountPoint, backendFs);
       } catch {

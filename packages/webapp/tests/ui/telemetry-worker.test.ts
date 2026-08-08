@@ -21,7 +21,7 @@ const mockHelixRum = vi.fn();
 
 // Mock both sampler modules so we can prove which branch fired and that the
 // worker path never falls through to the helix path.
-vi.mock('../../src/ui/rum-worker.js', () => ({ default: mockWorkerRum }));
+vi.mock('../../src/kernel/rum-worker.js', () => ({ default: mockWorkerRum }));
 vi.mock('@adobe/helix-rum-js', () => ({ sampleRUM: mockHelixRum }));
 
 // EventTarget shaped `self` stub so `self.addEventListener` /
@@ -62,12 +62,12 @@ describe('telemetry — standalone-worker branch', () => {
     expect(typeof document).toBe('undefined');
     expect(typeof localStorage).toBe('undefined');
 
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await expect(initTelemetry()).resolves.toBeUndefined();
   });
 
   it('emits a navigate checkpoint via the worker-safe sampler with target=standalone-worker', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect(mockWorkerRum).toHaveBeenCalledWith(
       'navigate',
@@ -78,14 +78,14 @@ describe('telemetry — standalone-worker branch', () => {
   });
 
   it('writes RUM_GENERATION=slicc-standalone-worker to globalThis (no window to write to)', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect((globalThis as Record<string, unknown>).RUM_GENERATION).toBe('slicc-standalone-worker');
   });
 
   it('registers error and unhandledrejection listeners on self', async () => {
     const addSpy = vi.spyOn(workerSelf, 'addEventListener');
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     const types = addSpy.mock.calls.map((c) => c[0]);
     expect(types).toContain('error');
@@ -93,7 +93,7 @@ describe('telemetry — standalone-worker branch', () => {
   });
 
   it('error listener falls back to empty string when message is null (?? branch)', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockWorkerRum.mockClear();
 
@@ -109,7 +109,7 @@ describe('telemetry — standalone-worker branch', () => {
   });
 
   it('error listener forwards sanitized message via trackError → sampleRUM', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockWorkerRum.mockClear();
 
@@ -127,7 +127,7 @@ describe('telemetry — standalone-worker branch', () => {
   });
 
   it('unhandledrejection listener stringifies non-Error reasons', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockWorkerRum.mockClear();
 
@@ -142,7 +142,7 @@ describe('telemetry — standalone-worker branch', () => {
   });
 
   it('unhandledrejection listener uses Error.message when reason is an Error', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockWorkerRum.mockClear();
 

@@ -24,15 +24,15 @@ Signals by Application" at the end of this document.
 - **Lightweight**: sampling-based, zero performance impact on unsampled pageviews.
 - **Privacy-first**: no cookies, no PII, per-pageview random ID, opt-out via `localStorage`.
 - **Fire-and-forget**: `navigator.sendBeacon` — no response handling, no retries, never blocks the UI.
-- **Two implementations behind one API**: CLI/Electron use `@adobe/helix-rum-js` (npm dep) with its auto-loaded enhancer for CWV/auto-click. The Chrome extension uses an inlined `packages/webapp/src/ui/rum.js` (~50 lines, modeled on `@adobe/aem-sidekick`) because the extension manifest CSP blocks the auto-loaded enhancer. See "Integration Approach" for details.
-- **Custom checkpoints**: `sampleRUM(checkpoint, {source, target})` is called via thin wrappers (`trackChatSend`, `trackShellCommand`, etc.) in `packages/webapp/src/ui/telemetry.ts`.
+- **Two implementations behind one API**: CLI/Electron use `@adobe/helix-rum-js` (npm dep) with its auto-loaded enhancer for CWV/auto-click. The Chrome extension uses an inlined `packages/webapp/src/kernel/rum.js` (~50 lines, modeled on `@adobe/aem-sidekick`) because the extension manifest CSP blocks the auto-loaded enhancer. See "Integration Approach" for details.
+- **Custom checkpoints**: `sampleRUM(checkpoint, {source, target})` is called via thin wrappers (`trackChatSend`, `trackShellCommand`, etc.) in `packages/webapp/src/kernel/telemetry.ts`.
 
 ## Integration Approach
 
-`packages/webapp/src/ui/telemetry.ts` is a small dispatcher chosen at init time by `getModeLabel()`:
+`packages/webapp/src/kernel/telemetry.ts` is a small dispatcher chosen at init time by `getModeLabel()`:
 
 - **CLI / Electron** load `@adobe/helix-rum-js` (npm dep). Helix's auto-loaded enhancer fetches CWV/auto-click instrumentation from `rum.hlx.page` — there is no extension manifest CSP in this mode (it's a regular page served by the dev server in CLI, an Electron BrowserWindow in Electron), so the cross-origin script load and beacon are unrestricted. `window.SAMPLE_PAGEVIEWS_AT_RATE = 'high'` is set before the import — helix interprets `'high'` as 1-in-10 sampling.
-- **Extension** loads `packages/webapp/src/ui/rum.js` instead — a self-contained ~50-line beacon that fires `navigator.sendBeacon` to `https://rum.hlx.page/.rum/<weight>` (default weight 10). The inlined approach avoids the auto-loaded enhancer (CSP-blocked by `script-src 'self' 'wasm-unsafe-eval'`) and matches `@adobe/aem-sidekick`'s pattern of bundling a tiny RUM utility into the extension itself.
+- **Extension** loads `packages/webapp/src/kernel/rum.js` instead — a self-contained ~50-line beacon that fires `navigator.sendBeacon` to `https://rum.hlx.page/.rum/<weight>` (default weight 10). The inlined approach avoids the auto-loaded enhancer (CSP-blocked by `script-src 'self' 'wasm-unsafe-eval'`) and matches `@adobe/aem-sidekick`'s pattern of bundling a tiny RUM utility into the extension itself.
 
 Both implementations share the `(checkpoint, data)` signature. `window.RUM_GENERATION` is set to `slicc-cli`, `slicc-extension`, or `slicc-electron` so dashboard queries can split by deployment mode.
 
@@ -280,7 +280,7 @@ Once checkpoints are flowing in production, verify in the RUM dashboard (`rum.hl
 
 ## Deploy-Impact Signals by Application
 
-Everything above covers the three floats that load `packages/webapp/src/ui/telemetry.ts`.
+Everything above covers the three floats that load `packages/webapp/src/kernel/telemetry.ts`.
 The repo ships eight applications; five of them never load it, so "check the RUM
 dashboard" is the wrong answer for those. This section is the post-ship lookup table for
 the question that actually gets asked: **I just shipped — where do I look to see if it

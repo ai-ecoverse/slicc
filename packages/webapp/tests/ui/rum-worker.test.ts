@@ -34,7 +34,7 @@ describe('rum-worker.js', () => {
   });
 
   it('caches sampling decision on globalThis.hlx.rum on first call', async () => {
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate', { target: 'standalone-worker' });
@@ -48,7 +48,7 @@ describe('rum-worker.js', () => {
 
   it('emits sendBeacon when isSelected (Math.random=0 forces selection)', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate', { target: 'standalone-worker' });
@@ -65,7 +65,7 @@ describe('rum-worker.js', () => {
 
   it('skips sendBeacon when not selected', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.99);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate', { target: 'standalone-worker' });
@@ -76,7 +76,7 @@ describe('rum-worker.js', () => {
     const storage: Record<string, string> = { 'slicc-rum-debug': '1' };
     vi.stubGlobal('localStorage', { getItem: (k: string) => storage[k] ?? null });
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate');
@@ -91,7 +91,7 @@ describe('rum-worker.js', () => {
 
   it('falls back to weight=10 when localStorage is absent', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate');
@@ -108,7 +108,7 @@ describe('rum-worker.js', () => {
       },
     });
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     expect(() => sampleRUM('navigate')).not.toThrow();
@@ -120,7 +120,7 @@ describe('rum-worker.js', () => {
 
   it('no-ops when navigator.sendBeacon is missing', async () => {
     vi.stubGlobal('navigator', {});
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     expect(() => sampleRUM('navigate')).not.toThrow();
@@ -129,7 +129,7 @@ describe('rum-worker.js', () => {
 
   it('never throws when JSON.stringify rejects circular data', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     const circular: Record<string, unknown> = {};
@@ -143,7 +143,7 @@ describe('rum-worker.js', () => {
     // undefined)` actually replaces the property so the typeof check returns
     // 'undefined' even on Node >=22 (where globalThis.navigator exists).
     vi.stubGlobal('navigator', undefined);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     expect(() => sampleRUM('navigate')).not.toThrow();
@@ -152,7 +152,7 @@ describe('rum-worker.js', () => {
   it('falls back to empty-string referer when self.location is undefined', async () => {
     vi.stubGlobal('self', {});
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate');
@@ -163,7 +163,7 @@ describe('rum-worker.js', () => {
 
   it('reuses cached sampling decision across multiple calls', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const { default: sampleRUM } = (await import('../../src/ui/rum-worker.js')) as {
+    const { default: sampleRUM } = (await import('../../src/kernel/rum-worker.js')) as {
       default: SampleRUM;
     };
     sampleRUM('navigate');

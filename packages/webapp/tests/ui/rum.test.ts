@@ -38,7 +38,7 @@ describe('rum.js', () => {
 
   it('sends a beacon when isSelected (random*weight < 1)', async () => {
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     sampleRUM('formsubmit', { source: 'cone', target: 'claude' });
 
@@ -59,7 +59,7 @@ describe('rum.js', () => {
 
   it('skips beacons when not selected (random*weight >= 1)', async () => {
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     sampleRUM('formsubmit', { source: 'cone' });
 
@@ -69,7 +69,7 @@ describe('rum.js', () => {
   it('debug flag forces weight=1 and selection', async () => {
     (globalThis as any).localStorage.setItem('slicc-rum-debug', '1');
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.99);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     sampleRUM('navigate', { target: 'extension' });
 
@@ -81,7 +81,7 @@ describe('rum.js', () => {
 
   it('caches the per-pageview decision on window.hlx.rum', async () => {
     randomSpy = vi.spyOn(Math, 'random').mockReturnValueOnce(0.05).mockReturnValueOnce(0.99);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     sampleRUM('a');
     sampleRUM('b');
@@ -97,7 +97,7 @@ describe('rum.js', () => {
       throw new Error('boom');
     });
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     expect(() => sampleRUM('formsubmit')).not.toThrow();
   });
@@ -105,7 +105,7 @@ describe('rum.js', () => {
   it('bails silently when window is undefined', async () => {
     // Simulate non-browser context (e.g., SSR, worker without window).
     delete (globalThis as any).window;
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     expect(() => sampleRUM('formsubmit')).not.toThrow();
     expect(sendBeaconSpy).not.toHaveBeenCalled();
@@ -114,7 +114,7 @@ describe('rum.js', () => {
   it('bails silently when navigator is undefined', async () => {
     delete (globalThis as any).navigator;
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     expect(() => sampleRUM('formsubmit')).not.toThrow();
   });
@@ -127,7 +127,7 @@ describe('rum.js', () => {
       },
     };
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
-    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+    const { default: sampleRUM } = await import('../../src/kernel/rum.js');
 
     expect(() => sampleRUM('formsubmit')).not.toThrow();
     // Default weight (10) is used, beacon URL reflects that.

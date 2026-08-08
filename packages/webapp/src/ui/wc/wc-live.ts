@@ -50,7 +50,7 @@ import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
-import type { OffscreenClient, OffscreenClientCallbacks } from '../offscreen-client.js';
+import { OffscreenClient, type OffscreenClientCallbacks } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
@@ -2221,7 +2221,7 @@ export async function mountWcUiLive(
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
-    callbacks: createWcLiveCallbacks(boot.wiring),
+    makeClient: (transport) => new OffscreenClient(createWcLiveCallbacks(boot.wiring), transport),
     localApiBaseUrl,
     bridgeToken,
     syncFsBridgeEnabled,

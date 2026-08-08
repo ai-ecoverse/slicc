@@ -22,7 +22,7 @@ const source = readFileSync(workerPath, 'utf8');
 describe('kernel-worker.ts telemetry wiring', () => {
   it('imports initTelemetry from the webapp telemetry module', () => {
     expect(source).toMatch(
-      /import\s+\{\s*initTelemetry\s*\}\s+from\s+['"][^'"]*\/ui\/telemetry\.js['"]/
+      /import\s+\{\s*initTelemetry\s*\}\s+from\s+['"][^'"]*\/telemetry\.js['"]/
     );
   });
 
