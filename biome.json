@@ -341,7 +341,6 @@
         "packages/webapp/providers/openai-codex.ts",
         "packages/webapp/providers/xai-grok.ts",
         "packages/webapp/src/cdp/har-recorder.ts",
-        "packages/webapp/src/kernel/host.ts",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/providers/intercepted-oauth.ts",
         "packages/webapp/src/scoops/scheduler.ts",

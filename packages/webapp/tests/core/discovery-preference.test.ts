@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../src/core/discovery-preference.js';
 import { setExtensionDelegateId } from '../../src/shell/proxied-fetch.js';
-import { getDiscoveryEnabled, setDiscoveryEnabled } from '../../src/ui/discovery-preference.js';
 
 function makeMemoryStorage(): Storage {
   const store = new Map<string, string>();

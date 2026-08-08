@@ -33,6 +33,7 @@ import type { FeatureFlagFloat } from '../core/feature-flags.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
 import type {
   KernelWorkerBootErrorMsg,
+  KernelWorkerBootProgressMsg,
   KernelWorkerInitMsg,
   KernelWorkerReadyMsg,
 } from './kernel-worker.js';
@@ -292,7 +293,16 @@ export function bootstrapKernelWorker<TClient>(
       const data = event.data as
         | Partial<KernelWorkerReadyMsg>
         | Partial<KernelWorkerBootErrorMsg>
+        | Partial<KernelWorkerBootProgressMsg>
         | null;
+      // #2007: a boot-progress heartbeat means the worker is still
+      // advancing (orchestrator up, a scoop restored, cone bootstrapped,
+      // …) — re-arm the clock so the timeout is a stall watchdog, not a
+      // hard cap on a slow-but-healthy boot.
+      if (data?.type === 'kernel-worker-boot-progress') {
+        armReadyTimeout();
+        return;
+      }
       if (data?.type === 'kernel-worker-ready') {
         cleanupReady?.();
         resolve();

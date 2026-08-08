@@ -49,6 +49,7 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
+import { getDiscoveryEnabled } from '../core/discovery-preference.js';
 import { hasLocalNodeServer } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
@@ -70,7 +71,6 @@ import {
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
-import { getDiscoveryEnabled } from '../ui/discovery-preference.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
@@ -159,6 +159,15 @@ export interface KernelHostConfig {
    * is not installed (realms fall back to the bounded snapshot).
    */
   syncFsChannelNonce?: SyncFsNonce | null;
+  /**
+   * Boot-progress heartbeat, called at each boot milestone (orchestrator
+   * up, each restored scoop's context, lick manager, cone bootstrap, …).
+   * The kernel worker forwards it to the page, which re-arms the
+   * kernel-ready watchdog on each — so a slow-but-advancing boot (a large
+   * restored session) is never killed by the timeout, while a genuine
+   * stall (no progress for the window) still surfaces (#2007). Best-effort.
+   */
+  onBootProgress?: (stage: string) => void;
 }
 
 export interface LickRoutingContext {
@@ -340,7 +349,12 @@ function routeFormattedLickToCone(
     // dip) can locate this stored message and flip its rendered card.
     ...(event.lickId ? { lickId: event.lickId } : {}),
   };
-  orchestrator.handleMessage(channelMsg);
+  // Fire-and-forget: this routing handler is sync-void (the lick pipeline
+  // does not await delivery), so surface a rejection to the log rather
+  // than letting it float unhandled.
+  void orchestrator.handleMessage(channelMsg).catch((err: unknown) => {
+    log.warn('Lick message routing failed', { channel, eventName, error: String(err) });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +374,8 @@ async function bootOrchestrator(
   container: HTMLElement,
   browser: BrowserAPI,
   bridge: KernelFacade,
-  callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>
+  callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>,
+  onBootProgress?: (stage: string) => void
 ): Promise<{
   processManager: ProcessManager;
   orchestrator: OrchestratorType;
@@ -400,7 +415,10 @@ async function bootOrchestrator(
   const unsubFollower = subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
 
   // 4. Init orchestrator (loads persisted scoops, mounts the shared FS).
-  await orchestrator.init();
+  //    Each restored scoop's context init emits a boot-progress heartbeat —
+  //    this is the boot's main time sink for a large session, so it must
+  //    keep the ready watchdog alive (#2007).
+  await orchestrator.init(onBootProgress);
 
   // 4b. Seed the bridge's chat buffers from each scoop's restored
   // canonical conversation, BEFORE `kernel-worker-ready` is signaled and
@@ -830,11 +848,13 @@ export function shouldStartLickWsBridge(): boolean {
 export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
   const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;
+  const progress = (stage: string): void => config.onBootProgress?.(stage);
 
   // Steps 1–4b: construct + init the orchestrator, bind the bridge, wire tray
   // subs, seed chat buffers. See `bootOrchestrator` for the per-step detail.
   const { processManager, orchestrator, unsubLeader, unsubFollower, sharedFs } =
-    await bootOrchestrator(container, browser, bridge, callbacks);
+    await bootOrchestrator(container, browser, bridge, callbacks, config.onBootProgress);
+  progress('orchestrator-ready');
   if (sharedFs) {
     publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
   } else {
@@ -863,6 +883,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 6. Register session-costs provider for the `cost` shell command;
   //    7. init the LickManager + wire lick→cone routing.
   const lickManager = await initCostsAndLickManager(orchestrator, config, log);
+  progress('lick-manager-ready');
 
   // 7b. Publish the workflow run manager on `globalThis.__slicc_workflows`
   //     so the `workflow` shell command + the cone resolve it the same way
@@ -926,6 +947,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   if (!skipConeBootstrap) {
     await bootstrapCone(orchestrator);
   }
+  progress('cone-bootstrapped');
 
   // 11. Upgrade detection. Must run after cone bootstrap so an upgrade
   //     lick has a routable target.

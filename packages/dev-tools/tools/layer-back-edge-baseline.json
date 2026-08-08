@@ -17,7 +17,6 @@
   "packages/webapp/src/fs/mount/signed-fetch.ts": 2,
   "packages/webapp/src/fs/sudo-fs.ts": 2,
   "packages/webapp/src/git/git-commands.ts": 1,
-  "packages/webapp/src/kernel/host.ts": 1,
   "packages/webapp/src/kernel/remote-terminal-view.ts": 2,
   "packages/webapp/src/providers/adobe-oauth-state.ts": 1,
   "packages/webapp/src/scoops/agent-message-to-chat.ts": 1,

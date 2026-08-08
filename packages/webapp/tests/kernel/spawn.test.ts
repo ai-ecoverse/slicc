@@ -279,4 +279,65 @@ describe('bootstrapKernelWorker', () => {
       }
     });
   });
+
+  describe('boot-progress watchdog (#2007)', () => {
+    /** Post `init`, then N progress heartbeats spaced `gap` ms apart, then ready. */
+    function makeProgressWorker(opts: {
+      heartbeats: number;
+      gap: number;
+      thenReady: boolean;
+    }): WorkerLike {
+      return {
+        postMessage: (message: unknown) => {
+          const data = message as { type?: string; kernelPort?: MessagePort };
+          if (data?.type !== 'kernel-worker-init' || !data.kernelPort) return;
+          const port = data.kernelPort;
+          port.start();
+          for (let i = 1; i <= opts.heartbeats; i++) {
+            setTimeout(
+              () => port.postMessage({ type: 'kernel-worker-boot-progress', stage: `s${i}` }),
+              opts.gap * i
+            );
+          }
+          if (opts.thenReady) {
+            setTimeout(
+              () => port.postMessage({ type: 'kernel-worker-ready' }),
+              opts.gap * (opts.heartbeats + 1)
+            );
+          }
+        },
+        terminate: () => {},
+      };
+    }
+
+    it('a slow-but-advancing boot resolves — total time exceeds the base timeout', async () => {
+      // 6 heartbeats 30ms apart (~180ms) then ready — well past the 50ms base
+      // timeout, but each gap is under it, so the watchdog keeps re-arming.
+      const worker = makeProgressWorker({ heartbeats: 6, gap: 30, thenReady: true });
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: makeStubCdpTransport(),
+        makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+        readyTimeoutMs: 50,
+      });
+
+      await expect(host.ready).resolves.toBeUndefined();
+      host.dispose();
+    });
+
+    it('progress then a stall past the window still rejects (watchdog, not a hard cap)', async () => {
+      // Two heartbeats, then silence — no ready. The clock re-arms on the
+      // heartbeats but must still fire once the worker goes quiet for >window.
+      const worker = makeProgressWorker({ heartbeats: 2, gap: 20, thenReady: false });
+      const host = bootstrapKernelWorker({
+        worker,
+        realCdpTransport: makeStubCdpTransport(),
+        makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+        readyTimeoutMs: 50,
+      });
+
+      await expect(host.ready).rejects.toThrow(/did not signal ready/);
+      host.dispose();
+    });
+  });
 });
