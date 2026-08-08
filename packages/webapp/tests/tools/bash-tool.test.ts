@@ -49,12 +49,36 @@ describe('Bash Tool', () => {
       wipe: true,
     });
     shell = new AlmostBashShell({ fs });
-    bash = createBashTool(shell);
+    bash = createBashTool(shell, fs);
   });
 
   it('has correct name and description', () => {
     expect(bash.name).toBe('bash');
     expect(bash.description).toBeTruthy();
+  });
+
+  it('caps oversized output at 40KB and writes the full output to a temp file (#2010)', async () => {
+    const big = 'y'.repeat(60 * 1024); // 60KB — over the 40KB cap
+    await fs.writeFile('/big.txt', big);
+
+    const result = await bash.execute({ command: 'cat /big.txt' });
+
+    // Returned content is bounded well under the raw 60KB, with a truncation footer.
+    expect(result.isError).toBeFalsy();
+    expect(result.content.length).toBeLessThan(60 * 1024);
+    expect(result.content).toContain('Output truncated');
+    const pathMatch = result.content.match(/\/tmp\/bash-output-\d+\.txt/);
+    expect(pathMatch).not.toBeNull();
+
+    // The full, untruncated output is retrievable from the temp file for paging.
+    const full = await fs.readFile(pathMatch![0], { encoding: 'utf-8' });
+    expect(typeof full === 'string' ? full.length : 0).toBeGreaterThanOrEqual(60 * 1024);
+  });
+
+  it('leaves small output unchanged (no truncation footer)', async () => {
+    const result = await bash.execute({ command: 'echo hello world' });
+    expect(result.content).toContain('hello world');
+    expect(result.content).not.toContain('Output truncated');
   });
 
   it('executes echo', async () => {
@@ -202,7 +226,7 @@ describe('Bash Tool', () => {
 
   it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
     const browserShell = new AlmostBashShell({ fs, browserAPI: {} as any });
-    const browserBash = createBashTool(browserShell);
+    const browserBash = createBashTool(browserShell, fs);
 
     const help = await browserBash.execute({ command: 'playwright --help' });
     expect(help.isError).toBeFalsy();

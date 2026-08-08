@@ -358,6 +358,14 @@ export default defineConfig(({ mode }) => ({
         workspaceRoot,
         'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
+      // Deep import into pi-coding-agent's tool-output truncation utility — same
+      // reason as compaction above: the main entry drags Node-only modules, but
+      // truncate.js is pure string/Buffer ops (browser-safe). The bash tool
+      // re-uses it to stay converged with pi's output-bounding contract (#2009).
+      '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js': resolve(
+        workspaceRoot,
+        'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
+      ),
       '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
         workspaceRoot,
         'node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js'

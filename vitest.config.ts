@@ -116,6 +116,10 @@ export default defineConfig({
               workspaceRoot,
               'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
             ),
+            '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js': resolve(
+              workspaceRoot,
+              'node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js'
+            ),
             '@earendil-works/pi-ai/dist/api/transform-messages.js': resolve(
               workspaceRoot,
               'node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js'

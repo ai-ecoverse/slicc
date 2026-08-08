@@ -532,7 +532,7 @@ export class ScoopContext {
 
     const legacyTools = [
       ...createFileTools(gatedFs),
-      createBashTool(this.shell!),
+      createBashTool(this.shell!, gatedFs),
       ...scoopManagementTools,
     ];
 
