@@ -94,6 +94,14 @@ const SCALAR_KEYS = new Set(['model', 'timeoutSeconds', 'thinkingLevel']);
  */
 const DEFAULT_MEMORY_THINKING_LEVEL: ThinkingLevel = 'medium';
 
+/**
+ * Headroom the outer safety wait grants beyond the run's own wall-clock
+ * bound (#1972), so the bounded in-run failure — which stops the agent
+ * and is safe to legacy-fallback from — always arrives before the wait
+ * gives up (whose timeout must assume the run may still be billing).
+ */
+const BOUND_GRACE_MS = 30_000;
+
 interface MemoryConfig {
   writablePaths: string[];
   visiblePaths: string[];
@@ -145,8 +153,18 @@ export async function runAgenticMemoryPass(
       TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
     });
     const spawnOptions = buildSpawnOptions(config, prompt, opts.sessionArchivePath);
+    if (opts.signal) spawnOptions.signal = opts.signal;
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
-    const outcome = await waitForSpawn(spawnPromise, config.timeoutSeconds * 1000, opts.signal);
+    // The run carries a REAL wall-clock bound now (#1972) — the bounded
+    // failure arrives through the normal exitCode path with
+    // `legacyFallbackSafe: true` (the run is genuinely stopped). This wait
+    // is only a safety net for a bound that never fires; give it grace so
+    // the in-run bound always wins the race.
+    const outcome = await waitForSpawn(
+      spawnPromise,
+      config.timeoutSeconds * 1000 + BOUND_GRACE_MS,
+      opts.signal
+    );
     if (outcome.type === 'timeout') {
       return { ok: false, reason: 'timeout', legacyFallbackSafe: false };
     }
@@ -370,6 +388,10 @@ function buildSpawnOptions(
     // and the cone never learns the pass happened at all.
     notifyOnComplete: true,
     successReceiptPath: curatorReceiptPath(sessionArchivePath),
+    // What `timeoutSeconds` always claimed to mean: the RUN stops at the
+    // bound (#1972), instead of only the caller's wait resolving while
+    // the agent kept taking turns.
+    maxWallClockMs: config.timeoutSeconds * 1000,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }

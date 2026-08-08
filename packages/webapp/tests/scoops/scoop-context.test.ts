@@ -2056,3 +2056,93 @@ describe('ScoopContext mid-turn checkpointing (#1987)', () => {
     expect(mockStore.save).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ScoopContext run bounds (#1972)', () => {
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    callbacks = createMockCallbacks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function boundedScoop(config: Record<string, unknown>): RegisteredScoop {
+    return { ...testScoop, config: { allowedCommands: ['*'], ...config } } as RegisteredScoop;
+  }
+
+  it('an agent that would loop indefinitely terminates at the turn bound', async () => {
+    const ctx = new ScoopContext(boundedScoop({ maxTurns: 3 }), callbacks, {} as any);
+    // A "runaway" agent: every prompt keeps producing turns until aborted.
+    let aborted = false;
+    injectMockAgent(ctx, async () => {
+      const handler = (ctx as any).handleAgentEvent.bind(ctx);
+      for (let turn = 0; turn < 1000 && !aborted; turn++) {
+        handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
+      }
+    });
+    ((ctx as any).agent.abort as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      aborted = true;
+    });
+
+    await ctx.prompt('run forever');
+
+    // The loop stopped at the bound, not at its own 1000-turn horizon…
+    expect(aborted).toBe(true);
+    // …and the run surfaced as a bounded failure, not a clean completion.
+    expect(callbacks.onError).toHaveBeenCalledWith(
+      expect.stringContaining('turn bound (3) exceeded')
+    );
+  });
+
+  it('a run past its wall-clock bound is stopped and surfaced', async () => {
+    const ctx = new ScoopContext(boundedScoop({ maxWallClockMs: 5_000 }), callbacks, {} as any);
+    injectMockAgent(ctx, async () => {
+      // Simulate a run that would go on for minutes.
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    await ctx.prompt('run long');
+
+    expect((ctx as any).agent.abort).toHaveBeenCalled();
+    expect(callbacks.onError).toHaveBeenCalledWith(
+      expect.stringContaining('wall-clock bound (5000 ms) exceeded')
+    );
+  });
+
+  it('a bounded run that finishes in time reports no bound failure', async () => {
+    const ctx = new ScoopContext(
+      boundedScoop({ maxTurns: 5, maxWallClockMs: 60_000 }),
+      callbacks,
+      {} as any
+    );
+    injectMockAgent(ctx, async () => {
+      const handler = (ctx as any).handleAgentEvent.bind(ctx);
+      handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
+    });
+
+    await ctx.prompt('quick task');
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    // The armed wall-clock timer was cleared — advancing time fires nothing.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+
+  it('an unbounded scoop counts turns without ever stopping (unchanged default)', async () => {
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {
+      const handler = (ctx as any).handleAgentEvent.bind(ctx);
+      for (let turn = 0; turn < 50; turn++) {
+        handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
+      }
+    });
+
+    await ctx.prompt('long but allowed');
+
+    expect((ctx as any).agent.abort).not.toHaveBeenCalled();
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+});

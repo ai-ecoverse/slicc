@@ -320,6 +320,10 @@ export class ScoopContext {
   private promptStreamErrorMessage: string | null = null;
   /** Pending debounced mid-turn session write (#1987); null when idle. */
   private sessionPersistTimer: ReturnType<typeof setTimeout> | null = null;
+  /** #1972 run bounds — armed per prompt run from `ScoopConfig`. */
+  private promptTurnCount = 0;
+  private boundExceededNote: string | null = null;
+  private wallClockBoundTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
@@ -925,6 +929,17 @@ export class ScoopContext {
     lastError: Error | null,
     abortSignal: AbortSignal
   ): void {
+    if (this.wallClockBoundTimer !== null) {
+      clearTimeout(this.wallClockBoundTimer);
+      this.wallClockBoundTimer = null;
+    }
+    // A bound-terminated run must not read as a clean completion: surface
+    // the ceiling through onError so observers (the agent bridge) report a
+    // non-zero exit instead of a truncated-but-"successful" result (#1972).
+    if (this.boundExceededNote !== null) {
+      this.callbacks.onError(`agent run terminated: ${this.boundExceededNote}`);
+      this.boundExceededNote = null;
+    }
     // Flush-on-abort (#1987): a turn that ends in an error or an abort may
     // never reach `agent_end`, so persist whatever completed messages the
     // agent accumulated before the failure — the debounced checkpoint alone
@@ -1080,6 +1095,7 @@ export class ScoopContext {
 
     const turnProcess = this.registerTurnProcess(text, abortController);
     this.currentTurnProcess = turnProcess;
+    this.armRunBounds();
 
     // Hoisted so the `finally` can thread it into cleanupPromptState, which uses
     // it to set the turn process exit code (1 on failure, 0 on clean completion).
@@ -1103,6 +1119,43 @@ export class ScoopContext {
   }
 
   /** Stop the current agent operation and clear any queued prompts */
+  /**
+   * #1972: arm the hard per-run ceilings from `ScoopConfig`. A spawned
+   * agent with no bound once billed $53.81 across 163 turns after its
+   * caller had already timed out — the "timeout" only stopped the
+   * waiting, never the run. `stop()` ends the run for real; the note
+   * makes `cleanupPromptState` surface a bounded failure to observers
+   * (the agent bridge maps it to a non-zero exit).
+   */
+  private armRunBounds(): void {
+    this.promptTurnCount = 0;
+    this.boundExceededNote = null;
+    const ms = this.scoop.config?.maxWallClockMs;
+    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
+      this.wallClockBoundTimer = setTimeout(() => {
+        this.wallClockBoundTimer = null;
+        if (this.boundExceededNote !== null || this.disposed) return;
+        this.boundExceededNote = `wall-clock bound (${ms} ms) exceeded`;
+        this.stop();
+      }, ms);
+    }
+  }
+
+  /** #1972 turn ceiling — called once per `turn_end` during a prompt run. */
+  private countTurnAgainstBound(): void {
+    this.promptTurnCount += 1;
+    const maxTurns = this.scoop.config?.maxTurns;
+    if (
+      typeof maxTurns === 'number' &&
+      maxTurns > 0 &&
+      this.promptTurnCount >= maxTurns &&
+      this.boundExceededNote === null
+    ) {
+      this.boundExceededNote = `turn bound (${maxTurns}) exceeded`;
+      this.stop();
+    }
+  }
+
   stop(): void {
     // Route the abort through `pm.signal` first so the turn
     // process records `terminatedBy: 'SIGINT'` before we abort
@@ -1495,6 +1548,7 @@ export class ScoopContext {
       }
 
       case 'turn_end': {
+        this.countTurnAgainstBound();
         if (
           event.message.role === 'assistant' &&
           isContextOverflow(event.message as PiAssistantMessage)
