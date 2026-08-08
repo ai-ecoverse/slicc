@@ -142,15 +142,23 @@ function makeMockOrchestrator(): {
 function makeMockSharedFs(options?: {
   /** Throw from `rm`. Takes the path so the caller can pick a matching error. */
   rm?: (path: string) => Promise<void>;
-}): { fs: VirtualFS; rmCalls: string[] } {
+  /** Throw from `writeFile` (receipt-failure tests). */
+  writeFile?: (path: string) => Promise<void>;
+}): { fs: VirtualFS; rmCalls: string[]; writes: Array<{ path: string; content: string }> } {
   const rmCalls: string[] = [];
+  const writes: Array<{ path: string; content: string }> = [];
   const mock: Partial<VirtualFS> = {
     rm: vi.fn(async (path: string) => {
       rmCalls.push(path);
       if (options?.rm) await options.rm(path);
     }) as unknown as VirtualFS['rm'],
+    mkdir: vi.fn(async () => {}) as unknown as VirtualFS['mkdir'],
+    writeFile: vi.fn(async (path: string, content: string) => {
+      if (options?.writeFile) await options.writeFile(path);
+      writes.push({ path, content });
+    }) as unknown as VirtualFS['writeFile'],
   };
-  return { fs: mock as unknown as VirtualFS, rmCalls };
+  return { fs: mock as unknown as VirtualFS, rmCalls, writes };
 }
 
 const BASE_OPTS: AgentSpawnOptions = {
@@ -1342,5 +1350,83 @@ describe('createAgentBridge — parentJid propagation', () => {
     await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_worker_1' });
 
     expect(registerCalls[0].originToolCallId).toBeUndefined();
+  });
+});
+
+describe('createAgentBridge — success receipts (#1989)', () => {
+  it('writes the receipt on exit 0 before the spawn resolves', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'diligent-pistachio',
+    });
+    scripts.set('agent_diligent_pistachio', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      successReceiptPath: '/sessions/.curated/pending-abc.md',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(writes).toHaveLength(1);
+    expect(writes[0].path).toBe('/sessions/.curated/pending-abc.md');
+    // ISO timestamp content — debuggability, not a contract.
+    expect(writes[0].content).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('writes no receipt when the scoop errors', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'somber-walnut',
+    });
+    scripts.set('agent_somber_walnut', (obs) => obs.onError?.('provider exploded'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      successReceiptPath: '/sessions/.curated/pending-abc.md',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('rejects a relative successReceiptPath without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'brisk-nougat',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      successReceiptPath: 'sessions/receipt',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('successReceiptPath must be absolute');
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('a receipt write failure never fails the successful spawn', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs({
+      writeFile: async () => {
+        throw new Error('quota exceeded');
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'stoic-honeycomb',
+    });
+    scripts.set('agent_stoic_honeycomb', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      successReceiptPath: '/sessions/.curated/pending-abc.md',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalText).toBe('curated');
+    expect(writes).toHaveLength(0);
   });
 });

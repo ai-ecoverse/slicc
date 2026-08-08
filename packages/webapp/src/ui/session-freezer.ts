@@ -31,13 +31,9 @@ import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
-import { runAgenticMemoryPass } from '../scoops/agentic-memory.js';
+import { curatorReceiptPath, runAgenticMemoryPass } from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
-import {
-  applyConeMemoryBudget,
-  CONE_MEMORY_PATH,
-  readSessionCount,
-} from '../scoops/cone-memory-budget.js';
+import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -214,6 +210,10 @@ export async function curateFrozenSessionMemories(
   }
   if (result.ok) {
     const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
+    // The bridge's completion receipt has served its purpose once the
+    // marker is durably cleared (or the entry is gone) — drop it so a
+    // later catch-up never consumes stale evidence.
+    await removeCuratorReceipt(opts.vfs, frozen.filename);
     if (!updated) {
       // The curated memory is already on disk; only the index bookkeeping
       // missed, so there is no work left for a retry to redo.
@@ -920,15 +920,18 @@ export async function enrichPendingSession(
   const agentMessages = recoverPendingMessages(entry, archiveContent);
   if (agentMessages === null) return null;
   // #1989: the agentic background pass clears `memoryPending` only AFTER
-  // the curator's rewrite lands — a tab closing between the two leaves a
-  // marker whose memory work is already done. If the cone memory file was
-  // rewritten after the freeze, run title-only recovery instead of
-  // appending legacy-extracted duplicates on top of the curated memory,
-  // and let the marker drop (the curator evidently ran).
+  // the curator's rewrite lands — a tab dying between the two leaves a
+  // marker whose memory work is already done. The agent bridge writes a
+  // per-archive receipt (worker realm, before the spawn resolves) on
+  // curator success; if THIS archive's receipt exists, run title-only
+  // recovery instead of appending legacy-extracted duplicates on top of
+  // the curated memory, and let the marker drop. Per-entry by design: a
+  // sibling archive's enrichment or any other memory write can never be
+  // misattributed to this one.
   const curatorAlreadyRan =
     entry.memoryPending === true &&
     opts.skipMemory !== true &&
-    (await memoryRewrittenSinceFreeze(vfs, entry));
+    (await curatorReceiptExists(vfs, entry));
   const effectiveOpts = curatorAlreadyRan ? { ...opts, skipMemory: true } : opts;
   const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
   if (calls === null) return null;
@@ -941,7 +944,7 @@ export async function enrichPendingSession(
   // `preserveMemoryPending` follows the CALLER's skipMemory, not the
   // effective one: the agentic save path (curator still owed) keeps the
   // marker, while the curator-already-ran case drops it by omission.
-  return await commitEnrichedArchive(
+  const committed = await commitEnrichedArchive(
     vfs,
     entry,
     archiveContent,
@@ -949,26 +952,34 @@ export async function enrichPendingSession(
     icon,
     opts.skipMemory === true
   );
+  if (committed && curatorAlreadyRan) await removeCuratorReceipt(vfs, entry.filename);
+  return committed;
 }
 
 /**
- * #1989 discriminator: `true` when the cone memory file was modified
- * after this archive's freeze — the curator's rewrite (the only
- * freeze-adjacent writer in the agentic flow) landed even though the
- * marker survived. Fail-closed: a missing file or unparsable timestamp
- * reports `false`, keeping the legacy extraction.
+ * #1989 discriminator: `true` when the agent bridge's per-archive
+ * completion receipt exists for this entry — the curator finished even
+ * though the `memoryPending` marker survived. Fail-closed: a missing
+ * receipt (or a stat error) keeps the legacy extraction.
  */
-async function memoryRewrittenSinceFreeze(
+async function curatorReceiptExists(
   vfs: WritableVfsClient,
   entry: FrozenSessionIndexEntry
 ): Promise<boolean> {
-  const frozenAt = Date.parse(entry.frozenAt);
-  if (!Number.isFinite(frozenAt)) return false;
   try {
-    const stats = await vfs.stat(CONE_MEMORY_PATH);
-    return stats.mtime > frozenAt;
+    await vfs.stat(curatorReceiptPath(`/sessions/${entry.filename}`));
+    return true;
   } catch {
     return false;
+  }
+}
+
+/** Best-effort receipt cleanup once its evidence has been consumed. */
+async function removeCuratorReceipt(vfs: WritableVfsClient, filename: string): Promise<void> {
+  try {
+    await vfs.rm(curatorReceiptPath(`/sessions/${filename}`));
+  } catch {
+    /* already gone or unreadable — the receipt is only advisory */
   }
 }
 

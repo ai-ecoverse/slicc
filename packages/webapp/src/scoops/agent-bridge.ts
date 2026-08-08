@@ -126,6 +126,17 @@ export interface AgentSpawnOptions {
    * dropped, leaving the cone with no idea it ran.
    */
   notifyOnComplete?: boolean;
+  /**
+   * Absolute VFS path of a completion receipt the bridge writes (ISO
+   * timestamp content) immediately after the spawned scoop finishes with
+   * exit 0, BEFORE the spawn promise resolves. Written with the bridge's
+   * full shared-VFS handle — the scoop itself never sees the path. Gives
+   * detached callers a durable, per-spawn completion signal in the worker
+   * realm for crash-safe bookkeeping (#1989: the curator receipt the boot
+   * catch-up checks before trusting a surviving `memoryPending` marker).
+   * Best-effort: a receipt write failure is logged, never fails the spawn.
+   */
+  successReceiptPath?: string;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -263,7 +274,32 @@ function validateSpawnOptions(
     };
   }
 
+  const receiptPath = options.successReceiptPath;
+  if (receiptPath !== undefined && !receiptPath.startsWith('/')) {
+    return {
+      error: {
+        finalText: `agent: successReceiptPath must be absolute: ${receiptPath}`,
+        exitCode: 1,
+      },
+    };
+  }
+
   return { resolvedModelId };
+}
+
+/**
+ * Write the caller's completion receipt (see
+ * {@link AgentSpawnOptions.successReceiptPath}). Best-effort — a failure
+ * is logged and the successful spawn result stands.
+ */
+async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<void> {
+  try {
+    const dir = path.slice(0, path.lastIndexOf('/'));
+    if (dir) await sharedFs.mkdir(dir, { recursive: true });
+    await sharedFs.writeFile(path, new Date().toISOString());
+  } catch (err) {
+    log.warn('success receipt write failed', { path, error: errText(err) });
+  }
 }
 
 /**
@@ -487,7 +523,14 @@ export function createAgentBridge(
         options.structuredOutputSchema,
         observerHandle
       );
-      if (result) return result;
+      if (result) {
+        // Durable completion signal, written before the spawn resolves so
+        // it lands strictly earlier than any caller-side bookkeeping.
+        if (result.exitCode === 0 && options.successReceiptPath) {
+          await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
+        }
+        return result;
+      }
 
       return { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
     } catch (err) {

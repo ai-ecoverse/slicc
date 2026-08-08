@@ -144,7 +144,7 @@ export async function runAgenticMemoryPass(
       BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
       TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
     });
-    const spawnOptions = buildSpawnOptions(config, prompt);
+    const spawnOptions = buildSpawnOptions(config, prompt, opts.sessionArchivePath);
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
     const outcome = await waitForSpawn(spawnPromise, config.timeoutSeconds * 1000, opts.signal);
     if (outcome.type === 'timeout') {
@@ -339,7 +339,24 @@ function validatePaths(paths: string[], key: string): void {
   }
 }
 
-function buildSpawnOptions(config: MemoryConfig, prompt: string): AgentSpawnOptions {
+/**
+ * Per-archive completion receipt the agent bridge writes (worker realm)
+ * when the curator spawn exits 0 — durable proof that THIS archive's
+ * curation finished even if the page died before `clearPendingMarkers`
+ * landed. The boot catch-up checks it before trusting a surviving
+ * `memoryPending` marker (#1989); a shared-file mtime cannot attribute a
+ * memory rewrite to a specific archive, this can.
+ */
+export function curatorReceiptPath(sessionArchivePath: string): string {
+  const base = sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1);
+  return `/sessions/.curated/${base}`;
+}
+
+function buildSpawnOptions(
+  config: MemoryConfig,
+  prompt: string,
+  sessionArchivePath: string
+): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   return {
     cwd: CURATOR_CWD,
@@ -352,6 +369,7 @@ function buildSpawnOptions(config: MemoryConfig, prompt: string): AgentSpawnOpti
     // this the curator's report — including any skill it found — is discarded
     // and the cone never learns the pass happened at all.
     notifyOnComplete: true,
+    successReceiptPath: curatorReceiptPath(sessionArchivePath),
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
 }
