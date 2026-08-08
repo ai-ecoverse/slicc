@@ -1840,14 +1840,24 @@ export class VirtualFS {
       /* best effort */
     }
     try {
-      await this.lfs.rename(normalizedOld, normalizedNew);
+      // Mutation, prefix marks, and eager persist share ONE critical
+      // section, matching rm/symlink: marking after an unlocked rename
+      // leaves an await-sized window where a concurrent same-`dbName`
+      // flush snapshots the renamed shared index with clean prefixes and
+      // preserves the on-disk `/old/**` entries — resurrecting the
+      // pre-rename subtree. Marks go BEFORE the mutation; if the rename
+      // then fails, an over-marked prefix merely re-persists reality.
+      // Prefix marks on both ends: a directory rename supersedes every
+      // on-disk child entry under the old AND new paths (sidecar-merge.ts).
+      await this.withWriteLock(async () => {
+        this.markSidecarDirty(normalizedOld, 'prefix');
+        this.markSidecarDirty(normalizedNew, 'prefix');
+        await this.lfs.rename(normalizedOld, normalizedNew);
+        await this.writeOpfsMetadataSidecarUnlocked();
+      });
     } catch (err) {
       throw convertError(err, normalizedOld);
     }
-    // Prefix marks on both ends: a directory rename supersedes every
-    // on-disk child entry under the old AND new paths (see sidecar-merge.ts).
-    this.markSidecarDirty(normalizedOld, 'prefix');
-    this.markSidecarDirty(normalizedNew, 'prefix');
     this.watcher?.notify([
       { type: 'delete', path: normalizedOld, entryType },
       { type: 'create', path: normalizedNew, entryType },

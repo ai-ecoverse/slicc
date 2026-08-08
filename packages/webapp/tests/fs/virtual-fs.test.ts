@@ -217,6 +217,23 @@ describe('VirtualFS', () => {
       expect(await vfs.exists('/src')).toBe(false);
       expect(await vfs.readTextFile('/source/main.ts')).toBe('code');
     });
+
+    it('persists sidecar metadata eagerly inside the rename critical section', async () => {
+      await vfs.writeFile('/ren-src/file.txt', 'x');
+      // rename persists INSIDE its write-lock critical section (same shape
+      // as rm/symlink), so it calls the unlocked variant — marking dirty
+      // after an unlocked rename would let a concurrent flush resurrect
+      // the on-disk /old subtree (PR #1993 review).
+      const flushSpy = vi.spyOn(
+        vfs as unknown as { writeOpfsMetadataSidecarUnlocked(): Promise<void> },
+        'writeOpfsMetadataSidecarUnlocked'
+      );
+
+      await vfs.rename('/ren-src', '/ren-dest');
+
+      expect(await vfs.readTextFile('/ren-dest/file.txt')).toBe('x');
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('copyFile', () => {
