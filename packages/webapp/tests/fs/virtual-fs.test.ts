@@ -161,9 +161,11 @@ describe('VirtualFS', () => {
         (_, i) => `/large-tree/pkg${i % 10}/nested/file${i}.txt`
       );
       await Promise.all(paths.map((path) => vfs.writeFile(path, path)));
+      // rm persists eagerly INSIDE its write-lock critical section, so it
+      // calls the unlocked variant (the locked wrapper would deadlock).
       const flushSpy = vi.spyOn(
-        vfs as unknown as { writeOpfsMetadataSidecar(): Promise<void> },
-        'writeOpfsMetadataSidecar'
+        vfs as unknown as { writeOpfsMetadataSidecarUnlocked(): Promise<void> },
+        'writeOpfsMetadataSidecarUnlocked'
       );
 
       await vfs.rm('/large-tree', { recursive: true });

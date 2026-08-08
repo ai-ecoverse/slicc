@@ -28,6 +28,11 @@ import {
   saveMountEntry,
 } from './mount-table-store.js';
 import { joinPath, normalizePath, splitPath } from './path-utils.js';
+import {
+  mergeSidecarEntries,
+  type SidecarDirtyState,
+  type SidecarIndexJson,
+} from './sidecar-merge.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
@@ -351,7 +356,7 @@ export class VirtualFS {
       } catch {
         /* already mounted with this backend — safe to ignore */
       }
-      entry = { backendFs, refs: 0 };
+      entry = { backendFs, refs: 0, sidecarDirty: { paths: new Set(), prefixes: new Set() } };
       VirtualFS.opfsBackends.set(vfs.dbName, entry);
     }
     entry.refs += 1;
@@ -453,7 +458,17 @@ export class VirtualFS {
    */
   private static opfsBackends: Map<
     string,
-    { backendFs: { index?: { toJSON: () => unknown } }; refs: number }
+    {
+      backendFs: { index?: { toJSON: () => unknown } };
+      refs: number;
+      /**
+       * Paths this realm mutated since its last successful sidecar write.
+       * Shared per `dbName` (like the index itself) so every same-name
+       * instance contributes to — and is covered by — one merge scope.
+       * See {@link writeOpfsMetadataSidecarUnlocked} and `sidecar-merge.ts`.
+       */
+      sidecarDirty: SidecarDirtyState;
+    }
   > = new Map();
   private static async ensureRootMount(zenfs: typeof import('@zenfs/core')): Promise<void> {
     // Testing the memo for presence, not for a result — a promise is always
@@ -681,23 +696,87 @@ export class VirtualFS {
   }
 
   /**
-   * Serialize the live OPFS WebAccessFS index back to `/.metadata.json`
-   * in the OPFS subdir so filemode bits and symlinks survive a reload.
-   * No-op on the InMemory backend, on backends without a captured index
-   * reference (defensive — should not happen after a successful
-   * `initOpfsBackend`), or if the OPFS handle was never captured. See
-   * {@link opfsBackendFs}.
+   * Persist the sidecar from OUTSIDE a {@link withWriteLock} critical
+   * section (flush / dispose): takes the lock so the read-merge-write is
+   * serialized against every mutation and every other sidecar writer —
+   * in this realm AND in any other context of the origin.
    */
   private async writeOpfsMetadataSidecar(): Promise<void> {
+    if (this.backend !== 'opfs') return;
+    await this.withWriteLock(() => this.writeOpfsMetadataSidecarUnlocked());
+  }
+
+  /**
+   * Serialize this realm's view of the index back to `/.metadata.json` —
+   * but only for the paths this realm actually mutated (#1992).
+   *
+   * The sidecar is shared by every context of the origin (kernel worker,
+   * page-side instances), each holding an independently drifting in-memory
+   * index. A whole-index overwrite from a context with a stale view
+   * re-poisoned a repaired sidecar in production and bricked boot with
+   * `EISDIR` in `crossCopy`. Instead: read the sidecar on disk, overlay
+   * ONLY this realm's dirty paths/prefixes (see {@link markSidecarDirty}),
+   * and write the merge back. A missing/corrupt on-disk sidecar falls back
+   * to the full own-index snapshot (also the fresh-boot seed case).
+   *
+   * The caller must hold {@link withWriteLock} — either the public
+   * {@link writeOpfsMetadataSidecar} wrapper or an in-lock mutation path
+   * (rm / symlink persist eagerly inside their critical section).
+   * No-op on the InMemory backend, on backends without a captured index
+   * reference, or if the OPFS handle was never captured.
+   */
+  private async writeOpfsMetadataSidecarUnlocked(): Promise<void> {
     if (this.backend !== 'opfs') return;
     const backendFs = this.opfsBackendFs;
     const handle = this.opfsHandle;
     if (!backendFs || !handle) return;
-    const json = JSON.stringify(backendFs.index.toJSON());
+    const own = backendFs.index.toJSON() as SidecarIndexJson;
+    const dirty = VirtualFS.opfsBackends.get(this.dbName)?.sidecarDirty;
+    let merged: SidecarIndexJson = own;
+    if (dirty) {
+      let onDisk: SidecarIndexJson | null = null;
+      try {
+        const existing = await handle.getFileHandle('.metadata.json');
+        const parsed: unknown = JSON.parse(await (await existing.getFile()).text());
+        if (parsed && typeof parsed === 'object' && (parsed as SidecarIndexJson).entries) {
+          onDisk = parsed as SidecarIndexJson;
+        }
+      } catch {
+        /* absent or unreadable → full own snapshot below (seed/recovery) */
+      }
+      if (onDisk) merged = mergeSidecarEntries(onDisk, own, dirty);
+    }
+    const json = JSON.stringify(merged);
     const fileHandle = await handle.getFileHandle('.metadata.json', { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(json);
     await writable.close();
+    // Only clear after a successful write; the write lock guarantees no
+    // same-realm mutation ran (and dirtied new paths) mid-critical-section.
+    if (dirty) {
+      dirty.paths.clear();
+      dirty.prefixes.clear();
+    }
+  }
+
+  /**
+   * Record that this realm mutated `path`, so the next sidecar write may
+   * overwrite that entry (and, for `prefix` marks, the whole subtree —
+   * recursive removes and renames supersede every on-disk child). Ancestor
+   * directories are marked too: parent-ensure materializes their index
+   * records alongside the mutation. Cheap no-op on the memory backend.
+   */
+  private markSidecarDirty(path: string, kind: 'path' | 'prefix' = 'path'): void {
+    if (this.backend !== 'opfs') return;
+    const dirty = VirtualFS.opfsBackends.get(this.dbName)?.sidecarDirty;
+    if (!dirty) return;
+    const normalized = normalizePath(path);
+    (kind === 'prefix' ? dirty.prefixes : dirty.paths).add(normalized);
+    let { dir } = splitPath(normalized);
+    while (dir !== '/') {
+      dirty.paths.add(dir);
+      dir = splitPath(dir).dir;
+    }
   }
 
   /**
@@ -721,6 +800,10 @@ export class VirtualFS {
       const path = normalizePath(raw);
       fs.index.delete(path);
       fs._handles?.delete(path);
+      // The external write changed real state for this path: let the next
+      // sidecar write persist the freshly re-read entry instead of keeping
+      // whatever the sidecar recorded before the external writer ran.
+      this.markSidecarDirty(path);
     }
   }
 
@@ -1336,6 +1419,7 @@ export class VirtualFS {
     // write hit a not-yet-created parent (spurious ENOENT). See withWriteLock.
     const { dir } = splitPath(resolved);
     await this.withWriteLock(async () => {
+      this.markSidecarDirty(resolved);
       if (dir !== '/') {
         await this.mkdirRecursiveUnlocked(dir);
       }
@@ -1579,9 +1663,13 @@ export class VirtualFS {
     if (options?.recursive) {
       // Create all parent directories under the write lock so a concurrent
       // writeFile/symlink can't observe a half-materialized path.
-      await this.withWriteLock(() => this.mkdirRecursiveUnlocked(normalized));
+      await this.withWriteLock(() => {
+        this.markSidecarDirty(normalized);
+        return this.mkdirRecursiveUnlocked(normalized);
+      });
     } else {
       await this.withWriteLock(async () => {
+        this.markSidecarDirty(normalized);
         try {
           await this.lfs.mkdir(normalized);
         } catch (err) {
@@ -1637,7 +1725,10 @@ export class VirtualFS {
         } else {
           await this.lfs.unlink(normalized);
         }
-        await this.writeOpfsMetadataSidecar();
+        // Prefix mark: a recursive remove supersedes every on-disk child
+        // entry, not just the top path (see sidecar-merge.ts).
+        this.markSidecarDirty(normalized, 'prefix');
+        await this.writeOpfsMetadataSidecarUnlocked();
       });
     } catch (err) {
       throw convertError(err, normalized);
@@ -1753,6 +1844,10 @@ export class VirtualFS {
     } catch (err) {
       throw convertError(err, normalizedOld);
     }
+    // Prefix marks on both ends: a directory rename supersedes every
+    // on-disk child entry under the old AND new paths (see sidecar-merge.ts).
+    this.markSidecarDirty(normalizedOld, 'prefix');
+    this.markSidecarDirty(normalizedNew, 'prefix');
     this.watcher?.notify([
       { type: 'delete', path: normalizedOld, entryType },
       { type: 'create', path: normalizedNew, entryType },
@@ -1868,7 +1963,8 @@ export class VirtualFS {
       // write) and only for symlinks (rare vs file writes) keeps a full
       // clone cheap. No-op on the memory backend. See "Root cause: git
       // symlink/binary corruption".
-      await this.writeOpfsMetadataSidecar();
+      this.markSidecarDirty(normalizedLinkPath);
+      await this.writeOpfsMetadataSidecarUnlocked();
     });
     this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
   }
