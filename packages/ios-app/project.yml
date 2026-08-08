@@ -25,8 +25,7 @@ targets:
     dependencies:
       - package: WebRTC
       # Shared tray-follower transport, re-exported via TrayFollowerExports.swift.
-      - package: SliccTraySession
-        product: SliccTrayFollower
+      - package: SliccTrayFollower
       - sdk: FileProvider.framework
       - sdk: Security.framework
       - sdk: UniformTypeIdentifiers.framework
@@ -77,8 +76,7 @@ targets:
       - package: HuggingFace
       - package: WebRTC
       - package: SliccTraySession
-      - package: SliccTraySession
-        product: SliccTrayFollower
+      - package: SliccTrayFollower
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMotion.framework
@@ -153,8 +151,7 @@ targets:
       # Tests reference the moved transport types (and `@testable` a couple of
       # their internals) directly, so the test bundle must link the framework —
       # it is no longer folded into SliccTrayKit.
-      - package: SliccTraySession
-        product: SliccTrayFollower
+      - package: SliccTrayFollower
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
@@ -212,3 +209,5 @@ packages:
     exactVersion: 150.0.0
   SliccTraySession:
     path: ../swift-traysession
+  SliccTrayFollower:
+    path: ../swift-trayfollower

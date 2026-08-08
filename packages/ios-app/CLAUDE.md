@@ -30,11 +30,11 @@ This file covers the iOS follower app in `packages/ios-app/`.
 | `SliccFollower/App/{InboundActions,AppGroupInbox,OpenInSliccIntents}.swift`, `SliccShareExtension/` | Inbound actions (#1918): `slicc://open\|prompt` (+`x-callback-url` form), `sliccy.ai/app/*` universal links, App Intents, and the share appex parking URLs in the `group.ai.sliccy.follower` inbox. One coordinator funnel; deep links confirm via card (fail-closed), intents are explicit                 |
 | `SliccFollower/{Models,Views}/*Avatar*.swift`                                                       | Avatar geometry/motion, renderer, screenshot fixture                                                                                                                                                                                                                                                        |
 
-Plain SPM commands do nothing useful on a macOS host. Build and test go through the XcodeGen project on a simulator (see "Test + coverage"). **It is generated from `project.yml`, not committed** — `xcodegen generate` after cloning and whenever sources change; project-editor edits are overwritten. The `SliccTrayFollower/*` rows are in `swift-traysession`, re-exported via `TrayFollowerExports.swift`.
+Plain SPM commands do nothing useful on a macOS host. Build and test go through the XcodeGen project on a simulator (see "Test + coverage"). **It is generated from `project.yml`, not committed** — `xcodegen generate` after cloning and whenever sources change; project-editor edits are overwritten. The `SliccTrayFollower/*` rows are in the `swift-trayfollower` package, re-exported via `TrayFollowerExports.swift`.
 
 ## Protocol Mirror Invariant
 
-`SliccTrayFollower/Models/SyncProtocol.swift` (in `swift-traysession`) mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts`. The matrix in `docs/architecture.md` is the cross-float source of truth. iOS-local facts:
+`SliccTrayFollower/Models/SyncProtocol.swift` (in `swift-trayfollower`) mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts`. The matrix in `docs/architecture.md` is the cross-float source of truth. iOS-local facts:
 
 - `preview.open` → `CDPBridge.handleTabOpen`, acks `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable` in the corpus.

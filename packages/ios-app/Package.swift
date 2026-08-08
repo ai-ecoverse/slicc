@@ -23,6 +23,7 @@ let package = Package(
             .upToNextMinor(from: "0.9.0")),
         .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0")),
         .package(path: "../swift-traysession"),
+        .package(path: "../swift-trayfollower"),
     ],
     targets: [
         .target(
@@ -36,7 +37,7 @@ let package = Package(
                 // The tray-follower transport core (formerly SliccTrayKit's own
                 // Models/ + Networking/), now shared with swift-server. Re-exported
                 // module-wide via SliccTrayKit/TrayFollowerExports.swift.
-                .product(name: "SliccTrayFollower", package: "swift-traysession"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "SliccTrayKit"
         ),
@@ -48,7 +49,7 @@ let package = Package(
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "WebRTC", package: "WebRTC"),
                 .product(name: "SliccTraySession", package: "swift-traysession"),
-                .product(name: "SliccTrayFollower", package: "swift-traysession"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "SliccFollower",
             exclude: ["SliccFollower.entitlements", "Tests"],

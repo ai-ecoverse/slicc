@@ -13,10 +13,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log", from: "1.14.0"),
         // Headless tray-follower transport (WebRTC + signalling + tray-sync
         // protocol) shared with the iOS app so the WebRTC framework and the
-        // transport core are not double-shipped. Only `SliccTrayFollower`
-        // (WebRTC-bearing) is consumed here; `SliccTraySession` (Foundation-only,
-        // used by swift-launcher) is a separate product and is NOT pulled in.
-        .package(path: "../swift-traysession"),
+        // transport core are not double-shipped.
+        .package(path: "../swift-trayfollower"),
     ],
     targets: [
         .executableTarget(
@@ -28,7 +26,7 @@ let package = Package(
                 .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "SliccTrayFollower", package: "swift-traysession"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "Sources"
         ),
@@ -39,7 +37,7 @@ let package = Package(
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
-                .product(name: "SliccTrayFollower", package: "swift-traysession"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "Tests"
         ),
