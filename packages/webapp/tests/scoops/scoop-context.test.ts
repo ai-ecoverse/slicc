@@ -2073,15 +2073,20 @@ describe('ScoopContext run bounds (#1972)', () => {
     return { ...testScoop, config: { allowedCommands: ['*'], ...config } } as RegisteredScoop;
   }
 
+  /** Emit one full agent turn (turn_start → turn_end) through the handler. */
+  function emitTurn(ctx: ScoopContext): void {
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'turn_start' });
+    handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
+  }
+
   it('an agent that would loop indefinitely terminates at the turn bound', async () => {
     const ctx = new ScoopContext(boundedScoop({ maxTurns: 3 }), callbacks, {} as any);
-    // A "runaway" agent: every prompt keeps producing turns until aborted.
+    // A "runaway" agent: keeps taking turns until aborted. Enforcement is on
+    // turn_start, so the 4th turn_start (after 3 completed turns) trips it.
     let aborted = false;
     injectMockAgent(ctx, async () => {
-      const handler = (ctx as any).handleAgentEvent.bind(ctx);
-      for (let turn = 0; turn < 1000 && !aborted; turn++) {
-        handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
-      }
+      for (let turn = 0; turn < 1000 && !aborted; turn++) emitTurn(ctx);
     });
     ((ctx as any).agent.abort as ReturnType<typeof vi.fn>).mockImplementation(() => {
       aborted = true;
@@ -2089,18 +2094,33 @@ describe('ScoopContext run bounds (#1972)', () => {
 
     await ctx.prompt('run forever');
 
-    // The loop stopped at the bound, not at its own 1000-turn horizon…
     expect(aborted).toBe(true);
-    // …and the run surfaced as a bounded failure, not a clean completion.
     expect(callbacks.onError).toHaveBeenCalledWith(
       expect.stringContaining('turn bound (3) exceeded')
     );
+    // A tripped bound is a failure, not a completion: status is `error` so
+    // the lifecycle never announces the partial output (#2005 review).
+    expect((ctx as any).status).toBe('error');
   });
 
-  it('a run past its wall-clock bound is stopped and surfaced', async () => {
+  it('a run that finishes EXACTLY on maxTurns completes normally (#2005 off-by-one)', async () => {
+    const ctx = new ScoopContext(boundedScoop({ maxTurns: 1 }), callbacks, {} as any);
+    injectMockAgent(ctx, async () => {
+      // One ordinary turn, then the agent ends — no further turn_start.
+      emitTurn(ctx);
+    });
+
+    await ctx.prompt('one-shot answer');
+
+    // The completing turn is not treated as exceeding the bound.
+    expect((ctx as any).agent.abort).not.toHaveBeenCalled();
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect((ctx as any).status).not.toBe('error');
+  });
+
+  it('a run past its wall-clock bound is stopped, surfaced, and marked error', async () => {
     const ctx = new ScoopContext(boundedScoop({ maxWallClockMs: 5_000 }), callbacks, {} as any);
     injectMockAgent(ctx, async () => {
-      // Simulate a run that would go on for minutes.
       await vi.advanceTimersByTimeAsync(60_000);
     });
 
@@ -2110,6 +2130,7 @@ describe('ScoopContext run bounds (#1972)', () => {
     expect(callbacks.onError).toHaveBeenCalledWith(
       expect.stringContaining('wall-clock bound (5000 ms) exceeded')
     );
+    expect((ctx as any).status).toBe('error');
   });
 
   it('a bounded run that finishes in time reports no bound failure', async () => {
@@ -2118,10 +2139,7 @@ describe('ScoopContext run bounds (#1972)', () => {
       callbacks,
       {} as any
     );
-    injectMockAgent(ctx, async () => {
-      const handler = (ctx as any).handleAgentEvent.bind(ctx);
-      handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
-    });
+    injectMockAgent(ctx, async () => emitTurn(ctx));
 
     await ctx.prompt('quick task');
 
@@ -2134,10 +2152,7 @@ describe('ScoopContext run bounds (#1972)', () => {
   it('an unbounded scoop counts turns without ever stopping (unchanged default)', async () => {
     const ctx = new ScoopContext(testScoop, callbacks, {} as any);
     injectMockAgent(ctx, async () => {
-      const handler = (ctx as any).handleAgentEvent.bind(ctx);
-      for (let turn = 0; turn < 50; turn++) {
-        handler({ type: 'turn_end', message: { role: 'assistant', content: [] } });
-      }
+      for (let turn = 0; turn < 50; turn++) emitTurn(ctx);
     });
 
     await ctx.prompt('long but allowed');

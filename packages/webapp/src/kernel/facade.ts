@@ -102,6 +102,14 @@ interface BufferedChatMessage {
 
 export class Bridge implements KernelFacade {
   private orchestrator: Orchestrator | null = null;
+  /**
+   * Kernel-side abort controllers for in-flight spawns, keyed by the
+   * page's `requestId`. `spawnAgent` can't send a live `AbortSignal`
+   * across the transport, so cancellation arrives as an
+   * `agent-spawn-abort` message that aborts the matching controller
+   * (#1972).
+   */
+  private readonly agentSpawnAborts = new Map<string, AbortController>();
   private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
   private messageBuffers = new Map<string, BufferedChatMessage[]>();
@@ -1559,6 +1567,11 @@ export class Bridge implements KernelFacade {
         break;
       }
 
+      case 'agent-spawn-abort': {
+        this.agentSpawnAborts.get(msg.requestId)?.abort();
+        break;
+      }
+
       case 'clear-filesystem':
         await this.orchestrator
           .resetFilesystem()
@@ -1668,8 +1681,13 @@ export class Bridge implements KernelFacade {
       } satisfies AgentSpawnResultMsg);
       return;
     }
+    // Reconstruct the caller's cancel handle kernel-side: the wire dropped
+    // any `AbortSignal`, so an `agent-spawn-abort` for this requestId aborts
+    // this controller, whose signal the bridge honors (#1972).
+    const controller = new AbortController();
+    this.agentSpawnAborts.set(msg.requestId, controller);
     try {
-      const result = await agentBridge.spawn(msg.options);
+      const result = await agentBridge.spawn({ ...msg.options, signal: controller.signal });
       this.emit({ type: 'agent-spawn-result', requestId: msg.requestId, ok: true, result });
     } catch (err) {
       this.emit({
@@ -1678,6 +1696,8 @@ export class Bridge implements KernelFacade {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
       } satisfies AgentSpawnResultMsg);
+    } finally {
+      this.agentSpawnAborts.delete(msg.requestId);
     }
   }
 

@@ -450,7 +450,22 @@ export class OffscreenClient implements KernelClientFacade {
     const result = new Promise<AgentSpawnResult>((resolve, reject) => {
       this.pendingAgentSpawnRequests.set(requestId, { resolve, reject });
     });
-    this.send({ type: 'agent-spawn-request', requestId, options });
+    // An `AbortSignal` cannot cross the panel↔worker transport, so strip it
+    // and translate cancellation into a wire-safe `agent-spawn-abort` keyed
+    // by requestId; the kernel reconstructs its own controller (#1972).
+    const { signal, ...wireOptions } = options;
+    this.send({ type: 'agent-spawn-request', requestId, options: wireOptions });
+    if (signal) {
+      if (signal.aborted) this.send({ type: 'agent-spawn-abort', requestId });
+      else
+        signal.addEventListener(
+          'abort',
+          () => this.send({ type: 'agent-spawn-abort', requestId }),
+          {
+            once: true,
+          }
+        );
+    }
     return result;
   }
 

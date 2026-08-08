@@ -1134,26 +1134,47 @@ export class ScoopContext {
     if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
       this.wallClockBoundTimer = setTimeout(() => {
         this.wallClockBoundTimer = null;
-        if (this.boundExceededNote !== null || this.disposed) return;
-        this.boundExceededNote = `wall-clock bound (${ms} ms) exceeded`;
-        this.stop();
+        this.tripRunBound(`wall-clock bound (${ms} ms) exceeded`);
       }, ms);
     }
   }
 
-  /** #1972 turn ceiling — called once per `turn_end` during a prompt run. */
-  private countTurnAgainstBound(): void {
+  /**
+   * Count a COMPLETED turn (`turn_end`). Overflow-recovery turns are
+   * counted too: `maxTurns` is a cost cap and every model round-trip
+   * bills, so an overflow turn is not "free" — see the enforcement on
+   * `turn_start`, which is what actually stops a run.
+   */
+  private recordCompletedTurn(): void {
     this.promptTurnCount += 1;
+  }
+
+  /**
+   * #1972 turn ceiling, enforced on `turn_start`. A run that finishes on
+   * exactly `maxTurns` emits its final `turn_end` (counted above) then
+   * `agent_end` and completes NORMALLY — the ceiling only trips when the
+   * agent tries to BEGIN a turn beyond the limit, so a legitimate
+   * single-turn answer under `maxTurns: 1` is never marked a failure.
+   */
+  private enforceTurnBoundOnStart(): void {
     const maxTurns = this.scoop.config?.maxTurns;
-    if (
-      typeof maxTurns === 'number' &&
-      maxTurns > 0 &&
-      this.promptTurnCount >= maxTurns &&
-      this.boundExceededNote === null
-    ) {
-      this.boundExceededNote = `turn bound (${maxTurns}) exceeded`;
-      this.stop();
+    if (typeof maxTurns === 'number' && maxTurns > 0 && this.promptTurnCount >= maxTurns) {
+      this.tripRunBound(`turn bound (${maxTurns}) exceeded`);
     }
+  }
+
+  /**
+   * Terminate a run for exceeding a bound (#1972). Records the note and
+   * flips the scoop to `error` BEFORE stopping so the lifecycle manager
+   * never sees a `ready` transition and announces the partial output as a
+   * completed scoop (agentic memory sets `notifyOnComplete`) — the run is
+   * a failure, surfaced through `onError` in cleanup and exit 1.
+   */
+  private tripRunBound(note: string): void {
+    if (this.boundExceededNote !== null || this.disposed) return;
+    this.boundExceededNote = note;
+    this.setStatus('error');
+    this.stop();
   }
 
   stop(): void {
@@ -1170,7 +1191,10 @@ export class ScoopContext {
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.isProcessing = false;
-    this.setStatus('ready');
+    // Preserve an `error` state (a tripped bound set it deliberately, so the
+    // lifecycle doesn't announce completion); a plain user interrupt lands
+    // on `ready` as before.
+    if (this.status !== 'error') this.setStatus('ready');
   }
 
   /** Clear the agent's in-memory conversation history (used by clear-chat). */
@@ -1340,6 +1364,14 @@ export class ScoopContext {
     // messages a pending debounce hadn't flushed yet (#1987).
     this.persistSessionNow();
     this.disposed = true;
+    // Clear the run-bound wall-clock timer symmetrically with
+    // `cleanupPromptState` (#1972): a dispose mid-bounded-run (shutdown,
+    // drop_scoop) bypasses cleanup, and the armed timer would otherwise
+    // hold a reference to this disposed context until it fires.
+    if (this.wallClockBoundTimer !== null) {
+      clearTimeout(this.wallClockBoundTimer);
+      this.wallClockBoundTimer = null;
+    }
     // Cancel any in-flight retry loop / backoff sleep before tearing down the agent.
     if (this.currentTurnProcess && this.processManager) {
       // SIGTERM matches the conventional shutdown semantic — the
@@ -1547,8 +1579,16 @@ export class ScoopContext {
         break;
       }
 
+      case 'turn_start': {
+        // #1972: stop only when the agent tries to BEGIN a turn past the
+        // ceiling — a run that completes exactly on `maxTurns` finishes
+        // normally (its final turn_end + agent_end fire first).
+        this.enforceTurnBoundOnStart();
+        break;
+      }
+
       case 'turn_end': {
-        this.countTurnAgainstBound();
+        this.recordCompletedTurn();
         if (
           event.message.role === 'assistant' &&
           isContextOverflow(event.message as PiAssistantMessage)

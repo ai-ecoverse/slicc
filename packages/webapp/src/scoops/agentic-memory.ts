@@ -166,6 +166,15 @@ export async function runAgenticMemoryPass(
       opts.signal
     );
     if (outcome.type === 'timeout') {
+      // With the in-run wall-clock bound (#1972) firing at
+      // `timeoutSeconds` and this wait carrying +grace, reaching here means
+      // the in-run bound FAILED to stop the run (e.g. `armRunBounds` never
+      // ran) — a real regression, not routine slowness. Log it loudly so
+      // it doesn't read as "the curator sometimes times out".
+      log.warn('Agentic memory wait timed out past the in-run bound + grace', {
+        timeoutSeconds: config.timeoutSeconds,
+        graceMs: BOUND_GRACE_MS,
+      });
       return { ok: false, reason: 'timeout', legacyFallbackSafe: false };
     }
     if (outcome.type === 'aborted') {

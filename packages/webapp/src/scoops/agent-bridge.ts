@@ -156,6 +156,11 @@ export interface AgentSpawnOptions {
    * `orchestrator.stopScoop`) and resolves the spawn with a non-zero
    * exit; an already-aborted signal short-circuits before any scoop is
    * registered.
+   *
+   * In-realm only as a live object. Across the panel↔worker transport an
+   * `AbortSignal` can't be cloned, so `OffscreenClient.spawnAgent` strips
+   * it and forwards cancellation as a wire-safe `agent-spawn-abort`
+   * message; the kernel reconstructs an equivalent signal here (#1972).
    */
   signal?: AbortSignal;
 }
@@ -548,10 +553,6 @@ export function createAgentBridge(
       ...(options.parentJid !== undefined ? { parentJid: options.parentJid } : {}),
     };
 
-    if (options.signal?.aborted) {
-      return { finalText: 'agent: aborted before start', exitCode: 1 };
-    }
-
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
     // Caller-held cancel: stop the running scoop so an abandoned wait
     // actually reclaims the run instead of letting it keep billing.
@@ -562,7 +563,17 @@ export function createAgentBridge(
         log.warn('stopScoop on abort failed', { jid, error: errText(err) });
       }
     };
+    // Attach BEFORE the aborted-check, then re-check: an abort landing in
+    // the window between check and attach would otherwise be missed
+    // (AbortSignal fires exactly once), leaving stopScoop uncalled and the
+    // cancellation deferred to the post-run gate — the 30s+ window this is
+    // meant to eliminate.
     options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) {
+      options.signal.removeEventListener('abort', onAbort);
+      observerHandle.unsubscribe?.();
+      return { finalText: 'agent: aborted before start', exitCode: 1 };
+    }
 
     try {
       try {

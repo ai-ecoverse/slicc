@@ -225,6 +225,18 @@ export interface AgentSpawnRequestMsg {
   options: AgentSpawnOptions;
 }
 
+/**
+ * Page → kernel cancel for an in-flight {@link AgentSpawnRequestMsg}. An
+ * `AbortSignal` cannot cross the panel↔worker transport as a live object,
+ * so `spawnAgent` strips it and, on abort, sends this wire-safe message
+ * keyed by the same `requestId`; the kernel aborts its own controller for
+ * that spawn (#1972).
+ */
+export interface AgentSpawnAbortMsg {
+  type: 'agent-spawn-abort';
+  requestId: string;
+}
+
 /** Correlated kernel → page reply for {@link AgentSpawnRequestMsg}. */
 export type AgentSpawnResultMsg =
   | { type: 'agent-spawn-result'; requestId: string; ok: true; result: AgentSpawnResult }
@@ -753,6 +765,7 @@ export type PanelToOffscreenMessage =
   | RequestSessionStatsMsg
   | ClearChatMsg
   | AgentSpawnRequestMsg
+  | AgentSpawnAbortMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
   | SetThinkingLevelMsg
