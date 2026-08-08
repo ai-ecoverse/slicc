@@ -21,8 +21,9 @@ const source = readFileSync(workerPath, 'utf8');
 
 describe('kernel-worker.ts telemetry wiring', () => {
   it('imports initTelemetry from the webapp telemetry module', () => {
+    // Allow sibling named imports (e.g. trackError for the #1983 beacon).
     expect(source).toMatch(
-      /import\s+\{\s*initTelemetry\s*\}\s+from\s+['"][^'"]*\/telemetry\.js['"]/
+      /import\s+\{[^}]*\binitTelemetry\b[^}]*\}\s+from\s+['"][^'"]*\/telemetry\.js['"]/
     );
   });
 
@@ -58,7 +59,10 @@ describe('kernel-worker.ts telemetry wiring', () => {
   it('swallows initTelemetry rejection so a telemetry failure cannot block boot', () => {
     // Match the same `.catch(() => {})` discipline used by offscreen.ts so
     // a transient rum-worker.js import / fetch failure does not break the
-    // worker boot sequence.
-    expect(source).toMatch(/initTelemetry\(\)\s*\.catch\(/);
+    // worker boot sequence. The chain may carry a `.then` first (the #1983
+    // mixed-build beacon fires once telemetry is bound); the trailing
+    // catch still covers the whole chain. Non-greedy: with exactly one
+    // `initTelemetry()` call (asserted above), this stops at ITS catch.
+    expect(source).toMatch(/initTelemetry\(\)[\s\S]*?\.catch\(/);
   });
 });

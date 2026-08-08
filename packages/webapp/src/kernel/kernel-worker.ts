@@ -27,6 +27,7 @@
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 import {
+  broadcastIfMixedBuildGraph,
   broadcastIfStaleAssetError,
   setStaleAssetInstanceId,
 } from '../core/stale-asset-channel.js';
@@ -54,7 +55,7 @@ import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
 import type { SyncFsNonce } from './realm/sync-fs-wire.js';
-import { initTelemetry } from './telemetry.js';
+import { initTelemetry, trackError } from './telemetry.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { startVfsRpcHost } from './vfs-rpc-host.js';
 
@@ -138,6 +139,14 @@ export interface KernelWorkerInitMsg {
    * undefined outside the thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
+  /**
+   * The PAGE graph's inlined `__SLICC_BUILD_ID__`. The worker compares it
+   * against its own copy on boot: a mismatch means stale HTML mixed two
+   * deploys' chunk graphs (#1983) — beaconed and answered with a guarded
+   * reload request over the stale-asset channel. Absent on older pages;
+   * the comparison then stays silent.
+   */
+  pageBuildId?: string | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -275,41 +284,69 @@ self.addEventListener('message', (event: MessageEvent) => {
   initGuard.handle(event.data as KernelWorkerInitMsg);
 });
 
+/**
+ * #1983: the page inlined ITS build id into the init message; this module
+ * carries the worker graph's. A mismatch means stale HTML mixed two
+ * deploys' chunks — request the page's guarded reload immediately and let
+ * boot continue (the reload, if not rate-limited, tears this worker down
+ * anyway; if suppressed, mixed operation matches today's behavior but is
+ * no longer silent). Returns the RUM beacon to fire once `initTelemetry`
+ * has bound `trackError` — a per-realm no-op before then.
+ */
+function checkMixedBuildGraph(init: KernelWorkerInitMsg): () => void {
+  const mixed = broadcastIfMixedBuildGraph(init.pageBuildId, __SLICC_BUILD_ID__);
+  return () => {
+    if (mixed) {
+      trackError('mixed-build-graph', `page ${init.pageBuildId} worker ${__SLICC_BUILD_ID__}`);
+    }
+  };
+}
+
+/**
+ * Environment wiring that must precede any fetch, provider read, or
+ * telemetry decision. Extracted from `boot()` for the per-function line
+ * cap; ordering within is load-bearing (see the inline comments).
+ */
+function configureWorkerEnvironment(init: KernelWorkerInitMsg): void {
+  // Stamp `x-bypass-llm-proxy: 1` on same-origin worker fetches so
+  // the page-installed LLM-proxy SW doesn't double-intercept them.
+  // Cross-origin requests are intentionally left bare — see
+  // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
+  // Must run before any fetcher does.
+  installFetchBypass();
+
+  // Thin-bridge: the hosted leader serves the UI but has no local /api
+  // surface, so proxied-fetch must target the bridge-discovered local
+  // node-server origin + carry the per-process `X-Bridge-Token` (origin
+  // allowlist alone is insufficient — see `bridge-security.ts`). The
+  // page realm sets its own copy in `setupStandalonePrelude`.
+  setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
+  setBridgeToken(init.bridgeToken ?? null);
+  setSyncFsBridgeEnabled(init.syncFsBridgeEnabled ?? false); // realm sync-fs SW bridge (see sync-fs-enabled.ts)
+  // Thin-bridge extension leader: the worker has no `chrome`, so a
+  // configured delegate id routes cross-origin shell fetches over panel-RPC
+  // to the page realm, which opens the extension Port (host_permissions CORS
+  // bypass). `null` outside the thin-bridge extension leader.
+  setExtensionDelegateId(init.extensionDelegateId ?? null);
+  // The worker has no `localStorage` (Web Workers don't get one).
+  // `provider-settings.getApiKey()` and `selected-model` reads on the
+  // worker side would otherwise crash or return empty, which makes
+  // `ScoopContext.init` fail with no provider configured. Seed a
+  // Map-backed shim from the page's `localStorage` snapshot the page
+  // passed in `kernel-worker-init`. The `Bridge`
+  // `local-storage-*` handlers + `installPageStorageSync` on the page
+  // keep the shim in sync with subsequent page writes.
+  installLocalStorageShim(init.localStorageSeed ?? {});
+}
+
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // #1330: record instanceId up front so a stale-import failure anywhere in boot
   // (registerProviders eagerly imports every provider chunk) broadcasts an
   // instanceId-scoped reload request to the owning page.
   setStaleAssetInstanceId(init.instanceId);
+  const beaconMixedBuildGraph = checkMixedBuildGraph(init);
   try {
-    // Stamp `x-bypass-llm-proxy: 1` on same-origin worker fetches so
-    // the page-installed LLM-proxy SW doesn't double-intercept them.
-    // Cross-origin requests are intentionally left bare — see
-    // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
-    // Must run before any fetcher does.
-    installFetchBypass();
-
-    // Thin-bridge: the hosted leader serves the UI but has no local /api
-    // surface, so proxied-fetch must target the bridge-discovered local
-    // node-server origin + carry the per-process `X-Bridge-Token` (origin
-    // allowlist alone is insufficient — see `bridge-security.ts`). The
-    // page realm sets its own copy in `setupStandalonePrelude`.
-    setLocalApiBaseUrl(init.localApiBaseUrl ?? null);
-    setBridgeToken(init.bridgeToken ?? null);
-    setSyncFsBridgeEnabled(init.syncFsBridgeEnabled ?? false); // realm sync-fs SW bridge (see sync-fs-enabled.ts)
-    // Thin-bridge extension leader: the worker has no `chrome`, so a
-    // configured delegate id routes cross-origin shell fetches over panel-RPC
-    // to the page realm, which opens the extension Port (host_permissions CORS
-    // bypass). `null` outside the thin-bridge extension leader.
-    setExtensionDelegateId(init.extensionDelegateId ?? null);
-    // The worker has no `localStorage` (Web Workers don't get one).
-    // `provider-settings.getApiKey()` and `selected-model` reads on the
-    // worker side would otherwise crash or return empty, which makes
-    // `ScoopContext.init` fail with no provider configured. Seed a
-    // Map-backed shim from the page's `localStorage` snapshot the page
-    // passed in `kernel-worker-init`. The `Bridge`
-    // `local-storage-*` handlers + `installPageStorageSync` on the page
-    // keep the shim in sync with subsequent page writes.
-    installLocalStorageShim(init.localStorageSeed ?? {});
+    configureWorkerEnvironment(init);
 
     // Initialize RUM telemetry so beacons fire from the worker
     // AlmostBashShell and uncaught errors in the agent loop are captured.
@@ -318,7 +355,9 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // shim so the `telemetry-disabled` / `slicc-rum-debug` keys the page
     // seeded propagate into the worker's `initTelemetry` decision. Fire-
     // and-forget — telemetry init must never block the boot.
-    void initTelemetry().catch(() => {});
+    void initTelemetry()
+      .then(beaconMixedBuildGraph)
+      .catch(() => {});
 
     // Register providers first — kernel host construction reads the
     // provider registry (via scoop-context → provider-settings).

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  broadcastIfMixedBuildGraph,
   broadcastIfStaleAssetError,
   broadcastStaleAssetReload,
   installStaleAssetReloadListener,
@@ -113,5 +114,50 @@ describe('broadcast + listener (instanceId-scoped)', () => {
     // Dev-only warning; assert it does not throw and (in DEV) warns at least 0+ times.
     expect(() => setStaleAssetInstanceId(undefined)).not.toThrow();
     warn.mockRestore();
+  });
+});
+
+describe('broadcastIfMixedBuildGraph (#1983)', () => {
+  beforeEach(() => installFakeBroadcastChannel());
+  afterEach(() => {
+    setStaleAssetInstanceId(undefined);
+    resetFakeBroadcastChannel();
+  });
+
+  it('requests the guarded reload when page and worker build ids differ', async () => {
+    const onReload = vi.fn();
+    const dispose = installStaleAssetReloadListener('inst-A', onReload);
+    setStaleAssetInstanceId('inst-A');
+
+    expect(broadcastIfMixedBuildGraph('6.36.2-aaa', '6.36.2-bbb')).toBe(true);
+    await Promise.resolve();
+    expect(onReload).toHaveBeenCalledTimes(1);
+    // A boot-time trigger: never a turn replay.
+    expect(onReload).toHaveBeenCalledWith(false);
+    dispose();
+  });
+
+  it('stays silent when the ids match', async () => {
+    const onReload = vi.fn();
+    const dispose = installStaleAssetReloadListener('inst-A', onReload);
+    setStaleAssetInstanceId('inst-A');
+
+    expect(broadcastIfMixedBuildGraph('6.36.2-aaa', '6.36.2-aaa')).toBe(false);
+    await Promise.resolve();
+    expect(onReload).not.toHaveBeenCalled();
+    dispose();
+  });
+
+  it('makes no claim when the page id is absent (older page HTML)', async () => {
+    const onReload = vi.fn();
+    const dispose = installStaleAssetReloadListener('inst-A', onReload);
+    setStaleAssetInstanceId('inst-A');
+
+    expect(broadcastIfMixedBuildGraph(undefined, '6.36.2-bbb')).toBe(false);
+    expect(broadcastIfMixedBuildGraph(null, '6.36.2-bbb')).toBe(false);
+    expect(broadcastIfMixedBuildGraph('', '6.36.2-bbb')).toBe(false);
+    await Promise.resolve();
+    expect(onReload).not.toHaveBeenCalled();
+    dispose();
   });
 });
