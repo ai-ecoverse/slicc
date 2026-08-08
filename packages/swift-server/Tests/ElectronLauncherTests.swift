@@ -376,12 +376,15 @@ final class ElectronLauncherTests: XCTestCase {
             ),
             bootstrapScript: "/* noop */",
             servePort: 5711,
+            bridgeToken: "test-token",
             session: .shared,
             logger: Logger(label: "test"),
             probeDelayNanoseconds: 1_000_000,
             commandTimeoutNanoseconds: 60_000_000_000,
             isAlreadyBypassed: { _ in false },
             recordBypassed: { _ in },
+            isAlreadyEgressBlocked: { _ in false },
+            recordEgressBlocked: { _ in },
             onClose: { _ in }
         )
 
@@ -413,12 +416,15 @@ final class ElectronLauncherTests: XCTestCase {
             ),
             bootstrapScript: "/* noop */",
             servePort: 5711,
+            bridgeToken: "test-token",
             session: .shared,
             logger: Logger(label: "test"),
             probeDelayNanoseconds: 1_000_000,
             commandTimeoutNanoseconds: 60_000_000_000,
             isAlreadyBypassed: { _ in false },
             recordBypassed: { _ in },
+            isAlreadyEgressBlocked: { _ in false },
+            recordEgressBlocked: { _ in },
             onClose: { _ in }
         )
         session.stop()
@@ -1038,12 +1044,15 @@ final class ElectronLauncherTests: XCTestCase {
             ),
             bootstrapScript: "/* noop */",
             servePort: 5711,
+            bridgeToken: "test-token",
             session: .shared,
             logger: Logger(label: "test"),
             probeDelayNanoseconds: 1_000_000,
             commandTimeoutNanoseconds: 60_000_000_000,
             isAlreadyBypassed: { _ in false },
             recordBypassed: { _ in },
+            isAlreadyEgressBlocked: { _ in false },
+            recordEgressBlocked: { _ in },
             onClose: { _ in }
         )
         session.stop()

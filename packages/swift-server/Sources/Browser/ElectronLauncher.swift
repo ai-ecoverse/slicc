@@ -517,6 +517,10 @@ enum OverlayPostReloadAction: Equatable {
     case escalateToFetchProxy
 }
 
+// Egress-block detection helpers (`overlayEgressBlockErrorTexts`,
+// `OverlayNetworkSignal`, `isEgressBlockError`, `classifyNetworkEvent`) live in
+// `ElectronOverlayEgress.swift`.
+
 final class ElectronOverlayInjector: @unchecked Sendable {
     private let cdpPort: Int
     private let servePort: Int
@@ -530,9 +534,19 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// from the local serve port was retired. Nil only in the test-only
     /// init, which supplies `testingThinBootstraps` instead.
     private let thinBridge: ThinBridgeConfig?
+    /// Per-process bridge token, present in every overlay app URL. Used to
+    /// correlate a `Network.loadingFailed` back to OUR overlay iframe's document
+    /// request (vs the app's own frames) when detecting an egress block.
+    private let bridgeToken: String
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
     private var sessions: [String: OverlayTargetSession] = [:]
     private var cspBypassedURLs = Set<String>()
+    /// Targets whose overlay iframe was denied at the network layer by the app
+    /// itself (e.g. Signal → `net::ERR_ACCESS_DENIED`). The reload/Fetch-proxy
+    /// escalation cannot rescue these, so once a target is here we stop
+    /// escalating and never record it as CSP-bypassed. Mirrors node-server's
+    /// `egressBlockedTargets`.
+    private var egressBlockedURLs = Set<String>()
     private var pollTask: Task<Void, Never>?
     /// URL of the target currently elected as the pinned leader. Cleared
     /// by `syncTargets` when that target disappears so the next injection
@@ -562,6 +576,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
         self.thinBridge = thinBridge
+        self.bridgeToken = thinBridge.bridgeToken
         self.testingThinBootstraps = nil
     }
 
@@ -573,6 +588,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         _testingServePort servePort: Int,
         cdpPort: Int = 9223,
         thinBootstraps: ThinBootstrapSet? = nil,
+        bridgeToken: String = "test-bridge-token",
         probeDelayNanoseconds: UInt64 = 20_000_000,
         session: URLSession = .shared,
         logger: Logger = Logger(label: "slicc.browser.electron-overlay")
@@ -584,6 +600,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
         self.thinBridge = nil
+        self.bridgeToken = bridgeToken
         self.testingThinBootstraps =
             thinBootstraps
             ?? ThinBootstrapSet(leader: "/* test-leader */", follower: "/* test-follower */")
@@ -942,15 +959,26 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             guard let self else { return }
             self.stateQueue.sync { _ = self.sessions.removeValue(forKey: targetID) }
         }
+        let isAlreadyEgressBlocked: @Sendable (String) -> Bool = { [weak self] url in
+            guard let self else { return false }
+            return self.stateQueue.sync { self.egressBlockedURLs.contains(url) }
+        }
+        let recordEgressBlocked: @Sendable (String) -> Void = { [weak self] url in
+            guard let self else { return }
+            self.stateQueue.sync { _ = self.egressBlockedURLs.insert(url) }
+        }
         return OverlayTargetSession(
             target: target,
             bootstrapScript: bootstrapScript,
             servePort: servePort,
+            bridgeToken: bridgeToken,
             session: session,
             logger: logger,
             probeDelayNanoseconds: probeDelayNanoseconds,
             isAlreadyBypassed: isAlreadyBypassed,
             recordBypassed: recordBypassed,
+            isAlreadyEgressBlocked: isAlreadyEgressBlocked,
+            recordEgressBlocked: recordEgressBlocked,
             onClose: onClose
         )
     }
@@ -965,6 +993,18 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// `alreadyBypassed` branch without driving a real CDP session.
     func _testing_seedBypassedURL(_ url: String) {
         stateQueue.sync { _ = cspBypassedURLs.insert(url) }
+    }
+
+    /// Snapshot of URLs marked egress-blocked in this injector's lifetime.
+    /// Mirrors node-server's `_testingEgressBlockedTargets()`.
+    func _testing_egressBlockedURLs() -> Set<String> {
+        stateQueue.sync { egressBlockedURLs }
+    }
+
+    /// Seed egress-blocked state for tests. Mirrors node-server's
+    /// `_testingSeedEgressBlockedTarget`.
+    func _testing_seedEgressBlockedURL(_ url: String) {
+        stateQueue.sync { _ = egressBlockedURLs.insert(url) }
     }
 
     /// Build the thin-bridge bootstrap pair loaded once per `syncTargets`
@@ -1068,6 +1108,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     private let target: ElectronInspectableTarget
     private let bootstrapScript: String
     private let servePort: Int
+    private let bridgeToken: String
     private let urlSession: URLSession
     private let logger: Logger
     private let probeDelayNanoseconds: UInt64
@@ -1075,6 +1116,8 @@ final class OverlayTargetSession: @unchecked Sendable {
     private let presenceCheckIntervalNanoseconds: UInt64
     private let isAlreadyBypassed: @Sendable (String) -> Bool
     private let recordBypassed: @Sendable (String) -> Void
+    private let isAlreadyEgressBlocked: @Sendable (String) -> Bool
+    private let recordEgressBlocked: @Sendable (String) -> Void
     private let onClose: @Sendable (String) -> Void
 
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-session")
@@ -1086,6 +1129,14 @@ final class OverlayTargetSession: @unchecked Sendable {
     private var pendingReload = false
     private var pendingCspEscalation = false
     private var fetchProxyActive = false
+    /// Set once the app denies the overlay iframe's document request at the
+    /// network layer (`Network.loadingFailed` → `net::ERR_ACCESS_DENIED`). The
+    /// probe/escalation paths bail out when this is set — no reload, no Fetch
+    /// proxy, no bypass record. Mirrors node-server's `ConnectFlowState.egressBlocked`.
+    private var egressBlocked = false
+    /// CDP `requestId`s of OUR overlay iframe document requests, for correlating
+    /// a `Network.loadingFailed` back to the overlay (vs the app's own frames).
+    private var overlayRequestIDs = Set<String>()
     private var addedScriptIdentifier: String?
     private var responseWaiters: [Int: CheckedContinuation<[String: Any]?, Never>] = [:]
     private var closed = false
@@ -1094,6 +1145,7 @@ final class OverlayTargetSession: @unchecked Sendable {
         target: ElectronInspectableTarget,
         bootstrapScript: String,
         servePort: Int,
+        bridgeToken: String,
         session: URLSession,
         logger: Logger,
         probeDelayNanoseconds: UInt64,
@@ -1101,11 +1153,14 @@ final class OverlayTargetSession: @unchecked Sendable {
         presenceCheckIntervalNanoseconds: UInt64 = electronOverlayPresenceCheckIntervalNanoseconds,
         isAlreadyBypassed: @escaping @Sendable (String) -> Bool,
         recordBypassed: @escaping @Sendable (String) -> Void,
+        isAlreadyEgressBlocked: @escaping @Sendable (String) -> Bool,
+        recordEgressBlocked: @escaping @Sendable (String) -> Void,
         onClose: @escaping @Sendable (String) -> Void
     ) {
         self.target = target
         self.bootstrapScript = bootstrapScript
         self.servePort = servePort
+        self.bridgeToken = bridgeToken
         self.urlSession = session
         self.logger = logger
         self.probeDelayNanoseconds = probeDelayNanoseconds
@@ -1113,6 +1168,8 @@ final class OverlayTargetSession: @unchecked Sendable {
         self.presenceCheckIntervalNanoseconds = presenceCheckIntervalNanoseconds
         self.isAlreadyBypassed = isAlreadyBypassed
         self.recordBypassed = recordBypassed
+        self.isAlreadyEgressBlocked = isAlreadyEgressBlocked
+        self.recordEgressBlocked = recordEgressBlocked
         self.onClose = onClose
     }
 
@@ -1214,6 +1271,21 @@ final class OverlayTargetSession: @unchecked Sendable {
 
         _ = await sendCommand(method: "Runtime.enable", awaitResponse: true)
         _ = await sendCommand(method: "Page.enable", awaitResponse: true)
+        // Watch the overlay iframe's document request so an app that denies it
+        // at the network layer (e.g. Signal → net::ERR_ACCESS_DENIED) is
+        // detected and the doomed CSP/Fetch escalation is skipped (see
+        // `applyNetworkSignal`).
+        _ = await sendCommand(method: "Network.enable", awaitResponse: true)
+
+        // A target already known to block renderer egress cannot load the hosted
+        // overlay by any escalation — skip re-injecting the doomed iframe on
+        // reconnect. (The stripped-down CDP-over-CDP follower path handles these.)
+        if isAlreadyEgressBlocked(target.url) {
+            stateQueue.sync { egressBlocked = true }
+            logger.info("Skipping overlay injection — target blocks renderer egress", metadata: ["target": .string(target.url)])
+            return
+        }
+
         _ = await sendCommand(method: "Page.setBypassCSP", params: ["enabled": true], awaitResponse: true)
         // Install the bootstrap as a permanent new-document hook so it
         // re-runs automatically after the reload below (and after any
@@ -1235,7 +1307,9 @@ final class OverlayTargetSession: @unchecked Sendable {
             let loaded = await ElectronOverlayInjector.pollOverlayLoaded(
                 budgetNanoseconds: overlayFirstProbeBudgetNanoseconds,
                 intervalNanoseconds: overlayFirstProbeIntervalNanoseconds,
-                shouldStop: { [weak self] in Task.isCancelled || (self?.isClosed() ?? true) },
+                shouldStop: {
+                    [weak self] in Task.isCancelled || (self?.isClosed() ?? true) || (self?.isEgressBlockedNow() ?? false)
+                },
                 probe: { [weak self] in await self?.probeOverlayLoaded() ?? false }
             )
             if Task.isCancelled || isClosed() { return }
@@ -1243,7 +1317,19 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
     }
 
+    /// Whether the app has denied the overlay iframe's document request at the
+    /// network layer (see `applyNetworkSignal`).
+    private func isEgressBlockedNow() -> Bool {
+        stateQueue.sync { egressBlocked }
+    }
+
     private func handlePostProbe(loaded: Bool) async {
+        // Egress-blocked apps deny the overlay's document request beneath the
+        // layer setBypassCSP / the Fetch proxy operate at, so escalation cannot
+        // help. The probe's throw-based "loaded" can't tell this apart from a
+        // real cross-origin load, so `egressBlocked` is authoritative: bail out
+        // WITHOUT recording the target as bypassed/loaded.
+        if isEgressBlockedNow() { return }
         let decision = ElectronOverlayInjector.postProbeAction(loaded: loaded)
         if ElectronOverlayInjector.shouldRecordBypassedAfter(probeAction: decision) {
             recordBypassed(target.url)
@@ -1316,6 +1402,8 @@ final class OverlayTargetSession: @unchecked Sendable {
             await handleLoadEventFired()
         case "Fetch.requestPaused":
             await handleFetchRequestPaused(params: params ?? [:])
+        case "Network.requestWillBeSent", "Network.loadingFailed":
+            await applyNetworkSignal(method: method, params: params)
         default:
             // In-page SPA route change (history.pushState / hashchange) or a
             // main-frame load-driven nav: re-inject the role bootstrap if the
@@ -1335,6 +1423,42 @@ final class OverlayTargetSession: @unchecked Sendable {
         }
     }
 
+    /// Apply the egress-block signal from a `Network.*` event: track OUR overlay
+    /// iframe's document request (matched by the bridge token) and, on a
+    /// network-layer denial, mark the target egress-blocked, stop the Network
+    /// stream, and record it so escalation is skipped. Mirrors node-server's
+    /// `handleNetworkEventForEgressBlock`.
+    private func applyNetworkSignal(method: String, params: [String: Any]?) async {
+        let currentIDs = stateQueue.sync { overlayRequestIDs }
+        let signal = ElectronOverlayInjector.classifyNetworkEvent(
+            method: method,
+            params: params,
+            bridgeToken: bridgeToken,
+            overlayRequestIDs: currentIDs
+        )
+        switch signal {
+        case .trackOverlayRequest(let requestId):
+            stateQueue.sync { _ = overlayRequestIDs.insert(requestId) }
+        case .egressBlocked:
+            let firstTime: Bool = stateQueue.sync {
+                let wasBlocked = egressBlocked
+                egressBlocked = true
+                return !wasBlocked
+            }
+            // Determination made — stop the Network event stream for this session.
+            _ = await sendCommand(method: "Network.disable")
+            if firstTime {
+                recordEgressBlocked(target.url)
+                let errorText = (params?["errorText"] as? String) ?? "net::ERR_ACCESS_DENIED"
+                logger.info(
+                    "Overlay blocked by app network egress; hosted overlay cannot load — skipping CSP/Fetch escalation. Egress-blocked apps need the CDP-over-CDP follower path.",
+                    metadata: ["target": .string(target.url), "error": .string(errorText)])
+            }
+        case .ignore:
+            break
+        }
+    }
+
     private func handleLoadEventFired() async {
         let snapshot: (reload: Bool, escalation: Bool) = stateQueue.sync {
             let r = pendingReload
@@ -1344,6 +1468,10 @@ final class OverlayTargetSession: @unchecked Sendable {
             return (r, e)
         }
         guard snapshot.reload else { return }
+        // Network-egress block detected during/after the reload — the Fetch
+        // proxy can't help either (it intercepts above the denying layer), so
+        // stop here without re-injecting or recording the target as loaded.
+        if isEgressBlockedNow() { return }
 
         logger.info("Page loaded after CSP-bypass reload, re-injecting overlay", metadata: ["target": .string(target.url)])
         // The CDP session keeps `Page.setBypassCSP` enabled across reloads,
@@ -1359,7 +1487,9 @@ final class OverlayTargetSession: @unchecked Sendable {
 
         try? await Task.sleep(nanoseconds: probeDelayNanoseconds)
         if Task.isCancelled || isClosed() { return }
+        if isEgressBlockedNow() { return }
         let loaded = await probeOverlayLoaded()
+        if isEgressBlockedNow() { return }
         let decision = ElectronOverlayInjector.postReloadAction(loaded: loaded, escalationRequested: true)
         if ElectronOverlayInjector.shouldRecordBypassedAfter(postReloadAction: decision) {
             recordBypassed(target.url)
