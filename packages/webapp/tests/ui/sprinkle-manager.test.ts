@@ -1141,7 +1141,7 @@ describe('SprinkleManager', () => {
       expect(JSON.parse(localStorage.getItem('slicc-open-sprinkles') ?? '[]')).toEqual(['q']);
     });
 
-    it('activate is a no-op when the sprinkle is already user-opened', async () => {
+    it('activate re-places an already user-opened sprinkle (reopen after minimize)', async () => {
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
       await mgr.refresh();
       await mgr.open('dash');
@@ -1149,7 +1149,11 @@ describe('SprinkleManager', () => {
 
       await mgr.activate('dash');
 
-      expect(addSprinkle).not.toHaveBeenCalled();
+      // Re-runs addSprinkle on the SAME container (no re-fetch/re-render) so a
+      // minimized/parked sprinkle's leaf gets placed back into the layout;
+      // idempotent when it was already shown.
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      expect(addSprinkle.mock.calls[0]?.[0]).toBe('dash');
     });
   });
 
