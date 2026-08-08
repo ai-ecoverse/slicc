@@ -641,6 +641,44 @@ function buildFulfillResponseHeaders(
 export interface ThinBootstrapSet {
   leader: string;
   follower: string;
+  /**
+   * Status-only overlay bootstrap: injects the launcher with NO app-url (no
+   * iframe) and a message explaining the app blocks the embedded panel. Used
+   * for egress-blocked apps (e.g. Signal) so the user sees the launcher + a
+   * clear note instead of a silent blank panel.
+   */
+  status: string;
+}
+
+/**
+ * Empty-viewport message shown by the status-only overlay for an app that
+ * denies the overlay iframe's network egress. Kept in sync with swift-server's
+ * `overlayStatusMessageEgressBlocked`.
+ */
+export const OVERLAY_STATUS_MESSAGE_EGRESS_BLOCKED =
+  'SLICC is attached to this app, but it blocks embedded panels. Drive it from the SLICC leader window.';
+
+/**
+ * CDP `Network.loadingFailed` `errorText` values that mean the *app itself*
+ * denied the overlay's document request at the network layer — not a CSP block.
+ * Signal (and other locked-down Electron apps) proxy all renderer network
+ * through their main process and deny external requests with
+ * `net::ERR_ACCESS_DENIED`, BENEATH the layer where `Page.setBypassCSP` or the
+ * CDP Fetch proxy operate — so the reload/Fetch escalation cannot help and must
+ * be skipped. Unlike a CSP block, the thrown probe (`OVERLAY_LOADED_PROBE_EXPRESSION`)
+ * can't distinguish this from a successful cross-origin load (both throw), so we
+ * detect it authoritatively from the failed document request instead.
+ */
+export const OVERLAY_EGRESS_BLOCK_ERROR_TEXTS: readonly string[] = [
+  'net::ERR_ACCESS_DENIED',
+  'net::ERR_NETWORK_ACCESS_DENIED',
+  'net::ERR_BLOCKED_BY_CLIENT',
+  'net::ERR_BLOCKED_BY_ADMINISTRATOR',
+];
+
+/** True when `errorText` is one of {@link OVERLAY_EGRESS_BLOCK_ERROR_TEXTS}. */
+export function isOverlayEgressBlockError(errorText: string | undefined): boolean {
+  return typeof errorText === 'string' && OVERLAY_EGRESS_BLOCK_ERROR_TEXTS.includes(errorText);
 }
 
 /**
@@ -655,6 +693,13 @@ export interface ThinBootstrapSet {
  * so the overlay did not load and the setBypassCSP escalation must fire.
  * Returns `'ok'` only from the catch; otherwise `'no-host' / 'no-iframe' /
  * 'no-src' / 'blank:<href>'`.
+ *
+ * CAVEAT: a *network-layer* block (the app denying the overlay's document
+ * request with `net::ERR_ACCESS_DENIED`) swaps to a CROSS-origin `chrome-error`
+ * page whose href access ALSO throws — indistinguishable here from a real load.
+ * That case is detected authoritatively from `Network.loadingFailed`
+ * (see {@link isOverlayEgressBlockError}); this probe's `'ok'` is overridden by
+ * the connection's `egressBlocked` flag so it is never recorded as loaded.
  */
 export const OVERLAY_LOADED_PROBE_EXPRESSION = `(function() {
           var host = document.getElementById('slicc-electron-overlay-root');
@@ -706,11 +751,31 @@ export class ElectronOverlayInjector {
   private readonly connections = new Map<string, WebSocket>();
   private readonly cspBypassedTargets = new Set<string>();
   /**
+   * Per-process bridge token, present in every overlay app URL. Used to
+   * correlate a `Network.loadingFailed` back to OUR overlay iframe's document
+   * request (vs the app's own frames) when detecting an egress block.
+   */
+  private readonly bridgeToken: string;
+  /**
+   * Targets whose overlay iframe was denied at the network layer by the app
+   * itself (e.g. Signal → `net::ERR_ACCESS_DENIED`). The reload/Fetch-proxy
+   * escalation cannot rescue these, so once a target is here we stop escalating
+   * and never record it as CSP-bypassed (which would falsely read as loaded).
+   */
+  private readonly egressBlockedTargets = new Set<string>();
+  /**
    * URL of the target currently elected as the pinned leader. Cleared by
    * `syncTargets` when that target disappears so the next injection
    * re-elects a fresh leader.
    */
   private leaderTargetUrl: string | null = null;
+  /**
+   * Fired ONCE when the app is first detected to block renderer egress, so the
+   * runtime can start the headless CDP-over-CDP follower (`ElectronTrayFollower`)
+   * for this app. The hosted overlay can never load in such apps, so exposing
+   * their CDP to the tray leader is the only way to drive them.
+   */
+  private readonly onEgressBlocked?: (targetUrl: string) => void;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
 
@@ -718,12 +783,16 @@ export class ElectronOverlayInjector {
     cdpPort: number,
     servePort: number,
     thinBootstraps: ThinBootstrapSet,
+    bridgeToken: string,
+    onEgressBlocked?: (targetUrl: string) => void,
     probeDelayMs: number = 1500,
     presenceCheckIntervalMs: number = ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
   ) {
     this.cdpPort = cdpPort;
     this.servePort = servePort;
     this.thinBootstraps = thinBootstraps;
+    this.bridgeToken = bridgeToken;
+    this.onEgressBlocked = onEgressBlocked;
     this.probeDelayMs = probeDelayMs;
     this.presenceCheckIntervalMs = presenceCheckIntervalMs;
   }
@@ -739,6 +808,8 @@ export class ElectronOverlayInjector {
      * bundled overlay path was retired.
      */
     thinBridge: ThinBridgeConfig;
+    /** Start the headless CDP-over-CDP follower when egress-block is detected. */
+    onEgressBlocked?: (targetUrl: string) => void;
   }): Promise<ElectronOverlayInjector> {
     const bundleSource = await loadElectronOverlayBundleSource({
       projectRoot: options.projectRoot,
@@ -753,9 +824,20 @@ export class ElectronOverlayInjector {
         bundleSource,
         appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_FOLLOWER }),
       }),
+      status: buildElectronOverlayBootstrapScript({
+        bundleSource,
+        appUrl: '',
+        statusMessage: OVERLAY_STATUS_MESSAGE_EGRESS_BLOCKED,
+      }),
     };
 
-    return new ElectronOverlayInjector(options.cdpPort, options.servePort, thinBootstraps);
+    return new ElectronOverlayInjector(
+      options.cdpPort,
+      options.servePort,
+      thinBootstraps,
+      options.thinBridge.bridgeToken,
+      options.onEgressBlocked
+    );
   }
 
   /**
@@ -767,13 +849,21 @@ export class ElectronOverlayInjector {
     cdpPort?: number;
     servePort: number;
     thinBootstraps?: ThinBootstrapSet;
+    bridgeToken?: string;
+    onEgressBlocked?: (targetUrl: string) => void;
     probeDelayMs?: number;
     presenceCheckIntervalMs?: number;
   }): ElectronOverlayInjector {
     return new ElectronOverlayInjector(
       options.cdpPort ?? 9223,
       options.servePort,
-      options.thinBootstraps ?? { leader: '/* test-leader */', follower: '/* test-follower */' },
+      options.thinBootstraps ?? {
+        leader: '/* test-leader */',
+        follower: '/* test-follower */',
+        status: '/* test-status */',
+      },
+      options.bridgeToken ?? 'test-bridge-token',
+      options.onEgressBlocked,
       options.probeDelayMs ?? 1500,
       options.presenceCheckIntervalMs ?? ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
     );
@@ -802,6 +892,16 @@ export class ElectronOverlayInjector {
   /** Test-only: snapshot the per-target "already bypassed" guard set. */
   _testingBypassedTargets(): ReadonlySet<string> {
     return new Set(this.cspBypassedTargets);
+  }
+
+  /** Test-only: snapshot the set of targets marked egress-blocked. */
+  _testingEgressBlockedTargets(): ReadonlySet<string> {
+    return new Set(this.egressBlockedTargets);
+  }
+
+  /** Test-only: seed a target as already egress-blocked. */
+  _testingSeedEgressBlockedTarget(url: string): void {
+    this.egressBlockedTargets.add(url);
   }
 
   /** Test-only: drive a single `syncTargets` pass without `start()`'s interval. */
@@ -1088,6 +1188,25 @@ export class ElectronOverlayInjector {
     send('Runtime.enable');
     send('Page.enable');
 
+    // A target already known to block renderer egress cannot load the hosted
+    // overlay by any escalation — show the status-only overlay (no iframe)
+    // instead of re-running the doomed iframe injection + probe. (The
+    // stripped-down CDP-over-CDP follower path drives these apps.)
+    if (this.egressBlockedTargets.has(target.url)) {
+      state.egressBlocked = true;
+      console.log(
+        `[electron-float] ${target.url} blocks renderer egress — injecting status-only overlay`
+      );
+      this.injectStatusOverlay(send);
+      return;
+    }
+
+    // Watch the overlay iframe's document request so an app that denies it at
+    // the network layer (e.g. Signal → net::ERR_ACCESS_DENIED) is detected and
+    // the doomed CSP/Fetch escalation is skipped (see
+    // `handleNetworkEventForEgressBlock`).
+    send('Network.enable');
+
     // Install the role bootstrap as a permanent new-document hook (parity with
     // swift-server) so a full document reload / load-driven navigation of this
     // already-connected target re-injects the overlay automatically. Without
@@ -1137,12 +1256,21 @@ export class ElectronOverlayInjector {
       setTimeout(async () => {
         if (ws.readyState !== WebSocket.OPEN) return;
 
+        // Egress-blocked apps deny the overlay's document request beneath the
+        // layer setBypassCSP / the Fetch proxy operate at, so escalation cannot
+        // help. The probe's throw-based `'ok'` can't tell this apart from a real
+        // cross-origin load, so `egressBlocked` is authoritative: bail out
+        // WITHOUT recording the target as bypassed/loaded.
+        if (state.egressBlocked) return;
+
         const loaded = await this.probeOverlayIframeLoaded(ws, send);
-        if (loaded) {
+        if (loaded && !state.egressBlocked) {
           console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
           this.cspBypassedTargets.add(target.url);
+          send('Network.disable');
           return;
         }
+        if (state.egressBlocked) return;
 
         // Phase 2: Page.setBypassCSP was already set — a simple reload should
         // make the browser ignore CSP headers on the fresh navigation.
@@ -1196,12 +1324,18 @@ export class ElectronOverlayInjector {
       state.pendingCspEscalation = false;
       setTimeout(async () => {
         if (ws.readyState !== WebSocket.OPEN) return;
+        // Network-egress block detected during/after the reload — the Fetch
+        // proxy can't help either (it intercepts above the denying layer), so
+        // stop here without recording the target as loaded.
+        if (state.egressBlocked) return;
         const loaded = await this.probeOverlayIframeLoaded(ws, send);
-        if (loaded) {
+        if (loaded && !state.egressBlocked) {
           console.log(`[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`);
           this.cspBypassedTargets.add(target.url);
+          send('Network.disable');
           return;
         }
+        if (state.egressBlocked) return;
 
         const fetchOrigin = resolveFetchProxyOrigin(target.url, this.servePort);
         console.log(
@@ -1309,6 +1443,84 @@ export class ElectronOverlayInjector {
     proxyReq.end();
   }
 
+  /**
+   * Inspect a `Network.*` CDP event for the egress-block signal: track OUR
+   * overlay iframe's top-level Document request (matched by the per-process
+   * bridge token in its URL, so the app's own frames are ignored) and, when the
+   * app denies it at the network layer ({@link isOverlayEgressBlockError}), set
+   * `state.egressBlocked` and record the target. `Page.setBypassCSP` / the Fetch
+   * proxy operate above the layer that denies these, so escalation cannot help —
+   * the probe/escalation paths read `state.egressBlocked` to bail out instead of
+   * reload-churning and instead of falsely recording the target as loaded.
+   */
+  private handleNetworkEventForEgressBlock(
+    msg: {
+      method?: string;
+      params?: {
+        requestId?: string;
+        type?: string;
+        request?: { url?: string };
+        errorText?: string;
+      };
+    },
+    send: (method: string, params?: Record<string, unknown>) => number,
+    target: ElectronInspectableTarget,
+    state: ConnectFlowState
+  ): void {
+    const params = msg.params;
+    if (!params) return;
+
+    if (msg.method === 'Network.requestWillBeSent') {
+      if (
+        params.type === 'Document' &&
+        typeof params.requestId === 'string' &&
+        typeof params.request?.url === 'string' &&
+        params.request.url.includes(this.bridgeToken)
+      ) {
+        state.overlayRequestIds.add(params.requestId);
+      }
+      return;
+    }
+
+    if (
+      msg.method === 'Network.loadingFailed' &&
+      typeof params.requestId === 'string' &&
+      state.overlayRequestIds.has(params.requestId) &&
+      isOverlayEgressBlockError(params.errorText)
+    ) {
+      state.egressBlocked = true;
+      // Determination made — stop the Network event stream for this connection.
+      send('Network.disable');
+      if (!this.egressBlockedTargets.has(target.url)) {
+        this.egressBlockedTargets.add(target.url);
+        console.log(
+          `[electron-float] Overlay blocked by app network egress (${params.errorText}); ` +
+            `the hosted overlay cannot load in ${target.url} — skipping CSP/Fetch escalation. ` +
+            `Egress-blocked apps need the CDP-over-CDP follower path.`
+        );
+        // Start the headless CDP-over-CDP follower for this app (once).
+        this.onEgressBlocked?.(target.url);
+      }
+      // Replace the (blank-iframe) overlay with the status-only launcher.
+      this.injectStatusOverlay(send);
+    }
+  }
+
+  /**
+   * Show the status-only overlay (launcher + message, no iframe) on a target
+   * that blocks the embedded panel. Injects the status bootstrap now AND as a
+   * `Page.addScriptToEvaluateOnNewDocument` hook so it survives app reloads —
+   * the status hook is added after the role hook, so re-running both leaves the
+   * idempotent launcher in the status-only state (the launcher is collapsed, so
+   * there is no visible iframe flash).
+   */
+  private injectStatusOverlay(
+    send: (method: string, params?: Record<string, unknown>) => number
+  ): void {
+    send('Page.addScriptToEvaluateOnNewDocument', { source: this.thinBootstraps.status });
+    send('Runtime.evaluate', { expression: this.thinBootstraps.status, awaitPromise: false });
+  }
+
   private connectToTarget(target: ElectronInspectableTarget): void {
     const targetId = target.webSocketDebuggerUrl!;
     const ws = new WebSocket(targetId);
@@ -1325,6 +1537,8 @@ export class ElectronOverlayInjector {
       pendingReload: false,
       pendingCspEscalation: false,
       fetchProxyActive: false,
+      egressBlocked: false,
+      overlayRequestIds: new Set<string>(),
     };
 
     // Periodic presence re-check: covers SPAs that re-render their DOM root
@@ -1376,6 +1590,12 @@ export class ElectronOverlayInjector {
         if (msg.method === 'Fetch.requestPaused' && state.fetchProxyActive) {
           this.handleFetchRequestPaused(ws, send, msg);
         }
+
+        // Egress-block detection: track OUR overlay iframe's Document request
+        // (matched by the per-process bridge token in the URL) and, if the app
+        // denies it at the network layer, mark the target so the doomed
+        // reload/Fetch escalation is skipped and it is never recorded as loaded.
+        this.handleNetworkEventForEgressBlock(msg, send, target, state);
       } catch {
         // Ignore parse errors for non-JSON messages
       }
@@ -1412,4 +1632,13 @@ interface ConnectFlowState {
   pendingReload: boolean;
   pendingCspEscalation: boolean;
   fetchProxyActive: boolean;
+  /**
+   * Set once the app denies the overlay iframe's document request at the network
+   * layer (see `handleNetworkEventForEgressBlock`). The probe/escalation paths
+   * bail out when this is set — no reload, no Fetch proxy, no bypass record.
+   */
+  egressBlocked: boolean;
+  /** CDP `requestId`s of OUR overlay iframe document requests, for correlating
+   *  a `Network.loadingFailed` back to the overlay (vs the app's own frames). */
+  overlayRequestIds: Set<string>;
 }

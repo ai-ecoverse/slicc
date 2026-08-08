@@ -37,7 +37,8 @@
         "packages/shared-ts/src/secret-env-schema.ts",
         "packages/shared-ts/src/transcript-export.ts",
         "packages/shared-ts/src/transcript-redaction.ts",
-        "packages/shared-ts/src/slicc-app-url.ts"
+        "packages/shared-ts/src/slicc-app-url.ts",
+        "packages/node-server/src/electron-tray-follower.ts"
       ]
     },
     "chrome-extension": {
@@ -149,6 +150,11 @@
       "lines": 88,
       "functions": 84,
       "regions": 83
+    },
+    "swift-trayfollower": {
+      "lines": 62,
+      "functions": 47,
+      "regions": 72
     },
     "ios-app": {
       "lines": 70,

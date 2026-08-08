@@ -334,7 +334,6 @@
       "includes": [
         "packages/chrome-extension/capture-popup.js",
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/node-server/src/index.ts",
         "packages/webapp/cloud/app.js",
         "packages/webapp/providers/adobe.ts",
         "packages/webapp/providers/cerebras.ts",

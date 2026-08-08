@@ -253,11 +253,14 @@ public struct TrayFsResponse: Codable, Equatable {
         self.totalChunks = totalChunks
     }
 
-    static func success(_ data: TrayFsResponseData) -> TrayFsResponse {
+    // Public because a production consumer (`SliccTrayKit/Sync/FsClient.swift`)
+    // constructs refusals through these once this type lives in a separate
+    // module — `@testable` reaches internal statics only from test builds.
+    public static func success(_ data: TrayFsResponseData) -> TrayFsResponse {
         TrayFsResponse(ok: true, data: data)
     }
 
-    static func failure(_ error: String, code: String? = nil) -> TrayFsResponse {
+    public static func failure(_ error: String, code: String? = nil) -> TrayFsResponse {
         TrayFsResponse(ok: false, error: error, code: code)
     }
 }

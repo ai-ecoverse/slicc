@@ -46,6 +46,32 @@ final class AppScannerTests: XCTestCase {
         XCTAssertEqual(knownBundleIds, expectedBundleIds)
     }
 
+    func testKnownElectronAppsIncludeSignalWithRealBundleId() {
+        // Without App Management permission, Electron apps are discovered only
+        // by bundle ID via `knownElectronApps`, so a wrong id makes the app
+        // silently un-listable. Signal Desktop ships `org.whispersystems.signal-desktop`
+        // (NOT `org.signal.Signal`) — pin the real id so it stays discoverable.
+        let signal = AppTarget.knownElectronApps.first { $0.name == "Signal" }
+        XCTAssertEqual(signal?.bundleId, "org.whispersystems.signal-desktop")
+        XCTAssertFalse(
+            AppTarget.knownElectronApps.contains { $0.bundleId == "org.signal.Signal" },
+            "stale Signal bundle id `org.signal.Signal` never resolves an installed app"
+        )
+    }
+
+    func testKnownElectronAppBundleIdsAreWellFormedAndUnique() {
+        let ids = AppTarget.knownElectronApps.map(\.bundleId)
+        // A reverse-DNS bundle id has at least one dot and no whitespace; a typo
+        // that drops the id (or duplicates one) makes an app un-listable.
+        for id in ids {
+            XCTAssertFalse(id.isEmpty, "empty bundle id in knownElectronApps")
+            XCTAssertTrue(id.contains("."), "bundle id `\(id)` is not reverse-DNS")
+            XCTAssertFalse(
+                id.contains(where: \.isWhitespace), "bundle id `\(id)` contains whitespace")
+        }
+        XCTAssertEqual(Set(ids).count, ids.count, "duplicate bundle id in knownElectronApps")
+    }
+
     func testIsChromiumBrowserMatchesExpandedBrowserList() {
         XCTAssertTrue(AppScanner.isChromiumBrowser(bundleId: "company.thebrowser.dia"))
         XCTAssertTrue(AppScanner.isChromiumBrowser(bundleId: "com.openai.atlas"))

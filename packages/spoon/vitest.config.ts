@@ -31,7 +31,17 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['**/*.stories.ts', 'src/index.ts', 'src/overlay-entry.ts', '**/*.d.ts'],
+      exclude: [
+        '**/*.stories.ts',
+        'src/index.ts',
+        'src/overlay-entry.ts',
+        // Browser-runtime glue validated live via cdp-smoke-test, not in CI
+        // (no headless equivalent of Signal's egress lockdown). The pure graph
+        // transforms it delegates to (`tunnel/asset-graph.ts`) ARE unit-tested.
+        'src/tunnel/tunnel-loader-entry.ts',
+        'src/tunnel/tunnel-protocol.ts',
+        '**/*.d.ts',
+      ],
       thresholds: floors,
     },
   },

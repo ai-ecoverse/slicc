@@ -318,6 +318,9 @@ export function buildElectronOverlayInjectionCall(options: {
   appUrl: string;
   open?: boolean;
   activeTab?: string;
+  /** Empty-viewport message for the status-only overlay (apps that block the
+   *  embedded panel, e.g. Signal). Only meaningful when `appUrl` is empty. */
+  statusMessage?: string;
 }): string {
   const payload: Record<string, unknown> = {
     appUrl: options.appUrl,
@@ -328,6 +331,9 @@ export function buildElectronOverlayInjectionCall(options: {
   }
   if (options.activeTab) {
     payload['activeTab'] = options.activeTab;
+  }
+  if (options.statusMessage !== undefined) {
+    payload['statusMessage'] = options.statusMessage;
   }
 
   // Wait for document.body before injecting — Runtime.evaluate and
@@ -341,6 +347,7 @@ export function buildElectronOverlayBootstrapScript(options: {
   appUrl: string;
   open?: boolean;
   activeTab?: string;
+  statusMessage?: string;
 }): string {
   return `${options.bundleSource}\n${buildElectronOverlayInjectionCall(options)}`;
 }

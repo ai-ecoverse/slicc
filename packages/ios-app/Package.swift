@@ -23,12 +23,21 @@ let package = Package(
             .upToNextMinor(from: "0.9.0")),
         .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0")),
         .package(path: "../swift-traysession"),
+        .package(path: "../swift-trayfollower"),
     ],
     targets: [
         .target(
             name: "SliccTrayKit",
             dependencies: [
-                .product(name: "WebRTC", package: "WebRTC")
+                // WebRTC stays a direct dep: `FileProvider/FileProviderTrayConnection`
+                // still imports it (its `TrayFollowerConnectorDelegate` conformance
+                // names `RTCIceCandidate`). SPM dedupes it with the copy pulled via
+                // SliccTrayFollower, so the framework is not double-shipped.
+                .product(name: "WebRTC", package: "WebRTC"),
+                // The tray-follower transport core (formerly SliccTrayKit's own
+                // Models/ + Networking/), now shared with swift-server. Re-exported
+                // module-wide via SliccTrayKit/TrayFollowerExports.swift.
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "SliccTrayKit"
         ),
@@ -40,6 +49,7 @@ let package = Package(
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "WebRTC", package: "WebRTC"),
                 .product(name: "SliccTraySession", package: "swift-traysession"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "SliccFollower",
             exclude: ["SliccFollower.entitlements", "Tests"],
