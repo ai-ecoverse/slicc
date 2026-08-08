@@ -403,22 +403,26 @@ function elideMessageContent(message: AgentMessage): AgentMessage {
 }
 
 /**
- * In the hopeless branch, replace the content of any single `toolResult`
- * (or assistant message carrying tool calls) whose estimated tokens exceed
- * `(contextWindow - reserveTokens) / 2` with a short stub.
+ * Replace the content of any single `toolResult` (or assistant message carrying
+ * tool calls) whose estimated tokens exceed `(contextWindow - reserveTokens) / 2`
+ * with a short stub. A message that large cannot be summarized — serializing it
+ * into the summary prompt would itself blow context — so it must be stubbed in
+ * place before either summarization or naive drop (#2011).
  *
  * - Message ordering, role, `toolCallId`, and `toolName` are preserved.
  * - For assistant messages, `toolCall` content blocks are kept (with `id`,
  *   `name`, and `type` intact) so the agent loop's tool-call/tool-result
  *   pairing stays valid. Each block's `arguments` payload is rewritten to
  *   a small `{ elided: true, originalBytes: <n> }` stub so multi-megabyte
- *   `write_file`-style argument blobs don't survive elision and re-trigger
- *   the hopeless branch on the next turn.
+ *   `write_file`-style argument blobs don't survive elision.
  * - Assistant messages without any `toolCall` block are passed through
- *   unchanged — only assistant turns that actually carry tool calls
- *   participate in this elision, matching the JSDoc invariant.
+ *   unchanged — only assistant turns that actually carry tool calls participate.
+ *
+ * Unlike {@link elideHopelessMessages}, this does NOT strip images: it runs on
+ * every compaction (not only when the context is multiples of the window), so it
+ * must touch only messages that are individually oversized.
  */
-function elideHopelessMessages(
+function elideOversizedMessages(
   messages: AgentMessage[],
   contextWindow: number,
   reserveTokens: number
@@ -427,18 +431,7 @@ function elideHopelessMessages(
   let elidedCount = 0;
   let elidedBytes = 0;
 
-  const out = messages.map((rawMsg) => {
-    // Hopeless-branch image strip (#1986): the context is multiples of the
-    // window, so no image payload can survive to the model anyway — and
-    // user-role messages (where photo attachments live) never reach the
-    // role-gated elision below.
-    const msg = elideImagesInMessage(rawMsg);
-    if (msg !== rawMsg) {
-      elidedCount++;
-      elidedBytes +=
-        approxContentBytes((rawMsg as { content?: unknown }).content) -
-        approxContentBytes((msg as { content?: unknown }).content);
-    }
+  const out = messages.map((msg) => {
     const tokens = estimateTokens(msg);
     if (tokens <= perMessageThreshold) return msg;
     const role = (msg as { role: string }).role;
@@ -455,12 +448,7 @@ function elideHopelessMessages(
 
     // Assistant branch: only elide turns that actually carry tool calls.
     const content = Array.isArray(m.content) ? m.content : [];
-    const toolCalls = content.filter((b) => (b as { type?: string }).type === 'toolCall') as Array<{
-      type: string;
-      id?: string;
-      name?: string;
-      arguments?: unknown;
-    }>;
+    const toolCalls = content.filter((b) => (b as { type?: string }).type === 'toolCall');
     if (toolCalls.length === 0) return msg;
 
     elidedCount++;
@@ -469,6 +457,40 @@ function elideHopelessMessages(
   });
 
   return { messages: out, elidedCount, elidedBytes };
+}
+
+/**
+ * Hopeless-branch elision: strip images from every message (#1986 — the context
+ * is multiples of the window, so no image payload can survive to the model
+ * anyway, and user-role messages where photo attachments live never reach the
+ * role-gated size elision), then stub every oversized message via
+ * {@link elideOversizedMessages}.
+ */
+function elideHopelessMessages(
+  messages: AgentMessage[],
+  contextWindow: number,
+  reserveTokens: number
+): { messages: AgentMessage[]; elidedCount: number; elidedBytes: number } {
+  let elidedCount = 0;
+  let elidedBytes = 0;
+
+  const imageStripped = messages.map((rawMsg) => {
+    const msg = elideImagesInMessage(rawMsg);
+    if (msg !== rawMsg) {
+      elidedCount++;
+      elidedBytes +=
+        approxContentBytes((rawMsg as { content?: unknown }).content) -
+        approxContentBytes((msg as { content?: unknown }).content);
+    }
+    return msg;
+  });
+
+  const sized = elideOversizedMessages(imageStripped, contextWindow, reserveTokens);
+  return {
+    messages: sized.messages,
+    elidedCount: elidedCount + sized.elidedCount,
+    elidedBytes: elidedBytes + sized.elidedBytes,
+  };
 }
 
 /** Sum the estimated token cost of a message list. */
@@ -516,21 +538,48 @@ function applyHopelessElision(
   hopelessMultiplier: number,
   settings: Parameters<typeof shouldCompact>[2]
 ): { messages: AgentMessage[]; isHopeless: boolean; earlyReturn: AgentMessage[] | null } {
-  if (totalTokens <= contextWindow * hopelessMultiplier) {
+  // #2011: stub any individually-oversized message on EVERY compaction, decoupled
+  // from the 4x-window "hopeless" gate below. A single tool result larger than
+  // half the window (e.g. a multi-hundred-KB command dump) cannot be summarized —
+  // sending it to the summary LLM re-blows context — so it must be elided in
+  // place whether or not the conversation total is multiples of the window.
+  const sizeElision = elideOversizedMessages(messages, contextWindow, reserveTokens);
+  let workingMessages = sizeElision.messages;
+  let elidedCount = sizeElision.elidedCount;
+  let elidedBytes = sizeElision.elidedBytes;
+
+  const postSizeTokens = elidedCount > 0 ? estimateTotalTokens(workingMessages) : totalTokens;
+
+  // Hopeless branch (#1986): even after size-elision the context is still
+  // multiples of the window, so strip images too and skip the LLM summary —
+  // serializing this much conversation would itself blow context.
+  const isHopeless = postSizeTokens > contextWindow * hopelessMultiplier;
+  if (isHopeless) {
+    const hopeless = elideHopelessMessages(workingMessages, contextWindow, reserveTokens);
+    workingMessages = hopeless.messages;
+    elidedCount += hopeless.elidedCount;
+    elidedBytes += hopeless.elidedBytes;
+  }
+
+  // True no-op: nothing oversized and not hopeless — let the caller run the
+  // normal summarize path on the untouched messages.
+  if (!isHopeless && elidedCount === 0) {
     return { messages, isHopeless: false, earlyReturn: null };
   }
-  const elision = elideHopelessMessages(messages, contextWindow, reserveTokens);
-  const workingMessages = elision.messages;
-  log.warn('Compaction hopeless branch', {
+
+  log.warn('Compaction oversized-message elision', {
     totalTokens,
+    postSizeTokens,
     contextWindow,
-    multiplier: hopelessMultiplier,
-    elidedCount: elision.elidedCount,
-    elidedBytes: elision.elidedBytes,
+    isHopeless,
+    elidedCount,
+    elidedBytes,
   });
   const postTokens = estimateTotalTokens(workingMessages);
+  // If elision alone brought us back under the compaction threshold, return
+  // immediately — no LLM summary, no naive drop needed.
   const earlyReturn = shouldCompact(postTokens, contextWindow, settings) ? null : workingMessages;
-  return { messages: workingMessages, isHopeless: true, earlyReturn };
+  return { messages: workingMessages, isHopeless, earlyReturn };
 }
 
 /**
@@ -693,11 +742,21 @@ async function summarizeWithLlm(
   messagesToSummarize: AgentMessage[],
   messagesToKeep: AgentMessage[],
   reserveTokens: number,
+  contextWindow: number,
   originalMessageCount: number,
   signal: AbortSignal | undefined
 ): Promise<AgentMessage[] | null> {
   try {
-    const conversationText = serializeMessages(messagesToSummarize);
+    // #2012 defense-in-depth: never serialize an individually-oversized message
+    // into the summary prompt. In the normal flow applyHopelessElision already
+    // stubbed these upstream; this guard guarantees the summary LLM call can't
+    // be handed an un-summarizable message by any future or forced path.
+    const safeToSummarize = elideOversizedMessages(
+      messagesToSummarize,
+      contextWindow,
+      reserveTokens
+    ).messages;
+    const conversationText = serializeMessages(safeToSummarize);
     const systemPrompt = buildSharedSystemPrompt(conversationText);
     // Summary uses ~80% of the reserve budget for output, mirroring the
     // pi-coding-agent default.
@@ -817,6 +876,7 @@ export function createCompactContext(
         messagesToSummarize,
         messagesToKeep,
         reserveTokens,
+        contextWindow,
         messages.length,
         signal
       );
