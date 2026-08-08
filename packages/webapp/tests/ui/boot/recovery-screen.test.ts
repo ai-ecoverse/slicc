@@ -146,3 +146,79 @@ describe('renderBootRecoveryScreen', () => {
     expect(wipe).not.toHaveBeenCalled();
   });
 });
+
+describe('renderBootRecoveryScreen — browser-wedged variant (#1982)', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function mountWedged(deps: { wipe?: () => Promise<void>; reload?: () => void } = {}) {
+    const app = document.createElement('div');
+    document.body.appendChild(app);
+    renderBootRecoveryScreen(app, new Error('Kernel worker did not signal ready within 30000ms'), {
+      wipe: deps.wipe ?? vi.fn(async () => {}),
+      reload: deps.reload ?? vi.fn(),
+      verdict: 'browser-wedged',
+    });
+    return app;
+  }
+
+  it('leads with the browser restart, not the failure', () => {
+    const app = mountWedged();
+    expect(app.querySelector('h1')?.textContent).toBe('Your browser needs a restart');
+    // The explanation names the fix and protects the data.
+    const text = app.textContent ?? '';
+    expect(text).toContain('Quit the browser completely');
+    expect(text).toContain('resetting it will not fix this');
+  });
+
+  it('orders Reload first and demotes (but keeps) the destructive reset', () => {
+    const app = mountWedged();
+    const buttons = [...app.querySelectorAll('button')];
+    expect(buttons.map((b) => b.textContent)).toEqual(['Reload', 'Reset local data & reload']);
+    // Demoted: the reset is no longer the filled negative action.
+    expect(buttons[1]?.dataset['variant']).toBe('demoted');
+  });
+
+  it('the demoted reset still wipes and reloads when explicitly chosen', async () => {
+    const wipe = vi.fn(async () => {});
+    const reload = vi.fn();
+    const app = mountWedged({ wipe, reload });
+    const reset = [...app.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Reset local data & reload'
+    ) as HTMLButtonElement;
+    reset.click();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalled());
+    expect(wipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('the triage re-render never replaces a wipe in progress', async () => {
+    let releaseWipe: () => void = () => {};
+    const wipe = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWipe = resolve;
+        })
+    );
+    const reload = vi.fn();
+    const app = document.createElement('div');
+    document.body.appendChild(app);
+    const err = new Error('Kernel worker did not signal ready within 30000ms');
+    renderBootRecoveryScreen(app, err, { wipe, reload });
+    const reset = [...app.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Reset local data & reload'
+    ) as HTMLButtonElement;
+    reset.click();
+    expect(reset.textContent).toBe('Resetting…');
+
+    // The (late) triage verdict arrives mid-wipe: the re-render is a no-op.
+    renderBootRecoveryScreen(app, err, { wipe, reload, verdict: 'browser-wedged' });
+    expect(app.querySelector('h1')?.textContent).toBe('Failed to start');
+    expect([...app.querySelectorAll('button')][0]?.textContent).toBe('Resetting…');
+
+    releaseWipe();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalled());
+  });
+});
