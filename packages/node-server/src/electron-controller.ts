@@ -769,6 +769,13 @@ export class ElectronOverlayInjector {
    * re-elects a fresh leader.
    */
   private leaderTargetUrl: string | null = null;
+  /**
+   * Fired ONCE when the app is first detected to block renderer egress, so the
+   * runtime can start the headless CDP-over-CDP follower (`ElectronTrayFollower`)
+   * for this app. The hosted overlay can never load in such apps, so exposing
+   * their CDP to the tray leader is the only way to drive them.
+   */
+  private readonly onEgressBlocked?: (targetUrl: string) => void;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
 
@@ -777,6 +784,7 @@ export class ElectronOverlayInjector {
     servePort: number,
     thinBootstraps: ThinBootstrapSet,
     bridgeToken: string,
+    onEgressBlocked?: (targetUrl: string) => void,
     probeDelayMs: number = 1500,
     presenceCheckIntervalMs: number = ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
   ) {
@@ -784,6 +792,7 @@ export class ElectronOverlayInjector {
     this.servePort = servePort;
     this.thinBootstraps = thinBootstraps;
     this.bridgeToken = bridgeToken;
+    this.onEgressBlocked = onEgressBlocked;
     this.probeDelayMs = probeDelayMs;
     this.presenceCheckIntervalMs = presenceCheckIntervalMs;
   }
@@ -799,6 +808,8 @@ export class ElectronOverlayInjector {
      * bundled overlay path was retired.
      */
     thinBridge: ThinBridgeConfig;
+    /** Start the headless CDP-over-CDP follower when egress-block is detected. */
+    onEgressBlocked?: (targetUrl: string) => void;
   }): Promise<ElectronOverlayInjector> {
     const bundleSource = await loadElectronOverlayBundleSource({
       projectRoot: options.projectRoot,
@@ -824,7 +835,8 @@ export class ElectronOverlayInjector {
       options.cdpPort,
       options.servePort,
       thinBootstraps,
-      options.thinBridge.bridgeToken
+      options.thinBridge.bridgeToken,
+      options.onEgressBlocked
     );
   }
 
@@ -838,6 +850,7 @@ export class ElectronOverlayInjector {
     servePort: number;
     thinBootstraps?: ThinBootstrapSet;
     bridgeToken?: string;
+    onEgressBlocked?: (targetUrl: string) => void;
     probeDelayMs?: number;
     presenceCheckIntervalMs?: number;
   }): ElectronOverlayInjector {
@@ -850,6 +863,7 @@ export class ElectronOverlayInjector {
         status: '/* test-status */',
       },
       options.bridgeToken ?? 'test-bridge-token',
+      options.onEgressBlocked,
       options.probeDelayMs ?? 1500,
       options.presenceCheckIntervalMs ?? ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
     );
@@ -1484,6 +1498,8 @@ export class ElectronOverlayInjector {
             `the hosted overlay cannot load in ${target.url} — skipping CSP/Fetch escalation. ` +
             `Egress-blocked apps need the CDP-over-CDP follower path.`
         );
+        // Start the headless CDP-over-CDP follower for this app (once).
+        this.onEgressBlocked?.(target.url);
       }
       // Replace the (blank-iframe) overlay with the status-only launcher.
       this.injectStatusOverlay(send);

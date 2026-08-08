@@ -783,10 +783,12 @@ describe('ElectronOverlayInjector egress-block detection', () => {
     });
 
     try {
+      const egressCalls: string[] = [];
       const injector = ElectronOverlayInjector._createForTesting({
         servePort: 5711,
         bridgeToken: TOKEN,
         probeDelayMs: 40,
+        onEgressBlocked: (url) => egressCalls.push(url),
       });
       injector._testingConnectToTarget({
         id: '1',
@@ -802,6 +804,8 @@ describe('ElectronOverlayInjector egress-block detection', () => {
       await new Promise((r) => setTimeout(r, 150));
 
       expect(injector._testingEgressBlockedTargets().has(targetUrl)).toBe(true);
+      // The egress-block hook fired once, so the runtime can start the follower.
+      expect(egressCalls).toEqual([targetUrl]);
       // Never recorded as CSP-bypassed (which would read as "loaded").
       expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
       // Escalation skipped: no reload, no Fetch proxy.

@@ -115,7 +115,9 @@ export class ElectronTrayFollower {
     ElectronTrayFollowerOptions;
   private readonly runtimeId: string;
   private readonly controllerId = randomUUID();
-  private readonly signaling: TrayFollowerSignaling;
+  /** Reassigned when the tray supersedes and hands us a fresh join URL. */
+  private signaling: TrayFollowerSignaling;
+  private readonly fetchImpl: typeof fetch;
   private readonly log: (m: string) => void;
   private pc: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
@@ -129,18 +131,41 @@ export class ElectronTrayFollower {
   constructor(options: ElectronTrayFollowerOptions) {
     this.opts = options as ElectronTrayFollower['opts'];
     this.runtimeId = options.runtimeId ?? randomUUID();
-    this.signaling = new TrayFollowerSignaling(options.joinUrl, options.fetchImpl ?? fetch);
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.signaling = new TrayFollowerSignaling(options.joinUrl, this.fetchImpl);
     this.log = options.logger ?? (() => {});
+  }
+
+  /**
+   * Attach to the tray, following a `TRAY_SUPERSEDED` redirect to the fresh
+   * join URL (the tray mints a new one when the leader reconnects — observed
+   * live). Returns the ICE servers, or null if no bootstrap could be obtained.
+   */
+  private async attachWithRedirects(maxHops = 4): Promise<IceServerConfig[] | null> {
+    for (let hop = 0; hop < maxHops; hop++) {
+      const attach = await this.signaling.attach(this.controllerId, FOLLOWER_RUNTIME_TAG);
+      const result = attach['result'] as Record<string, unknown> | undefined;
+      const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
+      if (bootstrap?.bootstrapId) {
+        this.bootstrapId = bootstrap.bootstrapId;
+        return normalizeIceServers(attach['iceServers']);
+      }
+      const supersededUrl = result?.['joinUrl'];
+      if (result?.['code'] === 'TRAY_SUPERSEDED' && typeof supersededUrl === 'string') {
+        this.log(`[electron-follower] tray superseded → following ${supersededUrl}`);
+        this.signaling = new TrayFollowerSignaling(supersededUrl, this.fetchImpl);
+        continue;
+      }
+      this.log(`[electron-follower] attach failed: ${JSON.stringify(result)}`);
+      return null;
+    }
+    return null;
   }
 
   /** Join the tray, answer the leader's offer, and start servicing CDP. */
   async start(): Promise<void> {
-    const attach = await this.signaling.attach(this.controllerId, FOLLOWER_RUNTIME_TAG);
-    const bootstrap = (attach['result'] as Record<string, unknown> | undefined)?.['bootstrap'] as
-      | { bootstrapId?: string }
-      | undefined;
-    this.bootstrapId = bootstrap?.bootstrapId ?? '';
-    const iceServers = normalizeIceServers(attach['iceServers']);
+    const iceServers = await this.attachWithRedirects();
+    if (iceServers === null || this.stopped) return;
     this.log(
       `[electron-follower] attached tray, bootstrap=${this.bootstrapId}, ice=${iceServers.length}`
     );
