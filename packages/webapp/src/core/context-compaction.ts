@@ -577,8 +577,17 @@ function applyHopelessElision(
   });
   const postTokens = estimateTotalTokens(workingMessages);
   // If elision alone brought us back under the compaction threshold, return
-  // immediately — no LLM summary, no naive drop needed.
-  const earlyReturn = shouldCompact(postTokens, contextWindow, settings) ? null : workingMessages;
+  // immediately — no LLM summary, no naive drop needed. But first strip images
+  // the same way the summarize path does: `estimateTokens` assigns each image a
+  // fixed ~1,200 tokens regardless of its real base64 size, so this early return
+  // could otherwise hand back large image payloads that keep the real backend
+  // over its limit (post-#2011 the size-elision path bypassed both
+  // `elideTailImages` and the hopeless image strip — Codex P1 on #2013).
+  // `elideTailImages` stubs every image except the latest user message's, which
+  // the model has not acted on yet — parity with the normal summarize path.
+  const earlyReturn = shouldCompact(postTokens, contextWindow, settings)
+    ? null
+    : elideTailImages([], workingMessages, contextWindow, settings);
   return { messages: workingMessages, isHopeless, earlyReturn };
 }
 
