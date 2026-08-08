@@ -22,7 +22,7 @@
  */
 
 import { playSoundscapeCue, type SoundscapeCue } from '@slicc/webcomponents/audio/soundscape-cues';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('speech:soundscape');
 

@@ -23,9 +23,9 @@
  */
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
+import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { CDPTransport } from '../cdp/transport.js';
-import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { handlePreviewRequest } from '../scoops/preview-request-handler.js';

@@ -20,7 +20,7 @@
  * plumbing and a manual test hook only.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
 import { createExtensionSudoBroker } from './extension-broker.js';

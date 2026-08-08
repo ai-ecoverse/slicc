@@ -19,7 +19,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { PYODIDE_RUNTIME_CDN } from '../../kernel/realm/py-realm-shared.js';
 import { decodeFetchBody } from '../fetch-body.js';

@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ToolDefinition } from '../../src/core/types.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShell } from '../../src/shell/index.js';
 import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 describe('splitCommandSegments', () => {
   it('splits on ;, |, && and ||', () => {

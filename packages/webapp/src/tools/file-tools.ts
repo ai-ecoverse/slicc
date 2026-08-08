@@ -7,9 +7,9 @@
  * - edit_file: Apply a string replacement edit to a file
  */
 
-import { createLogger } from '../core/logger.js';
-import type { ToolDefinition, ToolResult } from '../core/types.js';
+import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import type { ToolDefinition, ToolResult } from './types.js';
 
 const log = createLogger('tool:fs');
 

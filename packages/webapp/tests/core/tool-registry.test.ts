@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ToolRegistry } from '../../src/core/tool-registry.js';
-import type { ToolDefinition } from '../../src/core/types.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 function makeTool(name: string, result = 'ok'): ToolDefinition {
   return {

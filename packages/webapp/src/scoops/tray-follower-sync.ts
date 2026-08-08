@@ -14,13 +14,13 @@ import {
   TranscriptExportError,
   VALID_EXPORT_ERROR_CODES,
 } from '@slicc/shared-ts';
+import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent, AgentHandle } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import { stripLocalPathsForRemote } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ExportSpool } from '../transcript/export-spool.js';
 import { makeExportSpool } from '../transcript/export-spool.js';

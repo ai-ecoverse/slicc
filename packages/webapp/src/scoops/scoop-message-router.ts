@@ -11,8 +11,8 @@
  * orchestrator coupling.
  */
 
+import { createLogger } from '../base/logger.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
 import type { SessionStore } from '../core/session.js';
 import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ScoopContext } from './scoop-context.js';

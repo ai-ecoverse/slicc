@@ -18,7 +18,7 @@
  */
 
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';

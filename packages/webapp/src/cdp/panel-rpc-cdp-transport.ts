@@ -15,7 +15,7 @@
  * `createRemoteTransport()` → `send('Target.attachToTarget', …)`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import {
   PANEL_RPC_DEFAULT_TIMEOUT_MS,
   type PanelRpcClient,

@@ -13,7 +13,7 @@
  * to `deny`. The endpoint never auto-resolves on the server side either.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { suggestPattern } from './suggest-pattern.js';
 import {

@@ -1,7 +1,7 @@
+import { createLogger } from '../base/logger.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
-import { createLogger } from '../core/logger.js';
 import type { ProbeFetch } from '../net/well-known-probe.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';

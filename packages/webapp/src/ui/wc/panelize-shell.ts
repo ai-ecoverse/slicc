@@ -41,7 +41,7 @@
 import type { LayoutDocument, SliccLayout, SliccPanel } from '@slicc/webcomponents';
 import { parseLayoutDocument } from '@slicc/webcomponents/panel/layout-schema';
 import { registerPanel, unregisterPanel } from '@slicc/webcomponents/panel/registry';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { createAddPanelMenu } from './add-panel-menu.js';
 import { applyLayoutDoc, isLayoutDocMsg } from './apply-layout-doc.js';

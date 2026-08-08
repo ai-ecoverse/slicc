@@ -91,13 +91,11 @@ export type { AgentMessage };
 
 // ─── Tool Types ─────────────────────────────────────────────────────────────
 
-/** JSON Schema for tool input parameters. */
-export interface ToolInputSchema {
-  type: 'object';
-  properties?: Record<string, unknown>;
-  required?: string[];
-  [k: string]: unknown;
-}
+// `ToolInputSchema` (and the legacy `ToolDefinition` / `ToolResult` contract)
+// now live in the lower `tools/` layer so tool modules import them without an
+// up-the-stack back-edge. `core/` consumes `ToolInputSchema` as a legal
+// down-edge (`core/` → `tools/`).
+import type { ToolInputSchema } from '../tools/types.js';
 
 /** Base tool definition (schema only, no execute). */
 export interface Tool {
@@ -274,24 +272,4 @@ export interface SessionData {
   config: Omit<AgentConfig, 'apiKey'>;
   createdAt: number;
   updatedAt: number;
-}
-
-// ─── Legacy compat re-exports ───────────────────────────────────────────────
-// (tools still import ToolDefinition and ToolResult — keep them working)
-
-/**
- * Legacy tool definition for backwards compatibility with existing tools.
- * Used by src/tools/ factories. The tool adapter converts these to AgentTool.
- */
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: ToolInputSchema;
-  execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult>;
-}
-
-/** Legacy tool result. */
-export interface ToolResult {
-  content: string;
-  isError?: boolean;
 }

@@ -11,12 +11,12 @@ import type {
   WorkerBridgeDisconnected,
   WorkerPreviewState,
 } from '@slicc/shared-ts';
+import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { PreviewBridgeCdpTransport } from '../cdp/preview-bridge-cdp-transport.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';

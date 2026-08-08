@@ -16,7 +16,7 @@
  * limited — the leader's VFS is not addressable from here.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Logger } from '../../../src/base/logger.js';
 import type { CDPTransport } from '../../../src/cdp/transport.js';
-import type { Logger } from '../../../src/core/logger.js';
 import { CDPRouter } from '../../../src/scoops/tray-leader/cdp-router.js';
 import type { LeaderSyncContext } from '../../../src/scoops/tray-leader/context.js';
 import {

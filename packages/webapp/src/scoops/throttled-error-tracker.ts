@@ -17,7 +17,7 @@
  * drift, and so the contract can be unit-tested in isolation.
  */
 
-import type { Logger } from '../core/logger.js';
+import type { Logger } from '../base/logger.js';
 
 interface ThrottledErrorTrackerOptions {
   /** Message logged on a throttled failure (passed through `log.error`). */

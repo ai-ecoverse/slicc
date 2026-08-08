@@ -5,7 +5,7 @@ import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { adaptTool } from '../../src/core/tool-adapter.js';
-import type { ToolDefinition } from '../../src/core/types.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 /** Create a dummy Model object for testing. */
 function testModel(): Model<any> {

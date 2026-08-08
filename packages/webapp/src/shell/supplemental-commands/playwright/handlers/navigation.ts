@@ -2,7 +2,7 @@
  * Navigation subcommands: goto/navigate, go-back, go-forward, reload.
  */
 
-import { createLogger } from '../../../../core/logger.js';
+import { createLogger } from '../../../../base/logger.js';
 import { fetchAndDiscover } from '../discover.js';
 import { requireTab } from '../state.js';
 import { armTeleportWatcher, cleanupTeleportWatcher } from '../teleport.js';

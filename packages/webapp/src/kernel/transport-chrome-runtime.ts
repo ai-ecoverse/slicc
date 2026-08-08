@@ -19,7 +19,7 @@
  * not need this wrapper.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { ExtensionMessage } from './messages.js';
 import { decodeBinaryForTransport, encodeBinaryForTransport } from './transport-binary-codec.js';
 import type { KernelTransport } from './types.js';

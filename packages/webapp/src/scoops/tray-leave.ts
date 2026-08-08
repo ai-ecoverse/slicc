@@ -18,7 +18,7 @@
  * next reload otherwise.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from './tray-runtime-config.js';
 
 const log = createLogger('scoops.tray-leave');

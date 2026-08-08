@@ -29,7 +29,7 @@ import {
   type SpeechSession,
   type SpeechSessionOptions,
 } from '@slicc/webcomponents/composer/speech';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';

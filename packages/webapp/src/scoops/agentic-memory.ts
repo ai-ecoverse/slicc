@@ -1,5 +1,5 @@
 import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { AgentBridge, AgentSpawnOptions, AgentSpawnResult } from './agent-bridge.js';
 import { CONE_MEMORY_PATH, computeBudget } from './cone-memory-budget.js';

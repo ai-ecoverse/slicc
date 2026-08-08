@@ -42,6 +42,10 @@ export {
   stream,
   streamSimple,
 } from '@earendil-works/pi-ai/compat';
+export type { Logger } from '../base/logger.js';
+export { createLogger, getLogLevel, LogLevel, setLogLevel } from '../base/logger.js';
+// Tool-contract types now live in the lower `tools/` layer (legal down-edge).
+export type { ToolDefinition, ToolInputSchema, ToolResult } from '../tools/types.js';
 export type { MessageAttachment, MessageAttachmentKind } from './attachments.js';
 export {
   formatAttachmentForPrompt,
@@ -53,8 +57,6 @@ export {
 } from './attachments.js';
 export type { CompactionConfig } from './context-compaction.js';
 export { compactContext, createCompactContext } from './context-compaction.js';
-export type { Logger } from './logger.js';
-export { createLogger, getLogLevel, LogLevel, setLogLevel } from './logger.js';
 export { getMimeType } from './mime-types.js';
 export {
   getIdentityToolResultScrubber,
@@ -70,12 +72,5 @@ export {
   type ToolAdapterSecretsConfig,
 } from './tool-adapter.js';
 export { ToolRegistry } from './tool-registry.js';
-
 // Local types
-export type {
-  AgentConfig,
-  SessionData,
-  ToolDefinition,
-  ToolInputSchema,
-  ToolResult,
-} from './types.js';
+export type { AgentConfig, SessionData } from './types.js';

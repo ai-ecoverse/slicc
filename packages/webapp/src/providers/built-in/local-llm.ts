@@ -51,7 +51,7 @@ import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/compat';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import { getDeploymentForProvider } from '../account-store.js';
 import type { ProviderConfig } from '../types.js';
 

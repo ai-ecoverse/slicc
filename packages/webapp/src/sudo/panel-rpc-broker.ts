@@ -16,7 +16,7 @@
  * transport error / timeout, or a malformed decision resolves to `deny`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
 import { suggestPattern } from './suggest-pattern.js';
 import type { SudoBroker, SudoDecision, SudoRequest } from './types.js';

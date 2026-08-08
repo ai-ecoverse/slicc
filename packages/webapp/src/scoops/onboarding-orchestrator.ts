@@ -28,7 +28,7 @@
  * and keeps the standalone/extension paths in `main.ts` symmetric.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { type ValidationResult, validateApiKey } from './api-key-validator.js';
 import type { OnboardingProfile, RandomFn } from './onboarding-messages.js';

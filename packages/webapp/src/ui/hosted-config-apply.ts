@@ -1,5 +1,5 @@
 import type { Account } from '@slicc/cloud-core/cone-config';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { ProviderConfig } from '../providers/types.js';
 
 const log = createLogger('hosted-config');

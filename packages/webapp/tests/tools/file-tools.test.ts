@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ToolDefinition } from '../../src/core/types.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { createFileTools } from '../../src/tools/file-tools.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 describe('File Tools', () => {
   let fs: VirtualFS;

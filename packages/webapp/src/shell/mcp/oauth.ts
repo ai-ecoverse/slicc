@@ -10,7 +10,7 @@
  * webapp's CORS-bypassing transport.
  */
 
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import { deriveCodeChallenge, generateCodeVerifier, randomState } from '../../providers/pkce.js';
 
 const log = createLogger('mcp-oauth');

@@ -18,7 +18,7 @@
  * follow-up; it degrades to Web Speech via the routing task until then.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { EspeakPhonemize } from './kokoro-phonemize.js';
 
 const log = createLogger('speech:espeak');

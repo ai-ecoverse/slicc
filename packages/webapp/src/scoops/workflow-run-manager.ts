@@ -1,5 +1,5 @@
 // packages/webapp/src/scoops/workflow-run-manager.ts
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('workflow-run-manager');
 export const WORKFLOW_MANAGER_GLOBAL_KEY = '__slicc_workflows';

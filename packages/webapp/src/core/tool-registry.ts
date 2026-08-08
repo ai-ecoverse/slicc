@@ -4,7 +4,7 @@
  * Manages ToolDefinition objects and dispatches tool execution by name.
  */
 
-import type { ToolDefinition, ToolResult } from './types.js';
+import type { ToolDefinition, ToolResult } from '../tools/types.js';
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();

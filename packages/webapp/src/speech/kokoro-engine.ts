@@ -23,7 +23,7 @@
 
 import type { Tensor } from '@huggingface/transformers';
 import type { KokoroTTS as KokoroTtsClass } from 'kokoro-js';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
 import { getEspeakPhonemize } from './espeak-phonemizer.js';
 import {

@@ -11,7 +11,7 @@
  * No UI, no FS, no shell wiring — those live in their own tasks.
  */
 
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
 import { isNoOpWriteDevicePath } from '../../fs/virtual-device-paths.js';
 

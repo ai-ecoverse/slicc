@@ -25,8 +25,8 @@
  * this applies it across the tray.
  */
 
+import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('oauth-cdp-login');
 

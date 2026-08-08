@@ -6,9 +6,9 @@
  * which delegates to just-bash's Bash interpreter.
  */
 
-import { createLogger } from '../core/logger.js';
-import type { ToolDefinition, ToolResult } from '../core/types.js';
+import { createLogger } from '../base/logger.js';
 import type { AlmostBashShell } from '../shell/index.js';
+import type { ToolDefinition, ToolResult } from './types.js';
 
 const log = createLogger('tool:bash');
 

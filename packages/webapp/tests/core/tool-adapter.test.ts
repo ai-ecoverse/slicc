@@ -4,7 +4,7 @@ import {
   parseToolResultContent,
   parseToolResultContentRaw,
 } from '../../src/core/tool-adapter.js';
-import type { ToolDefinition } from '../../src/core/types.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 describe('parseToolResultContentRaw', () => {
   it('returns plain text as a single TextContent block', () => {

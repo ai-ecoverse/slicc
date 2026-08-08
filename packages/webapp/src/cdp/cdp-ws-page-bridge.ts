@@ -19,7 +19,7 @@
  * `BrowserAPI.withTab(...)`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { WsSelector } from '../kernel/realm/realm-types.js';
 import { WS_ROUTER_SOURCE } from '../kernel/realm/ws-router-page.js';
 import type { WsPageBridge } from '../kernel/realm/ws-subscribers.js';

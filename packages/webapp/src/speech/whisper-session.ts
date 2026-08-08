@@ -11,7 +11,7 @@
  * pass falls behind, the next tick simply covers more audio.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { decodeToMono16k } from './audio.js';
 import type { WhisperAsr } from './whisper-engine.js';
 

@@ -8,16 +8,17 @@
  */
 
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+import { createLogger } from '../base/logger.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import {
   popToolExecutionContext,
   pushToolExecutionContext,
   type ToolExecutionContext,
 } from '../tools/tool-ui.js';
+import type { ToolDefinition } from '../tools/types.js';
 import { processImageContent } from './image-processor.js';
-import { createLogger } from './logger.js';
 import { createImageMarkerRegex, parseImageMarker } from './tool-result-images.js';
-import type { ImageContent, TextContent, ToolDefinition } from './types.js';
+import type { ImageContent, TextContent } from './types.js';
 
 const log = createLogger('tool-adapter');
 

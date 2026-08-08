@@ -21,12 +21,12 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { hasIcon } from '@slicc/webcomponents/icons';
+import { createLogger } from '../base/logger.js';
 import {
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
   runOneOffCompactionCall,
 } from '../core/context-compaction.js';
-import { createLogger } from '../core/logger.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';

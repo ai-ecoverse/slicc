@@ -12,7 +12,7 @@
  * are specified in docs/superpowers/specs/2026-06-08-workflow-authoring-design.md §3.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 
 const log = createLogger('workflow-discovery');

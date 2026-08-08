@@ -17,7 +17,7 @@
  * shared `CdpTransportBridge`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import {
   type CdpBridgeOptions,
   CdpTransportBridge,

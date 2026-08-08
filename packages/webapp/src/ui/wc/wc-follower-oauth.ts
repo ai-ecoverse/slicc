@@ -18,7 +18,7 @@
  */
 
 import type { SliccPermissions } from '@slicc/webcomponents';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 
 const log = createLogger('follower-oauth');
 

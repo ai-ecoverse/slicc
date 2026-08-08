@@ -28,7 +28,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installPackages } from '../shell/ipk/installer.js';

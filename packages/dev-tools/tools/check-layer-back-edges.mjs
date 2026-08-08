@@ -41,6 +41,7 @@ export const BASELINE_PATH = resolve(dirname(Filename), 'layer-back-edge-baselin
  * rung, so they may import each other.
  */
 export const LAYER_RANK = {
+  base: 0, // foundational layer (logger etc.) — shares the bottom rung with fs
   fs: 0,
   shell: 1,
   git: 1,

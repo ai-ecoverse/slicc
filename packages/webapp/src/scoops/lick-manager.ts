@@ -5,7 +5,7 @@
  * POSTs to the browser via WebSocket - all filtering and routing happens here.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { discoveryFingerprint } from '../net/discovery-link.js';
 import { handoffFingerprint } from '../net/handoff-link.js';
 import { getNextCronTime } from './cron.js';

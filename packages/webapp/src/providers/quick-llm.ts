@@ -17,7 +17,7 @@ import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { hasIcon } from '@slicc/webcomponents/icons';
 // The registry is already in the page bundle — the web components render from it.
 import { icons as lucideIcons } from 'lucide';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import {
   getApiKey,

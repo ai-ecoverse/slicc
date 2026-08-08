@@ -42,7 +42,7 @@ import {
   estimateTokens,
   shouldCompact,
 } from '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js';
-import { createLogger } from './logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('context-compaction');
 

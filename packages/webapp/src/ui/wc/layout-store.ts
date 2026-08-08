@@ -22,7 +22,7 @@
 // while the barrel side-effect-registers every component and needs
 // `CSSStyleSheet`. Same rationale as `@slicc/webcomponents/composer/speech`.
 import { type LayoutDocument, parseLayoutDocument } from '@slicc/webcomponents/panel/layout-schema';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { PROTECTED_LAYOUTS_DIR } from '../../shell/sudo/sudoers.js';
 

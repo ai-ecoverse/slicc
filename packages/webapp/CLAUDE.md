@@ -269,7 +269,7 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 ## Key Conventions
 
 - **Two type systems**: legacy `tools/` + pi-compatible `core/`; bridge via `tool-adapter.ts`.
-- **Logging**: `createLogger('namespace')` (`core/logger.ts`).
+- **Logging**: `createLogger('namespace')` (`base/logger.ts`).
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and extension. The
   thin extension runs no dynamic code itself — all JS execution (realms, WASM, sprinkles/dips)

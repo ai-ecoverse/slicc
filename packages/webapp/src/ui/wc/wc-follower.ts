@@ -1,8 +1,8 @@
 import type { TranscriptExportSelector } from '@slicc/shared-ts';
 import { TranscriptExportError } from '@slicc/shared-ts';
 import type { SliccPermissions } from '@slicc/webcomponents';
+import { createLogger } from '../../base/logger.js';
 import { applyHostFlagOverrides, isFeatureEnabled } from '../../core/feature-flags.js';
-import { createLogger } from '../../core/logger.js';
 import {
   FOLLOWER_STATUS_STORAGE_KEY,
   getFollowerTrayRuntimeStatus,

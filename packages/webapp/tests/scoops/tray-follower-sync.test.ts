@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import type { AgentEvent } from '../../src/core/agent-types.js';
-import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import {
   getFollowerTrayRuntimeStatus,

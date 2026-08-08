@@ -7,8 +7,8 @@
  * which look like real tokens but aren't.
  */
 
+import { createLogger } from '../base/logger.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
-import { createLogger } from './logger.js';
 import { resolveSecretTopology } from './secret-topology.js';
 import { callSecretsBridge } from './secrets-bridge-client.js';
 

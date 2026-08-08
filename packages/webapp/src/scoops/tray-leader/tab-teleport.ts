@@ -11,8 +11,8 @@
  */
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
+import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/index.js';
-import { createLogger } from '../../core/logger.js';
 import {
   captureTeleportStorageSnapshot,
   countTeleportStorageEntries,

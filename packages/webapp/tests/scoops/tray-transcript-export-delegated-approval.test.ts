@@ -9,7 +9,7 @@
 import 'fake-indexeddb/auto';
 import { sha256 as sha256Lib } from 'js-sha256';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetLoggerDedupForTests } from '../../src/core/logger.js';
+import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
 import {
   LeaderSyncManager,

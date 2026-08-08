@@ -11,7 +11,7 @@
  * the pre-election behavior.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('tray-leader-lock');
 

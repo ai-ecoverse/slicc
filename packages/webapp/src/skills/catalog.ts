@@ -1,4 +1,4 @@
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { MONKEYPATCH_UNSAFE_FS } from '../fs/sudo-fs.js';
 import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';

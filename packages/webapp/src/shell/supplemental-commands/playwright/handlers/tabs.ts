@@ -2,7 +2,7 @@
  * Tab lifecycle subcommands: open/tab-new, tab-list, tab-close/close, resize.
  */
 
-import { createLogger } from '../../../../core/logger.js';
+import { createLogger } from '../../../../base/logger.js';
 import { fetchAndDiscover } from '../discover.js';
 import { getActionablePages, resolveAppTabId } from '../snapshot.js';
 import { requireTab } from '../state.js';

@@ -4,7 +4,7 @@
  * page AND the kernel worker), so both realms import it. Mirrors the split-out
  * shape of `nuke-channel.ts`.
  */
-import { createLogger } from './logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('stale-asset');
 

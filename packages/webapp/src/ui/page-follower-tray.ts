@@ -26,9 +26,9 @@
  */
 
 import { isSliccAppUrl } from '@slicc/shared-ts';
+import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import {

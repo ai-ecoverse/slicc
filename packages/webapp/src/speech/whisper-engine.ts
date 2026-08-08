@@ -24,7 +24,7 @@
  * issues are common enough that the fallback is mandatory, not best-effort).
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
 import {
   assertLocalModelPresent,
