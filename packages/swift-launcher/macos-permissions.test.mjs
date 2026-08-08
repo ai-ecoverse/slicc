@@ -40,6 +40,35 @@ describe('Sliccstart default-browser packaging', () => {
   });
 });
 
+describe('Sliccstart WebRTC.framework packaging', () => {
+  // slicc-server links @rpath/WebRTC.framework/WebRTC (via SliccTrayFollower's
+  // WebRTC tray transport). Its only bundle-local rpath is @loader_path
+  // (Contents/Resources), so the framework must sit next to the binary or dyld
+  // fails at launch and every spawned server dies as "start failed".
+  it('copies WebRTC.framework next to slicc-server in the bundle', () => {
+    expect(assemblySource).toContain(".build/release/WebRTC.framework");
+    expect(assemblySource).toContain("resolve(resources, 'WebRTC.framework')");
+  });
+
+  it('fails assembly fast when the framework was not built', () => {
+    expect(assemblySource).toContain('WebRTC.framework not found');
+  });
+
+  it('re-signs the embedded framework in both the Developer ID and ad-hoc paths', () => {
+    expect(
+      signingScript.match(/"\$APP_DIR\/Contents\/Resources\/WebRTC\.framework"/g)
+    ).toHaveLength(2);
+  });
+
+  it('signs the framework innermost-first, before slicc-server', () => {
+    // Nested code must be signed before the code that contains it.
+    const framework = signingScript.indexOf('Resources/WebRTC.framework"');
+    const server = signingScript.indexOf('Resources/slicc-server"');
+    expect(framework).toBeGreaterThanOrEqual(0);
+    expect(framework).toBeLessThan(server);
+  });
+});
+
 describe('Sliccstart iCloud sync packaging', () => {
   it('embeds the provisioning profile only when PROVISION_PROFILE is supplied', () => {
     expect(signingScript).toContain('if [ -n "${PROVISION_PROFILE:-}" ]; then');

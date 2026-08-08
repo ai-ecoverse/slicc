@@ -38,6 +38,29 @@ const serverDest = resolve(resources, 'slicc-server');
 cpSync(serverBin, serverDest);
 chmodSync(serverDest, 0o755);
 
+// Copy WebRTC.framework next to slicc-server. The server links
+// `@rpath/WebRTC.framework/WebRTC` (via `SliccTrayFollower`, which the
+// egress-blocked Electron follower uses for its WebRTC tray transport), and
+// the binary's only bundle-local rpath is `@loader_path` — i.e. its own
+// directory, `Contents/Resources`. Without the framework here dyld fails with
+// "Library not loaded: @rpath/WebRTC.framework/WebRTC" and *every* spawned
+// slicc-server (leader or follower) dies immediately as a launcher "start
+// failed". SPM stages the macOS slice at `.build/release/WebRTC.framework`;
+// copy it verbatim so the internal `Versions/Current` symlinks survive.
+const webrtcFramework = resolve(swiftServerDir, '.build/release/WebRTC.framework');
+if (!existsSync(webrtcFramework)) {
+  console.error(
+    `ERROR: WebRTC.framework not found at ${webrtcFramework}. ` +
+      `Build the release server first: (cd packages/swift-server && swift build -c release)`
+  );
+  process.exit(1);
+}
+cpSync(webrtcFramework, resolve(resources, 'WebRTC.framework'), {
+  recursive: true,
+  verbatimSymlinks: true,
+});
+console.log('Copied WebRTC.framework into Resources/');
+
 // ---------------------------------------------------------------------------
 // 2. Icon
 // ---------------------------------------------------------------------------

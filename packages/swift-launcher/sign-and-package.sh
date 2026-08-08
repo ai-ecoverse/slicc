@@ -21,7 +21,12 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   IDENTITY="Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)"
 
   echo "Code signing Sliccstart.app with $IDENTITY..."
-  # Sign nested executables first, then the outer app
+  # Sign nested code innermost-first, then the outer app. WebRTC.framework
+  # (bundled next to slicc-server so dyld can resolve @rpath/WebRTC.framework)
+  # ships pre-signed by Google; re-sign it with our Developer ID + hardened
+  # runtime so notarization accepts the embedded framework.
+  codesign --force --options runtime --sign "$IDENTITY" --timestamp \
+    "$APP_DIR/Contents/Resources/WebRTC.framework"
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
     "$APP_DIR/Contents/Resources/slicc-server"
 
@@ -89,6 +94,7 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   rm -f "$SCRIPT_DIR/build/Sliccstart-notarize.zip"
 else
   echo "No APPLE_TEAM_ID set, using ad-hoc signing..."
+  codesign --force --sign - "$APP_DIR/Contents/Resources/WebRTC.framework"
   codesign --force --sign - "$APP_DIR/Contents/Resources/slicc-server"
   codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
 fi
