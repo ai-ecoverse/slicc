@@ -40,13 +40,23 @@ test.describe('compaction robustness', () => {
     await resetFakeLlm();
   });
 
+  test.afterEach(async () => {
+    // Restore the boot default so later serial tests (workers: 1) that rely on
+    // the reference scenario see the fixture they expect.
+    await loadFakeLlmFixture(fixture('reference-scenario'));
+  });
+
   async function bootLeader(page: import('@playwright/test').Page): Promise<void> {
     await seedLocalLlmProvider(page, { modelId: 'fake-coder-compaction' });
     await seedSkipSwReload(page);
     await gotoLeader(page);
     await waitForSW(page);
     await page.waitForSelector('slicc-input-card');
-    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC');
+    // The cone bootstrap renders the welcome as its first turn; CI machines
+    // take well over the 5s default expect timeout to get there.
+    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
+      timeout: 20_000,
+    });
   }
 
   /** Two big story turns put the history over the compaction threshold. */
