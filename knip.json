@@ -86,6 +86,7 @@
         "src/publish-chrome-web-store.ts!",
         "src/qa-setup.ts!",
         "src/secrets/index.ts!",
+        "src/electron-federated-cdp.ts!",
         "tests/**/*.test.ts"
       ],
       "project": ["src/**/*.ts!", "tests/**/*.ts"],
