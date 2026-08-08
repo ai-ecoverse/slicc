@@ -18,6 +18,7 @@
 
 import { createLogger } from '../core/index.js';
 import { hasChromeRuntimeConnect, isExtensionRealm } from '../core/runtime-env.js';
+import { initTelemetry } from '../kernel/telemetry.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -32,7 +33,6 @@ import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
-import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 

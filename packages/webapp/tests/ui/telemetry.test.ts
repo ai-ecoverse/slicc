@@ -46,7 +46,7 @@ describe('telemetry', () => {
   });
 
   it('initializes and emits navigate checkpoint', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect(mockSampleRUM).toHaveBeenCalledWith(
       'navigate',
@@ -57,21 +57,21 @@ describe('telemetry', () => {
   });
 
   it('sets RUM_GENERATION=slicc-cli in the CLI branch', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect((globalThis as any).window?.RUM_GENERATION).toBe('slicc-cli');
   });
 
   it('respects telemetry-disabled flag', async () => {
     mockLocalStorage.setItem('telemetry-disabled', 'true');
-    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     trackChatSend('cone', 'claude');
     expect(mockSampleRUM).not.toHaveBeenCalled();
   });
 
   it('trackChatSend emits formsubmit', async () => {
-    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -83,7 +83,7 @@ describe('telemetry', () => {
   });
 
   it('trackShellCommand emits fill', async () => {
-    const { initTelemetry, trackShellCommand } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackShellCommand } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -92,7 +92,7 @@ describe('telemetry', () => {
   });
 
   it('initTelemetry registers the shell telemetry sink so emitShellCommand reaches RUM', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     const { emitShellCommand } = await import('../../src/shell/telemetry-hook.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
@@ -102,7 +102,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle emits enter/convert/leave for spawn/feed/complete', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -125,7 +125,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle error namespaces source and sanitizes target', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -137,7 +137,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle drops error entirely on pure Vite-noise details', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -147,7 +147,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle drops error for user-fixable error families (no-api-key, invalid-model, auth-expired)', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -172,7 +172,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle drops error for the Adobe "Model not allowed" 403 family', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -189,7 +189,7 @@ describe('telemetry', () => {
   });
 
   it('trackError drops user-fixable error families before sampling (llm/tool/js beacons)', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -213,7 +213,7 @@ describe('telemetry', () => {
   });
 
   it('trackScoopLifecycle drops user-fixable error even when a long prefix pushes the family substring past the 200-char truncation', async () => {
-    const { initTelemetry, trackScoopLifecycle } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackScoopLifecycle } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -227,7 +227,7 @@ describe('telemetry', () => {
   });
 
   it('initTelemetry registers the scoop telemetry sink so emitScoopLifecycle reaches RUM', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     const { emitScoopLifecycle } = await import('../../src/scoops/scoop-telemetry-hook.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
@@ -240,7 +240,7 @@ describe('telemetry', () => {
   });
 
   it('initTelemetry registers the agent-error sink so emitAgentError reaches RUM with typed source', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     const { emitAgentError } = await import('../../src/core/telemetry-hook.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
@@ -259,7 +259,7 @@ describe('telemetry', () => {
   });
 
   it('trackSprinkleView emits viewblock', async () => {
-    const { initTelemetry, trackSprinkleView } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackSprinkleView } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -268,7 +268,7 @@ describe('telemetry', () => {
   });
 
   it('trackError emits error', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -277,7 +277,7 @@ describe('telemetry', () => {
   });
 
   it('trackLickBackpressure emits a dedicated non-error checkpoint', async () => {
-    const { initTelemetry, trackLickBackpressure } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackLickBackpressure } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -290,7 +290,7 @@ describe('telemetry', () => {
   });
 
   it('trackImageView emits viewmedia', async () => {
-    const { initTelemetry, trackImageView } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackImageView } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -299,7 +299,7 @@ describe('telemetry', () => {
   });
 
   it('trackSettingsOpen emits signup', async () => {
-    const { initTelemetry, trackSettingsOpen } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackSettingsOpen } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -308,7 +308,7 @@ describe('telemetry', () => {
   });
 
   it('trackError sanitizes target (truncates to 200 chars)', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -320,7 +320,7 @@ describe('telemetry', () => {
   });
 
   it('trackError drops errors that are entirely Vite dev-server noise', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -333,7 +333,7 @@ describe('telemetry', () => {
   });
 
   it('trackError drops [vite] HMR overlay noise entirely', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -343,7 +343,7 @@ describe('telemetry', () => {
   });
 
   it('trackError strips Vite frames from real app errors but keeps the rest', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -361,7 +361,7 @@ describe('telemetry', () => {
   });
 
   it('trackError preserves real errors unchanged (no Vite content)', async () => {
-    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -370,7 +370,7 @@ describe('telemetry', () => {
   });
 
   it('CLI sampleRUM wrapper passes through non-error checkpoints unchanged', async () => {
-    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -384,14 +384,14 @@ describe('telemetry', () => {
   });
 
   it('track functions are no-op before init', async () => {
-    const { trackChatSend, trackShellCommand } = await import('../../src/ui/telemetry.js');
+    const { trackChatSend, trackShellCommand } = await import('../../src/kernel/telemetry.js');
     trackChatSend('cone', 'claude');
     trackShellCommand('ls');
     expect(mockSampleRUM).not.toHaveBeenCalled();
   });
 
   it('initTelemetry is idempotent — second call is a no-op', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     const callsAfterFirst = mockSampleRUM.mock.calls.length;
 
@@ -400,7 +400,7 @@ describe('telemetry', () => {
   });
 
   it('does NOT register window error listeners in CLI branch', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     const before = mockSampleRUM.mock.calls.length;
@@ -429,18 +429,20 @@ describe('isTelemetryEnabled / setTelemetryEnabled', () => {
   });
 
   it('returns true by default', async () => {
-    const { isTelemetryEnabled } = await import('../../src/ui/telemetry.js');
+    const { isTelemetryEnabled } = await import('../../src/kernel/telemetry.js');
     expect(isTelemetryEnabled()).toBe(true);
   });
 
   it('returns false when disabled', async () => {
     mockLocalStorage.setItem('telemetry-disabled', 'true');
-    const { isTelemetryEnabled } = await import('../../src/ui/telemetry.js');
+    const { isTelemetryEnabled } = await import('../../src/kernel/telemetry.js');
     expect(isTelemetryEnabled()).toBe(false);
   });
 
   it('setTelemetryEnabled toggles the flag', async () => {
-    const { isTelemetryEnabled, setTelemetryEnabled } = await import('../../src/ui/telemetry.js');
+    const { isTelemetryEnabled, setTelemetryEnabled } = await import(
+      '../../src/kernel/telemetry.js'
+    );
     expect(isTelemetryEnabled()).toBe(true);
 
     setTelemetryEnabled(false);
@@ -461,17 +463,17 @@ describe('telemetry — extension branch', () => {
     vi.resetModules();
     stubLocalStorage();
     vi.stubGlobal('chrome', { runtime: { id: 'test-extension' } });
-    vi.doMock('../../src/ui/rum.js', () => ({ default: mockSampleRumJs }));
+    vi.doMock('../../src/kernel/rum.js', () => ({ default: mockSampleRumJs }));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.doUnmock('../../src/ui/rum.js');
+    vi.doUnmock('../../src/kernel/rum.js');
     vi.resetModules();
   });
 
   it('uses the inlined rum.js (default export) and sets RUM_GENERATION=slicc-extension', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect(mockSampleRumJs).toHaveBeenCalledWith(
       'navigate',
@@ -482,7 +484,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('does NOT set SAMPLE_PAGEVIEWS_AT_RATE in the extension branch', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     if ((globalThis as any).window) {
       delete (globalThis as any).window.SAMPLE_PAGEVIEWS_AT_RATE;
     }
@@ -491,7 +493,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('forwards trackChatSend through the extension sampleRUM', async () => {
-    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -503,7 +505,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('registers window error listeners that call trackError("js", sanitized)', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -524,7 +526,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('error listener falls back to error.message when event.message is empty', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -549,7 +551,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('registers unhandledrejection listener that calls trackError("js", sanitized)', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -568,7 +570,7 @@ describe('telemetry — extension branch', () => {
   // path, so these tests pin its behavior with varied inputs.
 
   it('sanitizeError truncates messages over 200 characters', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -582,7 +584,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('sanitizeError collapses multiple VFS paths in one message', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -600,7 +602,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('sanitizeError handles a null/empty message without throwing', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -614,7 +616,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('unhandledrejection with a non-Error reason stringifies it', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -629,7 +631,7 @@ describe('telemetry — extension branch', () => {
   });
 
   it('sanitizeError collapses uppercase VFS paths (regex i flag)', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     mockSampleRumJs.mockClear();
 
@@ -691,7 +693,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('drops error beacons whose target is entirely Vite noise', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     expect(navigator.sendBeacon).not.toBe(underlying);
 
@@ -706,7 +708,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('drops error beacons whose source AND target are both pure Vite noise', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     const body = JSON.stringify({
@@ -721,7 +723,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('blanks a noisy source but keeps the beacon when the target survives', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     const body = JSON.stringify({
@@ -739,7 +741,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('blanks a noisy target but keeps the beacon when the source survives', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     const body = JSON.stringify({
@@ -756,7 +758,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('rewrites error beacons with mixed Vite + real-app content', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     const body = JSON.stringify({
@@ -774,7 +776,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('passes through non-error beacons unchanged', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     const body = JSON.stringify({ checkpoint: 'navigate', target: 'cli' });
     navigator.sendBeacon('https://rum.hlx.page/.rum/100', body);
@@ -784,7 +786,7 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('falls through opaque (Blob) bodies without throwing', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     const blob = new Blob(['{"checkpoint":"error","target":"x"}'], {
       type: 'application/json',
@@ -796,12 +798,12 @@ describe('telemetry — CLI sendBeacon wrapper', () => {
 
   it('does not re-wrap an already-wrapped sendBeacon on re-init', async () => {
     const underlying = installUnderlyingBeacon();
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
     const wrappedOnce = navigator.sendBeacon;
 
     vi.resetModules();
-    const reloaded = await import('../../src/ui/telemetry.js');
+    const reloaded = await import('../../src/kernel/telemetry.js');
     await reloaded.initTelemetry();
     expect(navigator.sendBeacon).toBe(wrappedOnce);
 
@@ -834,18 +836,18 @@ describe('telemetry — electron branch', () => {
     // — a refactor that accidentally routed electron through rum.js would
     // call this mock instead of mockSampleRUM, which the negative assertion
     // below catches.
-    vi.doMock('../../src/ui/rum.js', () => ({ default: mockSampleRumJs }));
+    vi.doMock('../../src/kernel/rum.js', () => ({ default: mockSampleRumJs }));
   });
 
   afterEach(() => {
     delete document.documentElement.dataset.electronOverlay;
-    vi.doUnmock('../../src/ui/rum.js');
+    vi.doUnmock('../../src/kernel/rum.js');
     vi.unstubAllGlobals();
     vi.resetModules();
   });
 
   it('sets RUM_GENERATION=slicc-electron and uses helix-rum-js with SAMPLE_PAGEVIEWS_AT_RATE=high', async () => {
-    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    const { initTelemetry } = await import('../../src/kernel/telemetry.js');
     await initTelemetry();
 
     expect(window.RUM_GENERATION).toBe('slicc-electron');

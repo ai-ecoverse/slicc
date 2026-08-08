@@ -10,14 +10,14 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-vi.mock('../../../src/ui/telemetry.js', async () => {
-  const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
-    '../../../src/ui/telemetry.js'
+vi.mock('../../../src/kernel/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/kernel/telemetry.js')>(
+    '../../../src/kernel/telemetry.js'
   );
   return { ...actual, trackImageView: vi.fn() };
 });
 
-import { trackImageView } from '../../../src/ui/telemetry.js';
+import { trackImageView } from '../../../src/kernel/telemetry.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
 import { messageEls } from '../../../src/ui/wc/wc-message-view.js';
 

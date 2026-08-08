@@ -45,7 +45,6 @@ import {
   setExtensionDelegateId,
   setLocalApiBaseUrl,
 } from '../shell/proxied-fetch.js';
-import { initTelemetry } from '../ui/telemetry.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { Bridge } from './facade.js';
 import { createKernelHost, type KernelHost } from './host.js';
@@ -55,6 +54,7 @@ import { getPanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
 import type { SyncFsNonce } from './realm/sync-fs-wire.js';
+import { initTelemetry } from './telemetry.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { startVfsRpcHost } from './vfs-rpc-host.js';
 
@@ -143,6 +143,22 @@ export interface KernelWorkerInitMsg {
 /** Posted back over the kernel port once `createKernelHost` resolves. */
 export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
+}
+
+/**
+ * Posted back over the kernel port when `boot()` fails. Without this the
+ * page only ever sees the generic 30s ready-timeout: the real error lands
+ * in the worker console, which current Chrome DevTools/CDP cannot even
+ * attach to for module workers — in production that hid an `EISDIR` boot
+ * brick behind "did not signal ready" next to a data-wipe button (#1984).
+ * `bootstrapKernelWorker` rejects `ready` immediately with this payload.
+ */
+export interface KernelWorkerBootErrorMsg {
+  type: 'kernel-worker-boot-error';
+  message: string;
+  /** POSIX-style `.code` when the failure carries one (e.g. `EISDIR`). */
+  code?: string;
+  stack?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,9 +434,34 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // Signal readiness to the page over the kernel port.
     init.kernelPort.postMessage({ type: 'kernel-worker-ready' } satisfies KernelWorkerReadyMsg);
   } catch (err) {
-    broadcastIfStaleAssetError(err);
-    throw err; // preserve the init-guard reset + worker-ready-timeout fallback
+    handleBootFailure(init.kernelPort, err);
   }
+}
+
+/**
+ * Boot-failure path: broadcast the stale-asset reload signal when the error
+ * is deploy-shaped, tell the page WHAT failed so the recovery screen shows
+ * the real error immediately instead of burning the 30s ready-timeout
+ * (#1984), then rethrow to preserve the init-guard reset and the
+ * worker-ready-timeout fallback. The boot-error post is best-effort: the
+ * port may already be closed/neutered, and the ready-timeout remains the
+ * fallback.
+ */
+function handleBootFailure(kernelPort: MessagePort, err: unknown): never {
+  broadcastIfStaleAssetError(err);
+  try {
+    const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: unknown } | null)?.code;
+    kernelPort.postMessage({
+      type: 'kernel-worker-boot-error',
+      message,
+      ...(typeof code === 'string' ? { code } : {}),
+      ...(err instanceof Error && err.stack ? { stack: err.stack } : {}),
+    } satisfies KernelWorkerBootErrorMsg);
+  } catch {
+    /* best-effort */
+  }
+  throw err;
 }
 
 type BridgeTransport = Parameters<typeof createPanelTerminalHost>[0]['transport'];

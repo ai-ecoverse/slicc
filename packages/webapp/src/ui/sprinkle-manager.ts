@@ -6,6 +6,7 @@
 import { createLogger } from '../core/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
+import { trackSprinkleView } from '../kernel/telemetry.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import type { SprinkleManagerHandle } from '../shell/sprinkle-manager-handle.js';
 import {
@@ -15,7 +16,6 @@ import {
 } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
-import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');
 
@@ -757,7 +757,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
    * otherwise fire two passes for the same install burst.
    */
   async openNewAutoOpenSprinkles(): Promise<void> {
-    if (this.inflightRefresh) return this.inflightRefresh;
+    if (this.inflightRefresh !== null) return this.inflightRefresh;
     if (Date.now() - this.lastRefreshAt < REFRESH_COOLDOWN_MS) return;
     this.inflightRefresh = this.runOpenNewAutoOpenSprinkles().finally(() => {
       this.lastRefreshAt = Date.now();

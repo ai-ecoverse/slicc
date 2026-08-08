@@ -22,15 +22,15 @@ import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
 import '@slicc/webcomponents';
-import { lickChannelFromBody } from '../../scoops/agent-message-to-chat.js';
 import {
   isAuthExpiredError,
   isInvalidModelError,
   isNoApiKeyError,
   NO_API_KEY_ERROR_PREFIX,
-} from '../error-families.js';
+} from '../../core/error-families.js';
+import { trackImageView } from '../../kernel/telemetry.js';
+import { lickChannelFromBody } from '../../scoops/agent-message-to-chat.js';
 import { isLickChannel } from '../lick-channels.js';
-import { trackImageView } from '../telemetry.js';
 import { scoopColor } from './wc-scoop-color.js';
 
 // Re-export the error-family predicates from their original location so

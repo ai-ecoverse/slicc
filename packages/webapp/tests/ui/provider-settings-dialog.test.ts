@@ -45,7 +45,7 @@ vi.mock('../../src/scoops/tray-runtime-config.js', () => ({
   storeTrayJoinUrl: vi.fn(() => ({ joinUrl: 'https://www.sliccy.ai/join/x', workerBaseUrl: 'w' })),
 }));
 
-vi.mock('../../src/ui/telemetry.js', () => ({ trackSettingsOpen: vi.fn() }));
+vi.mock('../../src/kernel/telemetry.js', () => ({ trackSettingsOpen: vi.fn() }));
 
 import { addAccount, getProviderConfig, removeAccount } from '../../src/providers/account-store.js';
 

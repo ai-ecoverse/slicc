@@ -10,9 +10,9 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-vi.mock('../../../src/ui/telemetry.js', async () => {
-  const actual = await vi.importActual<typeof import('../../../src/ui/telemetry.js')>(
-    '../../../src/ui/telemetry.js'
+vi.mock('../../../src/kernel/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/kernel/telemetry.js')>(
+    '../../../src/kernel/telemetry.js'
   );
   return {
     ...actual,
@@ -22,7 +22,7 @@ vi.mock('../../../src/ui/telemetry.js', async () => {
   };
 });
 
-import { trackChatSend, trackError, trackLickBackpressure } from '../../../src/ui/telemetry.js';
+import { trackChatSend, trackError, trackLickBackpressure } from '../../../src/kernel/telemetry.js';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
 

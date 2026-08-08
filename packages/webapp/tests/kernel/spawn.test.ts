@@ -19,7 +19,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import { bootstrapKernelWorker, type WorkerLike } from '../../src/kernel/spawn.js';
-import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
+import { OffscreenClient, type OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
 function makeStubCdpTransport(): CDPTransport {
   return {
@@ -80,7 +80,7 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
     });
 
     expect(host.client).toBeDefined();
@@ -108,7 +108,7 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
       readyTimeoutMs: 1_000,
     });
 
@@ -121,11 +121,43 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
       readyTimeoutMs: 50,
     });
 
     await expect(host.ready).rejects.toThrow(/did not signal ready/);
+    host.dispose();
+  });
+
+  it('ready rejects IMMEDIATELY with the real cause on kernel-worker-boot-error', async () => {
+    const worker = makeMockWorker();
+    worker.postMessage = (message) => {
+      const data = message as { type?: string; kernelPort?: MessagePort };
+      if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+        data.kernelPort.start();
+        data.kernelPort.postMessage({
+          type: 'kernel-worker-boot-error',
+          message: 'illegal operation on a directory',
+          code: 'EISDIR',
+        });
+      }
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      // Generous timeout: the rejection must come from the boot-error
+      // message, not from this timer expiring.
+      readyTimeoutMs: 30_000,
+    });
+
+    const error = (await host.ready.then(
+      () => null,
+      (e: unknown) => e
+    )) as (Error & { code?: string }) | null;
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('illegal operation on a directory');
+    expect(error?.code).toBe('EISDIR');
     host.dispose();
   });
 
@@ -134,7 +166,7 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
       readyTimeoutMs: 1_000,
     });
     await host.ready;
@@ -154,7 +186,7 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
       readyTimeoutMs: 1_000,
     });
     await host.ready;
@@ -184,7 +216,7 @@ describe('bootstrapKernelWorker', () => {
     const host = bootstrapKernelWorker({
       worker,
       realCdpTransport: makeStubCdpTransport(),
-      callbacks: makeStubCallbacks(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
       readyTimeoutMs: 30,
     });
 
@@ -234,7 +266,7 @@ describe('bootstrapKernelWorker', () => {
       const host = bootstrapKernelWorker({
         worker,
         realCdpTransport: { on: () => {}, off: () => {}, send: async () => ({}) } as never,
-        callbacks: {} as never,
+        makeClient: () => ({}) as never,
         readyTimeoutMs: 50,
         onWorkerScriptError,
       });

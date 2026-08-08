@@ -9,8 +9,8 @@
  *   3. Wire the page-side CDP forwarder against the existing
  *      WebSocket-backed `CDPTransport` so the worker can issue real
  *      CDP commands.
- *   4. Construct an `OffscreenClient` over the panel-side kernel
- *      port — the panel's existing UI callbacks (chat, scoops,
+ *   4. Mint the caller's panel-side client over the kernel-port
+ *      transport — the panel's existing UI callbacks (chat, scoops,
  *      memory, sprinkle-op) wire into it exactly like they do for
  *      the extension panel.
  *   5. Post `kernel-worker-init` to the worker, transferring the
@@ -29,11 +29,23 @@
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
-import { OffscreenClient, type OffscreenClientCallbacks } from '../ui/offscreen-client.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
-import type { KernelWorkerInitMsg, KernelWorkerReadyMsg } from './kernel-worker.js';
+import type {
+  KernelWorkerBootErrorMsg,
+  KernelWorkerInitMsg,
+  KernelWorkerReadyMsg,
+} from './kernel-worker.js';
 import type { SyncFsNonce } from './realm/sync-fs-wire.js';
 import { createPanelMessageChannelTransport } from './transport-message-channel.js';
+
+/**
+ * The page-side kernel-port transport handed to {@link
+ * KernelWorkerSpawnOptions.makeClient}. Callers wrap it in their client of
+ * choice (the UI shells pass `new OffscreenClient(callbacks, transport)`) —
+ * inverted so this kernel-layer module never imports up the stack into
+ * `ui/` (layer back-edge paid down with #1984's changes).
+ */
+export type PanelKernelTransport = ReturnType<typeof createPanelMessageChannelTransport>;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -47,7 +59,7 @@ export interface WorkerLike {
   addEventListener?(type: 'error', listener: () => void): void;
 }
 
-export interface KernelWorkerSpawnOptions {
+export interface KernelWorkerSpawnOptions<TClient> {
   /**
    * Optional override for the worker URL. Defaults to
    * `DEFAULT_KERNEL_WORKER_URL` (the Vite-bundled
@@ -57,8 +69,12 @@ export interface KernelWorkerSpawnOptions {
   workerUrl?: string | URL;
   /** Real CDP transport (WebSocket-backed `CDPClient` in standalone). */
   realCdpTransport: CDPTransport;
-  /** Panel UI callbacks the `OffscreenClient` dispatches into. */
-  callbacks: OffscreenClientCallbacks;
+  /**
+   * Build the panel-side client over the kernel-port transport. The UI
+   * shells pass `(t) => new OffscreenClient(callbacks, t)`; inverted so
+   * this kernel-layer module never imports `ui/`.
+   */
+  makeClient: (transport: PanelKernelTransport) => TClient;
   /** Boot timeout in ms. Default 30s. */
   readyTimeoutMs?: number;
   /**
@@ -128,10 +144,11 @@ export interface KernelWorkerSpawnOptions {
   onWorkerScriptError?: () => void;
 }
 
-export interface KernelWorkerBootstrapOptions {
+export interface KernelWorkerBootstrapOptions<TClient> {
   worker: WorkerLike;
   realCdpTransport: CDPTransport;
-  callbacks: OffscreenClientCallbacks;
+  /** See {@link KernelWorkerSpawnOptions.makeClient}. */
+  makeClient: (transport: PanelKernelTransport) => TClient;
   readyTimeoutMs?: number;
   localStorageSeed?: Record<string, string>;
   /**
@@ -183,9 +200,9 @@ export function collectLocalStorageSeed(): Record<string, string> {
   return seed;
 }
 
-export interface SpawnedKernelHost {
-  /** Panel-side client. UI callbacks wire into it. */
-  client: OffscreenClient;
+export interface SpawnedKernelHost<TClient> {
+  /** Panel-side client, minted by the caller's `makeClient` factory. */
+  client: TClient;
   /** Resolves when the worker has finished `createKernelHost`. */
   ready: Promise<void>;
   /** Tear down the worker, the CDP forwarder, and close both ports. */
@@ -200,8 +217,10 @@ export interface SpawnedKernelHost {
  * Wire up an existing Worker-like instance to a kernel host. Used by
  * `spawnKernelWorker` and by tests with a mock worker.
  */
-export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): SpawnedKernelHost {
-  const { worker, realCdpTransport, callbacks } = options;
+export function bootstrapKernelWorker<TClient>(
+  options: KernelWorkerBootstrapOptions<TClient>
+): SpawnedKernelHost<TClient> {
+  const { worker, realCdpTransport } = options;
   const readyTimeoutMs = options.readyTimeoutMs ?? 30_000;
   const localStorageSeed = options.localStorageSeed ?? {};
 
@@ -212,7 +231,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
   // `source: 'panel'` so the worker-side bridge's source filter matches
   // exactly what chrome.runtime would have delivered.
   const panelTransport = createPanelMessageChannelTransport(kernelChannel.port1);
-  const client = new OffscreenClient(callbacks, panelTransport);
+  const client = options.makeClient(panelTransport);
 
   // Attach the worker error listener before any async work so an uncaught
   // worker `error` event — notably a stale worker ENTRY chunk failing to load —
@@ -261,10 +280,28 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
       clearTimer();
     };
     listener = (event: MessageEvent): void => {
-      const data = event.data as Partial<KernelWorkerReadyMsg> | null;
-      if (data?.type !== 'kernel-worker-ready') return;
-      cleanupReady?.();
-      resolve();
+      const data = event.data as
+        | Partial<KernelWorkerReadyMsg>
+        | Partial<KernelWorkerBootErrorMsg>
+        | null;
+      if (data?.type === 'kernel-worker-ready') {
+        cleanupReady?.();
+        resolve();
+        return;
+      }
+      // Boot failed with a known cause: reject NOW with the real error
+      // instead of letting the 30s timeout produce a generic message next
+      // to the recovery screen's data-wipe button (#1984). `.code` rides
+      // along so future recovery UI can special-case storage-shaped
+      // failures.
+      if (data?.type === 'kernel-worker-boot-error') {
+        cleanupReady?.();
+        const detail = (data as Partial<KernelWorkerBootErrorMsg>).message ?? 'unknown error';
+        const code = (data as Partial<KernelWorkerBootErrorMsg>).code;
+        const error = new Error(`Kernel worker boot failed: ${detail}`);
+        if (code) (error as Error & { code?: string }).code = code;
+        reject(error);
+      }
     };
     kernelChannel.port1.addEventListener('message', listener as EventListener);
     armReadyTimeout();
@@ -340,14 +377,16 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
  * (this worker's `boot()` and the page's `main.ts`) await it during
  * boot.
  */
-export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKernelHost {
+export function spawnKernelWorker<TClient>(
+  options: KernelWorkerSpawnOptions<TClient>
+): SpawnedKernelHost<TClient> {
   const worker = options.workerUrl
     ? new Worker(options.workerUrl, { type: 'module' })
     : new Worker(new URL('./kernel-worker.ts', import.meta.url), { type: 'module' });
   return bootstrapKernelWorker({
     worker,
     realCdpTransport: options.realCdpTransport,
-    callbacks: options.callbacks,
+    makeClient: options.makeClient,
     readyTimeoutMs: options.readyTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
     instanceId: options.instanceId,

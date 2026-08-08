@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../src/ui/telemetry.js', async () => {
-  const actual = await vi.importActual<typeof import('../../src/ui/telemetry.js')>(
-    '../../src/ui/telemetry.js'
+vi.mock('../../src/kernel/telemetry.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/kernel/telemetry.js')>(
+    '../../src/kernel/telemetry.js'
   );
   return { ...actual, trackSettingsOpen: vi.fn() };
 });
 
-import { trackSettingsOpen } from '../../src/ui/telemetry.js';
+import { trackSettingsOpen } from '../../src/kernel/telemetry.js';
 
 describe('showProviderSettings — trackSettingsOpen wiring', () => {
   beforeEach(() => {

@@ -8,6 +8,7 @@
 
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { createLogger } from '../core/index.js';
+import { trackSettingsOpen } from '../kernel/telemetry.js';
 import {
   ACCOUNTS_KEY,
   type Account,
@@ -26,7 +27,6 @@ import type { DeviceCodePrompter } from '../providers/types.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { hasStoredTrayJoinUrl, storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { copyTextToClipboard } from './clipboard.js';
-import { trackSettingsOpen } from './telemetry.js';
 import { describeInvalidJoinUrl } from './tray-join-url.js';
 
 // Re-export the data layer for backward compatibility with the many callers
