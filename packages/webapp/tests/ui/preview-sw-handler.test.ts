@@ -21,6 +21,8 @@ import {
   handlePreviewRequest,
   isSliccAppPath,
   type PreviewChannel,
+  pathnameOf,
+  projectServeVfsPath,
 } from '../../src/ui/preview-sw-handler.js';
 
 type ResponderReply =
@@ -244,5 +246,70 @@ describe('handlePreviewRequest', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('isSliccAppPath — project-owned static prefixes stay interceptable (#1981)', () => {
+  it('does NOT reserve the production static surface', () => {
+    // A previewed project (a built Vite app is the canonical case) serves
+    // its own /assets/, fonts, and favicons; reserving these pathnames
+    // would break project serve mode for it. App protection comes from
+    // requester scoping in projectServeVfsPath instead.
+    expect(isSliccAppPath('/assets/main-Ab12Cd34.js')).toBe(false);
+    expect(isSliccAppPath('/fonts/site.woff2')).toBe(false);
+    expect(isSliccAppPath('/favicon.ico')).toBe(false);
+    expect(isSliccAppPath('/styles/main.css')).toBe(false);
+  });
+});
+
+describe('pathnameOf (#1981)', () => {
+  it('extracts rooted pathnames and rejects opaque or invalid URLs', () => {
+    expect(pathnameOf('https://app.test/preview/index.html')).toBe('/preview/index.html');
+    expect(pathnameOf('https://app.test/')).toBe('/');
+    expect(pathnameOf('about:client')).toBe(null);
+    expect(pathnameOf('')).toBe(null);
+    expect(pathnameOf(null)).toBe(null);
+    expect(pathnameOf(undefined)).toBe(null);
+    expect(pathnameOf('not a url')).toBe(null);
+  });
+});
+
+describe('projectServeVfsPath — requester scoping (#1981)', () => {
+  const ROOT = '/shared/my-project';
+
+  it('serves any project path — including /assets/ — to a /preview/ requester', () => {
+    expect(projectServeVfsPath(ROOT, '/assets/main.js', '/preview/index.html', false)).toBe(
+      '/shared/my-project/assets/main.js'
+    );
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', '/preview/index.html', false)).toBe(
+      '/shared/my-project/styles/main.css'
+    );
+  });
+
+  it('serves documents project serve mode itself delivered (tracked, not path-guessed)', () => {
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', '/other-page.html', true)).toBe(
+      '/shared/my-project/styles/main.css'
+    );
+  });
+
+  it('never captures the leader page or worker-served app routes', () => {
+    // The boot-brick vector: '/' fetching chunks and worker scripts.
+    expect(projectServeVfsPath(ROOT, '/assets/kernel-worker.js', '/', false)).toBe(null);
+    // '/cloud' is a real app route the SW cannot know by pathname — it is
+    // simply NOT a tracked project document, so it passes through.
+    expect(projectServeVfsPath(ROOT, '/cloud/styles.css', '/cloud', false)).toBe(null);
+    expect(projectServeVfsPath(ROOT, '/electron/app.js', '/electron', false)).toBe(null);
+  });
+
+  it('excludes app infrastructure paths even for project requesters', () => {
+    expect(projectServeVfsPath(ROOT, '/api/fetch-proxy', '/preview/index.html', false)).toBe(null);
+    expect(projectServeVfsPath(ROOT, '/node_modules/x/y.js', '/preview/index.html', false)).toBe(
+      null
+    );
+  });
+
+  it('passes through unknown requesters and unset project roots', () => {
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', null, false)).toBe(null);
+    expect(projectServeVfsPath(null, '/styles/main.css', '/preview/index.html', false)).toBe(null);
   });
 });

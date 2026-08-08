@@ -17,13 +17,29 @@
 
 /// <reference lib="webworker" />
 
-import { handlePreviewRequest, isSliccAppPath } from './preview-sw-handler.js';
+import {
+  handlePreviewRequest,
+  isSliccAppPath,
+  pathnameOf,
+  projectServeVfsPath,
+} from './preview-sw-handler.js';
 
 /**
  * Active project root in VFS (e.g., "/shared/my-project").
  * When set, root-relative requests resolve against this path.
  */
 let projectRoot: string | null = null;
+
+/**
+ * Documents project serve mode itself delivered, by client id (for their
+ * subresource fetches) and by pathname (for referrer-checked navigation
+ * chains). Only these — plus `/preview/` pages — may pull further files
+ * from the project root; app pages can never be misclassified because
+ * membership is recorded at serve time, not inferred from the pathname.
+ * Module-scoped like `projectRoot` itself: reset on SW eviction.
+ */
+const projectClientIds = new Set<string>();
+const projectClientPaths = new Set<string>();
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
@@ -65,9 +81,56 @@ sw.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Mode 2: Project serve mode — resolve root-relative paths against project root
-  if (projectRoot && !isSliccAppPath(url.pathname)) {
-    const vfsPath = projectRoot + url.pathname;
-    event.respondWith(handlePreviewRequest(getVfsBroadcast(), vfsPath));
+  // Mode 2: Project serve mode — resolve root-relative paths against project
+  // root, but only for requests made BY a project context (a /preview/ page
+  // or a document this mode itself delivered). App fetches — the leader
+  // page's chunks and workers, /cloud-style routes — fall back to the
+  // network instead of the project VFS, whatever projectRoot a previous
+  // preview left behind in SW state (#1981).
+  if (projectRoot !== null && !isSliccAppPath(url.pathname)) {
+    const root = projectRoot;
+    const isNavigation = event.request.mode === 'navigate';
+    const resultingClientId = event.resultingClientId;
+    event.respondWith(
+      (async () => {
+        let requesterPath: string | null;
+        let requesterIsProjectDocument: boolean;
+        try {
+          if (isNavigation) {
+            // Navigations have no source client; the referrer names the
+            // page the user navigated from.
+            requesterPath = pathnameOf(event.request.referrer);
+            requesterIsProjectDocument =
+              requesterPath !== null && projectClientPaths.has(requesterPath);
+          } else {
+            const client = await sw.clients.get(event.clientId);
+            requesterPath = pathnameOf(client?.url);
+            // Fall back to the path set for browsers that don't surface a
+            // resultingClientId at navigation-serve time.
+            requesterIsProjectDocument =
+              (client !== undefined && projectClientIds.has(client.id)) ||
+              (requesterPath !== null && projectClientPaths.has(requesterPath));
+          }
+        } catch {
+          // A failed client lookup must degrade to the network, never to a
+          // rejected respondWith (which would fail the request outright).
+          return fetch(event.request);
+        }
+        const vfsPath = projectServeVfsPath(
+          root,
+          url.pathname,
+          requesterPath,
+          requesterIsProjectDocument
+        );
+        if (vfsPath === null) return fetch(event.request);
+        if (isNavigation) {
+          // This response commits a project document — record it so its own
+          // subresource fetches and onward navigations stay project-scoped.
+          projectClientPaths.add(url.pathname);
+          if (resultingClientId) projectClientIds.add(resultingClientId);
+        }
+        return handlePreviewRequest(getVfsBroadcast(), vfsPath);
+      })()
+    );
   }
 });

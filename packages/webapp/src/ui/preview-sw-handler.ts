@@ -231,6 +231,13 @@ export async function handlePreviewRequest(
 /**
  * Paths that should NOT be intercepted in project serve mode — they
  * belong to the slicc app itself (Vite HMR, API endpoints, UI assets).
+ *
+ * Deliberately NOT broadened with the production static surface
+ * (`/assets/`, `/fonts/`, …): previewed projects — a built Vite app is
+ * the canonical case — legitimately serve their own `/assets/*` files,
+ * so those prefixes must stay interceptable for project contexts. The
+ * app is protected by requester scoping in `projectServeVfsPath`, not by
+ * reserving pathnames (#1981).
  */
 export function isSliccAppPath(pathname: string): boolean {
   return (
@@ -242,4 +249,44 @@ export function isSliccAppPath(pathname: string): boolean {
     pathname === '/' ||
     pathname === '/index.html'
   );
+}
+
+/** Rooted pathname of a URL string, or null for unparsable/opaque URLs. */
+export function pathnameOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  // Opaque-path URLs ('about:client') parse but are not pages of ours.
+  return pathname.startsWith('/') ? pathname : null;
+}
+
+/**
+ * Decide whether a project-serve (Mode 2) request should be served from
+ * the project VFS. Returns the VFS path to read, or `null` to let the
+ * request pass through to the network.
+ *
+ * Beyond the pathname exclusions, interception requires the REQUESTER to
+ * be a known project context: a `/preview/` page, or a document project
+ * serve mode itself delivered (`requesterIsProjectDocument`, tracked by
+ * the SW at navigation-serve time). Everything else — the leader page at
+ * `/`, worker-served routes like `/cloud`, unknown or opaque requesters —
+ * falls through to the network, so a `projectRoot` left behind in SW
+ * state can never capture the app's own fetches (#1981). App routes are
+ * recognized by what project serve mode has actually delivered, not by a
+ * pathname heuristic, so `/cloud`-style pages are never misclassified.
+ */
+export function projectServeVfsPath(
+  projectRoot: string | null,
+  pathname: string,
+  requesterPath: string | null,
+  requesterIsProjectDocument: boolean
+): string | null {
+  if (!projectRoot) return null;
+  if (isSliccAppPath(pathname)) return null;
+  const isProjectContext = requesterIsProjectDocument || requesterPath?.startsWith('/preview/');
+  return isProjectContext ? projectRoot + pathname : null;
 }
