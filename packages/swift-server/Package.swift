@@ -11,6 +11,10 @@ let package = Package(
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.2"),
         .package(url: "https://github.com/apple/swift-log", from: "1.14.0"),
+        // Headless tray-follower transport (WebRTC + signalling + tray-sync
+        // protocol) shared with the iOS app so the WebRTC framework and the
+        // transport core are not double-shipped.
+        .package(path: "../swift-trayfollower"),
     ],
     targets: [
         .executableTarget(
@@ -22,6 +26,7 @@ let package = Package(
                 .product(name: "WebSocketKit", package: "websocket-kit"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "Sources"
         ),
@@ -32,6 +37,7 @@ let package = Package(
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "Tests"
         ),

@@ -6,27 +6,28 @@ This is the repo navigation hub. Keep package details in the nearest package `CL
 
 ### Packages
 
-| Path                          | Purpose                                                                                                           |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                           |
-| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                             |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                                              |
-| `packages/cloudflare-worker/` | Tray hub worker: session coordination, signaling, TURN credentials, `sliccy.ai/cloud` dashboard                   |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                            |
-| `packages/cloud-core/`        | `@slicc/cloud-core` — sandbox-lifecycle library shared by `node-server --cloud` and the worker                    |
-| `packages/shared-ts/`         | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline)                              |
-| `packages/webcomponents/`     | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`)                                    |
-| `packages/spoon/`             | `@ai-ecoverse/spoon` — injection overlay web component + IIFE bootstrap, used across all floats                   |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                                             |
-| `packages/go-optel/`          | Dependency-free Go RUM client used by `slicc-cli`                                                                 |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                  |
-| `packages/swift-optel/`       | Pure-Swift RUM library shared by the iOS and macOS apps                                                           |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                                                  |
-| `packages/swift-traysession/` | Foundation-only iCloud tray-session sync shared by the launcher and iOS app                                       |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM, not npm)                     |
-| `packages/slicc-cli/`         | `slicc` — headless Go (pion) follower CLI: `prompt`/`exec`/`follow`; cross-compiled binaries (Go module, not npm) |
-| `packages/dev-tools/`         | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template                                 |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)              |
+| Path                           | Purpose                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/`             | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops                                             |
+| `packages/cherry/`             | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target                               |
+| `packages/chrome-extension/`   | Manifest V3 extension entry points, HTML shells, and message bridges                                                |
+| `packages/cloudflare-worker/`  | Tray hub worker: session coordination, signaling, TURN credentials, `sliccy.ai/cloud` dashboard                     |
+| `packages/node-server/`        | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving, hosted-leader mode                              |
+| `packages/cloud-core/`         | `@slicc/cloud-core` — sandbox-lifecycle library shared by `node-server --cloud` and the worker                      |
+| `packages/shared-ts/`          | `@slicc/shared-ts` — platform-agnostic primitives (secret masking, secrets pipeline)                                |
+| `packages/webcomponents/`      | `@slicc/webcomponents` — the webapp's UI shell (Storybook + `@vitest/browser`)                                      |
+| `packages/spoon/`              | `@ai-ecoverse/spoon` — injection overlay web component + IIFE bootstrap, used across all floats                     |
+| `packages/vfs-root/`           | Default VFS content copied into the app on init/reset                                                               |
+| `packages/go-optel/`           | Dependency-free Go RUM client used by `slicc-cli`                                                                   |
+| `packages/swift-launcher/`     | Native macOS SwiftUI launcher app (`Sliccstart`)                                                                    |
+| `packages/swift-optel/`        | Pure-Swift RUM library shared by the iOS and macOS apps                                                             |
+| `packages/swift-server/`       | Native macOS Hummingbird server (`slicc-server`)                                                                    |
+| `packages/swift-traysession/`  | Foundation-only iCloud tray-session sync shared by the launcher and iOS app                                         |
+| `packages/swift-trayfollower/` | `SliccTrayFollower` — shared headless tray-follower transport (WebRTC + tray-sync) used by ios-app and swift-server |
+| `packages/ios-app/`            | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC (SPM, not npm)                       |
+| `packages/slicc-cli/`          | `slicc` — headless Go (pion) follower CLI: `prompt`/`exec`/`follow`; cross-compiled binaries (Go module, not npm)   |
+| `packages/dev-tools/`          | Repo-level tooling: build helpers, QA setup, providers build filter, e2b template                                   |
+| `packages/assets/`             | Shared static files (logos, fonts, favicon) used by multiple packages (folder, not an npm workspace)                |
 
 ### Other Top-Level Directories
 
@@ -65,6 +66,7 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/swift-optel/CLAUDE.md`](packages/swift-optel/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
 - [`packages/swift-traysession/CLAUDE.md`](packages/swift-traysession/CLAUDE.md)
+- [`packages/swift-trayfollower/CLAUDE.md`](packages/swift-trayfollower/CLAUDE.md)
 - [`packages/ios-app/CLAUDE.md`](packages/ios-app/CLAUDE.md)
 - [`packages/slicc-cli/CLAUDE.md`](packages/slicc-cli/CLAUDE.md)
 - [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)

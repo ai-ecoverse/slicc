@@ -54,7 +54,9 @@ import {
   launchElectronApp,
   resolveOverlayThinBridge,
 } from './electron-controller.js';
+import type { FederatedCdpInspectableTarget } from './electron-federated-cdp.js';
 import { getElectronAppPorts } from './electron-runtime.js';
+import { ElectronTrayFollower } from './electron-tray-follower.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { runInstallCli } from './install-cli.js';
@@ -240,6 +242,9 @@ interface ServerState {
   launchedBrowserProcess: ChildProcess | null;
   launchedBrowserLabel: string;
   overlayInjector: ElectronOverlayInjector | null;
+  /** Headless CDP-over-CDP follower, started once an attached Electron app is
+   *  detected to block renderer egress (e.g. Signal). */
+  electronFollower: ElectronTrayFollower | null;
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
   /**
@@ -267,6 +272,7 @@ function createServerState(): ServerState {
     launchedBrowserProcess: null,
     launchedBrowserLabel: 'Browser',
     overlayInjector: null,
+    electronFollower: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
     bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: THIN_BRIDGE_MODE }),
@@ -942,6 +948,9 @@ function createGracefulShutdown(state: ServerState, deps: ShutdownDeps): () => P
     state.overlayInjector?.stop();
     state.overlayInjector = null;
 
+    state.electronFollower?.stop();
+    state.electronFollower = null;
+
     closeWebSocketQuietly(state.chromeWs);
     state.chromeWs = null;
     closeWebSocketQuietly(state.activeClientWs);
@@ -1009,6 +1018,11 @@ async function startOverlayInjector(
       servePort,
       projectRoot: PROJECT_ROOT,
       thinBridge,
+      // When the app blocks renderer egress (hosted overlay can't load), expose
+      // its CDP to the tray leader via the headless follower instead.
+      onEgressBlocked: () => {
+        void startElectronFollower(state, cdpPort);
+      },
     });
     await state.overlayInjector.start();
     console.log(
@@ -1017,6 +1031,54 @@ async function startOverlayInjector(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('[electron-float] Failed to start overlay injector:', message);
+  }
+}
+
+/**
+ * Start the headless CDP-over-CDP follower for an Electron app that blocks
+ * renderer egress (e.g. Signal). Idempotent — only the first egress-block
+ * detection starts it. Requires a tray join URL (`--join`); without one there
+ * is no leader to expose the app's CDP to, so it no-ops. The follower connects
+ * to the app's browser-level CDP endpoint and advertises its page targets to
+ * the leader, servicing the leader's CDP requests against the app.
+ */
+async function startElectronFollower(state: ServerState, cdpPort: number): Promise<void> {
+  if (state.electronFollower || state.shuttingDown) return;
+  const joinUrl = state.discoveredTrayJoinUrl;
+  if (!joinUrl) {
+    console.log(
+      '[electron-follower] app blocks renderer egress but no tray join URL (--join) is set — cannot expose its CDP to a leader'
+    );
+    return;
+  }
+  try {
+    const versionUrl = `http://127.0.0.1:${cdpPort}/json/version`;
+    const listUrl = `http://127.0.0.1:${cdpPort}/json/list`;
+    // Explicit timeouts: a stalled/half-open CDP endpoint would otherwise hang
+    // `.json()` forever, blocking the onEgressBlocked hook. Mirrors the
+    // `AbortSignal.timeout` already used by `discoverLeaderTrayJoinUrl`.
+    const version = (await (
+      await fetch(versionUrl, { signal: AbortSignal.timeout(5000) })
+    ).json()) as { webSocketDebuggerUrl?: string };
+    if (!version.webSocketDebuggerUrl) throw new Error('no browser webSocketDebuggerUrl from CDP');
+    const follower = new ElectronTrayFollower({
+      joinUrl,
+      browserWsUrl: version.webSocketDebuggerUrl,
+      listTargets: async () =>
+        (await (
+          await fetch(listUrl, { signal: AbortSignal.timeout(5000) })
+        ).json()) as FederatedCdpInspectableTarget[],
+      logger: (m) => {
+        console.log(m);
+      },
+    });
+    state.electronFollower = follower;
+    await follower.start();
+    console.log('[electron-follower] headless CDP-over-CDP follower started');
+  } catch (error: unknown) {
+    state.electronFollower = null;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[electron-follower] Failed to start follower:', message);
   }
 }
 
@@ -1321,10 +1383,10 @@ async function main() {
     server,
   });
   process.on('SIGINT', () => {
-    gracefulShutdown();
+    void gracefulShutdown();
   });
   process.on('SIGTERM', () => {
-    gracefulShutdown();
+    void gracefulShutdown();
   });
   process.on('exit', () => {
     // Synchronous last-resort cleanup — kill the launched browser if still running.

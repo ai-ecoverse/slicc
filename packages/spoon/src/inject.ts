@@ -13,6 +13,9 @@ export interface InjectSliccLauncherOptions {
   open?: boolean;
   appUrl?: string | null;
   corner?: string | null;
+  /** Empty-viewport message for the status-only overlay (apps that block the
+   *  embedded panel, e.g. Signal). Shown when `appUrl` is empty. */
+  statusMessage?: string | null;
   /** Accepted for backward compatibility with the legacy overlay; ignored. */
   activeTab?: string | null;
 }
@@ -39,6 +42,9 @@ export function injectSliccLauncher(
 
   if (options.appUrl !== undefined) {
     launcher.appUrl = options.appUrl ?? '';
+  }
+  if (options.statusMessage !== undefined) {
+    launcher.statusMessage = options.statusMessage ?? '';
   }
   if (typeof options.open === 'boolean') {
     launcher.open = options.open;

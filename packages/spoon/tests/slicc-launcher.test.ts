@@ -385,6 +385,37 @@ describe('slicc-launcher', () => {
     expect(evt.bubbles).toBe(true);
     expect(evt.composed).toBe(true);
   });
+
+  it('shows the default empty text when no status-message is set', () => {
+    const el = mount();
+    const empty = el.shadowRoot?.querySelector('.empty') as HTMLElement;
+    expect(empty.textContent).toBe('Set the app-url attribute to load SLICC.');
+  });
+
+  it('renders a custom status-message in the empty viewport (status-only overlay)', () => {
+    const el = mount();
+    el.statusMessage = 'This app blocks the SLICC panel.';
+    const empty = el.shadowRoot?.querySelector('.empty') as HTMLElement;
+    expect(empty.textContent).toBe('This app blocks the SLICC panel.');
+    expect(el.getAttribute('status-message')).toBe('This app blocks the SLICC panel.');
+  });
+
+  it('reverts to the default text when the status-message is cleared', () => {
+    const el = mount({ 'status-message': 'temporary' });
+    const empty = el.shadowRoot?.querySelector('.empty') as HTMLElement;
+    expect(empty.textContent).toBe('temporary');
+    el.statusMessage = null;
+    expect(el.hasAttribute('status-message')).toBe(false);
+    expect(empty.textContent).toBe('Set the app-url attribute to load SLICC.');
+  });
+
+  it('keeps the empty viewport visible only while there is no app-url', () => {
+    const el = mount({ 'status-message': 'blocked here' });
+    const empty = el.shadowRoot?.querySelector('.empty') as HTMLElement;
+    expect(empty.hasAttribute('hidden')).toBe(false);
+    el.appUrl = 'https://example.test/app';
+    expect(empty.hasAttribute('hidden')).toBe(true);
+  });
 });
 
 describe('inject', () => {
@@ -404,6 +435,20 @@ describe('inject', () => {
     expect(launcher.appUrl).toBe('https://example.test/app');
     expect(launcher.open).toBe(true);
     expect(launcher.corner).toBe('bottom-left');
+  });
+
+  it('applies a status-only overlay (empty app-url + custom message)', () => {
+    const launcher = injectSliccLauncher(document, {
+      appUrl: '',
+      statusMessage: 'SLICC is attached, but this app blocks the embedded panel.',
+    });
+    expect(launcher.appUrl).toBe('');
+    expect(launcher.statusMessage).toBe(
+      'SLICC is attached, but this app blocks the embedded panel.'
+    );
+    const empty = launcher.shadowRoot?.querySelector('.empty') as HTMLElement;
+    expect(empty.textContent).toBe('SLICC is attached, but this app blocks the embedded panel.');
+    expect(empty.hasAttribute('hidden')).toBe(false);
   });
 
   it('normalizes an invalid corner to the default and reuses an existing host', () => {

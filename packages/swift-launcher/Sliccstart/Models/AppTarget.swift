@@ -83,7 +83,7 @@ struct AppTarget: Identifiable {
         ("com.todoist.mac.Todoist", "Todoist"),
         ("com.github.GitHubClient", "GitHub Desktop"),
         ("com.postmanlabs.mac", "Postman"),
-        ("org.signal.Signal", "Signal"),
+        ("org.whispersystems.signal-desktop", "Signal"),
         ("com.tdesktop.Telegram", "Telegram Desktop"),
         ("com.logseq.logseq", "Logseq"),
         ("com.whatsonchain.WhatsOnChain", "WhatsOnChain"),

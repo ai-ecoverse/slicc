@@ -35,7 +35,9 @@ protocol CDPWebSocketTransport: Sendable {
 }
 
 /// `URLSessionWebSocketTask` is documented as safe to use from any thread.
-private final class URLSessionCDPWebSocket: CDPWebSocketTransport, @unchecked Sendable {
+/// Internal (not private) so the federated-CDP servicer can reuse it as its
+/// production transport rather than duplicating the URLSession glue.
+final class URLSessionCDPWebSocket: CDPWebSocketTransport, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
 
     init(url: URL, session: URLSession) {

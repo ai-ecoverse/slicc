@@ -9,6 +9,8 @@ import {
   buildThinOverlayAppUrl,
   ElectronOverlayInjector,
   findMatchingElectronAppPids,
+  isOverlayEgressBlockError,
+  OVERLAY_EGRESS_BLOCK_ERROR_TEXTS,
   OVERLAY_LOADED_PROBE_EXPRESSION,
   resolveFetchProxyOrigin,
   resolveHostedLeaderOrigin,
@@ -715,6 +717,240 @@ describe('ElectronOverlayInjector connect flow (file:// parity with swift-server
   });
 });
 
+describe('isOverlayEgressBlockError', () => {
+  it('matches the app-layer network-denial errors, not CSP / generic failures', () => {
+    expect(isOverlayEgressBlockError('net::ERR_ACCESS_DENIED')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_NETWORK_ACCESS_DENIED')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_CLIENT')).toBe(true);
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_ADMINISTRATOR')).toBe(true);
+    // A CSP block reports differently and IS rescuable by setBypassCSP — not an
+    // egress block; nor are transient/DNS failures.
+    expect(isOverlayEgressBlockError('net::ERR_BLOCKED_BY_CSP')).toBe(false);
+    expect(isOverlayEgressBlockError('net::ERR_NAME_NOT_RESOLVED')).toBe(false);
+    expect(isOverlayEgressBlockError('net::ERR_ABORTED')).toBe(false);
+    expect(isOverlayEgressBlockError(undefined)).toBe(false);
+    expect(isOverlayEgressBlockError('')).toBe(false);
+  });
+
+  it('exports the error-text list it checks against', () => {
+    expect(OVERLAY_EGRESS_BLOCK_ERROR_TEXTS).toContain('net::ERR_ACCESS_DENIED');
+    for (const t of OVERLAY_EGRESS_BLOCK_ERROR_TEXTS)
+      expect(isOverlayEgressBlockError(t)).toBe(true);
+  });
+});
+
+describe('ElectronOverlayInjector egress-block detection', () => {
+  const TOKEN = 'egress-tok-9f3a';
+  const targetUrl = 'file:///Applications/Signal.app/Contents/Resources/app.asar/background.html';
+
+  it('marks the target egress-blocked on ERR_ACCESS_DENIED and skips escalation without recording bypass', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Network.enable' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        // The overlay iframe's own document request (carries the bridge token)…
+        socket.send(
+          JSON.stringify({
+            method: 'Network.requestWillBeSent',
+            params: {
+              requestId: 'req-1',
+              type: 'Document',
+              request: { url: `https://www.sliccy.ai/electron?bridgeToken=${TOKEN}&role=leader` },
+            },
+          })
+        );
+        // …denied by the app at the network layer.
+        socket.send(
+          JSON.stringify({
+            method: 'Network.loadingFailed',
+            params: { requestId: 'req-1', type: 'Document', errorText: 'net::ERR_ACCESS_DENIED' },
+          })
+        );
+      }
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      // Even if the probe ran it would (falsely) report loaded — egressBlocked
+      // must override it so this is NOT recorded as bypassed.
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        String(msg.params?.expression).includes('slicc-electron-overlay-root')
+      ) {
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'ok' } } })
+        );
+      }
+    });
+
+    try {
+      const egressCalls: string[] = [];
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+        onEgressBlocked: (url) => egressCalls.push(url),
+      });
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      // The injector enables Network on connect; wait for that, then let the
+      // pushed loadingFailed propagate and the probe window (40ms) elapse.
+      await harness.waitFor((m) => m.method === 'Network.enable', 'Network.enable');
+      await new Promise((r) => setTimeout(r, 150));
+
+      expect(injector._testingEgressBlockedTargets().has(targetUrl)).toBe(true);
+      // The egress-block hook fired once, so the runtime can start the follower.
+      expect(egressCalls).toEqual([targetUrl]);
+      // Never recorded as CSP-bypassed (which would read as "loaded").
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+      // Escalation skipped: no reload, no Fetch proxy.
+      expect(harness.messages.some((m) => m.method === 'Page.reload')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Fetch.enable')).toBe(false);
+      // The overlay-loaded probe must NOT have run (egressBlocked bailed first).
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            String(m.params?.expression).includes('slicc-electron-overlay-root')
+        )
+      ).toBe(false);
+      // The status-only overlay (default test bootstrap `/* test-status */`) is
+      // injected in its place, both immediately and as a new-document hook.
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Page.addScriptToEvaluateOnNewDocument' &&
+            m.params?.source === '/* test-status */'
+        )
+      ).toBe(true);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('ignores a network failure on a frame that is not our overlay (no bridge token)', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Network.enable' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        // A Document request WITHOUT our bridge token — the app's own frame.
+        socket.send(
+          JSON.stringify({
+            method: 'Network.requestWillBeSent',
+            params: {
+              requestId: 'other-1',
+              type: 'Document',
+              request: { url: 'https://example.com/x' },
+            },
+          })
+        );
+        socket.send(
+          JSON.stringify({
+            method: 'Network.loadingFailed',
+            params: { requestId: 'other-1', type: 'Document', errorText: 'net::ERR_ACCESS_DENIED' },
+          })
+        );
+      }
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+      if (
+        msg.method === 'Runtime.evaluate' &&
+        typeof msg.id === 'number' &&
+        String(msg.params?.expression).includes('slicc-electron-overlay-root')
+      ) {
+        // Report not-loaded so the normal CSP escalation proceeds.
+        socket.send(
+          JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: 'no-host' } } })
+        );
+      }
+    });
+
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+      });
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      // The unrelated failure must NOT mark the target, and the normal probe →
+      // reload escalation must still run.
+      await harness.waitFor((m) => m.method === 'Page.reload', 'Page.reload (normal escalation)');
+      expect(injector._testingEgressBlockedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('injects the status-only overlay on reconnect to an already-egress-blocked target', async () => {
+    const harness = await startFakeCdpTarget((msg, socket) => {
+      if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
+    });
+    try {
+      const injector = ElectronOverlayInjector._createForTesting({
+        servePort: 5711,
+        bridgeToken: TOKEN,
+        probeDelayMs: 40,
+      });
+      injector._testingSeedEgressBlockedTarget(targetUrl);
+      injector._testingConnectToTarget({
+        id: '1',
+        type: 'page',
+        title: 'Signal',
+        url: targetUrl,
+        webSocketDebuggerUrl: harness.url,
+      });
+
+      // The status-only overlay is injected straight away (default test
+      // bootstrap `/* test-status */`) instead of the doomed iframe path.
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      await new Promise((r) => setTimeout(r, 80));
+
+      // No theme screenshot, no probe, no reload, no Network stream, no bypass:
+      // the egress-blocked path returns before any of that.
+      expect(harness.messages.some((m) => m.method === 'Page.captureScreenshot')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Page.reload')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Network.enable')).toBe(false);
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            String(m.params?.expression).includes('slicc-electron-overlay-root')
+        )
+      ).toBe(false);
+      expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
+
+      injector._testingCloseConnections();
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
 // -----------------------------------------------------------------------------
 // Thin-bridge helpers + leader/follower election (Path B).
 // -----------------------------------------------------------------------------
@@ -813,11 +1049,12 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
   // travelled in the `Runtime.evaluate` expression for each target.
   const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
   const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
 
   function makeThinInjector(): ElectronOverlayInjector {
     return ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
   }
@@ -1001,7 +1238,7 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     const injector = ElectronOverlayInjector._createForTesting({
       cdpPort,
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
 
@@ -1052,7 +1289,7 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     const injector = ElectronOverlayInjector._createForTesting({
       cdpPort,
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
 
@@ -1187,6 +1424,7 @@ describe('OVERLAY_LOADED_PROBE_EXPRESSION classification', () => {
 describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () => {
   const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
   const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
   const targetUrl = 'https://discord.com/app';
 
   // Counts only the role-bootstrap `Runtime.evaluate` injections (initial themed
@@ -1261,7 +1499,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     // path in isolation (one event → exactly one re-inject).
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 1_000_000,
     });
@@ -1312,7 +1550,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     let evictionProbes = 0;
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 40,
     });
@@ -1346,7 +1584,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     // must re-inject while the host is attached.
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 40,
     });
