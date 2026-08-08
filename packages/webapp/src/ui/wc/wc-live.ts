@@ -2228,6 +2228,8 @@ export async function mountWcUiLive(
     syncFsChannelNonce,
     localLickWsUrl,
     extensionDelegateId,
+    // The worker adopts this float's cached remote flags at boot (#2003).
+    flagFloat: runtimeMode,
     onWorkerScriptError: () => {
       guardedReload();
     },

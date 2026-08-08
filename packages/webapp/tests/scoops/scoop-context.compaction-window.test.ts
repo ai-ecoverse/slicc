@@ -22,6 +22,7 @@ type CompactConfig = {
   headers?: Record<string, string>;
   contextWindow?: number;
   onMemoryUpdates?: unknown;
+  shouldExtractMemories?: unknown;
 };
 
 const captures = vi.hoisted(() => ({
@@ -190,18 +191,23 @@ describe('ScoopContext compaction memory gating (#2003)', () => {
     mocks.enabledFlags.clear();
   });
 
-  it('wires onMemoryUpdates for the cone when agentic memory is off', async () => {
-    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
-    expect(config.onMemoryUpdates).toBeTypeOf('function');
-  });
-
-  it('leaves onMemoryUpdates unset when agentic memory is on — the curator owns memory', async () => {
-    // Mid-session compaction memory building appends legacy bullets and
-    // triggers the budget restructure on the curated file, repeatedly
-    // squeezing it toward "last session summed up" (#2003).
+  it('wires onMemoryUpdates for the cone regardless of the flag (the gate is live)', async () => {
     mocks.enabledFlags.add('agentic-memory');
     const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
-    expect(config.onMemoryUpdates).toBeUndefined();
+    expect(config.onMemoryUpdates).toBeTypeOf('function');
+    expect(config.shouldExtractMemories).toBeTypeOf('function');
+  });
+
+  it('shouldExtractMemories tracks the flag LIVE — a mid-session toggle applies to the next compaction', async () => {
+    // The compactFn built at init outlives prompts; a construction-time
+    // decision would keep extracting until a reload (#2003 review P1).
+    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
+    const gate = config.shouldExtractMemories as () => boolean;
+    expect(gate()).toBe(true);
+    mocks.enabledFlags.add('agentic-memory');
+    expect(gate()).toBe(false);
+    mocks.enabledFlags.delete('agentic-memory');
+    expect(gate()).toBe(true);
   });
 
   it('leaves onMemoryUpdates unset without an appendConeMemory callback (unchanged)', async () => {

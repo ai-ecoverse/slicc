@@ -360,6 +360,52 @@ describe('createCompactContext', () => {
     expect(onMemoryUpdates.mock.calls[0][0]).toContain('user prefers vim');
   });
 
+  it('shouldExtractMemories false skips the memory call, the append, and its state (#2003)', async () => {
+    const onMemoryUpdates = vi.fn();
+    const onCompactionStateChange = vi.fn();
+    mockCompleteSimple.mockResolvedValueOnce(llmResponse('## Goal\ndo a thing'));
+
+    const compact = createCompactContext({
+      ...mockConfig,
+      onMemoryUpdates,
+      onCompactionStateChange,
+      shouldExtractMemories: () => false,
+    });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+    await compact(messages);
+
+    // Summary only — with agentic memory on, the curator owns memory.
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+    expect(onMemoryUpdates).not.toHaveBeenCalled();
+    const states = onCompactionStateChange.mock.calls.map((c) => c[0]);
+    expect(states).not.toContain('extracting-memory');
+  });
+
+  it('shouldExtractMemories is consulted per compaction — a flipped gate extracts again', async () => {
+    const onMemoryUpdates = vi.fn();
+    mockCompleteSimple
+      .mockResolvedValueOnce(llmResponse('summary one'))
+      .mockResolvedValueOnce(llmResponse('summary two'))
+      .mockResolvedValueOnce(llmResponse('- a memory'));
+
+    let extract = false;
+    const compact = createCompactContext({
+      ...mockConfig,
+      onMemoryUpdates,
+      shouldExtractMemories: () => extract,
+    });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+
+    await compact(messages);
+    expect(onMemoryUpdates).not.toHaveBeenCalled();
+
+    extract = true;
+    await compact(messages);
+    expect(onMemoryUpdates).toHaveBeenCalledOnce();
+  });
+
   it('emits compaction lifecycle states in order, ending with idle', async () => {
     const onMemoryUpdates = vi.fn();
     const onCompactionStateChange = vi.fn();
