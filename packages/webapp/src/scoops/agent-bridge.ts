@@ -137,6 +137,32 @@ export interface AgentSpawnOptions {
    * Best-effort: a receipt write failure is logged, never fails the spawn.
    */
   successReceiptPath?: string;
+  /**
+   * Hard turn ceiling for the spawned run (#1972). Enforced in
+   * `ScoopContext` where the agent loop runs — the run stops at the
+   * bound and the spawn resolves with a non-zero exit carrying the
+   * bound note. Unset → unbounded. Must be a positive integer.
+   */
+  maxTurns?: number;
+  /**
+   * Hard wall-clock ceiling in ms — same semantics. This is what makes
+   * a caller's "timeout" real: resolving a wait early never stopped the
+   * run before (one abandoned curator billed $53.81 over 29 minutes
+   * against a 120 s timeout).
+   */
+  maxWallClockMs?: number;
+  /**
+   * Caller-held cancel handle. Aborting stops the running scoop (via
+   * `orchestrator.stopScoop`) and resolves the spawn with a non-zero
+   * exit; an already-aborted signal short-circuits before any scoop is
+   * registered.
+   *
+   * In-realm only as a live object. Across the panel↔worker transport an
+   * `AbortSignal` can't be cloned, so `OffscreenClient.spawnAgent` strips
+   * it and forwards cancellation as a wire-safe `agent-spawn-abort`
+   * message; the kernel reconstructs an equivalent signal here (#1972).
+   */
+  signal?: AbortSignal;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -284,6 +310,20 @@ function validateSpawnOptions(
     };
   }
 
+  for (const [name, value] of [
+    ['maxTurns', options.maxTurns],
+    ['maxWallClockMs', options.maxWallClockMs],
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+      return {
+        error: {
+          finalText: `agent: ${name} must be a positive integer: ${String(value)}`,
+          exitCode: 1,
+        },
+      };
+    }
+  }
+
   return { resolvedModelId };
 }
 
@@ -321,6 +361,12 @@ function buildScoopConfig(
     writablePaths,
     allowedCommands: options.allowedCommands,
   };
+  if (options.maxTurns !== undefined) {
+    scoopConfig.maxTurns = options.maxTurns;
+  }
+  if (options.maxWallClockMs !== undefined) {
+    scoopConfig.maxWallClockMs = options.maxWallClockMs;
+  }
   if (effectiveModelId) {
     scoopConfig.modelId = effectiveModelId;
   }
@@ -508,6 +554,26 @@ export function createAgentBridge(
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
+    // Caller-held cancel: stop the running scoop so an abandoned wait
+    // actually reclaims the run instead of letting it keep billing.
+    const onAbort = (): void => {
+      try {
+        ctx.orchestrator.stopScoop(jid);
+      } catch (err) {
+        log.warn('stopScoop on abort failed', { jid, error: errText(err) });
+      }
+    };
+    // Attach BEFORE the aborted-check, then re-check: an abort landing in
+    // the window between check and attach would otherwise be missed
+    // (AbortSignal fires exactly once), leaving stopScoop uncalled and the
+    // cancellation deferred to the post-run gate — the 30s+ window this is
+    // meant to eliminate.
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) {
+      options.signal.removeEventListener('abort', onAbort);
+      observerHandle.unsubscribe?.();
+      return { finalText: 'agent: aborted before start', exitCode: 1 };
+    }
 
     try {
       try {
@@ -523,6 +589,9 @@ export function createAgentBridge(
         options.structuredOutputSchema,
         observerHandle
       );
+      if (options.signal?.aborted) {
+        return { finalText: 'agent: aborted', exitCode: 1 };
+      }
       if (result) {
         // Durable completion signal, written before the spawn resolves so
         // it lands strictly earlier than any caller-side bookkeeping.
@@ -536,6 +605,7 @@ export function createAgentBridge(
     } catch (err) {
       return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
     } finally {
+      options.signal?.removeEventListener('abort', onAbort);
       observerHandle.unsubscribe?.();
       await cleanupScoop(ctx, jid, folder, scratchFolder);
     }

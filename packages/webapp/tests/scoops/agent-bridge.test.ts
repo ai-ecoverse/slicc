@@ -1430,3 +1430,69 @@ describe('createAgentBridge — success receipts (#1989)', () => {
     expect(writes).toHaveLength(0);
   });
 });
+
+describe('createAgentBridge — run bounds + cancellation (#1972)', () => {
+  it('copies maxTurns and maxWallClockMs into the scoop config', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'bounded-caramel',
+    });
+    scripts.set('agent_bounded_caramel', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, maxTurns: 25, maxWallClockMs: 120_000 });
+
+    expect(registerCalls[0].config).toMatchObject({ maxTurns: 25, maxWallClockMs: 120_000 });
+  });
+
+  it('rejects non-positive or fractional bounds without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'strict-taffy',
+    });
+
+    for (const bad of [{ maxTurns: 0 }, { maxTurns: 2.5 }, { maxWallClockMs: -1 }]) {
+      const result = await bridge.spawn({ ...BASE_OPTS, ...bad });
+      expect(result.exitCode).toBe(1);
+      expect(result.finalText).toContain('must be a positive integer');
+    }
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('an already-aborted signal short-circuits before any scoop registers', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'eager-fudge',
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await bridge.spawn({ ...BASE_OPTS, signal: controller.signal });
+
+    expect(result).toEqual({ finalText: 'agent: aborted before start', exitCode: 1 });
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('aborting mid-run stops the scoop and resolves with a non-zero exit', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const stopScoop = vi.fn();
+    (orchestrator as unknown as { stopScoop: typeof stopScoop }).stopScoop = stopScoop;
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'reclaimed-sorbet',
+    });
+    const controller = new AbortController();
+    scripts.set('agent_reclaimed_sorbet', (obs) => {
+      // The caller gives up while the scoop is mid-run.
+      controller.abort();
+      obs.onResponse?.('partial work', false);
+    });
+
+    const result = await bridge.spawn({ ...BASE_OPTS, signal: controller.signal });
+
+    expect(stopScoop).toHaveBeenCalledWith('agent_reclaimed_sorbet');
+    expect(result).toEqual({ finalText: 'agent: aborted', exitCode: 1 });
+  });
+});

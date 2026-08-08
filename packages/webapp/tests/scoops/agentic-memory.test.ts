@@ -96,6 +96,9 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       // Per-archive completion receipt the bridge writes on exit 0 —
       // the boot catch-up's crash-safe curator-finished signal (#1989).
       successReceiptPath: '/sessions/.curated/2026-08-05-memory.md',
+      // timeoutSeconds becomes a REAL in-run wall-clock bound (#1972);
+      // this fixture sets timeoutSeconds: 45.
+      maxWallClockMs: 45_000,
     });
     expect(options.prompt).toBe(
       `Memory=${CONE_MEMORY_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
@@ -386,7 +389,9 @@ Curate {{MEMORY_PATH}}.`;
       sessionArchivePath: ARCHIVE_PATH,
       sessionCount: 1,
     });
-    await vi.advanceTimersByTimeAsync(1000);
+    // The outer wait grants 30 s grace beyond the in-run bound (#1972),
+    // so the pure-wait timeout fires at bound + grace.
+    await vi.advanceTimersByTimeAsync(1000 + 30_000);
 
     await expect(pass).resolves.toEqual({
       ok: false,
@@ -408,7 +413,7 @@ Curate {{MEMORY_PATH}}.`;
       sessionArchivePath: ARCHIVE_PATH,
       sessionCount: 1,
     });
-    await vi.advanceTimersByTimeAsync(599_999);
+    await vi.advanceTimersByTimeAsync(599_999 + 30_000);
     let settled = false;
     void pass.then(() => {
       settled = true;

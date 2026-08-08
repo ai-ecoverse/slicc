@@ -979,3 +979,79 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'fallback');
   });
 });
+
+describe('OffscreenClient.spawnAgent wire-safe cancel (#1972)', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  function payloads(type: string): any[] {
+    return sentMessages.map((m) => (m as { payload: any }).payload).filter((p) => p?.type === type);
+  }
+
+  it('strips the AbortSignal from the wired options (not structured-cloneable)', () => {
+    const controller = new AbortController();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+
+    const req = payloads('agent-spawn-request')[0];
+    expect(req).toBeDefined();
+    expect('signal' in req.options).toBe(false);
+    expect(req.options.prompt).toBe('go');
+    expect(typeof req.requestId).toBe('string');
+  });
+
+  it('translates a later abort into agent-spawn-abort with the same requestId', () => {
+    const controller = new AbortController();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+    const requestId = payloads('agent-spawn-request')[0].requestId;
+    expect(payloads('agent-spawn-abort')).toHaveLength(0);
+
+    controller.abort();
+
+    const abort = payloads('agent-spawn-abort');
+    expect(abort).toHaveLength(1);
+    expect(abort[0].requestId).toBe(requestId);
+  });
+
+  it('sends the abort immediately when the signal is already aborted', () => {
+    const controller = new AbortController();
+    controller.abort();
+    void client.spawnAgent({
+      cwd: '/workspace',
+      allowedCommands: ['*'],
+      prompt: 'go',
+      signal: controller.signal,
+    });
+
+    const req = payloads('agent-spawn-request')[0];
+    const abort = payloads('agent-spawn-abort');
+    expect(abort).toHaveLength(1);
+    expect(abort[0].requestId).toBe(req.requestId);
+  });
+
+  it('sends no abort message when no signal is provided', () => {
+    void client.spawnAgent({ cwd: '/workspace', allowedCommands: ['*'], prompt: 'go' });
+    expect(payloads('agent-spawn-abort')).toHaveLength(0);
+  });
+});

@@ -116,8 +116,17 @@ export interface RegisteredScoop {
 export interface ScoopConfig {
   /** Custom system prompt addition */
   systemPromptAppend?: string;
-  /** Agent timeout (ms) */
+  /** @deprecated Never enforced. Use {@link ScoopConfig.maxWallClockMs}. */
   timeout?: number;
+  /**
+   * Hard per-prompt-run turn ceiling (#1972). The run is stopped at the
+   * bound and surfaced as a bounded failure through `onError`, so a
+   * spawned agent cannot keep taking (and billing) turns after its
+   * caller gave up — turn count is the cost. Unset → unbounded.
+   */
+  maxTurns?: number;
+  /** Hard per-prompt-run wall-clock ceiling in ms — same semantics. */
+  maxWallClockMs?: number;
   /** Assistant name override for this scoop */
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
