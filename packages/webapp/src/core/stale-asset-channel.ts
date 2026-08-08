@@ -75,6 +75,33 @@ export function broadcastIfStaleAssetError(err: unknown): void {
 }
 
 /**
+ * Mixed-build-graph tripwire (#1983). A deploy landing mid-session can
+ * leave stale page HTML (build N) spawning a kernel worker whose hashed
+ * import graph resolves to build N±1 — every chunk servable (the R2
+ * asset archive keeps prior builds alive by design), so the drift loads
+ * silently and surfaces later as protocol-shaped runtime bugs. Called
+ * from worker boot with the page's inlined build id (rode in on
+ * `kernel-worker-init`) and the worker's own: on mismatch, requests the
+ * page's guarded reload over the stale-asset channel and reports `true`
+ * so the caller can RUM-tag it. Boot continues either way — if the
+ * (rate-limited) reload is suppressed, a mixed graph that would have run
+ * before still runs, now with a breadcrumb.
+ *
+ * The channel name and message shape are a cross-build wire contract:
+ * this signal must survive exactly the build skew it detects. Keep them
+ * stable.
+ */
+export function broadcastIfMixedBuildGraph(
+  pageBuildId: string | null | undefined,
+  workerBuildId: string
+): boolean {
+  if (!pageBuildId || pageBuildId === workerBuildId) return false;
+  log.warn(`mixed build graph: page ${pageBuildId} vs worker ${workerBuildId} — requesting reload`);
+  broadcastStaleAssetReload();
+  return true;
+}
+
+/**
  * Page-side listener PRIMITIVE. Invokes `onReload` only for a broadcast stamped
  * with the page's own `instanceId`. Returns a fresh disposer per call (like
  * `installNukeReloadListener`); single-install is enforced by the page wrapper

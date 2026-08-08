@@ -306,6 +306,15 @@ export default defineConfig(({ mode }) => ({
     __DEV__: JSON.stringify(mode !== 'production'),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+    // Per-build stamp inlined into every chunk that references it (page
+    // AND kernel-worker graphs). A deploy landing mid-session can leave
+    // stale HTML running page chunks from build N while the worker's
+    // hashed import graph resolves to build N±1 — both servable via the
+    // R2 asset archive, so the mixed graph loads silently. Comparing the
+    // page's inlined copy against the worker's on the boot handshake
+    // detects that drift (#1983). One evaluation per config load: a
+    // single build (or dev-server run) stamps both realms identically.
+    __SLICC_BUILD_ID__: JSON.stringify(`${rootPkg.version}-${Date.now().toString(36)}`),
     // Wasm dependency versions baked from webapp/package.json so the
     // ipk-wrapping commands (convert/magick, biome, ffmpeg) derive their
     // install guidance + version guards from the pinned dep instead of a literal.

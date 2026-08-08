@@ -322,6 +322,10 @@ export function bootstrapKernelWorker<TClient>(
     syncFsChannelNonce: options.syncFsChannelNonce ?? null,
     localLickWsUrl: options.localLickWsUrl ?? null,
     extensionDelegateId: options.extensionDelegateId ?? null,
+    // Inlined into THIS (page-graph) chunk at build time; the worker
+    // compares it against its own copy to catch mixed-build graphs after
+    // a mid-session deploy (#1983).
+    pageBuildId: __SLICC_BUILD_ID__,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 

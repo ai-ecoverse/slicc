@@ -95,6 +95,7 @@ export default defineConfig({
           __DEV__: 'true',
           __SLICC_VERSION__: JSON.stringify(rootPkg.version),
           __SLICC_RELEASED_AT__: 'null',
+          __SLICC_BUILD_ID__: JSON.stringify('test-build'),
           ...wasmVersionDefines,
           global: 'globalThis',
         },
@@ -179,6 +180,7 @@ export default defineConfig({
           // Extension tests transitively import webapp modules; keep the
           // wasm version constants defined so those imports don't throw.
           ...wasmVersionDefines,
+          __SLICC_BUILD_ID__: JSON.stringify('test-build'),
         },
         test: {
           name: 'chrome-extension',

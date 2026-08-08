@@ -2,6 +2,7 @@ declare const __DEV__: boolean;
 declare const __SLICC_EXT_DEV__: boolean;
 declare const __SLICC_VERSION__: string;
 declare const __SLICC_RELEASED_AT__: string | null;
+declare const __SLICC_BUILD_ID__: string;
 // Wasm dependency versions baked from packages/webapp/package.json at build
 // time (Vite `define` / vitest `define`). See the wasm-wrapping commands that
 // derive their `ipk add <pkg>@<version>` guidance from these.

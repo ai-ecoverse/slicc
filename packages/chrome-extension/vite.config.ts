@@ -332,6 +332,11 @@ export default defineConfig(({ mode }) => ({
     __SLICC_EXT_DEV__: JSON.stringify(isExtDev),
     __SLICC_VERSION__: JSON.stringify(rootPkg.version),
     __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
+    // Mirror the webapp's per-build stamp (#1983) so transitively bundled
+    // kernel modules never hit an undefined identifier. The extension
+    // itself spawns no kernel worker — the hosted leader tab does — so
+    // the value is inert here.
+    __SLICC_BUILD_ID__: JSON.stringify(`${rootPkg.version}-ext-${Date.now().toString(36)}`),
   },
   resolve: {
     // pi-coding-agent ships its own physical copy of pi-ai / pi-agent-core /
