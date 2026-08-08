@@ -16,7 +16,7 @@
  * realm only.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { callEnsureSpeechAssets } from '../kernel/speech-assets-bridge.js';
 import {

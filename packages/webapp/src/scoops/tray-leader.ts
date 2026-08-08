@@ -1,5 +1,5 @@
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '@slicc/shared-ts';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';

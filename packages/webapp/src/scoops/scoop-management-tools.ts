@@ -5,9 +5,9 @@
  * but implemented as direct agent tools.
  */
 
-import { createLogger } from '../core/logger.js';
-import type { ToolDefinition } from '../core/types.js';
+import { createLogger } from '../base/logger.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
+import type { ToolDefinition } from '../tools/types.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,

@@ -1,5 +1,5 @@
 // packages/webapp/src/scoops/structured-output-tool.ts
-import type { ToolDefinition, ToolInputSchema } from '../core/types.js';
+import type { ToolDefinition, ToolInputSchema } from '../tools/types.js';
 
 export function createStructuredOutputTool(
   schema: Record<string, unknown>,

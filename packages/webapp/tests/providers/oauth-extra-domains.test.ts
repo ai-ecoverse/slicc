@@ -235,7 +235,7 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
     // Log the warn through `console.warn` (createLogger's transport
     // for WARN level). Bump the runtime level so the message isn't
     // filtered out by the test-env default (ERROR).
-    const { setLogLevel, getLogLevel, LogLevel } = await import('../../src/core/logger.js');
+    const { setLogLevel, getLogLevel, LogLevel } = await import('../../src/base/logger.js');
     const priorLevel = getLogLevel();
     setLogLevel(LogLevel.WARN);
     const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

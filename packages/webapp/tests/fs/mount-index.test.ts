@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LogLevel, resetLoggerDedupForTests, setLogLevel } from '../../src/core/logger.js';
+import { LogLevel, resetLoggerDedupForTests, setLogLevel } from '../../src/base/logger.js';
 import { MountIndex, resolveMountIndexLimits } from '../../src/fs/mount-index.js';
 
 /**

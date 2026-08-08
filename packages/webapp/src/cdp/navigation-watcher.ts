@@ -19,7 +19,7 @@
  */
 
 import type { DiscoveryKind } from '@slicc/shared-ts';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { extractCatalog } from '../net/discovery-link.js';
 import {
   extractHandoffFromCdpHeaders,

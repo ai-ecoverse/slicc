@@ -532,7 +532,16 @@ export class ScoopContext {
 
     const legacyTools = [
       ...createFileTools(gatedFs),
-      createBashTool(this.shell!),
+      // Bash output truncation writes its overflow file via the UNGATED fs (an
+      // internal, fixed-path write must never trip a sudo prompt) into a temp dir
+      // the context can also read back: `/tmp` for the cone, the scoop's own
+      // writable root for a scoop (its sandbox excludes `/tmp`). Per-context dirs
+      // also keep parallel scoops from colliding on the same filename.
+      createBashTool(
+        this.shell!,
+        this.fs! as VirtualFS,
+        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`
+      ),
       ...scoopManagementTools,
     ];
 

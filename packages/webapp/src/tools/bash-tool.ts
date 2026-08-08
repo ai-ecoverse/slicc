@@ -6,11 +6,72 @@
  * which delegates to just-bash's Bash interpreter.
  */
 
-import { createLogger } from '../core/logger.js';
-import type { ToolDefinition, ToolResult } from '../core/types.js';
+import {
+  formatSize,
+  truncateTail,
+} from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
+import { createLogger } from '../base/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShell } from '../shell/index.js';
+import type { ToolDefinition, ToolResult } from './types.js';
 
 const log = createLogger('tool:bash');
+
+/**
+ * Cap on bash output returned to the model. An unbounded tool result can
+ * dominate the whole context window and wedge compaction — a single ~482K-token
+ * Signal CDP dump did exactly that in production (#2010). We re-use
+ * pi-coding-agent's own output-bounding contract (`truncateTail` + `formatSize`)
+ * rather than reinventing it, so SLICC's browser bash tool stays converged with
+ * pi's built-in bash tool. pi's *executor* can't be reused here (it spawns an OS
+ * shell via `child_process`; SLICC runs `just-bash` over the VFS in the kernel
+ * worker), but its `truncate` module is pure and browser-safe (#2009).
+ */
+const BASH_OUTPUT_MAX_BYTES = 40 * 1024;
+
+/**
+ * Bound bash output to {@link BASH_OUTPUT_MAX_BYTES}, keeping the TAIL (errors and
+ * final results live at the end), matching pi's bash convention. When truncated,
+ * the full output is written to a temp file under `tempDir` and a footer tells
+ * the model exactly what was dropped and how to page the rest.
+ *
+ * `tempDir` MUST be writable AND readable in the caller's context, and unique to
+ * it: the cone uses `/tmp`, but a scoop's sandbox exposes only `/scoops/<folder>/`
+ * and `/shared/`, so `/tmp` there is neither writable (RestrictedFS rejects it,
+ * or sudo prompts) nor readable by the follow-up `sed`/`tail`. A per-context
+ * `tempDir` also means two parallel scoops never collide on the same filename
+ * (they write into their own folders). If the temp write still fails, degrade to
+ * a re-run hint.
+ */
+async function boundBashOutput(
+  output: string,
+  fs: VirtualFS,
+  tempDir: string,
+  nextSeq: () => number
+): Promise<string> {
+  const truncation = truncateTail(output, { maxBytes: BASH_OUTPUT_MAX_BYTES });
+  if (!truncation.truncated) return output;
+
+  const shown = `showing the last ${formatSize(truncation.outputBytes)} of ${formatSize(
+    truncation.totalBytes
+  )} (${truncation.totalLines} lines)`;
+  const path = `${tempDir}/bash-output-${nextSeq()}.txt`;
+  try {
+    await fs.writeFile(path, output);
+    return (
+      `${truncation.content}\n\n[Output truncated: ${shown}. Full output written to ${path} — ` +
+      `read specific ranges with \`sed -n 'START,ENDp' ${path}\`, \`tail -n +N ${path}\`, or \`grep\`.]`
+    );
+  } catch (err) {
+    log.warn('Failed to persist full bash output', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return (
+      `${truncation.content}\n\n[Output truncated: ${shown}. Re-run piping through ` +
+      '`head`/`tail`/`grep`/`sed -n` to narrow the output.]'
+    );
+  }
+}
 
 const SEARCH_COMMAND_PREFIX =
   /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
@@ -91,14 +152,26 @@ function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: stri
   return SEARCH_COMMAND_PREFIX.test(getLastCommandSegment(command));
 }
 
-/** Create the bash tool bound to a AlmostBashShell instance. */
-export function createBashTool(shell: AlmostBashShell): ToolDefinition {
+/**
+ * Create the bash tool bound to a AlmostBashShell instance. `fs` (ungated — NOT
+ * the sudo-wrapped handle) backs the temp-file paging for truncated output, and
+ * `tempDir` is the context's writable+readable temp directory (`/tmp` for the
+ * cone, `/scoops/<folder>` for a scoop). See {@link boundBashOutput}.
+ */
+export function createBashTool(
+  shell: AlmostBashShell,
+  fs: VirtualFS,
+  tempDir: string
+): ToolDefinition {
+  let outputSeq = 0;
   return {
     name: 'bash',
     description:
       'Execute a bash command. Full shell with pipes, redirects, chaining, control flow. ' +
       'Includes: grep, rg, sed, awk, jq, find, curl, git, node, python3, sqlite3, ' +
-      'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list.',
+      'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list. ' +
+      `Output is capped at ${BASH_OUTPUT_MAX_BYTES / 1024}KB (the tail is kept); when truncated the ` +
+      'full output is written to a temp file named in the result so you can page it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,8 +200,10 @@ export function createBashTool(shell: AlmostBashShell): ToolDefinition {
         if (result.stderr) output += result.stderr;
         if (!output) output = `(exit code: ${result.exitCode})`;
 
+        const bounded = await boundBashOutput(output, fs, tempDir, () => (outputSeq += 1));
+
         return {
-          content: output,
+          content: bounded,
           isError:
             result.exitCode !== 0 &&
             !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),

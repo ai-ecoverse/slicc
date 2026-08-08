@@ -17,7 +17,7 @@
  * orchestrator coupling.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
 
 const log = createLogger('scoop-idle-timers');

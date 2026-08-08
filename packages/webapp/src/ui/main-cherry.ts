@@ -1,6 +1,6 @@
+import { createLogger } from '../base/logger.js';
 import { CherryHostTransport } from '../cdp/cherry-host-transport.js';
 import { BrowserAPI } from '../cdp/index.js';
-import { createLogger } from '../core/logger.js';
 
 const log = createLogger('cherry-boot');
 

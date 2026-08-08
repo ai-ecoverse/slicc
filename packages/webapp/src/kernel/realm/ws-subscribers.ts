@@ -16,7 +16,7 @@
  * forwarding into a dead destination.
  */
 
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
 import type { WsObserveRequest, WsSelector, WsSubscriberInfo } from './realm-types.js';
 

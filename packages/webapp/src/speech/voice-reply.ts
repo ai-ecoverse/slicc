@@ -9,7 +9,7 @@
  * its chained download is ready, Web Speech until then — see `speak.ts`).
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { parseReplyLang, stripReplyLangMarker } from './dictation-priming.js';
 import { hasVoiceForLang, speak, speechTextFromMarkdown } from './speak.js';
 

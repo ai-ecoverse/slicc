@@ -1,4 +1,4 @@
-import type { Logger } from '../../core/logger.js';
+import type { Logger } from '../../base/logger.js';
 import { DataChannelKeepalive } from '../data-channel-keepalive.js';
 import {
   createLeaderSyncChannel,

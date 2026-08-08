@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import type { AgentEvent } from '../../src/core/agent-types.js';
-import { resetLoggerDedupForTests } from '../../src/core/logger.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { ChatMessage } from '../../src/scoops/chat-types.js';
 import { CDPRouter } from '../../src/scoops/tray-leader/cdp-router.js';

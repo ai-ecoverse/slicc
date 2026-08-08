@@ -19,7 +19,7 @@
 // in `wc-shell.ts`; types come from the same barrel.
 import type { PermissionGrant, PermissionProviders, SliccPermissions } from '@slicc/webcomponents';
 
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { setLeaderPermissionsSurface } from './wc-permissions-registry.js';
 

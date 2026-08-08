@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ToolDefinition } from '../../src/core/types.js';
-import { VirtualFS } from '../../src/fs/index.js';
+import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShell } from '../../src/shell/index.js';
 import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
+import type { ToolDefinition } from '../../src/tools/types.js';
 
 describe('splitCommandSegments', () => {
   it('splits on ;, |, && and ||', () => {
@@ -49,12 +49,61 @@ describe('Bash Tool', () => {
       wipe: true,
     });
     shell = new AlmostBashShell({ fs });
-    bash = createBashTool(shell);
+    bash = createBashTool(shell, fs, '/tmp');
   });
 
   it('has correct name and description', () => {
     expect(bash.name).toBe('bash');
     expect(bash.description).toBeTruthy();
+  });
+
+  it('caps oversized output at 40KB and writes the full output to a temp file (#2010)', async () => {
+    const big = 'y'.repeat(60 * 1024); // 60KB — over the 40KB cap
+    await fs.writeFile('/big.txt', big);
+
+    const result = await bash.execute({ command: 'cat /big.txt' });
+
+    // Returned content is bounded well under the raw 60KB, with a truncation footer.
+    expect(result.isError).toBeFalsy();
+    expect(result.content.length).toBeLessThan(60 * 1024);
+    expect(result.content).toContain('Output truncated');
+    const pathMatch = result.content.match(/\/tmp\/bash-output-\d+\.txt/);
+    expect(pathMatch).not.toBeNull();
+
+    // The full, untruncated output is retrievable from the temp file for paging.
+    const full = await fs.readFile(pathMatch![0], { encoding: 'utf-8' });
+    expect(typeof full === 'string' ? full.length : 0).toBeGreaterThanOrEqual(60 * 1024);
+  });
+
+  it('leaves small output unchanged (no truncation footer)', async () => {
+    const result = await bash.execute({ command: 'echo hello world' });
+    expect(result.content).toContain('hello world');
+    expect(result.content).not.toContain('Output truncated');
+  });
+
+  it('writes the paging file into an injected scoop temp dir readable via the same sandbox (#2010 P2)', async () => {
+    // Simulate a scoop sandbox: writable+readable only under /scoops/<folder>/ and
+    // /shared/ — NOT /tmp. Codex flagged that a hardcoded /tmp path is unusable
+    // for scoops (RestrictedFS rejects the write/read). The tool must write into
+    // the injected, context-accessible temp dir instead.
+    await fs.mkdir('/scoops/andy-scoop', { recursive: true });
+    const restricted = new RestrictedFS(fs, ['/scoops/andy-scoop/', '/shared/']);
+    const scoopShell = new AlmostBashShell({ fs: restricted as unknown as VirtualFS });
+    const scoopBash = createBashTool(
+      scoopShell,
+      restricted as unknown as VirtualFS,
+      '/scoops/andy-scoop'
+    );
+
+    await restricted.writeFile('/scoops/andy-scoop/big.txt', 'z'.repeat(60 * 1024));
+    const result = await scoopBash.execute({ command: 'cat /scoops/andy-scoop/big.txt' });
+
+    expect(result.content).toContain('Output truncated');
+    const path = result.content.match(/\/scoops\/andy-scoop\/bash-output-\d+\.txt/)?.[0];
+    expect(path).toBeTruthy();
+    // The follow-up read the footer advertises actually works inside the sandbox.
+    const full = await restricted.readFile(path!, { encoding: 'utf-8' });
+    expect(typeof full === 'string' ? full.length : 0).toBeGreaterThanOrEqual(60 * 1024);
   });
 
   it('executes echo', async () => {
@@ -202,7 +251,7 @@ describe('Bash Tool', () => {
 
   it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
     const browserShell = new AlmostBashShell({ fs, browserAPI: {} as any });
-    const browserBash = createBashTool(browserShell);
+    const browserBash = createBashTool(browserShell, fs, '/tmp');
 
     const help = await browserBash.execute({ command: 'playwright --help' });
     expect(help.isError).toBeFalsy();

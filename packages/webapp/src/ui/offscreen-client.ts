@@ -8,8 +8,8 @@
  * - State sync on reconnect with retry logic
  */
 
+import { createLogger } from '../base/logger.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import { createLogger } from '../core/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type {
   AgentEventMsg,

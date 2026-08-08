@@ -1,4 +1,4 @@
-import type { Logger } from '../../core/logger.js';
+import type { Logger } from '../../base/logger.js';
 import type { LeaderSyncManagerOptions } from '../tray-leader-sync.js';
 import type { FollowerRegistry } from './follower-registry.js';
 

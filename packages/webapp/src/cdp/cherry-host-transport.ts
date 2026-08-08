@@ -11,7 +11,7 @@
  */
 
 import { type TranscriptExportProgress, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import {
   acceptEnvelope,
   CHERRY_PROTOCOL_VERSION,

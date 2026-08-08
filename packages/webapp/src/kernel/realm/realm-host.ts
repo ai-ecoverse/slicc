@@ -13,8 +13,8 @@
  */
 
 import type { CommandContext } from 'just-bash';
+import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
-import { createLogger } from '../../core/logger.js';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,

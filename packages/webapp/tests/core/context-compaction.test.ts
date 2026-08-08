@@ -6,7 +6,7 @@ import {
   LogLevel,
   resetLoggerDedupForTests,
   setLogLevel,
-} from '../../src/core/logger.js';
+} from '../../src/base/logger.js';
 
 /** Structural views used in test helpers and assertions to avoid `any`. */
 type TestContentBlock = {

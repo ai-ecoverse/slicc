@@ -16,7 +16,7 @@
  * response, or any thrown error resolves to `deny`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { suggestPattern } from './suggest-pattern.js';
 import {
   SUDO_REQUEST_TYPE,

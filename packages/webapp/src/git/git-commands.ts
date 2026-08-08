@@ -15,7 +15,7 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { VirtualFS } from '../fs/index.js';
 import { type ArgSpec, parseArgs } from '../shell/arg-parser.js';

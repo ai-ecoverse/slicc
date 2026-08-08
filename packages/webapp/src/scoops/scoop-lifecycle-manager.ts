@@ -17,7 +17,7 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import type { VirtualFS } from '../fs/index.js';

@@ -27,7 +27,7 @@
  * behavior.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('data-channel-keepalive');
 

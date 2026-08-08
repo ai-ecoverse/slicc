@@ -7,7 +7,7 @@
  * - Session management for target-specific commands
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type {

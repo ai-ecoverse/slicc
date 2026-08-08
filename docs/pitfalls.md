@@ -839,7 +839,7 @@ Use `format: 'iife'` to avoid code-splitting.
 
 **The Solution**
 
-Use `createLogger()` from `packages/webapp/src/core/logger.ts`:
+Use `createLogger()` from `packages/webapp/src/base/logger.ts`:
 
 ```typescript
 import { createLogger } from '../core/logger.js';

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import type { SecureFetch } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetLoggerDedupForTests } from '../../../src/core/logger.js';
+import { resetLoggerDedupForTests } from '../../../src/base/logger.js';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
 import { resolveLockfile } from '../../../src/shell/di/lockfile.js';

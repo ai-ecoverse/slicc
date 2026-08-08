@@ -7,7 +7,7 @@
  */
 
 import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
-import { createLogger } from './logger.js';
+import { createLogger } from '../base/logger.js';
 import type { ImageContent, TextContent } from './types.js';
 
 const log = createLogger('image-processor');

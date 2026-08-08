@@ -19,7 +19,7 @@
  * see `PanelRpcResponses` in `panel-rpc.ts`.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
 import type { PanelRpcOp } from './panel-rpc.js';
 

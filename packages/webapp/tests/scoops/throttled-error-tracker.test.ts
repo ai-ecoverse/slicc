@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Logger } from '../../src/core/logger.js';
+import type { Logger } from '../../src/base/logger.js';
 import { ThrottledErrorTracker } from '../../src/scoops/throttled-error-tracker.js';
 
 function makeFakeLogger(): {

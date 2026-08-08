@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetLoggerDedupForTests } from '../../src/core/logger.js';
+import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../../src/scoops/agent-bridge.js';
 import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';

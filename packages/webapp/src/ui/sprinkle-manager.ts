@@ -3,7 +3,7 @@
  * and their placement in the layout.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { trackSprinkleView } from '../kernel/telemetry.js';

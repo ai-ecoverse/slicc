@@ -10,8 +10,8 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createLogger } from '../core/logger.js';
 import { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
 import { FsWatcher, VirtualFS } from '../fs/index.js';

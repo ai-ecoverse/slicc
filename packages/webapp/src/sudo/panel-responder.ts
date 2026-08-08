@@ -33,7 +33,7 @@
  * Any unexpected shape or error denies.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { SUDO_REQUEST_TYPE, type SudoDecision, type SudoRequest } from './types.js';
 
 const log = createLogger('sudo-panel');

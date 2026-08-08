@@ -16,7 +16,7 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { FsError, type VirtualFS } from '../fs/index.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
 import { createDefaultSharedFiles } from './skills.js';

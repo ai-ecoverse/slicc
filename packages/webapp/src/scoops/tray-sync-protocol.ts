@@ -30,7 +30,7 @@ import {
   TRAY_MAX_REASSEMBLY_BYTES,
   TRAY_SEND_HIGH_WATER_BYTES,
 } from '@slicc/shared-ts';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 export type {

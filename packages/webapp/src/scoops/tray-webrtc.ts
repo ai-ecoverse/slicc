@@ -7,7 +7,7 @@ import type {
   TraySessionDescription,
   WorkerToLeaderControlMessage,
 } from '@slicc/shared-ts';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import {
   attachTrayFollower,
   type FollowerAttachPlan,

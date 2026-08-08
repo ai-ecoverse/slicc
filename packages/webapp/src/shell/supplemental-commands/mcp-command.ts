@@ -18,7 +18,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { OAuthLauncher } from '../../providers/types.js';
 import { McpTimeoutError } from '../mcp/client.js';

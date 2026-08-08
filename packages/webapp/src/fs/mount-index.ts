@@ -16,7 +16,7 @@
  * detected — use `mount refresh` to re-index.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 
 const log = createLogger('mount-index');
 

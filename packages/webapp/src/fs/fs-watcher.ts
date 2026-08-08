@@ -1,4 +1,4 @@
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { EntryType } from './types.js';
 
 const log = createLogger('fs-watcher');

@@ -20,7 +20,7 @@
  * same tray rather than booting dormant.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { type LeaveTrayTransport, resolveAmbientLeaveTrayTransport } from './tray-leave.js';
 import {
   parseTrayJoinUrlValue,

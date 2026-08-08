@@ -20,7 +20,7 @@
  * what the user has seen).
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('welcome-detection');

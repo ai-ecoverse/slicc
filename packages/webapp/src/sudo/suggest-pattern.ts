@@ -12,7 +12,7 @@
  * "Always" never silently produces a broader grant than the user can see.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { quickLabel } from '../providers/quick-llm.js';
 import type { SudoRequest } from './types.js';
 

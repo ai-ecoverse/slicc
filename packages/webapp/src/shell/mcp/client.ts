@@ -11,7 +11,7 @@
  * the caller can drive the OAuth flow in `oauth.ts`.
  */
 
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { McpAppDef, McpFetchLike, McpRpcError, McpToolDef } from './types.js';
 
 const log = createLogger('mcp-client');

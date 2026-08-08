@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Logger } from '../../../src/core/logger.js';
+import type { Logger } from '../../../src/base/logger.js';
 import {
   FollowerRegistry,
   type FollowerRegistryOptions,

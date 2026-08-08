@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Logger } from '../../../src/core/logger.js';
+import type { Logger } from '../../../src/base/logger.js';
 import type { LeaderSyncContext } from '../../../src/scoops/tray-leader/context.js';
 import { FollowerRegistry } from '../../../src/scoops/tray-leader/follower-registry.js';
 import {

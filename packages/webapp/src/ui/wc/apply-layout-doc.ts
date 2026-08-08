@@ -13,7 +13,7 @@
  */
 
 import { type LayoutDocument, listPanels, type SliccLayout } from '@slicc/webcomponents';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { getLayoutDoc, layoutDocNames } from './default-layouts.js';
 import { deleteLayout, listLayouts, loadLayoutByName, writeLayout } from './layout-store.js';

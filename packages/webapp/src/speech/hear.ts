@@ -15,7 +15,7 @@
  * `hear-*` panel-RPC ops.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { decodeToMono16k } from './audio.js';
 import {

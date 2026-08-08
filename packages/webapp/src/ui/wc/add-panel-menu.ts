@@ -17,7 +17,7 @@
 
 import { listPanels, panelRegistryEvents, type SliccLayout } from '@slicc/webcomponents';
 import { iconSvg } from '@slicc/webcomponents/icons';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
 
 const log = createLogger('add-panel-menu');
 

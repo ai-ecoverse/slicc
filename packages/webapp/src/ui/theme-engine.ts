@@ -3,7 +3,7 @@
  * Pure HSL math, no external dependencies.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import { PRESETS } from './theme-presets.js';
 import type {
   SimplifiedSlots,

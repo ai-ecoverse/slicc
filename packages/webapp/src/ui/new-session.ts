@@ -8,8 +8,8 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { createLogger } from '../base/logger.js';
 import { isFeatureEnabled } from '../core/feature-flags.js';
-import { createLogger } from '../core/logger.js';
 import type { DirEntry } from '../fs/types.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
