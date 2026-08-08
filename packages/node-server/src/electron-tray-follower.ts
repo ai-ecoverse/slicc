@@ -12,8 +12,11 @@
 import { randomUUID } from 'node:crypto';
 import {
   type FollowerToLeaderMessage,
+  isTrayChunkFrame,
   type LeaderToFollowerMessage,
+  TRAY_MAX_PENDING_REASSEMBLIES,
   TRAY_SYNC_PROTOCOL_VERSION,
+  type TrayChunkFrame,
 } from '@slicc/shared-ts';
 // werift is a pure-TS WebRTC stack (no native build) that interops with the
 // browser leader's RTCPeerConnection.
@@ -32,6 +35,10 @@ import {
 export const TRAY_CONTROL_CHANNEL_LABEL = 'tray-control';
 /** Runtime tag advertised on attach + `hello`. */
 export const FOLLOWER_RUNTIME_TAG = 'slicc-electron';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface IceServerConfig {
   urls: string | string[];
@@ -57,8 +64,31 @@ export class TrayFollowerSignaling {
     return (await res.json()) as Record<string, unknown>;
   }
 
-  attach(controllerId: string, runtime: string): Promise<Record<string, unknown>> {
-    return this.post({ controllerId, runtime });
+  /**
+   * Attach to the tray. Unlike poll/answer/ice, this tolerates a non-OK status
+   * and returns the decoded body: the tray signals `TRAY_SUPERSEDED` with an
+   * HTTP 409 + a replacement `joinUrl`, and `wait` plans (leader not yet
+   * elected/connected) can also arrive on a non-2xx status. Throwing before
+   * decoding — as `post()` does — would strand the follower on both.
+   * `attachWithRedirects` interprets `result.code` / `result.action`.
+   */
+  async attach(
+    controllerId: string,
+    runtime: string
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await this.fetchImpl(this.joinUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId, runtime }),
+    });
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await res.json()) as Record<string, unknown>;
+    } catch {
+      // Non-JSON error body (e.g. a bare 5xx) — leave it empty; a bootstrap-less,
+      // code-less result is treated as a terminal attach failure by the caller.
+    }
+    return { status: res.status, body };
   }
   poll(
     controllerId: string,
@@ -127,6 +157,13 @@ export class ElectronTrayFollower {
   private cursor = 0;
   private stopped = false;
   private readonly seenEvents = new Set<string>();
+  /** Bounded reconnect state — a dropped tray-control channel re-joins. */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnecting = false;
+  private reconnectAttempts = 0;
+  private readonly maxReconnects = 10;
+  /** Reassembles oversize (`__chunk`-framed) leader messages before dispatch. */
+  private readonly reassembler = new ChunkReassembler();
 
   constructor(options: ElectronTrayFollowerOptions) {
     this.opts = options as ElectronTrayFollower['opts'];
@@ -137,23 +174,51 @@ export class ElectronTrayFollower {
   }
 
   /**
-   * Attach to the tray, following a `TRAY_SUPERSEDED` redirect to the fresh
-   * join URL (the tray mints a new one when the leader reconnects — observed
-   * live). Returns the ICE servers, or null if no bootstrap could be obtained.
+   * Attach to the tray, resolving the non-terminal attach outcomes the worker
+   * returns before a bootstrap is available:
+   *  - `TRAY_SUPERSEDED` (HTTP 409 + `joinUrl`): the leader reconnected onto a
+   *    fresh tray — follow the redirect (bounded hops).
+   *  - `wait` (leader not yet elected/connected, carries `retryAfterMs`): sleep
+   *    then re-attach (bounded), as the shared Swift/Go followers do — otherwise
+   *    a follower that raced leader election resolves "started" but is never
+   *    discovered.
+   *  - bootstrap present: return the ICE servers to start WebRTC.
+   *
+   * Exposed for unit tests (signalling only, no WebRTC). Returns null on a
+   * terminal failure or once the follower is stopped.
    */
-  private async attachWithRedirects(maxHops = 4): Promise<IceServerConfig[] | null> {
-    for (let hop = 0; hop < maxHops; hop++) {
-      const attach = await this.signaling.attach(this.controllerId, FOLLOWER_RUNTIME_TAG);
-      const result = attach['result'] as Record<string, unknown> | undefined;
+  async attachWithRedirects(maxHops = 4, maxWaits = 30): Promise<IceServerConfig[] | null> {
+    let hops = 0;
+    let waits = 0;
+    while (!this.stopped) {
+      const { body } = await this.signaling.attach(this.controllerId, FOLLOWER_RUNTIME_TAG);
+      const result = body['result'] as Record<string, unknown> | undefined;
       const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
       if (bootstrap?.bootstrapId) {
         this.bootstrapId = bootstrap.bootstrapId;
-        return normalizeIceServers(attach['iceServers']);
+        return normalizeIceServers(body['iceServers']);
       }
       const supersededUrl = result?.['joinUrl'];
       if (result?.['code'] === 'TRAY_SUPERSEDED' && typeof supersededUrl === 'string') {
+        if (++hops > maxHops) {
+          this.log('[electron-follower] too many supersede hops — giving up');
+          return null;
+        }
         this.log(`[electron-follower] tray superseded → following ${supersededUrl}`);
         this.signaling = new TrayFollowerSignaling(supersededUrl, this.fetchImpl);
+        continue;
+      }
+      if (result?.['action'] === 'wait') {
+        if (++waits > maxWaits) {
+          this.log('[electron-follower] leader never became ready — giving up');
+          return null;
+        }
+        const retryAfterMs =
+          typeof result['retryAfterMs'] === 'number' ? (result['retryAfterMs'] as number) : 1000;
+        this.log(
+          `[electron-follower] leader not ready (${String(result['code'])}) — retry in ${retryAfterMs}ms`
+        );
+        await sleep(retryAfterMs);
         continue;
       }
       this.log(`[electron-follower] attach failed: ${JSON.stringify(result)}`);
@@ -164,6 +229,12 @@ export class ElectronTrayFollower {
 
   /** Join the tray, answer the leader's offer, and start servicing CDP. */
   async start(): Promise<void> {
+    await this.joinOnce();
+  }
+
+  /** One join attempt: attach → WebRTC answerer → federated-CDP servicer. Runs
+   *  again on reconnect after the tray-control channel drops. */
+  private async joinOnce(): Promise<void> {
     const iceServers = await this.attachWithRedirects();
     if (iceServers === null || this.stopped) return;
     this.log(
@@ -198,25 +269,77 @@ export class ElectronTrayFollower {
 
   stop(): void {
     this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.teardownPeer();
+  }
+
+  /**
+   * The tray-control channel left `open` (ICE failure, leader restart, or
+   * transient network loss). Re-join the tray with capped exponential backoff,
+   * as the shared follower transport does — a persistent follower must survive a
+   * dropped channel instead of silently discarding every response (`sendRaw`
+   * no-ops while `readyState !== 'open'`) until the whole server restarts.
+   */
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnecting) return;
+    this.reconnecting = true;
+    if (this.reconnectAttempts >= this.maxReconnects) {
+      this.log('[electron-follower] reconnect attempts exhausted — stopping follower');
+      this.stop();
+      return;
+    }
+    const delayMs = Math.min(1000 * 2 ** this.reconnectAttempts, 15000);
+    this.reconnectAttempts++;
+    this.log(
+      `[electron-follower] tray-control channel lost — reconnecting in ${delayMs}ms ` +
+        `(attempt ${this.reconnectAttempts}/${this.maxReconnects})`
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.teardownPeer();
+      this.reconnecting = false;
+      if (this.stopped) return;
+      void this.joinOnce().catch((e) =>
+        this.log(`[electron-follower] reconnect join failed: ${String(e)}`)
+      );
+    }, delayMs);
+  }
+
+  /** Close the WebRTC peer + CDP link and reset per-connection state so a fresh
+   *  `joinOnce()` re-attaches cleanly (the tray may have superseded). Does NOT
+   *  set `stopped` — that is reserved for a caller-initiated `stop()`. */
+  private teardownPeer(): void {
     if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = null;
     this.cdp?.stop();
+    this.cdp = null;
     try {
       this.channel?.close();
     } catch {
       /* ignore */
     }
+    this.channel = null;
     try {
       void this.pc?.close();
     } catch {
       /* ignore */
     }
+    this.pc = null;
+    this.bootstrapId = '';
+    this.cursor = 0;
+    this.seenEvents.clear();
   }
 
   private wireControlChannel(ch: RTCDataChannel): void {
     this.channel = ch;
     ch.stateChanged.subscribe((state) => {
-      if (state === 'open') void this.onChannelOpen();
+      if (state === 'open') {
+        this.reconnectAttempts = 0;
+        void this.onChannelOpen();
+      } else if ((state === 'closed' || state === 'closing') && !this.stopped) {
+        this.scheduleReconnect();
+      }
     });
     ch.onMessage.subscribe((data) => {
       const text = typeof data === 'string' ? data : data.toString('utf8');
@@ -235,13 +358,21 @@ export class ElectronTrayFollower {
     this.cdp?.advertiseTargets(targets);
   }
 
-  /** Parse one inbound data-channel message and route it. Ping is auto-answered;
-   *  `cdp.request` is serviced by the federated-CDP servicer. */
+  /** Parse one inbound data-channel frame and route it. Transport `__chunk`
+   *  frames (an oversize message the leader split below the SCTP limit — e.g. a
+   *  long `Runtime.evaluate` expression) are reassembled first, then the
+   *  recovered message is dispatched; ping is auto-answered; `cdp.request` is
+   *  serviced by the federated-CDP servicer. */
   dispatchRaw(text: string): void {
-    let message: LeaderToFollowerMessage | { type: string };
+    let message: unknown;
     try {
       message = JSON.parse(text);
     } catch {
+      return;
+    }
+    if (isTrayChunkFrame(message)) {
+      const reassembled = this.reassembler.push(message);
+      if (reassembled !== null) this.dispatchRaw(reassembled);
       return;
     }
     this.dispatchLeaderMessage(message as LeaderToFollowerMessage);
@@ -331,6 +462,39 @@ export class ElectronTrayFollower {
         }
       }
     }
+  }
+}
+
+/**
+ * Reassembles `TrayChunkFrame` transport frames into the original serialized
+ * message. Frames of one message share a `chunkId`; `push` returns the joined
+ * message once every index has arrived, else null. Bounded to
+ * {@link TRAY_MAX_PENDING_REASSEMBLIES} concurrent groups (oldest evicted
+ * first) so a peer can't exhaust memory with many partial reassemblies.
+ * Mirrors the receive side of the webapp's `TraySyncChannel` and the shared
+ * Swift/Go followers.
+ */
+export class ChunkReassembler {
+  private readonly pending = new Map<string, { total: number; chunks: Map<number, string> }>();
+
+  push(frame: TrayChunkFrame): string | null {
+    let entry = this.pending.get(frame.chunkId);
+    if (!entry) {
+      if (this.pending.size >= TRAY_MAX_PENDING_REASSEMBLIES) {
+        const oldest = this.pending.keys().next().value;
+        if (oldest !== undefined) this.pending.delete(oldest);
+      }
+      entry = { total: frame.totalChunks, chunks: new Map() };
+      this.pending.set(frame.chunkId, entry);
+    }
+    // A frame whose totalChunks disagrees with its group is malformed — ignore.
+    if (frame.totalChunks !== entry.total) return null;
+    entry.chunks.set(frame.chunkIndex, frame.chunkData);
+    if (entry.chunks.size < entry.total) return null;
+    this.pending.delete(frame.chunkId);
+    let out = '';
+    for (let i = 0; i < entry.total; i++) out += entry.chunks.get(i) ?? '';
+    return out;
   }
 }
 
