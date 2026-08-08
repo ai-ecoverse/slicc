@@ -14,6 +14,11 @@ const dirname = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = resolve(dirname, '../..');
 const entry = resolve(dirname, 'src/overlay-entry.ts');
 const outfile = resolve(repoRoot, 'dist/ui/electron-overlay-entry.js');
+// Second artifact: the CDP virtual-network overlay loader, injected into the
+// `srcdoc` frame when an Electron app blocks renderer network egress. Read from
+// disk at runtime by node-server / swift-server (like electron-overlay-entry.js).
+const tunnelEntry = resolve(dirname, 'src/tunnel/tunnel-loader-entry.ts');
+const tunnelOutfile = resolve(repoRoot, 'dist/ui/electron-tunnel-loader.js');
 
 /** esbuild plugin: strip `?raw` and load `.svg` files as text (matches Vite's `?raw`). */
 function rawSvgPlugin() {
@@ -32,15 +37,17 @@ function rawSvgPlugin() {
   };
 }
 
-await build({
-  entryPoints: [entry],
-  outfile,
+const commonOptions = {
   bundle: true,
   format: 'iife',
   target: 'esnext',
   minify: true,
   define: { __DEV__: 'false', global: 'globalThis' },
   plugins: [rawSvgPlugin()],
-});
+};
 
+await build({ ...commonOptions, entryPoints: [entry], outfile });
 console.log(`Built spoon overlay bundle: ${outfile}`);
+
+await build({ ...commonOptions, entryPoints: [tunnelEntry], outfile: tunnelOutfile });
+console.log(`Built spoon tunnel loader bundle: ${tunnelOutfile}`);
