@@ -313,8 +313,17 @@ function persistCorner(view: Window | null | undefined, corner: LauncherCorner):
  * @fires slicc-launcher-focus - on a double-click; no detail
  * @fires slicc-launcher-move - `{ corner }` after a drag snaps to a new corner
  */
+/** Fallback text for the empty viewport when no `status-message` is set. */
+const DEFAULT_EMPTY_TEXT = 'Set the app-url attribute to load SLICC.';
+
 export class SliccLauncher extends HTMLElement {
-  static readonly observedAttributes = ['open', 'corner', 'app-url', LAUNCHER_FOLLOWER_STATUS_ATTR];
+  static readonly observedAttributes = [
+    'open',
+    'corner',
+    'app-url',
+    'status-message',
+    LAUNCHER_FOLLOWER_STATUS_ATTR,
+  ];
 
   readonly #root: ShadowRoot;
   #button!: HTMLButtonElement;
@@ -342,11 +351,13 @@ export class SliccLauncher extends HTMLElement {
       this.#syncingAttributes = false;
     }
     this.#syncIframe();
+    this.#syncEmptyText();
   }
 
   attributeChangedCallback(name: string): void {
     if (this.#syncingAttributes) return;
     if (name === 'app-url') this.#syncIframe();
+    if (name === 'status-message') this.#syncEmptyText();
     if (name === 'corner') {
       persistCorner(this.ownerDocument.defaultView, this.corner);
     }
@@ -394,6 +405,18 @@ export class SliccLauncher extends HTMLElement {
     const next = (value ?? '').trim();
     if (next) this.setAttribute('app-url', next);
     else this.removeAttribute('app-url');
+  }
+
+  /** Message shown in the (iframe-less) viewport when there is no `app-url` —
+   *  used by the status-only overlay for apps that block the embedded panel
+   *  (e.g. Signal). Empty/absent falls back to {@link DEFAULT_EMPTY_TEXT}. */
+  get statusMessage(): string {
+    return this.getAttribute('status-message') ?? '';
+  }
+  set statusMessage(value: string | null) {
+    const next = value ?? '';
+    if (next) this.setAttribute('status-message', next);
+    else this.removeAttribute('status-message');
   }
 
   /** Follower-link status — drives which Sliccy icon variant is visible.
@@ -461,7 +484,7 @@ export class SliccLauncher extends HTMLElement {
     this.#backdrop.addEventListener('click', () => this.hide());
 
     this.#iframe = h('iframe', { title: 'SLICC overlay' }) as HTMLIFrameElement;
-    this.#empty = h('div', { class: 'empty' }, 'Set the app-url attribute to load SLICC.');
+    this.#empty = h('div', { class: 'empty' }, DEFAULT_EMPTY_TEXT);
     const viewport = h('div', { class: 'viewport' }, this.#iframe, this.#empty);
     this.#sidebar = h(
       'aside',
@@ -499,6 +522,12 @@ export class SliccLauncher extends HTMLElement {
     if (url === this.#currentAppUrl) return;
     this.#currentAppUrl = url;
     this.#iframe.src = url;
+  }
+
+  /** Set the empty-viewport text from `status-message` (or the default).
+   *  `textContent` (not innerHTML) keeps `lint:no-innerhtml` satisfied. */
+  #syncEmptyText(): void {
+    this.#empty.textContent = this.statusMessage || DEFAULT_EMPTY_TEXT;
   }
 
   #onPointerDown = (event: PointerEvent): void => {

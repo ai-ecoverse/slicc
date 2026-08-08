@@ -416,6 +416,9 @@ func resolveHostedLeaderOrigin(environment: [String: String] = ProcessInfo.proce
 struct ThinBootstrapSet: Sendable {
     let leader: String
     let follower: String
+    /// Status-only overlay bootstrap (launcher + message, no iframe) for
+    /// egress-blocked apps. See `buildElectronOverlayStatusBootstrapScript`.
+    let status: String
 }
 
 func buildElectronOverlayBootstrapScript(bundleSource: String, appURL: String) -> String {
@@ -603,7 +606,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         self.bridgeToken = bridgeToken
         self.testingThinBootstraps =
             thinBootstraps
-            ?? ThinBootstrapSet(leader: "/* test-leader */", follower: "/* test-follower */")
+            ?? ThinBootstrapSet(
+                leader: "/* test-leader */", follower: "/* test-follower */", status: "/* test-status */")
     }
 
     func start() {
@@ -878,7 +882,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             guard !alreadyConnected else { continue }
 
             let bootstrap = resolveBootstrapForTarget(target, bootstraps: bootstraps)
-            let session = makeTargetSession(target: target, bootstrapScript: bootstrap)
+            let session = makeTargetSession(
+                target: target, bootstrapScript: bootstrap, statusBootstrapScript: bootstraps.status)
             stateQueue.sync { sessions[targetID] = session }
             session.start()
         }
@@ -925,7 +930,8 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     func _testing_connectToTarget(_ target: ElectronInspectableTarget) throws -> OverlayTargetSession {
         let bootstraps = try loadBootstrapScripts()
         let bootstrap = resolveBootstrapForTarget(target, bootstraps: bootstraps)
-        let session = makeTargetSession(target: target, bootstrapScript: bootstrap)
+        let session = makeTargetSession(
+            target: target, bootstrapScript: bootstrap, statusBootstrapScript: bootstraps.status)
         if let targetID = target.webSocketDebuggerURL {
             stateQueue.sync { sessions[targetID] = session }
         }
@@ -946,7 +952,9 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         }
     }
 
-    private func makeTargetSession(target: ElectronInspectableTarget, bootstrapScript: String) -> OverlayTargetSession {
+    private func makeTargetSession(
+        target: ElectronInspectableTarget, bootstrapScript: String, statusBootstrapScript: String
+    ) -> OverlayTargetSession {
         let isAlreadyBypassed: @Sendable (String) -> Bool = { [weak self] url in
             guard let self else { return false }
             return self.stateQueue.sync { self.cspBypassedURLs.contains(url) }
@@ -970,6 +978,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         return OverlayTargetSession(
             target: target,
             bootstrapScript: bootstrapScript,
+            statusBootstrapScript: statusBootstrapScript,
             servePort: servePort,
             bridgeToken: bridgeToken,
             session: session,
@@ -1040,7 +1049,11 @@ final class ElectronOverlayInjector: @unchecked Sendable {
                 options: ThinOverlayURLOptions(config: thinBridge, role: .follower)
             )
         )
-        return ThinBootstrapSet(leader: leader, follower: follower)
+        let status = buildElectronOverlayStatusBootstrapScript(
+            bundleSource: bundleSource,
+            statusMessage: overlayStatusMessageEgressBlocked
+        )
+        return ThinBootstrapSet(leader: leader, follower: follower, status: status)
     }
 
     private func loadOverlayBundleSource() throws -> String {
@@ -1107,6 +1120,9 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 final class OverlayTargetSession: @unchecked Sendable {
     private let target: ElectronInspectableTarget
     private let bootstrapScript: String
+    /// Status-only overlay bootstrap (no iframe) shown when the app blocks the
+    /// overlay's network egress.
+    private let statusBootstrapScript: String
     private let servePort: Int
     private let bridgeToken: String
     private let urlSession: URLSession
@@ -1144,6 +1160,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     init(
         target: ElectronInspectableTarget,
         bootstrapScript: String,
+        statusBootstrapScript: String,
         servePort: Int,
         bridgeToken: String,
         session: URLSession,
@@ -1159,6 +1176,7 @@ final class OverlayTargetSession: @unchecked Sendable {
     ) {
         self.target = target
         self.bootstrapScript = bootstrapScript
+        self.statusBootstrapScript = statusBootstrapScript
         self.servePort = servePort
         self.bridgeToken = bridgeToken
         self.urlSession = session
@@ -1278,11 +1296,15 @@ final class OverlayTargetSession: @unchecked Sendable {
         _ = await sendCommand(method: "Network.enable", awaitResponse: true)
 
         // A target already known to block renderer egress cannot load the hosted
-        // overlay by any escalation — skip re-injecting the doomed iframe on
-        // reconnect. (The stripped-down CDP-over-CDP follower path handles these.)
+        // overlay by any escalation — show the status-only overlay (no iframe)
+        // instead of re-running the doomed iframe injection + probe. (The
+        // stripped-down CDP-over-CDP follower path drives these apps.)
         if isAlreadyEgressBlocked(target.url) {
             stateQueue.sync { egressBlocked = true }
-            logger.info("Skipping overlay injection — target blocks renderer egress", metadata: ["target": .string(target.url)])
+            logger.info(
+                "Target blocks renderer egress — injecting status-only overlay",
+                metadata: ["target": .string(target.url)])
+            await injectStatusOverlay()
             return
         }
 
@@ -1453,10 +1475,26 @@ final class OverlayTargetSession: @unchecked Sendable {
                 logger.info(
                     "Overlay blocked by app network egress; hosted overlay cannot load — skipping CSP/Fetch escalation. Egress-blocked apps need the CDP-over-CDP follower path.",
                     metadata: ["target": .string(target.url), "error": .string(errorText)])
+                // Replace the (blank-iframe) overlay with the status-only launcher.
+                await injectStatusOverlay()
             }
         case .ignore:
             break
         }
+    }
+
+    /// Show the status-only overlay (launcher + message, no iframe) on a target
+    /// that blocks the embedded panel. Injects the status bootstrap now AND as a
+    /// `Page.addScriptToEvaluateOnNewDocument` hook so it survives app reloads
+    /// (it runs after the role hook, so the idempotent launcher ends up
+    /// status-only). Mirrors node-server's `injectStatusOverlay`.
+    private func injectStatusOverlay() async {
+        _ = await sendCommand(
+            method: "Page.addScriptToEvaluateOnNewDocument",
+            params: ["source": statusBootstrapScript])
+        _ = await sendCommand(
+            method: "Runtime.evaluate",
+            params: ["expression": statusBootstrapScript, "awaitPromise": false])
     }
 
     private func handleLoadEventFired() async {

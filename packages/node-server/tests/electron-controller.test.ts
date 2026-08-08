@@ -815,6 +815,19 @@ describe('ElectronOverlayInjector egress-block detection', () => {
             String(m.params?.expression).includes('slicc-electron-overlay-root')
         )
       ).toBe(false);
+      // The status-only overlay (default test bootstrap `/* test-status */`) is
+      // injected in its place, both immediately and as a new-document hook.
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Page.addScriptToEvaluateOnNewDocument' &&
+            m.params?.source === '/* test-status */'
+        )
+      ).toBe(true);
 
       injector._testingCloseConnections();
     } finally {
@@ -884,7 +897,7 @@ describe('ElectronOverlayInjector egress-block detection', () => {
     }
   });
 
-  it('skips overlay injection on reconnect to an already-egress-blocked target', async () => {
+  it('injects the status-only overlay on reconnect to an already-egress-blocked target', async () => {
     const harness = await startFakeCdpTarget((msg, socket) => {
       if (msg.method === 'Page.captureScreenshot' && typeof msg.id === 'number') {
         socket.send(JSON.stringify({ id: msg.id, result: {} }));
@@ -905,12 +918,26 @@ describe('ElectronOverlayInjector egress-block detection', () => {
         webSocketDebuggerUrl: harness.url,
       });
 
-      await harness.waitFor((m) => m.method === 'Network.enable', 'Network.enable');
-      await new Promise((r) => setTimeout(r, 120));
+      // The status-only overlay is injected straight away (default test
+      // bootstrap `/* test-status */`) instead of the doomed iframe path.
+      await harness.waitFor(
+        (m) => m.method === 'Runtime.evaluate' && m.params?.expression === '/* test-status */',
+        'status overlay Runtime.evaluate'
+      );
+      await new Promise((r) => setTimeout(r, 80));
 
-      // No theme screenshot, no bootstrap injection, no reload — injection is skipped.
+      // No theme screenshot, no probe, no reload, no Network stream, no bypass:
+      // the egress-blocked path returns before any of that.
       expect(harness.messages.some((m) => m.method === 'Page.captureScreenshot')).toBe(false);
       expect(harness.messages.some((m) => m.method === 'Page.reload')).toBe(false);
+      expect(harness.messages.some((m) => m.method === 'Network.enable')).toBe(false);
+      expect(
+        harness.messages.some(
+          (m) =>
+            m.method === 'Runtime.evaluate' &&
+            String(m.params?.expression).includes('slicc-electron-overlay-root')
+        )
+      ).toBe(false);
       expect(injector._testingBypassedTargets().has(targetUrl)).toBe(false);
 
       injector._testingCloseConnections();
@@ -1018,11 +1045,12 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
   // travelled in the `Runtime.evaluate` expression for each target.
   const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
   const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
 
   function makeThinInjector(): ElectronOverlayInjector {
     return ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
   }
@@ -1206,7 +1234,7 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     const injector = ElectronOverlayInjector._createForTesting({
       cdpPort,
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
 
@@ -1257,7 +1285,7 @@ describe('ElectronOverlayInjector thin-mode leader/follower election', () => {
     const injector = ElectronOverlayInjector._createForTesting({
       cdpPort,
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
     });
 
@@ -1392,6 +1420,7 @@ describe('OVERLAY_LOADED_PROBE_EXPRESSION classification', () => {
 describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () => {
   const LEADER_MARK = 'LEADER_BOOTSTRAP_MARKER';
   const FOLLOWER_MARK = 'FOLLOWER_BOOTSTRAP_MARKER';
+  const STATUS_MARK = 'STATUS_BOOTSTRAP_MARKER';
   const targetUrl = 'https://discord.com/app';
 
   // Counts only the role-bootstrap `Runtime.evaluate` injections (initial themed
@@ -1466,7 +1495,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     // path in isolation (one event → exactly one re-inject).
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 1_000_000,
     });
@@ -1517,7 +1546,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     let evictionProbes = 0;
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 40,
     });
@@ -1551,7 +1580,7 @@ describe('ElectronOverlayInjector overlay re-injection on eviction (#1125)', () 
     // must re-inject while the host is attached.
     const injector = ElectronOverlayInjector._createForTesting({
       servePort: 5711,
-      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK },
+      thinBootstraps: { leader: LEADER_MARK, follower: FOLLOWER_MARK, status: STATUS_MARK },
       probeDelayMs: 20,
       presenceCheckIntervalMs: 40,
     });

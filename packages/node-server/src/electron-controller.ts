@@ -641,7 +641,22 @@ function buildFulfillResponseHeaders(
 export interface ThinBootstrapSet {
   leader: string;
   follower: string;
+  /**
+   * Status-only overlay bootstrap: injects the launcher with NO app-url (no
+   * iframe) and a message explaining the app blocks the embedded panel. Used
+   * for egress-blocked apps (e.g. Signal) so the user sees the launcher + a
+   * clear note instead of a silent blank panel.
+   */
+  status: string;
 }
+
+/**
+ * Empty-viewport message shown by the status-only overlay for an app that
+ * denies the overlay iframe's network egress. Kept in sync with swift-server's
+ * `overlayStatusMessageEgressBlocked`.
+ */
+export const OVERLAY_STATUS_MESSAGE_EGRESS_BLOCKED =
+  'SLICC is attached to this app, but it blocks embedded panels. Drive it from the SLICC leader window.';
 
 /**
  * CDP `Network.loadingFailed` `errorText` values that mean the *app itself*
@@ -798,6 +813,11 @@ export class ElectronOverlayInjector {
         bundleSource,
         appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_FOLLOWER }),
       }),
+      status: buildElectronOverlayBootstrapScript({
+        bundleSource,
+        appUrl: '',
+        statusMessage: OVERLAY_STATUS_MESSAGE_EGRESS_BLOCKED,
+      }),
     };
 
     return new ElectronOverlayInjector(
@@ -824,7 +844,11 @@ export class ElectronOverlayInjector {
     return new ElectronOverlayInjector(
       options.cdpPort ?? 9223,
       options.servePort,
-      options.thinBootstraps ?? { leader: '/* test-leader */', follower: '/* test-follower */' },
+      options.thinBootstraps ?? {
+        leader: '/* test-leader */',
+        follower: '/* test-follower */',
+        status: '/* test-status */',
+      },
       options.bridgeToken ?? 'test-bridge-token',
       options.probeDelayMs ?? 1500,
       options.presenceCheckIntervalMs ?? ELECTRON_OVERLAY_PRESENCE_CHECK_INTERVAL_MS
@@ -1149,22 +1173,25 @@ export class ElectronOverlayInjector {
 
     send('Runtime.enable');
     send('Page.enable');
+
+    // A target already known to block renderer egress cannot load the hosted
+    // overlay by any escalation — show the status-only overlay (no iframe)
+    // instead of re-running the doomed iframe injection + probe. (The
+    // stripped-down CDP-over-CDP follower path drives these apps.)
+    if (this.egressBlockedTargets.has(target.url)) {
+      state.egressBlocked = true;
+      console.log(
+        `[electron-float] ${target.url} blocks renderer egress — injecting status-only overlay`
+      );
+      this.injectStatusOverlay(send);
+      return;
+    }
+
     // Watch the overlay iframe's document request so an app that denies it at
     // the network layer (e.g. Signal → net::ERR_ACCESS_DENIED) is detected and
     // the doomed CSP/Fetch escalation is skipped (see
     // `handleNetworkEventForEgressBlock`).
     send('Network.enable');
-
-    // A target already known to block renderer egress cannot load the hosted
-    // overlay by any escalation — skip re-injecting the doomed iframe on
-    // reconnect. (The stripped-down CDP-over-CDP follower path handles these.)
-    if (this.egressBlockedTargets.has(target.url)) {
-      state.egressBlocked = true;
-      console.log(
-        `[electron-float] Skipping overlay injection — ${target.url} blocks renderer egress`
-      );
-      return;
-    }
 
     // Install the role bootstrap as a permanent new-document hook (parity with
     // swift-server) so a full document reload / load-driven navigation of this
@@ -1458,7 +1485,24 @@ export class ElectronOverlayInjector {
             `Egress-blocked apps need the CDP-over-CDP follower path.`
         );
       }
+      // Replace the (blank-iframe) overlay with the status-only launcher.
+      this.injectStatusOverlay(send);
     }
+  }
+
+  /**
+   * Show the status-only overlay (launcher + message, no iframe) on a target
+   * that blocks the embedded panel. Injects the status bootstrap now AND as a
+   * `Page.addScriptToEvaluateOnNewDocument` hook so it survives app reloads —
+   * the status hook is added after the role hook, so re-running both leaves the
+   * idempotent launcher in the status-only state (the launcher is collapsed, so
+   * there is no visible iframe flash).
+   */
+  private injectStatusOverlay(
+    send: (method: string, params?: Record<string, unknown>) => number
+  ): void {
+    send('Page.addScriptToEvaluateOnNewDocument', { source: this.thinBootstraps.status });
+    send('Runtime.evaluate', { expression: this.thinBootstraps.status, awaitPromise: false });
   }
 
   private connectToTarget(target: ElectronInspectableTarget): void {

@@ -375,6 +375,7 @@ final class ElectronLauncherTests: XCTestCase {
                 webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
             ),
             bootstrapScript: "/* noop */",
+            statusBootstrapScript: "/* status */",
             servePort: 5711,
             bridgeToken: "test-token",
             session: .shared,
@@ -415,6 +416,7 @@ final class ElectronLauncherTests: XCTestCase {
                 webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
             ),
             bootstrapScript: "/* noop */",
+            statusBootstrapScript: "/* status */",
             servePort: 5711,
             bridgeToken: "test-token",
             session: .shared,
@@ -1043,6 +1045,7 @@ final class ElectronLauncherTests: XCTestCase {
                 webSocketDebuggerURL: "ws://127.0.0.1:9999/devtools/page/1"
             ),
             bootstrapScript: "/* noop */",
+            statusBootstrapScript: "/* status */",
             servePort: 5711,
             bridgeToken: "test-token",
             session: .shared,
@@ -1168,11 +1171,13 @@ final class ElectronLauncherTests: XCTestCase {
 
     private static let leaderMark = "LEADER_BOOTSTRAP_MARKER"
     private static let followerMark = "FOLLOWER_BOOTSTRAP_MARKER"
+    private static let statusMark = "STATUS_BOOTSTRAP_MARKER"
 
     private func makeThinInjector() -> ElectronOverlayInjector {
         ElectronOverlayInjector(
             _testingServePort: 5711,
-            thinBootstraps: ThinBootstrapSet(leader: Self.leaderMark, follower: Self.followerMark),
+            thinBootstraps: ThinBootstrapSet(
+                leader: Self.leaderMark, follower: Self.followerMark, status: Self.statusMark),
             probeDelayNanoseconds: 1_000_000
         )
     }

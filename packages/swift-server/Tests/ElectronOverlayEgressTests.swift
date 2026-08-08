@@ -96,6 +96,27 @@ final class ElectronOverlayEgressTests: XCTestCase {
         XCTAssertEqual(signal, .ignore)
     }
 
+    func testStatusBootstrapEmbedsEmptyAppUrlAndMessage() {
+        let script = buildElectronOverlayStatusBootstrapScript(
+            bundleSource: "/* bundle */",
+            statusMessage: "This app blocks the panel."
+        )
+        XCTAssertTrue(script.contains("/* bundle */"))
+        // Injects with an empty app-url (no iframe) and the status message.
+        XCTAssertTrue(script.contains("appUrl:\"\""))
+        XCTAssertTrue(script.contains("statusMessage:\"This app blocks the panel.\""))
+        // Top-frame guard is present so it never runs inside a subframe.
+        XCTAssertTrue(script.contains("window.top!==window.self"))
+    }
+
+    func testStatusBootstrapEscapesQuotesInMessage() {
+        let script = buildElectronOverlayStatusBootstrapScript(
+            bundleSource: "",
+            statusMessage: "quote \" and backslash \\"
+        )
+        XCTAssertTrue(script.contains("statusMessage:\"quote \\\" and backslash \\\\\""))
+    }
+
     func testEgressBlockedURLSeedingIsObservable() {
         let injector = ElectronOverlayInjector(_testingServePort: 0, cdpPort: 0)
         XCTAssertTrue(injector._testing_egressBlockedURLs().isEmpty)

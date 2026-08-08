@@ -19,6 +19,32 @@ let overlayEgressBlockErrorTexts: Set<String> = [
     "net::ERR_BLOCKED_BY_ADMINISTRATOR",
 ]
 
+/// Empty-viewport message shown by the status-only overlay for an app that
+/// denies the overlay iframe's network egress. Kept in sync with node-server's
+/// `OVERLAY_STATUS_MESSAGE_EGRESS_BLOCKED`.
+let overlayStatusMessageEgressBlocked =
+    "SLICC is attached to this app, but it blocks embedded panels. Drive it from the SLICC leader window."
+
+/// Build the status-only overlay bootstrap: injects the launcher with NO
+/// app-url (no iframe) and `statusMessage`, so egress-blocked apps (e.g. Signal)
+/// show the launcher + a clear note instead of a silent blank panel. Mirrors
+/// node-server's status `buildElectronOverlayBootstrapScript({ appUrl: '',
+/// statusMessage })`.
+func buildElectronOverlayStatusBootstrapScript(bundleSource: String, statusMessage: String) -> String {
+    let escaped =
+        statusMessage
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    // Top-frame guard only (no origin guard needed: there is no overlay iframe
+    // to recurse into when app-url is empty).
+    let frameGuard = "try{if(window.top!==window.self)return;}catch(e){return;}"
+    let inject = "window.__SLICC_ELECTRON_OVERLAY__?.inject({appUrl:\"\",statusMessage:\"\(escaped)\"});"
+    let injectBody =
+        "if(document.body){\(inject)}else{document.addEventListener('DOMContentLoaded',function(){\(inject)});}"
+    let injectionCall = "(function(){\(frameGuard)\(injectBody)})();"
+    return bundleSource + "\n" + injectionCall
+}
+
 /// Outcome of inspecting one `Network.*` CDP event for the egress-block signal.
 enum OverlayNetworkSignal: Equatable {
     /// A `Network.requestWillBeSent` for OUR overlay iframe's document —
