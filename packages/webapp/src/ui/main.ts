@@ -24,7 +24,6 @@ import { initTelemetry } from '../kernel/telemetry.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { parseBridgeLaunchParams } from './boot/bridge-launch-params.js';
-import { renderBootRecoveryScreen } from './boot/recovery-screen.js';
 import { installExtensionFetchDelegate } from './boot/setup-extension-fetch-delegate.js';
 import { setupFeatureFlagsForPage } from './boot/setup-feature-flags.js';
 import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
@@ -169,11 +168,59 @@ async function main(): Promise<void> {
   return mountWcUiLive(app, log, runtimeMode);
 }
 
+/**
+ * Absolute-last-resort surface when even the recovery chunk cannot load
+ * (offline plus boot failure). Inline on purpose: no imports, error text
+ * and a reload only — never a wipe the user can't be warned about.
+ */
+function renderMinimalRecovery(app: HTMLElement, err: unknown): void {
+  const box = document.createElement('div');
+  box.style.cssText = 'padding:2rem;text-align:center;font-family:system-ui;';
+  const h1 = document.createElement('h1');
+  h1.textContent = 'Failed to start';
+  const p = document.createElement('p');
+  p.textContent = err instanceof Error ? err.message : String(err);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Reload';
+  btn.addEventListener('click', () => location.reload());
+  box.append(h1, p, btn);
+  app.replaceChildren(box);
+}
+
+/**
+ * Boot-failure path. The recovery screen — error message, one-click
+ * "Reset local data & reload" (same wipe as `nuke`), plain "Reload" —
+ * lives in a lazy chunk to keep the main entry lean; page-realm dynamic
+ * imports keep working in every observed failure mode (including the
+ * module-worker wedge), with {@link renderMinimalRecovery} as the inline
+ * fallback. A kernel-ready timeout then runs the worker triage (#1982):
+ * a wedged browser gets the restart-first variant instead of a
+ * destructive wipe suggestion that cannot fix it.
+ */
+async function bootRecovery(app: HTMLElement, err: unknown): Promise<void> {
+  let renderScreen: typeof import('./boot/recovery-screen.js').renderBootRecoveryScreen;
+  try {
+    ({ renderBootRecoveryScreen: renderScreen } = await import('./boot/recovery-screen.js'));
+  } catch {
+    renderMinimalRecovery(app, err);
+    return;
+  }
+  renderScreen(app, err);
+  if (!(err instanceof Error && err.message.includes('did not signal ready'))) return;
+  try {
+    // The default screen above stays interactive while the ≤3 s probes run.
+    const { triageModuleWorkerHealth } = await import('./boot/worker-triage.js');
+    const verdict = await triageModuleWorkerHealth();
+    if (verdict === 'browser-wedged') renderScreen(app, err, { verdict });
+  } catch {
+    /* triage is best-effort; the default recovery screen stands */
+  }
+}
+
 main().catch((err) => {
   log.error('Fatal error', err);
   const app = document.getElementById('app');
-  // Render the recovery screen — the error message plus a one-click
-  // "Reset local data & reload" (same wipe as `nuke`) and a plain
-  // "Reload" retry — reachable even when the shell never booted.
-  if (app) renderBootRecoveryScreen(app, err);
+  if (!app) return;
+  void bootRecovery(app, err);
 });
