@@ -89,6 +89,11 @@ test.describe('compaction robustness', () => {
     await expect(thread).toContainText('COMPACTION-DONE-ANSWER');
     // The clean path never shows the degradation notice.
     await expect(thread).not.toContainText('Compaction summarization failed');
+    // The notice is its own bubble — the reply must not bleed into it
+    // (onResponse-style emission would concatenate them; see PR review).
+    const noticeBubble = page.locator('slicc-agent-message', { hasText: 'compacting history' });
+    await expect(noticeBubble).toHaveCount(1);
+    await expect(noticeBubble).not.toContainText('COMPACTION-DONE-ANSWER');
   });
 
   test('summary-call failure degrades to naive drop; the turn still completes (#1985)', async ({
@@ -110,6 +115,12 @@ test.describe('compaction robustness', () => {
     );
     // …and the user's actual question still got its answer.
     await expect(thread).toContainText('FALLBACK-DONE-ANSWER');
+    // The degradation notice is its own bubble; the reply must not bleed in.
+    const fallbackBubble = page.locator('slicc-agent-message', {
+      hasText: 'Compaction summarization failed',
+    });
+    await expect(fallbackBubble).toHaveCount(1);
+    await expect(fallbackBubble).not.toContainText('FALLBACK-DONE-ANSWER');
   });
 
   test('an errored turn keeps its completed messages across a reload (#1987)', async ({ page }) => {

@@ -267,7 +267,7 @@ export interface ScoopContextCallbacks {
    * Optional lifecycle hook for compaction. Emitted by the compaction
    * `transformContext` before and after each LLM call so the panel can
    * render a ghost-bubble affordance while the agent is silent.
-   * `state ==='summarizing' | 'extracting-memory' | 'fallback' | 'idle'` clears the affordance.
+   * `state === 'idle'` clears the affordance.
    */
   onCompactionStateChange?: (
     state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
@@ -653,19 +653,11 @@ export class ScoopContext {
       getApiKey: getCompactionApiKey,
       headers: compactionHeaders,
       onMemoryUpdates,
-      // Surface the two phases worth a transcript line (#1985) — the WC
-      // shell renders no ghost-bubble for compaction states, so without
-      // these lines a pre-call compaction (and especially a degraded one)
-      // is invisible: the user just sees the agent go quiet.
+      // States flow to the UI untouched; OffscreenClient renders the
+      // transcript notices (#1985). Emitting them here via onResponse would
+      // clobber the streaming bubble on the bridge path and poison non-cone
+      // scoops' completion buffers routed back to the cone.
       onCompactionStateChange: (state) => {
-        if (state === 'summarizing') {
-          this.callbacks.onResponse('Context window almost exceeded — compacting history…', false);
-        } else if (state === 'fallback') {
-          this.callbacks.onResponse(
-            'Compaction summarization failed — continuing with older messages truncated.',
-            false
-          );
-        }
         this.callbacks.onCompactionStateChange?.(state);
       },
     });
