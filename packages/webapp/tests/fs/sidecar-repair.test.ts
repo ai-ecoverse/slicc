@@ -42,9 +42,12 @@ describe('repairSidecarDocument', () => {
       probeFrom({ '/x': { kind: 'file', size: 1 } })
     );
     expect(summary.kindFixed).toEqual(['/x dir→file']);
-    const mode = (doc.entries?.['/x'] as { mode: number }).mode;
-    expect(mode & 0o170000).toBe(S_IFREG);
-    expect(mode & 0o777).toBe(0o700);
+    const fixed = doc.entries?.['/x'] as { mode: number; size?: number };
+    expect(fixed.mode & 0o170000).toBe(S_IFREG);
+    expect(fixed.mode & 0o777).toBe(0o700);
+    // A directory entry carried no size — the flipped file entry must state
+    // the real one, or the retry mount re-enters the size-mismatch storm.
+    expect(fixed.size).toBe(1);
   });
 
   it('trues up a stale size (the "file data size mismatch" storm)', async () => {

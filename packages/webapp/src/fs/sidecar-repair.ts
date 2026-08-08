@@ -104,6 +104,9 @@ function repairEntryAgainstReality(
   }
   if (fmt === S_IFDIR && real.kind === 'file') {
     entry.mode = ((entry.mode ?? 0) & 0o777 || 0o644) | S_IFREG;
+    // A directory entry carries no size; the flipped file entry must state
+    // the real one or the retry mount re-enters the size-mismatch storm.
+    entry.size = real.size;
     summary.kindFixed.push(`${path} dir→file`);
     summary.changed = true;
     return;

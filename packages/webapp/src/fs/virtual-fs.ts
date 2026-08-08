@@ -362,7 +362,11 @@ export class VirtualFS {
       );
       const backendFs = (await resolveWithSidecarRepair(
         resolveBackend,
-        () => repairOpfsMetadataSidecar(handle),
+        // The repair's read-mutate-write shares the sidecar with every
+        // context of the origin: run it under the same cross-context Web
+        // Lock as `writeOpfsMetadataSidecarUnlocked`, so a realm that is
+        // already booted and flushing cannot be clobbered mid-repair.
+        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle)),
         (summary) =>
           console.warn('[virtual-fs] repaired poisoned metadata sidecar; retrying mount', {
             dbName: vfs.dbName,
