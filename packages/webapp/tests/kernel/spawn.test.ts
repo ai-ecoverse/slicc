@@ -310,15 +310,21 @@ describe('bootstrapKernelWorker', () => {
       };
     }
 
+    // The heartbeat gap is a small FRACTION of the watchdog window (80 ms vs
+    // 300 ms → 220 ms of slack per gap), so ordinary test-suite CPU
+    // contention cannot delay a heartbeat past the window and flake the
+    // re-arm. `readyTimeoutMs` stays real (the MessagePort delivery these
+    // heartbeats ride is a task source fake timers do not drive, so faking
+    // the clock here would deadlock rather than determinize).
     it('a slow-but-advancing boot resolves — total time exceeds the base timeout', async () => {
-      // 6 heartbeats 30ms apart (~180ms) then ready — well past the 50ms base
-      // timeout, but each gap is under it, so the watchdog keeps re-arming.
-      const worker = makeProgressWorker({ heartbeats: 6, gap: 30, thenReady: true });
+      // 5 heartbeats 80 ms apart (~400 ms) then ready — past the 300 ms base
+      // window, but each gap is well under it, so the watchdog keeps re-arming.
+      const worker = makeProgressWorker({ heartbeats: 5, gap: 80, thenReady: true });
       const host = bootstrapKernelWorker({
         worker,
         realCdpTransport: makeStubCdpTransport(),
         makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
-        readyTimeoutMs: 50,
+        readyTimeoutMs: 300,
       });
 
       await expect(host.ready).resolves.toBeUndefined();
@@ -328,12 +334,12 @@ describe('bootstrapKernelWorker', () => {
     it('progress then a stall past the window still rejects (watchdog, not a hard cap)', async () => {
       // Two heartbeats, then silence — no ready. The clock re-arms on the
       // heartbeats but must still fire once the worker goes quiet for >window.
-      const worker = makeProgressWorker({ heartbeats: 2, gap: 20, thenReady: false });
+      const worker = makeProgressWorker({ heartbeats: 2, gap: 80, thenReady: false });
       const host = bootstrapKernelWorker({
         worker,
         realCdpTransport: makeStubCdpTransport(),
         makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
-        readyTimeoutMs: 50,
+        readyTimeoutMs: 300,
       });
 
       await expect(host.ready).rejects.toThrow(/did not signal ready/);
