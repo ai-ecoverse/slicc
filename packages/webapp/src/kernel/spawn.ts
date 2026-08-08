@@ -29,6 +29,7 @@
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
+import type { FeatureFlagFloat } from '../core/feature-flags.js';
 import { startPageCdpForwarder } from './cdp-worker-proxy.js';
 import type {
   KernelWorkerBootErrorMsg,
@@ -136,6 +137,12 @@ export interface KernelWorkerSpawnOptions<TClient> {
    * thin-bridge extension leader.
    */
   extensionDelegateId?: string | null;
+  /**
+   * The page's resolved feature-flag float (its `UiRuntimeMode`) — the
+   * worker adopts the page's cached remote flag values for it at boot so
+   * worker-realm `isFeatureEnabled` matches the page (#2003).
+   */
+  flagFloat?: FeatureFlagFloat | null;
   /** Page-side hook fired on ANY uncaught kernel-worker `error` event — notably a
    *  stale worker ENTRY chunk failing to load after a deploy (the worker never
    *  evaluates, so its own boot catch can't run). Not message-filtered: a
@@ -169,6 +176,8 @@ export interface KernelWorkerBootstrapOptions<TClient> {
   localLickWsUrl?: string | null;
   /** See `KernelWorkerSpawnOptions.extensionDelegateId`. */
   extensionDelegateId?: string | null;
+  /** See `KernelWorkerSpawnOptions.flagFloat`. */
+  flagFloat?: FeatureFlagFloat | null;
   /** Page-side hook fired on ANY uncaught kernel-worker `error` event — notably a
    *  stale worker ENTRY chunk failing to load after a deploy (the worker never
    *  evaluates, so its own boot catch can't run). Not message-filtered: a
@@ -326,6 +335,7 @@ export function bootstrapKernelWorker<TClient>(
     // compares it against its own copy to catch mixed-build graphs after
     // a mid-session deploy (#1983).
     pageBuildId: __SLICC_BUILD_ID__,
+    flagFloat: options.flagFloat ?? null,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -400,6 +410,7 @@ export function spawnKernelWorker<TClient>(
     syncFsChannelNonce: options.syncFsChannelNonce,
     localLickWsUrl: options.localLickWsUrl,
     extensionDelegateId: options.extensionDelegateId,
+    flagFloat: options.flagFloat,
     onWorkerScriptError: options.onWorkerScriptError,
   });
 }

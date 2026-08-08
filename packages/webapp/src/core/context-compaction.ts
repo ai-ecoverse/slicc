@@ -121,6 +121,15 @@ export interface CompactionConfig {
    */
   onMemoryUpdates?: (bullets: string) => Promise<void> | void;
   /**
+   * Consulted immediately before the memory-extraction phase of EACH
+   * compaction. Return `false` to skip extraction for this compaction —
+   * unlike omitting `onMemoryUpdates` (a construction-time decision),
+   * the check is live, so a mid-session toggle (the agentic-memory flag,
+   * #2003) applies to the very next compaction without a reload. Absent
+   * → extract whenever `onMemoryUpdates` is wired.
+   */
+  shouldExtractMemories?: () => boolean;
+  /**
    * Optional lifecycle hook for the UI. Fired around the compaction LLM
    * calls so the chat panel can render a ghost-bubble affordance instead
    * of leaving the user wondering why the agent is silent.
@@ -640,6 +649,8 @@ async function extractMemoriesIfConfigured(
   signal: AbortSignal | undefined
 ): Promise<void> {
   if (!config.onMemoryUpdates) return;
+  // Live per-compaction gate — see `shouldExtractMemories` (#2003).
+  if (config.shouldExtractMemories?.() === false) return;
   // Memory budget is much smaller — bullets, not a structured doc.
   const memoryMaxTokens = 2048;
   try {

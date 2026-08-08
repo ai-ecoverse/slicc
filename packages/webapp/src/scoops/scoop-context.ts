@@ -23,6 +23,7 @@ import {
   hasCompactionProgress,
   stripOrphanedToolResults,
 } from '../core/context-compaction.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import type {
   AgentMessage,
   AssistantMessage,
@@ -653,6 +654,16 @@ export class ScoopContext {
       getApiKey: getCompactionApiKey,
       headers: compactionHeaders,
       onMemoryUpdates,
+      // With agentic memory enabled, the end-of-session curator is the
+      // ONLY memory builder (#2003): mid-session extraction appends legacy
+      // bullets to the curated file and triggers the legacy budget
+      // restructure, repeatedly squeezing curated content until only the
+      // recent session survives. Checked live at EACH compaction (the
+      // compactFn built here outlives prompts), so an avatar-dialog toggle
+      // applies to the next compaction without a reload; the flag resolves
+      // in this (worker) realm via the seeded/synced localStorage shim
+      // plus the remote cache adopted at boot.
+      shouldExtractMemories: () => !isFeatureEnabled('agentic-memory'),
       // States flow to the UI untouched; OffscreenClient renders the
       // transcript notices (#1985). Emitting them here via onResponse would
       // clobber the streaming bubble on the bridge path and poison non-cone

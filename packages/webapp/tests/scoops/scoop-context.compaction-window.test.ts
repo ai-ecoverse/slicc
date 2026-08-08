@@ -18,7 +18,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 type AgentCtorOptions = { streamFn?: unknown; transformContext?: unknown };
-type CompactConfig = { headers?: Record<string, string>; contextWindow?: number };
+type CompactConfig = {
+  headers?: Record<string, string>;
+  contextWindow?: number;
+  onMemoryUpdates?: unknown;
+  shouldExtractMemories?: unknown;
+};
 
 const captures = vi.hoisted(() => ({
   agentCtorCalls: [] as AgentCtorOptions[],
@@ -27,6 +32,11 @@ const captures = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
   resolveCurrentModel: vi.fn(() => ({ id: 'test-model', provider: 'anthropic' })),
+  enabledFlags: new Set<string>(),
+}));
+
+vi.mock('../../src/core/feature-flags.js', () => ({
+  isFeatureEnabled: (id: string) => mocks.enabledFlags.has(id),
 }));
 
 vi.mock('../../src/core/index.js', () => {
@@ -130,9 +140,13 @@ function createMockFs() {
   };
 }
 
-async function initWith(model: Record<string, unknown>): Promise<CompactConfig> {
+async function initWith(
+  model: Record<string, unknown>,
+  extraCallbacks: Record<string, unknown> = {}
+): Promise<CompactConfig> {
   mocks.resolveCurrentModel.mockReturnValue(model as never);
-  const ctx = new ScoopContext(baseScoop, createMockCallbacks() as never, createMockFs() as never);
+  const callbacks = { ...createMockCallbacks(), ...extraCallbacks };
+  const ctx = new ScoopContext(baseScoop, callbacks as never, createMockFs() as never);
   await ctx.init();
   expect(captures.createCompactContextCalls).toHaveLength(1);
   return captures.createCompactContextCalls[0];
@@ -164,5 +178,40 @@ describe('ScoopContext compaction context-window wiring', () => {
   it('omits contextWindow (default applies) when the model reports no window', async () => {
     const config = await initWith({ id: 'none', provider: 'adobe' });
     expect(config.contextWindow).toBeUndefined();
+  });
+});
+
+describe('ScoopContext compaction memory gating (#2003)', () => {
+  const MODEL = { id: 'sonnet', provider: 'adobe', contextWindow: 200_000 };
+
+  beforeEach(() => {
+    captures.agentCtorCalls.length = 0;
+    captures.createCompactContextCalls.length = 0;
+    mocks.resolveCurrentModel.mockReset();
+    mocks.enabledFlags.clear();
+  });
+
+  it('wires onMemoryUpdates for the cone regardless of the flag (the gate is live)', async () => {
+    mocks.enabledFlags.add('agentic-memory');
+    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
+    expect(config.onMemoryUpdates).toBeTypeOf('function');
+    expect(config.shouldExtractMemories).toBeTypeOf('function');
+  });
+
+  it('shouldExtractMemories tracks the flag LIVE — a mid-session toggle applies to the next compaction', async () => {
+    // The compactFn built at init outlives prompts; a construction-time
+    // decision would keep extracting until a reload (#2003 review P1).
+    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
+    const gate = config.shouldExtractMemories as () => boolean;
+    expect(gate()).toBe(true);
+    mocks.enabledFlags.add('agentic-memory');
+    expect(gate()).toBe(false);
+    mocks.enabledFlags.delete('agentic-memory');
+    expect(gate()).toBe(true);
+  });
+
+  it('leaves onMemoryUpdates unset without an appendConeMemory callback (unchanged)', async () => {
+    const config = await initWith(MODEL);
+    expect(config.onMemoryUpdates).toBeUndefined();
   });
 });

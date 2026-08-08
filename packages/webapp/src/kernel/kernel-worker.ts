@@ -26,6 +26,8 @@
 
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
+import type { FeatureFlagFloat } from '../core/feature-flags.js';
+import { initFeatureFlagsFromRemoteCache } from '../core/feature-flags-cache.js';
 import {
   broadcastIfMixedBuildGraph,
   broadcastIfStaleAssetError,
@@ -147,6 +149,15 @@ export interface KernelWorkerInitMsg {
    * the comparison then stays silent.
    */
   pageBuildId?: string | null;
+  /**
+   * The page's resolved feature-flag float (its `UiRuntimeMode`). The
+   * worker adopts the page's cached remote flag values for this float
+   * from the localStorage shim at boot, so `isFeatureEnabled` in this
+   * realm matches the page even for remote-only enablement (#2003).
+   * Absent (older pages) → local overrides still apply; remote values
+   * stay empty.
+   */
+  flagFloat?: FeatureFlagFloat | null;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -337,6 +348,11 @@ function configureWorkerEnvironment(init: KernelWorkerInitMsg): void {
   // `local-storage-*` handlers + `installPageStorageSync` on the page
   // keep the shim in sync with subsequent page writes.
   installLocalStorageShim(init.localStorageSeed ?? {});
+  // The shim now carries the page's cached /api/flags values; adopt them
+  // for the page's float so this realm's `isFeatureEnabled` matches the
+  // page even for remote-only enablement (#2003). Runs AFTER the shim —
+  // the cache reader resolves `globalThis.localStorage` at call time.
+  if (init.flagFloat) initFeatureFlagsFromRemoteCache(init.flagFloat);
 }
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
