@@ -18,13 +18,17 @@ function throwingSpawn(): ProbeWorker {
 }
 
 describe('triageModuleWorkerHealth (#1982)', () => {
+  /** Defaults: probe script fetchable, short windows. Cases override. */
+  function triage(deps: Parameters<typeof triageModuleWorkerHealth>[0]) {
+    return triageModuleWorkerHealth({ fetchProbeScript: async () => true, timeoutMs: 20, ...deps });
+  }
+
   it('classifies blob-alive + module-silent as browser-wedged', async () => {
     const blob = fakeWorker('message');
     const mod = fakeWorker('silent');
-    const verdict = await triageModuleWorkerHealth({
+    const verdict = await triage({
       spawnBlobWorker: blob.spawn,
       spawnModuleWorker: mod.spawn,
-      timeoutMs: 20,
     });
     expect(verdict).toBe('browser-wedged');
     // Both probes are torn down whatever they reported.
@@ -36,10 +40,9 @@ describe('triageModuleWorkerHealth (#1982)', () => {
     const blob = fakeWorker('message');
     const mod = fakeWorker('message');
     await expect(
-      triageModuleWorkerHealth({
+      triage({
         spawnBlobWorker: blob.spawn,
         spawnModuleWorker: mod.spawn,
-        timeoutMs: 20,
       })
     ).resolves.toBe('workers-ok');
   });
@@ -48,10 +51,9 @@ describe('triageModuleWorkerHealth (#1982)', () => {
     const blob = fakeWorker('message');
     const mod = fakeWorker('error');
     await expect(
-      triageModuleWorkerHealth({
+      triage({
         spawnBlobWorker: blob.spawn,
         spawnModuleWorker: mod.spawn,
-        timeoutMs: 20,
       })
     ).resolves.toBe('workers-ok');
   });
@@ -60,10 +62,9 @@ describe('triageModuleWorkerHealth (#1982)', () => {
     const blob = fakeWorker('silent');
     const mod = fakeWorker('silent');
     await expect(
-      triageModuleWorkerHealth({
+      triage({
         spawnBlobWorker: blob.spawn,
         spawnModuleWorker: mod.spawn,
-        timeoutMs: 20,
       })
     ).resolves.toBe('inconclusive');
   });
@@ -71,10 +72,9 @@ describe('triageModuleWorkerHealth (#1982)', () => {
   it('is inconclusive when the blob probe cannot even spawn', async () => {
     const mod = fakeWorker('silent');
     await expect(
-      triageModuleWorkerHealth({
+      triage({
         spawnBlobWorker: throwingSpawn,
         spawnModuleWorker: mod.spawn,
-        timeoutMs: 20,
       })
     ).resolves.toBe('inconclusive');
   });
@@ -82,11 +82,26 @@ describe('triageModuleWorkerHealth (#1982)', () => {
   it('still reports workers-ok when only the blob spawn fails', async () => {
     const mod = fakeWorker('message');
     await expect(
-      triageModuleWorkerHealth({
+      triage({
         spawnBlobWorker: throwingSpawn,
         spawnModuleWorker: mod.spawn,
-        timeoutMs: 20,
       })
     ).resolves.toBe('workers-ok');
+  });
+
+  it('never blames the browser when the probe script is not fetchable', async () => {
+    // A network/SW outage produces the same blob-alive + module-silent
+    // shape as the wedge; the page-realm fetch is the discriminator — in
+    // the real incident the page fetched the asset the worker never
+    // loaded. Unfetchable script → no restart diagnosis.
+    const blob = fakeWorker('message');
+    const mod = fakeWorker('silent');
+    await expect(
+      triage({
+        spawnBlobWorker: blob.spawn,
+        spawnModuleWorker: mod.spawn,
+        fetchProbeScript: async () => false,
+      })
+    ).resolves.toBe('inconclusive');
   });
 });

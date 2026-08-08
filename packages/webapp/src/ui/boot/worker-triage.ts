@@ -32,6 +32,11 @@ export interface WorkerTriageDeps {
   spawnBlobWorker?: () => ProbeWorker;
   /** Spawn the network module-worker probe. Defaults to `/worker-probe.js`. */
   spawnModuleWorker?: () => ProbeWorker;
+  /**
+   * Page-realm fetch of the probe URL; resolve `true` on an ok response.
+   * Defaults to `fetch('/worker-probe.js')` under the same timeout.
+   */
+  fetchProbeScript?: (timeoutMs: number) => Promise<boolean>;
   /** Per-probe silence window. */
   timeoutMs?: number;
 }
@@ -91,22 +96,45 @@ function defaultModuleWorker(): ProbeWorker {
 }
 
 /**
+ * The wedge's defining evidence in the incident: the PAGE could fetch
+ * the very asset the worker never loaded (~30 ms). A silent worker with
+ * an unfetchable script is a network/SW outage, not a browser wedge —
+ * restarting the browser wouldn't fix it, so no verdict is claimed.
+ */
+async function defaultFetchProbeScript(timeoutMs: number): Promise<boolean> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const res = await fetch('/worker-probe.js', { cache: 'no-store', signal: abort.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Classify the browser's worker health. `browser-wedged` — blob workers
- * run but a network module worker stays silent: restarting the browser
- * is the fix and wiping local data is not. `workers-ok` — the network
- * module worker signalled, so the boot failure lies elsewhere.
- * `inconclusive` — anything else (both silent, spawn failures): no
- * claim, keep the default recovery UI.
+ * run, the page can fetch the probe script, yet a network module worker
+ * stays silent: restarting the browser is the fix and wiping local data
+ * is not. `workers-ok` — the network module worker signalled, so the
+ * boot failure lies elsewhere. `inconclusive` — anything else (both
+ * probes silent, spawn failures, probe script unfetchable): no claim,
+ * keep the default recovery UI.
  */
 export async function triageModuleWorkerHealth(
   deps: WorkerTriageDeps = {}
 ): Promise<WorkerTriageVerdict> {
   const timeoutMs = deps.timeoutMs ?? PROBE_TIMEOUT_MS;
-  const [blobResult, moduleResult] = await Promise.all([
+  const [blobResult, moduleResult, scriptFetchable] = await Promise.all([
     runProbe(deps.spawnBlobWorker ?? defaultBlobWorker, timeoutMs),
     runProbe(deps.spawnModuleWorker ?? defaultModuleWorker, timeoutMs),
+    (deps.fetchProbeScript ?? defaultFetchProbeScript)(timeoutMs),
   ]);
-  if (blobResult === 'signal' && moduleResult === 'silent') return 'browser-wedged';
+  if (blobResult === 'signal' && moduleResult === 'silent' && scriptFetchable) {
+    return 'browser-wedged';
+  }
   if (moduleResult === 'signal') return 'workers-ok';
   return 'inconclusive';
 }
