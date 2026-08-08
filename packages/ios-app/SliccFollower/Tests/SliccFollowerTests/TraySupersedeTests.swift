@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 
+@testable import SliccTrayFollower
 @testable import SliccTrayKit
 
 /// A leader tab that reconnects mints a fresh tray and marks the old one

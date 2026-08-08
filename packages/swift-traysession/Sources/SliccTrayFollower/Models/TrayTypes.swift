@@ -17,7 +17,7 @@ public struct TraySessionDescription: Codable, Sendable {
     public let type: SDPType
     public let sdp: String
 
-    public enum SDPType: String, Codable {
+    public enum SDPType: String, Codable, Sendable {
         case offer
         case answer
     }

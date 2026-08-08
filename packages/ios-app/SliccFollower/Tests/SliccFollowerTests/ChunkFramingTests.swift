@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 
 @testable import SliccFollower
+@testable import SliccTrayFollower
 @testable import SliccTrayKit
 
 /// Transport-level chunk framing (#1700).
