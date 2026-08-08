@@ -111,6 +111,11 @@ struct ServerCommand: AsyncParsableCommand {
         var browserKillPid: pid_t?
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
+        // Headless CDP-over-CDP follower for egress-blocked Electron apps
+        // (e.g. Signal). Created up front when a `--join` tray URL is present;
+        // it only joins the tray once the overlay injector reports an egress
+        // block. Mirrors node-server's `startElectronFollower`.
+        var electronFollower: ElectronTrayFollower?
         // Records the launched Chrome's open tabs so the next launch reopens
         // them. Only the Chrome launch path sets it: `--serve-only` attaches to
         // a browser someone else launched (and whose profile dir it does not
@@ -339,6 +344,24 @@ struct ServerCommand: AsyncParsableCommand {
                         logger: Logger(label: "slicc.browser.electron-overlay"),
                         thinBridge: thinBridge
                     )
+                    // When the app blocks the overlay's egress (Signal), the
+                    // hosted overlay can never load — so expose the app's CDP to
+                    // the leader over a headless WebRTC tray follower instead.
+                    // Requires a `--join` tray URL; without one there is no leader
+                    // to serve, so only the status overlay is shown.
+                    if let joinURLString = config.joinUrl,
+                        let joinURL = URL(string: joinURLString)
+                    {
+                        let follower = ElectronTrayFollower(
+                            cdpPort: cdpPort,
+                            joinURL: joinURL,
+                            logger: Logger(label: "slicc.browser.electron-follower")
+                        )
+                        injector.onEgressBlocked = { [weak follower] _ in
+                            follower?.startIfNeeded()
+                        }
+                        electronFollower = follower
+                    }
                     injector.start()
                     overlayInjector = injector
                 } else {
@@ -384,11 +407,13 @@ struct ServerCommand: AsyncParsableCommand {
             try await appTask.value
             await consoleForwarder?.stop()
             await tabSessionRecorder?.stop()
+            electronFollower?.stop()
             overlayInjector?.stop()
             try await httpClient.shutdown()
         } catch {
             appTask.cancel()
             await tabSessionRecorder?.stop()
+            electronFollower?.stop()
             overlayInjector?.stop()
             try? await httpClient.shutdown()
             throw error

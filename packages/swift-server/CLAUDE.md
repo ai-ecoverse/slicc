@@ -57,12 +57,24 @@ Hoist the interpolated expression into a local instead.
 
 ## Main Package Layout
 
-- `Sources/Browser/` — Chrome and Electron launchers plus console forwarding
+- `Sources/Browser/` — Chrome and Electron launchers plus console forwarding. `ElectronLauncher.swift` owns launch + `ElectronOverlayInjector`; the per-target CDP worker `OverlayTargetSession` lives in its own file (`OverlayTargetSession.swift`) to stay under the SwiftLint file-length cap.
 - `Sources/CLI/` — `ServerCommand` argument parsing and runtime bootstrap
+- `Sources/Follower/` — headless CDP-over-CDP follower for egress-blocked Electron apps (below)
 - `Sources/Server/` — HTTP routes, thin-bridge CORS middleware, request logging, shutdown
 - `Sources/Signing/` — `SigV4Signer` (mirrors the JS signers in webapp + node-server byte-for-byte against AWS canonical test vectors)
 - `Sources/WebSocket/` — CDP proxy and lick WebSocket system
 - `Tests/` — package tests
+
+## Egress-blocked Electron apps (Signal) — CDP over CDP
+
+Signal (and similarly locked-down Electron apps) deny **all** renderer network egress at the main-process layer (`net::ERR_ACCESS_DENIED`), beneath where `Page.setBypassCSP` / the CDP Fetch proxy operate — so the hosted overlay iframe can never load. `ElectronOverlayEgress.swift` detects this from `Network.loadingFailed` on our overlay iframe's document request and shows a **status-only** overlay instead of a silent blank panel (mirrors node-server's `electron-controller.ts`).
+
+When such a block is detected AND a `--join` tray URL was given, swift-server exposes the app's CDP to the leader over a headless WebRTC tray follower (`Sources/Follower/`), so the leader drives Signal's pages as a federated target — no webapp runs in Signal's renderer:
+
+- `ElectronTrayFollower.swift` joins the tray, answers the leader's WebRTC offer, opens the `tray-control` channel, sends `hello` + `targets.advertise`, and routes inbound messages (ping→pong, `cdp.request`→servicer). The signalling + WebRTC + supersede-redirect transport is the shared `TrayFollowerConnector` from `@slicc/swift-traysession`'s `SliccTrayFollower` product (also used by the iOS app — the WebRTC framework is not double-shipped).
+- `FederatedCDPServicer.swift` connects to the app's raw browser-level CDP (`/json/version`) and translates the leader's tray-sync CDP messages to/from it (`targets.advertise`, `cdp.request`→`cdp.response` with `sendCDPResponse`-compatible 64 KB-threshold / 32 KB chunking, `cdp.event`). Its `CDPWebSocketTransport` (shared with `CDPBrowserSession`) is injectable so the frame pump is unit-tested without a live browser.
+
+`ElectronOverlayInjector.onEgressBlocked` fires once on first detection; `ServerCommand` starts the follower on that signal and stops it on shutdown. This mirrors node-server's `electron-tray-follower.ts` / `electron-federated-cdp.ts` (which use `werift`); the Swift path uses in-process `stasel/WebRTC`.
 
 ## Server Overview
 
