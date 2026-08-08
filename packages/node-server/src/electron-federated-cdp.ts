@@ -162,7 +162,20 @@ export class ElectronFederatedCdp {
     this.pending.set(id, request.requestId);
     const frame: RawCdpFrame = { id, method: request.method, params: request.params ?? {} };
     if (request.sessionId) frame.sessionId = request.sessionId;
-    ws.send(JSON.stringify(frame));
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch (err) {
+      // A socket that goes CLOSING between the OPEN check above and here makes
+      // `ws.send` throw synchronously; without this the leader's requestId is
+      // stranded until `stop()` rejects it (long after the leader's own
+      // timeout). Mirrors FederatedCDPServicer.handleCdpRequest in swift-server.
+      this.pending.delete(id);
+      for (const message of buildCdpResponses(request.requestId, {
+        error: `cdp-send-failed: ${err instanceof Error ? err.message : String(err)}`,
+      })) {
+        this.send(message);
+      }
+    }
   }
 
   /** Close the CDP connection and reject any in-flight requests. */

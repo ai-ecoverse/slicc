@@ -40,6 +40,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Cap on a single tray-signalling round-trip. `stop()` cannot abort an
+ *  in-flight fetch, so without this a hung hub / black-holing proxy would wedge
+ *  `attachWithRedirects` (or a poll) forever. */
+const SIGNALLING_TIMEOUT_MS = 10_000;
+
+/** Bound on the bootstrap-event de-dup set so a long-lived follower can't grow
+ *  it without limit (`cursor` already gates re-delivery; this is belt-only). */
+const MAX_SEEN_EVENTS = 512;
+
 interface IceServerConfig {
   urls: string | string[];
   username?: string;
@@ -59,6 +68,7 @@ export class TrayFollowerSignaling {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SIGNALLING_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`tray signalling ${res.status} ${res.statusText}`);
     return (await res.json()) as Record<string, unknown>;
@@ -80,6 +90,7 @@ export class TrayFollowerSignaling {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ controllerId, runtime }),
+      signal: AbortSignal.timeout(SIGNALLING_TIMEOUT_MS),
     });
     let body: Record<string, unknown> = {};
     try {
@@ -264,7 +275,7 @@ export class ElectronTrayFollower {
     });
     await this.cdp.connect(this.opts.browserWsUrl);
 
-    this.schedulemPoll();
+    this.schedulePoll();
   }
 
   stop(): void {
@@ -410,14 +421,14 @@ export class ElectronTrayFollower {
     ch.send(JSON.stringify(message));
   }
 
-  private schedulemPoll(): void {
+  private schedulePoll(): void {
     if (this.stopped) return;
     this.pollTimer = setTimeout(() => void this.pollOnce(), this.opts.pollIntervalMs ?? 500);
   }
 
   private async pollOnce(): Promise<void> {
     if (this.stopped || !this.bootstrapId) {
-      this.schedulemPoll();
+      this.schedulePoll();
       return;
     }
     try {
@@ -430,7 +441,7 @@ export class ElectronTrayFollower {
     } catch (e) {
       this.log(`[electron-follower] poll failed: ${String(e)}`);
     }
-    this.schedulemPoll();
+    this.schedulePoll();
   }
 
   private async handleBootstrapEvent(event: Record<string, unknown>): Promise<void> {
@@ -438,6 +449,9 @@ export class ElectronTrayFollower {
     if (!pc) return;
     const key = JSON.stringify(event);
     if (this.seenEvents.has(key)) return;
+    // Bound the de-dup set: `cursor` already gates re-delivery of consumed
+    // offsets, so evicting old keys can never reprocess a stale event.
+    if (this.seenEvents.size >= MAX_SEEN_EVENTS) this.seenEvents.clear();
     this.seenEvents.add(key);
 
     if (event['type'] === 'bootstrap.offer') {

@@ -115,7 +115,13 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
             return nil
         }
         do {
-            let (data, _) = try await urlSession.data(from: versionURL)
+            // Explicit per-request timeout: URLSession's default only measures
+            // inactivity (60 s), so a CDP endpoint that connects but never sends
+            // bytes would stall `startIfNeeded` for a full minute. Parity with
+            // the node follower's AbortSignal timeouts.
+            var request = URLRequest(url: versionURL)
+            request.timeoutInterval = 5
+            let (data, _) = try await urlSession.data(for: request)
             return Self.parseBrowserWebSocketURL(from: data)
         } catch {
             logger.error("Failed to read /json/version: \(error.localizedDescription)")
@@ -127,7 +133,9 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
     private func listTargets() async -> [FederatedCdpInspectableTarget] {
         guard let listURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/list") else { return [] }
         do {
-            let (data, _) = try await urlSession.data(from: listURL)
+            var request = URLRequest(url: listURL)
+            request.timeoutInterval = 5
+            let (data, _) = try await urlSession.data(for: request)
             return Self.parseInspectableTargets(from: data)
         } catch {
             logger.error("Failed to read /json/list: \(error.localizedDescription)")

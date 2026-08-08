@@ -1054,13 +1054,20 @@ async function startElectronFollower(state: ServerState, cdpPort: number): Promi
   try {
     const versionUrl = `http://127.0.0.1:${cdpPort}/json/version`;
     const listUrl = `http://127.0.0.1:${cdpPort}/json/list`;
-    const version = (await (await fetch(versionUrl)).json()) as { webSocketDebuggerUrl?: string };
+    // Explicit timeouts: a stalled/half-open CDP endpoint would otherwise hang
+    // `.json()` forever, blocking the onEgressBlocked hook. Mirrors the
+    // `AbortSignal.timeout` already used by `discoverLeaderTrayJoinUrl`.
+    const version = (await (
+      await fetch(versionUrl, { signal: AbortSignal.timeout(5000) })
+    ).json()) as { webSocketDebuggerUrl?: string };
     if (!version.webSocketDebuggerUrl) throw new Error('no browser webSocketDebuggerUrl from CDP');
     const follower = new ElectronTrayFollower({
       joinUrl,
       browserWsUrl: version.webSocketDebuggerUrl,
       listTargets: async () =>
-        (await (await fetch(listUrl)).json()) as FederatedCdpInspectableTarget[],
+        (await (
+          await fetch(listUrl, { signal: AbortSignal.timeout(5000) })
+        ).json()) as FederatedCdpInspectableTarget[],
       logger: (m) => {
         console.log(m);
       },
