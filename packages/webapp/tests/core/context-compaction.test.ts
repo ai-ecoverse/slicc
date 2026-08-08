@@ -343,6 +343,81 @@ describe('createCompactContext', () => {
     expect(firstText(result[0])).toContain('<context-summary>');
   });
 
+  // #2011 / #2012 — a single oversized tool result (e.g. an unbounded command
+  // dump) must be stubbed in place, not summarized. Summarizing it re-blows the
+  // window (the model sees the whole message), which is what wedged the live
+  // cone: one 1.9M-char Signal dump made compaction escalate to "could not be
+  // reduced". Per-message threshold for mockConfig = (200000 - 16384) / 2 =
+  // 91,808 tokens ≈ 367K chars.
+  it('elides an oversized tool result instead of summarizing it (#2011)', async () => {
+    const compact = createCompactContext(mockConfig);
+    // 1M chars ≈ 250K tokens: over the per-message threshold AND pushes the
+    // conversation over the shouldCompact threshold, so the proactive path runs.
+    const giant = createToolResult('x'.repeat(1_000_000), 'tool-1');
+    const messages = [
+      createMessage('user', 'inspect the app'),
+      createAssistantWithToolCalls('running', ['tool-1']),
+      giant,
+    ];
+
+    const result = await compact(messages);
+
+    // Elided in place — no doomed LLM summary call.
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+    expect(hasCompactionProgress(messages, result)).toBe(true);
+    // The 1MB blob is now a short stub; nothing oversized survives.
+    expect(result.some((m) => firstText(m).includes('Tool result elided'))).toBe(true);
+    expect(result.every((m) => firstText(m).length < 2000)).toBe(true);
+  });
+
+  it('force-compacts by eliding an oversized message under the normal threshold (#2012)', async () => {
+    const compact = createCompactContext(mockConfig);
+    // 500K chars ≈ 125K tokens: over the per-message threshold (91,808) but the
+    // whole conversation is under the shouldCompact threshold (183,616), so only
+    // the forced overflow-recovery path reaches compaction.
+    const giant = createToolResult('y'.repeat(500_000), 'tool-1');
+    const messages = [
+      createMessage('user', 'hi'),
+      createAssistantWithToolCalls('ok', ['tool-1']),
+      giant,
+    ];
+
+    // Without force: under threshold → returned unchanged.
+    expect(await compact(messages)).toBe(messages);
+
+    // With force (overflow recovery): the oversized message is elided, no LLM call.
+    const result = await compact(messages, undefined, { force: true });
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+    expect(hasCompactionProgress(messages, result)).toBe(true);
+    expect(result.some((m) => firstText(m).includes('Tool result elided'))).toBe(true);
+  });
+
+  it('never serializes oversized content into the summary prompt (#2012 guard)', async () => {
+    const compact = createCompactContext(mockConfig);
+    // Oversized tool result placed early so it lands in the summarize slice
+    // (not the recent-keep window). Filler keeps the post-elision total over the
+    // summarize threshold so the LLM summary path actually runs.
+    const giant = createToolResult('z'.repeat(500_000), 'tool-1');
+    const filler = Array.from({ length: 8 }, (_, i) =>
+      createMessage('user', 'w'.repeat(100_000) + ` #${i}`)
+    );
+    const messages = [
+      createMessage('user', 'inspect'),
+      createAssistantWithToolCalls('run', ['tool-1']),
+      giant,
+      ...filler,
+    ];
+
+    await compact(messages);
+
+    // Summary path ran, but the raw 500K blob never reached the summary prompt.
+    expect(mockCompleteSimple).toHaveBeenCalled();
+    // completeSimple(model, { systemPrompt, messages }, opts) — args object is [1].
+    const call = mockCompleteSimple.mock.calls[0][1] as { systemPrompt?: string };
+    expect(call.systemPrompt).toBeDefined();
+    expect(call.systemPrompt).not.toContain('z'.repeat(1000));
+  });
+
   it('calls completeSimple twice when onMemoryUpdates wired', async () => {
     const onMemoryUpdates = vi.fn();
     mockCompleteSimple
@@ -832,9 +907,10 @@ describe('createCompactContext hopeless branch', () => {
     'skips LLM, elides oversized toolResult, emits structured warn, ' +
       'and returns under the soft threshold',
     async () => {
-      // 4 MB of text → ~1M est. tokens. With contextWindow = 200k and
-      // hopelessMultiplier = 4 (default), totalTokens > 800k triggers
-      // the hopeless branch.
+      // 4 MB of text → ~1M est. tokens in a single toolResult. That one message
+      // is individually oversized (> half the window), so the decoupled
+      // per-message elision (#2011) stubs it in place — no LLM summary needed —
+      // and the post-elision total is nowhere near the 4x hopeless threshold.
       const hugeText = 'x'.repeat(4_000_000);
       const messages: AgentMessage[] = [
         createMessage('user', 'run tool'),
@@ -863,14 +939,15 @@ describe('createCompactContext hopeless branch', () => {
       // Structured warn log MUST carry the documented fields.
       const warnCalls = (console.warn as ReturnType<typeof vi.fn>).mock.calls;
       const hopelessCall = warnCalls.find(
-        (c) => typeof c[1] === 'string' && c[1] === 'Compaction hopeless branch'
+        (c) => typeof c[1] === 'string' && c[1] === 'Compaction oversized-message elision'
       );
       expect(hopelessCall).toBeDefined();
       const fields = hopelessCall![2] as Record<string, unknown>;
       expect(fields).toEqual({
         totalTokens: expect.any(Number),
+        postSizeTokens: expect.any(Number),
         contextWindow: 200000,
-        multiplier: 4,
+        isHopeless: false,
         elidedCount: expect.any(Number),
         elidedBytes: expect.any(Number),
       });
