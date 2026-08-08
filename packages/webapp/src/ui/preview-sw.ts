@@ -17,7 +17,7 @@
 
 /// <reference lib="webworker" />
 
-import { handlePreviewRequest, isSliccAppPath } from './preview-sw-handler.js';
+import { handlePreviewRequest, isSliccAppPath, projectServeVfsPath } from './preview-sw-handler.js';
 
 /**
  * Active project root in VFS (e.g., "/shared/my-project").
@@ -65,9 +65,22 @@ sw.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Mode 2: Project serve mode — resolve root-relative paths against project root
-  if (projectRoot && !isSliccAppPath(url.pathname)) {
-    const vfsPath = projectRoot + url.pathname;
-    event.respondWith(handlePreviewRequest(getVfsBroadcast(), vfsPath));
+  // Mode 2: Project serve mode — resolve root-relative paths against project
+  // root. The pathname check is synchronous, so app paths (chunks, fonts,
+  // favicons) never enter respondWith at all; for the rest, the requester
+  // must be a project context (see `projectServeVfsPath`) — a leader-page
+  // fetch falls back to the network instead of the project VFS (#1981).
+  if (projectRoot !== null && !isSliccAppPath(url.pathname)) {
+    const root = projectRoot;
+    event.respondWith(
+      (async () => {
+        const client = await sw.clients.get(event.clientId);
+        const requesterUrl =
+          client?.url ?? (event.request.mode === 'navigate' ? event.request.referrer : null);
+        const vfsPath = projectServeVfsPath(root, url.pathname, requesterUrl);
+        if (vfsPath === null) return fetch(event.request);
+        return handlePreviewRequest(getVfsBroadcast(), vfsPath);
+      })()
+    );
   }
 });

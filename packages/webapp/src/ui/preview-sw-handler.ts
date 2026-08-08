@@ -229,17 +229,75 @@ export async function handlePreviewRequest(
 }
 
 /**
+ * Root-level scripts the production build serves next to `index.html`
+ * (see `dist/ui/`). Enumerated so project serve mode can never shadow
+ * them; anything added later is still protected by the client scoping
+ * in `projectServeVfsPath`.
+ */
+const APP_ROOT_FILES = new Set([
+  '/electron-overlay-entry.js',
+  '/llm-proxy-sw.js',
+  '/lucide-icons.js',
+  '/preview-sw.js',
+  '/slicc-diff.js',
+  '/slicc-editor.js',
+]);
+
+/**
  * Paths that should NOT be intercepted in project serve mode — they
  * belong to the slicc app itself (Vite HMR, API endpoints, UI assets).
+ *
+ * `/assets/` is the production chunk directory: without it, a stored
+ * `projectRoot` rerouted every app-chunk fetch that reached the SW into
+ * the project VFS — 30 s responder stall, then 404 — presenting as a
+ * boot failure ("Kernel worker did not signal ready") on reload (#1981).
  */
 export function isSliccAppPath(pathname: string): boolean {
   return (
     pathname.startsWith('/@') ||
     pathname.startsWith('/__') ||
     pathname.startsWith('/api/') ||
-    pathname.startsWith('/packages/webapp/src/') ||
+    pathname.startsWith('/assets/') ||
+    pathname.startsWith('/fonts/') ||
+    pathname.startsWith('/logos/') ||
+    pathname.startsWith('/favicon') ||
+    pathname.startsWith('/packages/') ||
     pathname.startsWith('/node_modules/') ||
+    APP_ROOT_FILES.has(pathname) ||
     pathname === '/' ||
     pathname === '/index.html'
   );
+}
+
+/**
+ * Decide whether a project-serve (Mode 2) request should be served from
+ * the project VFS. Returns the VFS path to read, or `null` to let the
+ * request pass through to the network.
+ *
+ * Beyond the pathname allowlist, interception is scoped to requests made
+ * BY a project context: the requester (the SW fetch event's client, or
+ * the referrer for client-less navigations) must be a `/preview/` page
+ * or a page that project serve mode itself delivered (any non-app path).
+ * The leader page (`/`) is an app path, so its own subresource fetches —
+ * app chunks, worker scripts — can never be captured, no matter what
+ * `projectRoot` a previous preview left behind in SW state (#1981).
+ */
+export function projectServeVfsPath(
+  projectRoot: string | null,
+  pathname: string,
+  requesterUrl: string | null | undefined
+): string | null {
+  if (!projectRoot) return null;
+  if (isSliccAppPath(pathname)) return null;
+  if (!requesterUrl) return null;
+  let requesterPath: string;
+  try {
+    requesterPath = new URL(requesterUrl).pathname;
+  } catch {
+    return null;
+  }
+  // Opaque-path URLs ('about:client') parse but are not app pages.
+  if (!requesterPath.startsWith('/')) return null;
+  const isProjectContext = requesterPath.startsWith('/preview/') || !isSliccAppPath(requesterPath);
+  return isProjectContext ? projectRoot + pathname : null;
 }
