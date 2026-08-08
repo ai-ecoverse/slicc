@@ -93,6 +93,9 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
       visiblePaths: ['/sessions/', '/shared/', '/knowledge/'],
       allowedCommands: [...BASE_ALLOWED_COMMANDS, 'custom-text'],
       modelId: 'claude-sonnet-4-6',
+      // Per-archive completion receipt the bridge writes on exit 0 —
+      // the boot catch-up's crash-safe curator-finished signal (#1989).
+      successReceiptPath: '/sessions/.curated/2026-08-05-memory.md',
     });
     expect(options.prompt).toBe(
       `Memory=${CONE_MEMORY_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`

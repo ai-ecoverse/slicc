@@ -31,7 +31,7 @@ import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
-import { runAgenticMemoryPass } from '../scoops/agentic-memory.js';
+import { curatorReceiptPath, runAgenticMemoryPass } from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
@@ -210,6 +210,10 @@ export async function curateFrozenSessionMemories(
   }
   if (result.ok) {
     const updated = await clearPendingMarkers(opts.vfs, frozen.filename);
+    // The bridge's completion receipt has served its purpose once the
+    // marker is durably cleared (or the entry is gone) — drop it so a
+    // later catch-up never consumes stale evidence.
+    await removeCuratorReceipt(opts.vfs, frozen.filename);
     if (!updated) {
       // The curated memory is already on disk; only the index bookkeeping
       // missed, so there is no work left for a retry to redo.
@@ -915,15 +919,32 @@ export async function enrichPendingSession(
   if (archiveContent === null) return null;
   const agentMessages = recoverPendingMessages(entry, archiveContent);
   if (agentMessages === null) return null;
-  const calls = await runEnrichmentCalls(entry, agentMessages, opts);
+  // #1989: the agentic background pass clears `memoryPending` only AFTER
+  // the curator's rewrite lands — a tab dying between the two leaves a
+  // marker whose memory work is already done. The agent bridge writes a
+  // per-archive receipt (worker realm, before the spawn resolves) on
+  // curator success; if THIS archive's receipt exists, run title-only
+  // recovery instead of appending legacy-extracted duplicates on top of
+  // the curated memory, and let the marker drop. Per-entry by design: a
+  // sibling archive's enrichment or any other memory write can never be
+  // misattributed to this one.
+  const curatorAlreadyRan =
+    entry.memoryPending === true &&
+    opts.skipMemory !== true &&
+    (await curatorReceiptExists(vfs, entry));
+  const effectiveOpts = curatorAlreadyRan ? { ...opts, skipMemory: true } : opts;
+  const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
   if (calls === null) return null;
   // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
   // that can hang, while the append is non-idempotent. Running it first means
   // a hung/aborted pick leaves the archive cleanly pending with NO memory
   // written yet, so the boot retry runs once with no duplicate memory.
-  const icon = await pickEnrichmentIcon(opts, calls.newTitle);
-  await appendEnrichmentMemory(vfs, entry, calls.bullets, opts);
-  return await commitEnrichedArchive(
+  const icon = await pickEnrichmentIcon(effectiveOpts, calls.newTitle);
+  await appendEnrichmentMemory(vfs, entry, calls.bullets, effectiveOpts);
+  // `preserveMemoryPending` follows the CALLER's skipMemory, not the
+  // effective one: the agentic save path (curator still owed) keeps the
+  // marker, while the curator-already-ran case drops it by omission.
+  const committed = await commitEnrichedArchive(
     vfs,
     entry,
     archiveContent,
@@ -931,6 +952,35 @@ export async function enrichPendingSession(
     icon,
     opts.skipMemory === true
   );
+  if (committed && curatorAlreadyRan) await removeCuratorReceipt(vfs, entry.filename);
+  return committed;
+}
+
+/**
+ * #1989 discriminator: `true` when the agent bridge's per-archive
+ * completion receipt exists for this entry — the curator finished even
+ * though the `memoryPending` marker survived. Fail-closed: a missing
+ * receipt (or a stat error) keeps the legacy extraction.
+ */
+async function curatorReceiptExists(
+  vfs: WritableVfsClient,
+  entry: FrozenSessionIndexEntry
+): Promise<boolean> {
+  try {
+    await vfs.stat(curatorReceiptPath(`/sessions/${entry.filename}`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort receipt cleanup once its evidence has been consumed. */
+async function removeCuratorReceipt(vfs: WritableVfsClient, filename: string): Promise<void> {
+  try {
+    await vfs.rm(curatorReceiptPath(`/sessions/${filename}`));
+  } catch {
+    /* already gone or unreadable — the receipt is only advisory */
+  }
 }
 
 /**

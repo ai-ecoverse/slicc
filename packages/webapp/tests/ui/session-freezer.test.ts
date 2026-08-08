@@ -17,6 +17,10 @@ vi.mock('../../src/core/context-compaction.js', () => ({
 const mockRunAgenticMemoryPass = vi.fn();
 vi.mock('../../src/scoops/agentic-memory.js', () => ({
   runAgenticMemoryPass: (...args: unknown[]) => mockRunAgenticMemoryPass(...args),
+  // Real path derivation — the receipt discriminator (#1989) resolves
+  // this exact path against the fake VFS.
+  curatorReceiptPath: (sessionArchivePath: string) =>
+    `/sessions/.curated/${sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1)}`,
 }));
 
 // Mock the budget sink so tests can assert the freezer routes through it
@@ -36,6 +40,9 @@ const { mockApplyConeMemoryBudget, mockReadSessionCount } = vi.hoisted(() => ({
 vi.mock('../../src/scoops/cone-memory-budget.js', () => ({
   applyConeMemoryBudget: (...args: unknown[]) => mockApplyConeMemoryBudget(...args),
   readSessionCount: (...args: unknown[]) => mockReadSessionCount(...args),
+  // Real path constant — the curator-already-ran discriminator (#1989)
+  // stats this exact path against the fake VFS.
+  CONE_MEMORY_PATH: '/workspace/CLAUDE.md',
 }));
 
 // chat-panel imports a wide chunk (incl. SessionStore via indexeddb shims) at
@@ -70,11 +77,25 @@ import {
  */
 function makeFakeVfs() {
   const files = new Map<string, string>();
+  const mtimes = new Map<string, number>();
   return {
     files,
+    /** Per-path mtimes for `stat` (#1989 tests); unset paths report 0. */
+    mtimes,
     async readFile(path: string): Promise<string> {
       if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
       return files.get(path)!;
+    },
+    async stat(
+      path: string
+    ): Promise<{ type: string; size: number; mtime: number; ctime: number }> {
+      if (!files.has(path)) throw new FsError('ENOENT', `missing ${path}`, path);
+      return {
+        type: 'file',
+        size: files.get(path)!.length,
+        mtime: mtimes.get(path) ?? 0,
+        ctime: 0,
+      };
     },
     async writeFile(path: string, content: string | Uint8Array): Promise<void> {
       files.set(path, typeof content === 'string' ? content : new TextDecoder().decode(content));
@@ -1777,6 +1798,128 @@ describe('enrichPendingSession', () => {
     });
     return { pendingFilename: result!.filename, frozenAt: result!.frozenAt };
   }
+
+  it('curator-already-ran: completion receipt present → title-only, marker + receipt drop (#1989)', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    // The bridge wrote the per-archive receipt when the curator spawn
+    // exited 0, but the tab died before clearPendingMarkers landed.
+    const curated = '## Memory\n- curated by the agentic pass\n';
+    vfs.files.set('/workspace/CLAUDE.md', curated);
+    const receiptPath = `/sessions/.curated/${pendingFilename}`;
+    vfs.files.set(receiptPath, '2026-08-08T00:00:00.000Z');
+
+    // Only ONE LLM call expected: the title. A second (memory) call would
+    // consume this mock and produce the wrong title below.
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+        memoryPending: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledTimes(1);
+    // No duplicate bullets on top of the curator's rewrite.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBe(curated);
+    // Marker DROPS (unlike the explicit skipMemory save path): the
+    // curator evidently ran, nothing is owed. The consumed receipt goes too.
+    expect(updated!.memoryPending).toBeUndefined();
+    expect(updated!.pendingEnrichment).toBeUndefined();
+    expect(vfs.files.has(receiptPath)).toBe(false);
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].memoryPending).toBeUndefined();
+  });
+
+  it('memoryPending with NO receipt still runs the legacy extraction', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- curated nothing; legacy extraction owns memory')
+      .mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+        memoryPending: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledTimes(2);
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('legacy extraction owns memory');
+    expect(updated!.memoryPending).toBeUndefined();
+  });
+
+  it("a sibling archive's memory write is never misattributed (per-entry receipts)", async () => {
+    // The PR-review scenario: two memoryPending archives whose curators
+    // never ran. Enriching A writes the shared memory file; B must STILL
+    // get its own legacy extraction — a shared-file signal (mtime) would
+    // have been fooled here, the per-entry receipt is not.
+    const vfs = makeFakeVfs();
+    const { pendingFilename: fileA, frozenAt: frozenAtA } = await seedPending(vfs);
+    const { pendingFilename: fileB, frozenAt: frozenAtB } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- fact from archive A')
+      .mockResolvedValueOnce('Archive A title')
+      .mockResolvedValueOnce('- fact from archive B')
+      .mockResolvedValueOnce('Archive B title');
+
+    const entryA = {
+      filename: fileA,
+      title: 'a',
+      frozenAt: frozenAtA,
+      messageCount: 4,
+      pendingEnrichment: true,
+      memoryPending: true as const,
+    };
+    const entryB = {
+      filename: fileB,
+      title: 'b',
+      frozenAt: frozenAtB,
+      messageCount: 4,
+      pendingEnrichment: true,
+      memoryPending: true as const,
+    };
+
+    const updatedA = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      entryA,
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(updatedA).not.toBeNull();
+    // A's legacy enrichment wrote the shared memory file…
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('fact from archive A');
+
+    const updatedB = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      entryB,
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(updatedB).not.toBeNull();
+    // …and B still ran its own memory call (4 total) and appended.
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledTimes(4);
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('fact from archive B');
+  });
 
   it('rewrites the title, renames the file, drops the pending flag, and appends memory', async () => {
     const vfs = makeFakeVfs();
