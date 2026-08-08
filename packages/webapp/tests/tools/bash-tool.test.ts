@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { VirtualFS } from '../../src/fs/index.js';
+import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShell } from '../../src/shell/index.js';
 import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
 import type { ToolDefinition } from '../../src/tools/types.js';
@@ -49,7 +49,7 @@ describe('Bash Tool', () => {
       wipe: true,
     });
     shell = new AlmostBashShell({ fs });
-    bash = createBashTool(shell, fs);
+    bash = createBashTool(shell, fs, '/tmp');
   });
 
   it('has correct name and description', () => {
@@ -79,6 +79,31 @@ describe('Bash Tool', () => {
     const result = await bash.execute({ command: 'echo hello world' });
     expect(result.content).toContain('hello world');
     expect(result.content).not.toContain('Output truncated');
+  });
+
+  it('writes the paging file into an injected scoop temp dir readable via the same sandbox (#2010 P2)', async () => {
+    // Simulate a scoop sandbox: writable+readable only under /scoops/<folder>/ and
+    // /shared/ — NOT /tmp. Codex flagged that a hardcoded /tmp path is unusable
+    // for scoops (RestrictedFS rejects the write/read). The tool must write into
+    // the injected, context-accessible temp dir instead.
+    await fs.mkdir('/scoops/andy-scoop', { recursive: true });
+    const restricted = new RestrictedFS(fs, ['/scoops/andy-scoop/', '/shared/']);
+    const scoopShell = new AlmostBashShell({ fs: restricted as unknown as VirtualFS });
+    const scoopBash = createBashTool(
+      scoopShell,
+      restricted as unknown as VirtualFS,
+      '/scoops/andy-scoop'
+    );
+
+    await restricted.writeFile('/scoops/andy-scoop/big.txt', 'z'.repeat(60 * 1024));
+    const result = await scoopBash.execute({ command: 'cat /scoops/andy-scoop/big.txt' });
+
+    expect(result.content).toContain('Output truncated');
+    const path = result.content.match(/\/scoops\/andy-scoop\/bash-output-\d+\.txt/)?.[0];
+    expect(path).toBeTruthy();
+    // The follow-up read the footer advertises actually works inside the sandbox.
+    const full = await restricted.readFile(path!, { encoding: 'utf-8' });
+    expect(typeof full === 'string' ? full.length : 0).toBeGreaterThanOrEqual(60 * 1024);
   });
 
   it('executes echo', async () => {
@@ -226,7 +251,7 @@ describe('Bash Tool', () => {
 
   it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
     const browserShell = new AlmostBashShell({ fs, browserAPI: {} as any });
-    const browserBash = createBashTool(browserShell, fs);
+    const browserBash = createBashTool(browserShell, fs, '/tmp');
 
     const help = await browserBash.execute({ command: 'playwright --help' });
     expect(help.isError).toBeFalsy();
