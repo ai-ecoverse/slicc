@@ -189,12 +189,15 @@ final class FederatedCDPServicerTests: XCTestCase {
         await servicer.handleCdpRequest(
             requestId: "req-1", method: "Runtime.evaluate", params: ["expression": "1"],
             sessionId: "s1")
+        // A `Browser.getVersion` self-probe is also sent on connect, so find the
+        // forwarded request frame by method rather than assuming it is the only one.
         let sent = await transport.sentFrames
-        XCTAssertEqual(sent.count, 1)
-        let sentObject = try JSONSerialization.jsonObject(with: sent[0]) as? [String: Any]
-        XCTAssertEqual(sentObject?["method"] as? String, "Runtime.evaluate")
-        XCTAssertEqual(sentObject?["sessionId"] as? String, "s1")
-        let cdpId = try XCTUnwrap(sentObject?["id"] as? Int)
+        let sentObject = try XCTUnwrap(
+            sent
+                .compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                .first { ($0["method"] as? String) == "Runtime.evaluate" })
+        XCTAssertEqual(sentObject["sessionId"] as? String, "s1")
+        let cdpId = try XCTUnwrap(sentObject["id"] as? Int)
 
         // The app replies → a cdp.response for req-1 is emitted.
         await transport.push(#"{"id":\#(cdpId),"result":{"value":42}}"#)

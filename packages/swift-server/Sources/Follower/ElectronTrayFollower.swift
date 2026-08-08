@@ -83,11 +83,12 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
             logger.error("Could not resolve the app's browser CDP endpoint; follower not started")
             return
         }
+        logger.info("Follower resolved app browser CDP: \(browserWsURL.absoluteString)")
         let servicer = FederatedCDPServicer(
             runtimeId: runtimeId,
             logger: logger,
             send: { [weak self] message in self?.sendToLeader(message) })
-        await servicer.connect(browserWsUrl: browserWsURL, session: urlSession)
+        await servicer.connect(browserWsUrl: browserWsURL)
         let cancelled: Bool = lock.withLock {
             guard !stopped else { return true }
             self.servicer = servicer
@@ -217,6 +218,7 @@ final class ElectronTrayFollower: NSObject, @unchecked Sendable {
 extension ElectronTrayFollower: TrayFollowerConnectorDelegate {
     func connector(_ connector: TrayFollowerConnector, didConnect channelSend: @escaping (Data) -> Bool) {
         lock.withLock { self.channelSend = channelSend }
+        logger.info("Follower tray-control channel open — sent hello, advertising targets")
         // Both sides send `hello` first on channel open; then advertise targets.
         sendToLeader(
             .hello(
@@ -225,6 +227,7 @@ extension ElectronTrayFollower: TrayFollowerConnectorDelegate {
         Task { [weak self] in
             guard let self = self else { return }
             let targets = await self.listTargets()
+            self.logger.info("Follower advertising \(targets.count) target(s) to leader")
             let servicer: FederatedCDPServicer? = self.lock.withLock { self.servicer }
             await servicer?.advertiseTargets(targets)
         }

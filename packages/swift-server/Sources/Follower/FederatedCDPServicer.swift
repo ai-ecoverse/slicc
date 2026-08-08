@@ -190,10 +190,24 @@ actor FederatedCDPServicer {
         self.send = send
     }
 
+    /// A reserved CDP id used by the post-connect self-probe (`Browser.getVersion`),
+    /// so a failed servicer↔app CDP socket surfaces immediately instead of only
+    /// when the leader's first `cdp.request` times out.
+    private static let probeId = 999_999
+
     /// Open the CDP connection to the browser-level debugger endpoint and start
-    /// pumping frames.
-    func connect(browserWsUrl: URL, session: URLSession = .shared) {
-        connect(transport: URLSessionCDPWebSocket(url: browserWsUrl, session: session))
+    /// pumping frames. Uses WebSocketKit (not `URLSessionWebSocketTask`, which
+    /// fails the handshake against Electron's CDP). Awaits the handshake, so a
+    /// connect failure surfaces here rather than on the first leader request.
+    func connect(browserWsUrl: URL) async {
+        logger.info("federated CDP servicer connecting to \(browserWsUrl.absoluteString)")
+        do {
+            let transport = try await WebSocketKitCDPTransport.connect(url: browserWsUrl.absoluteString)
+            connect(transport: transport)
+        } catch {
+            logger.error(
+                "federated CDP: WebSocket connect to app CDP FAILED — \(error.localizedDescription)")
+        }
     }
 
     /// Start pumping frames over an injected transport (production or a test
@@ -201,6 +215,23 @@ actor FederatedCDPServicer {
     func connect(transport: any CDPWebSocketTransport) {
         self.transport = transport
         receiveLoop = Task { [weak self] in await self?.readLoop() }
+        Task { [weak self] in await self?.probeConnection() }
+    }
+
+    /// Send a `Browser.getVersion` right after connect to confirm the socket to
+    /// the app's raw CDP actually round-trips (the mock transport in unit tests
+    /// can't catch a broken real URLSession WS). Its reply is logged, not
+    /// forwarded, in `onCdpFrame`.
+    private func probeConnection() async {
+        guard let transport = transport else { return }
+        let frame: [String: Any] = ["id": Self.probeId, "method": "Browser.getVersion"]
+        guard let data = try? JSONSerialization.data(withJSONObject: frame) else { return }
+        do {
+            try await transport.sendFrame(data)
+            logger.info("federated CDP probe: Browser.getVersion sent")
+        } catch {
+            logger.warning("federated CDP probe: send FAILED — \(error.localizedDescription)")
+        }
     }
 
     /// Advertise the app's page targets to the leader (from `/json/list`).
@@ -230,9 +261,11 @@ actor FederatedCDPServicer {
             pending[id] = nil
             return
         }
+        logger.info("federated CDP → #\(id) \(method)\(sessionId.map { " sess=\($0.prefix(8))" } ?? "")")
         do {
             try await transport.sendFrame(data)
         } catch {
+            logger.warning("federated CDP send FAILED #\(id) \(method) — \(error.localizedDescription)")
             failPending(id: id, message: "cdp-send-failed: \(error.localizedDescription)")
         }
     }
@@ -262,9 +295,12 @@ actor FederatedCDPServicer {
     }
 
     private func readLoop() async {
+        var frameCount = 0
         while !stopped, let transport = transport {
             do {
                 let message = try await transport.receiveFrame()
+                if frameCount == 0 { logger.info("federated CDP: first inbound frame from app CDP — socket is live") }
+                frameCount += 1
                 let data: Data
                 switch message {
                 case .data(let payload): data = payload
@@ -274,7 +310,13 @@ actor FederatedCDPServicer {
                 onCdpFrame(data)
             } catch {
                 if !stopped {
-                    logger.debug("federated CDP read loop ended: \(error.localizedDescription)")
+                    // The socket to the app's raw CDP died. Null the transport so
+                    // subsequent leader requests get a clean `cdp-not-connected`
+                    // rather than repeatedly hitting a zombie socket.
+                    logger.warning(
+                        "federated CDP read loop ENDED after \(frameCount) frames (socket lost): \(error.localizedDescription)"
+                    )
+                    self.transport = nil
                 }
                 return
             }
@@ -283,6 +325,16 @@ actor FederatedCDPServicer {
 
     private func onCdpFrame(_ data: Data) {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        // The self-probe reply is logged, not forwarded to the leader.
+        if object["id"] as? Int == Self.probeId {
+            if let error = object["error"] as? [String: Any] {
+                logger.warning("federated CDP probe: app CDP error — \(error["message"] as? String ?? "?")")
+            } else {
+                let product = (object["result"] as? [String: Any])?["product"] as? String ?? "?"
+                logger.info("federated CDP probe: app CDP replied (\(product)) — socket round-trips OK")
+            }
             return
         }
         for message in messagesForCdpFrame(object, pending: &pending) {
