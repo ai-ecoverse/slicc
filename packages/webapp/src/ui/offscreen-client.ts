@@ -119,7 +119,7 @@ export interface OffscreenClientCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
   ) => void;
   /**
    * Fired when any scoop (selected or not) produces meaningful agent
@@ -722,6 +722,7 @@ export class OffscreenClient implements KernelClientFacade {
 
       case 'compaction-state':
         this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state);
+        this.renderCompactionNotice(msg.scoopJid, msg.state);
         break;
 
       case 'clear-chat-ack': {
@@ -1018,6 +1019,34 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
     }
+  }
+
+  /**
+   * Surface the two compaction phases worth a transcript line (#1985) as a
+   * standalone, already-completed assistant bubble. The notice id is
+   * deliberately NOT recorded in `currentMessageId`, so an in-flight (or
+   * subsequent) real assistant stream keeps appending to its own bubble —
+   * routing the notice through the response path instead would overwrite the
+   * streaming buffer and, for non-cone scoops, poison the completion summary
+   * sent back to the cone.
+   */
+  private renderCompactionNotice(
+    scoopJid: string,
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+  ): void {
+    if (scoopJid !== this.selectedScoopJid) return;
+    let notice: string;
+    if (state === 'summarizing') {
+      notice = 'Context window almost exceeded — compacting history…';
+    } else if (state === 'fallback') {
+      notice = 'Compaction summarization failed — continuing with older messages truncated.';
+    } else {
+      return;
+    }
+    const noticeId = `compaction-${scoopJid}-${uid()}`;
+    this.emitToUI({ type: 'message_start', messageId: noticeId });
+    this.emitToUI({ type: 'content_delta', messageId: noticeId, text: notice });
+    this.emitToUI({ type: 'content_done', messageId: noticeId });
   }
 
   private handleScoopStatus(msg: ScoopStatusMsg): void {

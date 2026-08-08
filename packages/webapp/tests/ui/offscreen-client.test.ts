@@ -872,3 +872,110 @@ describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () 
     expect(events[0].messageId).not.toBe('a1');
   });
 });
+
+describe('OffscreenClient compaction notices (#1985)', () => {
+  let client: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+    onMessageUpdate: vi.fn(),
+    onLickBackpressure: vi.fn(),
+    onScoopActivity: vi.fn(),
+    onCompactionStateChange: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    client = new OffscreenClient(callbacks);
+  });
+
+  function collect(): Array<{ type: string; messageId?: string; text?: string }> {
+    const events: Array<{ type: string; messageId?: string; text?: string }> = [];
+    client.createAgentHandle().onEvent((e) => events.push(e as (typeof events)[number]));
+    return events;
+  }
+
+  it('renders "summarizing" as a standalone completed bubble', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: 'cone_123',
+      state: 'summarizing',
+    });
+
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta', 'content_done']);
+    expect(events[1].text).toContain('compacting history');
+    // All three events target the same synthetic bubble.
+    expect(new Set(events.map((e) => e.messageId)).size).toBe(1);
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('cone_123', 'summarizing');
+  });
+
+  it('renders "fallback" as a truncation notice and stays silent for other states', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    for (const state of ['extracting-memory', 'idle', 'fallback']) {
+      simulateMessage('offscreen', { type: 'compaction-state', scoopJid: 'cone_123', state });
+    }
+
+    // Only 'fallback' produced a bubble.
+    expect(events.map((e) => e.type)).toEqual(['message_start', 'content_delta', 'content_done']);
+    expect(events[1].text).toContain('Compaction summarization failed');
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not disturb an in-flight assistant stream', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'part one ',
+    });
+    const streamId = events[0].messageId;
+
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: 'cone_123',
+      state: 'summarizing',
+    });
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'part two',
+    });
+
+    // The stream resumes into ITS bubble — no fresh message_start, same id —
+    // rather than being captured by (or appended to) the notice bubble.
+    const tail = events[events.length - 1];
+    expect(tail).toMatchObject({ type: 'content_delta', text: 'part two', messageId: streamId });
+    const noticeIds = events
+      .filter((e) => e.type === 'content_done')
+      .map((e) => e.messageId as string);
+    expect(noticeIds).toHaveLength(1);
+    expect(noticeIds[0]).not.toBe(streamId);
+  });
+
+  it('drops notices for non-selected scoops but still forwards the state callback', () => {
+    client.setSelectedScoopJid('cone_123');
+    const events = collect();
+
+    simulateMessage('offscreen', {
+      type: 'compaction-state',
+      scoopJid: 'scoop_other',
+      state: 'fallback',
+    });
+
+    expect(events).toHaveLength(0);
+    expect(callbacks.onCompactionStateChange).toHaveBeenCalledWith('scoop_other', 'fallback');
+  });
+});

@@ -63,6 +63,13 @@ import { type RegisteredScoop, THINKING_LEVELS } from './types.js';
 const log = createLogger('scoop-context');
 
 /**
+ * Debounce for mid-turn session checkpoints (#1987): long enough to coalesce
+ * a tool burst into one IndexedDB write, short enough that an abnormal turn
+ * death loses at most a moment of completed messages.
+ */
+const SESSION_CHECKPOINT_DEBOUNCE_MS = 1_000;
+
+/**
  * Resolve a thinking level against an active model. Returns the value the
  * `Agent` should be initialized with — never throws.
  *
@@ -262,7 +269,9 @@ export interface ScoopContextCallbacks {
    * render a ghost-bubble affordance while the agent is silent.
    * `state === 'idle'` clears the affordance.
    */
-  onCompactionStateChange?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
+  onCompactionStateChange?: (
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
+  ) => void;
   /**
    * Scoop-only: request a cone-mediated sudo escalation. Routes through the
    * orchestrator's pending-request registry and resolves with the cone's
@@ -309,6 +318,8 @@ export class ScoopContext {
   private disposed = false;
   private didStreamDeltas = false;
   private promptStreamErrorMessage: string | null = null;
+  /** Pending debounced mid-turn session write (#1987); null when idle. */
+  private sessionPersistTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
@@ -642,7 +653,13 @@ export class ScoopContext {
       getApiKey: getCompactionApiKey,
       headers: compactionHeaders,
       onMemoryUpdates,
-      onCompactionStateChange: this.callbacks.onCompactionStateChange,
+      // States flow to the UI untouched; OffscreenClient renders the
+      // transcript notices (#1985). Emitting them here via onResponse would
+      // clobber the streaming bubble on the bridge path and poison non-cone
+      // scoops' completion buffers routed back to the cone.
+      onCompactionStateChange: (state) => {
+        this.callbacks.onCompactionStateChange?.(state);
+      },
     });
 
     return { streamWithSessionId, compactFn, getCompactionApiKey };
@@ -908,6 +925,13 @@ export class ScoopContext {
     lastError: Error | null,
     abortSignal: AbortSignal
   ): void {
+    // Flush-on-abort (#1987): a turn that ends in an error or an abort may
+    // never reach `agent_end`, so persist whatever completed messages the
+    // agent accumulated before the failure — the debounced checkpoint alone
+    // could still be pending.
+    if (lastError || abortSignal.aborted) {
+      this.persistSessionNow();
+    }
     this.isProcessing = false;
     if (!this.disposed && this.status === 'processing') {
       this.setStatus('ready');
@@ -1258,6 +1282,10 @@ export class ScoopContext {
 
   /** Cleanup */
   dispose(): void {
+    // Final checkpoint BEFORE the disposed flag blocks writes and the agent
+    // reference is dropped — dispose mid-turn must not lose completed
+    // messages a pending debounce hadn't flushed yet (#1987).
+    this.persistSessionNow();
     this.disposed = true;
     // Cancel any in-flight retry loop / backoff sleep before tearing down the agent.
     if (this.currentTurnProcess && this.processManager) {
@@ -1370,23 +1398,53 @@ export class ScoopContext {
       }
     }
 
-    const persistMessages = this.agent?.state?.messages ?? messages;
-    if (this.sessionStore && persistMessages.length > 0) {
-      this.sessionStore
-        .save({
-          id: this.sessionId,
-          messages: persistMessages,
-          config: {},
-          createdAt: this.sessionCreatedAt || Date.now(),
-          updatedAt: Date.now(),
-        })
-        .catch((err) => {
-          log.error('Failed to save agent session', {
-            folder: this.scoop.folder,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+    this.persistSessionNow(messages);
+  }
+
+  /**
+   * Persist the agent's current message list to the session store (#1987).
+   * Fire-and-forget with logging; safe to call from any point in a turn —
+   * completed messages are immutable, so a mid-turn snapshot is always a
+   * consistent prefix of the final history.
+   */
+  private persistSessionNow(fallbackMessages?: AgentMessage[]): void {
+    if (this.sessionPersistTimer !== null) {
+      clearTimeout(this.sessionPersistTimer);
+      this.sessionPersistTimer = null;
     }
+    const persistMessages = this.agent?.state?.messages ?? fallbackMessages ?? [];
+    if (!this.sessionStore || persistMessages.length === 0) return;
+    this.sessionStore
+      .save({
+        id: this.sessionId,
+        messages: persistMessages,
+        config: {},
+        createdAt: this.sessionCreatedAt || Date.now(),
+        updatedAt: Date.now(),
+      })
+      .catch((err) => {
+        log.error('Failed to save agent session', {
+          folder: this.scoop.folder,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
+
+  /**
+   * Debounced mid-turn checkpoint (#1987). Persistence used to happen only
+   * at `agent_end`, so a turn that aborted abnormally — compaction failure,
+   * worker death, page reload — lost EVERY message since the previous turn:
+   * in production a multi-minute tool turn existed only in the page's memory
+   * and a reload silently dropped it. Each completed message now schedules a
+   * write; the debounce keeps tool-heavy turns from write-storming IndexedDB.
+   */
+  private schedulePersistSession(): void {
+    if (this.disposed || !this.sessionStore) return;
+    if (this.sessionPersistTimer !== null) return;
+    this.sessionPersistTimer = setTimeout(() => {
+      this.sessionPersistTimer = null;
+      if (!this.disposed) this.persistSessionNow();
+    }, SESSION_CHECKPOINT_DEBOUNCE_MS);
   }
 
   private handleAgentEvent(event: CoreAgentEvent, abortSignal?: AbortSignal): void {
@@ -1413,6 +1471,9 @@ export class ScoopContext {
 
       case 'tool_execution_end': {
         this.formatToolResult(event);
+        // A completed tool result is durable-worthy the moment it exists —
+        // it is exactly what an abnormal turn death loses (#1987).
+        this.schedulePersistSession();
         break;
       }
 
@@ -1429,6 +1490,7 @@ export class ScoopContext {
             this.callbacks.onResponse(fullText, false);
           }
         }
+        this.schedulePersistSession();
         break;
       }
 

@@ -57,7 +57,7 @@ export interface ScoopLifecycleCallbacks {
   onStatusChange(scoopJid: string, status: ScoopTabState['status']): void;
   onCompactionStateChange?(
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
   ): void;
   onError(scoopJid: string, error: string): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;

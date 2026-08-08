@@ -144,8 +144,12 @@ export interface CompactionOptions {
 /**
  * Phases of an in-flight compaction. `idle` is the resting state; the UI
  * should clear any compaction-specific affordance when it sees it.
+ * `fallback` fires when the LLM summary failed (or was unavailable) and the
+ * naive-drop result is about to be applied — the one phase worth surfacing
+ * in the transcript, because it means older context was truncated without a
+ * summary (#1985).
  */
-export type CompactionState = 'summarizing' | 'extracting-memory' | 'idle';
+export type CompactionState = 'summarizing' | 'extracting-memory' | 'fallback' | 'idle';
 
 /**
  * Lightweight serializer that renders an AgentMessage array as a text block
@@ -414,7 +418,18 @@ function elideHopelessMessages(
   let elidedCount = 0;
   let elidedBytes = 0;
 
-  const out = messages.map((msg) => {
+  const out = messages.map((rawMsg) => {
+    // Hopeless-branch image strip (#1986): the context is multiples of the
+    // window, so no image payload can survive to the model anyway — and
+    // user-role messages (where photo attachments live) never reach the
+    // role-gated elision below.
+    const msg = elideImagesInMessage(rawMsg);
+    if (msg !== rawMsg) {
+      elidedCount++;
+      elidedBytes +=
+        approxContentBytes((rawMsg as { content?: unknown }).content) -
+        approxContentBytes((msg as { content?: unknown }).content);
+    }
     const tokens = estimateTokens(msg);
     if (tokens <= perMessageThreshold) return msg;
     const role = (msg as { role: string }).role;
@@ -507,6 +522,74 @@ function applyHopelessElision(
   const postTokens = estimateTotalTokens(workingMessages);
   const earlyReturn = shouldCompact(postTokens, contextWindow, settings) ? null : workingMessages;
   return { messages: workingMessages, isHopeless: true, earlyReturn };
+}
+
+/**
+ * Replace every image block in `message` with a small text stub naming the
+ * approximate payload it displaced. Returns the original message when it
+ * carries no image blocks — callers rely on identity to detect no-ops.
+ */
+function elideImagesInMessage(message: AgentMessage): AgentMessage {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return message;
+  let elided = false;
+  const next = content.map((block) => {
+    // Both image shapes in the wild: pi-ai's `{ type, data }` and
+    // Anthropic-style `{ type, source: { data } }`.
+    const b = block as { type?: string; data?: string; source?: { data?: string } };
+    if (b.type !== 'image') return block;
+    elided = true;
+    const kb = Math.max(1, Math.round((b.source?.data ?? b.data ?? '').length / 1024));
+    return {
+      type: 'text',
+      text: `[image elided during compaction: ~${kb} KB. Re-attach or re-read the image if it is still needed.]`,
+    };
+  });
+  if (!elided) return message;
+  return { ...(message as object), content: next } as AgentMessage;
+}
+
+/** Index of the last user message, or -1. */
+function lastUserIndex(messages: AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (hasRole(messages[i], 'user')) return i;
+  }
+  return -1;
+}
+
+/**
+ * Compaction keeps the recent tail verbatim — including the image blocks
+ * that are usually WHY the window blew. A "successful" compaction that
+ * retains them leaves the context still over the limit, so the very next
+ * call fails again and the recovery loop burns retries invisibly (#1986,
+ * observed in production). Two passes:
+ *
+ *  1. Elide images in every kept message BEFORE the latest user message —
+ *     the model has already acted on those; a stub loses nothing.
+ *  2. Re-estimate the assembled result; when still over the compaction
+ *     threshold, elide images oldest-first from the remaining messages
+ *     (including the latest user message) until under or none are left.
+ */
+function elideTailImages(
+  head: AgentMessage[],
+  tail: AgentMessage[],
+  contextWindow: number,
+  settings: Parameters<typeof shouldCompact>[2]
+): AgentMessage[] {
+  const keepFrom = lastUserIndex(tail);
+  let result = tail.map((m, i) => (keepFrom !== -1 && i >= keepFrom ? m : elideImagesInMessage(m)));
+
+  if (shouldCompact(estimateTotalTokens([...head, ...result]), contextWindow, settings)) {
+    for (let i = 0; i < result.length; i++) {
+      const next = elideImagesInMessage(result[i]);
+      if (next === result[i]) continue;
+      result = [...result.slice(0, i), next, ...result.slice(i + 1)];
+      if (!shouldCompact(estimateTotalTokens([...head, ...result]), contextWindow, settings)) {
+        break;
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -726,12 +809,21 @@ export function createCompactContext(
         messages.length,
         signal
       );
-      if (summarized) return summarized;
+      if (summarized) {
+        // The summary head is small; the tail's images are what re-blow the
+        // window (#1986). `summarized` = [summaryMessage, ...messagesToKeep].
+        const [summaryHead, ...tail] = summarized;
+        return [summaryHead, ...elideTailImages([summaryHead], tail, contextWindow, settings)];
+      }
     } else if (!isHopeless) {
       log.warn('No API key available for LLM summarization, falling back to naive drop');
     }
-    // Always clear the indicator before returning — both the fallback path
-    // and any successful early-return must leave the UI in the resting state.
+    // Surface the degradation (#1985): the LLM summary failed or was
+    // unavailable, so older context is about to be truncated WITHOUT a
+    // summary. The `fallback` phase is the observable difference between
+    // "compacted cleanly" and "dropped history"; `idle` still fires last so
+    // every consumer's resting-state contract holds.
+    emitCompactionState(config, 'fallback');
     emitCompactionState(config, 'idle');
 
     // Fallback: naive drop (same as old behavior but without eager truncation)
@@ -746,12 +838,14 @@ export function createCompactContext(
       timestamp: Date.now(),
     };
 
+    const keptTail = elideTailImages([compactedMsg], messagesToKeep, contextWindow, settings);
+
     log.info('Naive compaction applied', {
       originalMessages: messages.length,
-      compactedMessages: 1 + messagesToKeep.length,
+      compactedMessages: 1 + keptTail.length,
     });
 
-    return [compactedMsg, ...messagesToKeep];
+    return [compactedMsg, ...keptTail];
   };
 }
 

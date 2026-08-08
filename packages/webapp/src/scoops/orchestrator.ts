@@ -93,7 +93,7 @@ export interface OrchestratorCallbacks {
    */
   onCompactionStateChange?: (
     scoopJid: string,
-    state: 'summarizing' | 'extracting-memory' | 'idle'
+    state: 'summarizing' | 'extracting-memory' | 'fallback' | 'idle'
   ) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;

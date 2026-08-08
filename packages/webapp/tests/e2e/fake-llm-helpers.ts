@@ -24,7 +24,7 @@
  */
 
 import type { Page } from '@playwright/test';
-import { FAKE_LLM_PORT } from './playwright.config.js';
+import { CDP_PORT, FAKE_LLM_PORT } from './playwright.config.js';
 
 /** Default base URL the fake LLM webServer listens on. */
 export const FAKE_LLM_BASE_URL = `http://127.0.0.1:${FAKE_LLM_PORT}/v1`;
@@ -285,7 +285,10 @@ export interface ReadCdpPageStateOptions {
 export async function readCdpPageState(
   options: ReadCdpPageStateOptions = {}
 ): Promise<CdpPageTarget[]> {
-  const base = options.cdpEndpoint ?? 'http://127.0.0.1:9222';
+  // Follow the harness's CDP port override — a hardcoded 9222 here reads
+  // whatever unrelated Chrome owns that port when `SLICC_E2E_CDP_PORT`
+  // redirects the dedicated browser (e.g. a developer's live instance).
+  const base = options.cdpEndpoint ?? `http://127.0.0.1:${CDP_PORT}`;
   let raw: unknown;
   try {
     const res = await fetch(`${base.replace(/\/+$/, '')}/json`);

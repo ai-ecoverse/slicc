@@ -1963,3 +1963,96 @@ describe('ScoopContext stale-asset error handling', () => {
     expect(broadcastStaleAssetReload).not.toHaveBeenCalled();
   });
 });
+
+describe('ScoopContext mid-turn checkpointing (#1987)', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+  let mockStore: { load: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    callbacks = createMockCallbacks();
+    mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) };
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore as any, undefined, 'cone_1');
+    injectMockAgent(ctx, async () => {});
+    (ctx as any).agent.state.messages = [
+      { role: 'user', content: 'hello', timestamp: 1 },
+      { role: 'assistant', content: [{ type: 'text', text: 'working' }], timestamp: 2 },
+    ];
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('message_end schedules a debounced session write', () => {
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+    });
+    // Debounced — nothing yet.
+    expect(mockStore.save).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    expect(mockStore.save.mock.calls[0][0].messages).toHaveLength(2);
+  });
+
+  it('a burst of completed messages coalesces into one write', () => {
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    for (let i = 0; i < 5; i++) {
+      handler({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: `m${i}` }] },
+      });
+    }
+    vi.advanceTimersByTime(1_000);
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('an errored turn flushes immediately in cleanup, canceling the pending debounce', () => {
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
+    });
+    expect(mockStore.save).not.toHaveBeenCalled();
+
+    const abortController = new AbortController();
+    (ctx as any).cleanupPromptState(
+      abortController,
+      null,
+      new Error('provider exploded mid-turn'),
+      abortController.signal
+    );
+    // Immediate — the failure path must not wait out the debounce.
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+    // And the canceled debounce timer must not double-write later.
+    vi.advanceTimersByTime(5_000);
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('an aborted turn flushes in cleanup too', () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal);
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('a clean turn end does not flush from cleanup (agent_end owns it)', () => {
+    const abortController = new AbortController();
+    (ctx as any).cleanupPromptState(abortController, null, null, abortController.signal);
+    expect(mockStore.save).not.toHaveBeenCalled();
+  });
+
+  it('dispose flushes a pending checkpoint before tearing the agent down', () => {
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] },
+    });
+    expect(mockStore.save).not.toHaveBeenCalled();
+    ctx.dispose();
+    expect(mockStore.save).toHaveBeenCalledTimes(1);
+  });
+});
