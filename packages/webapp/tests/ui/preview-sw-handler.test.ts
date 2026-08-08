@@ -21,6 +21,7 @@ import {
   handlePreviewRequest,
   isSliccAppPath,
   type PreviewChannel,
+  pathnameOf,
   projectServeVfsPath,
 } from '../../src/ui/preview-sw-handler.js';
 
@@ -248,76 +249,67 @@ describe('handlePreviewRequest', () => {
   });
 });
 
-describe('isSliccAppPath — production static surface (#1981)', () => {
-  it('allowlists the production chunk directory and static prefixes', () => {
-    // Every entry the built dist/ui serves root-relative. Intercepting any
-    // of these in project serve mode stalls 30s then 404s — on a reload
-    // that is a boot failure.
-    expect(isSliccAppPath('/assets/kernel-worker-DQl7D0WI.js')).toBe(true);
-    expect(isSliccAppPath('/assets/index-DP3XdJ4f.css')).toBe(true);
-    expect(isSliccAppPath('/fonts/inter.woff2')).toBe(true);
-    expect(isSliccAppPath('/logos/slicc.svg')).toBe(true);
-    expect(isSliccAppPath('/favicon.png')).toBe(true);
-    expect(isSliccAppPath('/favicon.ico')).toBe(true);
-    expect(isSliccAppPath('/packages/assets/logo.svg')).toBe(true);
-    expect(isSliccAppPath('/electron-overlay-entry.js')).toBe(true);
-    expect(isSliccAppPath('/llm-proxy-sw.js')).toBe(true);
-    expect(isSliccAppPath('/lucide-icons.js')).toBe(true);
-    expect(isSliccAppPath('/preview-sw.js')).toBe(true);
-    expect(isSliccAppPath('/slicc-diff.js')).toBe(true);
-    expect(isSliccAppPath('/slicc-editor.js')).toBe(true);
-  });
-
-  it('still lets genuine project paths through', () => {
+describe('isSliccAppPath — project-owned static prefixes stay interceptable (#1981)', () => {
+  it('does NOT reserve the production static surface', () => {
+    // A previewed project (a built Vite app is the canonical case) serves
+    // its own /assets/, fonts, and favicons; reserving these pathnames
+    // would break project serve mode for it. App protection comes from
+    // requester scoping in projectServeVfsPath instead.
+    expect(isSliccAppPath('/assets/main-Ab12Cd34.js')).toBe(false);
+    expect(isSliccAppPath('/fonts/site.woff2')).toBe(false);
+    expect(isSliccAppPath('/favicon.ico')).toBe(false);
     expect(isSliccAppPath('/styles/main.css')).toBe(false);
-    expect(isSliccAppPath('/scripts/app.js')).toBe(false);
-    expect(isSliccAppPath('/other-page.html')).toBe(false);
-    // A project's own assets-adjacent names must not be swallowed by the
-    // root-file allowlist (exact matches only).
-    expect(isSliccAppPath('/slicc-editor.js.map')).toBe(false);
-    expect(isSliccAppPath('/main.js')).toBe(false);
   });
 });
 
-describe('projectServeVfsPath — client scoping (#1981)', () => {
+describe('pathnameOf (#1981)', () => {
+  it('extracts rooted pathnames and rejects opaque or invalid URLs', () => {
+    expect(pathnameOf('https://app.test/preview/index.html')).toBe('/preview/index.html');
+    expect(pathnameOf('https://app.test/')).toBe('/');
+    expect(pathnameOf('about:client')).toBe(null);
+    expect(pathnameOf('')).toBe(null);
+    expect(pathnameOf(null)).toBe(null);
+    expect(pathnameOf(undefined)).toBe(null);
+    expect(pathnameOf('not a url')).toBe(null);
+  });
+});
+
+describe('projectServeVfsPath — requester scoping (#1981)', () => {
   const ROOT = '/shared/my-project';
 
-  it('serves project paths requested by a /preview/ client', () => {
-    expect(
-      projectServeVfsPath(ROOT, '/styles/main.css', 'https://app.test/preview/index.html')
-    ).toBe('/shared/my-project/styles/main.css');
-  });
-
-  it('serves project paths requested by a page project serve mode itself delivered', () => {
-    // A Mode-2-served document (multi-page project) has a non-app URL.
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', 'https://app.test/other-page.html')).toBe(
+  it('serves any project path — including /assets/ — to a /preview/ requester', () => {
+    expect(projectServeVfsPath(ROOT, '/assets/main.js', '/preview/index.html', false)).toBe(
+      '/shared/my-project/assets/main.js'
+    );
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', '/preview/index.html', false)).toBe(
       '/shared/my-project/styles/main.css'
     );
   });
 
-  it('never captures requests made by the leader page', () => {
-    // The boot-brick vector: a stored projectRoot must not reroute the
-    // app's own fetches, whatever the pathname.
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', 'https://app.test/')).toBe(null);
-    expect(projectServeVfsPath(ROOT, '/data.json', 'https://app.test/index.html')).toBe(null);
+  it('serves documents project serve mode itself delivered (tracked, not path-guessed)', () => {
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', '/other-page.html', true)).toBe(
+      '/shared/my-project/styles/main.css'
+    );
   });
 
-  it('never serves app paths regardless of requester', () => {
-    expect(
-      projectServeVfsPath(ROOT, '/assets/chunk-abc123.js', 'https://app.test/preview/index.html')
-    ).toBe(null);
+  it('never captures the leader page or worker-served app routes', () => {
+    // The boot-brick vector: '/' fetching chunks and worker scripts.
+    expect(projectServeVfsPath(ROOT, '/assets/kernel-worker.js', '/', false)).toBe(null);
+    // '/cloud' is a real app route the SW cannot know by pathname — it is
+    // simply NOT a tracked project document, so it passes through.
+    expect(projectServeVfsPath(ROOT, '/cloud/styles.css', '/cloud', false)).toBe(null);
+    expect(projectServeVfsPath(ROOT, '/electron/app.js', '/electron', false)).toBe(null);
   });
 
-  it('passes through when there is no requester or an unparsable one', () => {
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', null)).toBe(null);
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', undefined)).toBe(null);
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', '')).toBe(null);
-    expect(projectServeVfsPath(ROOT, '/styles/main.css', 'about:client')).toBe(null);
-  });
-
-  it('passes everything through when no project root is set', () => {
-    expect(projectServeVfsPath(null, '/styles/main.css', 'https://app.test/preview/x.html')).toBe(
+  it('excludes app infrastructure paths even for project requesters', () => {
+    expect(projectServeVfsPath(ROOT, '/api/fetch-proxy', '/preview/index.html', false)).toBe(null);
+    expect(projectServeVfsPath(ROOT, '/node_modules/x/y.js', '/preview/index.html', false)).toBe(
       null
     );
+  });
+
+  it('passes through unknown requesters and unset project roots', () => {
+    expect(projectServeVfsPath(ROOT, '/styles/main.css', null, false)).toBe(null);
+    expect(projectServeVfsPath(null, '/styles/main.css', '/preview/index.html', false)).toBe(null);
   });
 });

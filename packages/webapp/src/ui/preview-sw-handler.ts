@@ -229,44 +229,39 @@ export async function handlePreviewRequest(
 }
 
 /**
- * Root-level scripts the production build serves next to `index.html`
- * (see `dist/ui/`). Enumerated so project serve mode can never shadow
- * them; anything added later is still protected by the client scoping
- * in `projectServeVfsPath`.
- */
-const APP_ROOT_FILES = new Set([
-  '/electron-overlay-entry.js',
-  '/llm-proxy-sw.js',
-  '/lucide-icons.js',
-  '/preview-sw.js',
-  '/slicc-diff.js',
-  '/slicc-editor.js',
-]);
-
-/**
  * Paths that should NOT be intercepted in project serve mode — they
  * belong to the slicc app itself (Vite HMR, API endpoints, UI assets).
  *
- * `/assets/` is the production chunk directory: without it, a stored
- * `projectRoot` rerouted every app-chunk fetch that reached the SW into
- * the project VFS — 30 s responder stall, then 404 — presenting as a
- * boot failure ("Kernel worker did not signal ready") on reload (#1981).
+ * Deliberately NOT broadened with the production static surface
+ * (`/assets/`, `/fonts/`, …): previewed projects — a built Vite app is
+ * the canonical case — legitimately serve their own `/assets/*` files,
+ * so those prefixes must stay interceptable for project contexts. The
+ * app is protected by requester scoping in `projectServeVfsPath`, not by
+ * reserving pathnames (#1981).
  */
 export function isSliccAppPath(pathname: string): boolean {
   return (
     pathname.startsWith('/@') ||
     pathname.startsWith('/__') ||
     pathname.startsWith('/api/') ||
-    pathname.startsWith('/assets/') ||
-    pathname.startsWith('/fonts/') ||
-    pathname.startsWith('/logos/') ||
-    pathname.startsWith('/favicon') ||
-    pathname.startsWith('/packages/') ||
+    pathname.startsWith('/packages/webapp/src/') ||
     pathname.startsWith('/node_modules/') ||
-    APP_ROOT_FILES.has(pathname) ||
     pathname === '/' ||
     pathname === '/index.html'
   );
+}
+
+/** Rooted pathname of a URL string, or null for unparsable/opaque URLs. */
+export function pathnameOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  // Opaque-path URLs ('about:client') parse but are not pages of ours.
+  return pathname.startsWith('/') ? pathname : null;
 }
 
 /**
@@ -274,30 +269,24 @@ export function isSliccAppPath(pathname: string): boolean {
  * the project VFS. Returns the VFS path to read, or `null` to let the
  * request pass through to the network.
  *
- * Beyond the pathname allowlist, interception is scoped to requests made
- * BY a project context: the requester (the SW fetch event's client, or
- * the referrer for client-less navigations) must be a `/preview/` page
- * or a page that project serve mode itself delivered (any non-app path).
- * The leader page (`/`) is an app path, so its own subresource fetches —
- * app chunks, worker scripts — can never be captured, no matter what
- * `projectRoot` a previous preview left behind in SW state (#1981).
+ * Beyond the pathname exclusions, interception requires the REQUESTER to
+ * be a known project context: a `/preview/` page, or a document project
+ * serve mode itself delivered (`requesterIsProjectDocument`, tracked by
+ * the SW at navigation-serve time). Everything else — the leader page at
+ * `/`, worker-served routes like `/cloud`, unknown or opaque requesters —
+ * falls through to the network, so a `projectRoot` left behind in SW
+ * state can never capture the app's own fetches (#1981). App routes are
+ * recognized by what project serve mode has actually delivered, not by a
+ * pathname heuristic, so `/cloud`-style pages are never misclassified.
  */
 export function projectServeVfsPath(
   projectRoot: string | null,
   pathname: string,
-  requesterUrl: string | null | undefined
+  requesterPath: string | null,
+  requesterIsProjectDocument: boolean
 ): string | null {
   if (!projectRoot) return null;
   if (isSliccAppPath(pathname)) return null;
-  if (!requesterUrl) return null;
-  let requesterPath: string;
-  try {
-    requesterPath = new URL(requesterUrl).pathname;
-  } catch {
-    return null;
-  }
-  // Opaque-path URLs ('about:client') parse but are not app pages.
-  if (!requesterPath.startsWith('/')) return null;
-  const isProjectContext = requesterPath.startsWith('/preview/') || !isSliccAppPath(requesterPath);
+  const isProjectContext = requesterIsProjectDocument || requesterPath?.startsWith('/preview/');
   return isProjectContext ? projectRoot + pathname : null;
 }
