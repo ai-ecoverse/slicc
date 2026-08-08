@@ -23,6 +23,7 @@ import {
   hasCompactionProgress,
   stripOrphanedToolResults,
 } from '../core/context-compaction.js';
+import { isFeatureEnabled } from '../core/feature-flags.js';
 import type {
   AgentMessage,
   AssistantMessage,
@@ -633,8 +634,17 @@ export class ScoopContext {
     const compactionHeaders =
       model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
     const getCompactionApiKey = () => getApiKey() ?? undefined;
+    // With agentic memory enabled, the end-of-session curator is the ONLY
+    // memory builder (#2003): wiring onMemoryUpdates here would make every
+    // mid-session compaction append legacy bullets to the curated file and
+    // trigger the legacy budget restructure, repeatedly squeezing curated
+    // content until only the recent session survives. Leaving the callback
+    // unset skips the extraction LLM call, its state, and the append+budget
+    // chain. The flag resolves in this (worker) realm via the seeded/synced
+    // localStorage shim, so the avatar-dialog toggle applies at the next
+    // prompt without a reload.
     const onMemoryUpdates =
-      this.scoop.isCone && this.callbacks.appendConeMemory
+      this.scoop.isCone && !isFeatureEnabled('agentic-memory') && this.callbacks.appendConeMemory
         ? (bullets: string) =>
             this.callbacks.appendConeMemory!(bullets, {
               source: 'compaction',

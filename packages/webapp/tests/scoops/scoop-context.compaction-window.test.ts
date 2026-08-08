@@ -18,7 +18,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 type AgentCtorOptions = { streamFn?: unknown; transformContext?: unknown };
-type CompactConfig = { headers?: Record<string, string>; contextWindow?: number };
+type CompactConfig = {
+  headers?: Record<string, string>;
+  contextWindow?: number;
+  onMemoryUpdates?: unknown;
+};
 
 const captures = vi.hoisted(() => ({
   agentCtorCalls: [] as AgentCtorOptions[],
@@ -27,6 +31,11 @@ const captures = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
   resolveCurrentModel: vi.fn(() => ({ id: 'test-model', provider: 'anthropic' })),
+  enabledFlags: new Set<string>(),
+}));
+
+vi.mock('../../src/core/feature-flags.js', () => ({
+  isFeatureEnabled: (id: string) => mocks.enabledFlags.has(id),
 }));
 
 vi.mock('../../src/core/index.js', () => {
@@ -130,9 +139,13 @@ function createMockFs() {
   };
 }
 
-async function initWith(model: Record<string, unknown>): Promise<CompactConfig> {
+async function initWith(
+  model: Record<string, unknown>,
+  extraCallbacks: Record<string, unknown> = {}
+): Promise<CompactConfig> {
   mocks.resolveCurrentModel.mockReturnValue(model as never);
-  const ctx = new ScoopContext(baseScoop, createMockCallbacks() as never, createMockFs() as never);
+  const callbacks = { ...createMockCallbacks(), ...extraCallbacks };
+  const ctx = new ScoopContext(baseScoop, callbacks as never, createMockFs() as never);
   await ctx.init();
   expect(captures.createCompactContextCalls).toHaveLength(1);
   return captures.createCompactContextCalls[0];
@@ -164,5 +177,35 @@ describe('ScoopContext compaction context-window wiring', () => {
   it('omits contextWindow (default applies) when the model reports no window', async () => {
     const config = await initWith({ id: 'none', provider: 'adobe' });
     expect(config.contextWindow).toBeUndefined();
+  });
+});
+
+describe('ScoopContext compaction memory gating (#2003)', () => {
+  const MODEL = { id: 'sonnet', provider: 'adobe', contextWindow: 200_000 };
+
+  beforeEach(() => {
+    captures.agentCtorCalls.length = 0;
+    captures.createCompactContextCalls.length = 0;
+    mocks.resolveCurrentModel.mockReset();
+    mocks.enabledFlags.clear();
+  });
+
+  it('wires onMemoryUpdates for the cone when agentic memory is off', async () => {
+    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
+    expect(config.onMemoryUpdates).toBeTypeOf('function');
+  });
+
+  it('leaves onMemoryUpdates unset when agentic memory is on — the curator owns memory', async () => {
+    // Mid-session compaction memory building appends legacy bullets and
+    // triggers the budget restructure on the curated file, repeatedly
+    // squeezing it toward "last session summed up" (#2003).
+    mocks.enabledFlags.add('agentic-memory');
+    const config = await initWith(MODEL, { appendConeMemory: vi.fn() });
+    expect(config.onMemoryUpdates).toBeUndefined();
+  });
+
+  it('leaves onMemoryUpdates unset without an appendConeMemory callback (unchanged)', async () => {
+    const config = await initWith(MODEL);
+    expect(config.onMemoryUpdates).toBeUndefined();
   });
 });

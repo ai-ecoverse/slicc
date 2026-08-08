@@ -51,9 +51,8 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   `readFileSync`/`writeFileSync` and `child_process.execSync`/`execFileSync`/`spawnSync`
   for realm scripts, over one blocking sync-XHR transport (`synchronify`) and one
   capability token scoped to the calling realm's `ctx.fs` / `ctx.exec`.
-  See `docs/kernel/process-model.md` for method surface, coherence, and cold-start.
 
-Deep reference: `docs/kernel/process-model.md`.
+Deep reference (method surface, coherence, cold-start): `docs/kernel/process-model.md`.
 
 ### Orchestrator
 
@@ -75,8 +74,8 @@ Deep reference: `docs/kernel/process-model.md`.
 ### VirtualFS
 
 - Path: `packages/webapp/src/fs/`
-- `virtual-fs.ts` — POSIX-like FS backed by OPFS (in-memory in Node tests). Legacy
-  LightningFS/IDB backend and boot-time migration are fully removed.
+- `virtual-fs.ts` — POSIX-like FS backed by OPFS (in-memory in Node tests); the legacy
+  LightningFS/IDB backend is gone.
 - `restricted-fs.ts` — path ACLs for scoop sandboxes.
 - `mount-commands.ts` — parses `--source` / `--profile` / `--no-probe` etc.;
   `path-utils.ts` defines normalization.
@@ -201,10 +200,11 @@ See docs/architecture.md "Multi-Browser Sync (Tray) Architecture".
 ### Context Compaction
 
 - Path: `packages/webapp/src/core/context-compaction.ts`
-- `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus reserve,
-  falling back to 200K when absent/zero.
-- Cone memory appends to `/workspace/CLAUDE.md`; the agentic budget covers the whole file, legacy
-  restructuring only `## Auto-extracted`.
+- `scoop-context.ts` passes `model.contextWindow`; compaction fires at window minus
+  reserve (200K fallback when absent/zero).
+- Cone memory appends to `/workspace/CLAUDE.md`; the agentic budget covers the whole file,
+  legacy restructuring only `## Auto-extracted`. `agentic-memory` on → compaction builds
+  no memory (#2003); the curator owns it.
 
 ### Frozen Sessions ("New session" flow)
 
