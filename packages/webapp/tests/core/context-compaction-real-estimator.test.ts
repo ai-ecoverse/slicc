@@ -118,13 +118,20 @@ describe('createCompactContext with the real estimator', () => {
       createUser('what did you find?'),
     ];
 
-    await createCompactContext(mockConfig)(messages);
+    const result = await createCompactContext(mockConfig)(messages);
 
-    // completeSimple firing proves shouldCompact returned true, which proves
-    // the real estimateTokens counted the toolResult bytes — the whole point
-    // of this regression guard. If a future pi-coding-agent release changes
-    // `estimateTokens` to drop toolResult accounting, this assertion fails.
-    expect(mockCompleteSimple).toHaveBeenCalled();
+    // The oversized toolResult being elided proves shouldCompact returned true,
+    // which proves the real estimateTokens counted the toolResult bytes — the
+    // whole point of this regression guard. If a future pi-coding-agent release
+    // changes `estimateTokens` to drop toolResult accounting, total would be
+    // tiny, shouldCompact false, and the messages returned unchanged (blob
+    // intact), failing these assertions.
+    const resultText = JSON.stringify(result);
+    expect(resultText).not.toContain('x'.repeat(1000));
+    expect(resultText).toContain('Tool result elided');
+    // #2011: a single oversized message is stubbed in place — no doomed LLM
+    // summary round-trip (sending it would re-blow the window).
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
   });
 
   it('does NOT trigger compaction when toolResult payloads are small', async () => {
