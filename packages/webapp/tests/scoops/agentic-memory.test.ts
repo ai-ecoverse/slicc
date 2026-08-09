@@ -120,6 +120,9 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(spawn.mock.calls[0][0]).toMatchObject({
       persistSession: true,
       name: 'memory-curator',
+      // Shipped MEMORY.md sets timeoutSeconds: 600 → a 10-minute wall-clock
+      // ceiling, generous enough that a slow pass is not killed mid-write.
+      maxWallClockMs: 600_000,
     });
   });
 
@@ -143,6 +146,8 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     );
     expect(prompt).toContain('Prioritize re-verifying the oldest-dated sections');
     expect(prompt).toContain('Treat undated headings as maximally stale');
+    // The soft time budget: aim to finish under 5 minutes (hard stop at 10).
+    expect(prompt).toContain('should finish in well under 5 minutes');
     expect(prompt).not.toContain('Preserve the user-authored header');
   });
 
