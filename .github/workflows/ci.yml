@@ -426,7 +426,11 @@ jobs:
       needs.changes.outputs.root-config == 'true' ||
       needs.changes.outputs.speech == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Budget covers setup + three builds + the full suite on one worker, and on
+    # the speech leg the kokoro spec alone may take up to its 25-minute test
+    # timeout (staging recovery = one page reboot + a second ~6-min download
+    # pass). 30 could kill the job before the spec's own budget played out.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
