@@ -92,7 +92,10 @@ Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → 
 else SPA. **Cherry embed (`?cherry=1`):** `frame-ancestors` from
 `ALLOWED_CHERRY_HOST_ORIGINS` (bare `*` also enumerates `chrome-extension://` origins);
 non-cherry → `frame-ancestors 'none'`; cherry sets `Cache-Control: no-store` +
-`Vary: Sec-Fetch-Dest`. **25 MiB per-asset cap** — CI runs `wrangler deploy --dry-run`
+`Vary: Sec-Fetch-Dest`. **Non-cherry, non-electron SPA responses also carry
+`Document-Isolation-Policy: isolate-and-credentialless`** — per-document
+cross-origin isolation (SAB for vpod guest networking) without COOP/COEP;
+cherry/electron branches must stay header-free (embedded, never need SAB). **25 MiB per-asset cap** — CI runs `wrangler deploy --dry-run`
 as a hard gate. `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys;
 `serveAssetWithArchiveFallback` tries `ASSETS` → R2 → stale-asset reload; bucket GC
 14 days. Full rules:
