@@ -249,6 +249,36 @@ jobs:
   # + Node >= 25 quirks around vi.unstubAllGlobals + localStorage). Build/E2E
   # stay on a single Node version in the per-package jobs to keep CI time
   # bounded.
+  # Full 9-project `tsc` matrix. The per-package jobs only run package-scoped
+  # typechecks; the cross-project configs (tsconfig.webapp-worker.json, etc.)
+  # were previously typechecked ONLY in the release job, so a type error there
+  # merged green and then broke the release (bash-tool truncate import, #2020).
+  # ~7s of tsc on top of npm ci — cheap insurance against that class of break.
+  typecheck:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.cherry == 'true' ||
+      needs.changes.outputs.dev-tools == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Typecheck (all tsc projects)
+        run: npm run typecheck
+
   node-matrix-tests:
     needs: changes
     if: >-
@@ -1689,6 +1719,7 @@ jobs:
         changes,
         lint,
         linear-history,
+        typecheck,
         node-matrix-tests,
         webapp,
         speech-e2e,
