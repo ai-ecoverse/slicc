@@ -17,6 +17,7 @@ import {
   BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
+  selectFfmpegCore,
   tryLoadFfmpegCoreFromNodeModules,
 } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 
@@ -733,6 +734,70 @@ describe('tryLoadFfmpegCoreFromNodeModules', () => {
       fromDir: '/workspace',
     });
     expect(loaded).toBeNull();
+  });
+});
+
+describe('selectFfmpegCore', () => {
+  /** Fake ipk context with configurable installed core packages. */
+  function makeCoreIpk(opts: { core?: boolean; mt?: boolean; mtWorkerMissing?: boolean }) {
+    const sources = new Map<string, string>();
+    const bytes = new Map<string, Uint8Array>();
+    const dirs = new Set<string>(['/workspace', '/workspace/node_modules']);
+    const install = (pkg: string, withWorker: boolean) => {
+      const root = `/workspace/node_modules/${pkg}`;
+      for (const d of [`/workspace/node_modules/@ffmpeg`, root, `${root}/dist`, `${root}/dist/esm`])
+        dirs.add(d);
+      sources.set(`${root}/package.json`, JSON.stringify({ name: pkg, version: '0.12.10' }));
+      sources.set(`${root}/dist/esm/ffmpeg-core.js`, `/* ${pkg} glue */`);
+      bytes.set(`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d]));
+      if (withWorker) {
+        sources.set(`${root}/dist/esm/ffmpeg-core.worker.js`, `/* ${pkg} pthread worker */`);
+      }
+    };
+    if (opts.core) install('@ffmpeg/core', false);
+    if (opts.mt) install('@ffmpeg/core-mt', !opts.mtWorkerMissing);
+    return {
+      reader: {
+        exists: async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p),
+        isDirectory: async (p: string) => dirs.has(p),
+        readFile: async (p: string) => {
+          const v = sources.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        },
+      },
+      readBytes: async (p: string) => {
+        const v = bytes.get(p);
+        if (!v) throw new Error(`ENOENT: ${p}`);
+        return v;
+      },
+      fromDir: '/workspace',
+    };
+  }
+
+  it('prefers @ffmpeg/core-mt (with pthread worker) when isolated and installed', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true, mt: true }), true);
+    expect(loaded?.pkg).toBe('@ffmpeg/core-mt');
+    expect(loaded?.workerSource).toContain('pthread worker');
+  });
+
+  it('falls back to @ffmpeg/core when isolated but -mt is not installed', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true }), true);
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
+    expect(loaded?.workerSource).toBeUndefined();
+  });
+
+  it('ignores an installed -mt core when the runtime is not isolated', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true, mt: true }), false);
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
+  });
+
+  it('treats an -mt install missing its worker file as not installed', async () => {
+    const loaded = await selectFfmpegCore(
+      makeCoreIpk({ core: true, mt: true, mtWorkerMissing: true }),
+      true
+    );
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
   });
 });
 

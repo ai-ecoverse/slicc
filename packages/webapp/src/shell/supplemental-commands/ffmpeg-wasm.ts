@@ -38,6 +38,16 @@ export const BUNDLED_FFMPEG_CORE_VERSION = __FFMPEG_CORE_VERSION__;
 export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_modules: run \`ipk add @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
 
 /**
+ * The multi-threaded core (pthreads over SharedArrayBuffer). Preferred
+ * automatically when the runtime is cross-origin isolated (the leader is,
+ * via Document-Isolation-Policy — see #2040) AND the package is installed;
+ * `@ffmpeg/core` remains the universal fallback because embedded floats
+ * (Cherry, spoon/Electron) can never be isolated. Published in lockstep
+ * with `@ffmpeg/core`, so the same pinned version applies.
+ */
+export const FFMPEG_CORE_MT_PACKAGE = '@ffmpeg/core-mt';
+
+/**
  * Read-only VFS context the loader needs to read an ipk-installed
  * `@ffmpeg/core/dist/esm/{ffmpeg-core.js,ffmpeg-core.wasm}` pair.
  * Mirrors the {@link IpkResolutionContext} shape used by
@@ -59,7 +69,20 @@ interface FfmpegAssetUrls {
   coreURL: string;
   wasmURL: string;
   classWorkerURL?: string;
+  /** Pthread worker (multi-threaded core only). */
+  workerURL?: string;
 }
+
+/** A core package resolved from the VFS `node_modules`. */
+export interface LoadedFfmpegCore {
+  pkg: typeof FFMPEG_CORE_PACKAGE | typeof FFMPEG_CORE_MT_PACKAGE;
+  coreSource: string;
+  wasmBytes: Uint8Array;
+  /** `ffmpeg-core.worker.js` source — present only for the `-mt` core. */
+  workerSource?: string;
+}
+
+const FFMPEG_CORE_PACKAGE = '@ffmpeg/core';
 
 let ffmpegPromise: Promise<FFmpeg> | null = null;
 
@@ -97,6 +120,7 @@ async function loadFfmpeg(
   await ffmpeg.load({
     coreURL: assets.coreURL,
     wasmURL: assets.wasmURL,
+    ...(assets.workerURL ? { workerURL: assets.workerURL } : {}),
     ...(assets.classWorkerURL ? { classWorkerURL: assets.classWorkerURL } : {}),
   });
   log('ffmpeg ready');
@@ -115,11 +139,12 @@ async function loadFfmpeg(
  * without booting the heavy wasm runtime.
  */
 export async function tryLoadFfmpegCoreFromNodeModules(
-  ipk: IpkResolutionContext
-): Promise<{ coreSource: string; wasmBytes: Uint8Array } | null> {
+  ipk: IpkResolutionContext,
+  pkg: LoadedFfmpegCore['pkg'] = FFMPEG_CORE_PACKAGE
+): Promise<LoadedFfmpegCore | null> {
   let resolved;
   try {
-    resolved = await ipkResolve('@ffmpeg/core/package.json', ipk.fromDir, ipk.reader);
+    resolved = await ipkResolve(`${pkg}/package.json`, ipk.fromDir, ipk.reader);
   } catch {
     return null;
   }
@@ -127,15 +152,39 @@ export async function tryLoadFfmpegCoreFromNodeModules(
   const pkgDir = splitPath(resolved.path).dir;
   const corePath = `${pkgDir}/dist/esm/ffmpeg-core.js`;
   const wasmPath = `${pkgDir}/dist/esm/ffmpeg-core.wasm`;
+  // The -mt core is unusable without its pthread worker — treat a missing
+  // worker file as not-installed rather than booting a broken core.
+  const workerPath =
+    pkg === FFMPEG_CORE_MT_PACKAGE ? `${pkgDir}/dist/esm/ffmpeg-core.worker.js` : null;
   if (!(await ipk.reader.exists(corePath))) return null;
   if (!(await ipk.reader.exists(wasmPath))) return null;
+  if (workerPath && !(await ipk.reader.exists(workerPath))) return null;
   try {
     const coreSource = await ipk.reader.readFile(corePath);
     const wasmBytes = await ipk.readBytes(wasmPath);
-    return { coreSource, wasmBytes };
+    const workerSource = workerPath ? await ipk.reader.readFile(workerPath) : undefined;
+    return { pkg, coreSource, wasmBytes, ...(workerSource !== undefined ? { workerSource } : {}) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Pick the core to boot: the multi-threaded `@ffmpeg/core-mt` when the
+ * runtime is cross-origin isolated (SharedArrayBuffer available for its
+ * pthread pool) and the package is installed; otherwise the single-threaded
+ * `@ffmpeg/core`. Exported for unit tests; production passes
+ * `globalThis.crossOriginIsolated`.
+ */
+export async function selectFfmpegCore(
+  ipk: IpkResolutionContext,
+  isolated: boolean
+): Promise<LoadedFfmpegCore | null> {
+  if (isolated) {
+    const mt = await tryLoadFfmpegCoreFromNodeModules(ipk, FFMPEG_CORE_MT_PACKAGE);
+    if (mt) return mt;
+  }
+  return tryLoadFfmpegCoreFromNodeModules(ipk);
 }
 
 async function resolveAssetUrls(
@@ -150,20 +199,24 @@ async function resolveAssetUrls(
     throw new Error('ffmpeg-wasm is not available in Node runtime');
   }
   if (!ipk) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
-  const loaded = await tryLoadFfmpegCoreFromNodeModules(ipk);
+  const loaded = await selectFfmpegCore(ipk, globalThis.crossOriginIsolated === true);
   if (!loaded) throw new Error(FFMPEG_CORE_NOT_INSTALLED);
 
   log(
-    `ffmpeg-core loaded from ipk node_modules (js: ${loaded.coreSource.length} chars, wasm: ${loaded.wasmBytes.byteLength} bytes)`
+    `${loaded.pkg} loaded from ipk node_modules (js: ${loaded.coreSource.length} chars, wasm: ${loaded.wasmBytes.byteLength} bytes${loaded.workerSource ? ', multi-threaded' : ''})`
   );
   const wasmURL = bytesToBlobUrl(loaded.wasmBytes, 'application/wasm');
 
   // Materialize the core JS source as a blob URL so the
   // `@ffmpeg/ffmpeg` wrapper worker (also `blob:` by default) can
-  // `import(coreURL)` same-scheme.
+  // `import(coreURL)` same-scheme. The -mt pthread worker rides the same
+  // pattern (the official multithread recipe uses blob URLs for all three).
   return {
     coreURL: stringToBlobUrl(loaded.coreSource, 'text/javascript'),
     wasmURL,
+    ...(loaded.workerSource !== undefined
+      ? { workerURL: stringToBlobUrl(loaded.workerSource, 'text/javascript') }
+      : {}),
   };
 }
 
