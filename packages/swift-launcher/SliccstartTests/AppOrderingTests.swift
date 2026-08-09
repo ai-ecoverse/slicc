@@ -156,15 +156,17 @@ final class AppOrderingTests: XCTestCase {
 
     func testBrowserLaunchActionResolves() {
         XCTAssertEqual(
-            BrowserLaunchAction.resolve(isRunning: false, hasRemoteSessions: true),
+            BrowserLaunchAction.resolve(isRunning: false, hasAttachableSessions: true),
             .chooseLeadOrAttach
         )
         XCTAssertEqual(
-            BrowserLaunchAction.resolve(isRunning: true, hasRemoteSessions: true),
+            BrowserLaunchAction.resolve(isRunning: true, hasAttachableSessions: true),
             .standalone
         )
+        // Advertised-but-unreachable sessions do not count as attachable, so a
+        // launch with none left goes straight to standalone with no dialog.
         XCTAssertEqual(
-            BrowserLaunchAction.resolve(isRunning: false, hasRemoteSessions: false),
+            BrowserLaunchAction.resolve(isRunning: false, hasAttachableSessions: false),
             .standalone
         )
     }

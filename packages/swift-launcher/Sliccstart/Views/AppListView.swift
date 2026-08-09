@@ -121,7 +121,7 @@ struct AppListView: View {
                 onLaunchStandalone(target)
                 browserDialogTarget = nil
             }
-            ForEach(sessionStore.remoteSessions) { session in
+            ForEach(attachableRemoteSessions) { session in
                 Button("Attach to \(session.label) on \(session.deviceName)") {
                     onLaunchBrowserFollower(target, session.joinUrl)
                     browserDialogTarget = nil
@@ -288,10 +288,21 @@ struct AppListView: View {
         orderedBrowsers.first(where: { $0.name == session.label })?.icon
     }
 
+    private var attachableRemoteSessions: [SyncedTraySession] {
+        TraySessionPresentation.attachableSessions(
+            sessionStore.remoteSessions,
+            verdicts: sessionReachability.verdicts
+        )
+    }
+
     private func handleBrowserLaunch(_ target: AppTarget) {
+        // Re-probe so a leader that died after the last section-appear probe
+        // drops out of the dialog while it is open; the resolve below still
+        // uses the verdicts already in hand.
+        sessionReachability.probe(sessionStore.remoteSessions)
         switch BrowserLaunchAction.resolve(
             isRunning: sliccProcess.runtimeState(for: target).isRunning,
-            hasRemoteSessions: !sessionStore.remoteSessions.isEmpty
+            hasAttachableSessions: !attachableRemoteSessions.isEmpty
         ) {
         case .standalone:
             onLaunchStandalone(target)

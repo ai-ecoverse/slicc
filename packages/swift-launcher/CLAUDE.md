@@ -55,7 +55,7 @@ Shared models in **`packages/swift-traysession`**. **Secret-bearing join URLs sy
 
 ## App Ordering, Browser Followers, Startup
 
-`Models/AppOrdering.swift` (default `browserBundlePriority`/`terminalBundlePriority`; user drag-reorder via `AppOrderStore` UserDefaults wins). `browserFollowerArgs(cdpPort:joinUrl:)` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. `Models/StartupPreference.swift`: launch starts top-ordered browser (`AppOrdering.topBrowser`). Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
+`Models/AppOrdering.swift` (default `browserBundlePriority`/`terminalBundlePriority`; user drag-reorder via `AppOrderStore` UserDefaults wins). `browserFollowerArgs(cdpPort:joinUrl:)` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. `BrowserLaunchAction` and the lead-or-attach dialog count only attachable iCloud sessions (no confirmed-unreachable `SessionReachability` verdict) — all-dead lists launch standalone with no dialog. `Models/StartupPreference.swift`: launch starts top-ordered browser (`AppOrdering.topBrowser`). Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
 
 ## Default Browser Role
 

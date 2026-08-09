@@ -76,6 +76,21 @@ final class TraySessionLauncherTests: XCTestCase {
         )
     }
 
+    func testAttachableSessionsExcludeOnlyConfirmedUnreachable() {
+        let unprobed = session(url: "https://one.invalid/join/a", label: "One")
+        let unreachable = session(url: "https://two.invalid/join/b", label: "Two")
+        let reachable = session(url: "https://three.invalid/join/c", label: "Three")
+        let sessions = [unprobed, unreachable, reachable]
+        let verdicts: [String: SessionReachability.Verdict] = [
+            unreachable.id: .unreachable,
+            reachable.id: .reachable,
+        ]
+
+        let attachable = TraySessionPresentation.attachableSessions(sessions, verdicts: verdicts)
+
+        XCTAssertEqual(attachable.map(\.id), [unprobed.id, reachable.id])
+    }
+
     func testUnreachableSessionDisablesRemoteActions() {
         XCTAssertFalse(
             TraySessionPresentation.remoteActionEnabled(available: true, verdict: .unreachable)
