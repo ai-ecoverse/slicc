@@ -6,25 +6,27 @@ import { define } from '../internal/define.js';
  * the host document (idempotent) and scoped by the host class `.slicc-chatpane`
  * (added on connect) so it can't leak.
  *
- * Lifted faithfully from the prototype (`proto/StellarRubySwift.html` `.chatpane`
- * + `.shell.open .chatpane`): the flat, full-bleed left column of the chat shell.
- * Unlike the floating, rounded `.workbench` pane beside it, the chat column stays
- * FLAT (shadcn-style) — it is just a `flex-direction: column` that stacks the nav
- * + chat thread + composer and owns the column width animation.
+ * Lifted from the prototype (`proto/StellarRubySwift.html` `.chatpane`): the
+ * flat, full-bleed chat column of the shell. Unlike the framed tool tiles
+ * beside it, the chat column stays FLAT (shadcn-style) — it is just a
+ * `flex-direction: column` that stacks the nav + chat thread + composer.
  *
- * Width: `calc(100% - 48px)` in the wide (shell-collapsed) layout — the full row
- * minus the 48px dock rail — narrowing to `34%` in the `narrow` layout (the
- * prototype's `.shell.open .chatpane`, where the workbench floats in beside it).
- * The `width .38s cubic-bezier(.4,0,.2,1)` transition is the slide the whole chat
- * column performs as the workbench opens / closes. `flex: 0 0 auto` keeps the
- * column from flex-growing past that explicit width; `min-height: 0` lets the
- * inner thread scroll instead of overflowing the column.
+ * Width: the column always fills its container. Since the dock-tree became the
+ * sole layout host (the chatpane lives inside a `<slicc-surface>` leaf, and the
+ * 48px dock rail is a separate `<slicc-shell>` flex sibling of the tree), the
+ * column's width is entirely the tree's business — the shell-era
+ * `calc(100% - 48px)` / `34%` widths would double-count the rail and fight the
+ * zone sizing. `flex: 1 1 0` + `width: 100%` fill the surface either way
+ * (flex item or block child); `min-width: 0` / `min-height: 0` let the inner
+ * thread scroll and shrink instead of overflowing the column.
  *
- * The `narrow` host attribute mirrors the prototype's `.shell.open`: besides the
- * 34% width it is forwarded as `open` onto the slotted `<slicc-chat-thread>` and
- * `<slicc-composer>` (tightening the thread feather + padding and hiding the
- * composer's keyboard hint) — that forwarding happens in script, not CSS, since
- * those children own their own scoped rules.
+ * The `narrow` host attribute mirrors the prototype's `.shell.open`: it no
+ * longer changes the column's width (the dock-tree owns that), but is forwarded
+ * as `open` onto the slotted `<slicc-chat-thread>` and `<slicc-composer>`
+ * (tightening the thread feather + padding and hiding the composer's keyboard
+ * hint) — that forwarding happens in script, not CSS, since those children own
+ * their own scoped rules. `<slicc-shell>` toggles it whenever the dock-tree
+ * shows any non-chat leaf.
  *
  * Everything is var-driven (`--bg` / `--ink` here; children theme themselves via
  * `--ctx` / `--shaderbg` / `--line` / `--ui`) so dark mode flips automatically
@@ -36,23 +38,19 @@ import { define } from '../internal/define.js';
  */
 const STYLE = `
 .slicc-chatpane {
-  flex: 0 0 auto;
-  width: calc(100% - 48px);
+  flex: 1 1 0;
+  width: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   font-family: var(--ui);
   color: var(--ink);
   background: var(--bg);
-  transition: width .38s cubic-bezier(.4, 0, .2, 1);
 }
 .slicc-chatpane[hidden] {
   display: none;
-}
-/* narrow-chat (.shell.open .chatpane): the column shrinks to 34% and slides. */
-.slicc-chatpane[narrow] {
-  width: 34%;
 }
 /* The reading column is background-free in every layout (the frosted card was
    dropped — the shader renders low-contrast instead). In the narrow column the
@@ -96,13 +94,12 @@ function ensureChatpaneStyle(doc: Document): void {
 const OPEN_FORWARD_TAGS = ['slicc-chat-thread', 'slicc-composer'] as const;
 
 /**
- * `<slicc-chatpane>` — the flat, full-bleed left column of the chat shell from
+ * `<slicc-chatpane>` — the flat, full-bleed chat column of the shell from
  * the prototype (`.chatpane`). A `flex-direction: column` host that stacks — in
  * DOM order — an optional top `<slicc-nav>`, the `<slicc-chat-thread>`, and the
  * `<slicc-composer>`, composing each BY TAG (it never imports or reaches into
- * them). It owns the column's width and the slide animation: `calc(100% - 48px)`
- * wide when the shell is collapsed, `34%` when `narrow` (the prototype's
- * `.shell.open .chatpane`).
+ * them). It always fills its container (`flex: 1 1 0` / `width: 100%`) — the
+ * dock-tree leaf it lives in owns the column's width.
  *
  * Light DOM (no shadow root): the host IS the column, so its children lay out
  * directly inside it (DOM order is layout order) — there is no inner wrapper to
@@ -110,15 +107,15 @@ const OPEN_FORWARD_TAGS = ['slicc-chat-thread', 'slicc-composer'] as const;
  * the scoped stylesheet is injected once into the host document and scoped by the
  * `.slicc-chatpane` host class so it can't leak.
  *
- * The `narrow` boolean attribute mirrors `.shell.open`: it drives the 34% width
- * via CSS AND is forwarded in script as the `open` attribute onto the slotted
- * `<slicc-chat-thread>` + `<slicc-composer>` so they switch to their own narrow
- * variants (tighter thread feather/padding; the composer hides its keyboard
- * hint). Forwarding re-runs whenever the column's direct children change, so a
- * thread/composer added later still inherits the current state.
+ * The `narrow` boolean attribute mirrors `.shell.open`: it is forwarded in
+ * script as the `open` attribute onto the slotted `<slicc-chat-thread>` +
+ * `<slicc-composer>` so they switch to their own narrow variants (tighter
+ * thread feather/padding; the composer hides its keyboard hint). Forwarding
+ * re-runs whenever the column's direct children change, so a thread/composer
+ * added later still inherits the current state.
  *
- * @attr narrow - boolean; narrow-chat variant (34% width + forwards `open` to
- *   the thread/composer + the thread inner fills full width/height with its
+ * @attr narrow - boolean; narrow-chat variant (forwards `open` to the
+ *   thread/composer + the thread inner fills full width/height with its
  *   frosted background dropped), mirrors `.shell.open .chatpane`
  * @csspart pane - the column (the host element itself carries `part="pane"`)
  * @slot - default; the column's children in DOM order: an optional `<slicc-nav>`,

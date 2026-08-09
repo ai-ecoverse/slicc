@@ -38,6 +38,13 @@ function ensureShellStyle(doc: Document): void {
 }
 
 /**
+ * The reserved chat surfaceId — a literal mirror of `CHAT_SURFACE_ID` in
+ * `../workbench/slicc-dock-tree.js` (not imported: a constant is not worth
+ * pulling the whole dock-tree module into every shell consumer).
+ */
+const CHAT_SURFACE_ID = 'chat';
+
+/**
  * `<slicc-shell>` — the top-level flex row laying out the dock-tree (the sole
  * layout host — chat and every panel are independent leaves within it) beside
  * the right dock rail (composed BY TAG as `<slicc-dock-tree>`, `<slicc-dock>`).
@@ -45,14 +52,36 @@ function ensureShellStyle(doc: Document): void {
  * Light DOM (no shadow root): the host IS the flex row; its children lay out
  * in DOM order.
  *
+ * The shell also owns the prototype's `.shell.open` forwarding, re-homed from
+ * the deleted workbench pane: whenever the composed dock-tree announces a
+ * render (`dock-tree-render`, fired on every mutation AND `setTree` restore),
+ * the shell toggles `narrow` on the descendant `<slicc-chatpane>` iff any
+ * non-chat leaf is placed — which cascades `open` onto the thread + composer
+ * (tighter reading-column feather, hidden ⏎/⇧⏎ keyboard hints).
+ *
  * @csspart shell - the host row (also styleable via the element itself)
  * @slot - default; `<slicc-dock-tree>`, `<slicc-dock>` by tag
  */
 export class SliccShell extends HTMLElement {
+  /** Bound listener so `disconnectedCallback` can remove exactly what connect added. */
+  readonly #onDockTreeRender = (event: Event): void => {
+    const placed = (event as CustomEvent<{ placed?: string[] }>).detail?.placed;
+    if (!Array.isArray(placed)) return;
+    const narrow = placed.some((id) => id !== CHAT_SURFACE_ID);
+    this.querySelector('slicc-chatpane')?.toggleAttribute('narrow', narrow);
+  };
+
   connectedCallback(): void {
     ensureShellStyle(this.ownerDocument);
     this.classList.add('slicc-shell');
     this.setAttribute('part', 'shell');
+    // Composed + bubbling from the dock-tree child, so listening on the host
+    // works no matter when the tree is slotted in.
+    this.addEventListener('dock-tree-render', this.#onDockTreeRender);
+  }
+
+  disconnectedCallback(): void {
+    this.removeEventListener('dock-tree-render', this.#onDockTreeRender);
   }
 
   /** The composed dock-tree, if present. */

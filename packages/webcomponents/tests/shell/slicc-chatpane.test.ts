@@ -80,12 +80,21 @@ describe('slicc-chatpane', () => {
     expect(seen).toEqual([true, false]);
   });
 
-  it('narrows to 34% width when narrow is set', () => {
+  it('keeps the container-filling width when narrow is set — the dock-tree leaf owns column width', () => {
+    // Shell-era `narrow` shrank the column to 34% beside the floating
+    // workbench. Post-dock-tree the surface leaf sizes the column, so `narrow`
+    // only re-themes the thread/composer (via the forwarded `open`) and the
+    // width must NOT change — a 34%-of-the-leaf column would re-open the
+    // phantom gap beside the panel.
     const wide = mount();
-    const wideW = getComputedStyle(wide).width;
+    const wideW = wide.getBoundingClientRect().width;
     const narrow = mount(true);
-    const narrowW = getComputedStyle(narrow).width;
-    expect(narrowW).not.toBe(wideW);
+    const narrowW = narrow.getBoundingClientRect().width;
+    expect(narrowW).toBeCloseTo(wideW, 1);
+    // And the column fills its container rather than reserving the shell-era
+    // 48px rail strip (the rail is a shell sibling now, never inside the leaf).
+    expect(getComputedStyle(wide).flexGrow).toBe('1');
+    expect(wideW).toBeCloseTo(wide.parentElement!.getBoundingClientRect().width, 1);
   });
 
   it('narrow (workbench open, wide viewport): drops the frosted card but KEEPS the centered reading cap', () => {

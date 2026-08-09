@@ -452,6 +452,21 @@ whose node is `null` collapses entirely.
   the same state machine.
 - `setPinned(surfaceIds)` — non-removable leaves (runtime-only, never serialized).
 
+Rendering: every non-chat leaf's tile carries the floating rounded
+workbench-pane chrome (`.dock-tree__tile--chrome`: `--canvas` card, 1px `--line`
+border, 14px radius, the elevated two-layer shadow, 12px float margin,
+`overflow: hidden` clipping full-bleed content to the corners) — the look the
+deleted `<slicc-workbench-pane>` → `<slicc-pane elevated>` chain gave right-rail
+slide-ins. The reserved `chat` leaf renders flat/full-bleed over the shader.
+After **every** render — the deliberately silent `setTree` restore included —
+the tree fires `dock-tree-render` (composed + bubbling,
+`detail: { placed: string[] }`), a display-only notification that never drives
+persistence. `<slicc-shell>` keys the chatpane's `narrow` state off it: `narrow`
+is set exactly while any non-chat leaf is placed, and re-themes the
+thread/composer (tight feather, hidden ⏎/⇧⏎ hints) without sizing the column —
+the leaf owns width now, so the shell-era `calc(100% - 48px)` / `34%` widths are
+gone from `<slicc-chatpane>`.
+
 Drag-drop: every unlocked leaf reveals a `.dock-tree__tile-move` button on hover
 over its top-left corner; hovering another tile computes a `DropRegion`
 (`n`/`s`/`e`/`w`/`center`) and splits accordingly.

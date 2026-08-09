@@ -42,6 +42,7 @@ Non-obvious rules:
 - `tilesMovable`/`tiles-movable` defaults off; flag-on replaces the dock-tree with `<slicc-layout>`. Full `DropRegion` contracts: `docs/layouts.md`.
 - Divider resize clamps to 2% of pair's combined weight (floor `setSurfaceSize` enforces). **Pointer capture is held on the host, not the divider**.
 - `dock-tree-change`/`dock-tree-resize` (composed + bubbling, `detail: { tree }`) never persist — see `packages/webapp/CLAUDE.md`'s `wireDockTreePersistence`.
+- Non-chat tiles carry the rounded workbench-pane chrome (`.dock-tree__tile--chrome`); the reserved chat leaf renders flat. `dock-tree-render` (`detail: { placed }`) fires after EVERY render — the change-silent `setTree` included — and is display-only: `slicc-shell` keys the chatpane's `narrow` re-theming (never its width — the leaf sizes the column) off it.
 
 ## Conventions (every component MUST follow)
 

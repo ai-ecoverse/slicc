@@ -126,6 +126,29 @@ slicc-dock-tree .dock-tree__tile {
   min-height: 0;
   box-sizing: border-box;
 }
+/* Tool tiles (every leaf except the reserved chat column) carry the
+   prototype's floating rounded workbench-pane chrome — the .pane card that
+   \`<slicc-workbench-pane>\` used to compose via \`<slicc-pane elevated>\`:
+   --canvas surface, 1px --line border, 14px radius, the elevated two-layer
+   shadow, 12px float margin. \`overflow: hidden\` clips full-bleed content
+   (xterm's dark surface, iframes) to the rounded corners. The chat tile stays
+   FLAT (full-bleed over the shader), exactly like the prototype's .chatpane. */
+slicc-dock-tree .dock-tree__tile--chrome {
+  margin: 12px;
+  background: var(--canvas, #fff);
+  border: 1px solid var(--line, #b7c6cf);
+  border-radius: 14px;
+  box-shadow:
+    rgba(10, 10, 10, 0.1) 0 14px 36px -12px,
+    rgba(10, 10, 10, 0.05) 0 4px 10px -4px;
+  overflow: hidden;
+}
+.dark slicc-dock-tree .dock-tree__tile--chrome,
+[data-theme="dark"] slicc-dock-tree .dock-tree__tile--chrome {
+  box-shadow:
+    rgba(0, 0, 0, 0.45) 0 14px 36px -12px,
+    rgba(0, 0, 0, 0.3) 0 4px 10px -4px;
+}
 slicc-dock-tree .dock-tree__tile-move {
   position: absolute;
   top: 4px;
@@ -715,6 +738,7 @@ function buildPreviewEl(): HTMLDivElement {
  * @slot - default; `<slicc-surface>` children, matched into the tree by id
  * @fires dock-tree-change - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired after a drag-drop (internal or external), `placeSurface`, or `removeSurface` mutates the tree
  * @fires dock-tree-resize - composed + bubbling; `detail: { tree: DockTreeSpec }`; fired on divider-drag pointerup, or `setSurfaceSize` actually changing a weight
+ * @fires dock-tree-render - composed + bubbling; `detail: { placed: string[] }` (the placed surfaceIds); fired after EVERY render, `setTree` included — a display notification (drives `<slicc-shell>`'s chatpane `narrow` sync), never a persistence trigger
  */
 export class SliccDockTree extends HTMLElement {
   static readonly observedAttributes = ['tiles-movable'];
@@ -1140,6 +1164,18 @@ export class SliccDockTree extends HTMLElement {
       parkSurfaceInline(surfaceEl);
       if (surfaceEl.parentElement !== this.#parking) this.#parking.appendChild(surfaceEl);
     }
+
+    // Every render (setTree restore included — which deliberately does NOT
+    // fire dock-tree-change, so persistence can't loop) announces what is
+    // currently placed. `<slicc-shell>` keys the chatpane's `narrow` state off
+    // this; it is a display notification, never a persistence trigger.
+    this.dispatchEvent(
+      new CustomEvent<{ placed: string[] }>('dock-tree-render', {
+        detail: { placed: [...usedIds] },
+        bubbles: true,
+        composed: true,
+      })
+    );
   }
 
   /** Build the center row (`left`/`middle`/`right`), or `null` when none of them show. */
@@ -1237,6 +1273,9 @@ export class SliccDockTree extends HTMLElement {
   ): HTMLElement {
     const tile = document.createElement('div');
     tile.className = 'dock-tree__tile';
+    // Tool tiles get the floating rounded pane chrome; the reserved chat
+    // column renders flat (see the .dock-tree__tile--chrome CSS above).
+    if (surfaceId !== CHAT_SURFACE_ID) tile.classList.add('dock-tree__tile--chrome');
     if (this.tilesMovable && !this.#isLockedNode(node, zone)) {
       const label = labelForSurface(surfaceId);
       const move = document.createElement('button');

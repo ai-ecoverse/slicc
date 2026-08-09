@@ -17,7 +17,12 @@ function populated(narrow: boolean): HTMLElement {
   frame.style.cssText =
     'display:flex;height:520px;width:880px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg);';
   const pane = document.createElement('slicc-chatpane');
-  if (narrow) pane.setAttribute('narrow', '');
+  if (narrow) {
+    pane.setAttribute('narrow', '');
+    // `narrow` no longer sizes the column (the dock-tree leaf does, in the
+    // app) — emulate that zone sizing here so the narrow theming reads.
+    pane.style.flex = '0 0 34%';
+  }
 
   const thread = document.createElement('slicc-chat-thread');
   const u = document.createElement('slicc-user-message');
@@ -31,10 +36,13 @@ function populated(narrow: boolean): HTMLElement {
 
   pane.append(thread, composer);
   frame.appendChild(pane);
-  // A faux dock gutter so the 34% narrow split reads against something.
-  const gutter = document.createElement('div');
-  gutter.style.cssText = 'flex:1;background:color-mix(in srgb,var(--ctx) 8%,var(--bg));';
-  frame.appendChild(gutter);
+  if (narrow) {
+    // A faux panel gutter beside the narrowed column, standing in for the
+    // tool tile the dock-tree would render there.
+    const gutter = document.createElement('div');
+    gutter.style.cssText = 'flex:1;background:color-mix(in srgb,var(--ctx) 8%,var(--bg));';
+    frame.appendChild(gutter);
+  }
   return frame;
 }
 
