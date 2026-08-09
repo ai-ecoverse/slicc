@@ -165,9 +165,11 @@ test.describe('say -o WAV output (real kokoro)', () => {
     // tight once the download could be retried: observed CI runs land between
     // 9 and 15 minutes, so the cap was itself producing failures
     // (`Test timeout of 600000ms exceeded`) that looked like product bugs.
+    // The staging recovery below can add one page reboot + one more full
+    // download pass (~6 min on a slow runner), so 20 was itself too tight.
     // Per-call exec budgets are still bounded by the panel-RPC ceiling inside
     // `say` (5 min).
-    test.setTimeout(20 * 60_000);
+    test.setTimeout(25 * 60_000);
 
     const diagnostics = attachBrowserDiagnostics(page);
 
@@ -204,31 +206,39 @@ test.describe('say -o WAV output (real kokoro)', () => {
     // Boot with the thin-bridge launch params: `ipk add` / `hf download` below
     // pull weights through the node-server fetch proxy, which the webapp only
     // reaches cross-origin when `proxied-fetch` is pointed at the bridge origin.
-    await gotoLeader(page);
-    await waitForSW(page);
+    //
+    // Kept as a closure so the staging recovery below re-boots EXACTLY the way
+    // the test boots — init scripts (webgpu delete, rejection log) re-apply on
+    // every navigation, and VFS state (ipk installs, downloaded weights)
+    // persists in OPFS/IndexedDB across the reload.
+    const bootLeader = async () => {
+      await gotoLeader(page);
+      await waitForSW(page);
 
-    // Same readiness signal `reference-scenario.test.ts` waits on — the
-    // cone's welcome message renders only after the kernel-worker cone
-    // bootstrap has completed and the OffscreenClient is wired.
-    await page.waitForSelector('slicc-input-card');
-    await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
-      timeout: 20_000,
-    });
+      // Same readiness signal `reference-scenario.test.ts` waits on — the
+      // cone's welcome message renders only after the kernel-worker cone
+      // bootstrap has completed and the OffscreenClient is wired.
+      await page.waitForSelector('slicc-input-card');
+      await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
+        timeout: 20_000,
+      });
 
-    // Activate the term surface via the dock rail's documented entry point;
-    // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
-    // into the dock-tree, opening the workbench AND firing the lazy mount
-    // that publishes `__slicc_terminal_view`.
-    await page.evaluate(() => {
-      const dock = document.querySelector('slicc-dock') as
-        | (HTMLElement & { selectItem?: (id: string) => void })
-        | null;
-      if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
-      dock.selectItem('term');
-    });
-    await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-      timeout: 30_000,
-    });
+      // Activate the term surface via the dock rail's documented entry point;
+      // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
+      // into the dock-tree, opening the workbench AND firing the lazy mount
+      // that publishes `__slicc_terminal_view`.
+      await page.evaluate(() => {
+        const dock = document.querySelector('slicc-dock') as
+          | (HTMLElement & { selectItem?: (id: string) => void })
+          | null;
+        if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
+        dock.selectItem('term');
+      });
+      await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
+        timeout: 30_000,
+      });
+    };
+    await bootLeader();
 
     // 1. Pre-stage the kokoro runtime + the specific weight files the
     //    `dtype: 'q8'` path in `kokoro-engine.ts` resolves to (config +
@@ -261,29 +271,51 @@ test.describe('say -o WAV output (real kokoro)', () => {
       'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'
     );
     expect(pkgs.exitCode, `ipk add stderr: ${pkgs.stderr}`).toBe(0);
-    // The 92 MB `model_quantized.onnx` write intermittently trips the same
-    // `@zenfs/dom` + kerium bug this file's header documents for whisper's
-    // 188 MB decoder (`EINVAL: Cannot set property message of … which has only
-    // a getter`). Retry ONLY this write — it is a known upstream defect in one
-    // operation, not a licence to re-run the spec until it passes. The
+    // The 92 MB `model_quantized.onnx` write intermittently trips one of two
+    // transient failures in the same operation:
+    //   a. the `@zenfs/dom` + kerium bug this file's header documents for
+    //      whisper's 188 MB decoder (`EINVAL: Cannot set property message of
+    //      … which has only a getter`) — recoverable in place;
+    //   b. Chromium's OPFS writable stream dying mid-write (`EINVAL: Failed
+    //      to write data to data pipe`, mojo pipe under runner load). Once it
+    //      dies, further BIG writes from the same kernel-worker storage
+    //      session fail within seconds while small writes still succeed
+    //      (observed dequeuing #2037), so in-place retries cannot recover —
+    //      only a page reboot gets a fresh worker + storage connection.
+    // Retry ONLY this staging step — first in place (a), then ONE reboot (b).
+    // It is a known-transient defect in one operation, not a licence to
+    // re-run the spec until it passes: the spec keeps `retries: 0` and the
     // phonemizer assertions below stay single-shot.
+    const KOKORO_DL_CMD =
+      'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
+      'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx';
+    const TRANSIENT_WRITE_FAILURE = /Cannot set property message|EINVAL/;
+    // Clear the half-written weights before any retry. The failed write leaves
+    // a truncated `model_quantized.onnx` behind, and downloading over it
+    // yields a file whose size does not match its metadata — the model then
+    // fails to load with `EIO … Unexpected mismatch in file data size`, which
+    // reads like a corrupt download rather than a retried one.
+    const clearPartialWeights = () =>
+      exec(page, 'rm -rf /workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX');
     let kokoroDl = { exitCode: 1, stdout: '', stderr: 'not attempted' };
     for (let attempt = 1; attempt <= 3; attempt++) {
-      kokoroDl = await exec(
-        page,
-        'hf download onnx-community/Kokoro-82M-v1.0-ONNX ' +
-          'config.json tokenizer.json tokenizer_config.json onnx/model_quantized.onnx'
-      );
+      kokoroDl = await exec(page, KOKORO_DL_CMD);
       if (kokoroDl.exitCode === 0) break;
-      if (!/Cannot set property message|EINVAL/.test(kokoroDl.stderr)) break; // a real failure
-      // Clear the half-written weights before retrying. The failed write leaves
-      // a truncated `model_quantized.onnx` behind, and downloading over it
-      // yields a file whose size does not match its metadata — the model then
-      // fails to load with `EIO … Unexpected mismatch in file data size`, which
-      // reads like a corrupt download rather than a retried one.
-      await exec(page, 'rm -rf /workspace/models/onnx-community/Kokoro-82M-v1.0-ONNX');
+      if (!TRANSIENT_WRITE_FAILURE.test(kokoroDl.stderr)) break; // a real failure
+      await clearPartialWeights();
       // eslint-disable-next-line no-console
-      console.warn(`hf download hit the kerium OPFS bug (attempt ${attempt}/3); retrying clean`);
+      console.warn(
+        `hf download hit a transient OPFS write failure (attempt ${attempt}/3); retrying clean`
+      );
+    }
+    if (kokoroDl.exitCode !== 0 && TRANSIENT_WRITE_FAILURE.test(kokoroDl.stderr)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        'hf download still failing after in-place retries; rebooting the leader page once'
+      );
+      await bootLeader();
+      await clearPartialWeights();
+      kokoroDl = await exec(page, KOKORO_DL_CMD);
     }
     expect(kokoroDl.exitCode, `hf kokoro stderr: ${kokoroDl.stderr}`).toBe(0);
 
