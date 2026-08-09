@@ -86,6 +86,14 @@ export function classifySubmitOutcome({ status, code }) {
   if (status < 400) return 'submitted';
   if (isSubmissionCapacityError({ status, code })) return 'deferred';
   if (IDEMPOTENT_ERROR_CODES.has(code) || status === 409) return 'skipped';
+  // Re-running distribute against a build whose review is already pending
+  // (or decided) returns ENTITY_UNPROCESSABLE.INVALID_QC_STATE — the
+  // desired end state holds, so the re-run must not abort before the group
+  // attach. Suffix match for the same prefix-drift reason as
+  // isSubmissionCapacityError. Submit-only: on attach the same code can
+  // mean a genuinely unusable build, which must stay fatal. Observed live
+  // re-setting build 1376's What to Test (2026-08-09).
+  if (typeof code === 'string' && code.includes('INVALID_QC_STATE')) return 'skipped';
   return 'fatal';
 }
 

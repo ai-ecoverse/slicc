@@ -62,6 +62,14 @@ describe('classifySubmitOutcome', () => {
   it('prefers deferred over skipped when a 409 also carries a capacity code', () => {
     expect(classifySubmitOutcome({ status: 409, code: SUBMISSION_LIMIT })).toBe('deferred');
   });
+
+  it('reports an already-in-review re-run (INVALID_QC_STATE) as skipped', () => {
+    // Observed re-running distribute to re-set What to Test on a build
+    // whose Beta App Review was already pending.
+    expect(
+      classifySubmitOutcome({ status: 422, code: 'ENTITY_UNPROCESSABLE.INVALID_QC_STATE' })
+    ).toBe('skipped');
+  });
 });
 
 describe('classifyAttachOutcome', () => {
@@ -70,6 +78,14 @@ describe('classifyAttachOutcome', () => {
     expect(classifyAttachOutcome({ status: 409, code: '' })).toBe('already-present');
     expect(classifyAttachOutcome({ status: 422, code: 'STATE_ERROR' })).toBe('already-present');
     expect(classifyAttachOutcome({ status: 403, code: 'FORBIDDEN' })).toBe('fatal');
+  });
+
+  it('keeps INVALID_QC_STATE fatal on attach, unlike submit', () => {
+    // On attach this code can mean an expired or rejected build — masking
+    // it as already-present would hide a real failure.
+    expect(
+      classifyAttachOutcome({ status: 422, code: 'ENTITY_UNPROCESSABLE.INVALID_QC_STATE' })
+    ).toBe('fatal');
   });
 });
 
