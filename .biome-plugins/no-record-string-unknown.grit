@@ -1,0 +1,7 @@
+`Record<string, unknown>` as $node where {
+    register_diagnostic(
+        span = $node,
+        message = "Record<string, unknown> is banned in source: declare a named type for the shape you actually accept, and narrow opaque payloads at the boundary. If the bag is genuinely untyped (JSON-RPC params, CDP payloads), suppress the line with `// biome-ignore lint/plugin: <reason>`.",
+        severity = "error"
+    )
+}

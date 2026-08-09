@@ -306,6 +306,38 @@ Deterministic enforcement: `npm run lint:layer-back-edges`
 frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.
 `providers/built-in/` stays a zero-tolerance zone (`lint:no-ui-in-providers`).
 
+### 11. Untyped string-keyed bags (`Record<string, unknown>`)
+
+**Trigger patterns**
+
+- A new `Record<string, unknown>` in non-test source — as a parameter, a return type, a
+  field, or a cast target. It is what a type looks like when nobody decided what the shape
+  is: it type-checks, so it never surfaces as an error, and it pushes the narrowing onto
+  every consumer, ad-hoc and unverified.
+- The tell-tale disguise: a value whose shape _is_ known at the call site (a config object,
+  an options bag, a message payload with a fixed set of fields) typed as an open bag because
+  writing the interface felt like ceremony.
+- `packages/dev-tools/tools/record-string-unknown-baseline.json` growing in a diff — someone
+  is grandfathering a new bag instead of naming the shape.
+
+**Class size** — 604 grandfathered occurrences across 181 source files at baseline freeze
+(2026-08), concentrated in `webapp` (984 including tests) and `shared-ts` (200). A further
+782 occurrences in test files are deliberately out of scope: `(globalThis as Record<string,
+unknown>).chrome = …` is idiomatic scaffolding with no better spelling, and `biome.json`
+already exempts tests from `noExplicitAny` and the complexity rules for the same reason.
+
+**Remediation** — declare a named `interface`/`type` for the shape you actually accept, and
+narrow opaque input at the boundary (parse/validate once) rather than passing an open bag
+inward. For a payload that is genuinely untyped at that point — JSON-RPC params, CDP
+payloads, a third-party envelope — suppress the line with
+`// biome-ignore lint/plugin: <reason>`; the reason is the review artifact.
+Deterministic enforcement: `npm run lint:record-string-unknown`
+(`packages/dev-tools/tools/check-record-string-unknown.mjs`) runs the GritQL plugin
+`.biome-plugins/no-record-string-unknown.grit` via `biome.record-gate.json` and fails on any
+occurrence not in the frozen baseline; the baseline is a one-way ratchet — shrink it, never
+grow it. Touching a baselined file obliges you to clear that file
+(`check-touched-exemptions.mjs`).
+
 ## Transcript export — redaction boundary and protocol parity
 
 Changes to export-service, redaction logic, or the Cherry/follower export protocol.
