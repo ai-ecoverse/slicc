@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
-import type { AgentSpawnOptions, AgentSpawnResult } from '../../src/scoops/agent-bridge.js';
+import {
+  AGENT_NAME_IN_USE_PREFIX,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+} from '../../src/scoops/agent-bridge.js';
 import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
 
@@ -397,6 +401,29 @@ Curate {{MEMORY_PATH}}.`;
     });
 
     expect(result).toEqual({ ok: false, reason: 'curation failed', legacyFallbackSafe: true });
+  });
+
+  it('defers (legacyFallbackSafe:false) when the curator name is already in use', async () => {
+    // A prior curator (now up to a 10-minute window) still holds the fixed
+    // `memory-curator` name, so this spawn is rejected before it runs. No run
+    // released — a legacy append here would be clobbered by the running
+    // namesake's whole-file rewrite, so the pass must NOT mark it safe; the
+    // entry stays pending for boot catch-up instead.
+    const spawn = vi.fn(
+      async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
+        finalText: `${AGENT_NAME_IN_USE_PREFIX}: memory-curator`,
+        exitCode: 1,
+      })
+    );
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toMatchObject({ ok: false, legacyFallbackSafe: false });
   });
 
   it('returns ok:false when the configured timeout elapses', async () => {

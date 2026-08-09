@@ -384,6 +384,15 @@ function isValidAgentName(name: string): boolean {
 }
 
 /**
+ * `finalText` prefix a fixed-name spawn returns when the name's JID is already
+ * registered. Distinct from a run that spawned and failed: the scoop never
+ * started and a DIFFERENT one still holds the name — so callers that would fall
+ * back to a mutation (e.g. the memory curator's legacy append) must instead
+ * defer, or the running namesake will clobber it. See `agentic-memory.ts`.
+ */
+export const AGENT_NAME_IN_USE_PREFIX = 'agent: name already in use';
+
+/**
  * Persist the spawned agent's transcript to disk (see
  * {@link AgentSpawnOptions.persistSession}). Called from the spawn `finally`,
  * so it runs on BOTH success and failure and BEFORE `cleanupScoop` deletes
@@ -659,7 +668,7 @@ export function createAgentBridge(
     // session history and scratch folder. Reject rather than collide; the
     // random path can never hit this (it excludes live JIDs by construction).
     if (options.name !== undefined && ctx.orchestrator.getScoops().some((s) => s.jid === jid)) {
-      return { finalText: `agent: name already in use: ${nameToken}`, exitCode: 1 };
+      return { finalText: `${AGENT_NAME_IN_USE_PREFIX}: ${nameToken}`, exitCode: 1 };
     }
     const scratchFolder = `/scoops/${folder}`;
 
