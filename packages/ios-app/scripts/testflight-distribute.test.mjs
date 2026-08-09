@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   classifyAttachOutcome,
   classifySubmitOutcome,
+  composeWhatsNew,
   defaultWhatsNew,
   distribute,
   DistributionError,
@@ -89,6 +90,42 @@ describe('defaultWhatsNew', () => {
     expect(defaultWhatsNew({ SLICC_TF_DEMO_JOIN_URL: 'https://example.test/join' })).toContain(
       'https://example.test/join'
     );
+  });
+});
+
+describe('composeWhatsNew', () => {
+  it('falls back to the static copy when no highlights are provided', () => {
+    expect(composeWhatsNew({})).toBe(defaultWhatsNew({}));
+  });
+
+  it('falls back when highlights are whitespace-only', () => {
+    // A failed generation step can leave a blank env var; that must read as
+    // "no highlights", not as an empty leading section.
+    expect(composeWhatsNew({ SLICC_TF_WHATS_NEW: '  \n ' })).toBe(defaultWhatsNew({}));
+  });
+
+  it('leads with the highlights and keeps the onboarding footer', () => {
+    const env = {
+      SLICC_TF_WHATS_NEW: 'New this week:\n- You can now do a thing.',
+      SLICC_TF_DEMO_JOIN_URL: 'https://example.test/join',
+    };
+    const copy = composeWhatsNew(env);
+    expect(copy.startsWith('New this week:')).toBe(true);
+    expect(copy).toContain('Getting a session to join:');
+    expect(copy).toContain('https://example.test/join');
+  });
+
+  it('caps runaway highlights so the footer survives the 4000-char ASC limit', () => {
+    const copy = composeWhatsNew({ SLICC_TF_WHATS_NEW: 'x'.repeat(5000) });
+    expect(copy).toContain('Getting a session to join:');
+    expect([...copy].length).toBeLessThanOrEqual(4000);
+  });
+
+  it('caps highlights by code point, not UTF-16 units', () => {
+    const copy = composeWhatsNew({ SLICC_TF_WHATS_NEW: '🚀'.repeat(3500) });
+    // No split surrogate pair at the cap boundary.
+    expect(copy).not.toContain('�');
+    expect(copy).toContain('Getting a session to join:');
   });
 });
 

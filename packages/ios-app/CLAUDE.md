@@ -79,7 +79,7 @@ Outputs in `.build/coverage/`. Gate runs only `SliccFollowerTests`, disables par
 
 ## TestFlight
 
-Releases run `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`), path-gated by `release-native.mjs`. Script **soft-skips with exit 0** when `SLICC_SKIP_TESTFLIGHT=1`, an Apple secret is missing/`-`, or default Xcode < 26 (a green release is not proof an ipa shipped). Distribution: `scripts/testflight-distribute.mjs`; [`docs/ios-app-details.md`](../../docs/ios-app-details.md#testflight-distribute).
+Releases run `scripts/package-and-upload-testflight.sh` (secrets via `setup-testflight-secrets.sh`), path-gated by `release-native.mjs`. Script **soft-skips with exit 0** when `SLICC_SKIP_TESTFLIGHT=1`, an Apple secret is missing/`-`, or default Xcode < 26 (a green release is not proof an ipa shipped). Distribution: `scripts/testflight-distribute.mjs`; What to Test notes = best-effort model-drafted weekly highlights (`SLICC_TF_WHATS_NEW` from release.yml's analyze job) + static onboarding footer via `composeWhatsNew()`; [`docs/ios-app-details.md`](../../docs/ios-app-details.md#testflight-distribute).
 
 ## Related
 
