@@ -34,6 +34,7 @@ import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
 import { resolveModelIdForScoop } from '../providers/account-store.js';
+import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -137,6 +138,30 @@ export interface AgentSpawnOptions {
    * Best-effort: a receipt write failure is logged, never fails the spawn.
    */
   successReceiptPath?: string;
+  /**
+   * Persist the spawned agent's full session transcript to disk when the run
+   * completes — written on BOTH success and failure, BEFORE the scoop's IDB
+   * session is dropped, with the bridge's full shared-VFS handle (the scoop
+   * itself never sees the path). For later human analysis; it never touches
+   * `/sessions/index.json`. Tri-value:
+   *   - `true`      → durable archive at `/sessions/agent-<name>-<timestamp>.md`
+   *   - `undefined` → ephemeral archive at `/tmp/agent-<name>-<timestamp>.md`
+   *                   (default; `/tmp` is cleared on a new chat)
+   *   - `false`     → no archive is written at all
+   * `<name>` is the agent name token; `<timestamp>` is
+   * `new Date().toISOString()` with `:` and `.` replaced by `-`.
+   * Best-effort: a write failure is logged, never fails the spawn.
+   */
+  persistSession?: boolean;
+  /**
+   * Fixed agent name token, used instead of the random `<adjective>-<flavor>`
+   * generator when provided. Must match the generated name shape — one or more
+   * lowercase tokens joined by single dashes, e.g. `memory-curator` — so the
+   * `agent-<name>` scratch folder and `agent_<name_with_underscores>` jid both
+   * parse cleanly. Validated in `validateSpawnOptions`; a malformed value
+   * returns a spawn error instead of registering a scoop.
+   */
+  name?: string;
   /**
    * Hard turn ceiling for the spawned run (#1972). Enforced in
    * `ScoopContext` where the agent loop runs — the run stops at the
@@ -310,6 +335,16 @@ function validateSpawnOptions(
     };
   }
 
+  const requestedName = options.name;
+  if (requestedName !== undefined && !isValidAgentName(requestedName)) {
+    return {
+      error: {
+        finalText: `agent: invalid name: ${requestedName} (lowercase tokens joined by single dashes)`,
+        exitCode: 1,
+      },
+    };
+  }
+
   for (const [name, value] of [
     ['maxTurns', options.maxTurns],
     ['maxWallClockMs', options.maxWallClockMs],
@@ -339,6 +374,51 @@ async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<v
     await sharedFs.writeFile(path, new Date().toISOString());
   } catch (err) {
     log.warn('success receipt write failed', { path, error: errText(err) });
+  }
+}
+
+/** A valid fixed agent name: one or more lowercase tokens joined by dashes. */
+const AGENT_NAME_PATTERN = /^[a-z]+(?:-[a-z]+)*$/;
+function isValidAgentName(name: string): boolean {
+  return AGENT_NAME_PATTERN.test(name);
+}
+
+/**
+ * Persist the spawned agent's transcript to disk (see
+ * {@link AgentSpawnOptions.persistSession}). Called from the spawn `finally`,
+ * so it runs on BOTH success and failure and BEFORE `cleanupScoop` deletes
+ * the IDB session and the `ScoopContext` the history is read from. Uses the
+ * bridge's own shared-VFS handle. Best-effort — a failure is logged, never
+ * fails the spawn.
+ */
+async function writeAgentSessionArchive(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  jid: string,
+  nameToken: string,
+  outcome: AgentSpawnResult
+): Promise<void> {
+  if (options.persistSession === false) return;
+  const dir = options.persistSession === true ? '/sessions' : '/tmp';
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const path = `${dir}/agent-${nameToken}-${timestamp}.md`;
+  try {
+    // The ScoopContext may already be gone (e.g. registerScoop threw); guard.
+    const scoopCtx = ctx.orchestrator.getScoopContext(jid);
+    const messages =
+      typeof scoopCtx?.getAgentMessages === 'function' ? scoopCtx.getAgentMessages() : [];
+    const markdown = serializeAgentSessionArchive({
+      name: nameToken,
+      jid,
+      prompt: options.prompt,
+      exitCode: outcome.exitCode,
+      messages,
+      timestamp,
+    });
+    await ctx.sharedFs.mkdir(dir, { recursive: true });
+    await ctx.sharedFs.writeFile(path, markdown);
+  } catch (err) {
+    log.warn('agent session archive write failed', { path, error: errText(err) });
   }
 }
 
@@ -490,6 +570,51 @@ async function cleanupScoop(
 }
 
 /**
+ * Register the scoop, run its agent loop, and map the run to an
+ * {@link AgentSpawnResult} — never throwing (every failure path returns an
+ * exit-1 result). Extracted from `spawn` so the caller can keep the
+ * archive-then-cleanup `finally` thin. A `registerScoop` failure still
+ * returns a value here, so `spawn`'s `finally` runs cleanup regardless.
+ */
+async function runScoopToOutcome(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  scoop: RegisteredScoop,
+  jid: string,
+  observerHandle: ReturnType<typeof registerScoopObserver>
+): Promise<AgentSpawnResult> {
+  try {
+    await ctx.orchestrator.registerScoop(scoop);
+  } catch (err) {
+    return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
+  }
+
+  try {
+    const result = await runScoopAndCaptureOutput(
+      ctx.orchestrator,
+      jid,
+      options.prompt,
+      options.structuredOutputSchema,
+      observerHandle
+    );
+    if (options.signal?.aborted) {
+      return { finalText: 'agent: aborted', exitCode: 1 };
+    }
+    if (result) {
+      // Durable completion signal, written before the spawn resolves so
+      // it lands strictly earlier than any caller-side bookkeeping.
+      if (result.exitCode === 0 && options.successReceiptPath) {
+        await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
+      }
+      return result;
+    }
+    return { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
+  } catch (err) {
+    return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
+  }
+}
+
+/**
  * Create an {@link AgentBridge} bound to an orchestrator + shared VFS.
  *
  * `sharedFs` is used only for the scratch-folder cleanup
@@ -524,9 +649,18 @@ export function createAgentBridge(
       resolveParentThinkingLevel(ctx.orchestrator, options.parentJid) ??
       undefined;
 
-    const nameToken = pickFreshNameToken(ctx);
+    // A validated fixed name wins; otherwise pick a fresh collision-free token.
+    const nameToken = options.name !== undefined ? options.name : pickFreshNameToken(ctx);
     const folder = `agent-${nameToken}`;
     const jid = `agent_${tokenToJid(nameToken)}`;
+    // A fixed name bypasses pickFreshNameToken's collision guard: if a scoop
+    // with this JID is still registered — a detached run still in flight, or a
+    // crashed one not yet cleaned up — reusing the name would clobber its
+    // session history and scratch folder. Reject rather than collide; the
+    // random path can never hit this (it excludes live JIDs by construction).
+    if (options.name !== undefined && ctx.orchestrator.getScoops().some((s) => s.jid === jid)) {
+      return { finalText: `agent: name already in use: ${nameToken}`, exitCode: 1 };
+    }
     const scratchFolder = `/scoops/${folder}`;
 
     const scoopConfig = buildScoopConfig(
@@ -575,38 +709,18 @@ export function createAgentBridge(
       return { finalText: 'agent: aborted before start', exitCode: 1 };
     }
 
+    // Held so the `finally` can archive the transcript with the real exit
+    // code, whatever path `runScoopToOutcome` leaves through.
+    let outcome: AgentSpawnResult = { finalText: '', exitCode: 1 };
     try {
-      try {
-        await ctx.orchestrator.registerScoop(scoop);
-      } catch (err) {
-        return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
-      }
-
-      const result = await runScoopAndCaptureOutput(
-        ctx.orchestrator,
-        jid,
-        options.prompt,
-        options.structuredOutputSchema,
-        observerHandle
-      );
-      if (options.signal?.aborted) {
-        return { finalText: 'agent: aborted', exitCode: 1 };
-      }
-      if (result) {
-        // Durable completion signal, written before the spawn resolves so
-        // it lands strictly earlier than any caller-side bookkeeping.
-        if (result.exitCode === 0 && options.successReceiptPath) {
-          await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
-        }
-        return result;
-      }
-
-      return { finalText: observerHandle.scoopError ?? '', exitCode: 1 };
-    } catch (err) {
-      return { finalText: observerHandle.scoopError ?? errText(err), exitCode: 1 };
+      outcome = await runScoopToOutcome(ctx, options, scoop, jid, observerHandle);
+      return outcome;
     } finally {
       options.signal?.removeEventListener('abort', onAbort);
       observerHandle.unsubscribe?.();
+      // Archive the transcript BEFORE cleanupScoop drops the IDB session and
+      // the ScoopContext the history is read from. Runs on success AND failure.
+      await writeAgentSessionArchive(ctx, options, jid, nameToken, outcome);
       await cleanupScoop(ctx, jid, folder, scratchFolder);
     }
   }

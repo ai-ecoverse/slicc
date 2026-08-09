@@ -9,6 +9,10 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { MessageAttachment } from '../core/attachments.js';
 
+// The runtime enumeration and guard live in the foundational `base/` layer so
+// lower layers (shell/'s `agent` command) can validate a `--thinking` value
+// without a back-edge into `scoops/`. Re-exported here for existing importers.
+export { isThinkingLevel, THINKING_LEVELS } from '../base/thinking-level.js';
 export type { ThinkingLevel };
 
 /**
@@ -25,21 +29,6 @@ export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
   'high',
   'xhigh',
 ] as const;
-
-/** Full enumeration accepted by the `agent --thinking` flag and tools. */
-export const THINKING_LEVELS: readonly ThinkingLevel[] = [
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-] as const;
-
-/** Type guard: is `value` a valid {@link ThinkingLevel}? */
-export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value);
-}
 
 /**
  * Current `ScoopConfig` schema generation. Bumped whenever a new field is

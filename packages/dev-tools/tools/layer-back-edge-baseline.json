@@ -17,7 +17,6 @@
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
   "packages/webapp/src/shell/mcp/redirect-uri.ts": 1,
   "packages/webapp/src/shell/proxied-fetch.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/agent-command.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/crontask-command.ts": 6,
   "packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts": 1,
