@@ -61,8 +61,14 @@ jobs:
         if: steps.release.outputs.required == 'true'
         run: |
           set -euo pipefail
+          # Select by touched path, not commit scope: cross-cutting work lands
+          # as feat(tray)/unscoped subjects that still change the iOS app.
+          # Keep feat/fix/perf plus reverts (`revert:` or GitHub's `Revert
+          # "..."`) so the model can net out reverted work instead of
+          # advertising it — both Codex findings on PR #2049.
           git log --since='7 days ago' --no-merges --pretty='%s' \
-            | grep -E '^(feat|fix|perf)\((ios|ios-app)[^)]*\)!?:' > ios-commits.txt || true
+            -- packages/ios-app packages/swift-trayfollower packages/swift-traysession \
+            | grep -iE '^(feat|fix|perf)[(!:]|^revert' > ios-commits.txt || true
           if [ -s ios-commits.txt ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "iOS commits in the 7-day window:"
@@ -94,10 +100,11 @@ jobs:
             --max-turns 10
           prompt: |
             The file `ios-commits.txt` in the repo root holds the subject
-            lines of the last week's iOS-scoped conventional commits, newest
-            first. Turn them into TestFlight "What to Test" notes for END
-            USERS of the SLICC iPhone/iPad app — people using the app, not
-            testers or developers.
+            lines of the last week's commits that touched the iOS app
+            (feat/fix/perf plus reverts), newest first. Turn them into
+            TestFlight "What to Test" notes for END USERS of the SLICC
+            iPhone/iPad app — people using the app, not testers or
+            developers.
 
             Rules:
             - Plain text only (TestFlight renders no markdown): one intro
