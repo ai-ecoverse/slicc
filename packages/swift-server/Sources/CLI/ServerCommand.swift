@@ -342,7 +342,17 @@ struct ServerCommand: AsyncParsableCommand {
                         servePort: servePort,
                         projectRoot: repositoryRoot,
                         logger: Logger(label: "slicc.browser.electron-overlay"),
-                        thinBridge: thinBridge
+                        thinBridge: thinBridge,
+                        // Hand `--join` to the overlay webapp as the same
+                        // `?tray=<join url>` contract the Chrome join path
+                        // emits, so an egress-ALLOWED app attaches to the
+                        // running leader as a tray follower. Without this,
+                        // the overlay boots in electron-overlay mode and
+                        // mints its own tray as a second leader. (The
+                        // egress-BLOCKED path below joins via the headless
+                        // WebRTC follower instead — the overlay never loads
+                        // there.)
+                        trayJoinUrl: config.joinUrl.flatMap { Self.parseTrayJoinURL($0)?.joinURL }
                     )
                     // When the app blocks the overlay's egress (Signal), the
                     // hosted overlay can never load — so expose the app's CDP to

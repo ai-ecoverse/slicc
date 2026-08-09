@@ -21,6 +21,7 @@ import {
   getElectronOverlayEntryDistPath,
   selectBestOverlayTargets,
 } from './electron-runtime.js';
+import { TRAY_QUERY_PARAM } from './tray-url-shared.js';
 
 const execFile = promisify(nodeExecFile);
 const ELECTRON_OVERLAY_SYNC_INTERVAL_MS = 1500;
@@ -75,14 +76,36 @@ export function resolveOverlayThinBridge(
 export interface ThinOverlayUrlOptions extends ThinBridgeConfig {
   role: OverlayRole;
   activeTab?: string;
+  /**
+   * Explicit tray intent for the overlay URL, three-valued:
+   *
+   * - a normalized join URL (`--join`) → `tray=<url>`: the hosted webapp
+   *   resolves it via `resolveFollowerJoinUrl` and attaches to the running
+   *   leader as a tray FOLLOWER instead of minting its own tray — omitting
+   *   it was the bug that made every egress-allowed Electron app silently
+   *   become a second leader.
+   * - the EMPTY string → `tray=` (empty): explicit "no tray" intent. The
+   *   webapp treats any present `tray` param as explicit intent, which
+   *   blocks `resolveFollowerJoinUrl`'s localStorage fallback — without it,
+   *   the join URL the leader tab persists into the shared sliccy.ai
+   *   storage would re-enter through that fallback and boot every
+   *   auto-follow tab as ANOTHER tray follower (N followers for one
+   *   multi-window app).
+   * - absent/null → no `tray` param at all; storage-based re-follow stays
+   *   possible. Reserved for the SLICC Electron float's own window
+   *   (`electron-main.ts`), whose stored-tray reattach is intentional.
+   */
+  trayJoinUrl?: string | null;
 }
 
 /**
  * Build the hosted launcher URL for an overlay injection. Mirrors the
  * standalone Path A launch-URL shape (`bridge`, `bridgeToken` query
- * params) with one Electron-specific addition: a `role` param that pins
+ * params) with two Electron-specific additions: a `role` param that pins
  * the first injected tab as the leader and marks every subsequent tab as
- * an auto-follow follower.
+ * an auto-follow follower, and — on a `--join` launch — the same
+ * `tray=<join url>` param the Chrome join path emits so the pinned tab
+ * attaches to the running leader as a tray follower.
  */
 export function buildThinOverlayAppUrl(opts: ThinOverlayUrlOptions): string {
   const url = new URL(ELECTRON_OVERLAY_APP_PATH, opts.hostedLeaderOrigin);
@@ -91,6 +114,9 @@ export function buildThinOverlayAppUrl(opts: ThinOverlayUrlOptions): string {
   url.searchParams.set(BRIDGE_ROLE_QUERY_PARAM, opts.role);
   if (opts.activeTab && opts.activeTab !== 'chat') {
     url.searchParams.set('tab', opts.activeTab);
+  }
+  if (opts.trayJoinUrl != null) {
+    url.searchParams.set(TRAY_QUERY_PARAM, opts.trayJoinUrl);
   }
   return url.toString();
 }
@@ -810,6 +836,16 @@ export class ElectronOverlayInjector {
     thinBridge: ThinBridgeConfig;
     /** Start the headless CDP-over-CDP follower when egress-block is detected. */
     onEgressBlocked?: (targetUrl: string) => void;
+    /**
+     * Normalized tray join URL (`--join`); rides the LEADER-role overlay URL
+     * only, so the app's pinned first tab attaches to the running leader as
+     * ONE tray follower. In-app auto-follow tabs instead carry an explicitly
+     * EMPTY `tray=` — the leader tab persists the join URL into the shared
+     * sliccy.ai localStorage, and without explicit no-tray intent the
+     * `resolveFollowerJoinUrl` storage fallback would boot every extra
+     * window as ANOTHER tray follower (N followers for one app).
+     */
+    trayJoinUrl?: string | null;
   }): Promise<ElectronOverlayInjector> {
     const bundleSource = await loadElectronOverlayBundleSource({
       projectRoot: options.projectRoot,
@@ -818,11 +854,22 @@ export class ElectronOverlayInjector {
     const thinBootstraps: ThinBootstrapSet = {
       leader: buildElectronOverlayBootstrapScript({
         bundleSource,
-        appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_LEADER }),
+        appUrl: buildThinOverlayAppUrl({
+          ...options.thinBridge,
+          role: BRIDGE_ROLE_LEADER,
+          // Explicit intent in BOTH cases: join URL → follow; no join →
+          // empty tray= so a stored join URL from an earlier launch can't
+          // hijack a plain --electron launch into follower mode.
+          trayJoinUrl: options.trayJoinUrl ?? '',
+        }),
       }),
       follower: buildElectronOverlayBootstrapScript({
         bundleSource,
-        appUrl: buildThinOverlayAppUrl({ ...options.thinBridge, role: BRIDGE_ROLE_FOLLOWER }),
+        appUrl: buildThinOverlayAppUrl({
+          ...options.thinBridge,
+          role: BRIDGE_ROLE_FOLLOWER,
+          trayJoinUrl: '',
+        }),
       }),
       status: buildElectronOverlayBootstrapScript({
         bundleSource,
