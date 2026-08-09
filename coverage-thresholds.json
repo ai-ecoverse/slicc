@@ -73,7 +73,7 @@
       "lines": 81,
       "statements": 79,
       "functions": 79,
-      "branches": 69,
+      "branches": 70,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -133,8 +133,8 @@
   "swift": {
     "swift-server": {
       "lines": 62,
-      "functions": 60,
-      "regions": 59
+      "functions": 61,
+      "regions": 60
     },
     "swift-launcher": {
       "lines": 41,
@@ -152,13 +152,13 @@
       "regions": 83
     },
     "swift-trayfollower": {
-      "lines": 62,
-      "functions": 47,
-      "regions": 72
+      "lines": 63,
+      "functions": 48,
+      "regions": 73
     },
     "ios-app": {
-      "lines": 70,
-      "functions": 67,
+      "lines": 72,
+      "functions": 70,
       "regions": 68
     }
   }
