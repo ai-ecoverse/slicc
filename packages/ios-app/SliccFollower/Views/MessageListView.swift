@@ -9,6 +9,22 @@ enum MessageListLayout {
     static let maximumReadableWidth: CGFloat = 680
 }
 
+extension View {
+    /// Caps one transcript row at the readable column width.
+    ///
+    /// The cap lives on the **rows**, not on the stack around them. The
+    /// `LazyVStack` carries `scrollTargetLayout()`, which makes it the scroll
+    /// view's anchor: a centering frame wrapped *around* the target layout is
+    /// undone by an equal and opposite content offset, so the capped column
+    /// snapped back to the leading edge instead of centering (#1938 follow-up).
+    /// Capping rows instead keeps the target layout full-width — nothing to
+    /// scroll away — and the stack's own `.center` alignment does the
+    /// centering.
+    fileprivate func readableTranscriptColumn() -> some View {
+        frame(maxWidth: MessageListLayout.maximumReadableWidth)
+    }
+}
+
 /// Renders chat messages as a scrollable list with auto-scroll to bottom.
 struct MessageListView: View {
     let messages: [ChatMessage]
@@ -81,6 +97,7 @@ struct MessageListView: View {
                         .foregroundStyle(palette.ink.opacity(0.3))
                         .padding(.top, 12)
                         .padding(.bottom, 4)
+                        .readableTranscriptColumn()
 
                     ForEach(group.messages) { message in
                         MessageBubble(
@@ -96,6 +113,7 @@ struct MessageListView: View {
                         // tests ask which messages are on screen without
                         // matching on user-visible copy.
                         .accessibilityIdentifier("message-\(message.id)")
+                        .readableTranscriptColumn()
                     }
                 }
 
@@ -104,6 +122,7 @@ struct MessageListView: View {
                 ForEach(toolUICards) { card in
                     ToolUICardView(card: card)
                         .padding(.horizontal, 12)
+                        .readableTranscriptColumn()
                 }
 
                 ForEach(openApprovals) { request in
@@ -111,18 +130,21 @@ struct MessageListView: View {
                         onOpenApprovalDecision?(request.requestId, decision)
                     }
                     .padding(.horizontal, 12)
+                    .readableTranscriptColumn()
                 }
 
-                // Invisible anchor at bottom
+                // Invisible anchor at bottom. Its greedy width is load-bearing:
+                // the rows are centered by this stack's `.center` alignment,
+                // which can only center them if the stack itself spans the
+                // whole viewport rather than hugging the capped rows.
                 Color.clear
-                    .frame(height: 1)
+                    .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
                     .id("bottom")
             }
+            // Stays directly on the stack so every message remains its own
+            // scroll target for `scrollTo(id:)`. Nothing may wrap it in a
+            // sizing frame — see `readableTranscriptColumn()`.
             .scrollTargetLayout()
-            // The inner frame caps the reading column; the outer frame fills
-            // the scroll viewport so SwiftUI centers that capped column.
-            .frame(maxWidth: MessageListLayout.maximumReadableWidth)
-            .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
         .scrollPosition($scrollPosition)
