@@ -17,6 +17,7 @@ import {
   BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
+  selectFfmpegCore,
   tryLoadFfmpegCoreFromNodeModules,
 } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 
@@ -736,6 +737,70 @@ describe('tryLoadFfmpegCoreFromNodeModules', () => {
   });
 });
 
+describe('selectFfmpegCore', () => {
+  /** Fake ipk context with configurable installed core packages. */
+  function makeCoreIpk(opts: { core?: boolean; mt?: boolean; mtWorkerMissing?: boolean }) {
+    const sources = new Map<string, string>();
+    const bytes = new Map<string, Uint8Array>();
+    const dirs = new Set<string>(['/workspace', '/workspace/node_modules']);
+    const install = (pkg: string, withWorker: boolean) => {
+      const root = `/workspace/node_modules/${pkg}`;
+      for (const d of [`/workspace/node_modules/@ffmpeg`, root, `${root}/dist`, `${root}/dist/esm`])
+        dirs.add(d);
+      sources.set(`${root}/package.json`, JSON.stringify({ name: pkg, version: '0.12.10' }));
+      sources.set(`${root}/dist/esm/ffmpeg-core.js`, `/* ${pkg} glue */`);
+      bytes.set(`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d]));
+      if (withWorker) {
+        sources.set(`${root}/dist/esm/ffmpeg-core.worker.js`, `/* ${pkg} pthread worker */`);
+      }
+    };
+    if (opts.core) install('@ffmpeg/core', false);
+    if (opts.mt) install('@ffmpeg/core-mt', !opts.mtWorkerMissing);
+    return {
+      reader: {
+        exists: async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p),
+        isDirectory: async (p: string) => dirs.has(p),
+        readFile: async (p: string) => {
+          const v = sources.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        },
+      },
+      readBytes: async (p: string) => {
+        const v = bytes.get(p);
+        if (!v) throw new Error(`ENOENT: ${p}`);
+        return v;
+      },
+      fromDir: '/workspace',
+    };
+  }
+
+  it('prefers @ffmpeg/core-mt (with pthread worker) when isolated and installed', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true, mt: true }), true);
+    expect(loaded?.pkg).toBe('@ffmpeg/core-mt');
+    expect(loaded?.workerSource).toContain('pthread worker');
+  });
+
+  it('falls back to @ffmpeg/core when isolated but -mt is not installed', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true }), true);
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
+    expect(loaded?.workerSource).toBeUndefined();
+  });
+
+  it('ignores an installed -mt core when the runtime is not isolated', async () => {
+    const loaded = await selectFfmpegCore(makeCoreIpk({ core: true, mt: true }), false);
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
+  });
+
+  it('treats an -mt install missing its worker file as not installed', async () => {
+    const loaded = await selectFfmpegCore(
+      makeCoreIpk({ core: true, mt: true, mtWorkerMissing: true }),
+      true
+    );
+    expect(loaded?.pkg).toBe('@ffmpeg/core');
+  });
+});
+
 /** Build a ctx whose fs emulates an ipk-installed `@ffmpeg/core`. */
 function createCtxWithFfmpegCoreInstalled(): ReturnType<typeof createMockCtx> {
   const root = '/workspace/node_modules/@ffmpeg/core';
@@ -793,6 +858,55 @@ describe('ffmpeg -version gating (NS2c)', () => {
     const result = await createFfmpegCommand().execute(['-version'], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ffmpeg');
+  });
+
+  it('reports ready on an isolated leader with ONLY @ffmpeg/core-mt installed', async () => {
+    // The version gate resolves through the loader's no-arg (isolation-
+    // aware) form — an mt-only install that transcoding would happily
+    // boot must not report "not installed".
+    const root = '/workspace/node_modules/@ffmpeg/core-mt';
+    const sources = new Map<string, string>([
+      [`${root}/package.json`, JSON.stringify({ name: '@ffmpeg/core-mt', version: '0.12.10' })],
+      [`${root}/dist/esm/ffmpeg-core.js`, '/* mt glue */'],
+      [`${root}/dist/esm/ffmpeg-core.worker.js`, '/* pthread worker */'],
+    ]);
+    const bytes = new Map<string, Uint8Array>([
+      [`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d])],
+    ]);
+    const dirs = new Set<string>([
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/@ffmpeg',
+      root,
+      `${root}/dist`,
+      `${root}/dist/esm`,
+    ]);
+    const ctx = createMockCtx({
+      cwd: '/workspace',
+      fs: {
+        exists: vi.fn(async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p)),
+        readFile: vi.fn(async (p: string) => {
+          const v = sources.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+        readFileBuffer: vi.fn(async (p: string) => {
+          const v = bytes.get(p);
+          if (!v) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+        stat: vi.fn(async (p: string) => ({ isDirectory: dirs.has(p) }) as unknown as FsStat),
+      },
+    });
+    vi.stubGlobal('crossOriginIsolated', true);
+    try {
+      const result = await createFfmpegCommand().execute(['-version'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('ffmpeg');
+      expect(result.stderr).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
