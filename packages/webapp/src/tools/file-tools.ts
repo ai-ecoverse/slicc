@@ -81,22 +81,26 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
         }
 
         // Apply the user's offset/limit slice first, exactly like pi's read tool.
-        let selectedContent: string;
-        let userLimitedLines: number | undefined;
-        if (limit !== undefined) {
-          const endIdx = Math.min(startIdx + limit, allLines.length);
-          selectedContent = allLines.slice(startIdx, endIdx).join('\n');
-          userLimitedLines = endIdx - startIdx;
-        } else {
-          selectedContent = allLines.slice(startIdx).join('\n');
-        }
+        const selectedLines =
+          limit !== undefined
+            ? allLines.slice(startIdx, Math.min(startIdx + limit, allLines.length))
+            : allLines.slice(startIdx);
+        const userLimitedLines = limit !== undefined ? selectedLines.length : undefined;
 
-        // ALWAYS bound the slice to pi's head window, even when no limit was
-        // passed (#2009). truncateHead keeps whole lines, never partial.
-        const truncation = truncateHead(selectedContent);
+        // Number the selected lines with their FILE line numbers (1-based) BEFORE
+        // truncating, so the byte/line cap applies to what the model actually
+        // receives. pi caps the exact bytes it delivers (it adds no prefixes);
+        // SLICC's `NNNNNN | ` prefix is ~9 bytes/line, so truncating the raw text
+        // and numbering afterwards would ship a result well past 50KB and defeat
+        // the cap (Codex P2 on #2021). truncateHead keeps whole lines, never partial.
+        const numberedSelected = selectedLines
+          .map((line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`)
+          .join('\n');
+        const truncation = truncateHead(numberedSelected);
 
         // First surviving line alone blows the byte limit: there is no body to
-        // number, so point the model at a bash fallback (mirrors pi's read tool).
+        // show, so point the model at a bash fallback (mirrors pi's read tool).
+        // Report the RAW line size so the `head -c` hint matches the file.
         if (truncation.firstLineExceedsLimit) {
           const firstLineSize = formatSize(
             new TextEncoder().encode(allLines[startIdx] ?? '').length
@@ -108,12 +112,11 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
           };
         }
 
-        // Number the SURVIVING lines with their FILE line numbers (1-based),
-        // then append the un-numbered continuation footer.
-        const numbered = truncation.content
-          .split('\n')
-          .map((line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`)
-          .join('\n');
+        // `truncation.content` is already numbered and byte/line-capped; append
+        // the un-numbered continuation footer. `outputLines` is a 1:1 count of
+        // file lines shown (numbered lines map to file lines), so it drives the
+        // paging offsets directly.
+        const numbered = truncation.content;
 
         let footer = '';
         if (truncation.truncated) {

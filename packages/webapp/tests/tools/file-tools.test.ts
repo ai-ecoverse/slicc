@@ -82,17 +82,13 @@ describe('File Tools', () => {
       expect(result.content).not.toContain('more lines in file');
     });
 
-    // Reconstruct the underlying (un-prefixed) content that truncateHead capped,
-    // by stripping SLICC's `      N | ` line-number prefix from each body line.
-    const underlyingContent = (content: string): string =>
-      content
-        .split('\n\n[')[0] // drop the footer
-        .split('\n')
-        .map((l) => l.replace(/^\s*\d+ \| /, ''))
-        .join('\n');
+    // The body delivered to the model = the numbered content WITHOUT the footer.
+    // pi caps the exact bytes it delivers; after the fix SLICC caps this too
+    // (line-number prefixes included), so the delivered body — not just the raw
+    // text — is what must honor DEFAULT_MAX_BYTES.
+    const deliveredBody = (content: string): string => content.split('\n\n[')[0];
     const numberedLines = (content: string): string[] =>
-      content
-        .split('\n\n[')[0]
+      deliveredBody(content)
         .split('\n')
         .filter((l) => /^\s*\d+ \| /.test(l));
 
@@ -109,10 +105,10 @@ describe('File Tools', () => {
       // 2500 lines actually in the file.
       expect(numberedLines(result.content)).toHaveLength(DEFAULT_MAX_LINES);
       expect(DEFAULT_MAX_LINES).toBeLessThan(totalLines);
-      // The underlying (un-prefixed) content honors pi's byte cap too.
-      expect(
-        new TextEncoder().encode(underlyingContent(result.content)).length
-      ).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+      // The DELIVERED (numbered) body honors pi's byte cap.
+      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
+        DEFAULT_MAX_BYTES
+      );
       // Continuation footer points at the next file line to page from.
       expect(result.content).toContain(
         `[Showing lines 1-${DEFAULT_MAX_LINES} of ${totalLines}. Use offset=${DEFAULT_MAX_LINES + 1} to continue.]`
@@ -139,10 +135,32 @@ describe('File Tools', () => {
       const shown = numberedLines(result.content).length;
       expect(shown).toBeLessThan(totalLines);
       expect(shown).toBeLessThan(DEFAULT_MAX_LINES);
-      // The underlying content (what truncateHead sized) fits inside the 50KB cap.
-      expect(
-        new TextEncoder().encode(underlyingContent(result.content)).length
-      ).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+      // The DELIVERED (numbered) body — prefixes included — fits inside the 50KB cap.
+      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
+        DEFAULT_MAX_BYTES
+      );
+    });
+
+    it('caps the DELIVERED numbered body — not just the raw text — at 50KB (Codex P2 on #2021)', async () => {
+      // Codex's scenario: many moderate-width lines. SLICC's `      N | ` prefix
+      // is ~9 bytes/line, so capping the RAW text and numbering afterwards shipped
+      // a result well past 50KB (~68KB for 2500×25B lines). The body delivered to
+      // the model must honor the cap; pi does this trivially because it adds no
+      // prefixes, so matching pi means capping the numbered output.
+      const totalLines = DEFAULT_MAX_LINES + 500;
+      const raw = Array.from({ length: totalLines }, () => 'y'.repeat(25)).join('\n');
+      await fs.writeFile('/moderate.txt', raw);
+
+      const result = await readFile.execute({ path: '/moderate.txt' });
+
+      expect(result.isError).toBeFalsy();
+      // The prefixes push the byte cap below the 2000-line cap, so it truncates
+      // by BYTES — and the delivered body stays within 50KB (fails pre-fix).
+      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
+        DEFAULT_MAX_BYTES
+      );
+      expect(result.content).toContain('KB limit). Use offset=');
+      expect(numberedLines(result.content).length).toBeLessThan(DEFAULT_MAX_LINES);
     });
 
     it('reports remaining lines when the user limit stops short of EOF (#2009)', async () => {
