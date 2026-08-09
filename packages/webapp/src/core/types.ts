@@ -32,7 +32,14 @@ export interface ToolCall {
 
 // ─── Message Types ──────────────────────────────────────────────────────────
 
-export type StopReason = 'stop' | 'length' | 'toolUse' | 'error' | 'aborted' | 'pending';
+export type StopReason =
+  | 'stop'
+  | 'length'
+  | 'toolUse'
+  | 'error'
+  | 'aborted'
+  | 'pending'
+  | 'deferred';
 
 export interface Usage {
   input: number;
@@ -172,7 +179,7 @@ export type AssistantMessageEvent =
   | { type: 'toolcall_start'; contentIndex: number; partial: AssistantMessage }
   | { type: 'toolcall_delta'; contentIndex: number; delta: string; partial: AssistantMessage }
   | { type: 'toolcall_end'; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
-  | { type: 'done'; reason: 'stop' | 'length' | 'toolUse'; message: AssistantMessage }
+  | { type: 'done'; reason: 'stop' | 'length' | 'toolUse' | 'deferred'; message: AssistantMessage }
   | { type: 'error'; reason: 'aborted' | 'error'; error: AssistantMessage };
 
 /** Events emitted by the agent loop. */
