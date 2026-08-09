@@ -43,6 +43,31 @@ paying debt down with `--update`). The baseline doubles as a debt list
 for the boy-scout gate. Chained into `npm run lint`, `lint:ci`,
 pre-commit (webapp-source commits), and the pre-push gate.
 
+## record-string-unknown-ratchet
+
+`check-record-string-unknown.mjs` fails on any NEW `Record<string, unknown>`
+in non-test source. Detection is a Biome analyzer plugin
+(`.biome-plugins/no-record-string-unknown.grit`), not a regex, so it matches
+the real type node: line-wrapped occurrences count, `Record<string, string>`
+does not, and `// biome-ignore lint/plugin: <reason>` suppresses a line the
+same way it would any other Biome diagnostic.
+
+The plugin cannot live in the root `biome.json`: at `severity = "error"` it
+would fail `lint:ci` on all 604 pre-existing occurrences, and Biome's
+`--skip=plugin` and `overrides[].plugins` are both group-level — there is no
+per-plugin file exemption (`overrides[].plugins: []` is additive, not a
+kill-switch). So `biome.record-gate.json` extends the root config, inheriting
+`files.includes` verbatim (zero drift), and swaps in that one plugin; the
+script runs it with `--only=plugin --reporter=json` and enforces the baseline.
+
+Pre-existing occurrences are grandfathered per file in
+`record-string-unknown-baseline.json` (one-way ratchet; regenerate after
+paying debt down with `--update`). The baseline doubles as a debt list for
+the boy-scout gate. Tests are out of scope — `(globalThis as Record<string,
+unknown>).chrome = …` is idiomatic scaffolding, and `biome.json` already
+exempts tests from `noExplicitAny` and the complexity rules for the same
+reason. Chained into `npm run lint` and `lint:ci`.
+
 ## storybook-screenshots-upload
 
 `storybook-screenshots-upload.mjs` (+ `storybook-screenshots-upload-lib.mjs`)

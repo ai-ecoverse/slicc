@@ -4,10 +4,11 @@
 // Computes the PR's changed files via `git diff --name-only <base>...HEAD`
 // and intersects them with EVERY debt list: the per-rule exemption glob lists
 // parsed from `biome.json` (see size-exemption-lib.mjs) — function size,
-// cognitive complexity, floating promises, and misused promises — plus the
-// layer-stack back-edge baseline
-// (`layer-back-edge-baseline.json`, see check-layer-back-edges.mjs),
-// evaluated per file.
+// cognitive complexity, floating promises, and misused promises — plus the two
+// ratchet baselines: layer-stack back-edges
+// (`layer-back-edge-baseline.json`, see check-layer-back-edges.mjs) and
+// untyped string-keyed bags (`record-string-unknown-baseline.json`, see
+// check-record-string-unknown.mjs), evaluated per file.
 // Exits non-zero with a rule-appropriate fix-it message if any touched file
 // is still on ANY list — the PR author must pay the file's debt down and
 // delete its entry in the same PR.
@@ -29,7 +30,8 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { BASELINE_PATH, baselineFiles } from './check-layer-back-edges.mjs';
+import { baselineFiles, BASELINE_PATH as LAYER_BASELINE_PATH } from './check-layer-back-edges.mjs';
+import { BASELINE_PATH as RECORD_BASELINE_PATH } from './check-record-string-unknown.mjs';
 import {
   COMPLEXITY_RULE_KEY,
   extractExemptionGlobsFor,
@@ -44,7 +46,8 @@ import {
 
 const SCRIPT = 'check-touched-exemptions';
 
-const LAYER_BASELINE_REL = relative(repoRoot, BASELINE_PATH).split('\\').join('/');
+const LAYER_BASELINE_REL = relative(repoRoot, LAYER_BASELINE_PATH).split('\\').join('/');
+const RECORD_BASELINE_REL = relative(repoRoot, RECORD_BASELINE_PATH).split('\\').join('/');
 
 const RULES = [
   {
@@ -154,12 +157,12 @@ function readBaseJson(baseRef, relPath) {
   }
 }
 
-// Read the current layer back-edge baseline from disk; null on any failure so
-// a missing/broken baseline degrades to "no back-edge debt list" instead of
-// crashing the biome-rule checks.
-function readLayerBaseline() {
+// Read a ratchet baseline from disk; null on any failure so a missing/broken
+// baseline degrades to "no debt list for that rule" instead of crashing the
+// biome-rule checks.
+function readBaselineFile(path) {
   try {
-    return JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+    return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return null;
   }
@@ -188,8 +191,10 @@ function main() {
   const biomeConfig = readBiomeConfig();
   const baseRef = resolveBaseRef(process.argv);
   const baseConfig = readBaseJson(baseRef, 'biome.json');
-  const layerBaseline = readLayerBaseline();
+  const layerBaseline = readBaselineFile(LAYER_BASELINE_PATH);
   const baseLayerBaseline = readBaseJson(baseRef, LAYER_BASELINE_REL);
+  const recordBaseline = readBaselineFile(RECORD_BASELINE_PATH);
+  const baseRecordBaseline = readBaseJson(baseRef, RECORD_BASELINE_REL);
   const ruleStates = [
     ...RULES.map((rule) => ({
       ...rule,
@@ -212,6 +217,23 @@ function main() {
       globs: baselineFiles(layerBaseline),
       baseGlobs: baselineFiles(baseLayerBaseline),
       baseReadable: baseLayerBaseline !== null,
+    },
+    {
+      label: 'record-string-unknown',
+      listRef: RECORD_BASELINE_REL,
+      fixIt:
+        'Fix: in this same PR, replace every Record<string, unknown> in the file with a\n' +
+        'named type for the shape you actually accept (see docs/review-patterns.md §\n' +
+        'Untyped string-keyed bags); for a genuinely untyped payload add\n' +
+        '`// biome-ignore lint/plugin: <reason>`. Then ratchet the baseline:\n' +
+        '  node packages/dev-tools/tools/check-record-string-unknown.mjs --update',
+      addFixIt:
+        'Fix: name the shape you actually accept instead of growing the baseline — or, for\n' +
+        'a genuinely untyped payload, suppress the line with `// biome-ignore lint/plugin:\n' +
+        '<reason>` (see docs/review-patterns.md § Untyped string-keyed bags).',
+      globs: baselineFiles(recordBaseline),
+      baseGlobs: baselineFiles(baseRecordBaseline),
+      baseReadable: baseRecordBaseline !== null,
     },
   ];
 

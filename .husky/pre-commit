@@ -15,3 +15,10 @@ fi
 if git diff --cached --name-only | grep -qE '^(packages/webapp/src/|packages/dev-tools/tools/layer-back-edge-baseline\.json)'; then
   node packages/dev-tools/tools/check-layer-back-edges.mjs
 fi
+
+# Record<string, unknown> ratchet: when any package source (or the baseline) is
+# staged, fail on any NEW untyped string-keyed bag. Sub-second scan; the same
+# gate runs in `npm run lint` / `lint:ci` and pre-push.
+if git diff --cached --name-only | grep -qE '^(packages/.*\.(ts|tsx|js|mjs|cjs)|packages/dev-tools/tools/record-string-unknown-baseline\.json)$'; then
+  node packages/dev-tools/tools/check-record-string-unknown.mjs
+fi

@@ -68,8 +68,11 @@ Run `npm run lint`. It runs `biome check --write .` over JS/TS/JSON/CSS and
 then `lint:docs` (CLAUDE.md size limits), `lint:skills` (tessl `SKILL.md` lint),
 `lint:skill-router` (developer-skill router and alias sync), `lint:no-innerhtml`,
 `lint:layer-back-edges` (no new imports pointing up the layer stack — baseline-ratcheted;
-fix the layering, never grow `layer-back-edge-baseline.json`), `lint:patches`, and
-`lint:duplication`.
+fix the layering, never grow `layer-back-edge-baseline.json`),
+`lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
+baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
+`// biome-ignore lint/plugin: <reason>`, never grow
+`record-string-unknown-baseline.json`), `lint:patches`, and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
@@ -142,6 +145,8 @@ The gate enforces five "debt lists" of files grandfathered out of a rule:
   synchronous callbacks or conditions)
 - Layer-stack back-edges (`packages/dev-tools/tools/layer-back-edge-baseline.json`; cap:
   **0** imports pointing up the stack `fs → shell/git → cdp → tools → core → scoops → ui`)
+- Untyped string-keyed bags (`packages/dev-tools/tools/record-string-unknown-baseline.json`;
+  cap: **0** `Record<string, unknown>` in non-test source)
 
 When a PR **touches** any file still on one of those debt lists, this gate **fails** unless,
 in the same change, you pay the file's debt down and remove its entry:
@@ -151,8 +156,12 @@ in the same change, you pay the file's debt down and remove its entry:
 - Back-edge baseline: remove every up-the-stack import from the file (move the pure helper
   into the lower layer), then run
   `node packages/dev-tools/tools/check-layer-back-edges.mjs --update`.
+- `Record<string, unknown>` baseline: replace every occurrence in the file with a named type
+  for the shape you actually accept (or, for a genuinely untyped payload, a
+  `// biome-ignore lint/plugin: <reason>` line), then run
+  `node packages/dev-tools/tools/check-record-string-unknown.mjs --update`.
 
-Treat all five as one-way ratchets: never add a file to a debt list to silence it — the gate
+Treat all six as one-way ratchets: never add a file to a debt list to silence it — the gate
 also fails when a PR grows any list vs the base ref. The gate auto-skips on `merge_group` /
 `push` events (it resolves the merge-base against `$GITHUB_BASE_REF`), so always run it
 locally before pushing if you touched a listed file.
@@ -162,7 +171,8 @@ touch a debt-listed file, you must fully pay down that file's debt in the same P
 touching that file.
 
 To check whether a file is exempt, search `biome.json` for its path under a single-rule
-`"off"` override, and `layer-back-edge-baseline.json` for its path key.
+`"off"` override, and `layer-back-edge-baseline.json` / `record-string-unknown-baseline.json`
+for its path key.
 
 ## Coverage
 

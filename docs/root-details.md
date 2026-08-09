@@ -51,3 +51,5 @@ Numbering matches the root checklist. Full catalog:
     errors → `transfer-corrupt`; SHA-256.
 12. **Layer import direction** — no new `ui/` imports below ui; move helpers
     down.
+13. **Untyped string-keyed bags** — no new `Record<string, unknown>` in source;
+    name the shape, or `// biome-ignore lint/plugin:` with a reason.
