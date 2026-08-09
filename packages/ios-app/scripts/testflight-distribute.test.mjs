@@ -10,6 +10,7 @@ import {
   firstErrorCode,
   isSubmissionCapacityError,
   main,
+  resolveVerifyOutcome,
 } from './testflight-distribute.mjs';
 
 const SUBMISSION_LIMIT = 'ENTITY_UNPROCESSABLE.SUBMISSION_LIMIT_REACHED';
@@ -63,12 +64,27 @@ describe('classifySubmitOutcome', () => {
     expect(classifySubmitOutcome({ status: 409, code: SUBMISSION_LIMIT })).toBe('deferred');
   });
 
-  it('reports an already-in-review re-run (INVALID_QC_STATE) as skipped', () => {
+  it('routes INVALID_QC_STATE to verification instead of deciding blind', () => {
     // Observed re-running distribute to re-set What to Test on a build
-    // whose Beta App Review was already pending.
+    // whose Beta App Review was already pending — but the same code fires
+    // for a REJECTED build, so the outcome depends on the actual state.
     expect(
       classifySubmitOutcome({ status: 422, code: 'ENTITY_UNPROCESSABLE.INVALID_QC_STATE' })
-    ).toBe('skipped');
+    ).toBe('verify');
+  });
+});
+
+describe('resolveVerifyOutcome', () => {
+  it('treats pending and passed reviews as the desired end state', () => {
+    expect(resolveVerifyOutcome('WAITING_FOR_REVIEW')).toBe('skipped');
+    expect(resolveVerifyOutcome('IN_REVIEW')).toBe('skipped');
+    expect(resolveVerifyOutcome('APPROVED')).toBe('skipped');
+  });
+
+  it('keeps rejected or unreadable states fatal', () => {
+    expect(resolveVerifyOutcome('REJECTED')).toBe('fatal');
+    expect(resolveVerifyOutcome('')).toBe('fatal');
+    expect(resolveVerifyOutcome(undefined)).toBe('fatal');
   });
 });
 
@@ -266,6 +282,47 @@ describe('distribute', () => {
 
     const result = await distribute({ ...baseArgs, asc });
     expect(result).toEqual({ submit: 'skipped', attach: 'attached' });
+  });
+
+  // The re-run regression observed live re-setting build 1376's What to
+  // Test: INVALID_QC_STATE on an already-pending review aborted the script
+  // as fatal. The pending state must read as skipped and attach must run.
+  it('skips and still attaches on INVALID_QC_STATE when the review is pending', async () => {
+    const { asc, calls } = makeAsc({
+      'POST /betaAppReviewSubmissions': {
+        status: 422,
+        json: { errors: [{ code: 'ENTITY_UNPROCESSABLE.INVALID_QC_STATE' }] },
+        text: 'invalid qc state',
+      },
+      'GET /builds/build-1/betaAppReviewSubmission': {
+        status: 200,
+        json: { data: { attributes: { betaReviewState: 'WAITING_FOR_REVIEW' } } },
+        text: '{}',
+      },
+    });
+
+    const result = await distribute({ ...baseArgs, asc });
+    expect(result).toEqual({ submit: 'skipped', attach: 'attached' });
+    expect(calls.some((c) => c.path.includes('/relationships/builds'))).toBe(true);
+  });
+
+  it('stays fatal on INVALID_QC_STATE when the review was rejected', async () => {
+    // A rejected build can never reach external testers — masking this as
+    // skipped would report success for a failed distribution.
+    const { asc } = makeAsc({
+      'POST /betaAppReviewSubmissions': {
+        status: 422,
+        json: { errors: [{ code: 'ENTITY_UNPROCESSABLE.INVALID_QC_STATE' }] },
+        text: 'invalid qc state',
+      },
+      'GET /builds/build-1/betaAppReviewSubmission': {
+        status: 200,
+        json: { data: { attributes: { betaReviewState: 'REJECTED' } } },
+        text: '{}',
+      },
+    });
+
+    await expect(distribute({ ...baseArgs, asc })).rejects.toThrow(DistributionError);
   });
 
   it('throws on a genuinely failed review submission', async () => {
