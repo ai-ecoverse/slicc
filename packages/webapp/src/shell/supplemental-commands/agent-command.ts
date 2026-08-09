@@ -1,8 +1,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { createLogger } from '../../core/logger.js';
+import { createLogger } from '../../base/logger.js';
+import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../base/thinking-level.js';
 import { normalizePath } from '../../fs/path-utils.js';
-import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../scoops/types.js';
 
 const log = createLogger('agent-command');
 
@@ -28,6 +28,13 @@ interface AgentSpawnOptions {
   thinkingLevel?: ThinkingLevel;
   /** Structured output schema for the spawned scoop. */
   structuredOutputSchema?: Record<string, unknown>;
+  /**
+   * Tri-value session-transcript persistence forwarded to the bridge:
+   * `true` (`--persist-session`) writes a durable `/sessions/...` archive,
+   * `false` (`--no-persist-session`) writes nothing, and `undefined` (neither
+   * flag) leaves the bridge's default — an ephemeral `/tmp/...` archive.
+   */
+  persistSession?: boolean;
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -96,6 +103,13 @@ Options:
                           explicit list if you want them back (e.g.
                           "/workspace/,$(pwd)"). Each entry is normalized to
                           a trailing slash.
+  --persist-session       Write the spawned agent's full session transcript to
+                          /sessions/agent-<name>-<timestamp>.md (durable —
+                          survives a new chat) for later human analysis.
+  --no-persist-session    Do not write a session transcript at all. With
+                          NEITHER flag, the transcript is written to
+                          /tmp/agent-<name>-<timestamp>.md, which a new chat
+                          clears.
   -h, --help              Show this help message and exit.
 
 Examples:
@@ -115,6 +129,7 @@ interface ParsedArgs {
   visiblePaths?: string[];
   thinkingLevel?: ThinkingLevel;
   structuredOutputSchema?: Record<string, unknown>;
+  persistSession?: boolean;
   error?: string;
 }
 
@@ -201,6 +216,7 @@ interface ParseState {
   visiblePaths?: string[];
   thinkingLevel?: ThinkingLevel;
   schemaOut?: Record<string, unknown>;
+  persistSession?: boolean;
 }
 
 /** Process one argument. Returns error or null and consumed count. */
@@ -246,6 +262,16 @@ function processArg(
     if (result.error) return { error: result.error, consumed: 0 };
     state.schemaOut = result.value;
     return { consumed: result.consumed };
+  }
+
+  if (arg === '--persist-session') {
+    state.persistSession = true;
+    return { consumed: 1 };
+  }
+
+  if (arg === '--no-persist-session') {
+    state.persistSession = false;
+    return { consumed: 1 };
   }
 
   if (arg.length > 0 && arg.startsWith('-')) {
@@ -327,6 +353,7 @@ function parseArgs(args: string[]): ParsedArgs {
     visiblePaths: state.visiblePaths,
     thinkingLevel: state.thinkingLevel,
     structuredOutputSchema: state.schemaOut,
+    persistSession: state.persistSession,
   };
 }
 
@@ -433,6 +460,9 @@ function buildSpawnOptions(
   }
   if (parsed.structuredOutputSchema !== undefined) {
     spawnOptions.structuredOutputSchema = parsed.structuredOutputSchema;
+  }
+  if (parsed.persistSession !== undefined) {
+    spawnOptions.persistSession = parsed.persistSession;
   }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;

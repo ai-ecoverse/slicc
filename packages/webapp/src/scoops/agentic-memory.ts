@@ -392,6 +392,10 @@ function buildSpawnOptions(
     allowedCommands: config.allowedCommands,
     prompt,
     thinkingLevel: config.thinkingLevel,
+    // Durable transcript under a stable name — /sessions/agent-memory-curator-*.md
+    // survives a new chat, so a curator run stays auditable for humans.
+    persistSession: true,
+    name: 'memory-curator',
     // The pass is detached, so the caller's return value goes nowhere. Without
     // this the curator's report — including any skill it found — is discarded
     // and the cone never learns the pass happened at all.

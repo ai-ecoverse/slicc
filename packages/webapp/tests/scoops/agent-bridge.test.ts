@@ -1364,6 +1364,8 @@ describe('createAgentBridge — success receipts (#1989)', () => {
 
     const result = await bridge.spawn({
       ...BASE_OPTS,
+      // Isolate the receipt write from the default /tmp session archive.
+      persistSession: false,
       successReceiptPath: '/sessions/.curated/pending-abc.md',
     });
 
@@ -1384,6 +1386,8 @@ describe('createAgentBridge — success receipts (#1989)', () => {
 
     const result = await bridge.spawn({
       ...BASE_OPTS,
+      // Isolate the receipt assertion from the default /tmp session archive.
+      persistSession: false,
       successReceiptPath: '/sessions/.curated/pending-abc.md',
     });
 
@@ -1494,5 +1498,143 @@ describe('createAgentBridge — run bounds + cancellation (#1972)', () => {
 
     expect(stopScoop).toHaveBeenCalledWith('agent_reclaimed_sorbet');
     expect(result).toEqual({ finalText: 'agent: aborted', exitCode: 1 });
+  });
+});
+
+describe('createAgentBridge — session archive (persistSession)', () => {
+  it('persistSession: true writes a durable archive under /sessions', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, persistSession: true });
+
+    const archive = writes.filter((w) => w.path.startsWith('/sessions/agent-zesty-custard-'));
+    expect(archive).toHaveLength(1);
+    expect(archive[0].path).toMatch(/^\/sessions\/agent-zesty-custard-.*\.md$/);
+    expect(archive[0].content).toContain('# Agent session: zesty-custard');
+  });
+
+  it('persistSession undefined (default) writes an ephemeral archive under /tmp', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    const archive = writes.filter((w) => w.path.startsWith('/tmp/agent-'));
+    expect(archive).toHaveLength(1);
+    expect(archive[0].path).toMatch(/^\/tmp\/agent-zesty-custard-.*\.md$/);
+  });
+
+  it('persistSession: false writes no session archive', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, persistSession: false });
+
+    expect(writes).toHaveLength(0);
+  });
+
+  it('a fixed name produces the agent-<name> folder and agent_<name> jid', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      // Would be used only on the default (random) path — the fixed name wins.
+      generateName: () => 'should-not-be-used',
+    });
+    scripts.set('agent_memory_curator', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, name: 'memory-curator', persistSession: true });
+
+    expect(registerCalls[0].folder).toBe('agent-memory-curator');
+    expect(registerCalls[0].jid).toBe('agent_memory_curator');
+    const archive = writes.filter((w) => w.path.startsWith('/sessions/agent-memory-curator-'));
+    expect(archive).toHaveLength(1);
+  });
+
+  it('rejects a malformed fixed name without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    const result = await bridge.spawn({ ...BASE_OPTS, name: 'Bad_Name!' });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('invalid name');
+    expect(registerCalls).toHaveLength(0);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('writes the session archive even when the agent exits non-zero', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onError?.('provider exploded'));
+
+    const result = await bridge.spawn({ ...BASE_OPTS, persistSession: true });
+
+    expect(result.exitCode).toBe(1);
+    const archive = writes.filter((w) => w.path.startsWith('/sessions/agent-zesty-custard-'));
+    expect(archive).toHaveLength(1);
+    // The header carries the non-zero exit for the human reader.
+    expect(archive[0].content).toContain('exit code: 1');
+  });
+
+  it('serializes captured agent messages into the archive body', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const messages = [
+      { role: 'user', content: 'do the thing', timestamp: 1 },
+      { role: 'assistant', content: 'did it', timestamp: 2 },
+    ];
+    (orchestrator.getScoopContext as ReturnType<typeof vi.fn>).mockReturnValue({
+      getAgentMessages: () => messages,
+    } as unknown as ScoopContext);
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onSendMessage?.('did it'));
+
+    await bridge.spawn({ ...BASE_OPTS, prompt: 'do the thing', persistSession: true });
+
+    const archive = writes.find((w) => w.path.startsWith('/sessions/agent-zesty-custard-'));
+    expect(archive?.content).toContain('## Prompt');
+    expect(archive?.content).toContain('do the thing');
+    expect(archive?.content).toContain('## user');
+    expect(archive?.content).toContain('## assistant');
+    expect(archive?.content).toContain('did it');
+  });
+
+  it('never fails the spawn when the archive write throws', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs({
+      writeFile: async () => {
+        throw new Error('quota exceeded');
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'zesty-custard',
+    });
+    scripts.set('agent_zesty_custard', (obs) => obs.onSendMessage?.('done'));
+
+    const result = await bridge.spawn({ ...BASE_OPTS, persistSession: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalText).toBe('done');
   });
 });

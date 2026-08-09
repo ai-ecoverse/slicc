@@ -105,6 +105,24 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     );
   });
 
+  it('persists a durable transcript under the fixed memory-curator name', async () => {
+    const spawn = successSpawn();
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs: fakeVfs(DEFAULT_MEMORY_MD),
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 3,
+      today: '2026-08-06',
+    });
+
+    expect(result).toEqual({ ok: true, report: 'done' });
+    expect(spawn.mock.calls[0][0]).toMatchObject({
+      persistSession: true,
+      name: 'memory-curator',
+    });
+  });
+
   it('passes whole-file budget and freshness rules to the curator', async () => {
     const spawn = successSpawn();
 

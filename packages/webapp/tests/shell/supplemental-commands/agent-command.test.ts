@@ -12,6 +12,7 @@ interface SpawnArgs {
   invokingCwd?: string;
   thinkingLevel?: string;
   structuredOutputSchema?: Record<string, unknown>;
+  persistSession?: boolean;
 }
 
 interface SpawnResult {
@@ -1107,6 +1108,65 @@ describe('agent command', () => {
       });
       await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
       expect(captured?.structuredOutputSchema).toBeUndefined();
+    });
+  });
+
+  describe('--persist-session / --no-persist-session flags', () => {
+    it('--persist-session forwards persistSession: true', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--persist-session', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.persistSession).toBe(true);
+    });
+
+    it('--no-persist-session forwards persistSession: false', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--no-persist-session', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.persistSession).toBe(false);
+    });
+
+    it('omits persistSession when neither flag is present', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.persistSession).toBeUndefined();
+    });
+
+    it('treats --persist-session as the prompt in the third positional slot', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', '--persist-session'], createMockCtx());
+      expect(captured?.prompt).toBe('--persist-session');
+      expect(captured?.persistSession).toBeUndefined();
+    });
+
+    it('mentions both flags in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/--persist-session/);
+      expect(result.stdout).toMatch(/--no-persist-session/);
     });
   });
 });
