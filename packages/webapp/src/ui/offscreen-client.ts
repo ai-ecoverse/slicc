@@ -130,7 +130,18 @@ export interface OffscreenClientCallbacks {
    * controls thread routing in {@link handleAgentEvent} is unchanged.
    */
   onScoopActivity?: (scoopJid: string) => void;
+  /**
+   * Fired when any scoop (selected or not) crosses between waiting on the
+   * model and running a tool, so the switcher tab can shape its centre pin
+   * the way the composer's send button shapes its busy treatment. Deduped —
+   * only an actual change fires. This is the per-scoop twin of
+   * `WcChatController`'s busy phase, which only tracks the focused thread.
+   */
+  onScoopPhaseChange?: (scoopJid: string, phase: ScoopBusyPhase) => void;
 }
+
+/** What a busy scoop is busy with. Mirrors `<slicc-send-button>`'s `phase`. */
+export type ScoopBusyPhase = 'thinking' | 'tool';
 
 export class OffscreenClient implements KernelClientFacade {
   private eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -138,6 +149,14 @@ export class OffscreenClient implements KernelClientFacade {
   private scoops: RegisteredScoop[] = [];
   private scoopStatuses = new Map<string, ScoopTabState['status']>();
   private currentMessageId = new Map<string, string>();
+  /**
+   * Tool calls in flight per scoop — incremented on `tool_start`, decremented
+   * on the matching `tool_end`. A scoop is in the `tool` phase while this is
+   * above zero and `thinking` otherwise. Kept here rather than in the host
+   * because the raw per-scoop tool events never leave this class: everything
+   * downstream of the selection gate is the SELECTED scoop's thread only.
+   */
+  private toolDepth = new Map<string, number>();
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: LocalVfsClient | null = null;
@@ -926,6 +945,21 @@ export class OffscreenClient implements KernelClientFacade {
     }
   }
 
+  /**
+   * Move a scoop's in-flight tool count and report the phase it lands in.
+   * `delta` of `null` resets the count (turn boundaries), which is what stops
+   * a turn that died mid-tool from stranding the tab on `tool` forever.
+   */
+  private trackToolPhase(scoopJid: string, delta: number | null): void {
+    const before = this.toolDepth.get(scoopJid) ?? 0;
+    const after = delta === null ? 0 : Math.max(0, before + delta);
+    if (after === 0) this.toolDepth.delete(scoopJid);
+    else this.toolDepth.set(scoopJid, after);
+    // Only the zero crossing changes the phase; nested tool calls do not.
+    if (before > 0 === after > 0) return;
+    this.callbacks.onScoopPhaseChange?.(scoopJid, after > 0 ? 'tool' : 'thinking');
+  }
+
   private handleAgentEvent(msg: AgentEventMsg): void {
     // Per-scoop activity ping fires BEFORE the selection gate so the
     // host can move the navbar eyes onto a non-selected scoop that is
@@ -937,6 +971,22 @@ export class OffscreenClient implements KernelClientFacade {
       case 'tool_ui':
       case 'turn_end':
         this.callbacks.onScoopActivity?.(msg.scoopJid);
+        break;
+    }
+
+    // Busy-phase bookkeeping also has to precede the selection gate: the tab
+    // for a scoop the user is NOT looking at still has to shape its pin. Note
+    // `tool_end` is deliberately absent from the activity ping above (it is
+    // not new output to point the eyes at) but is essential here.
+    switch (msg.eventType) {
+      case 'tool_start':
+        this.trackToolPhase(msg.scoopJid, 1);
+        break;
+      case 'tool_end':
+        this.trackToolPhase(msg.scoopJid, -1);
+        break;
+      case 'turn_end':
+        this.trackToolPhase(msg.scoopJid, null);
         break;
     }
 
@@ -1065,7 +1115,15 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopStatus(msg: ScoopStatusMsg): void {
+    const previous = this.scoopStatuses.get(msg.scoopJid);
     this.scoopStatuses.set(msg.scoopJid, msg.status);
+    // A CHANGED status is a turn boundary, and every boundary clears the tool
+    // count: a turn always opens in `thinking`, and one that ends — cleanly or
+    // by erroring mid-tool — must not strand the next turn on a stale `tool`.
+    // Same rising-edge reset `WcChatController.setProcessing` performs for the
+    // focused thread. A repeated identical broadcast is NOT a boundary, so it
+    // cannot yank the phase out from under a tool that is still running.
+    if (previous !== msg.status) this.trackToolPhase(msg.scoopJid, null);
     this.callbacks.onStatusChange(msg.scoopJid, msg.status);
   }
 

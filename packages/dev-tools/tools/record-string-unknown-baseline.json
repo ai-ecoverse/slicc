@@ -174,7 +174,6 @@
   "packages/webapp/src/ui/sync-fs-sw-handler.ts": 1,
   "packages/webapp/src/ui/tray-leave-runtime.ts": 1,
   "packages/webapp/src/ui/wc/wc-attach.ts": 3,
-  "packages/webapp/src/ui/wc/wc-live.ts": 1,
   "packages/webapp/src/ui/wc/wc-message-view.ts": 2,
   "packages/webapp/src/ui/wc/wc-onboarding.ts": 1,
   "packages/webapp/src/ui/wc/wc-sprinkles.ts": 1,

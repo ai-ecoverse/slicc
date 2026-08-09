@@ -10,6 +10,16 @@ import type {
 
 export type AgentState = 'working' | 'broken' | 'initializing' | 'idle';
 
+/**
+ * What a `working` agent is busy WITH, mirroring `<slicc-send-button>`'s
+ * `phase` attribute so one motion vocabulary covers the whole app: rectangular
+ * means the model is thinking, circular means a tool is running. The send
+ * button spends it on motion (pulsing square vs spinning ring); at 14px the tab
+ * glyph spends it on the centre pin's shape instead. Only meaningful while
+ * {@link AgentState} is `working`.
+ */
+export type AgentPhase = 'thinking' | 'tool';
+
 export interface ScoopDescriptor {
   key: string;
   type?: 'cone' | 'scoop';
@@ -19,6 +29,13 @@ export interface ScoopDescriptor {
   fill?: number;
   ephemeral?: boolean;
   state?: AgentState;
+  /**
+   * Busy detail for a `working` agent — `tool` while a tool call is in flight,
+   * `thinking` (the default) while waiting on or streaming from the model. A
+   * turn always opens in `thinking`, so an unset phase reads as thinking rather
+   * than as "unknown".
+   */
+  phase?: AgentPhase;
 }
 
 export interface ScoopSelectDetail extends SliccScoopSelectDetail {
@@ -68,10 +85,11 @@ const STYLE = `
 .slicc-agent-tabs__segment[data-attention='true'] .slicc-agent-tabs__glyph-glow{opacity:.72;}
 .slicc-agent-tabs__glyph-base{fill:none;stroke:color-mix(in srgb,currentColor 30%,var(--line));}
 .slicc-agent-tabs__glyph-arc{fill:none;stroke:currentColor;stroke-linecap:round;transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;animation:slicc-agent-tabs-arc 10.8s linear infinite;animation-play-state:paused;}
-.slicc-agent-tabs__glyph-pin{display:none;fill:currentColor;}
+.slicc-agent-tabs__glyph-pin,.slicc-agent-tabs__glyph-pin-square{display:none;fill:currentColor;}
 .slicc-agent-tabs__broken-x,.slicc-agent-tabs__initializing-ring{display:none;}
 .slicc-agent-tabs [data-state='working'] .slicc-agent-tabs__glyph-arc{animation-play-state:running;}
-.slicc-agent-tabs [data-state='working'] .slicc-agent-tabs__glyph-pin{display:inline;}
+.slicc-agent-tabs [data-state='working'][data-phase='tool'] .slicc-agent-tabs__glyph-pin{display:inline;}
+.slicc-agent-tabs [data-state='working']:not([data-phase='tool']) .slicc-agent-tabs__glyph-pin-square{display:inline;}
 .slicc-agent-tabs [data-state='broken'] .slicc-agent-tabs__status-glyph{color:var(--red);}
 .slicc-agent-tabs [data-state='broken'] .slicc-agent-tabs__glyph-arc,.slicc-agent-tabs [data-state='initializing'] .slicc-agent-tabs__glyph-arc{display:none;}
 .slicc-agent-tabs [data-state='broken'] .slicc-agent-tabs__broken-x{display:inline;}
@@ -131,6 +149,16 @@ export function arcDash(fill: number): number {
   return (sweep / 360) * ARC_CIRCUMFERENCE;
 }
 
+/**
+ * The busy detail for a segment, or `null` when it does not apply. Only a
+ * `working` agent has a phase; everything else (idle, broken, initializing)
+ * would render a meaningless attribute.
+ */
+function phaseFor(scoop: ScoopDescriptor, state: AgentState): AgentPhase | null {
+  if (state !== 'working') return null;
+  return scoop.phase === 'tool' ? 'tool' : 'thinking';
+}
+
 function stateFor(scoop: ScoopDescriptor, attention: string | null): AgentState {
   if (scoop.state) return scoop.state;
   if (scoop.eyes === 'dead') return 'broken';
@@ -175,7 +203,23 @@ function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
       'stroke-dasharray': `${arcDash(boundedFill(scoop.fill)).toFixed(3)} ${ARC_CIRCUMFERENCE.toFixed(3)}`,
       'stroke-dashoffset': 0,
     }),
+    // Both pins are always built; CSS shows exactly one, chosen by the phase.
+    // At this size the shapes only tell themselves apart by their CORNERS, so
+    // the square keeps them near-sharp (rx 0.15) and spans 3 — wide enough that
+    // its corners sit well outside the circle's 2.5 silhouette. A softer or
+    // smaller square just reads as the dot it is replacing. The circle keeps
+    // its original radius so the tool phase looks exactly like today's pin.
+    // Both are legible from 2x up; at 1x DPI a 3px square and a 3px circle
+    // antialias to nearly the same mark, which no geometry here can fix.
     svgEl('circle', { class: `${PREFIX}__glyph-pin`, cx: 7, cy: 7, r: 1.25 }),
+    svgEl('rect', {
+      class: `${PREFIX}__glyph-pin-square`,
+      x: 5.5,
+      y: 5.5,
+      width: 3,
+      height: 3,
+      rx: 0.15,
+    }),
     svgEl('line', {
       class: `${PREFIX}__broken-x`,
       x1: 4.8,
@@ -462,17 +506,22 @@ export class SliccAgentTabs extends HTMLElement {
 
   #updateSegment(segment: HTMLButtonElement, scoop: ScoopDescriptor, focused: string | null): void {
     const state = stateFor(scoop, this.attention);
+    const phase = phaseFor(scoop, state);
     const fill = boundedFill(scoop.fill);
     const wantsAttention = this.attention === scoop.key;
     segment.className = `${PREFIX}__segment${scoop.ephemeral ? ' ephemeral' : ''}`;
     segment.setAttribute('aria-selected', String(scoop.key === focused));
     segment.tabIndex = scoop.key === focused ? 0 : -1;
+    // The pin's shape is the only carrier of the phase, so spell it out for
+    // anyone who cannot see it.
+    const busyDetail = phase === 'tool' ? ' (running a tool)' : phase ? ' (thinking)' : '';
     segment.setAttribute(
       'aria-label',
-      `${scoop.label ?? scoop.key}: ${state}, ${Math.round(fill)}% context fill${wantsAttention ? ', spoke most recently' : ''}`
+      `${scoop.label ?? scoop.key}: ${state}${busyDetail}, ${Math.round(fill)}% context fill${wantsAttention ? ', spoke most recently' : ''}`
     );
     segment.dataset.k = scoop.key;
     segment.dataset.state = state;
+    this.#setAttribute(segment, 'data-phase', phase);
     this.#setAttribute(segment, 'data-attention', wantsAttention ? 'true' : null);
     segment.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
     const label = segment.querySelector<HTMLElement>(`.${PREFIX}__label`);

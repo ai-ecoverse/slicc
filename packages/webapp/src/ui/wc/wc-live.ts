@@ -18,6 +18,7 @@ import {
   type SyncFsNonce,
   type SyncFsNonceMsg,
 } from '../../kernel/realm/sync-fs-wire.js';
+import type { RemoteTerminalView } from '../../kernel/remote-terminal-view.js';
 import { spawnKernelWorker } from '../../kernel/spawn.js';
 import {
   getAccounts,
@@ -50,7 +51,11 @@ import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import { isLickChannel } from '../lick-channels.js';
-import { OffscreenClient, type OffscreenClientCallbacks } from '../offscreen-client.js';
+import {
+  OffscreenClient,
+  type OffscreenClientCallbacks,
+  type ScoopBusyPhase,
+} from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { ChatMessage } from '../types.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
@@ -238,21 +243,26 @@ function stateFor(status: ScoopStatus | undefined): NonNullable<SwitcherScoop['s
 export function toSwitcherScoops(
   scoops: readonly RegisteredScoop[],
   statuses?: ReadonlyMap<string, ScoopStatus>,
-  fills?: ReadonlyMap<string, number>
+  fills?: ReadonlyMap<string, number>,
+  phases?: ReadonlyMap<string, ScoopBusyPhase>
 ): SwitcherScoop[] {
   return [...scoops]
     .sort((a, b) => Number(b.isCone) - Number(a.isCone))
     .map((scoop) => {
       const fill = fills?.get(scoop.jid);
+      const status = statuses?.get(scoop.jid);
       return {
         key: scoop.jid,
         type: scoop.isCone ? 'cone' : 'scoop',
         color: scoopColor(scoop),
         label: scoop.isCone ? 'sliccy' : scoop.name,
-        eyes: eyesFor(statuses?.get(scoop.jid)),
-        state: stateFor(statuses?.get(scoop.jid)),
+        eyes: eyesFor(status),
+        state: stateFor(status),
         // The chip pupils dilate with context fullness (pill `fill` 0-100).
         fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
+        // Only a processing scoop has a busy phase; a stale entry for one that
+        // has since gone idle must not shape a pin that is no longer painted.
+        phase: status === 'processing' ? phases?.get(scoop.jid) : undefined,
       };
     });
 }
@@ -263,6 +273,12 @@ export interface WcLiveWiring {
   statuses: Map<string, ScoopStatus>;
   /** Per-scoop context-window fill (0..1), refreshed by the stats poller. */
   fills: Map<string, number>;
+  /**
+   * Per-scoop busy phase (`tool` while a tool call is in flight). Written by
+   * `onScoopPhaseChange` for every scoop, selected or not; only read while a
+   * scoop is processing.
+   */
+  phases: Map<string, ScoopBusyPhase>;
   /** Latest sustained lick-deferral state for each still-registered scoop. */
   lickBackpressure: Map<string, LickBackpressureState>;
   /**
@@ -299,7 +315,8 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       wiring.refs.switcher.scoops = toSwitcherScoops(
         client.getScoops(),
         wiring.statuses,
-        wiring.fills
+        wiring.fills,
+        wiring.phases
       );
     }
   };
@@ -371,6 +388,14 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       // eyes on whichever scoop is actively streaming. Mirrors the
       // `attention` write in `onIncomingMessage`; no thread routing.
       wiring.refs.switcher.setAttribute('attention', jid);
+    },
+    onScoopPhaseChange: (jid, phase) => {
+      // Busy detail for ANY scoop: the tab's centre pin goes square while the
+      // model thinks and circular while a tool runs, the same vocabulary the
+      // composer's send button spends on motion. Deduped upstream, so this
+      // only repaints on an actual crossing.
+      wiring.phases.set(jid, phase);
+      refreshScoops();
     },
     onIncomingMessage: (jid, message) => {
       // Most-recent-activity tracking: the scoop that just received a message
@@ -804,6 +829,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       refs,
       statuses: new Map(),
       fills: new Map(),
+      phases: new Map(),
       lickBackpressure,
       lastActivity: new Map(),
       // The thread component owns the `ctx` param — the host only routes it.
@@ -1264,7 +1290,8 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
       wiring.refs.switcher.scoops = toSwitcherScoops(
         client.getScoops(),
         wiring.statuses,
-        wiring.fills
+        wiring.fills,
+        wiring.phases
       );
     });
   };
@@ -1403,6 +1430,15 @@ export function wireWcChipTips(deps: {
  * when the kernel already reported ready, so this is free on late
  * activations. The client-side `open()` also retries defensively.
  */
+/**
+ * The one property this module hangs off `globalThis` — the mounted terminal
+ * view, published for Playwright. Named rather than an untyped string-keyed
+ * bag, mirroring `BrowserHolder` in `cdp/active-transport.ts`.
+ */
+interface TerminalViewHolder {
+  __slicc_terminal_view?: RemoteTerminalView;
+}
+
 async function mountWorkbenchTerminal(
   boot: WcShellBoot,
   client: OffscreenClient,
@@ -1422,7 +1458,7 @@ async function mountWorkbenchTerminal(
   // `executeCommandInTerminal` directly (mirrors the chat panel's "run
   // in terminal" affordance and avoids xterm-canvas scraping). Same
   // unconditional-publish pattern as `__slicc_pm` / `__slicc_browser`.
-  (globalThis as Record<string, unknown>).__slicc_terminal_view = view;
+  (globalThis as unknown as TerminalViewHolder).__slicc_terminal_view = view;
   window.addEventListener('beforeunload', () => view.dispose(), { once: true });
 }
 
