@@ -787,6 +787,18 @@ collide on the port and on the proxy's outbound target. The fake-LLM
 webServer entry also sets `reuseExistingServer: false` so each run
 starts with a fresh turn cursor and fixture.
 
+In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs this
+suite as a hard PR gate feeding the required `ci` summary check. It
+triggers on changes to any runtime the harness drives — `webapp`,
+`vfs-root`, `assets`, `shared-ts`, `spoon`, `node-server`,
+`cloudflare-worker` — plus `root-config` (dependency bumps, tsconfigs).
+Playwright retries twice in CI (`retries` in the config); locally it
+fails fast. The real-Kokoro speech round-trip rides the same job as a
+conditional leg: when the `speech` path filter matches, the run sets
+`RUN_REAL_SPEECH_E2E=1` (un-skipping `speech-roundtrip.test.ts`) and
+frees runner disk first so Chromium's free-disk-derived storage quota
+can hold the staged weights.
+
 ### Verify Risks with the Reference Scenario
 
 - **localStorage → kernel-worker shim sync**: the test only passes if
