@@ -1,84 +1,69 @@
 # CLAUDE.md
 
-This file covers the repo's developer-tooling surface.
-
-## Scope
-
-`packages/dev-tools/` is the home for build helpers, QA setup guidance, and developer verification utilities. Some of that tooling still lives at the repo root while the modularization settles; treat the locations below as the active surface.
+Developer-tooling surface for `packages/dev-tools/`. Long-form notes: [`docs/dev-tools-details.md`](../../docs/dev-tools-details.md).
 
 ## Key Tooling Areas
 
-- **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against the official `@playwright/cli` schema. Run after upgrading `@playwright/cli` or after adding/removing a handler. Full reference: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
-- **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): skills available in dev mode (`npm run dev`) but stripped from production builds. Loaded via a `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts` and remapped to `/workspace/skills/` in the VFS. Currently contains `playwright-cli-e2e` — an automated + manual E2E regression suite for the playwright-cli command. Run it in a Slicc dev instance: `pcli-e2e`.
-- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`
-- **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
-- **Visual/integration helpers**: `packages/webapp/tests/test-dips.mjs` and related targeted test utilities
-- **RUM error triage**: `packages/dev-tools/rum-error-triage/` — run `node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs` to query RUM for new SLICC errors and write triage candidates. Pure logic in `lib.mjs` (vitest `dev-tools` project). Driven nightly by `.github/workflows/rum-error-triage.yml`. See its `README.md`.
-- **AI comment detection**: `packages/dev-tools/ai-comment-detection/` — classifies contributions on a PR/issue thread and applies `ai-generated` or `human-in-the-loop` labels. Cost-ordered cascade (account check → markdown density → similarity → Pangram API). `human-in-the-loop` is sticky. Pure logic in `lib.mjs` (vitest `dev-tools` project). Driven by `.github/workflows/ai-comment-detection.yml`. See its `README.md`.
-- **Doc size/router check** (`npm run lint:docs`): `packages/dev-tools/tools/check-doc-sizes.mjs` — enforces instruction-file size budgets and requires every `packages/*/CLAUDE.md` to be linked from the root navigation hub. Non-zero exit on violation. Also runs in `.husky/pre-commit`.
-- **Doc dead-reference gate** (`npm run lint:docs`): `packages/dev-tools/tools/check-doc-refs.mjs` (+ pure lib `check-doc-refs-lib.mjs`) — fails on backtick-enclosed repo paths in `CLAUDE.md` or `docs/*.md` files that don't exist on disk. Skips globs, templates, illustrative paths, VFS runtime paths, and a built-in allowlist. TypeScript ESM `.js`→`.ts` resolution is handled. Chained after `check-doc-sizes.mjs` in `lint:docs`.
-- **Linear-history check**: `packages/dev-tools/tools/check-linear-history.sh` — fails if a PR branch contains merge commits. Run `bash packages/dev-tools/tools/check-linear-history.sh [base-ref] [head-ref]`. Driven by the `linear-history` CI job.
-- **Skill lint** (`npm run lint:skills`): `packages/dev-tools/tools/lint-skills.mjs` — runs `tessl skill lint` over all `SKILL.md` skills via `@tessl/cli`. Warns and skips locally; fails under `--strict` / CI.
-- **Developer-skill sync** (`npm run lint:skill-router`): `packages/dev-tools/tools/check-skill-router-sync.sh` — keeps the root router, canonical `.agents/skills/`, and `.claude/skills/` aliases synchronized.
-- **Patch reconcile** (`npm run lint:patches`): `packages/dev-tools/patch-reconcile/` — guards version-pinned `patch-package` patches (`patches/`). `check-patches.mjs` fails on undocumented, out-of-sync, or orphaned patches. `reconcile-context.mjs` emits metadata for the Renovate patch-reconcile workflow. Pure logic in `lib.mjs` (vitest `dev-tools` project). See `patches/README.md`.
-- **innerHTML guard** (`npm run lint:no-innerhtml`): `packages/dev-tools/tools/check-no-innerhtml.mjs` — fails on `.innerHTML =` / `.outerHTML =` / `insertAdjacentHTML()` in shipped `@slicc/webcomponents` source. Stories and tests are exempt. Chained into `npm run lint` and `lint:ci`.
-- **Providers boundary guard** (`npm run lint:no-ui-in-providers`): `packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs` — fails on `from '…ui/…'` imports in `providers/built-in/`. Comments and tests are exempt. Chained into `npm run lint` and `lint:ci`.
-- **Layer back-edge ratchet** (`npm run lint:layer-back-edges`): `packages/dev-tools/tools/check-layer-back-edges.mjs` — fails on any NEW import in `packages/webapp/src/` that points up the stack `fs → shell/git → cdp → tools → core → scoops → ui` (e.g. `cdp/` → `scoops/`, or any layer → `ui/`). Unranked directories (`kernel/`, `providers/`, `speech/`, …) rank just below `ui/`: they may import ranked layers but not `ui/`, and are never a back-edge target. Pre-existing back-edges are grandfathered per file in `layer-back-edge-baseline.json` (one-way ratchet; regenerate after paying debt down with `--update`). Chained into `npm run lint`, `lint:ci`, pre-commit (webapp-source commits), and the pre-push gate. The baseline doubles as a debt list for the boy-scout gate below.
-- **Hosted-origin literal guard**: `packages/dev-tools/tools/check-hosted-origin-literal.mjs` — ensures all TS source files import `SLICC_HOSTED_ORIGIN` from `@slicc/shared-ts` instead of inlining the literal. Comment-only refs and tests are exempt.
-- **Chrome runtime.id guard**: `packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs` — ensures all extension-environment detection goes through `core/runtime-env.ts` helpers. Tests are exempt.
-- **AGENTS.md symlink guard**: `packages/dev-tools/tools/check-agents-symlinks.mjs` — ensures every `packages/*/CLAUDE.md` has a sibling `AGENTS.md` symlink pointing to it.
-- **iOS PR screenshots**: `packages/dev-tools/tools/ios-screenshots.mjs` (+ pure lib `ios-screenshots-lib.mjs`) — captures deterministic leaderless simulator states from `packages/ios-app/screenshot-screens.json` and writes a Storybook-compatible `manifest.json`. Every screen runs on iPhone, while the conversation fixture also runs on iPad as regular-width proof. Local run: build the Debug app, then `node packages/dev-tools/tools/ios-screenshots.mjs --app=<SliccFollower.app> --out=<dir>`; use `--device=ipad --screen=conversation-fixture` for the tablet proof. Driven by `.github/workflows/ios-screenshots.yml` (same R2 bucket + sticky-comment pattern as Storybook).
-- **Storybook PR screenshots**: `packages/dev-tools/tools/storybook-affected-screenshots.mjs` (+ pure lib `storybook-affected-stories-lib.mjs`) — captures light/dark screenshots of webcomponents stories affected by a PR diff. Writes a `manifest.json` for the CI workflow. Local run: `npm run build-storybook -w @slicc/webcomponents && node packages/dev-tools/tools/storybook-affected-screenshots.mjs --changed-files=<path> --storybook-static=… --out=<dir>`. Driven by `.github/workflows/storybook-screenshots.yml`. See `packages/webcomponents/CLAUDE.md` for the end-to-end flow.
-- **Storybook PR screenshots upload**: `packages/dev-tools/tools/storybook-screenshots-upload.mjs` (+ pure lib `storybook-screenshots-upload-lib.mjs`) — uploads the manifest above to the `slicc-pr-screenshots` R2 bucket, content-hash deduplicated, with bounded concurrency (`--concurrency`, default 4) via an injectable `r2` client so `mapWithConcurrency`/dedup logic is testable without a real `wrangler` process. Sequential per-file `wrangler` subprocess spawns previously took ~4s/file — timing out the CI job on large PRs (many affected stories). Each shot retries up to 5 times with jittered exponential backoff, since R2 rate-limits upload bursts with `429` / code 971. Driven by `.github/workflows/storybook-screenshots.yml`'s "Upload screenshots to Cloudflare R2" step.
-- **Dead code detection — production-mode files** (`npm run deadcode:production-files`): `knip --production --include files`. Surfaces test-only dead files the default knip gate misses. **Production-suffix discipline**: every workspace `entry`/`project` glob in the production graph MUST be `!`-suffixed; `knip --production` keeps only suffixed patterns. Test-only fixtures are excluded via negated `project` patterns in `knip.json` (not `ignoreFiles`). See the [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md) § "Knip fixture exclusion" for why `ignoreFiles` is wrong and the correct approach.
-- **Debt boy-scout gate**: `packages/dev-tools/tools/check-touched-exemptions.mjs` (+ pure lib `size-exemption-lib.mjs`) — enforces every single-rule debt override in `biome.json` (complexity and promise safety) plus the `layer-back-edge-baseline.json` list. It fails when a PR touches a listed file or grows a list. Auto-skips on non-PR events. Run: `node packages/dev-tools/tools/check-touched-exemptions.mjs [base-ref]`. See the [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md) for details.
-- **Coverage gate + ratchet**: `packages/dev-tools/tools/coverage-gate.mjs` reads per-package floors from `coverage-thresholds.json` and runs vitest with those thresholds; argv after the package name is forwarded verbatim to vitest, so a caller can add run-wide options instead of running the suite twice. `coverage-ratchet.mjs` raises floors nightly toward measured coverage. The Swift-side `swift-coverage-check.sh` sources `swift-coverage-runner-retry.sh` in `--xcodebuild` mode to retry once when the UI-test runner dies at initialization (an infrastructure failure `-retry-tests-on-failure` cannot see; tested by `swift-coverage-runner-retry.test.mjs`). Set `SLICC_IOS_SIM_UDID` to a worktree-owned simulator UDID to override automatic selection locally; when unset or empty, existing SDK-runtime selection remains unchanged. See `coverage-thresholds.json` and the [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md).
-- **Optional-binary guard**: `packages/dev-tools/tools/run-if-installed.mjs <binary> [args...]` — runs a command only when its binary resolves on `PATH`, otherwise warns and exits 0. Used by the root `lint-staged` Swift/Go globs so a missing `swiftlint`/`gofmt` cannot break `git commit`.
-- **Cross-impl mask vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` — regenerate pinned mask vectors for TS/Swift parity tests after intentional masking changes.
-- **Cross-impl theme vectors**: `packages/dev-tools/tools/gen-theme-vectors.mjs` (run via `npx tsx`) — regenerate pinned theme-derivation vectors after intentional `theme-engine.ts` changes; asserted by `packages/webapp/tests/ui/theme-vectors.test.ts` and `ThemeEngineTests.swift` against the same fixture.
-- **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — fast `npm ci` staleness check wired via `pretypecheck` and `pretest` scripts.
-- **Release gating**: `packages/dev-tools/tools/release-plan.mjs` invokes semantic-release's commit analyzer directly for the read-only Linux preflight. `release-native.mjs` gates native macOS/iOS packaging, the signed + notarized `slicc` Go CLI binaries (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish steps, and the `@ai-ecoverse/biome-jsh` npm release (`--gate=biome-jsh-version` in prepare, `--gate=biome-jsh` in publish) on whether relevant source changed since the last tag.
+- **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against `@playwright/cli`. Ref: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
+- **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts`, remapped to `/workspace/skills/`. Contains `playwright-cli-e2e`.
+- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`.
+- **QA setup**: `packages/node-server/src/qa-setup.ts` plus root `npm run qa:*` scripts.
+- **Visual/integration helpers**: `packages/webapp/tests/test-dips.mjs`.
+- **RUM error triage**: `packages/dev-tools/rum-error-triage/triage-rum-errors.mjs`. Nightly via `.github/workflows/rum-error-triage.yml`.
+- **AI comment detection**: `packages/dev-tools/ai-comment-detection/` — labels `ai-generated`/`human-in-the-loop`; driven by `.github/workflows/ai-comment-detection.yml`. Deep ref: [dev-tools-details.md#ai-comment-detection](../../docs/dev-tools-details.md#ai-comment-detection).
+- **Doc gates** (`npm run lint:docs`, `.husky/pre-commit`): `packages/dev-tools/tools/check-doc-sizes.mjs` + `packages/dev-tools/tools/check-doc-refs.mjs` (+ `check-doc-refs-lib.mjs`). Deep ref: [dev-tools-details.md#doc-dead-reference-gate](../../docs/dev-tools-details.md#doc-dead-reference-gate).
+- **Linear-history check**: `bash packages/dev-tools/tools/check-linear-history.sh [base-ref] [head-ref]`. `linear-history` CI job.
+- **Skill lint** (`npm run lint:skills`): `packages/dev-tools/tools/lint-skills.mjs` — `tessl skill lint` via `@tessl/cli`. Warns locally; fails under `--strict`/CI.
+- **Developer-skill sync** (`npm run lint:skill-router`): `packages/dev-tools/tools/check-skill-router-sync.sh` — root router, `.agents/skills/`, `.claude/skills/` aliases in sync.
+- **Patch reconcile** (`npm run lint:patches`): `packages/dev-tools/patch-reconcile/check-patches.mjs` + `reconcile-context.mjs` (Renovate metadata). See `patches/README.md`.
+- **innerHTML guard** (`npm run lint:no-innerhtml`): `packages/dev-tools/tools/check-no-innerhtml.mjs` bans `.innerHTML =`, `.outerHTML =`, `insertAdjacentHTML()` in `@slicc/webcomponents` (stories/tests exempt).
+- **Providers boundary** (`npm run lint:no-ui-in-providers`): `packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs` bans `from '…ui/…'` in `providers/built-in/`.
+- **Layer back-edge ratchet** (`npm run lint:layer-back-edges`): `packages/dev-tools/tools/check-layer-back-edges.mjs`; baseline `layer-back-edge-baseline.json` (`--update`). Deep ref: [dev-tools-details.md#layer-back-edge-ratchet](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
+- **Hosted-origin literal guard**: `packages/dev-tools/tools/check-hosted-origin-literal.mjs` — TS must import `SLICC_HOSTED_ORIGIN` from `@slicc/shared-ts` (no inline literal).
+- **Chrome runtime.id guard**: `packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs` — go through `core/runtime-env.ts` (tests exempt).
+- **AGENTS.md symlink guard**: `packages/dev-tools/tools/check-agents-symlinks.mjs` — every `packages/*/CLAUDE.md` has an `AGENTS.md` sibling symlink.
+- **iOS PR screenshots**: `packages/dev-tools/tools/ios-screenshots.mjs` (+ `ios-screenshots-lib.mjs`) reads `packages/ios-app/screenshot-screens.json`, emits Storybook `manifest.json`. Driven by `.github/workflows/ios-screenshots.yml`.
+- **Storybook PR screenshots**: `packages/dev-tools/tools/storybook-affected-screenshots.mjs` (+ `storybook-affected-stories-lib.mjs`) — light/dark shots of affected webcomponents stories. Pair with `npm run build-storybook -w @slicc/webcomponents`. Driven by `.github/workflows/storybook-screenshots.yml`.
+- **Storybook screenshots upload**: `packages/dev-tools/tools/storybook-screenshots-upload.mjs` (+ `storybook-screenshots-upload-lib.mjs`) — R2 `slicc-pr-screenshots`, content-hash dedup, `--concurrency`. Deep ref: [dev-tools-details.md#storybook-screenshots-upload](../../docs/dev-tools-details.md#storybook-screenshots-upload).
+- **Dead code (production files)** (`npm run deadcode:production-files`): `knip --production --include files`; config `knip.json`. Deep ref: [dev-tools-details.md#knip-production-suffix-discipline](../../docs/dev-tools-details.md#knip-production-suffix-discipline).
+- **Debt boy-scout gate**: `node packages/dev-tools/tools/check-touched-exemptions.mjs [base-ref]` (+ `size-exemption-lib.mjs`) — enforces `biome.json` debt overrides plus `layer-back-edge-baseline.json`; skips non-PR events. See [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md).
+- **Coverage gate + ratchet**: `packages/dev-tools/tools/coverage-gate.mjs` + `coverage-ratchet.mjs` (`coverage-thresholds.json`). Swift: `packages/dev-tools/tools/swift-coverage-check.sh` + `swift-coverage-runner-retry.sh`; `SLICC_IOS_SIM_UDID` overrides. Deep ref: [dev-tools-details.md#swift-coverage-retry](../../docs/dev-tools-details.md#swift-coverage-retry).
+- **Optional-binary guard**: `packages/dev-tools/tools/run-if-installed.mjs <binary> [args...]` — runs iff on `PATH`, else warns and exits 0. Used by root `lint-staged` Swift/Go globs.
+- **Cross-impl mask vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` — regenerate TS/Swift parity mask vectors.
+- **Cross-impl theme vectors**: `packages/dev-tools/tools/gen-theme-vectors.mjs` (via `npx tsx`) — regenerate after `theme-engine.ts` changes; asserted by `packages/webapp/tests/ui/theme-vectors.test.ts` + `ThemeEngineTests.swift`.
+- **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — wired via `pretypecheck`/`pretest`.
+- **Release gating**: `packages/dev-tools/tools/release-plan.mjs` (Linux preflight) + `release-native.mjs` — gates macOS/iOS packaging, `slicc` Go CLI (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish, `@ai-ecoverse/biome-jsh` (`--gate=biome-jsh-version`/`--gate=biome-jsh`).
 
-### SLICC CDP Debug Toolkit
+### SLICC CDP Debug + Screencast
 
-`packages/dev-tools/tools/slicc-debug.mjs` — CDP diagnostic CLI for the standalone dev harness. Subcommands: `targets`, `logs`, `vfs ls/cat`, `eval`, `shell`. Page-target selection via `--url`/`--url-pattern`. Payload input via `--file`. Run: `node packages/dev-tools/tools/slicc-debug.mjs --help`. See the script's header comment for the full option reference.
-
-### SLICC CDP Screencast Recorder
-
-`packages/dev-tools/tools/slicc-screencast.mjs` (+ `slicc-screencast-lib.mjs`, `slicc-screencast-video.mjs`) — records `Page.startScreencast` frames of the running SLICC leader tab. Writes timestamped frames + `manifest.json`; optional `--video` assembly via ffmpeg. Agent-facing usage: the `demo-recording` skill. Run: `node packages/dev-tools/tools/slicc-screencast.mjs --help`. See the script's header comment for the full option reference.
+- `packages/dev-tools/tools/slicc-debug.mjs` — CDP diagnostic CLI (`targets`, `logs`, `vfs ls/cat`, `eval`, `shell`; `--url`/`--url-pattern`/`--file`). `node packages/dev-tools/tools/slicc-debug.mjs --help`.
+- `packages/dev-tools/tools/slicc-screencast.mjs` (+ `slicc-screencast-lib.mjs`, `slicc-screencast-video.mjs`) — `Page.startScreencast` frames + `manifest.json`; `--video` via ffmpeg. Skill: `demo-recording`.
 
 ### Fresh Dev Harnesses
 
-Five harness scripts bring up isolated dev environments on distinct ports so they can run concurrently. The standalone harness fails if its selected bridge is occupied unless `SLICC_FRESH_REAP=1` explicitly opts into reaping a confirmed stale harness; forced reaping of the documented production bridge `:5710` is refused, and it never reaps Chrome CDP. Other harness cleanup remains strictly port-scoped, never by process name. Labeled Chrome bundle clones (`clone-labeled-chrome.sh`) provide distinct ⌘-Tab entries.
+Five isolated harnesses on distinct ports. Standalone fails on an occupied bridge unless `SLICC_FRESH_REAP=1` reaps a stale harness. Reaping production bridge `:5710` is refused; Chrome CDP is never reaped. Cleanup is port-scoped. `clone-labeled-chrome.sh` gives distinct ⌘-Tab entries.
 
-| Harness        | Script                        | Bridge                 | CDP     | Chrome Label  | Notes                                                                          |
-| -------------- | ----------------------------- | ---------------------- | ------- | ------------- | ------------------------------------------------------------------------------ |
-| Standalone     | `dev-standalone-fresh.sh`     | `:$PORT` (use `:5715`) | auto    | `SLICC-Node`  | Fails on occupied bridge by default; self-builds leader UI                     |
-| Swift          | `dev-swift-fresh.sh`          | `:5720`                | `:9224` | `SLICC-Swift` | Native `swift-server` bridge; auto-signs with stable dev cert                  |
-| Extension      | `dev-extension-fresh.sh`      | (SW)                   | `:9333` | `SLICC-Ext`   | MV3 extension IS the bridge; self-builds leader UI; uses LaunchServices launch |
-| Electron-Node  | `dev-electron-node-fresh.sh`  | `:5730`                | `:9225` | —             | Attaches to external Electron app (default: Slack)                             |
-| Electron-Swift | `dev-electron-swift-fresh.sh` | `:5740`                | `:9226` | —             | Swift backend attaching to external Electron app                               |
+| Harness        | Script                        | Bridge                 | CDP     | Chrome Label  | Notes                                                  |
+| -------------- | ----------------------------- | ---------------------- | ------- | ------------- | ------------------------------------------------------ |
+| Standalone     | `dev-standalone-fresh.sh`     | `:$PORT` (use `:5715`) | auto    | `SLICC-Node`  | Fails on occupied bridge; self-builds leader UI        |
+| Swift          | `dev-swift-fresh.sh`          | `:5720`                | `:9224` | `SLICC-Swift` | Native `swift-server`; auto-signs with stable dev cert |
+| Extension      | `dev-extension-fresh.sh`      | (SW)                   | `:9333` | `SLICC-Ext`   | MV3 extension IS the bridge; LaunchServices launch     |
+| Electron-Node  | `dev-electron-node-fresh.sh`  | `:5730`                | `:9225` | —             | Attaches to external Electron app (default: Slack)     |
+| Electron-Swift | `dev-electron-swift-fresh.sh` | `:5740`                | `:9226` | —             | Swift backend attaching to external Electron app       |
 
-Run standalone in an isolated lane with `PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh`; never use or clear production bridge `:5710` or Chrome CDP `:9222`. Other entry points are `npm run dev:swift:fresh`, `npm run dev:extension:fresh`, `npm run dev:electron:node:fresh`, and `npm run dev:electron:swift:fresh`. Override bridge port with `PORT=…`, target app with positional arg or `ELECTRON_APP=…`. All pair with `slicc-debug.mjs` for verification. For detailed lifecycle, port resolution, reaping, LaunchServices, and wrangler reuse behavior, see [`docs/development.md`](../../docs/development.md) § "Fresh Dev Harness Details".
+Isolated lane: `PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh`; never touch production bridge `:5710` or Chrome CDP `:9222`. Also `npm run dev:swift:fresh`, `dev:extension:fresh`, `dev:electron:node:fresh`, `dev:electron:swift:fresh`. `PORT=…`/`ELECTRON_APP=…` override. Lifecycle + reaping: [`docs/development.md`](../../docs/development.md); [dev-tools-details.md#fresh-dev-harnesses](../../docs/dev-tools-details.md#fresh-dev-harnesses).
 
 ### Supporting Utilities
 
-- **Labeled Chrome bundle clone**: `clone-labeled-chrome.sh` — APFS COW-clones a Chrome for Testing `.app` under a distinct `CFBundleName`/`CFBundleIdentifier` so concurrent harnesses get separate ⌘-Tab entries. Re-signs ad-hoc (top-level only). No-op on non-darwin.
-- **Stable dev code-signing identity**: `setup-dev-cert.sh` — one-time setup creating a persistent self-signed `SLICC Dev Code Signing` identity so swift-server's Keychain DR stops changing on every build. Run once: `bash packages/dev-tools/tools/setup-dev-cert.sh`. `dev-swift-fresh.sh` signs with it automatically when present.
+- **Labeled Chrome clone**: `clone-labeled-chrome.sh` — APFS COW-clone with distinct `CFBundleName`/`CFBundleIdentifier`; ad-hoc re-signed (top-level only). No-op on non-darwin.
+- **Stable dev code-signing identity**: `bash packages/dev-tools/tools/setup-dev-cert.sh` — one-time; creates persistent self-signed `SLICC Dev Code Signing`. `dev-swift-fresh.sh` picks it up automatically.
 
 ## e2b Template
 
-The hosted-leader cloud float runs inside an e2b sandbox. The template definition lives in `packages/dev-tools/e2b-template/` — see `packages/cloud-core/CLAUDE.md` for the substrate lifecycle.
-
-## What Lives Here Conceptually
-
-- Scripts that support local development rather than runtime behavior
-- Config files that shape builds or verification flows
-- QA setup flows for isolated profiles and tray testing
-- One-off utilities used by release, validation, or inspection workflows
+Hosted-leader cloud float runs in an e2b sandbox; template in `packages/dev-tools/e2b-template/`. See `packages/cloud-core/CLAUDE.md`.
 
 ## Usage Notes
 
 - Prefer root npm scripts when a helper already has one.
-- Keep dev-only configs and utilities out of runtime packages unless they are required at runtime.
-- When adding new tooling, document both the file location and the intended entry command.
+- Keep dev-only configs and utilities out of runtime packages unless required at runtime.
+- When adding new tooling, document both file location and entry command.
