@@ -1,7 +1,12 @@
 import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
 import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
-import type { AgentBridge, AgentSpawnOptions, AgentSpawnResult } from './agent-bridge.js';
+import {
+  AGENT_NAME_IN_USE_PREFIX,
+  type AgentBridge,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+} from './agent-bridge.js';
 import { CONE_MEMORY_PATH, computeBudget } from './cone-memory-budget.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from './types.js';
 
@@ -10,7 +15,7 @@ export { DEFAULT_MEMORY_MD };
 const log = createLogger('agentic-memory');
 
 export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
-export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 120;
+export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 600;
 export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
 
 /**
@@ -184,10 +189,17 @@ export async function runAgenticMemoryPass(
       return { ok: false, reason: errorText(outcome.error), legacyFallbackSafe: true };
     }
     if (outcome.result.exitCode !== 0) {
+      // A name-in-use rejection means a PRIOR curator is still running and holds
+      // the fixed `memory-curator` name (its window is now up to 10 min). Unlike
+      // a curator that spawned and failed, no run has released — the legacy
+      // append is NOT safe: the running namesake read the memory file before
+      // this session's append and its whole-file rewrite would clobber it. Defer
+      // to the pending/boot-catch-up path instead (memoryPending stays set).
+      const collided = (outcome.result.finalText ?? '').startsWith(AGENT_NAME_IN_USE_PREFIX);
       return {
         ok: false,
         reason: outcome.result.finalText || `exit-${outcome.result.exitCode}`,
-        legacyFallbackSafe: true,
+        legacyFallbackSafe: !collided,
       };
     }
     return { ok: true, report: outcome.result.finalText };

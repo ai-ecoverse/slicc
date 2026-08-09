@@ -37,13 +37,15 @@ allowedCommands:
   - upskill
   - wc
   - xxd
-timeoutSeconds: 120
+timeoutSeconds: 600
 thinkingLevel: medium
 ---
 
 # Memory curator
 
 Curate the durable memory for session {{SESSION_COUNT}}. Today's date is {{TODAY}}.
+
+**Work fast: a full pass should finish in well under 5 minutes.** The run is hard-stopped at 10 minutes, and a kill mid-write can corrupt the memory file — so mine the three signals, rewrite the file, and stop, rather than exploring the archive exhaustively.
 
 Read the entire current memory at {{MEMORY_PATH}} if it exists. Then mine the archived session at {{SESSION_ARCHIVE_PATH}} using the reading recipes below. Rewrite the entire {{MEMORY_PATH}} file with the durable information worth carrying into future sessions. Every part of the file is editable and counts toward the budget.
 
