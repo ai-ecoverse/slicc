@@ -789,9 +789,10 @@ starts with a fresh turn cursor and fixture.
 
 In CI the dedicated `e2e` job (in `.github/workflows/ci.yml`) runs this
 suite as a hard PR gate feeding the required `ci` summary check. It
-triggers on changes to any runtime the harness drives — `webapp`,
-`vfs-root`, `assets`, `shared-ts`, `spoon`, `node-server`,
-`cloudflare-worker` — plus `root-config` (dependency bumps, tsconfigs).
+triggers on changes to any runtime the harness drives or bundles —
+`webapp`, `vfs-root`, `assets`, `shared-ts`, `spoon`, `webcomponents`,
+`cloud-core`, `node-server`, `cloudflare-worker` — plus `root-config`
+(dependency bumps, tsconfigs).
 Playwright retries twice in CI (`retries` in the config); locally it
 fails fast. The real-Kokoro speech round-trip rides the same job as a
 conditional leg: when the `speech` path filter matches, the run sets

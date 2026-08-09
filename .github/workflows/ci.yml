@@ -419,6 +419,8 @@ jobs:
       needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.shared == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.root-config == 'true' ||
