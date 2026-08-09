@@ -20,7 +20,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakeEnv {
-  backends?: { onnx?: { wasm?: { wasmPaths?: unknown } } };
+  backends?: { onnx?: { wasm?: { wasmPaths?: unknown; numThreads?: number } } };
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   allowRemoteModels?: boolean;
   allowLocalModels?: boolean;
@@ -69,6 +69,11 @@ describe('configureTransformersEnv', () => {
     expect(wasmPaths).toMatch(/\/preview\/workspace\/node_modules\/onnxruntime-web\/dist\/$/);
     // Defense in depth: must not point at any CDN host.
     expect(wasmPaths).not.toMatch(/jsdelivr|unpkg|huggingface/);
+    // With the leader cross-origin isolated (Document-Isolation-Policy),
+    // ort-web would auto-select multi-threaded execution — the explicit
+    // single-thread pin is what keeps that a deliberate choice, so its
+    // removal must fail a test, not ship silently.
+    expect(env.backends?.onnx?.wasm?.numThreads).toBe(1);
   });
 
   it('pins model loading to local /workspace/models via the preview SW', async () => {
