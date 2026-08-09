@@ -1,9 +1,10 @@
 # slicc-cli
 
-`slicc` — a headless SLICC **follower** CLI in Go. It joins a leader session over
-the same WebRTC tray-control data channel the browser and iOS followers use, and
-exposes three verbs. It is a **Go module, not an npm workspace** (like
-`packages/ios-app`), so it is built with `go`/`make`, not `npm`.
+`slicc` — headless SLICC **follower** CLI in Go, joining a leader over the
+same WebRTC tray-control data channel as browser + iOS followers. **Go
+module, not an npm workspace** (like `packages/ios-app`) — built with
+`go`/`make`, not `npm`. Deep-dive:
+[`docs/slicc-cli-details.md`](../../docs/slicc-cli-details.md).
 
 ```
 slicc <join-url> prompt "<text>"                Stream one assistant turn, then exit
@@ -16,236 +17,153 @@ slicc list-sessions [--json]                    List iCloud-synced tray sessions
 slicc <verb>-cloud [--index N|--session <id>]   Resolve a session's join URL from iCloud, then run <verb>
 ```
 
-`watch` is a passive `tail -f` on the agent that mirrors the browser thread: it
-sends nothing and renders the human's prompt (`user_message_echo` → `> …`),
-assistant text (`content_delta`), and tool calls (`tool_use_start` → `⚙ …`,
-`tool_result` → `↳ …`), blanking a line at each turn boundary — reconnecting with
-backoff (`cmdWatch`/`watchOnce`; `printWatchEvent` does the rendering). By default
-it does **not** filter by scoop (the cone's `scoopJid` is a generated uid, not the
-literal `"cone"`, and the leader broadcasts the selected scoop — the browser
-view); pass a scoop jid to filter to one.
-
-The `<text>`/`<command>` argument is curl-style: a literal string, `@path` (read a
-file), or `-` / `@-` (read stdin) — so `git log | slicc <url> exec -` and
-`slicc <url> prompt @brief.md` work. Resolution lives in `readTextArg` (main.go)
-and only kicks in for a single `@…`/`-` argument, so multi-word prompts still join
-verbatim.
-
-The trailing argv of `follow` is the **runner** each leader-issued command is handed
-to (command appended as the final arg): `follow bash -c`, `follow sh -c`,
-`follow docker exec -i sandbox sh -c`, a multiplexer, `flatpak-spawn --host …`, etc.
-With no runner, `follow` connects as a plain follower and refuses every command.
+- `watch` — passive `tail -f` mirror; sends nothing, reconnects with backoff.
+  **Does NOT filter by scoop by default** — the cone's `scoopJid` is a
+  generated uid (not `"cone"`); pass a scoop jid to filter. Render map:
+  [details](../../docs/slicc-cli-details.md).
+- `<text>`/`<command>` is curl-style: literal, `@path` (file), `-` / `@-`
+  (stdin) — e.g. `git log | slicc <url> exec -`,
+  `slicc <url> prompt @brief.md`. `readTextArg` (`main.go`) only fires for a
+  single `@…`/`-` arg; multi-word prompts join verbatim.
+- The trailing argv of `follow` is the **runner** — each leader command is
+  appended as the final arg: `follow bash -c`, `follow sh -c`,
+  `follow docker exec -i sandbox sh -c`, a multiplexer,
+  `flatpak-spawn --host …`. **With no runner, `follow` refuses every command.**
 
 ## iCloud tray sessions (`list-sessions`, `<verb>-cloud`)
 
-macOS only. iCloud key-value storage is an Apple API readable only by the signed,
-iCloud-entitled `Sliccstart` launcher, so `internal/cloud` **shells out** to
-`Sliccstart --list-sessions` rather than reading iCloud from Go (which would need
-cgo + entitlement/profile signing and break the `CGO_ENABLED=0` cross-compile).
-`LocateExecutable` finds the app via `$SLICCSTART_APP` → `mdfind` (bundle id
-`com.slicc.sliccstart`) → `/Applications` → `~/Applications`. Off macOS the reader
-returns `ErrUnsupported` and every verb reports it.
+macOS only. `internal/cloud` **shells out** to `Sliccstart --list-sessions`
+(cgo + entitlements would break `CGO_ENABLED=0`); `LocateExecutable` tries
+`$SLICCSTART_APP` → `mdfind` (bundle id `com.slicc.sliccstart`) →
+`/Applications` → `~/Applications`. Off macOS: `ErrUnsupported`.
 
-- `list-sessions [--json]` prints **metadata only** (opaque id, label, device,
-  age) — never a join URL — so it is safe to pipe and log.
-- `<verb>-cloud` (`follow`/`prompt`/`exec`/`watch`) resolves a session's **join
-  URL** with `--reveal-urls`, which prompts for consent on the Mac (denied over
-  SSH until granted once from the screen), then dispatches to the plain verb. The
-  URL is never printed. Selection defaults to the newest session; `--index N` /
-  `--session <id-prefix>` (leading options, consumed by `ParseSelector`) pick
-  another, and the remaining argv passes through verbatim (runner argv / text).
+- `list-sessions [--json]` — **metadata only** (opaque id, label, device,
+  age), **never a join URL** — safe to pipe/log.
+- `<verb>-cloud` (`follow`/`prompt`/`exec`/`watch`) resolves a session's
+  **join URL** via `--reveal-urls` (Mac consent prompt; denied over SSH
+  until granted once from the screen) then dispatches. **URL never printed.**
+  Newest by default; `--index N` / `--session <id-prefix>` (`ParseSelector`)
+  picks another; remaining argv verbatim.
 
 Pure logic (`ParseSessions`, `ParseSelector`, `Select`, `FormatTable`) is
-platform-independent and unit-tested; the exec/locate glue lives in the
-darwin-only `resolve_darwin.go` (not counted by the Linux coverage gate). The
-`cloudList` seam in `cloud.go` is overridden in tests so dispatch is exercised
-without a real launcher.
+platform-independent + unit-tested; darwin-only exec/locate lives in
+`resolve_darwin.go`; the `cloudList` seam in `cloud.go` is overridden in
+tests.
 
 ## Why Go + pion
 
-The follower must speak real WebRTC (SCTP data channel) and interoperate with
-browser leaders + Cloudflare TURN. `github.com/pion/webrtc/v4` is pure Go, so the
-CLI cross-compiles to a single static binary for macOS/Linux/Windows × amd64/arm64
-with `CGO_ENABLED=0` (see the `dist` target). No native toolchain required.
+`github.com/pion/webrtc/v4` is pure Go — the follower cross-compiles to a
+single static binary for macOS/Linux/Windows × amd64/arm64 with
+`CGO_ENABLED=0` (`dist` target). Interoperates with browser leaders +
+Cloudflare TURN. No native toolchain.
 
 ## Layout
 
-| Path                  | Purpose                                                                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `main.go`             | Arg parsing + subcommand dispatch + Ctrl+C handling                                                                                         |
-| `commands.go`         | `prompt` / `exec` / `follow` implementations                                                                                                |
-| `internal/protocol/`  | Wire structs mirroring `packages/shared-ts/src/tray-sync-protocol.ts` (the subset the CLI uses)                                             |
-| `internal/signaling/` | HTTP follower client for `tray-signaling.ts` (attach → poll/answer/ice/retry), ported from the iOS connector                                |
-| `internal/tray/`      | pion peer + `tray-control` data channel + follower state machine (hello, ping/pong, dispatch)                                               |
-| `internal/cloud/`     | iCloud tray-session discovery: parse/select/format (pure) + a darwin-only reader that shells out to `Sliccstart --list-sessions`            |
-| `cloud.go`            | `list-sessions` + the `<verb>-cloud` family (resolve a session's join URL from iCloud, then hand off to the plain verb)                     |
-| `internal/execrun/`   | Cross-platform OS command runner backing `follow` (streams stdout/stderr, forwards signals) + `EvalSession` (persistent-REPL `--eval` mode) |
-| `update.go`           | `cmdUpdate` (`slicc update [--check]`) + the on-launch update-notice hook                                                                   |
-| `telemetry.go`        | `initTelemetry`/`reportRuntimeError` — launch + error RUM beacons via `@ai-ecoverse/go-optel`                                               |
-| `internal/update/`    | Release discovery (sparse-release scan), self-update apply, once-a-day cached notice                                                        |
-| `internal/logging/`   | `log/slog` structured diagnostic logger (text/JSON handler, env-driven level) + the `Logf` adapter the `tray` seam consumes                 |
+`main.go` (argv + dispatch), `commands.go` (`prompt`/`exec`/`follow`),
+`cloud.go` (`list-sessions` + `<verb>-cloud`), `update.go`, `telemetry.go`,
+`internal/{protocol,signaling,tray,cloud,execrun,update,logging}/`. Full
+per-file map: [details](../../docs/slicc-cli-details.md#layout).
 
 ## Protocol parity
 
-`internal/protocol` mirrors a subset of the canonical TS union. The golden corpus
-(`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
+`internal/protocol` mirrors a subset of the canonical TS union. The golden
+corpus (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
 `packages/ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json`)
-is decoded by `internal/protocol/corpus_test.go` for the message types the CLI
-produces/consumes (`exec.*`, `hello`, `status`), so a wire change that breaks the CLI fails
-`go test`. When the
-tray protocol changes, regenerate the corpus JSON and update the Go structs +
-`corpus_test.go` alongside the TS and Swift mirrors.
+is decoded by `internal/protocol/corpus_test.go` for `exec.*`/`hello`/`status`;
+a wire change breaks `go test`. On protocol changes, regenerate the corpus
+JSON and update Go structs + `corpus_test.go` alongside TS + Swift mirrors.
 
 ## Diagnostics vs user-facing output
 
-Two output paths, deliberately separate:
+- **User-facing** — `prompt`/`exec`/`watch` write leader bytes to stdout,
+  status to stderr. **Never route through the logger**; the CLI is pipeable.
+- **Diagnostics** — signaling retries, supersede redirects, ICE failures,
+  unparseable frames go through `internal/logging` (`log/slog` `diagLogger`
+  in `commands.go`, to stderr); `debugLogf` adapts to `tray.Options.Logf`.
 
-- **User-facing streaming** — `prompt`/`exec`/`watch` write the leader's bytes
-  straight to stdout (and their own status lines to stderr). Never route this
-  through the logger; the CLI is meant to be pipeable.
-- **Diagnostics** — signaling retries, supersede redirects, ICE failures and
-  unparseable frames go through `internal/logging`, a `log/slog` logger built
-  once in `commands.go` (`diagLogger`) and written to stderr. `debugLogf` is the
-  thin `func(format string, args ...any)` adapter that satisfies the existing
-  `tray.Options.Logf` seam, so `internal/tray` keeps its callback-shaped API.
-
-Off by default. Enable with `SLICC_DEBUG=1` (legacy switch, equals
-`SLICC_LOG_LEVEL=debug`) or `SLICC_LOG_LEVEL=debug|info|warn|error`;
-`SLICC_LOG_FORMAT=json` swaps `slog.TextHandler` for `slog.JSONHandler`.
+Off by default. `SLICC_DEBUG=1` (legacy = `SLICC_LOG_LEVEL=debug`) or
+`SLICC_LOG_LEVEL=debug|info|warn|error`; `SLICC_LOG_FORMAT=json` swaps
+`slog.TextHandler` for `slog.JSONHandler`.
 
 ## Exec safety (`follow`)
 
-A `follow` with a runner advertises `hello.capabilities.exec = true`, telling the
-leader it may send `exec.request`. Each command runs as `<runner> <command>` (so
-the runner names — and can sandbox — the exec surface, e.g. a container or a
-restricted shell), as the user who started `slicc`, and is echoed to stderr as it
-runs. A `follow` with **no** runner advertises no capability and refuses every
-`exec.request` with an error response.
-
-Startup ergonomics (all in `commands.go`):
-
-- **Banner** — a small ASCII wordmark + the identity/runner/exec warning prints to
-  stderr on start; `--no-banner` drops the art but keeps the safety warning.
-- **Runner heuristic** (`runnerExecWarning`) — a known shell (`bash`/`sh`/`zsh`/…)
-  or wrapper (`docker`/`podman`/…) without a trailing `-c` warns that the leader's
-  command would be treated as a script FILE, not a command line — the `follow bash`
-  (vs `follow bash -c`) footgun.
-- **MOTD** (`hello.motd`, `followMotd`) — a one-line "who/what/where" summary the
-  follower advertises so the leader surfaces it to the agent via `ssh --list`. The
-  leader captures it in `tray-leader-sync.ts` (`getFollowerMotds`) and, alongside
-  `getBrowserCapableBootstrapIds`, tags followers `[ssh]` / `[playwright]` in
-  `host`. Additive + optional on the wire (browser/iOS peers omit it).
+A `follow` with a runner advertises `hello.capabilities.exec = true`; each
+command runs as `<runner> <command>` (runner sandboxes the exec surface),
+as the user who started `slicc`, echoed to stderr. **A `follow` with no
+runner advertises no capability and refuses every `exec.request` with an
+error.** Banner + safety warning on start (`--no-banner` drops art, keeps
+warning); `runnerExecWarning` flags the `follow bash` vs `follow bash -c`
+footgun; MOTD (`hello.motd`, `followMotd`) surfaces via the leader's
+`ssh --list` (`tray-leader-sync.ts` tags `[ssh]` / `[playwright]` in
+`host`). Additive + optional on the wire.
+[Details](../../docs/slicc-cli-details.md).
 
 ## follow `--eval` (persistent REPL)
 
-`execrun.EvalSession` spawns the runner ONCE and serializes leader commands
-into its stdin as lines; responses are framed by **output quiescence**
-(`--eval-quiet`, default 500 ms) because REPLs never signal completion. The
-session outlives connections AND connection drops — a cancelled per-connection
-context interrupts the in-flight computation (`interruptProcess`, SIGINT to
-the group; no-op on Windows) but never kills the REPL; only `Close` (process
-shutdown) and leader-sent SIGTERM/SIGKILL do. Leader SIGINT likewise
-interrupts without killing (ignored on Windows — a hard kill would destroy
-session state). Late output is forwarded at the head of the next response,
-exec exit codes are always 0 while the REPL lives, `req.Cwd`/`req.Env` are
-ignored, and REPL death marks the session dead (commands then error until
-restart). `follow.NewEvalSession`
-routes `exec.request` into it; the MOTD advertises a REPL target so the
-leader's agent sends language code, not shell. The banner warns about `node`
-without `-i` (it buffers piped stdin until EOF). Tests fake the REPL with a
-self-exec helper process (`TestEvalHelperProcess`) so the suite runs on all
-three CI OSes; the e2e (`TestCLIFollowEvalPersistsState`) proves cross-command
-state over real WebRTC using the platform shell as a line-eval stand-in.
+`execrun.EvalSession` spawns the runner ONCE; responses framed by **output
+quiescence** (`--eval-quiet`, default 500 ms) — REPLs never signal
+completion. **Session outlives connections and drops**: cancelled
+per-connection contexts run `interruptProcess` (SIGINT to the group; no-op
+on Windows) but never kill the REPL; only `Close` and leader-sent
+SIGTERM/SIGKILL do. `req.Cwd`/`req.Env` ignored; exec exit codes 0 while
+REPL lives. `follow.NewEvalSession` routes `exec.request` in; MOTD
+advertises a REPL target. Banner warns about `node` without `-i`.
+[Details](../../docs/slicc-cli-details.md).
 
 ## Self-update (`slicc update`)
 
-`internal/update` scans GitHub releases newest→oldest for the first one carrying
-this platform's `slicc-<os>-<arch>[.exe]` asset — releases are **sparse** (CLI
-binaries only attach when `packages/slicc-cli` changed), so `releases/latest` is
-not enough. The same bounded pagination as the worker's `/download/slicc-cli`
-route (30/page, 5 pages max). `Apply` downloads next to the executable, runs the
-staged binary's `--version` as a sanity gate, then atomically renames over the
-running binary (Windows: parks the old file at `.old`, swept on later runs).
-
-Regular verbs call `startUpdateNotice()` (main-package `update.go`): the upgrade
-notice prints from a local cache (`<user-cache-dir>/slicc/update-check.json`)
-and a background refresh runs at most once per 24 h, bounded-flushed at command
-exit so short verbs still persist it. Disabled via `SLICC_NO_UPDATE_CHECK=1`
-and for any non-release-stamped version (`dev`, `git describe` output) —
-`IsReleaseVersion` gates both the notice and the self-replace, so `slicc
-update` refuses to clobber a local build that is ahead of the latest tag.
-`SLICC_UPDATE_API_BASE` overrides the API base (tests/mirrors).
+`internal/update` scans GitHub releases newest→oldest for the first with
+this platform's `slicc-<os>-<arch>[.exe]` asset — releases are **sparse**
+(CLI binaries only attach when `packages/slicc-cli` changed); same bounded
+pagination as the worker's `/download/slicc-cli` route (30/page, 5 pages
+max). `Apply` downloads, sanity-gates via `--version`, then atomically
+renames over the running binary (Windows parks the old at `.old`).
+`startUpdateNotice()` (`update.go`) refreshes
+`<user-cache-dir>/slicc/update-check.json` at most once per 24 h.
+`SLICC_NO_UPDATE_CHECK=1` disables it; `IsReleaseVersion` gates both notice
+and self-replace, so **`slicc update` refuses to clobber a local build
+ahead of the latest tag** (`dev`, `git describe`). `SLICC_UPDATE_API_BASE`
+overrides the API base. [Details](../../docs/slicc-cli-details.md).
 
 ## Telemetry
 
-`telemetry.go` wires `packages/go-optel` (`github.com/ai-ecoverse/go-optel`, a
-sibling Go module pulled in via a local `replace` directive — this monorepo has
-no `go.work`) into two checkpoints only: `enter` on launch
-(`initTelemetry(sub)`, deferred right after `initTelemetry(sub)()` executes
-immediately in `main.go`'s `run()`) and `error` on an operational failure
-(`reportRuntimeError(source, err)`, called from the dial-error branches in
-`commands.go` and the update-check/apply error branches in `update.go`).
-`source` for `error` beacons is always one of a small fixed set (`dial`,
-`watch`, `follow`, `update`) — never user-typed input (join URL, exec/prompt
-text) — and `classifySubcommand` applies the same allowlist-not-passthrough
-treatment to the `enter` beacon's subcommand name.
+`telemetry.go` wires `packages/go-optel` (sibling Go module via local
+`replace`) into two checkpoints: `enter` on launch (`initTelemetry` from
+`main.go`'s `run()`) and `error` on operational failure
+(`reportRuntimeError(source, err)` from dial-error branches in
+`commands.go` and update-check/apply branches in `update.go`). **`source`
+is always one of a fixed set (`dial`, `watch`, `follow`, `update`) — never
+user-typed input** (join URL, exec/prompt text); `classifySubcommand`
+allowlists the `enter` beacon's subcommand. `SLICC_NO_TELEMETRY=1` opts
+out; `update.IsReleaseVersion(version)` means a `dev`/git-describe build
+never configures a client. See `packages/go-optel/CLAUDE.md` for why
+`Sanitize()` is **mandatory** — CLI error strings can embed a bearer-token
+join URL — and `docs/operational-telemetry.md` ("CLI Telemetry").
 
-Gated the same way as the update notifier: `SLICC_NO_TELEMETRY=1` opts out
-outright, and `update.IsReleaseVersion(version)` means a `dev`/git-describe
-local build never configures a client at all (no env var needed for that
-case). Sampling is one coin flip per process (weight 100 by default,
-`OPTEL_RATE`/`OPTEL_DEBUG` env override), not per checkpoint. See
-`packages/go-optel/CLAUDE.md` for why `Sanitize()` (URL/path redaction before
-truncation) is mandatory here rather than a nice-to-have — this CLI's error
-strings can embed a leader's bearer-token join URL — and
-`docs/operational-telemetry.md` ("CLI Telemetry") for the cross-float design.
-
-## Build / test
+## Build / test / release
 
 ```bash
 make build          # → bin/slicc
-make check          # CI gate: gofmt + tidy-check + go vet + golangci-lint + race tests + coverage floor
-make lint           # golangci-lint run (config in .golangci.yml)
-make tidy-check     # fail when go.mod/go.sum drift from the tree's imports
-make cover          # race tests + total-coverage floor (COVER_MIN, default 58%)
+make check          # CI gate: gofmt + tidy-check + vet + golangci-lint + race + coverage floor
+make lint           # golangci-lint (.golangci.yml)
+make tidy-check     # fail when go.mod/go.sum drift from imports
+make cover          # race tests + COVER_MIN floor (default 58%)
 make test-json      # per-test timings → test-report.json (CI artifact)
 make dist           # cross-compiled static binaries → dist/
 ```
 
-`make test-json` exists only to produce the `test-timings-slicc-cli-<os>` CI
-artifact; it is a separate pass so `test`/`cover` console output stays
-human-readable. There is **no** retry wrapper around the Go suite, deliberately:
-every test in this module is hermetic (no network, no real signaling server — the
-WebRTC integration test drives an in-process leader harness), so a failure is a
-real failure and a retry would only mask it.
+**No retry wrapper**: every test is hermetic. Gates via `make check` in
+the `slicc-cli` CI job: staticcheck/errcheck/unused + funlen/gocyclo/
+gocognit; `make tidy-check` (Go analogue of TS knip); `COVER_MIN` floor.
 
-Gates: `.golangci.yml` (staticcheck/errcheck/unused + funlen/gocyclo/gocognit for
-complexity, matching the TS side's biome complexity gate), `make tidy-check`
-(unused/missing module dependencies — the Go analogue of the TS side's knip run)
-and the `COVER_MIN` coverage floor in the Makefile. All run in the `slicc-cli` CI
-job via `make check`. Release binaries are cut **atomically with the semantic-release flow** and only
-when `packages/slicc-cli/` changed since the last tag. `release-native.mjs`
-(the prepareCmd gate) calls `sign-and-package.sh` when `decideSliccCliGating`
-opens: it cross-compiles every target on the macOS release runner, Developer
-ID-signs + notarizes the two darwin binaries (reusing release.yml's
-`APPLE_CERTIFICATE_BASE64` cert and `APPLE_API_KEY_*` notarytool creds, and the
-`setup-go` toolchain), and stages `artifacts/release/slicc-*` for
-`@semantic-release/github` to attach. A bare CLI binary can't be stapled (only
-`.app`/`.dmg`/`.pkg`), so Gatekeeper verifies the notarization online. With no
-cert (a fork / local run) the binaries build + stage unsigned instead of failing.
-
-**OS matrix:** the follower targets macOS/Linux/Windows, so CI runs `go test ./...`
-on all three (`strategy.matrix.os`) to exercise the real per-OS runtime paths —
-process-group signalling and the `cmd /c` vs `sh -c` runner — that a compile-only
-check would miss. Tests pick the platform shell via a `testRunner()` helper so they
-run rather than skip on Windows; only the genuinely POSIX-specific cases (`sleep` +
-signal delivery) stay `runtime.GOOS == "windows"`-skipped. The static gate
-(`make check`) and cross-compile (`make dist`) run once on Linux — they are
-platform-independent, and the coverage floor would under-count where those cases skip.
-
-`integration_test.go` is the real end-to-end test: it drives the whole follower
-path over an actual WebRTC connection (pion ↔ pion on loopback) — a leader peer
-creates the `tray-control` channel, a mock signaling server bridges the SDP/ICE
-exchange to `tray.Dial`, and the leader issues an `exec.request` that the follow
-session runs locally and streams back. Deterministic (no browser, no TURN), so it
-runs in the normal `go test` gate.
+Release binaries cut **atomically with semantic-release** and only when
+`packages/slicc-cli/` changed since the last tag: `release-native.mjs`
+(prepareCmd gate) invokes `sign-and-package.sh` when `decideSliccCliGating`
+opens, cross-compiling every target on the macOS runner, Developer
+ID-signing + notarizing the darwin binaries (`APPLE_CERTIFICATE_BASE64` +
+`APPLE_API_KEY_*`), staging `artifacts/release/slicc-*` for
+`@semantic-release/github`. **A bare CLI binary can't be stapled**;
+Gatekeeper verifies notarization online. Without cert (fork/local): stages
+unsigned instead of failing. Full pipeline + OS-matrix rationale
+(`testRunner()`, `integration_test.go` pion↔pion loopback):
+[details](../../docs/slicc-cli-details.md).

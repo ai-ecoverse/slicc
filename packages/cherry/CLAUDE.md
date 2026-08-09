@@ -1,314 +1,188 @@
 # CLAUDE.md
 
-This file covers the embedded-follower host SDK in `packages/cherry/`.
+Embedded-follower host SDK in `packages/cherry/`. Deep-dives (field
+notes, preview bootstrap, version negotiation, harness):
+[`docs/cherry-details.md`](../../docs/cherry-details.md).
 
 ## Scope
 
-`@ai-ecoverse/cherry` is a tiny, dependency-light host-side SDK that a **third-party
-web page** embeds. It mounts a SLICC follower in an iframe (the webapp loaded
-with `?cherry=1`) and lends the host page to a remote cloud-cone **leader** as a
-driveable, capability-limited CDP target — over cooperative, postMessage-backed
-_synthetic_ CDP. The host page becomes a browser target the remote agent can
-navigate / screenshot / open-url on, but **never** drive raw `Network.*` against.
-
-This package ships independently to third-party origins, so it must NOT import
-from `@slicc/webapp`.
+Dependency-light host-side SDK a **third-party web page** embeds. Mounts
+a SLICC follower iframe (webapp with `?cherry=1`) and lends the host
+page to a remote cloud-cone **leader** as a driveable,
+capability-limited CDP target over postMessage-backed _synthetic_ CDP.
+Agent may navigate / screenshot / open-url, but **never** drive raw
+`Network.*`. Ships to third-party origins; must NOT import from
+`@slicc/webapp`.
 
 ## Main Files
 
-- `src/index.ts` — public surface: `mountSlicc(options)`, `MountSliccOptions`,
-  `HostCapabilities`, `HostHooks`, `SliccHandle`.
-- `src/mount.ts` — `mountSliccImpl`: creates the `?cherry=1` iframe, runs the
-  handshake, dispatches inbound `cdp.request` envelopes through the host
-  handlers, and posts `cdp.response` back. Holds the per-mount `channelId` and
-  the `window` `message` listener.
-- `src/cdp-host-handlers.ts` — `createCdpHostHandler`: host-realm execution of
-  the synthetic CDP subset, plus `CherryUnsupportedError` (`code = -32601`).
-  Also consumed by `preview-bootstrap.ts` (the browser runs it against its own
-  `document` for driveable previews — `serve --bridge`).
-- `src/preview-bootstrap.ts` — the injected bootstrap for driveable previews
-  (`serve --bridge`). Opens the `/__slicc/bridge` WebSocket, runs
-  `createCdpHostHandler` against its **own** `document` (same-origin, no
-  postMessage hop), and exposes `window.slicc.emit(name, detail?)` /
-  `window.slicc.on(name, cb)` to the page. `emit` sends a `{ t:'emit', … }`
-  frame over that same WebSocket (so the DO can attribute it to this tab),
-  falling back to a `navigator.sendBeacon('/__slicc/emit', …)` only when the
-  socket isn't `OPEN` — e.g. during page unload. Builds as a single classic
-  IIFE (html2canvas-pro bundled in) embedded into the worker, served at
-  `/__slicc/preview-bridge.js`.
-- `scripts/build-preview-bootstrap.mjs` — esbuild-bundles `preview-bootstrap.ts`
-  into that IIFE and writes it as the `PREVIEW_BRIDGE_JS` string constant at
-  `packages/cloudflare-worker/src/preview-bridge-assets.ts`. Runs at the end of
-  the cherry `build` (so it's regenerated on every `npm ci`/`npm install` via the
-  root `postinstall`, and again in the root `build` chain which orders cherry
-  before the worker). The output is **`.gitignored` — never commit it**: it's a
-  ~232 KiB minified blob that drifts by dep/toolchain version, so a committed
-  copy goes stale (see #1308). The worker imports it at build/deploy time.
-- `src/protocol.ts` — the postMessage envelope contract and the three-factor
-  `acceptEnvelope` gate. **Structural MIRROR** of the canonical webapp copy (see
-  below).
+- `src/index.ts` — public surface: `mountSlicc(options)`,
+  `MountSliccOptions`, `HostCapabilities`, `HostHooks`, `SliccHandle`.
+- `src/mount.ts` — `mountSliccImpl`: creates `?cherry=1` iframe, runs
+  handshake, dispatches `cdp.request` via host handlers, posts
+  `cdp.response` back. Holds `channelId`, `message` listener.
+- `src/cdp-host-handlers.ts` — `createCdpHostHandler`: host-realm
+  execution of the synthetic CDP subset + `CherryUnsupportedError`
+  (`code = -32601`). Also consumed by `preview-bootstrap.ts`.
+- `src/preview-bootstrap.ts` — driveable-preview bootstrap (same-origin
+  previews for `serve --bridge`); opens `/__slicc/bridge` WS, runs
+  `createCdpHostHandler` against its **own** `document` (no postMessage
+  hop), exposes `window.slicc.emit`/`.on`. See docs/cherry-details.md.
+- `scripts/build-preview-bootstrap.mjs` — esbuilds the IIFE, writes it
+  as `PREVIEW_BRIDGE_JS` at
+  `packages/cloudflare-worker/src/preview-bridge-assets.ts`. Runs at
+  end of cherry `build` (also root `postinstall`; before worker).
+  **`.gitignored` — never commit it** (~232 KiB minified; #1308).
+- `src/protocol.ts` — postMessage envelope contract + three-factor
+  `acceptEnvelope` gate. **Structural MIRROR** of the canonical webapp.
 
 ## The `mountSlicc` surface
 
 ```ts
 mountSlicc({
-  container, // HTMLElement the follower iframe is appended to (optional when `iframe` is provided)
-  iframe, // Caller-provided iframe (opt-in; SDK uses it instead of creating one)
-  sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
-  capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
-  features, // { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } — all default true
-  theme, // SliccTheme object — optional brand theme applied inside the follower (serialized in handshake welcome)
-  layout, // DockTreeSpec-shaped object — optional pushed layout, typically with locked: true (serialized in handshake welcome)
-  flags, // { [flagId]: value } — optional feature-flag overrides for this embed, e.g. panel-layouts
+  container, // HTMLElement (optional when `iframe` provided)
+  iframe, // Caller-provided iframe (opt-in)
+  sliccOrigin, // worker-hosted webapp origin, e.g. https://app.sliccy.ai
+  capabilities, // { navigate; screenshot: 'html2canvas'|'none'; openUrl }
+  features, // CherryFeatures — { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } default true
+  theme, // SliccTheme — optional brand theme
+  layout, // DockTreeSpec-shaped — optional pushed layout, typically locked
+  flags, // { [flagId]: value } — feature-flag overrides
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest?, onHandshakeComplete? }
-  joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
-  uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (follower renders UI but advertises no CDP target)
+  joinToken, // REQUIRED: existing tray join URL the host provisioned
+  uiOnly, // Opt-in: append `ui-only=1` AFTER `cherry=1` (UI only, no target)
 }): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
 ```
 
-> **Scope:** this SDK only **embeds** against an already-provisioned leader —
-> the host supplies a ready `joinToken` (a tray join URL). Creating/provisioning
-> a cloud cone from the SDK (the old `imsToken` / `coneName` / `createIfMissing`
-> path) is deliberately **out of scope** and tracked as future work. See the
-> design doc's descope note.
+Field notes (theme, layout, `features`/`flags`/`SIDE_PANEL_FEATURES`,
+`HostCapabilities.screenshot`) in docs/cherry-details.md. Invariants:
 
-- **`iframe?` (opt-in):** Caller-provided iframe to drive instead of creating one.
-  When set, the SDK uses this element (already placed in the DOM by the caller) and
-  does not create or append an iframe. `container` becomes optional in this mode.
-  Used by the extension's managed-launcher sidebar. Backward compatible: existing
-  container-only callers keep the create+append+style+remove behavior.
-- **`uiOnly?` (opt-in):** Append `ui-only=1` AFTER `cherry=1` to the follower URL
-  so the follower renders chat/UI but advertises no CDP target. `cherry=1` MUST
-  be present — the worker's `frame-ancestors` CSP relaxation and the follower's
-  cherry-mode boot both key on the `cherry=1` query param (there is no DNR rule;
-  framing is a worker CSP response header). `ui-only=1` is an additive flag.
-
-- `CherryFeatures` controls which UI panels the follower renders. Each field
-  defaults to `true` when omitted. Setting a feature to `false` removes the panel
-  entirely from the DOM (no tab, no placeholder). Features are static — resolved
-  at mount time and sent in `handshake.welcome`; there is no runtime toggle.
-  Separate from `capabilities` (which gates agent _powers_ over the host page);
-  features gate _UI surfaces_ shown to the user.
-- **Feature flags are separate** from `CherryFeatures`: the `?cherry=1` boot uses the shared
-  registry in `feature-flags.ts` (Cherry default: `experimental-settings` off, hiding the
-  dialog that would toggle these). `flags` on `mountSlicc` is the host's session-only bridge
-  into that registry — same `userToggleable`-and-float gate a local override must pass; see
-  `docs/layouts.md`. Not `SIDE_PANEL_FEATURES` in `cherry-panel-protocol.ts` (extension), which
-  is mount-time `CherryFeatures` panel visibility, not a registry flag.
-- `theme` accepts a `SliccTheme` object (`{ id, name, base, tokens, css?,
-disableShader?, components? }`) that the SDK serializes as JSON in the
-  handshake welcome. The follower applies it on boot via `applyCherryTheme`,
-  overriding its default appearance. Static — resolved at mount time; there is no
-  runtime re-theme. The `examples/host.html` harness includes a dropdown with
-  hardcoded brand presets, plus a custom-JSON textarea, for manual testing.
-  **CSS-injection guard:** `theme.tokens`, `theme.css`, and every `components`
-  property flow through `sanitizeTheme` (`packages/webapp/src/ui/theme-engine.ts`)
-  before reaching the follower's `<style>` element — any value containing
-  `url(`, `@import`, `expression(`, `javascript:`, angle brackets, or a call to
-  a CSS function outside a small allowlist (`rgb`/`rgba`/`hsl`/`hsla`/`hwb`/
-  `var`/`calc`/`clamp`/`min`/`max`) is dropped rather than partially escaped.
-  This blocks the classic CSS-exfiltration vector (a host beaconing DOM state
-  out via a themed `url(...)`) without requiring the host page itself to be
-  trusted.
-- `layout` pushes an arrangement into the follower, serialized as JSON in the
-  handshake welcome and applied ONCE at boot — static, like `theme`. Structurally
-  typed as `unknown` (this SDK ships independently, so no cross-package import).
-  `wc-follower.ts` accepts EITHER shape, sniffed on the object: a `LayoutDocument`
-  (has `base`) or the older `DockTreeSpec` (has `zones`) — embedders vendor the SDK
-  and upgrade on their own schedule, so a version field older hosts never sent
-  would be more brittle than sniffing. See `docs/layouts.md`.
-  Set `locked: true` — tree-wide or per panel — so the user can't rearrange what was
-  pushed. Applied WITHOUT a filesystem, so it can't persist or drift, and `layout
-save` in an embed reports it needs one rather than writing your arrangement into
-  the user's profile. An invalid document falls back to the default.
-  `examples/host.html` has a custom-JSON textarea for testing.
-- `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
-  boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
-  is requested under the `'html2canvas'` strategy.
-- `hooks.onHandshakeComplete()` fires once after the handshake completes and the
-  channelId is pinned (synchronous, single-shot per hello).
-- `hooks.onPermissionRequest(domain)` gates each synthetic CDP domain the leader
-  tries to use (return `false` to deny — the SDK answers `-32601`).
-- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction. The follower also emits two transport-layer sentinels: `slicc.follower.ready` (WebRTC channel connected) and `slicc.follower.disconnected` (transient drop or terminal `onGaveUp`) — see `wc-follower.ts:onConnectionChange`. Defer `emitHostEvent` until `ready`: calls before the tray channel opens are silently dropped.
-- `SliccHandle.emitHostEvent(name, detail?)` is the **host → cone** direction: the host page emits a named event that posts a `host.event` envelope to the follower, which forwards it over the tray channel as `cherry.host_event`; the leader turns it into a `cherry` lick (labeled **Cherry Event**) on the cone. No-ops with a warning before the handshake completes (no `channelId` to pin it to).
+- **Scope:** SDK only **embeds** against a provisioned leader; host
+  supplies a ready `joinToken`. Cone creation
+  (`imsToken`/`coneName`/`createIfMissing`) is **out of scope**.
+- **`iframe?`:** SDK uses the caller-placed iframe; `container` becomes
+  optional. Used by the extension's managed-launcher sidebar.
+- **`uiOnly?`:** appends `ui-only=1` AFTER `cherry=1`; follower renders
+  UI but advertises no CDP target. `cherry=1` MUST be present — the
+  worker's `frame-ancestors` CSP relaxation and the follower's
+  cherry-mode boot key on it (worker CSP, not DNR).
+- **Three axes:** `capabilities` gate _powers_ (sandbox-escaping — see
+  boundary). `features` (`CherryFeatures`) gate _UI panels_ statically
+  in `handshake.welcome`. `flags` bridge into `feature-flags.ts` (Cherry
+  default: `experimental-settings` off) with the same
+  `userToggleable`-and-float gate as local overrides; see
+  `docs/layouts.md`. Do NOT conflate with `SIDE_PANEL_FEATURES`
+  (`cherry-panel-protocol.ts`, extension side-panel) — mount-time
+  `CherryFeatures` visibility, not a registry flag.
+- **`theme`** flows through `sanitizeTheme`
+  (`packages/webapp/src/ui/theme-engine.ts`) — blocks CSS-exfiltration
+  via themed `url(...)`. **`layout`** applied ONCE at boot, no
+  filesystem; `locked: true` prevents rearrangement.
+- **Hooks:** `onHandshakeComplete()` fires once per hello.
+  `onPermissionRequest(domain)` gates each CDP domain (`false` → SDK
+  answers `-32601`). `onSliccEvent` observes `slicc.event`
+  (**cone → host**). Transport sentinels `slicc.follower.ready` /
+  `.disconnected` (`wc-follower.ts:onConnectionChange`). Defer
+  `emitHostEvent` until `ready`.
+- **`emitHostEvent(name, detail?)`** — **host → cone**: posts
+  `host.event`, forwarded as `cherry.host_event`; leader emits a
+  `cherry` lick (**Cherry Event**).
 
 ## Host-SDK ↔ iframe synthetic-CDP boundary
 
-- The SDK runs on the **host page**; the follower runs in the **iframe**. They
-  speak the cherry envelope protocol over `postMessage`.
-- The iframe side is `CherryHostTransport`
-  (`packages/webapp/src/cdp/cherry-host-transport.ts`) — the **third**
-  `CDPTransport`. It synthesizes the session lifecycle `BrowserAPI` expects
-  (`Target.getTargets` / `attachToTarget`, `Page`/`Runtime`/`DOM.enable`,
-  `Page.getFrameTree`) locally and forwards everything else to the host SDK as
-  `cdp.request`.
-- The SDK answers `cdp.request` by running `createCdpHostHandler` against the
-  host page realm. Methods the host did not opt into (or Cherry does not
-  implement) throw `CherryUnsupportedError` → `cdp.response.error` with code
-  `-32601`.
-- **Two-tier gating** (by design): the `capabilities` booleans gate side effects
-  that ESCAPE the page sandbox — `navigate`, `screenshot`, `openUrl` — and fail
-  closed in the handler. DOM read/query and `Input` (clicking/typing _within_ the
-  page) are the baseline driveable contract; per-domain authorization is enforced
-  upstream by `onPermissionRequest` at the mount layer, so the handler does not
-  re-gate them.
-- **`Runtime.evaluate` is governed by the host page's CSP.** The handler runs an
-  _indirect_ `eval` in the host global scope; if the host CSP forbids dynamic
-  eval it throws natively and surfaces as `exceptionDetails`. Cherry adds no
-  escape hatch.
+SDK on the **host page**; follower in the **iframe**. Iframe side:
+`CherryHostTransport` (`packages/webapp/src/cdp/cherry-host-transport.ts`)
+— the **third** `CDPTransport`. Synthesizes session lifecycle locally
+(`Target.getTargets`/`attachToTarget`, `Page`/`Runtime`/`DOM.enable`,
+`Page.getFrameTree`); forwards everything else as `cdp.request`. SDK
+runs `createCdpHostHandler` in the host realm; unimplemented methods
+→ `CherryUnsupportedError` → `cdp.response.error` `-32601`.
+
+**Two-tier gating**: `capabilities` gate sandbox-escaping effects —
+`navigate`, `screenshot`, `openUrl` — fail closed. DOM read/query and
+`Input` (_within_ the page) are baseline; per-domain auth enforced by
+`onPermissionRequest`. **`Runtime.evaluate` is governed by host CSP** —
+_indirect_ `eval` in the host global scope; forbidden dynamic eval
+throws → `exceptionDetails`. No escape hatch.
 
 ## Three-factor postMessage pinning
 
-Every inbound message is validated by `acceptEnvelope()` against three
-independent factors before any synthetic CDP is acted on:
+`acceptEnvelope()` validates every inbound message against three
+independent factors before any synthetic CDP acts:
 
-1. **Origin allowlist** — `event.origin` must be in `allowOrigins` (the host
-   passes `[sliccOrigin]`; the iframe derives it from `document.referrer`).
-2. **Source identity** — `event.source` must be identity-equal to the expected
-   window (`iframe.contentWindow` on the host side; `window.parent` on the iframe
-   side). `null` accepts any source — only used pre-handshake.
-3. **`channelId` nonce** — `envelope.channelId` must equal the pinned per-mount
-   nonce (the iframe mints `cherry-<uuid>` in `handshake.hello`). `null` skips
-   this factor, only during the pre-handshake window.
+1. **Origin allowlist** — `event.origin` must be in `allowOrigins`
+   (host passes `[sliccOrigin]`; iframe derives it from
+   `document.referrer` — NOT `location.ancestorOrigins`, Chromium-only
+   and not portable as trust root).
+2. **Source identity** — `event.source` must be identity-equal to the
+   expected window (`iframe.contentWindow` host-side; `window.parent`
+   iframe-side). `null` accepts any source — pre-handshake only.
+3. **`channelId` nonce** — `envelope.channelId` must equal the pinned
+   per-mount nonce (iframe mints `cherry-<uuid>` in `handshake.hello`).
+   `null` skips factor 3 — pre-handshake only.
 
-## Embedding only — the host supplies the join URL
+## Embedding only + iframe reload
 
-The SDK forwards the host-supplied `joinToken` over the handshake
-(→ `handshake.welcome.joinUrl`); the follower embeds against that
-already-provisioned leader. The SDK **never calls `/api/cloud/*` itself** — that
-would be a cross-origin call from the third-party host carrying a third-party
-`Authorization` header.
+SDK forwards `joinToken` over the handshake (→
+`handshake.welcome.joinUrl`); follower embeds against the provisioned
+leader. The SDK **never calls `/api/cloud/*` itself** — cross-origin
+with a third-party `Authorization` header (rationale for retiring old
+IMS-bearer / `coneName` / `createIfMissing`: docs/cherry-details.md).
 
-Cone creation/provisioning from the SDK is **out of scope** for now. The host
-page (or its own backend) is responsible for obtaining a join URL and passing it
-in as `joinToken`. The earlier in-iframe provisioning path (forwarding an IMS
-bearer + `coneName` + `createIfMissing` so the same-origin iframe could drive
-`/api/cloud/*`) was removed because a third-party host's IMS token is issued to a
-different client than the cloud LLM proxy and so fails `validateBearer`, and
-because passing secrets through the browser handshake exposes them to the host
-page's user. Reintroducing creation is tracked as a separate future PR; see the
-design doc's descope note.
+SDK survives an iframe reload without `destroy()` + `mountSlicc()`:
+`onMessage` detects a **re-hello** (trusted-peer `handshake.hello` with
+new channelId) and re-runs the handshake. Acceptance is host-side
+policy in `mount.ts`, not `acceptEnvelope`; the gate stays strict —
+only `handshake.hello` bypasses factor 3.
 
-## Iframe reload / re-handshake
+## Protocol mirror & version negotiation
 
-The host SDK survives an iframe reload without the host calling `destroy()` +
-`mountSlicc()` again. When the iframe reloads (host-page re-render, follower
-stale-chunk recovery, crashed renderer), the new page boots a fresh
-`CherryHostTransport` and mints a new `channelId`. The host SDK's `onMessage`
-detects this as a **re-hello** — a `handshake.hello` from a trusted peer
-(origin + WindowProxy identity match) carrying a channelId that differs from
-the pinned one — and re-runs the handshake: re-pins the channelId, resends the
-welcome envelope with theme/config/features, and fires `onHandshakeComplete`.
+`packages/cherry/src/protocol.ts` is a structural **MIRROR** of
+`packages/webapp/src/cdp/cherry-host-protocol.ts` (same `CherryEnvelope`
+union, `CHERRY_PROTOCOL_VERSION`, `SUPPORTED_CHERRY_PROTOCOL_VERSIONS`,
+`isCherryEnvelope`, `AcceptContext`, `acceptEnvelope`; SDK copy has no
+webapp import). Change one → change the other.
 
-The re-hello acceptance rule lives in `mount.ts` (host-side policy), not in
-`acceptEnvelope` (shared protocol). The three-factor gate in `protocol.ts`
-remains strict — only the `handshake.hello` kind bypasses factor 3 under factors
-1-2 trust.
+Embedders **vendor** this SDK; both sides run different builds (full
+contract, incl. 2026-07-27 labs P1: docs/cherry-details.md). Rules:
 
-## Protocol mirror invariant
-
-`packages/cherry/src/protocol.ts` is a structural **MIRROR** of the canonical
-`packages/webapp/src/cdp/cherry-host-protocol.ts`. The two must stay in sync —
-same `CherryEnvelope` union, `CHERRY_PROTOCOL_VERSION`, `isCherryEnvelope`,
-`AcceptContext`, and the three-factor `acceptEnvelope` gate. The ONLY intended
-difference is the package location (the SDK copy carries no webapp import). When
-you change one, change the other.
-
-## Protocol version negotiation and bump rules
-
-Embedders **vendor** this SDK, so the two sides of the handshake routinely run
-different builds. The contract that keeps that safe:
-
-- The follower iframe posts one `handshake.hello` per entry in
-  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` (newest first, same `channelId`) and pins
-  the negotiated version from whichever `handshake.welcome` the host answers
-  with. All subsequent envelopes — both directions — are stamped with the
-  negotiated version. Version-gated envelope kinds (e.g. `session.export.*`,
-  v2+) must not be used on a lower-negotiated channel.
-- The host SDK accepts only its own `CHERRY_PROTOCOL_VERSION`. When a
-  handshake attempt arrives at a version it cannot speak (and origin + source
-  prove it is our iframe), it replies `handshake.version-mismatch` so the
-  follower fails `connect()` fast with an actionable error instead of eating
-  the handshake timeout, and fires `hooks.onProtocolMismatch`.
-- **When bumping `CHERRY_PROTOCOL_VERSION`:** keep the previous version in
-  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` and gate any new envelope kinds on the
-  negotiated version. Removing a version from the supported set hard-breaks
-  every embedder still shipping a vendored SDK at that version — do it only
-  for a genuinely breaking wire change, and say so in the changelog. The
-  2026-07-27 labs incident (P1: every embed failed with an opaque 30s
-  "Cherry handshake timed out") was caused by bumping 1 → 2 for an _additive_
-  feature while both sides still validated with strict equality.
+- Follower posts one `handshake.hello` per entry in
+  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` (newest first, same `channelId`);
+  pins whichever `handshake.welcome` the host answers. Version-gated
+  kinds (e.g. `session.export.*`, v2+) must not run on lower channels.
+- Host SDK accepts only its own `CHERRY_PROTOCOL_VERSION`; mismatch →
+  `handshake.version-mismatch` (fires `hooks.onProtocolMismatch` so the
+  follower fails fast, not the 30s timeout).
+- **Bumping `CHERRY_PROTOCOL_VERSION`:** keep the prior in
+  `SUPPORTED_CHERRY_PROTOCOL_VERSIONS` and gate new kinds on the
+  negotiated version. Removing a supported version hard-breaks vendored
+  SDKs — reserve for genuinely breaking wire changes.
 
 ## Build and test
 
 ```bash
-npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.build.json → dist/ (tsconfig.json is the noEmit typecheck config incl. tests/)
+npm run build -w @ai-ecoverse/cherry   # tsc -p tsconfig.build.json → dist/
 npm test -w @ai-ecoverse/cherry        # vitest (jsdom)
 ```
 
-`mountSliccImpl` and `CherryHostTransport` both expose `test*` seams (e.g.
-`__test_post`, `testReceive`) so the postMessage round-trip can be exercised
-without a real cross-origin window.
-
-### Manual end-to-end embed harness
-
-`examples/host.html` is a throwaway host page for exercising a real embed. It
-imports the built SDK (`../dist/index.js`), so run `npm run build -w @ai-ecoverse/cherry`
-first. Steps:
-
-1. `npm run dev` (webapp at `http://localhost:5710`); in that browser, avatar
-   popover → **Enable multi-browser sync** to become a tray **leader**, and copy
-   the `/join/…` URL it shows — that string is the `joinToken`.
-2. Serve the repo root on a **different** origin (`npx http-server . -p 8080`)
-   and open `http://localhost:8080/packages/cherry/examples/host.html`.
-3. Paste the join URL, press **Mount**. The right-hand log shows handshake
-   progress and `onSliccEvent` / `onOpenUrl` / `onPermissionRequest` callbacks.
-   The **send event** row drives `handle.emitHostEvent(name, detail)` (detail is
-   parsed as JSON, falling back to a string) so you can exercise the host → cone
-   direction and watch the `[cherry]` lick land on the leader.
-
-The host-page origin must differ from `sliccOrigin`, and `sliccOrigin` must
-exactly match where the webapp is served — a mismatch fails the three-factor
-`acceptEnvelope` gate (surfaces as a 30s handshake timeout, now logged). The dev
-server does not apply the `frame-ancestors` CSP (only the worker does), so local
-framing works without worker config.
-
-**The harness mirrors real embedder code.** `host.html` is authored exactly as a
-real consumer would write it — `import { mountSlicc } from '@ai-ecoverse/cherry'`.
-A real embedder `npm install`s the package and their bundler (or a CDN like
-esm.sh) resolves it plus its `html2canvas-pro` dependency automatically. Since
-this SDK isn't published yet and the harness has no bundler, `host.html` carries
-an `importmap` (clearly labelled as plumbing) that maps the `@ai-ecoverse/cherry`
-specifier to the local `dist/` and the `html2canvas-pro` specifier to the copy in
-the repo's `node_modules` — the same file a bundler would resolve. **Serve from
-the repo root** (`npx http-server . -p 8080`) so both relative map paths resolve.
-
-**Screenshots:** set the **screenshot** dropdown to `html2canvas` (it defaults to
-`none`) _before_ Mount — capabilities are fixed at mount time. The SDK is built
-with `tsc` (no bundling), so the screenshot path keeps a bare
-`await import('html2canvas-pro')` (resolved per the import map above). The
-renderer is the maintained **`html2canvas-pro`** fork — the original
-`html2canvas@1.4.1` throws on CSS Color 4 syntax (`color()`, `oklch`, …); the
-capability value stays `'html2canvas'`, only the implementation lib differs.
-Cherry's screenshot is a best-effort DOM raster of `document.body`, not a
-pixel-level CDP capture.
+Default `tsconfig.json` is the noEmit typecheck config (incl. tests/).
+`mountSliccImpl` and `CherryHostTransport` expose `test*` seams
+(`__test_post`, `testReceive`) exercising the postMessage round-trip
+without a real cross-origin window. Harness: `examples/host.html`.
 
 ## Transcript export
 
-Cherry hosts can request a transcript export via `handle.exportSession()`. The export
-flows through the `session.export.*` wire protocol (request → approval on the leader →
-progress events → response or error). Approval is one-time per request.
-
-See [`docs/transcript-export.md`](../../docs/transcript-export.md) for the full protocol,
-error codes, and `TranscriptExportError` usage.
+`handle.exportSession()` → `session.export.*` (request → approval on
+leader → progress → response/error); approval is one-time. Full
+protocol, error codes, `TranscriptExportError`:
+[`docs/transcript-export.md`](../../docs/transcript-export.md).
 
 ## Related Guides
 
-- `packages/webapp/CLAUDE.md` — `CherryHostTransport`, the `?cherry=1` boot mode,
-  and the `'cherry'` lick type.
-- `packages/cloudflare-worker/CLAUDE.md` — the `?cherry=1` `frame-ancestors` CSP,
-  `ALLOWED_CHERRY_HOST_ORIGINS`, and cache isolation.
-- `packages/vfs-root/workspace/skills/cherry/SKILL.md` — the cone-facing skill.
-- `docs/transcript-export.md` — transcript export full reference (bundle layout,
-  privacy guarantees, Cherry SDK API, approval semantics).
-- `docs/architecture.md` — float topology + the synthetic-CDP translation matrix.
+- `packages/webapp/CLAUDE.md` — `CherryHostTransport`, `?cherry=1` boot,
+  `'cherry'` lick.
+- `packages/cloudflare-worker/CLAUDE.md` — `?cherry=1` `frame-ancestors`
+  CSP, `ALLOWED_CHERRY_HOST_ORIGINS`, cache isolation.
+- `packages/vfs-root/workspace/skills/cherry/SKILL.md` — cone skill.
+- `docs/cherry-details.md`, `docs/transcript-export.md`,
+  `docs/architecture.md` (topology + translation matrix).

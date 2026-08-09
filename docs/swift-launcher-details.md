@@ -1,0 +1,44 @@
+# Swift Launcher Details
+
+Deep-reference companion to [`packages/swift-launcher/CLAUDE.md`](../packages/swift-launcher/CLAUDE.md). Extended rationale that does not fit the package guide's size budget.
+
+## optel
+
+`.optelAutoInstrument`'s `error` hook only catches Objective-C `NSException`s — Swift errors are values and cannot be intercepted globally. `Models/LauncherErrorReport.swift` bridges every `do/catch` boundary in the launcher:
+
+- `LauncherErrorReport.report(.<operation>, error)` emits an `error` checkpoint with `source = sliccstart:<operation>`. The `Operation` enum values (`update-check`, `update-detach`, `bootstrap`, `bootstrap-update`, `launch-standalone`, `launch-electron`, `auto-launch`, `debug-build`, `terminal-follower`, `reattach`, `secrets-unlock`, `secrets-persist`) are a wire contract — RUM dashboards filter on these strings.
+- `target` is the bridged error domain plus its description, redacted before it leaves the machine: URLs collapse to `<url>` (a join URL carries the session secret), absolute paths to `<path>` (home reveals the user name), `token`/`secret`/`password`/`key` values to `<redacted>`, whitespace collapses, and the result truncates to `maxTargetLength`.
+- Add a new call site together with an `Operation` case and a `log.error` line. Never report the up-to-date outcome of an update check (`AUError.cancelled`) — that is a normal result, not a fault.
+- `Optel.sample` no-ops until `.optelAutoInstrument` has configured a session, so reporting from a failure that happens before instrumentation mounts (or from a unit test) is safe.
+
+## terminal-followers
+
+`SliccCliLocator` resolves an executable in this order: managed `~/Library/Application Support/Sliccstart/bin/slicc`, the repository's local `make build` output, its architecture-specific `make dist` output, then `/usr/local/bin`, `~/.local/bin`, `/opt/homebrew/bin`. The CLI is never bundled in `Sliccstart.app`.
+
+If none is found, the launcher asks before downloading the current Darwin release from `https://www.sliccy.ai/download/slicc-cli/darwin-<arch>`, validates its Developer ID Application signature and release team identifier (`S8LB56P782`) before making it executable or running `--version`, then atomically installs it in the managed location. A successful terminal launch exposes that managed binary through `~/.local/bin/slicc`; the best-effort symlink step preserves regular files and unrelated user symlinks, and only re-points stale links under Sliccstart's own Application Support root.
+
+Release Darwin binaries are signed and notarized, but a bare Mach-O gets no stapled ticket — see [`docs/pitfalls.md`](pitfalls.md) § "Downloaded `slicc` CLI" for why Sliccstart neither strips quarantine nor trusts `spctl`.
+
+## icloud-sync
+
+`SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only a terminal HTTP 200 with `leader.connected == true` is live. Replacement URLs stay private.
+
+- **Producer** — `SliccstartApp` publishes non-nil `leaderJoinUrl`, withdraws when cleared, and refreshes every 4 hours. Clean quit withdraws; update/detach does not because the browser survives and relaunch republishes.
+- **Consumer** — `AppListView` probes remote rows on section appearance/store reload and stably sorts live/unprobed first. Unreachable rows use `icloud.slash`, `· not responding`, 0.55 opacity, and disable Attach/Follow, not Copy; local rows skip probing. Remote Follow passes a join URL override; Attach-browser uses `launchBrowserFollower`.
+- **Security** — secret-bearing join URLs sync only through same-Apple-ID, encrypted iCloud KVS. `TraySessionLauncherTests` covers row state and Follow.
+
+### Headless CLI (`Sliccstart --list-sessions`)
+
+The iCloud store is readable only by this signed, iCloud-entitled binary, so the Go `slicc` CLI shells out to a subcommand parsed in `main.swift` before the SwiftUI app boots (`TraySessionCLI.parse` returns `nil` for a normal launch). `--list-sessions` prints active sessions as JSON, metadata only (`joinUrl` redacted). `--reveal-urls` adds `joinUrl` behind a consent gate: a remembered "Always" (`UserDefaults`, keyed by caller code-signing id / path) wins; else an `NSAlert` (Deny / Allow Once / Always Allow / Always Deny) shows in a GUI session and a headless/SSH caller is denied (exit 3). Pure logic in `Models/TraySessionCLI.swift` is unit-tested (`TraySessionCLITests`); untestable glue (NSAlert, `getppid`/`proc_pidpath`/`SecCode`, store read) sits in `TraySessionCLIRunner`. Caller identity is spoofable, so redaction-by-default is the real control and the dialog a speed bump.
+
+## updates
+
+`Models/UpdateCheckStatus.swift` is the footer's report on the last check (`idle`, `checking`, `upToDate`, `noInstallableRelease`, `translocated`, `failed(message)`). `AppUpdater` hands every failure to a callback and otherwise only publishes a downloaded bundle, so without this a rate-limited or asset-less check was indistinguishable from "never checked" and the footer just kept offering "Check for Updates". `AUError.cancelled` maps to `upToDate` (that is how `findViableUpdate` says "nothing newer"); `AppUpdater.Error.noValidUpdate` to `noInstallableRelease`.
+
+`AppUpdater` stages its download next to `Bundle.main.bundleURL` before it ever hits the network, so a translocated launch (Gatekeeper copies an unmoved, quarantined `.app` to a read-only synthetic volume under `.../T/AppTranslocation/...`) fails every check with Cocoa's `NSFileWriteVolumeReadOnlyError`; that specific code maps to `translocated` instead of the raw OS error text so the footer tells the user to move the app to `/Applications`.
+
+`Models/TolerantGithubReleaseProvider.swift` tolerates release-naming drift in the `ai-ecoverse/slicc` release history. It also filters out releases lacking an installable macOS asset (`Sliccstart-<version>.zip`/`.tar`), so `AppUpdater` falls back to the newest release that actually ships a binary (needed now that native artifacts are conditionally built). Because the repo releases many times a day while the macOS artifact is built only on `packages/swift-launcher/**` changes, the newest installable release routinely sits beyond the default 30-release page: the provider requests `per_page=100` and follows the RFC 8288 `Link: rel="next"` chain (same host, HTTP(S) only) until a page yields a viable release or reaches `currentVersion` — the release the running build came from, since nothing older can ever be an update.
+
+"Reached" is not "saw an older tag": `/releases` is creation-ordered, so a backport published after a newer release, or a non-semver tag decoding to `Version.null`, would otherwise stop page one and hide the installable release further back. `hasReached(_:on:)` therefore stops only when the page carries the running build's own version or when every _parsed_ release on it is older, ignoring unparsable tags. `maxReleasePages` is only a loop guard for a host whose `Link` chain never terminates, not the intended stop. `currentVersion` defaults to `Bundle.main.version` (the same value `AppUpdater` compares against) and `fetchPage` injects a stub transport; both are pinned in tests because the XCTest host bundle's version is unrelated to the release history.
+
+`Models/LaunchRecordStore.swift` persists a `PersistedLaunchRecord` JSON (servePort, CDP port, electronAppPath, target name, target type, joinUrl, bridgeToken) at `~/Library/Application Support/Sliccstart/launch-records.json`, plus `CDPLiveProbe` for liveness checks via `/json/version`. No PID is stored — process identity isn't needed for reattach because the CDP port answering `/json/version` is what decides whether the previous browser is still alive. The `bridgeToken` is persisted because the surviving browser tab carries it in its launch URL (`?bridgeToken=<token>`); reattach re-forwards the same token so the re-spawned `--serve-only` slicc-server keeps gating `/cdp` against the secret the tab already has, instead of a freshly-minted static one. Legacy records carrying a `staticRoot` key still decode; the extra key is ignored, and a missing `bridgeToken`/`joinUrl` key loads as nil.

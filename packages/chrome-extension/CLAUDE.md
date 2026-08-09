@@ -1,313 +1,203 @@
 # CLAUDE.md
 
-This file covers the Chrome Manifest V3 float in `packages/chrome-extension/`.
+Chrome Manifest V3 float in `packages/chrome-extension/`.
 
 ## Scope
 
-`packages/chrome-extension/` contains the manifest, service-worker CDP bridge,
-the on-demand cherry side-panel cockpit (`sidepanel.html` +
-`sidepanel-entry.ts`), the secrets options page, the preview service worker,
-and the device / media popup shells (capture-popup / picker-popup). The webapp
-UI and the agent engine load from the hosted leader tab and are NOT bundled
-into the extension.
-
-### Permissions
-
-The manifest declares `sidePanel` to enable the Chrome-native per-window
-side-panel cockpit. There is no `content_scripts` array in the manifest.
+Contains the manifest, service-worker CDP bridge, on-demand cherry side-panel
+cockpit (`sidepanel.html` + `sidepanel-entry.ts`), the secrets options page,
+the preview service worker, and the device / media popup shells
+(capture-popup / picker-popup). Webapp UI and agent engine load from the
+hosted leader tab and are NOT bundled into the extension. Manifest declares
+`sidePanel`; no `content_scripts`.
 
 ## Thin Bridge Architecture
 
-The extension is a CDP pass-through + bootstrapper. There is no bundled
-side-panel UI and no offscreen agent engine — both moved to a pinned hosted
-leader tab (`https://www.sliccy.ai/?slicc=leader`).
+CDP pass-through + bootstrapper. No bundled side-panel UI, no offscreen
+engine - both moved to a pinned hosted leader tab
+(`https://www.sliccy.ai/?slicc=leader`).
 
 ```text
 Hosted leader tab (https://www.sliccy.ai/?slicc=leader)
   webapp UI, kernel worker, orchestrator, VFS, agent shell
-        ↑ chrome.runtime.connect({ name: 'slicc.cdp-bridge' })
-Service Worker bridge
-  service-worker.ts, bridge-sw.ts, chrome.debugger pass-through,
-  fetch-proxy backend, mount sign-and-forward backend, secrets storage
-        ↑ chrome.runtime.connect({ name: 'cherry-panel' })
+        ^ chrome.runtime.connect({ name: 'slicc.cdp-bridge' })
+Service Worker bridge (service-worker.ts, bridge-sw.ts)
+  chrome.debugger pass-through, fetch-proxy backend,
+  mount sign-and-forward backend, secrets storage
+        ^ chrome.runtime.connect({ name: 'cherry-panel' })
 Side-panel cockpit (sidepanel.html + sidepanel-entry.ts)
-  Iframes the hosted ui-only follower (?cherry=1&ui-only=1),
-  connected to the leader over the tray; no CDP target
+  Iframes hosted ui-only follower (?cherry=1&ui-only=1)
 ```
 
-See `docs/architecture.md` "Extension Thin-Bridge Architecture" for the full
-cross-origin model. See `docs/extension-thin-bridge.md` for bridge protocol,
-toast dedup, QA scenarios, and dev-watch details.
+Leader-tab bridge Port (`name: 'slicc.cdp-bridge'`) carries CDP pass-through
+(`cdp.request/response/event`), handoff licks (`extension.lick`),
+open-settings (`extension.open-settings`), and `leader.join-url`. Hosted
+leader tab is the tray leader (page-side `LeaderSyncManager` at
+`packages/webapp/src/ui/page-leader-tray.ts`); extension bypasses the tray
+data path.
+
+Refs: `docs/architecture.md` (cross-origin);
+`docs/extension-thin-bridge.md` (Bridge Port protocol, toast dedup,
+dev-watch, QA, side-panel six-step flow, Secret-Aware Fetch Proxy handler,
+Smoke Test knobs); `docs/chrome-extension-details.md` (per-surface
+responsibilities, leader-tab lifecycle rationale, `bridge-sw.ts` CDP
+ownership, picker payload shapes, secrets-page detail, MV3 RHC debug);
+`docs/pitfalls.md`; `docs/transcript-export.md`;
+`packages/webapp/CLAUDE.md`; `packages/shared-ts/CLAUDE.md`.
 
 ### Responsibilities
 
-- **Service worker** (`src/service-worker.ts`): pins the leader tab,
-  opens/focuses the side panel on action-click (`chrome.sidePanel.open`,
-  `setPanelBehavior`), accepts the leader's bridge Port via
-  `externally_connectable`, pass-through proxies `chrome.debugger` through
-  `bridge-sw.ts`, hosts the secret-aware fetch proxy and the S3/DA mount
-  sign-and-forward backends, and surfaces SLICC handoff notifications observed
-  via `webRequest` (payload-naming toast with origin attribution,
-  control-character sanitization, and per-fingerprint session dedup; see
-  `docs/extension-thin-bridge.md` "Handoff Toast" for details).
+- **Service worker** (`src/service-worker.ts`): pins the leader tab, opens
+  the side panel (`chrome.sidePanel.open`, `setPanelBehavior`), accepts the
+  leader's Port via `externally_connectable`, proxies `chrome.debugger`
+  through `bridge-sw.ts`, hosts the secret-aware fetch proxy and S3/DA
+  mount sign-and-forward backends, surfaces SLICC handoff notifications
+  via `webRequest`.
 - **Side-panel cockpit** (`sidepanel.html` + `src/sidepanel-entry.ts`):
-  on-demand `chrome.sidePanel` surface that iframes the hosted ui-only cherry
-  follower (`?cherry=1&ui-only=1`) and runs the tri-state
-  (booting → ready → disconnected) controller over a `cherry-panel` Port to
-  the service worker. It relays the follower avatar menu's "Bring leader to
-  front" (`slicc.focus-leader-tab`) as `focus-leader` with
-  `openSettings: false` — the follower iframe has no `chrome.tabs` access, and
-  the pinned leader lives in one window only.
-- **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`): user-
-  facing CRUD over `chrome.storage.local` credentials consumed by the SW's
-  fetch-proxy and sign-and-forward backends.
+  on-demand `chrome.sidePanel` surface iframing the hosted ui-only cherry
+  follower (`?cherry=1&ui-only=1`); runs the tri-state
+  (booting -> ready -> disconnected) controller over a `cherry-panel` Port;
+  relays `slicc.focus-leader-tab` as `focus-leader` with
+  `openSettings: false`.
+- **Secrets options page** (`secrets.html` + `src/secrets-entry.ts`): CRUD
+  over `chrome.storage.local`.
 
 ### Leader-tab lifecycle
 
-The service worker keeps one pinned tab at the hosted leader URL but does
-**not** create it on browser startup — Chrome restores the sticky pinned tab.
-`reconcileLeaderTabOnBoot()` runs at top-level (SW-wake hygiene) to clear a
-stale stored id. `ensureLeaderTab()` (adopt-or-create + dedup) runs **on
-demand** when the icon is clicked or a cherry-panel Port connects. After
-restart, the restored leader re-pins itself via **self-adopt**: when no leader
-id is stored, a top-frame connection from an allowlisted origin carrying
-`?slicc=leader` is accepted and persisted. Adoption reloads a
-discarded/unloaded leader tab (memory saver, lazy session restore) — it runs
-no JS and could never deliver `leader.join-url` to the side panel otherwise.
-See `docs/extension-thin-bridge.md` "Leader-Tab Lifecycle" for the full
-rationale.
-
-### Tray leader / multi-browser sync
-
-The hosted leader tab is the tray leader — it runs the standard page-side
-`LeaderSyncManager` (`packages/webapp/src/ui/page-leader-tray.ts`) exactly
-like any other standalone leader. The extension is not in the tray data path
-at all: extra browsers join as followers by connecting to the same worker URL
-the hosted leader publishes.
+SW keeps one pinned leader tab but does **not** create it on browser
+startup - Chrome restores the sticky pinned tab.
+`reconcileLeaderTabOnBoot()` runs at top-level (SW-wake hygiene);
+`ensureLeaderTab()` (adopt-or-create + dedup) runs **on demand**. After
+restart the restored leader re-pins via **self-adopt**: a top-frame
+connection from an allowlisted origin carrying `?slicc=leader` is accepted
+when no leader id is stored; adoption reloads a discarded/unloaded leader
+tab so it can deliver `leader.join-url`.
 
 ## On-Demand Per-Window Cherry Side Panel
 
-Clicking the toolbar icon opens a window-level Chrome side panel
-(`sidepanel.html`) — no per-page injection. The panel iframes the hosted
-`?cherry=1&ui-only=1` follower and connects to the leader over the tray.
+Toolbar-icon click opens window-level `sidepanel.html` - no per-page
+injection. Panel iframes the hosted `?cherry=1&ui-only=1` follower and
+connects to the leader over the tray.
 
-**Framing**: the cloudflare worker sets a `Content-Security-Policy`
-`frame-ancestors` header naming the extension origin (`chrome-extension://<id>`).
-A bare `*` does not authorize `chrome-extension://` ancestors; there is no
+**Framing**: cloudflare worker sets `Content-Security-Policy`
+`frame-ancestors` naming the extension origin (`chrome-extension://<id>`);
+bare `*` does not authorize `chrome-extension://` ancestors; no
 `declarativeNetRequest` framing rule.
 
-**Login hand-off**: provider login runs in the leader tab, not the panel. The
-follower detects the side-panel via `location.ancestorOrigins` and shortcuts
-onboarding to a "Set up SLICC in the main tab" card; see
-`docs/extension-thin-bridge.md` "On-Demand Cherry Side Panel" for the full
-six-step flow and tri-state UI details.
+**Login hand-off**: provider login runs in the leader tab, not the panel;
+the follower detects the side-panel via `location.ancestorOrigins` and
+shortcuts onboarding to a "Set up SLICC in the main tab" card.
 
 ## Key Files
 
-- `src/service-worker.ts` — MV3 background bridge + leader-tab lifecycle +
-  secret-aware fetch proxy + handoff notifications
-- `src/bridge-sw.ts` — `externally_connectable` Port handler that
-  pass-through-proxies CDP to `chrome.debugger`. `cdpGetTargets` marks the
-  `lastFocusedWindow` active tab so `playwright list-tabs` shows `(active)`
-  and cherry prompts can resolve 'this page'. The webapp's `CDPRouter` alone
-  owns temporary follower-preview focus and restoration; the bridge applies
-  every `Page.bringToFront` by activating the target tab and forwarding the
-  command, without trying to classify its origin. Synthetic sessions keep the
-  `sessionId === targetId` convention and ref-count duplicate tab attachments;
-  disconnect and target close force-release them. Debugger ownership is shared
-  symmetrically with the legacy compatibility path: whichever consumer performs
-  `chrome.debugger.attach` owns the matching detach, while the borrowing consumer's
-  detach is a no-op. External detach clears every live bridge Port's tab, session,
-  and ref-count state and emits `Target.detachedFromTarget` so the hosted leader
-  invalidates its cached session before reattaching; target close also clears ownership.
-- `src/sidepanel-entry.ts` — side-panel host controller (bundled to
-  `dist/extension/sidepanel.js`): mounts the ui-only cherry follower iframe
-  and drives the tri-state UI over a `cherry-panel` Port.
-- `src/cherry-panel-sw.ts` — SW-side `cherry-panel` Port hub: tracks panel
-  ports, caches/persists the tri-state (`chrome.storage.session`), and
-  recovers a dead-tray leader.
-- `packages/webapp/src/kernel/messages.ts` — wire-protocol message types
-  (extension imports from here).
-- `src/tab-group.ts` — persistent Chrome tab group handling.
-- `src/secrets-entry.ts` + `src/secrets-storage.ts` — options-page CRUD over
+- `src/service-worker.ts` - MV3 background bridge + leader-tab lifecycle +
+  secret-aware fetch proxy + handoff notifications.
+- `src/bridge-sw.ts` - `externally_connectable` Port handler that
+  pass-through-proxies CDP to `chrome.debugger`. Synthetic sessions keep
+  `sessionId === targetId` and ref-count duplicate tab attachments;
+  disconnect and target close force-release them.
+- `src/sidepanel-entry.ts` - side-panel host controller (bundled to
+  `dist/extension/sidepanel.js`).
+- `src/cherry-panel-sw.ts` - SW-side `cherry-panel` Port hub: caches/persists
+  tri-state (`chrome.storage.session`), recovers a dead-tray leader.
+- `packages/webapp/src/kernel/messages.ts` - wire-protocol message types.
+- `src/tab-group.ts` - persistent Chrome tab group handling.
+- `src/secrets-entry.ts` + `src/secrets-storage.ts` - options-page CRUD over
   `chrome.storage.local`.
-
-## Extension Bridge Port Control Messages
-
-The leader tab communicates with the service worker over a long-lived
-`chrome.runtime.connect` Port (`name: 'slicc.cdp-bridge'`). Post-handshake
-the Port carries: CDP pass-through (`cdp.request/response/event`), handoff
-licks (`extension.lick`), open-settings commands (`extension.open-settings`),
-and the leader's tray joinUrl (`leader.join-url`). Full protocol details in
-`docs/extension-thin-bridge.md` "Bridge Port Control Messages".
 
 ## CSP Workarounds
 
-The thin extension runs no dynamic code of its own. Dynamic JS (the JavaScript
-tool, `node -e`, `.jsh`, `workflow`), sprinkle/dip rendering, and WASM
-(`convert` / `python3` / `ffmpeg`) all execute in the hosted leader tab — a
-normal `https://www.sliccy.ai` origin under ordinary web CSP — and its kernel
-worker, using the `dist/ui` build. The MV3 sandbox-iframe escapes the fat
-extension relied on and all bundled WASM/JS under `dist/extension/` have been
-removed.
-
-The only extension-origin surfaces left are the service worker, the side-panel
-host, the secrets options page, and the picker/capture popups. For those, load
-bundled assets via `chrome.runtime.getURL(...)`.
+Thin extension runs no dynamic code. Dynamic JS (JavaScript tool, `node -e`,
+`.jsh`, `workflow`), sprinkle/dip rendering, and WASM (`convert` /
+`python3` / `ffmpeg`) execute in the hosted leader tab under ordinary web
+CSP. Extension-origin surfaces (SW, side-panel host, secrets page,
+picker/capture popups) load bundled assets via `chrome.runtime.getURL(...)`;
+no bundled WASM/JS under `dist/extension/`.
 
 ## Device / Directory Picker Popups
 
-The `mount` / `usb` / `serial` / `hid` shell commands call system choosers
-(`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`), which the
-hosted leader tab cannot host reliably under TCC. All four pickers share a
-single popup entry point — `picker-popup.html` + `picker-popup.js` —
-parameterized by `?kind=directory|usb-device|serial-port|hid-device`. The two
-files are copied into `dist/extension/` by the `closeBundle` hook in
-`vite.config.ts` (not Rollup `input` entries).
-
-Directory results carry an opaque `{ handleInIdb, idbKey, dirName }` (the popup
-stashes the non-postable `FileSystemDirectoryHandle` in the shared
-`slicc-pending-mount` IDB store); device results carry identifiers
-(`vendorId/productId/serialNumber`) the caller re-acquires via
-`navigator.{usb,serial,hid}.getDevices()` in its own realm.
-
-Any change to the `closeBundle` static-asset copy list must keep both
-`picker-popup.html` and `picker-popup.js` listed or all four picker windows 404.
+`mount` / `usb` / `serial` / `hid` shell commands call system choosers
+(`showDirectoryPicker` / `navigator.{usb,serial,hid}.request*`) that the
+hosted leader tab cannot host reliably under TCC. All four share
+`picker-popup.html` + `picker-popup.js` - parameterized by
+`?kind=directory|usb-device|serial-port|hid-device`. Both files are copied
+into `dist/extension/` by the `closeBundle` hook in `vite.config.ts` (not
+Rollup `input` entries); any change must keep both listed or all four
+picker windows 404.
 
 ## Media Capture (popup grant path)
 
-Camera / microphone / screen capture (`ffmpeg -f avfoundation`,
-`screencapture`) work without any new manifest permission:
-
-- **Media capture needs a visible surface**: route the capture through a real
-  window — `capture-popup.html` / `capture-popup.js`. The shell command
-  (`extension-media-capture.ts:captureViaPopup`) asks the service worker to
-  open the popup (`capture-open-window` message → `chrome.windows.create`,
-  no permission needed), the
-  popup performs the capture and posts the bytes back over `chrome.runtime`
-  messaging, and `ffmpeg-command.ts` / `screencapture-command.ts` gate this
-  path behind `isExtensionFloat()`. CLI / standalone and the hosted leader tab
-  keep their page-served auto-grant path unchanged.
+Camera / mic / screen capture (`ffmpeg -f avfoundation`, `screencapture`)
+needs a visible surface: route through `capture-popup.html` /
+`capture-popup.js`. `extension-media-capture.ts:captureViaPopup` asks the
+SW to open the popup (`capture-open-window` -> `chrome.windows.create`);
+popup posts bytes over `chrome.runtime` messaging.
+`ffmpeg-command.ts` / `screencapture-command.ts` gate this behind
+`isExtensionFloat()`.
 
 ## Runtime Conventions
 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
-- **`window.open()`**: in extension flows it often returns `null`; treat it as
-  fire-and-forget, not a failure signal.
-- **Persistence**: the hosted leader tab is the source of truth for chat/session
-  state. The extension never holds it.
-- **CDP access**: only the service worker can call `chrome.debugger`; the hosted
-  leader tab reaches it via the `externally_connectable` Port in `bridge-sw.ts`.
+- **`window.open()`**: often returns `null`; treat fire-and-forget.
+- **Persistence**: hosted leader tab is source of truth; extension never
+  holds chat/session state.
+- **CDP access**: only the SW can call `chrome.debugger`; leader tab reaches
+  it via the `externally_connectable` Port in `bridge-sw.ts`.
 
-## Mount Secrets Options Page
+## Secrets Options Page + Build Notes
 
-`secrets.html` is the manifest's `options_ui` page. Users reach it via
-right-click the toolbar icon → Options, `chrome://extensions` → SLICC →
-Extension options, or the in-app `secret edit` terminal command (which opens
-the page over `chrome-extension://<id>/secrets.html`). The page reads/writes
-`chrome.storage.local` directly (full chrome.\* API access, not sandboxed) and
-is the extension-mode equivalent of editing `~/.slicc/secrets.env` in CLI mode.
+`secrets.html` is the manifest's `options_ui` page - extension-mode
+equivalent of `~/.slicc/secrets.env`. Pure logic in `src/secrets-storage.ts`
+(tested by `tests/secrets-storage.test.ts`); DOM entry `src/secrets-entry.ts`
+bundles to `dist/extension/secrets.js` via `build-secrets-page` esbuild
+plugin in `vite.config.ts`.
 
-Pure logic lives in `src/secrets-storage.ts` (testable;
-`tests/secrets-storage.test.ts` covers it). The DOM entrypoint
-`src/secrets-entry.ts` is bundled to `dist/extension/secrets.js` via the
-`build-secrets-page` esbuild plugin in `vite.config.ts`.
-
-## Telemetry
-
-The thin extension does not emit Helix RUM beacons. The service worker is not
-instrumented; the hosted leader tab uses the standalone webapp's telemetry path
-(`@adobe/helix-rum-js` via `telemetry.ts:initTelemetry()`).
-
-## Build Notes
-
-- `packages/chrome-extension/vite.config.ts` builds the service worker,
-  side-panel host, secrets options page, preview service worker, and copied
-  static assets (picker/capture popups, toolbar icons/fonts) into
-  `dist/extension/`. Rollup's `input` is a single virtual no-op entry — all
-  bundled outputs are produced by `closeBundle` esbuild plugins.
-- The extension's side-panel host + secrets page consume shared webapp code
-  from `packages/webapp/` rather than duplicating core runtime logic.
-- `manifest.json` ships a stable `key` (so the production ID is fixed). For
-  local debugging that key triggers `Content verify job failed for extension …`
-  and the extension refuses to load. Build with
-  `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key`
-  so Chrome assigns a path-derived ID instead.
+- `packages/chrome-extension/vite.config.ts` builds SW, side-panel host,
+  secrets page, preview SW, and copied static assets into `dist/extension/`.
+  Rollup `input` is a single virtual no-op entry; outputs come from
+  `closeBundle` esbuild plugins.
+- `manifest.json` ships a stable `key` (production ID fixed). Local
+  debugging triggers `Content verify job failed for extension ...`; build
+  with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip
+  `key`.
+- No Helix RUM beacons; hosted leader tab uses standalone webapp telemetry
+  (`@adobe/helix-rum-js` via `telemetry.ts:initTelemetry()`).
 
 ## MV3 Remote Hosted Code Guard
 
-Chrome Web Store rejects MV3 submissions when its reviewer string-matches a
-full third-party CDN URL in the built bundle (violation reference Blue Argon).
-Even a literal that the runtime overrides is enough to fail review.
-
+Chrome Web Store rejects MV3 submissions when its reviewer string-matches
+a full third-party CDN URL (violation ref Blue Argon); even a literal the
+runtime overrides fails review.
 `packages/dev-tools/tools/check-extension-rhc.sh` scans `dist/extension/`
-(recursively, across `.js`/`.html`/`.json`/`.css`, excluding `.map` files) and
-exits non-zero if any of these patterns appear:
-
-- `https://unpkg.com/<path>` (scoped or non-scoped)
-- `https://esm.sh/<path>`
-- `https://cdn.jsdelivr.net/npm/<path>`
-
-Bare hostnames and the host-only form (no path) are allowed.
-
-**Debugging a failure:** the script prints `file:line:URL` for every match.
-Open the cited file, find the call site that constructed the URL, and migrate
-it to `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts` so
-only the bare host appears as a string literal and the path is composed at
-runtime via `new URL(path, ...)`.
-
-The check runs via `npm run postbuild:check -w @slicc/chrome-extension` and in
-the `chrome-extension` CI job.
-
-## Local QA and Dev Watch
-
-For the full manual recipe (Chrome for Testing, extension profile, QA
-scenarios) and the dev-watch loop details, see
-`docs/extension-thin-bridge.md`.
-
-Quick start:
-
-```bash
-# Build and serve (automated — builds webapp if missing, starts wrangler)
-npm run dev:extension:fresh
-
-# Or manual build + launch for a fixed extension ID across runs:
-SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension
-# Then follow the Chrome for Testing recipe in docs/extension-thin-bridge.md
-```
+and exits non-zero if `https://unpkg.com/<path>`, `https://esm.sh/<path>`,
+or `https://cdn.jsdelivr.net/npm/<path>` appears; bare hostnames allowed.
+Runs via `npm run postbuild:check -w @slicc/chrome-extension` and the
+`chrome-extension` CI job. Debug + `cdn-url-builder.ts` migration:
+`docs/chrome-extension-details.md`.
 
 ## Secret-Aware Fetch Proxy
 
-The service worker handles `fetch-proxy.fetch` Port connections for
-secret-aware HTTP proxying. Key invariant: the `onMessage` listener attaches
-**synchronously** in `onConnect` (the pipeline is awaited inside the listener).
-The previous "await build → then add listener" pattern silently dropped
-immediate `request` messages. Full handler reference and OAuth-domain extras
-in `docs/extension-thin-bridge.md` "Secret-Aware Fetch Proxy".
+SW handles `fetch-proxy.fetch` Port connections. Key invariant: the
+`onMessage` listener attaches **synchronously** in `onConnect` (pipeline
+awaited inside); the previous "await build -> add listener" pattern
+dropped immediate `request` messages. Handler:
+`docs/extension-thin-bridge.md`.
 
-## Automated CDP Smoke Test
+## Local QA, Dev Watch, Smoke Test
 
-`packages/dev-tools/tools/extension-smoke-test.ts` is the end-to-end
-verification script. Run after a fresh extension build:
+Recipe (Chrome for Testing, extension profile, QA scenarios, dev-watch
+loop, smoke-test knobs): `docs/extension-thin-bridge.md`. End-to-end smoke
+`packages/dev-tools/tools/extension-smoke-test.ts` runs with
+`continue-on-error: true` in CI while the thin-bridge replacement lands.
 
 ```bash
+# Build and serve (automated - builds webapp if missing, starts wrangler)
+npm run dev:extension:fresh
+
+# Manual build + launch for a fixed extension ID across runs:
+SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension
+
+# Smoke test after a fresh extension build
 npm run build -w @slicc/chrome-extension
 npm run test:extension-smoke -w @slicc/chrome-extension
 ```
-
-The script was written against the legacy fat-extension architecture and runs
-with `continue-on-error: true` in CI while the thin-bridge replacement lands.
-See `docs/extension-thin-bridge.md` "Automated CDP Smoke Test" for full
-details and local debugging knobs.
-
-## Related Guides
-
-- `packages/webapp/CLAUDE.md` — shared browser architecture
-- `packages/shared-ts/CLAUDE.md` — secret masking primitives
-- `docs/architecture.md` — extension message flow, persistence model, cross-
-  origin model (authoritative overview)
-- `docs/extension-thin-bridge.md` — bridge protocol, toast dedup, leader-tab
-  lifecycle rationale, side-panel flow, dev-watch loop, QA recipe
-- `docs/pitfalls.md` — extension-specific gotchas
-- `docs/transcript-export.md` — transcript export (runs in the hosted leader tab;
-  the extension bridge is transparent)
