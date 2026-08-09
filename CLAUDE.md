@@ -104,13 +104,13 @@ Run the full pre-push/PR pass — `lint` (first; top CI failure), `typecheck`, `
 
 Skill-aware harnesses load these directly; this list routes AGENTS.md-only harnesses to them.
 
-- Add/change a SLICC feature surface → `adding-slicc-features`
-- Deploy/debug the Cloudflare tray hub worker → `deploying-tray-worker`
-- Record a UI demo for a PR → `demo-recording`
-- Hand work off to SLICC → `slicc-handoff`
-- Smoke-test a build in a controlled browser → `cdp-smoke-test`
-- Write/update SLICC tests → `writing-slicc-tests`
-- Commit, push, open/update a PR, diagnose verification CI failures → `verifying-before-push`
+- Add/change a SLICC feature surface → use `adding-slicc-features`
+- Deploy/debug the Cloudflare tray hub worker → use `deploying-tray-worker`
+- Record a UI demo for a PR → use `demo-recording`
+- Hand work off to SLICC → use `slicc-handoff`
+- Smoke-test a build in a controlled browser → use `cdp-smoke-test`
+- Write/update SLICC tests → use `writing-slicc-tests`
+- Commit, push, open/update a PR, diagnose verification CI failures → use `verifying-before-push`
 
 ## Automated PR Review Checklist
 
