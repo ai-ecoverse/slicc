@@ -163,20 +163,34 @@ describe('check-record-string-unknown: compareToBaseline', () => {
   });
 });
 
+// Unlike the layer back-edge scan, which is pure JS, each of these spawns
+// Biome over the whole repo. That is ~0.5s on an idle machine but well past
+// Vitest's 5s default on a CI runner building three Node versions at once, so
+// both subprocess tests carry an explicit timeout.
+const SPAWN_TIMEOUT_MS = 60_000;
+
 describe('check-record-string-unknown: end-to-end over the real tree', () => {
-  it('scan matches the committed baseline (one-way ratchet holds)', () => {
-    const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
-    expect(compareToBaseline(scanRecordTypes().counts, baseline)).toEqual([]);
-  });
+  it(
+    'scan matches the committed baseline (one-way ratchet holds)',
+    () => {
+      const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
+      expect(compareToBaseline(scanRecordTypes().counts, baseline)).toEqual([]);
+    },
+    SPAWN_TIMEOUT_MS
+  );
 
   it('baseline contains only non-test source files', () => {
     const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
     expect(Object.keys(baseline).filter(isTestPath)).toEqual([]);
   });
 
-  it('guard entry script passes and reports the grandfathered count', () => {
-    const { code, out } = runGuard();
-    expect(code).toBe(0);
-    expect(out).toMatch(/ok: no new Record<string, unknown> in source/);
-  });
+  it(
+    'guard entry script passes and reports the grandfathered count',
+    () => {
+      const { code, out } = runGuard();
+      expect(code).toBe(0);
+      expect(out).toMatch(/ok: no new Record<string, unknown> in source/);
+    },
+    SPAWN_TIMEOUT_MS
+  );
 });
