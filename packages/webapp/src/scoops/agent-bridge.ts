@@ -653,6 +653,14 @@ export function createAgentBridge(
     const nameToken = options.name !== undefined ? options.name : pickFreshNameToken(ctx);
     const folder = `agent-${nameToken}`;
     const jid = `agent_${tokenToJid(nameToken)}`;
+    // A fixed name bypasses pickFreshNameToken's collision guard: if a scoop
+    // with this JID is still registered — a detached run still in flight, or a
+    // crashed one not yet cleaned up — reusing the name would clobber its
+    // session history and scratch folder. Reject rather than collide; the
+    // random path can never hit this (it excludes live JIDs by construction).
+    if (options.name !== undefined && ctx.orchestrator.getScoops().some((s) => s.jid === jid)) {
+      return { finalText: `agent: name already in use: ${nameToken}`, exitCode: 1 };
+    }
     const scratchFolder = `/scoops/${folder}`;
 
     const scoopConfig = buildScoopConfig(

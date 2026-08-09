@@ -1578,6 +1578,28 @@ describe('createAgentBridge — session archive (persistSession)', () => {
     expect(writes).toHaveLength(0);
   });
 
+  it('rejects a fixed name whose jid is already registered, without spawning', async () => {
+    const { orchestrator, registerCalls, knownScoops } = makeMockOrchestrator();
+    const { fs, writes } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'should-not-be-used',
+    });
+    // A prior curator (still running, or crashed-but-registered) holds the jid.
+    knownScoops.push({ jid: 'agent_memory_curator', folder: 'agent-memory-curator' } as never);
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      name: 'memory-curator',
+      persistSession: true,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('name already in use');
+    // No second scoop registered, no archive clobbering the live run's folder.
+    expect(registerCalls).toHaveLength(0);
+    expect(writes).toHaveLength(0);
+  });
+
   it('writes the session archive even when the agent exits non-zero', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs, writes } = makeMockSharedFs();
