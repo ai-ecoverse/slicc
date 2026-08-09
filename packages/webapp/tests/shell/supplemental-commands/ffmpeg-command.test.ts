@@ -859,6 +859,55 @@ describe('ffmpeg -version gating (NS2c)', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ffmpeg');
   });
+
+  it('reports ready on an isolated leader with ONLY @ffmpeg/core-mt installed', async () => {
+    // The version gate resolves through the loader's no-arg (isolation-
+    // aware) form — an mt-only install that transcoding would happily
+    // boot must not report "not installed".
+    const root = '/workspace/node_modules/@ffmpeg/core-mt';
+    const sources = new Map<string, string>([
+      [`${root}/package.json`, JSON.stringify({ name: '@ffmpeg/core-mt', version: '0.12.10' })],
+      [`${root}/dist/esm/ffmpeg-core.js`, '/* mt glue */'],
+      [`${root}/dist/esm/ffmpeg-core.worker.js`, '/* pthread worker */'],
+    ]);
+    const bytes = new Map<string, Uint8Array>([
+      [`${root}/dist/esm/ffmpeg-core.wasm`, new Uint8Array([0x00, 0x61, 0x73, 0x6d])],
+    ]);
+    const dirs = new Set<string>([
+      '/workspace',
+      '/workspace/node_modules',
+      '/workspace/node_modules/@ffmpeg',
+      root,
+      `${root}/dist`,
+      `${root}/dist/esm`,
+    ]);
+    const ctx = createMockCtx({
+      cwd: '/workspace',
+      fs: {
+        exists: vi.fn(async (p: string) => sources.has(p) || bytes.has(p) || dirs.has(p)),
+        readFile: vi.fn(async (p: string) => {
+          const v = sources.get(p);
+          if (v === undefined) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+        readFileBuffer: vi.fn(async (p: string) => {
+          const v = bytes.get(p);
+          if (!v) throw new Error(`ENOENT: ${p}`);
+          return v;
+        }),
+        stat: vi.fn(async (p: string) => ({ isDirectory: dirs.has(p) }) as unknown as FsStat),
+      },
+    });
+    vi.stubGlobal('crossOriginIsolated', true);
+    try {
+      const result = await createFfmpegCommand().execute(['-version'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('ffmpeg');
+      expect(result.stderr).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('ffmpeg-core version lockstep (NS2c)', () => {

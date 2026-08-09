@@ -140,8 +140,16 @@ async function loadFfmpeg(
  */
 export async function tryLoadFfmpegCoreFromNodeModules(
   ipk: IpkResolutionContext,
-  pkg: LoadedFfmpegCore['pkg'] = FFMPEG_CORE_PACKAGE
+  pkg?: LoadedFfmpegCore['pkg']
 ): Promise<LoadedFfmpegCore | null> {
+  // No explicit package → isolation-aware selection. The `ffmpeg -version`
+  // gate calls this no-arg form, so an isolated leader with only the -mt
+  // core installed reports ready instead of "not installed". (The gate
+  // lives in ffmpeg-command.ts, which is layer-back-edge debt-listed —
+  // the fix belongs here so that file stays untouched.)
+  if (pkg === undefined) {
+    return selectFfmpegCore(ipk, globalThis.crossOriginIsolated === true);
+  }
   let resolved;
   try {
     resolved = await ipkResolve(`${pkg}/package.json`, ipk.fromDir, ipk.reader);
@@ -184,7 +192,9 @@ export async function selectFfmpegCore(
     const mt = await tryLoadFfmpegCoreFromNodeModules(ipk, FFMPEG_CORE_MT_PACKAGE);
     if (mt) return mt;
   }
-  return tryLoadFfmpegCoreFromNodeModules(ipk);
+  // Explicit package — the no-arg form of tryLoad delegates HERE, so the
+  // fallback must never itself be the no-arg form (infinite recursion).
+  return tryLoadFfmpegCoreFromNodeModules(ipk, FFMPEG_CORE_PACKAGE);
 }
 
 async function resolveAssetUrls(
