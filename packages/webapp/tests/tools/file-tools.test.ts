@@ -1,9 +1,12 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { createFileTools } from '../../src/tools/file-tools.js';
 import type { ToolDefinition } from '../../src/tools/types.js';
@@ -46,22 +49,20 @@ describe('File Tools', () => {
   });
 
   describe('read_file', () => {
-    it('reads a file with line numbers', async () => {
+    it('returns file contents raw and un-numbered (pi-aligned)', async () => {
       await fs.writeFile('/test.txt', 'line1\nline2\nline3');
       const result = await readFile.execute({ path: '/test.txt' });
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('1 | line1');
-      expect(result.content).toContain('2 | line2');
-      expect(result.content).toContain('3 | line3');
+      // No `N | ` line-number prefix — byte-for-byte pi's read output.
+      expect(result.content).toBe('line1\nline2\nline3');
     });
 
     it('supports offset and limit', async () => {
-      await fs.writeFile('/lines.txt', 'a\nb\nc\nd\ne');
+      await fs.writeFile('/lines.txt', 'apple\nbanana\ncherry\ndate\nelder');
       const result = await readFile.execute({ path: '/lines.txt', offset: 2, limit: 2 });
-      expect(result.content).toContain('2 | b');
-      expect(result.content).toContain('3 | c');
-      expect(result.content).not.toContain('1 | a');
-      expect(result.content).not.toContain('4 | d');
+      expect(result.content.split('\n\n[')[0]).toBe('banana\ncherry');
+      expect(result.content).not.toContain('apple');
+      expect(result.content).not.toContain('date');
     });
 
     it('returns error for non-existent file', async () => {
@@ -74,26 +75,13 @@ describe('File Tools', () => {
       const result = await readFile.execute({ path: '/small.txt' });
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('1 | alpha');
-      expect(result.content).toContain('2 | beta');
-      expect(result.content).toContain('3 | gamma');
-      // No truncation happened, so no continuation footer.
-      expect(result.content).not.toContain('Use offset=');
-      expect(result.content).not.toContain('more lines in file');
+      expect(result.content).toBe('alpha\nbeta\ngamma');
     });
 
-    // The body delivered to the model = the numbered content WITHOUT the footer.
-    // pi caps the exact bytes it delivers; after the fix SLICC caps this too
-    // (line-number prefixes included), so the delivered body — not just the raw
-    // text — is what must honor DEFAULT_MAX_BYTES.
-    const deliveredBody = (content: string): string => content.split('\n\n[')[0];
-    const numberedLines = (content: string): string[] =>
-      deliveredBody(content)
-        .split('\n')
-        .filter((l) => /^\s*\d+ \| /.test(l));
+    // The body delivered to the model = everything before the footer.
+    const bodyOf = (content: string): string => content.split('\n\n[')[0];
 
-    it('caps a large file with NO limit and appends a continuation footer (#2009)', async () => {
-      // Well over the 2000-line head window; short lines → truncated BY LINES.
+    it('caps a large file at DEFAULT_MAX_LINES with a continuation footer (#2009)', async () => {
       const totalLines = DEFAULT_MAX_LINES + 500;
       const raw = Array.from({ length: totalLines }, (_, i) => `line-${i + 1}`).join('\n');
       await fs.writeFile('/big.txt', raw);
@@ -101,76 +89,39 @@ describe('File Tools', () => {
       const result = await readFile.execute({ path: '/big.txt' });
 
       expect(result.isError).toBeFalsy();
-      // Output is bounded to exactly the 2000-line head window — well under the
-      // 2500 lines actually in the file.
-      expect(numberedLines(result.content)).toHaveLength(DEFAULT_MAX_LINES);
-      expect(DEFAULT_MAX_LINES).toBeLessThan(totalLines);
-      // The DELIVERED (numbered) body honors pi's byte cap.
-      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
+      // Short lines → the 2000-line head window is hit before the 50KB byte cap.
+      expect(bodyOf(result.content).split('\n')).toHaveLength(DEFAULT_MAX_LINES);
+      expect(new TextEncoder().encode(bodyOf(result.content)).length).toBeLessThanOrEqual(
         DEFAULT_MAX_BYTES
       );
-      // Continuation footer points at the next file line to page from.
       expect(result.content).toContain(
         `[Showing lines 1-${DEFAULT_MAX_LINES} of ${totalLines}. Use offset=${DEFAULT_MAX_LINES + 1} to continue.]`
       );
-      // Last surviving numbered line is the 2000th file line, not the last.
-      expect(result.content).toContain(`${DEFAULT_MAX_LINES} | line-${DEFAULT_MAX_LINES}`);
-      expect(result.content).not.toContain(`| line-${totalLines}`);
+      expect(result.content).toContain(`line-${DEFAULT_MAX_LINES}`);
+      expect(result.content).not.toContain(`line-${totalLines}`);
     });
 
-    it('honors the exact 50KB byte cap when line count is under the limit (#2009)', async () => {
-      // 300 lines, each ~1KB → ~300KB total, but only ~50 lines fit in 50KB, so
-      // the line count stays under DEFAULT_MAX_LINES and the BYTE cap wins.
-      const fatLine = 'x'.repeat(1000);
-      const totalLines = 300;
-      const raw = Array.from({ length: totalLines }, () => fatLine).join('\n');
+    it('honors the 50KB byte cap for wide lines (#2009)', async () => {
+      // 300 × 1KB lines: the byte cap wins well before the 2000-line cap.
+      const raw = Array.from({ length: 300 }, () => 'x'.repeat(1000)).join('\n');
       await fs.writeFile('/fat.txt', raw);
 
       const result = await readFile.execute({ path: '/fat.txt' });
 
       expect(result.isError).toBeFalsy();
-      // Truncated by BYTES (line count is under DEFAULT_MAX_LINES), so the footer
-      // names the byte limit and stops well short of all 300 lines.
       expect(result.content).toContain('KB limit). Use offset=');
-      const shown = numberedLines(result.content).length;
-      expect(shown).toBeLessThan(totalLines);
-      expect(shown).toBeLessThan(DEFAULT_MAX_LINES);
-      // The DELIVERED (numbered) body — prefixes included — fits inside the 50KB cap.
-      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
+      expect(new TextEncoder().encode(bodyOf(result.content)).length).toBeLessThanOrEqual(
         DEFAULT_MAX_BYTES
       );
-    });
-
-    it('caps the DELIVERED numbered body — not just the raw text — at 50KB (Codex P2 on #2021)', async () => {
-      // Codex's scenario: many moderate-width lines. SLICC's `      N | ` prefix
-      // is ~9 bytes/line, so capping the RAW text and numbering afterwards shipped
-      // a result well past 50KB (~68KB for 2500×25B lines). The body delivered to
-      // the model must honor the cap; pi does this trivially because it adds no
-      // prefixes, so matching pi means capping the numbered output.
-      const totalLines = DEFAULT_MAX_LINES + 500;
-      const raw = Array.from({ length: totalLines }, () => 'y'.repeat(25)).join('\n');
-      await fs.writeFile('/moderate.txt', raw);
-
-      const result = await readFile.execute({ path: '/moderate.txt' });
-
-      expect(result.isError).toBeFalsy();
-      // The prefixes push the byte cap below the 2000-line cap, so it truncates
-      // by BYTES — and the delivered body stays within 50KB (fails pre-fix).
-      expect(new TextEncoder().encode(deliveredBody(result.content)).length).toBeLessThanOrEqual(
-        DEFAULT_MAX_BYTES
-      );
-      expect(result.content).toContain('KB limit). Use offset=');
-      expect(numberedLines(result.content).length).toBeLessThan(DEFAULT_MAX_LINES);
+      expect(bodyOf(result.content).split('\n').length).toBeLessThan(DEFAULT_MAX_LINES);
     });
 
     it('reports remaining lines when the user limit stops short of EOF (#2009)', async () => {
-      await fs.writeFile('/lines.txt', 'a\nb\nc\nd\ne');
+      await fs.writeFile('/lines.txt', 'apple\nbanana\ncherry\ndate\nelder');
       const result = await readFile.execute({ path: '/lines.txt', limit: 2 });
 
-      expect(result.content).toContain('1 | a');
-      expect(result.content).toContain('2 | b');
-      expect(result.content).not.toContain('3 | c');
-      // 3 lines remain (c, d, e); paging continues from file line 3.
+      expect(bodyOf(result.content)).toBe('apple\nbanana');
+      // 3 lines remain; paging continues from file line 3.
       expect(result.content).toContain('[3 more lines in file. Use offset=3 to continue.]');
     });
 
@@ -179,16 +130,94 @@ describe('File Tools', () => {
       const raw = Array.from({ length: totalLines }, (_, i) => `line-${i + 1}`).join('\n');
       await fs.writeFile('/big.txt', raw);
 
-      // First window told us to continue at DEFAULT_MAX_LINES + 1.
       const nextOffset = DEFAULT_MAX_LINES + 1;
       const result = await readFile.execute({ path: '/big.txt', offset: nextOffset });
 
       expect(result.isError).toBeFalsy();
-      // Numbers continue from the file line number, not restart at 1.
-      expect(result.content).toContain(`${nextOffset} | line-${nextOffset}`);
-      expect(result.content).toContain(`${totalLines} | line-${totalLines}`);
+      expect(result.content).toContain(`line-${nextOffset}`);
+      expect(result.content).toContain(`line-${totalLines}`);
       // The remaining 500 lines all fit, so no further footer.
       expect(result.content).not.toContain('Use offset=');
+    });
+
+    // Parity with pi-agent's ACTUAL read tool: this fails if pi changes its read
+    // behavior (footer wording, offset math, 2000-line/50KB limits) so we know to
+    // re-sync. pi reads from the OS fs; we mirror identical content into the VFS
+    // for SLICC and compare the DELIVERED text byte-for-byte — which holds only
+    // because SLICC returns pi's raw, un-numbered body.
+    describe("parity with pi-agent's read tool", () => {
+      // Loaded via a runtime path so tsc/vite don't resolve pi's Node-only read
+      // module (hidden by the package `exports` map); it runs fine in the node
+      // vitest env, where node resolves it relative to this file.
+      const piReadModule =
+        '../../../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/read.js';
+      type PiRead = {
+        createReadToolDefinition: (cwd: string) => {
+          execute: (
+            id: string,
+            args: { path: string; offset?: number; limit?: number }
+          ) => Promise<{ content: Array<{ text?: string }> }>;
+        };
+      };
+      let piDir: string;
+      let piRead: (name: string, offset?: number, limit?: number) => Promise<string>;
+
+      beforeAll(async () => {
+        const pi = (await import(/* @vite-ignore */ piReadModule)) as PiRead;
+        piDir = mkdtempSync(join(tmpdir(), 'pi-read-parity-'));
+        const def = pi.createReadToolDefinition(piDir);
+        piRead = async (name, offset, limit) => {
+          const res = await def.execute('tc', { path: join(piDir, name), offset, limit });
+          return (res.content ?? []).map((c) => c.text ?? '').join('');
+        };
+      });
+
+      // Mirror identical content into pi's OS temp dir and SLICC's VFS.
+      const both = async (name: string, content: string) => {
+        writeFileSync(join(piDir, name), content);
+        await fs.writeFile(`/${name}`, content);
+      };
+      const sliccRead = async (name: string, offset?: number, limit?: number) => {
+        const res = await readFile.execute({
+          path: `/${name}`,
+          ...(offset !== undefined ? { offset } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        });
+        return res.content;
+      };
+
+      it('matches pi: small file (no truncation)', async () => {
+        await both('p-small.txt', 'alpha\nbeta\ngamma');
+        expect(await sliccRead('p-small.txt')).toBe(await piRead('p-small.txt'));
+      });
+
+      it('matches pi: large file, no limit (line cap + footer)', async () => {
+        const content = Array.from({ length: 2500 }, (_, i) => `line-${i + 1}`).join('\n');
+        await both('p-big.txt', content);
+        expect(await sliccRead('p-big.txt')).toBe(await piRead('p-big.txt'));
+      });
+
+      it('matches pi: wide lines (byte cap + footer)', async () => {
+        const content = Array.from({ length: 300 }, () => 'x'.repeat(1000)).join('\n');
+        await both('p-fat.txt', content);
+        expect(await sliccRead('p-fat.txt')).toBe(await piRead('p-fat.txt'));
+      });
+
+      it('matches pi: offset continuation', async () => {
+        const content = Array.from({ length: 2500 }, (_, i) => `line-${i + 1}`).join('\n');
+        await both('p-off.txt', content);
+        expect(await sliccRead('p-off.txt', 2001)).toBe(await piRead('p-off.txt', 2001));
+      });
+
+      it('matches pi: user limit short of EOF', async () => {
+        await both('p-lim.txt', 'a\nb\nc\nd\ne');
+        expect(await sliccRead('p-lim.txt', 1, 2)).toBe(await piRead('p-lim.txt', 1, 2));
+      });
+
+      it('pins pi head-window limits so a pi bump is explicit in review', () => {
+        expect(DEFAULT_MAX_LINES).toBe(2000);
+        expect(DEFAULT_MAX_BYTES).toBe(50 * 1024);
+      });
     });
   });
 

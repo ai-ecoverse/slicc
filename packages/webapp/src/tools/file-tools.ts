@@ -31,15 +31,16 @@ export function createFileTools(fs: VirtualFS): ToolDefinition[] {
  * the same drift #2009/#2010 fixed for the bash tool. Re-using pi's `truncate`
  * module (pure string/Buffer ops, browser-safe via the vite/vitest alias) keeps
  * SLICC's read_file converged with pi's built-in `read` tool: the same 2000-line
- * / 50KB head window and the same offset-based continuation footer. We keep
- * SLICC's line-number prefix and text-only VFS read (vision goes through
- * `open --view` in bash), so this ports only the truncation contract.
+ * / 50KB head window, the same offset-based continuation footer, and the same
+ * raw (un-numbered) body — so the result is byte-for-byte pi's `read` output.
+ * Text-only VFS read (vision goes through `open --view` in bash) is the one
+ * intentional difference from pi's read tool.
  */
 function createReadFileTool(fs: VirtualFS): ToolDefinition {
   return {
     name: 'read_file',
     description:
-      `Read a file's contents with line numbers. Output is capped at ${DEFAULT_MAX_LINES} lines or ` +
+      `Read a file's contents. Output is capped at ${DEFAULT_MAX_LINES} lines or ` +
       `${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); use offset/limit for large files and ` +
       'the `offset=N` in the footer to page through the rest.',
     inputSchema: {
@@ -87,20 +88,14 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
             : allLines.slice(startIdx);
         const userLimitedLines = limit !== undefined ? selectedLines.length : undefined;
 
-        // Number the selected lines with their FILE line numbers (1-based) BEFORE
-        // truncating, so the byte/line cap applies to what the model actually
-        // receives. pi caps the exact bytes it delivers (it adds no prefixes);
-        // SLICC's `NNNNNN | ` prefix is ~9 bytes/line, so truncating the raw text
-        // and numbering afterwards would ship a result well past 50KB and defeat
-        // the cap (Codex P2 on #2021). truncateHead keeps whole lines, never partial.
-        const numberedSelected = selectedLines
-          .map((line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`)
-          .join('\n');
-        const truncation = truncateHead(numberedSelected);
+        // ALWAYS bound the slice to pi's head window, even when no limit was
+        // passed (#2009). We return the RAW text with no line-number prefix, so
+        // the body is byte-for-byte pi's `read` output and the cap applies to
+        // exactly what the model receives. truncateHead keeps whole lines.
+        const truncation = truncateHead(selectedLines.join('\n'));
 
-        // First surviving line alone blows the byte limit: there is no body to
-        // show, so point the model at a bash fallback (mirrors pi's read tool).
-        // Report the RAW line size so the `head -c` hint matches the file.
+        // First surviving line alone blows the byte limit: point the model at a
+        // bash fallback (mirrors pi's read tool).
         if (truncation.firstLineExceedsLimit) {
           const firstLineSize = formatSize(
             new TextEncoder().encode(allLines[startIdx] ?? '').length
@@ -112,11 +107,9 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
           };
         }
 
-        // `truncation.content` is already numbered and byte/line-capped; append
-        // the un-numbered continuation footer. `outputLines` is a 1:1 count of
-        // file lines shown (numbered lines map to file lines), so it drives the
-        // paging offsets directly.
-        const numbered = truncation.content;
+        // `outputLines` is a 1:1 count of file lines shown, so it drives the
+        // offset-based continuation footer directly.
+        const body = truncation.content;
 
         let footer = '';
         if (truncation.truncated) {
@@ -136,7 +129,7 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
           footer = `\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
         }
 
-        return { content: numbered + footer };
+        return { content: body + footer };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('Read failed', { path, error: message });
