@@ -123,8 +123,8 @@ enum BrowserLaunchAction: Equatable {
     case standalone
     case chooseLeadOrAttach
 
-    static func resolve(isRunning: Bool, hasRemoteSessions: Bool) -> BrowserLaunchAction {
-        (isRunning || !hasRemoteSessions) ? .standalone : .chooseLeadOrAttach
+    static func resolve(isRunning: Bool, hasAttachableSessions: Bool) -> BrowserLaunchAction {
+        (isRunning || !hasAttachableSessions) ? .standalone : .chooseLeadOrAttach
     }
 }
 

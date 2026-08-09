@@ -6,9 +6,19 @@ enum TraySessionPresentation {
         _ sessions: [SyncedTraySession],
         verdicts: [String: SessionReachability.Verdict]
     ) -> [SyncedTraySession] {
-        let presumedReachable = sessions.filter { verdicts[$0.id] != .unreachable }
+        let presumedReachable = attachableSessions(sessions, verdicts: verdicts)
         let unreachable = sessions.filter { verdicts[$0.id] == .unreachable }
         return presumedReachable + unreachable
+    }
+
+    /// Sessions the launcher may offer as attach targets. Only a confirmed
+    /// `.unreachable` verdict excludes: unprobed sessions stay offered so a
+    /// slow probe never hides a live session.
+    static func attachableSessions(
+        _ sessions: [SyncedTraySession],
+        verdicts: [String: SessionReachability.Verdict]
+    ) -> [SyncedTraySession] {
+        sessions.filter { verdicts[$0.id] != .unreachable }
     }
 
     static func subtitle(
