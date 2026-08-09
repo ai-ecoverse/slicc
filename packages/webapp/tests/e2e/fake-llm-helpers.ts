@@ -327,7 +327,10 @@ export async function readCdpPageState(
  * workers, so scenario-owned tabs must be cleared explicitly between retries.
  */
 export async function closeCdpPageTargets(options: ReadCdpPageStateOptions = {}): Promise<void> {
-  const base = (options.cdpEndpoint ?? 'http://127.0.0.1:9222').replace(/\/+$/, '');
+  // Follow the harness's CDP port override like readCdpPageState above — a
+  // hardcoded 9222 would read targets from the overridden port but close them
+  // against whatever Chrome squats on the default port (e.g. a live dev one).
+  const base = (options.cdpEndpoint ?? `http://127.0.0.1:${CDP_PORT}`).replace(/\/+$/, '');
   const targets = await readCdpPageState(options);
   await Promise.all(
     targets.map(async (target) => {

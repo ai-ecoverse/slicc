@@ -17,8 +17,8 @@
  *
  * Gated behind `RUN_REAL_SPEECH_E2E=1` because the Kokoro-82M weights
  * + onnxruntime wasm runtime are ~100 MB through the node-server fetch
- * proxy on a cold OPFS — opt-in for local runs (CI enables it on the
- * `speech-e2e` job).
+ * proxy on a cold OPFS — opt-in for local runs (the CI `e2e` job enables
+ * it when the `speech` path filter matches).
  */
 
 import { expect, test } from '@playwright/test';

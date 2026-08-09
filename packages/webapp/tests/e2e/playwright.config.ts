@@ -83,7 +83,7 @@ export default defineConfig({
       // wrangler serves `dist/ui` (the leader/UI origin) with SPA fallback,
       // exactly as the production worker does. The webapp must be built
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
-      // CI `webapp` job builds it before the E2E step.
+      // CI `e2e` job builds it before the E2E step.
       command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1`,
       // Gate readiness on a real HTTP 200 from `/status`, NOT a bare TCP probe.
       // workerd's `dev` process binds the listen socket well before the worker

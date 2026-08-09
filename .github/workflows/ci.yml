@@ -133,7 +133,7 @@ jobs:
             native-root-config:
               - 'patches/**'
               - '.github/workflows/ci.yml'
-            # Real-model `say -o` WAV (gated; see `speech-e2e` job).
+            # Real-model `say -o` WAV (gated; see the `e2e` job's speech leg).
             # Trigger on the synthesis engine, the `say` command, the
             # page-side panel RPC handlers that bridge it out of the
             # worker, and the terminal seam the test drives.
@@ -396,13 +396,67 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in dev-optimized deps"
+  # Fake-LLM agent-loop E2E (Playwright): real WC composer + kernel-worker
+  # agent against the deterministic fake LLM server, through the production
+  # standalone topology. Split from `webapp` so the gate also bites on the
+  # other two runtimes the harness drives end to end: node-server (the `/cdp`
+  # bridge + `/api` surface the leader dials back to) and cloudflare-worker
+  # (`wrangler dev` serves `dist/ui` exactly as production; the `/status`
+  # readiness probe and `run_worker_first` invariants live in the worker).
+  # Before the split, a node-server- or worker-only change never ran the E2E.
+  #
+  # The real-Kokoro speech round-trip (`say -o` WAV validation) rides the same
+  # harness, so it runs here as a conditional leg instead of a separate job:
+  # on `speech`-filter changes the run sets `RUN_REAL_SPEECH_E2E=1` (un-skipping
+  # `speech-roundtrip.test.ts`) and first frees runner disk, because staging
+  # the Kokoro-82M weights (~92 MB in OPFS) needs Chromium's per-origin storage
+  # quota — derived from free disk — to not be the variable under test.
+  e2e:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.shared == 'true' ||
+      needs.changes.outputs.spoon == 'true' ||
+      needs.changes.outputs.webcomponents == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true' ||
+      needs.changes.outputs.speech == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: ./.github/actions/npm-ci
+      - name: Build webapp (wrangler serves dist/ui)
+        run: npm run build -w @slicc/webapp
       - name: Build @slicc/shared-ts (node-server runtime dependency)
         run: npm run build -w @slicc/shared-ts
-      - name: Build node-server (E2E dependency)
+      - name: Build node-server (the /cdp bridge under test)
         run: npm run build -w @slicc/node-server
+      # Chromium derives a per-origin storage quota from FREE DISK on the
+      # volume holding the browser profile. When the quota runs short the run
+      # does not fail where the space ran out: the model still loads, then
+      # synthesis reports an empty voice list. Drop the preinstalled
+      # toolchains this job never uses (~20 GB); `df` is logged either side
+      # to keep that claim checkable. Speech leg only — ordinary runs don't
+      # pay the ~30 s of `rm`.
+      - name: Free disk space for the browser storage quota
+        if: needs.changes.outputs.speech == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: E2E tests
         run: |
-          npx playwright install chromium
+          npx playwright install --with-deps chromium
           npm run test:e2e
         env:
           # Surface wrangler's own diagnostics so a crash during workerd
@@ -410,6 +464,10 @@ jobs:
           # webServer log. Combined with the `/status` readiness gate in the
           # Playwright config, this makes a startup race actually debuggable.
           WRANGLER_LOG: debug
+          NODE_OPTIONS: '--max-old-space-size=6144'
+          # Un-skip the real-Kokoro speech round-trip only when speech
+          # surfaces changed; everywhere else the test self-skips.
+          RUN_REAL_SPEECH_E2E: ${{ needs.changes.outputs.speech == 'true' && '1' || '' }}
       - name: Upload Playwright artifacts
         # Playwright's report + trace + screenshots are the primary post-mortem
         # surface when the E2E job flakes. Without them a failure reduces to a
@@ -419,7 +477,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-report-webapp
+          name: playwright-report-e2e
           # Playwright resolves both the HTML reporter's `outputFolder` and the
           # per-test `outputDir` against the nearest package root walked up from
           # the config file, i.e. `packages/webapp/` (the config sits at
@@ -429,6 +487,7 @@ jobs:
           path: |
             packages/webapp/playwright-report/
             packages/webapp/test-results/
+            packages/webapp/tests/e2e/test-results/
           if-no-files-found: ignore
       - name: Upload wrangler logs
         # wrangler writes structured startup + request logs to
@@ -440,68 +499,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wrangler-logs-webapp
+          name: wrangler-logs-e2e
           path: ~/.config/.wrangler/logs/
-          if-no-files-found: ignore
-
-  # Real `say -o` Kokoro synthesis through the worker→page→worker
-  # synthesize-to-wav bridge, validating the produced WAV file. Split
-  # from `webapp` (and gated on the `speech` path filter) because the
-  # Kokoro-82M weights + onnxruntime runtime take a few minutes to
-  # stage on a cold OPFS. The test itself is gated behind
-  # `RUN_REAL_SPEECH_E2E=1` so it stays skipped on every other job
-  # (including the main `webapp` E2E run).
-  speech-e2e:
-    needs: changes
-    if: needs.changes.outputs.speech == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-      - uses: ./.github/actions/npm-ci
-      - name: Build @slicc/shared-ts (node-server runtime dependency)
-        run: npm run build -w @slicc/shared-ts
-      - name: Build node-server (E2E dependency — fetch-proxy + serve)
-        run: npm run build -w @slicc/node-server
-      - name: Build webapp
-        run: npm run build -w @slicc/webapp
-      - name: Install Chromium (with system deps)
-        run: npx playwright install --with-deps chromium
-      # Chromium derives a per-origin storage quota from FREE DISK on the
-      # volume holding the browser profile, and this run needs ~92 MB of
-      # kokoro weights in OPFS plus whatever transformers.js puts in
-      # CacheStorage. When the quota runs short the run does not fail where
-      # the space ran out: the model still loads, then synthesis reports an
-      # empty voice list. Drop the preinstalled toolchains this job never
-      # uses (~20 GB) so the quota is not the variable under test. `df` is
-      # logged either side to keep that claim checkable.
-      - name: Free disk space for the browser storage quota
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
-      - name: E2E say -o WAV (real Kokoro)
-        run: npm run test:e2e -- speech-roundtrip
-        env:
-          RUN_REAL_SPEECH_E2E: '1'
-          NODE_OPTIONS: '--max-old-space-size=6144'
-      - name: Upload Playwright artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: playwright-report-speech
-          # Playwright writes its outputs under packages/webapp/* because
-          # the config's `testDir` resolves there (see
-          # `packages/webapp/tests/e2e/playwright.config.ts`).
-          path: |
-            packages/webapp/playwright-report/
-            packages/webapp/test-results/
-            packages/webapp/tests/e2e/test-results/
           if-no-files-found: ignore
 
   node-server:
@@ -1722,7 +1721,7 @@ jobs:
         typecheck,
         node-matrix-tests,
         webapp,
-        speech-e2e,
+        e2e,
         node-server,
         chrome-extension,
         cloudflare-worker,
