@@ -1861,7 +1861,11 @@ describe('slicc-dock-tree', () => {
       expect(events[0].detail.tree).toEqual(el.getTree());
     });
 
-    it('a pixel target converges the leaf to (approximately) that many rendered pixels', () => {
+    it('a pixel target converges the VISIBLE surface to (approximately) that many rendered pixels', () => {
+      // Both leaves are non-chat, so both tiles carry the 12px-margin chrome:
+      // the calibration must measure the leaf (the actual flex item) and fold
+      // the chrome inset into the target, or the surface lands ~26px short
+      // (the P2 caught on #2023).
       const el = mount(); // 600x400 host
       el.appendChild(surface('a'));
       el.appendChild(surface('b'));
@@ -1873,8 +1877,92 @@ describe('slicc-dock-tree', () => {
       const width = (
         el.querySelector('slicc-surface[surface-id="a"]') as HTMLElement
       ).getBoundingClientRect().width;
-      expect(width).toBeGreaterThan(190);
-      expect(width).toBeLessThan(210);
+      expect(width).toBeGreaterThan(194);
+      expect(width).toBeLessThan(206);
+    });
+  });
+
+  describe('tile chrome', () => {
+    it('frames every non-chat tile with the rounded pane chrome and keeps chat flat', () => {
+      const el = mount();
+      el.append(surface(CHAT_SURFACE_ID), surface('term'));
+      el.setTree({
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, left: leaf(CHAT_SURFACE_ID), right: leaf('term') },
+      });
+      const chatTile = el
+        .querySelector(`slicc-surface[surface-id="${CHAT_SURFACE_ID}"]`)
+        ?.closest('.dock-tree__tile') as HTMLElement;
+      const termTile = el
+        .querySelector('slicc-surface[surface-id="term"]')
+        ?.closest('.dock-tree__tile') as HTMLElement;
+      expect(chatTile.classList.contains('dock-tree__tile--chrome')).toBe(false);
+      expect(termTile.classList.contains('dock-tree__tile--chrome')).toBe(true);
+      // The chrome is the old floating workbench-pane card (the deleted
+      // `<slicc-workbench-pane>` → `<slicc-pane elevated>` chain): rounded,
+      // bordered, clipped to the radius, floated off the edges.
+      const cs = getComputedStyle(termTile);
+      expect(cs.borderTopLeftRadius).toBe('14px');
+      expect(cs.overflow).toBe('hidden');
+      expect(cs.borderTopWidth).toBe('1px');
+      expect(cs.marginLeft).toBe('12px');
+      // The chat column keeps the prototype's flat full-bleed treatment.
+      const chatCs = getComputedStyle(chatTile);
+      expect(chatCs.borderTopLeftRadius).toBe('0px');
+      expect(chatCs.marginLeft).toBe('0px');
+    });
+  });
+
+  describe('tile entrance animation', () => {
+    it('slides in only the tiles a render NEWLY placed — carry-over renders never replay it', () => {
+      const el = mount();
+      el.append(surface(CHAT_SURFACE_ID), surface('term'));
+      const chatOnly: DockTreeSpec = {
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, left: leaf(CHAT_SURFACE_ID) },
+      };
+      el.setTree(chatOnly);
+      el.setTree({
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, left: leaf(CHAT_SURFACE_ID), right: leaf('term') },
+      });
+      const termTile = () =>
+        el.querySelector('slicc-surface[surface-id="term"]')?.closest('.dock-tree__tile');
+      const chatTile = el
+        .querySelector(`slicc-surface[surface-id="${CHAT_SURFACE_ID}"]`)
+        ?.closest('.dock-tree__tile');
+      // The newly placed tool tile enters; the carried-over chat leaf (flat,
+      // never animated) does not.
+      expect(termTile()?.classList.contains('dock-tree__tile--enter')).toBe(true);
+      expect(chatTile?.classList.contains('dock-tree__tile--enter')).toBe(false);
+      // A re-render with an unchanged placed set (what every divider-drag
+      // pointermove produces) must NOT restart the slide-in.
+      el.setSurfaceSize('term', { widthPercent: 40 });
+      expect(termTile()?.classList.contains('dock-tree__tile--enter')).toBe(false);
+    });
+  });
+
+  describe('dock-tree-render notification', () => {
+    it('announces the placed surfaceIds after every render — the silent setTree restore included', () => {
+      const el = mount();
+      el.append(surface(CHAT_SURFACE_ID), surface('term'));
+      const placed: string[][] = [];
+      const changes: unknown[] = [];
+      el.addEventListener('dock-tree-render', (e) =>
+        placed.push([...(e as CustomEvent<{ placed: string[] }>).detail.placed])
+      );
+      el.addEventListener('dock-tree-change', (e) => changes.push(e));
+      el.setTree({
+        ...EMPTY_SPEC,
+        zones: { ...EMPTY_SPEC.zones, left: leaf(CHAT_SURFACE_ID), right: leaf('term') },
+      });
+      expect(placed.at(-1)?.sort()).toEqual([CHAT_SURFACE_ID, 'term']);
+      // `setTree` deliberately fires no `dock-tree-change` (persistence must
+      // not loop on restore) — the render notification is the display-only
+      // channel that still fires, so `<slicc-shell>` can sync chatpane state.
+      expect(changes).toHaveLength(0);
+      el.removeSurface('term');
+      expect(placed.at(-1)).toEqual([CHAT_SURFACE_ID]);
     });
   });
 });

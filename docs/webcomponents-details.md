@@ -122,7 +122,15 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
   divider-drag `pointerup` or a `setSurfaceSize` call that actually changed
   something. Neither event persists anything itself — see
   `packages/webapp/CLAUDE.md`'s Layouts section for the webapp's
-  `wireDockTreePersistence` listener.
+  `wireDockTreePersistence` listener. `dock-tree-render` (composed + bubbling,
+  `detail: { placed: string[] }`) fires after EVERY render — the deliberately
+  change-silent `setTree` restore included — and is display-only:
+  `<slicc-shell>` keys the chatpane's `narrow` re-theming off it; it must never
+  feed persistence.
+- **Tile chrome**: every non-chat tile carries the floating rounded
+  workbench-pane card (`.dock-tree__tile--chrome` — `--canvas`, 1px `--line`,
+  14px radius, elevated shadow, 12px margin, `overflow: hidden`); the reserved
+  `chat` leaf renders flat/full-bleed over the shader.
 
 ## Composer push-to-talk
 
