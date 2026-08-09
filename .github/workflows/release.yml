@@ -82,6 +82,16 @@ jobs:
       # push-triggered workflows ("Unsupported event type: push", found on
       # the first live run of this step) and this workflow only runs on
       # push. Same Bedrock auth as rum-error-triage.yml.
+      #
+      # The CLI installs in its own credential-free step, pinned to an
+      # exact reviewed version: npm lifecycle scripts must never see the
+      # Bedrock token, and a mutable `latest` could exfiltrate it during a
+      # release (Codex review on PR #2050). Bump the pin deliberately.
+      - name: Install Claude Code CLI
+        if: steps.ios_commits.outputs.found == 'true'
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code@2.1.226
+
       - name: Draft What to Test notes
         if: steps.ios_commits.outputs.found == 'true'
         continue-on-error: true
@@ -92,7 +102,6 @@ jobs:
           ANTHROPIC_MODEL: ${{ vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
         run: |
           set -euo pipefail
-          npm install -g @anthropic-ai/claude-code
           cat > tf-notes-prompt.txt <<'PROMPT'
           The file `ios-commits.txt` in the repo root holds the subject
           lines of the last week's commits that touched the iOS app
