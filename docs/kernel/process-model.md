@@ -104,7 +104,14 @@ The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery
 Realm scripts (`.jsh` / `node -e` / `python3`) need synchronous filesystem
 access to satisfy Node's `fs.readFileSync` / `writeFileSync` API shape. The
 bridge (`realm/sync-fs-*.ts` + `ui/sync-fs-sw-handler.ts`) implements this
-without `SharedArrayBuffer` or COOP/COEP:
+without _requiring_ `SharedArrayBuffer` or cross-origin isolation, so it
+works on every float — including embedded leaders (Cherry, spoon/Electron)
+that can never be isolated. The hosted leader document _is_ now
+cross-origin isolated via `Document-Isolation-Policy` (per-document, no
+COOP/COEP, SW control unaffected — see the `serveSPA` comment in
+`packages/cloudflare-worker/src/index.ts`), which makes an Atomics/SAB
+fast path a possible future perf lever where `crossOriginIsolated` is
+true; the SW sync-XHR path below remains the universal baseline:
 
 **Fast path**: an in-memory snapshot of up to 500 files / 1 MB total / 10 MB
 per file, warm-populated at realm start. Reads that hit the snapshot return

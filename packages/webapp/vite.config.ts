@@ -397,6 +397,12 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
+    // Dev parity with the worker's `serveSPA` (#2036): the leader document is
+    // cross-origin isolated via Document-Isolation-Policy in production, so
+    // `npm run dev` must match or SAB-dependent paths (vpod --net) diverge.
+    headers: {
+      'Document-Isolation-Policy': 'isolate-and-credentialless',
+    },
     watch: {
       // Anchor to workspaceRoot so the ignore only matches the top-level
       // .yolo/.intent dirs in the main checkout. Using a bare `**/.yolo/**`

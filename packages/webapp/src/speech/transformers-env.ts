@@ -45,7 +45,7 @@ import { detectMimeType, toPreviewUrl } from '../shell/supplemental-commands/sha
 
 /** Structural slice of transformers.js' `env` that we touch. */
 export interface TransformersEnvLike {
-  backends?: { onnx?: { wasm?: { wasmPaths?: unknown } } };
+  backends?: { onnx?: { wasm?: { wasmPaths?: unknown; numThreads?: number } } };
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   /** Disable HF-Hub fetches; weights load only from `localModelPath`. */
   allowRemoteModels?: boolean;
@@ -386,6 +386,13 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
     // by the time ort reads wasmPaths at session-creation time the object
     // form is in place.
     onnxWasm.wasmPaths = toPreviewUrl(ORT_DIST_VFS_PATH);
+    // Pin single-threaded execution explicitly. With the leader now
+    // cross-origin isolated (Document-Isolation-Policy, #2036), ort-web
+    // would otherwise auto-select multi-threaded execution — a silent
+    // behavior change with its own worker-spawning and memory profile.
+    // Raising this is a deliberate future perf experiment, not a side
+    // effect of enabling isolation.
+    onnxWasm.numThreads = 1;
   }
   env.allowRemoteModels = false;
   env.allowLocalModels = true;

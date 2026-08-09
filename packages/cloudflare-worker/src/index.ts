@@ -279,6 +279,22 @@ async function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
     out.headers.set('Vary', 'Sec-Fetch-Dest');
   } else {
     out.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+    // Per-document cross-origin isolation (#2036): grants the leader (and
+    // its dedicated/nested workers) `crossOriginIsolated` + SharedArrayBuffer
+    // WITHOUT COOP/COEP — popups keep window.opener, iframes embed normally,
+    // and the controlling service worker keeps controlling (verified live;
+    // the COEP↔SW-script compatibility rule does not apply to DIP). First
+    // consumer: vpod's guest-network SAB ring buffer. `credentialless` (not
+    // `require-corp`) so no-cors cross-origin subresources — gravatars,
+    // agent-rendered external images, sprinkle assets — load anonymously
+    // instead of being blocked. Unsupported browsers (pre-Chrome-137,
+    // non-desktop) ignore the header and degrade to today's non-isolated
+    // behavior. This branch also serves `/join`/`/controller` follower pages;
+    // isolation is harmless there (no popup/iframe/embedding restrictions),
+    // and one unconditional value per URL keeps caching Vary-free. The
+    // `?cherry=1` and electron-overlay branches above stay header-free:
+    // embedded surfaces run no realms and never needed SAB.
+    out.headers.set('Document-Isolation-Policy', 'isolate-and-credentialless');
   }
   return out;
 }

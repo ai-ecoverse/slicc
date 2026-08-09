@@ -3092,6 +3092,28 @@ describe('cherry framing policy', () => {
     expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
   });
 
+  it('default SPA (leader + join/controller) is cross-origin isolated via DIP', async () => {
+    const { env } = createTestHarness();
+    for (const path of ['/', '/join/tok-abc', '/controller/tok-abc']) {
+      const res = await worker.fetch(new Request(`https://app.example${path}`), env);
+      expect(res.headers.get('document-isolation-policy')).toBe('isolate-and-credentialless');
+    }
+  });
+
+  it('cherry and electron-overlay responses carry NO isolation header', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: '*',
+    };
+    const cherry = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    expect(cherry.headers.get('document-isolation-policy')).toBeNull();
+    const overlay = await worker.fetch(
+      new Request('https://app.example/electron?bridge=ws://localhost:9222/cdp&role=leader'),
+      env
+    );
+    expect(overlay.headers.get('document-isolation-policy')).toBeNull();
+  });
+
   it('cherry boot allows configured ancestors and is uncacheable', async () => {
     const env = {
       ...createTestHarness().env,
