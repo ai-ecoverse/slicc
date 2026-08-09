@@ -3,6 +3,7 @@ import {
   mergeSidecarEntries,
   type SidecarDirtyState,
   type SidecarIndexJson,
+  stripSidecarSelfEntry,
 } from '../../src/fs/sidecar-merge.js';
 
 const entry = (tag: string) => ({ tag });
@@ -122,5 +123,26 @@ describe('mergeSidecarEntries', () => {
   it('tolerates documents with absent entries maps', () => {
     const merged = mergeSidecarEntries({ version: 1 }, { version: 1 }, dirty(['/x']));
     expect(merged.entries).toEqual({});
+  });
+});
+
+describe('stripSidecarSelfEntry', () => {
+  // The writer applies this to its full-snapshot recovery path, which skips
+  // mergeSidecarEntries — the raw ZenFS index there still carries the self-entry.
+  it('drops the self-referential entry, leaving real entries intact', () => {
+    const d = doc({ '/': entry('root'), '/.metadata.json': entry('self'), '/a.txt': entry('a') });
+    const out = stripSidecarSelfEntry(d);
+    expect(out.entries).not.toHaveProperty('/.metadata.json');
+    expect(out.entries?.['/a.txt']).toEqual(entry('a'));
+    expect(out).toBe(d); // mutates in place and returns the same doc
+  });
+
+  it('is a no-op when the self-entry is absent', () => {
+    const d = doc({ '/a.txt': entry('a') });
+    expect(stripSidecarSelfEntry(d).entries).toEqual({ '/a.txt': entry('a') });
+  });
+
+  it('tolerates a document with no entries map', () => {
+    expect(() => stripSidecarSelfEntry({ version: 1 })).not.toThrow();
   });
 });

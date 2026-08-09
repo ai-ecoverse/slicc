@@ -55,6 +55,25 @@ function isUnder(key: string, prefix: string): boolean {
 }
 
 /**
+ * The one sidecar path that must never appear in its own entry map.
+ *
+ * ZenFS's `crossCopy` indexes the physical `.metadata.json` file, so it turns
+ * up in the in-memory index every session. Persisting a self-entry is a latent
+ * boot brick: its recorded size can never match reality (writing the sidecar
+ * changes the very size stored), so the next cold-boot `crossCopy` hits a "file
+ * data size mismatch" and fails. Both the merge result AND any full-snapshot
+ * recovery flush — which skips {@link mergeSidecarEntries} entirely — must
+ * strip it. The boot self-heal in `sidecar-repair.ts` drops any already on disk.
+ */
+export const SIDECAR_SELF_ENTRY = '/.metadata.json';
+
+/** Drop the self-referential sidecar entry from `doc` in place; returns `doc`. */
+export function stripSidecarSelfEntry(doc: SidecarIndexJson): SidecarIndexJson {
+  if (doc.entries) delete doc.entries[SIDECAR_SELF_ENTRY];
+  return doc;
+}
+
+/**
  * Merge this context's in-memory index (`own`) over the sidecar currently
  * on disk (`onDisk`), constrained to the context's dirty paths/prefixes.
  *
@@ -86,14 +105,8 @@ export function mergeSidecarEntries(
     }
   }
 
-  // The sidecar lives inside the mounted directory, so ZenFS's index scan picks
-  // up `.metadata.json` as a file. Persisting a self-entry is a latent boot
-  // brick: its recorded size can never match (writing the sidecar changes that
-  // very size), so the next cold-boot `crossCopy` hits a "file data size
-  // mismatch" and fails. Never write one; the boot self-heal in
-  // `sidecar-repair.ts` drops any that already exist on disk.
-  delete entries['/.metadata.json'];
-
   const { entries: _ownEntries, ...ownRest } = own;
-  return { ...ownRest, entries };
+  // Never persist a self-entry (see {@link SIDECAR_SELF_ENTRY}); the writer
+  // applies the same strip to its full-snapshot recovery path.
+  return stripSidecarSelfEntry({ ...ownRest, entries });
 }

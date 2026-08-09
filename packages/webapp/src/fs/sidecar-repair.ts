@@ -14,7 +14,7 @@
  * OPFS handles and rewrites the file only when something changed.
  */
 
-import type { SidecarIndexJson } from './sidecar-merge.js';
+import { SIDECAR_SELF_ENTRY, type SidecarIndexJson } from './sidecar-merge.js';
 
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o40000;
@@ -88,7 +88,7 @@ export async function repairSidecarDocument(
     // boot repair can never converge. Drop it rather than true it up — see
     // {@link SidecarRepairSummary.selfEntryDropped}. Prevention lives in
     // `sidecar-merge.ts`, which never persists this entry in the first place.
-    if (path === '/.metadata.json') {
+    if (path === SIDECAR_SELF_ENTRY) {
       delete entries[path];
       summary.selfEntryDropped = true;
       summary.changed = true;
