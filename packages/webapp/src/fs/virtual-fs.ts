@@ -373,6 +373,7 @@ export class VirtualFS {
             kindFixed: summary.kindFixed,
             sizesFixed: summary.sizesFixed,
             dropped: summary.dropped,
+            selfEntryDropped: summary.selfEntryDropped,
           })
       )) as { index?: { toJSON: () => unknown } };
       try {

@@ -46,6 +46,16 @@ describe('mergeSidecarEntries', () => {
     expect(merged.entries?.['/tmp/own-new.txt']).toEqual(entry('file-own'));
   });
 
+  it('never persists a self-referential /.metadata.json entry (the boot brick)', () => {
+    // ZenFS indexes its own sidecar file, so the entry can arrive from either
+    // the on-disk base or this context's own index. A persisted self-entry
+    // re-bricks the next cold-boot crossCopy; the merge must strip it.
+    const onDisk = doc({ '/': entry('root'), '/.metadata.json': entry('disk-self') });
+    const own = doc({ '/': entry('root'), '/.metadata.json': entry('own-self') });
+    const merged = mergeSidecarEntries(onDisk, own, dirty(['/.metadata.json']));
+    expect(merged.entries).not.toHaveProperty('/.metadata.json');
+  });
+
   it('an empty dirty set leaves the on-disk entries untouched (root aside)', () => {
     const onDisk = doc({ '/': entry('root-disk'), '/a.txt': entry('disk') });
     const own = doc({ '/': entry('root-own'), '/a.txt': entry('stale'), '/b.txt': entry('stale') });

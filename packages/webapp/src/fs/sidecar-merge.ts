@@ -86,6 +86,14 @@ export function mergeSidecarEntries(
     }
   }
 
+  // The sidecar lives inside the mounted directory, so ZenFS's index scan picks
+  // up `.metadata.json` as a file. Persisting a self-entry is a latent boot
+  // brick: its recorded size can never match (writing the sidecar changes that
+  // very size), so the next cold-boot `crossCopy` hits a "file data size
+  // mismatch" and fails. Never write one; the boot self-heal in
+  // `sidecar-repair.ts` drops any that already exist on disk.
+  delete entries['/.metadata.json'];
+
   const { entries: _ownEntries, ...ownRest } = own;
   return { ...ownRest, entries };
 }

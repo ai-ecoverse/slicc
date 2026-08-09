@@ -37,6 +37,16 @@ export interface SidecarRepairSummary {
   sizesFixed: number;
   /** Entries dropped because their path no longer exists. */
   dropped: number;
+  /**
+   * Whether the self-referential `/.metadata.json` entry was dropped. The
+   * sidecar lives inside the mounted directory, so ZenFS indexes it as a file
+   * — but its recorded size is stale the instant the sidecar is rewritten (the
+   * write changes the very size stored), so a self-entry is a perpetual "file
+   * data size mismatch" that re-bricks `crossCopy` on the next mount. Truing
+   * the size up cannot converge (each rewrite invalidates it again), so the
+   * entry is dropped outright.
+   */
+  selfEntryDropped: boolean;
   /** Whether anything changed (callers skip the rewrite when false). */
   changed: boolean;
 }
@@ -67,11 +77,23 @@ export async function repairSidecarDocument(
     kindFixed: [],
     sizesFixed: 0,
     dropped: 0,
+    selfEntryDropped: false,
     changed: false,
   };
   const entries = doc.entries ?? {};
   for (const [path, raw] of Object.entries(entries)) {
     if (path === '/' || typeof raw !== 'object' || raw === null) continue;
+    // A sidecar must never track itself: writing it changes its own size, so
+    // any recorded `/.metadata.json` size is stale on the retry mount and the
+    // boot repair can never converge. Drop it rather than true it up — see
+    // {@link SidecarRepairSummary.selfEntryDropped}. Prevention lives in
+    // `sidecar-merge.ts`, which never persists this entry in the first place.
+    if (path === '/.metadata.json') {
+      delete entries[path];
+      summary.selfEntryDropped = true;
+      summary.changed = true;
+      continue;
+    }
     const entry = raw as MutableEntry;
     const fmt = (entry.mode ?? 0) & S_IFMT;
     if (fmt === S_IFLNK) continue;
