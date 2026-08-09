@@ -9,6 +9,10 @@ import { ESBUILD_VERSION } from '../../../src/shell/supplemental-commands/esbuil
 import { BUNDLED_FFMPEG_CORE_VERSION } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-wasm.js';
 import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
+import {
+  VPOD_PACKAGE,
+  VPOD_PINNED_VERSION,
+} from '../../../src/shell/supplemental-commands/vpod-loader.js';
 
 describe('built-in shadow map', () => {
   it('looks up unscoped and scoped package names', () => {
@@ -37,6 +41,10 @@ describe('built-in shadow map', () => {
       `ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}`
     );
     expect(BUILTIN_SHADOW_MAP.v86.bootstrap).toBe(`ipk add v86@${V86_PINNED_VERSION}`);
+    expect(BUILTIN_SHADOW_MAP[VPOD_PACKAGE].command).toBe('vpod');
+    expect(BUILTIN_SHADOW_MAP[VPOD_PACKAGE].bootstrap).toBe(
+      `ipk add ${VPOD_PACKAGE}@${VPOD_PINNED_VERSION}`
+    );
   });
 });
 

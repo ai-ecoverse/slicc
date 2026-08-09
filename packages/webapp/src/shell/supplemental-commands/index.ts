@@ -73,6 +73,7 @@ import { createUnzipCommand } from './unzip-command.js';
 import { createUpgradeCommand } from './upgrade-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
+import { createVpodCommand } from './vpod-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
@@ -243,6 +244,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createHidCommand(),
     createSerialCommand(),
     createV86Command({ processManager: options.processManager }),
+    createVpodCommand({ processManager: options.processManager }),
     createEsptoolCommand(),
     createCherryEmitCommand({ registry: options.cherryRuntimeRegistry }),
     createSliccFsCleanupCommand(),
