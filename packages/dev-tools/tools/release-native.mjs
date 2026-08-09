@@ -27,7 +27,15 @@ export const MACOS_PATH_PREFIXES = [
   'packages/spoon/',
   'packages/assets/',
 ];
-export const IOS_PATH_PREFIXES = ['packages/ios-app/', 'packages/swift-traysession/'];
+// swift-trayfollower compiles INTO the ipa (SliccTrayFollower, re-exported
+// via TrayFollowerExports.swift), so a trayfollower-only change must gate an
+// iOS release — without it the fix ships silently only when an unrelated
+// ios-app file next changes.
+export const IOS_PATH_PREFIXES = [
+  'packages/ios-app/',
+  'packages/swift-traysession/',
+  'packages/swift-trayfollower/',
+];
 
 // APPROVED relevant path set for the `slicc` Go CLI binaries. The CLI vendors
 // its own copy of the wire protocol (internal/protocol), so that part of the

@@ -137,6 +137,14 @@ describe('matchesAnyPrefix', () => {
     expect(matchesAnyPrefix('packages/swift-traysession/Package.swift', IOS_PATH_PREFIXES)).toBe(
       true
     );
+    // SliccTrayFollower compiles into the ipa; a trayfollower-only change
+    // must trigger the TestFlight build.
+    expect(
+      matchesAnyPrefix(
+        'packages/swift-trayfollower/Sources/SliccTrayFollower/Models/SyncProtocol.swift',
+        IOS_PATH_PREFIXES
+      )
+    ).toBe(true);
   });
 
   it('does not match unrelated files', () => {

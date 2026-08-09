@@ -86,7 +86,27 @@ export function classifySubmitOutcome({ status, code }) {
   if (status < 400) return 'submitted';
   if (isSubmissionCapacityError({ status, code })) return 'deferred';
   if (IDEMPOTENT_ERROR_CODES.has(code) || status === 409) return 'skipped';
+  // Re-running distribute against an already-submitted build returns
+  // ENTITY_UNPROCESSABLE.INVALID_QC_STATE — but so does re-submitting a
+  // build whose review was REJECTED, where the desired end state does NOT
+  // hold. The caller must resolve the ambiguity against the build's actual
+  // betaReviewState (resolveVerifyOutcome). Suffix match for the same
+  // prefix-drift reason as isSubmissionCapacityError. Observed live
+  // re-setting build 1376's What to Test (2026-08-09).
+  if (typeof code === 'string' && code.includes('INVALID_QC_STATE')) return 'verify';
   return 'fatal';
+}
+
+/**
+ * Review states in which an INVALID_QC_STATE resubmission means the desired
+ * end state already holds (review pending or passed). REJECTED — or a state
+ * we cannot read — means external testers will never receive the build, so
+ * the re-run must surface the failure instead of masking it.
+ */
+const SETTLED_REVIEW_STATES = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW', 'APPROVED']);
+
+export function resolveVerifyOutcome(betaReviewState) {
+  return SETTLED_REVIEW_STATES.has(betaReviewState) ? 'skipped' : 'fatal';
 }
 
 /**
@@ -318,11 +338,28 @@ export async function distribute({
       relationships: { build: { data: { id: build.id, type: 'builds' } } },
     },
   });
-  const submitOutcome = classifySubmitOutcome({
+  let submitOutcome = classifySubmitOutcome({
     status: submission.status,
     code: firstErrorCode(submission.json),
   });
-  if (submitOutcome === 'submitted') {
+  if (submitOutcome === 'verify') {
+    // INVALID_QC_STATE is ambiguous: review already pending/passed (desired
+    // state holds) or rejected (real failure). Ask for the actual state.
+    const review = await asc(
+      'GET',
+      `/builds/${build.id}/betaAppReviewSubmission?fields[betaAppReviewSubmissions]=betaReviewState`
+    );
+    const state = review.json?.data?.attributes?.betaReviewState ?? '';
+    if (resolveVerifyOutcome(state) === 'skipped') {
+      submitOutcome = 'skipped';
+      log.log(`Beta App Review already ${state}; submission skipped.`);
+    } else {
+      throw new DistributionError(
+        `Beta App Review resubmission returned INVALID_QC_STATE and the build's review state ` +
+          `is "${state || 'unknown'}" (HTTP ${review.status}) — the build cannot reach external testers.`
+      );
+    }
+  } else if (submitOutcome === 'submitted') {
     log.log('Submitted for Beta App Review.');
   } else if (submitOutcome === 'skipped') {
     log.log(`Beta App Review submission skipped (${submission.text.slice(0, 200)})`);
