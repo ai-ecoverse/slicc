@@ -218,4 +218,48 @@ describe('slicc-tab-overlay', () => {
     expect(cs.position).toBe('fixed');
     expect(cs.flexDirection).toBe('column');
   });
+
+  /** A 1×1 PNG — enough for Chromium to lay out a real `<img>` thumbnail. */
+  const PIXEL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+  /** `n` uniform tabs, each with a screenshot, so card heights are comparable. */
+  function manyTabs(n: number): TabDescriptor[] {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `t${i}`,
+      title: `Tab ${i}`,
+      url: `https://example.com/${i}`,
+      screenshot: PIXEL,
+    }));
+  }
+
+  /** Open an overlay with `n` tabs and measure its first card (real Chromium). */
+  function measure(n: number): { cardH: number; shotRatio: number; scrolls: boolean } {
+    const el = mount((o) => {
+      o.tabs = manyTabs(n);
+      o.show();
+    });
+    const grid = el.shadowRoot?.querySelector('.grid') as HTMLElement;
+    const card = cards(el)[0].getBoundingClientRect();
+    const shot = (cards(el)[0].querySelector('img.shot') as HTMLElement).getBoundingClientRect();
+    // Read every layout value while the overlay is still connected — a detached
+    // grid reports 0 for both scrollHeight and clientHeight.
+    const scrolls = grid.scrollHeight > grid.clientHeight;
+    el.remove();
+    return { cardH: card.height, shotRatio: shot.width / shot.height, scrolls };
+  }
+
+  it('scrolls a long tab list instead of squashing the cards (real Chromium)', () => {
+    // Regression: the grid's implicit rows were the initial `auto`, which lets
+    // the track sizing algorithm shrink rows below their content once they stop
+    // fitting the grid's definite height. A long list therefore compressed every
+    // card (220px → ~66px, thumbnail cropped to a sliver) and never overflowed,
+    // so the scroll container had nothing to scroll.
+    const few = measure(3);
+    const many = measure(40);
+    expect(few.scrolls).toBe(false);
+    expect(many.scrolls).toBe(true);
+    expect(many.cardH).toBe(few.cardH);
+    expect(many.shotRatio).toBeCloseTo(16 / 10, 1);
+  });
 });

@@ -57,6 +57,23 @@ const TABS: TabDescriptor[] = [
 
 const FEW: TabDescriptor[] = TABS.slice(0, 3);
 
+/** Hues cycled through the generated long-list roster. */
+const HUES = ['#8b5cf6', '#06b6d4', '#f43f5e', '#f59e0b', '#16a34a', '#ea580c'];
+
+/**
+ * A roster long enough to overflow the grid at any realistic viewport — the
+ * case that used to squash every card down to a cropped sliver instead of
+ * scrolling. Every fifth tab omits its screenshot to keep the globe placeholder
+ * in the shot.
+ */
+const LONG: TabDescriptor[] = Array.from({ length: 32 }, (_, i) => ({
+  id: `long-${i}`,
+  title: `Open tab ${i + 1}`,
+  url: `example.com/page/${i + 1}`,
+  active: i === 0,
+  ...(i % 5 === 4 ? {} : { screenshot: shot(`tab ${i + 1}`, HUES[i % HUES.length]) }),
+}));
+
 /** Build an open overlay seeded with the given tabs. */
 function overlay(tabs: TabDescriptor[]): HTMLElement {
   const el = document.createElement('slicc-tab-overlay') as SliccTabOverlay;
@@ -78,9 +95,19 @@ export const FewTabs: Story = {
   render: () => overlay(FEW),
 };
 
-/** A full roster — the responsive grid scrolls; one tab is the active (ctx-ringed) tab. */
+/** A full roster — mixed cards and titles; one tab is the active (ctx-ringed) tab. */
 export const ManyTabs: Story = {
   render: () => overlay(TABS),
+};
+
+/**
+ * A long roster that outgrows the viewport: cards keep their 16/10 thumbnail and
+ * full height, and the grid scrolls. Rows must stay `max-content` for this — the
+ * initial `auto` lets the track sizer shrink them to fit, which squashed the
+ * cards flat and left nothing to scroll.
+ */
+export const LongList: Story = {
+  render: () => overlay(LONG),
 };
 
 /** The empty state — no open tabs, just the header and the empty message. */

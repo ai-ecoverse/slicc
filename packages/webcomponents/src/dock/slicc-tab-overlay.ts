@@ -64,6 +64,13 @@ const STYLE = `
   flex: 1 1 auto; min-height: 0; overflow: auto; padding: 2px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 16px; align-content: start;
+  /* Implicit rows must be max-content, NOT the initial auto. Auto tracks shrink
+     to their min-content contribution once they no longer fit the grid's
+     definite height, so a long tab list silently squashed every card (220px
+     down to ~66px, its 16/10 thumbnail cropped to an unreadable sliver) and the
+     grid never overflowed — leaving the overflow property nothing to scroll.
+     Pinning rows to content height makes a long list overflow and scroll. */
+  grid-auto-rows: max-content;
 }
 .card {
   display: flex; flex-direction: column;
@@ -83,6 +90,9 @@ const STYLE = `
 .shot {
   display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover;
   background: var(--ghost); color: var(--txt-3);
+  /* The card is a column flex container: without this the thumbnail is a
+     shrinkable flex item and any height pressure on the card deforms it. */
+  flex: 0 0 auto;
 }
 .shot.ph { display: grid; place-items: center; }
 .shot.ph svg { display: block; }
