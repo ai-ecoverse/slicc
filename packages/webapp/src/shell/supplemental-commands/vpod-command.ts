@@ -14,10 +14,12 @@
  * `vpod run` executes commands in it. `vpod run` auto-boots the
  * default pod so the one-shot path needs no ceremony.
  *
- * Guest networking rides on SharedArrayBuffer, which needs
- * cross-origin isolation (COOP/COEP) — headers SLICC's origins do not
- * set (the kernel's sync-FS bridge was deliberately built without
- * them, see `docs/kernel/process-model.md`). Offline pods work fine;
+ * Guest networking rides on SharedArrayBuffer, which needs a
+ * cross-origin-isolated runtime. SLICC does not use COOP/COEP (the
+ * kernel's sync-FS bridge was deliberately built without them, see
+ * `docs/kernel/process-model.md`); isolation arrives per-document via
+ * `Document-Isolation-Policy` on the leader route (#2036), which the
+ * command feature-detects at runtime. Offline pods work either way;
  * `vpod net` reports what the guest can reach and why.
  */
 
@@ -58,10 +60,10 @@ Notes:
     vpod registry and caches it in origin-private storage.
   - Non-interactive: no TTYs (vim, top, REPLs time out), no streaming —
     each run returns complete stdout/stderr when the command exits.
-  - Guest networking requires cross-origin isolation (COOP/COEP
-    headers), which SLICC does not serve — expect backend 'none'.
-    For network work, use the host's \`curl\`/\`fetch\` and share files
-    with the pod instead.
+  - Guest networking (\`--net\`) requires a cross-origin-isolated
+    runtime; \`vpod net\` reports the current backend and why. Without
+    isolation expect backend 'none' — use the host's \`curl\`/\`fetch\`
+    and share files with the pod instead.
 `;
 
 /** Boot configuration parsed from `vpod start` args. */
@@ -430,9 +432,9 @@ async function vpodNet(
     `udp:              ${caps.udp}`,
     `cors restricted:  ${caps.corsRestricted}`,
   ];
-  if (caps.backend === 'none') {
+  if (caps.backend === 'none' && !globalThis.crossOriginIsolated) {
     lines.push(
-      'note: guest networking needs cross-origin isolation (COOP/COEP headers), which SLICC does not serve'
+      'note: guest networking needs cross-origin isolation (Document-Isolation-Policy), which this runtime does not have'
     );
   }
   if (port !== undefined) {

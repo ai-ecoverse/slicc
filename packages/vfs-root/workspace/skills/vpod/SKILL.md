@@ -44,7 +44,7 @@ Pods run in the background as ProcessManager-tracked units — `ps` shows them a
 
 ## Networking
 
-Guest networking requires cross-origin isolation (COOP/COEP response headers), which SLICC's origins do not serve — expect the guest to be offline (`backend: none`; `curl` inside the pod will fail). Check with:
+Guest networking requires a cross-origin-isolated runtime (SLICC serves this via `Document-Isolation-Policy` on supported browsers, not COOP/COEP). Check before relying on it — without isolation the guest is offline (`backend: none`; network commands inside the pod will fail):
 
 ```bash
 vpod net                              # capabilities + why
