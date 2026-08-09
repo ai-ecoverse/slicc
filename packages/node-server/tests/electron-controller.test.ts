@@ -992,11 +992,27 @@ describe('buildThinOverlayAppUrl', () => {
     expect(new URL(url).searchParams.get('tray')).toBe(joinUrl);
   });
 
-  it('emits no tray param without a join URL (null and absent alike)', () => {
+  it('emits no tray param when the option is absent (electron-main float URL keeps stored re-follow)', () => {
     for (const trayJoinUrl of [undefined, null]) {
       const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, trayJoinUrl });
       expect(new URL(url).searchParams.get('tray')).toBeNull();
     }
+  });
+
+  it('emits an explicitly EMPTY tray param for "no tray intent" so the stored join URL cannot leak in', () => {
+    // The leader tab persists the join URL into the shared sliccy.ai
+    // localStorage; a later overlay URL with NO tray param would fall back to
+    // that stored value (resolveFollowerJoinUrl step 3) and boot as another
+    // tray follower. An empty `tray=` is explicit intent and blocks the
+    // fallback — used for auto-follow tabs and no-join leader launches.
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      role: BRIDGE_ROLE_FOLLOWER,
+      trayJoinUrl: '',
+    });
+    const parsed = new URL(url);
+    expect(parsed.searchParams.has('tray')).toBe(true);
+    expect(parsed.searchParams.get('tray')).toBe('');
   });
 
   it('emits a tab override only when not the default "chat" tab', () => {

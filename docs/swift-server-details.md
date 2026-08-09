@@ -32,9 +32,13 @@ two routes, decided by whether the app allows renderer egress:
   URL carries `tray=<normalized join url>` (the same `?tray=` contract the
   Chrome `--join` path emits via `buildCanonicalTrayLaunchURL`, matched by the
   webapp's `resolveFollowerJoinUrl`), so the pinned first tab boots as a tray
-  FOLLOWER. In-app auto-follow tabs (role=follower) deliberately do not carry
-  it — one app registers exactly one tray follower. Omitting the param was the
-  bug that made egress-allowed apps mint their own tray as a second leader.
+  FOLLOWER. Omitting the param was the bug that made egress-allowed apps mint
+  their own tray as a second leader. Every injector URL carries EXPLICIT tray
+  intent: in-app auto-follow tabs (role=follower) — and a no-join leader — get
+  an explicitly EMPTY `tray=`, because the leader tab persists the join URL
+  into the shared sliccy.ai localStorage and `resolveFollowerJoinUrl`'s
+  storage fallback would otherwise boot every extra window as ANOTHER tray
+  follower. One app registers exactly one tray follower.
 - **Egress blocked** (Signal-class): the overlay can never load, so
   `onEgressBlocked` starts the headless CDP-over-CDP WebRTC follower below.
 

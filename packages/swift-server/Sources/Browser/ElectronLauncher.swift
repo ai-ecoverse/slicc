@@ -372,12 +372,23 @@ struct ThinOverlayURLOptions {
     let config: ThinBridgeConfig
     let role: OverlayRole
     let activeTab: String?
-    /// Normalized tray join URL (`--join`), or nil to boot without tray
-    /// intent. When present the hosted webapp resolves it via
-    /// `resolveFollowerJoinUrl` and attaches to the running leader as a tray
-    /// FOLLOWER instead of minting its own tray — omitting it was the bug
-    /// that made every egress-allowed Electron app silently become a second
-    /// leader.
+    /// Explicit tray intent for the overlay URL, three-valued:
+    ///
+    /// - a normalized join URL (`--join`) → `tray=<url>`: the hosted webapp
+    ///   resolves it via `resolveFollowerJoinUrl` and attaches to the running
+    ///   leader as a tray FOLLOWER instead of minting its own tray — omitting
+    ///   it was the bug that made every egress-allowed Electron app silently
+    ///   become a second leader.
+    /// - the EMPTY string → `tray=` (empty): explicit "no tray" intent. The
+    ///   webapp treats any present `tray` param as explicit intent, which
+    ///   blocks `resolveFollowerJoinUrl`'s localStorage fallback — without
+    ///   it, the join URL the leader tab persists into the shared sliccy.ai
+    ///   storage would re-enter through that fallback and boot every
+    ///   auto-follow tab as ANOTHER tray follower (N followers for one
+    ///   multi-window app).
+    /// - nil → no `tray` param at all; storage-based re-follow stays
+    ///   possible (node-server reserves this for the SLICC Electron float's
+    ///   own window).
     let trayJoinUrl: String?
 
     init(config: ThinBridgeConfig, role: OverlayRole, activeTab: String? = nil, trayJoinUrl: String? = nil) {
@@ -407,7 +418,7 @@ func buildThinOverlayAppURL(options: ThinOverlayURLOptions) -> String {
     if let activeTab = options.activeTab, !activeTab.isEmpty, activeTab != "chat" {
         items.append(URLQueryItem(name: "tab", value: activeTab))
     }
-    if let trayJoinUrl = options.trayJoinUrl, !trayJoinUrl.isEmpty {
+    if let trayJoinUrl = options.trayJoinUrl {
         items.append(URLQueryItem(name: trayQueryParam, value: trayJoinUrl))
     }
     components.queryItems = items
@@ -587,9 +598,11 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     /// Normalized tray join URL (`--join`), forwarded onto the LEADER-role
     /// overlay URL only so the app's pinned first tab attaches to the running
     /// leader as a tray follower. In-app auto-follow tabs (role=follower)
-    /// deliberately do NOT carry it — they follow the first tab, and giving
-    /// every window its own tray membership would register N followers for
-    /// one app.
+    /// instead carry an explicitly EMPTY `tray=` — the leader tab persists
+    /// the join URL into the shared sliccy.ai localStorage, and without
+    /// explicit no-tray intent the `resolveFollowerJoinUrl` storage fallback
+    /// would boot every extra window as ANOTHER tray follower (N followers
+    /// for one app).
     private let trayJoinUrl: String?
 
     /// Test-only injection seam: when set, `loadBootstrapScripts()` returns
@@ -1088,17 +1101,20 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
         let bundleSource = try loadOverlayBundleSource()
         // Only the pinned leader tab carries the tray join URL (see
-        // `trayJoinUrl` doc) — it books the app into the tray as ONE follower.
+        // `trayJoinUrl` doc) — it books the app into the tray as ONE
+        // follower. Both roles carry EXPLICIT tray intent (empty when not
+        // following), so the localStorage fallback can never re-enter.
         let leader = buildElectronOverlayBootstrapScript(
             bundleSource: bundleSource,
             appURL: buildThinOverlayAppURL(
-                options: ThinOverlayURLOptions(config: thinBridge, role: .leader, trayJoinUrl: trayJoinUrl)
+                options: ThinOverlayURLOptions(
+                    config: thinBridge, role: .leader, trayJoinUrl: trayJoinUrl ?? "")
             )
         )
         let follower = buildElectronOverlayBootstrapScript(
             bundleSource: bundleSource,
             appURL: buildThinOverlayAppURL(
-                options: ThinOverlayURLOptions(config: thinBridge, role: .follower)
+                options: ThinOverlayURLOptions(config: thinBridge, role: .follower, trayJoinUrl: "")
             )
         )
         let status = buildElectronOverlayStatusBootstrapScript(

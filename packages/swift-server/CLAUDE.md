@@ -52,8 +52,9 @@ Version-sensitive keys and the multi-line-interpolation footgun: [`docs/swift-se
 Egress-ALLOWED apps attach via the overlay itself: the LEADER-role overlay URL
 carries `tray=<join url>` (the Chrome join path's `?tray=` contract), so the
 pinned first tab boots as a tray follower instead of minting its own tray.
-In-app auto-follow tabs never carry it — one app, one follower. See
-[`docs/swift-server-details.md`](../../docs/swift-server-details.md).
+In-app auto-follow tabs carry an explicitly EMPTY `tray=` (blocks the webapp's
+stored-join-URL fallback at the shared sliccy.ai origin) — one app, one
+follower. See [`docs/swift-server-details.md`](../../docs/swift-server-details.md).
 
 ## Egress-blocked Electron apps (Signal) — CDP over CDP
 

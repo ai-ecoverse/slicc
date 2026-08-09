@@ -1109,17 +1109,30 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(items[trayQueryParam], joinURL)
     }
 
-    func testBuildThinOverlayAppURLEmitsNoTrayParamWithoutJoinURL() throws {
-        for trayJoinUrl in [nil, ""] as [String?] {
-            let url = buildThinOverlayAppURL(
-                options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, trayJoinUrl: trayJoinUrl)
-            )
-            let components = try XCTUnwrap(URLComponents(string: url))
-            let items = Dictionary(
-                uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-            )
-            XCTAssertNil(items[trayQueryParam])
-        }
+    func testBuildThinOverlayAppURLEmitsNoTrayParamWhenOptionAbsent() throws {
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, trayJoinUrl: nil)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        let items = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertNil(items[trayQueryParam])
+    }
+
+    func testBuildThinOverlayAppURLEmitsExplicitlyEmptyTrayParamForNoTrayIntent() throws {
+        // The leader tab persists the join URL into the shared sliccy.ai
+        // localStorage; a later overlay URL with NO tray param would fall back
+        // to that stored value (resolveFollowerJoinUrl step 3) and boot as
+        // another tray follower. An empty `tray=` is explicit intent and
+        // blocks the fallback — used for auto-follow tabs and no-join leader
+        // launches.
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .follower, trayJoinUrl: "")
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        let item = try XCTUnwrap((components.queryItems ?? []).first { $0.name == trayQueryParam })
+        XCTAssertEqual(item.value, "")
     }
 
     func testBuildThinOverlayAppURLEmitsTabOverrideOnlyWhenNonDefault() throws {
