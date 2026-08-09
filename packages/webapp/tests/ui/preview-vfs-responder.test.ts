@@ -179,6 +179,54 @@ describe('installPreviewVfsResponder', () => {
     expect(ch.outbound).toHaveLength(0);
   });
 
+  it('serializes overlapping reads — the backing VFS is not concurrency-safe', async () => {
+    const ch = new FakeChannel();
+    // Instrumented reader: counts in-flight reads and resolves each with
+    // its own path so cross-contamination (the live ZenFS-on-OPFS failure
+    // mode: every concurrent read resolving with one file's bytes) or an
+    // overlap would both be visible.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pendingResolvers: Array<() => void> = [];
+    const stat = vi.fn(async (): Promise<Stats> => ({ type: 'file', size: 1, mtime: 0, ctime: 0 }));
+    const readFile = vi.fn((path: string): Promise<string | Uint8Array> => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve) => {
+        pendingResolvers.push(() => {
+          inFlight--;
+          resolve(`content-of:${path}`);
+        });
+      });
+    });
+    const client: LocalVfsClient = { readDir: vi.fn(async () => []), readFile, stat };
+    installPreviewVfsResponder({ channel: ch, getReader: () => client });
+
+    // Three reads land back-to-back (a parallel module-graph fetch).
+    ch.emit({ type: 'preview-vfs-read', id: 'q1', path: '/dist/index.js', asText: true });
+    ch.emit({ type: 'preview-vfs-read', id: 'q2', path: '/dist/chunk-a.js', asText: true });
+    ch.emit({ type: 'preview-vfs-read', id: 'q3', path: '/dist/chunk-b.js', asText: true });
+    await tick();
+
+    // All three are acked immediately, but only the first read started.
+    expect(acksOf(ch)).toHaveLength(3);
+    expect(readFile).toHaveBeenCalledTimes(1);
+
+    // Draining the queue one read at a time never overlaps calls…
+    while (pendingResolvers.length > 0 || responsesOf(ch).length < 3) {
+      pendingResolvers.shift()?.();
+      await tick();
+    }
+    expect(maxInFlight).toBe(1);
+
+    // …and every response carries ITS OWN file's content, in order.
+    expect(responsesOf(ch)).toEqual([
+      { type: 'preview-vfs-response', id: 'q1', content: 'content-of:/dist/index.js' },
+      { type: 'preview-vfs-response', id: 'q2', content: 'content-of:/dist/chunk-a.js' },
+      { type: 'preview-vfs-response', id: 'q3', content: 'content-of:/dist/chunk-b.js' },
+    ]);
+  });
+
   it('reader swap takes effect on the next request (flag flip path)', async () => {
     const ch = new FakeChannel();
     const initial = makeStubVfs();
