@@ -96,12 +96,44 @@ function resolveNativeMeasure(): (() => Promise<MemoryMeasurement>) | null {
   return fn ? fn.bind(perf) : null;
 }
 
+/**
+ * Strict argv: only `--json` is defined. A typo like `--jsoon` must fail
+ * fast, not silently wait out the randomized measurement and hand an
+ * automation caller the wrong output format.
+ */
+function parseMeminfoArgs(
+  args: readonly string[]
+): { help: true } | { help: false; json: boolean } | { error: string } {
+  if (args[0] === '--help' || args[0] === '-h' || args[0] === 'help') return { help: true };
+  let json = false;
+  for (const arg of args) {
+    if (arg !== '--json') return { error: `unknown option '${arg}' — see \`meminfo --help\`` };
+    json = true;
+  }
+  return { help: false, json };
+}
+
+function renderHuman(result: MemoryMeasurement): string {
+  const lines = [`total: ${formatBytes(result.bytes)}`];
+  const rows = [...result.breakdown]
+    .filter((entry) => entry.bytes > 0)
+    .sort((a, b) => b.bytes - a.bytes);
+  if (rows.length > 0) {
+    lines.push('', 'BYTES      TYPES                ATTRIBUTION');
+    for (const entry of rows) {
+      lines.push(
+        `${formatBytes(entry.bytes).padEnd(10)} ${entry.types.join(',').padEnd(20)} ${attributionLabel(entry)}`
+      );
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 export function createMeminfoCommand(deps: MeminfoDeps = {}): Command {
   return defineCommand('meminfo', async (args) => {
-    if (args[0] === '--help' || args[0] === '-h' || args[0] === 'help') {
-      return { stdout: HELP, stderr: '', exitCode: 0 };
-    }
-    const json = args.includes('--json');
+    const parsed = parseMeminfoArgs(args);
+    if ('error' in parsed) return fail(parsed.error);
+    if (parsed.help) return { stdout: HELP, stderr: '', exitCode: 0 };
 
     const isolated = deps.isIsolated ? deps.isIsolated() : globalThis.crossOriginIsolated === true;
     const measure = deps.measure ?? resolveNativeMeasure();
@@ -121,22 +153,9 @@ export function createMeminfoCommand(deps: MeminfoDeps = {}): Command {
       return fail(err instanceof Error ? err.message : String(err));
     }
 
-    if (json) {
+    if (parsed.json) {
       return { stdout: `${JSON.stringify(result, null, 2)}\n`, stderr: '', exitCode: 0 };
     }
-
-    const lines = [`total: ${formatBytes(result.bytes)}`];
-    const rows = [...result.breakdown]
-      .filter((entry) => entry.bytes > 0)
-      .sort((a, b) => b.bytes - a.bytes);
-    if (rows.length > 0) {
-      lines.push('', 'BYTES      TYPES                ATTRIBUTION');
-      for (const entry of rows) {
-        lines.push(
-          `${formatBytes(entry.bytes).padEnd(10)} ${entry.types.join(',').padEnd(20)} ${attributionLabel(entry)}`
-        );
-      }
-    }
-    return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
+    return { stdout: renderHuman(result), stderr: '', exitCode: 0 };
   });
 }

@@ -43,6 +43,15 @@ describe('meminfo', () => {
     expect(result.stdout).toContain('meminfo --json');
   });
 
+  it('rejects unknown options without running a measurement', async () => {
+    const measure = vi.fn(async () => MEASUREMENT);
+    const cmd = createMeminfoCommand({ isIsolated: () => true, measure });
+    const result = await cmd.execute(['--jsoon'], CTX);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("unknown option '--jsoon'");
+    expect(measure).not.toHaveBeenCalled();
+  });
+
   it('fails with the isolation explanation when not cross-origin isolated', async () => {
     const cmd = createMeminfoCommand({ isIsolated: () => false });
     const result = await cmd.execute([], CTX);
