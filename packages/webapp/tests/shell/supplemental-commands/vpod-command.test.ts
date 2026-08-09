@@ -277,6 +277,21 @@ describe('vpod command lifecycle (fake SDK)', () => {
     expect(sandbox.runs.at(-1)).toEqual(['--weird-first-arg', undefined]);
   });
 
+  it('re-quotes argv for the guest shell (host shell already ate the quotes)', async () => {
+    const sandbox = makeFakeSandbox();
+    const cmd = createVpodCommand({ loadSdk: async () => makeSdk(sandbox) });
+    await cmd.execute(['start'], makeCtx());
+
+    // The host shell delivers `python3 -c "print(6*7)"` as bare argv —
+    // without re-quoting the guest sh chokes on the parens.
+    await cmd.execute(['run', 'python3', '-c', 'print(6*7)'], makeCtx());
+    expect(sandbox.runs.at(-1)).toEqual(["python3 -c 'print(6*7)'", undefined]);
+
+    // sh -c payloads survive as one quoted token, embedded quotes escaped.
+    await cmd.execute(['run', 'sh', '-c', "echo 'a b' && pwd"], makeCtx());
+    expect(sandbox.runs.at(-1)).toEqual([`sh -c 'echo '\\''a b'\\'' && pwd'`, undefined]);
+  });
+
   it('rejects bad --timeout values and empty commands', async () => {
     const cmd = createVpodCommand({ loadSdk: async () => makeSdk(makeFakeSandbox()) });
     expect((await cmd.execute(['run', '--timeout', 'soon', 'ls'], makeCtx())).exitCode).toBe(1);

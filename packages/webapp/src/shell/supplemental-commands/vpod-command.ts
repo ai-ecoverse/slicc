@@ -147,6 +147,19 @@ export function createIpkContextFromCtx(ctx: CommandContext): IpkResolutionConte
   };
 }
 
+/**
+ * Quote one argv token for the guest `/bin/sh`. The host shell already
+ * consumed the user's quotes, so rejoining argv with plain spaces would
+ * hand the guest bare metacharacters (`vpod run python3 -c "print(1)"`
+ * → `python3 -c print(1)` → guest syntax error). Mirrors `quoteArg` in
+ * `builtin-shadow-map.ts`. Guest-side pipes/redirects go through
+ * `vpod run sh -c "..."`, which survives this quoting by construction.
+ */
+function shellQuoteArg(arg: string): string {
+  if (/^[A-Za-z0-9_./:=@%^,+-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
 function fail(msg: string): CmdResult {
   return { stdout: '', stderr: `vpod: ${msg}\n`, exitCode: 1 };
 }
@@ -348,7 +361,7 @@ async function vpodRun(
     }
     break;
   }
-  const command = args.slice(i).join(' ').trim();
+  const command = args.slice(i).map(shellQuoteArg).join(' ').trim();
   if (!command) return fail('run requires a command — e.g. `vpod run uname -a`');
 
   let record = getPod(name);
