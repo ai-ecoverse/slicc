@@ -3,6 +3,7 @@ import {
   mergeSidecarEntries,
   type SidecarDirtyState,
   type SidecarIndexJson,
+  stripSidecarSelfEntry,
 } from '../../src/fs/sidecar-merge.js';
 
 const entry = (tag: string) => ({ tag });
@@ -44,6 +45,16 @@ describe('mergeSidecarEntries', () => {
     expect(merged.entries?.['/etc']).toEqual(entry('dir-repaired'));
     expect(merged.entries?.['/scoops/x/.github']).toEqual(entry('dir-repaired'));
     expect(merged.entries?.['/tmp/own-new.txt']).toEqual(entry('file-own'));
+  });
+
+  it('never persists a self-referential /.metadata.json entry (the boot brick)', () => {
+    // ZenFS indexes its own sidecar file, so the entry can arrive from either
+    // the on-disk base or this context's own index. A persisted self-entry
+    // re-bricks the next cold-boot crossCopy; the merge must strip it.
+    const onDisk = doc({ '/': entry('root'), '/.metadata.json': entry('disk-self') });
+    const own = doc({ '/': entry('root'), '/.metadata.json': entry('own-self') });
+    const merged = mergeSidecarEntries(onDisk, own, dirty(['/.metadata.json']));
+    expect(merged.entries).not.toHaveProperty('/.metadata.json');
   });
 
   it('an empty dirty set leaves the on-disk entries untouched (root aside)', () => {
@@ -112,5 +123,26 @@ describe('mergeSidecarEntries', () => {
   it('tolerates documents with absent entries maps', () => {
     const merged = mergeSidecarEntries({ version: 1 }, { version: 1 }, dirty(['/x']));
     expect(merged.entries).toEqual({});
+  });
+});
+
+describe('stripSidecarSelfEntry', () => {
+  // The writer applies this to its full-snapshot recovery path, which skips
+  // mergeSidecarEntries — the raw ZenFS index there still carries the self-entry.
+  it('drops the self-referential entry, leaving real entries intact', () => {
+    const d = doc({ '/': entry('root'), '/.metadata.json': entry('self'), '/a.txt': entry('a') });
+    const out = stripSidecarSelfEntry(d);
+    expect(out.entries).not.toHaveProperty('/.metadata.json');
+    expect(out.entries?.['/a.txt']).toEqual(entry('a'));
+    expect(out).toBe(d); // mutates in place and returns the same doc
+  });
+
+  it('is a no-op when the self-entry is absent', () => {
+    const d = doc({ '/a.txt': entry('a') });
+    expect(stripSidecarSelfEntry(d).entries).toEqual({ '/a.txt': entry('a') });
+  });
+
+  it('tolerates a document with no entries map', () => {
+    expect(() => stripSidecarSelfEntry({ version: 1 })).not.toThrow();
   });
 });

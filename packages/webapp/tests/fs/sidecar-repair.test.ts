@@ -80,7 +80,48 @@ describe('repairSidecarDocument', () => {
       doc,
       probeFrom({ '/ok.txt': { kind: 'file', size: 4 } })
     );
-    expect(summary).toEqual({ kindFixed: [], sizesFixed: 0, dropped: 0, changed: false });
+    expect(summary).toEqual({
+      kindFixed: [],
+      sizesFixed: 0,
+      dropped: 0,
+      selfEntryDropped: false,
+      changed: false,
+    });
+  });
+
+  it('drops the self-referential /.metadata.json entry instead of truing it up', async () => {
+    // The live boot brick: the sidecar records its OWN size, which can never
+    // match reality because writing the sidecar changes that very size. Pre-fix
+    // the repair trued the size up and the rewrite invalidated it again — a
+    // non-converging boot loop. Now the entry is dropped and real files are left
+    // untouched.
+    const doc: SidecarIndexJson = {
+      entries: { '/': dir(), '/.metadata.json': file(3403559), '/ok.txt': file(4) },
+    };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({
+        '/.metadata.json': { kind: 'file', size: 3336477 },
+        '/ok.txt': { kind: 'file', size: 4 },
+      })
+    );
+    expect(summary.selfEntryDropped).toBe(true);
+    expect(summary.changed).toBe(true);
+    expect(summary.sizesFixed).toBe(0); // dropped, NOT trued up
+    expect(doc.entries).not.toHaveProperty('/.metadata.json');
+    expect(doc.entries).toHaveProperty('/ok.txt'); // real files survive
+  });
+
+  it('converges: a repaired sidecar has no self-entry left to re-fix', async () => {
+    const doc: SidecarIndexJson = { entries: { '/.metadata.json': file(100) } };
+    const probe = probeFrom({ '/.metadata.json': { kind: 'file', size: 50 } });
+    const first = await repairSidecarDocument(doc, probe);
+    expect(first.changed).toBe(true);
+    // Second pass over the already-repaired doc finds nothing — the
+    // non-converging boot-repair loop cannot recur.
+    const second = await repairSidecarDocument(doc, probe);
+    expect(second.changed).toBe(false);
+    expect(second.selfEntryDropped).toBe(false);
   });
 });
 
@@ -89,6 +130,7 @@ describe('resolveWithSidecarRepair', () => {
     kindFixed: ['/x'],
     sizesFixed: 0,
     dropped: 0,
+    selfEntryDropped: false,
     changed: true,
   };
 

@@ -32,6 +32,7 @@ import {
   mergeSidecarEntries,
   type SidecarDirtyState,
   type SidecarIndexJson,
+  stripSidecarSelfEntry,
 } from './sidecar-merge.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
@@ -373,6 +374,7 @@ export class VirtualFS {
             kindFixed: summary.kindFixed,
             sizesFixed: summary.sizesFixed,
             dropped: summary.dropped,
+            selfEntryDropped: summary.selfEntryDropped,
           })
       )) as { index?: { toJSON: () => unknown } };
       try {
@@ -770,7 +772,12 @@ export class VirtualFS {
       }
       if (onDisk) merged = mergeSidecarEntries(onDisk, own, dirty);
     }
-    const json = JSON.stringify(merged);
+    // `merged` is the raw ZenFS index (`own`) whenever the merge is skipped —
+    // no dirty state, or an absent/unreadable on-disk sidecar (seed/recovery).
+    // That index carries the self-referential `.metadata.json` entry ZenFS's
+    // crossCopy adds, which would re-brick the next boot; strip it on every
+    // path, not only inside `mergeSidecarEntries`.
+    const json = JSON.stringify(stripSidecarSelfEntry(merged));
     const fileHandle = await handle.getFileHandle('.metadata.json', { create: true });
     const writable = await fileHandle.createWritable();
     await writable.write(json);
