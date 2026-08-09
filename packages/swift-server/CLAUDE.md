@@ -47,6 +47,14 @@ Version-sensitive keys and the multi-line-interpolation footgun: [`docs/swift-se
 - `Sources/WebSocket/` — CDP proxy and lick WebSocket system.
 - `Tests/` — package tests.
 
+## Electron `--join` — egress decides the attach route
+
+Egress-ALLOWED apps attach via the overlay itself: the LEADER-role overlay URL
+carries `tray=<join url>` (the Chrome join path's `?tray=` contract), so the
+pinned first tab boots as a tray follower instead of minting its own tray.
+In-app auto-follow tabs never carry it — one app, one follower. See
+[`docs/swift-server-details.md`](../../docs/swift-server-details.md).
+
 ## Egress-blocked Electron apps (Signal) — CDP over CDP
 
 Signal-class Electron apps deny **all** renderer egress at the main process (`net::ERR_ACCESS_DENIED`), beneath `Page.setBypassCSP` / CDP Fetch. `ElectronOverlayEgress.swift` detects this via `Network.loadingFailed` on the overlay iframe and shows a **status-only** overlay (mirrors node-server's `electron-controller.ts`).

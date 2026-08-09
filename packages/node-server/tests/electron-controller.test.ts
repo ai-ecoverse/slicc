@@ -978,6 +978,27 @@ describe('buildThinOverlayAppUrl', () => {
     expect(new URL(url).searchParams.get(BRIDGE_ROLE_QUERY_PARAM)).toBe(BRIDGE_ROLE_FOLLOWER);
   });
 
+  it('carries the tray join URL so a --join launch attaches as a tray follower, not a second leader', () => {
+    // Regression: an egress-ALLOWED Electron app (bb.app) launched with
+    // --join got an overlay URL without any tray param, so the webapp booted
+    // in electron-overlay mode and minted its OWN tray as leader instead of
+    // joining the running one.
+    const joinUrl = 'https://www.sliccy.ai/join/292c4f92-19ad-495e-a4f9-12f0d4631e2e.07bb9dad';
+    const url = buildThinOverlayAppUrl({
+      ...THIN_BRIDGE,
+      role: BRIDGE_ROLE_LEADER,
+      trayJoinUrl: joinUrl,
+    });
+    expect(new URL(url).searchParams.get('tray')).toBe(joinUrl);
+  });
+
+  it('emits no tray param without a join URL (null and absent alike)', () => {
+    for (const trayJoinUrl of [undefined, null]) {
+      const url = buildThinOverlayAppUrl({ ...THIN_BRIDGE, role: BRIDGE_ROLE_LEADER, trayJoinUrl });
+      expect(new URL(url).searchParams.get('tray')).toBeNull();
+    }
+  });
+
   it('emits a tab override only when not the default "chat" tab', () => {
     expect(
       new URL(

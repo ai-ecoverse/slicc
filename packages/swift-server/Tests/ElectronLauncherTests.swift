@@ -1095,6 +1095,33 @@ final class ElectronLauncherTests: XCTestCase {
         XCTAssertEqual(items[bridgeRoleQueryParam], bridgeRoleFollower)
     }
 
+    func testBuildThinOverlayAppURLCarriesTrayJoinURLForJoinLaunches() throws {
+        // Regression: an egress-ALLOWED Electron app (bb.app) launched with
+        // --join got an overlay URL without any tray param, so the webapp
+        // booted in electron-overlay mode and minted its OWN tray as leader
+        // instead of joining the running one.
+        let joinURL = "https://www.sliccy.ai/join/292c4f92-19ad-495e-a4f9-12f0d4631e2e.07bb9dad"
+        let url = buildThinOverlayAppURL(
+            options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, trayJoinUrl: joinURL)
+        )
+        let components = try XCTUnwrap(URLComponents(string: url))
+        let items = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(items[trayQueryParam], joinURL)
+    }
+
+    func testBuildThinOverlayAppURLEmitsNoTrayParamWithoutJoinURL() throws {
+        for trayJoinUrl in [nil, ""] as [String?] {
+            let url = buildThinOverlayAppURL(
+                options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, trayJoinUrl: trayJoinUrl)
+            )
+            let components = try XCTUnwrap(URLComponents(string: url))
+            let items = Dictionary(
+                uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+            )
+            XCTAssertNil(items[trayQueryParam])
+        }
+    }
+
     func testBuildThinOverlayAppURLEmitsTabOverrideOnlyWhenNonDefault() throws {
         let chatURL = buildThinOverlayAppURL(
             options: ThinOverlayURLOptions(config: Self.thinBridge, role: .leader, activeTab: "chat")

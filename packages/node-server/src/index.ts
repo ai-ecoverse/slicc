@@ -76,6 +76,7 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { registerSudoApproveEndpoint } from './sudo/endpoint.js';
+import { parseTrayJoinUrl } from './tray-url-shared.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');
@@ -1018,6 +1019,13 @@ async function startOverlayInjector(
       servePort,
       projectRoot: PROJECT_ROOT,
       thinBridge,
+      // Hand `--join` to the overlay webapp as the same `tray=<join url>`
+      // contract the Chrome join path emits, so an egress-ALLOWED app
+      // attaches to the running leader as a tray follower. Without this the
+      // overlay boots in electron-overlay mode and mints its own tray as a
+      // second leader. (The egress-BLOCKED hook below joins via the headless
+      // WebRTC follower instead — the overlay never loads there.)
+      trayJoinUrl: parseTrayJoinUrl(state.discoveredTrayJoinUrl)?.joinUrl ?? null,
       // When the app blocks renderer egress (hosted overlay can't load), expose
       // its CDP to the tray leader via the headless follower instead.
       onEgressBlocked: () => {

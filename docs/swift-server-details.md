@@ -23,6 +23,21 @@ CI runs whatever `macos-latest` ships (6.3 today).
 
 Avoid multi-line string interpolations inside a multi-line string literal: swift-format re-indents the two independently and can emit non-compiling Swift. Hoist the interpolated expression into a local instead.
 
+## `--join` on the Electron path — two attach routes
+
+An Electron app launched with `--join` attaches to the running leader by one of
+two routes, decided by whether the app allows renderer egress:
+
+- **Egress allowed** (most apps): the overlay injector's LEADER-role bootstrap
+  URL carries `tray=<normalized join url>` (the same `?tray=` contract the
+  Chrome `--join` path emits via `buildCanonicalTrayLaunchURL`, matched by the
+  webapp's `resolveFollowerJoinUrl`), so the pinned first tab boots as a tray
+  FOLLOWER. In-app auto-follow tabs (role=follower) deliberately do not carry
+  it — one app registers exactly one tray follower. Omitting the param was the
+  bug that made egress-allowed apps mint their own tray as a second leader.
+- **Egress blocked** (Signal-class): the overlay can never load, so
+  `onEgressBlocked` starts the headless CDP-over-CDP WebRTC follower below.
+
 ## CDP-over-CDP follower
 
 `ElectronTrayFollower.swift` joins the tray, answers the leader's WebRTC offer, opens the `tray-control` channel, sends `hello` + `targets.advertise`, and routes inbound messages (ping→pong, `cdp.request`→servicer). The signalling + WebRTC + supersede-redirect transport is the shared `TrayFollowerConnector` from the `packages/swift-trayfollower` package's `SliccTrayFollower` product, also used by the iOS app — the WebRTC framework is not double-shipped.
