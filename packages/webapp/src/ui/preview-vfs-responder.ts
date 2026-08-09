@@ -35,6 +35,14 @@ export type PreviewVfsResponse =
    * large read is never issued twice.
    */
   | { type: 'preview-vfs-ack'; id: string }
+  /**
+   * Dequeue notification: the serialized read pipeline reached this request
+   * and its read is starting NOW. Requesters restart their timeout budget on
+   * this signal so time spent queued behind a large read (e.g. a multi-hundred-
+   * MB model file) does not count against the read's own deadline. Requesters
+   * that predate the signal simply never restart — same behavior as before.
+   */
+  | { type: 'preview-vfs-start'; id: string }
   | { type: 'preview-vfs-response'; id: string; content: string | Uint8Array }
   | { type: 'preview-vfs-response'; id: string; error: string };
 
@@ -75,52 +83,74 @@ export function installPreviewVfsResponder(
   opts: PreviewVfsResponderOptions
 ): PreviewVfsResponderHandle {
   const { channel, getReader, logger } = opts;
+
+  async function respond(id: string, path: string, asText: boolean): Promise<void> {
+    try {
+      const reader = getReader();
+      // ZenFS' readFile does not throw EISDIR on a directory — it returns
+      // the directory entry's bytes — so the preview SW's directory →
+      // index.html fallback (which keys off an EISDIR error) never fires.
+      // Detect directories with a stat and surface EISDIR explicitly, the
+      // same POSIX-contract enforcement shell/vfs-adapter.ts applies for
+      // ZenFS. stat() throws ENOENT for missing paths, so the silent-404
+      // path below is preserved.
+      const stats = await reader.stat(path);
+      if (stats.type === 'directory') {
+        channel.postMessage({
+          type: 'preview-vfs-response',
+          id,
+          error: `EISDIR: is a directory '${path}'`,
+        } satisfies PreviewVfsResponse);
+        return;
+      }
+      const encoding = asText ? 'utf-8' : 'binary';
+      const content = await reader.readFile(path, { encoding });
+      channel.postMessage({
+        type: 'preview-vfs-response',
+        id,
+        content,
+      } satisfies PreviewVfsResponse);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (!errMsg.includes('ENOENT')) {
+        logger?.error('Preview VFS read failed', { path, error: errMsg });
+      }
+      channel.postMessage({
+        type: 'preview-vfs-response',
+        id,
+        error: errMsg,
+      } satisfies PreviewVfsResponse);
+    }
+  }
+
+  // Reads are SERIALIZED through this per-responder chain. The kernel VFS
+  // (ZenFS WebAccess-on-OPFS behind the RemoteVfsClient RPC) is not safe
+  // under same-context concurrent reads: overlapping readFile calls can
+  // resolve with each other's content. Observed live with a parallel
+  // module-graph fetch through the preview SW — every chunk URL of an
+  // ipk-installed package came back with the entry file's bytes, so the
+  // import linked but failed with a missing-export error. Sequential
+  // reads are verified correct; the throughput cost is negligible next
+  // to the BroadcastChannel + RPC round trip each read already pays.
+  let queue: Promise<void> = Promise.resolve();
+
   const listener = (event: MessageEvent): void => {
     const data = event.data as PreviewVfsReadRequest | undefined;
     if (data?.type !== 'preview-vfs-read') return;
     const { id, path, asText } = data;
-    // Ack on receipt so the SW halts its cold-start re-post loop before this
-    // (potentially multi-MB) read begins; without it a slow read would be
-    // re-requested and duplicated.
+    // Ack on receipt (synchronously, before queueing) so the SW halts its
+    // cold-start re-post loop before this (potentially multi-MB) read
+    // begins; without it a slow read would be re-requested and duplicated.
     channel.postMessage({ type: 'preview-vfs-ack', id } satisfies PreviewVfsResponse);
-    void (async () => {
-      try {
-        const reader = getReader();
-        // ZenFS' readFile does not throw EISDIR on a directory — it returns
-        // the directory entry's bytes — so the preview SW's directory →
-        // index.html fallback (which keys off an EISDIR error) never fires.
-        // Detect directories with a stat and surface EISDIR explicitly, the
-        // same POSIX-contract enforcement shell/vfs-adapter.ts applies for
-        // ZenFS. stat() throws ENOENT for missing paths, so the silent-404
-        // path below is preserved.
-        const stats = await reader.stat(path);
-        if (stats.type === 'directory') {
-          channel.postMessage({
-            type: 'preview-vfs-response',
-            id,
-            error: `EISDIR: is a directory '${path}'`,
-          } satisfies PreviewVfsResponse);
-          return;
-        }
-        const encoding = asText ? 'utf-8' : 'binary';
-        const content = await reader.readFile(path, { encoding });
-        channel.postMessage({
-          type: 'preview-vfs-response',
-          id,
-          content,
-        } satisfies PreviewVfsResponse);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (!errMsg.includes('ENOENT')) {
-          logger?.error('Preview VFS read failed', { path, error: errMsg });
-        }
-        channel.postMessage({
-          type: 'preview-vfs-response',
-          id,
-          error: errMsg,
-        } satisfies PreviewVfsResponse);
-      }
-    })();
+    // `respond` never rejects (its body is fully try/caught), but guard the
+    // chain anyway — a poisoned queue would silently starve every later read.
+    const dequeue = (): Promise<void> => {
+      // Signal dequeue-time so the requester's timeout measures the read
+      // itself, not its wait in the backlog.
+      channel.postMessage({ type: 'preview-vfs-start', id } satisfies PreviewVfsResponse);
+      return respond(id, path, asText);
+    };
+    queue = queue.then(dequeue, dequeue);
   };
   channel.addEventListener('message', listener);
   return {

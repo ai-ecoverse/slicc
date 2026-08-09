@@ -133,11 +133,16 @@ export async function readViaMainPage(
       }
     }
 
-    const timer = setTimeout(() => {
-      stopRetries();
-      channel.removeEventListener('message', handler);
-      resolve({ ok: false, error: null });
-    }, timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    function armTimeout(): void {
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => {
+        stopRetries();
+        channel.removeEventListener('message', handler);
+        resolve({ ok: false, error: null });
+      }, timeoutMs);
+    }
+    armTimeout();
 
     function handler(event: MessageEvent): void {
       const data = event.data as
@@ -148,6 +153,14 @@ export async function readViaMainPage(
       // for the actual response (a large read may still be in flight).
       if (data.type === 'preview-vfs-ack') {
         stopRetries();
+        return;
+      }
+      // The serialized responder dequeued this read — restart the budget so
+      // time spent queued behind a large read (multi-hundred-MB model files)
+      // does not count against this read's own deadline.
+      if (data.type === 'preview-vfs-start') {
+        stopRetries();
+        armTimeout();
         return;
       }
       if (data.type !== 'preview-vfs-response') return;

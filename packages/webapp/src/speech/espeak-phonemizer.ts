@@ -101,13 +101,22 @@ function readVfsBytes(path: string): Promise<Uint8Array> {
       channel.close();
       cb();
     };
-    const timer = setTimeout(
-      () => done(() => reject(new Error(`ENOENT: ${path} (timed out)`))),
-      30000
-    );
+    let timer: ReturnType<typeof setTimeout>;
+    const armTimeout = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => done(() => reject(new Error(`ENOENT: ${path} (timed out)`))), 30000);
+    };
+    armTimeout();
     const listener = (ev: MessageEvent): void => {
       const data = ev.data as { type?: string; id?: string; content?: unknown; error?: string };
-      if (data?.type !== 'preview-vfs-response' || data.id !== id) return;
+      if (!data || data.id !== id) return;
+      // Serialized responder dequeued this read — restart the budget so time
+      // queued behind another large read doesn't count against this one.
+      if (data.type === 'preview-vfs-start') {
+        armTimeout();
+        return;
+      }
+      if (data.type !== 'preview-vfs-response') return;
       clearTimeout(timer);
       if (typeof data.error === 'string') {
         done(() => reject(new Error(data.error)));
