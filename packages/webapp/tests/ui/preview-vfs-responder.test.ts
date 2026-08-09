@@ -74,6 +74,14 @@ function responsesOf(ch: FakeChannel): PreviewVfsResponse[] {
   );
 }
 
+/** Outbound `preview-vfs-start` (dequeue) envelopes. */
+function startsOf(ch: FakeChannel): Array<{ type: 'preview-vfs-start'; id: string }> {
+  return ch.outbound.filter(
+    (m): m is { type: 'preview-vfs-start'; id: string } =>
+      (m as { type?: string })?.type === 'preview-vfs-start'
+  );
+}
+
 /** Outbound `preview-vfs-ack` envelopes. */
 function acksOf(ch: FakeChannel): Array<{ type: 'preview-vfs-ack'; id: string }> {
   return ch.outbound.filter(
@@ -208,9 +216,13 @@ describe('installPreviewVfsResponder', () => {
     ch.emit({ type: 'preview-vfs-read', id: 'q3', path: '/dist/chunk-b.js', asText: true });
     await tick();
 
-    // All three are acked immediately, but only the first read started.
+    // All three are acked immediately, but only the first read started —
+    // and only the first got its dequeue (`start`) signal, which is what
+    // lets requesters restart their timeout budget at read-start instead
+    // of burning it in the backlog.
     expect(acksOf(ch)).toHaveLength(3);
     expect(readFile).toHaveBeenCalledTimes(1);
+    expect(startsOf(ch).map((s) => s.id)).toEqual(['q1']);
 
     // Draining the queue one read at a time never overlaps calls…
     while (pendingResolvers.length > 0 || responsesOf(ch).length < 3) {
@@ -218,6 +230,9 @@ describe('installPreviewVfsResponder', () => {
       await tick();
     }
     expect(maxInFlight).toBe(1);
+
+    // Each read got its dequeue signal exactly once, in queue order.
+    expect(startsOf(ch).map((s) => s.id)).toEqual(['q1', 'q2', 'q3']);
 
     // …and every response carries ITS OWN file's content, in order.
     expect(responsesOf(ch)).toEqual([

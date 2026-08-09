@@ -192,18 +192,30 @@ function readVfsBytes(path: string): Promise<Uint8Array> {
       channel.close();
       cb();
     };
-    const timer = setTimeout(() => {
-      const err = new Error(`ENOENT: ${path} (preview-vfs responder timed out)`) as Error & {
-        [VFS_ENOENT_MARKER]?: true;
-      };
-      err[VFS_ENOENT_MARKER] = true;
-      finish(() => reject(err));
-    }, VFS_READ_TIMEOUT_MS);
+    let timer: ReturnType<typeof setTimeout>;
+    const armTimeout = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const err = new Error(`ENOENT: ${path} (preview-vfs responder timed out)`) as Error & {
+          [VFS_ENOENT_MARKER]?: true;
+        };
+        err[VFS_ENOENT_MARKER] = true;
+        finish(() => reject(err));
+      }, VFS_READ_TIMEOUT_MS);
+    };
+    armTimeout();
     const listener = (ev: MessageEvent): void => {
       const data = ev.data as
         | { type?: string; id?: string; content?: string | Uint8Array; error?: string }
         | undefined;
-      if (data?.type !== 'preview-vfs-response' || data.id !== id) return;
+      if (!data || data.id !== id) return;
+      // Serialized responder dequeued this read — restart the budget so time
+      // queued behind another large read doesn't count against this one.
+      if (data.type === 'preview-vfs-start') {
+        armTimeout();
+        return;
+      }
+      if (data.type !== 'preview-vfs-response') return;
       clearTimeout(timer);
       if (typeof data.error === 'string') {
         const err = new Error(data.error) as Error & { [VFS_ENOENT_MARKER]?: true };

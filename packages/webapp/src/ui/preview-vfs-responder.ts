@@ -35,6 +35,14 @@ export type PreviewVfsResponse =
    * large read is never issued twice.
    */
   | { type: 'preview-vfs-ack'; id: string }
+  /**
+   * Dequeue notification: the serialized read pipeline reached this request
+   * and its read is starting NOW. Requesters restart their timeout budget on
+   * this signal so time spent queued behind a large read (e.g. a multi-hundred-
+   * MB model file) does not count against the read's own deadline. Requesters
+   * that predate the signal simply never restart — same behavior as before.
+   */
+  | { type: 'preview-vfs-start'; id: string }
   | { type: 'preview-vfs-response'; id: string; content: string | Uint8Array }
   | { type: 'preview-vfs-response'; id: string; error: string };
 
@@ -136,10 +144,13 @@ export function installPreviewVfsResponder(
     channel.postMessage({ type: 'preview-vfs-ack', id } satisfies PreviewVfsResponse);
     // `respond` never rejects (its body is fully try/caught), but guard the
     // chain anyway — a poisoned queue would silently starve every later read.
-    queue = queue.then(
-      () => respond(id, path, asText),
-      () => respond(id, path, asText)
-    );
+    const dequeue = (): Promise<void> => {
+      // Signal dequeue-time so the requester's timeout measures the read
+      // itself, not its wait in the backlog.
+      channel.postMessage({ type: 'preview-vfs-start', id } satisfies PreviewVfsResponse);
+      return respond(id, path, asText);
+    };
+    queue = queue.then(dequeue, dequeue);
   };
   channel.addEventListener('message', listener);
   return {

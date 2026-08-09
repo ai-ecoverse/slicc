@@ -23,6 +23,7 @@ import {
   type PreviewChannel,
   pathnameOf,
   projectServeVfsPath,
+  readViaMainPage,
 } from '../../src/ui/preview-sw-handler.js';
 
 type ResponderReply =
@@ -177,6 +178,39 @@ describe('handlePreviewRequest', () => {
       expect(r.status).toBe(200);
       expect(await r.text()).toBe('late');
       expect(ch.reads.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restarts the timeout budget on the responder dequeue (start) signal', async () => {
+    // Serialized responder: a read queued behind a large one must get its
+    // FULL budget measured from when its read actually starts, not from
+    // when it was posted — otherwise backlog time alone times it out.
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(ev: MessageEvent) => void>();
+      let id = '';
+      const ch: PreviewChannel = {
+        postMessage: (data: unknown) => {
+          const msg = data as { type?: string; id?: string };
+          if (msg?.type === 'preview-vfs-read' && msg.id) id = msg.id;
+        },
+        addEventListener: (_t, l) => listeners.add(l),
+        removeEventListener: (_t, l) => listeners.delete(l),
+      };
+      const emit = (data: unknown): void => {
+        for (const l of listeners) l({ data } as MessageEvent);
+      };
+
+      const pending = readViaMainPage(ch, '/queued.bin', false, 1000);
+      // Just before the original deadline the responder dequeues the read.
+      await vi.advanceTimersByTimeAsync(900);
+      emit({ type: 'preview-vfs-start', id });
+      // Past the ORIGINAL deadline but within the restarted budget.
+      await vi.advanceTimersByTimeAsync(900);
+      emit({ type: 'preview-vfs-response', id, content: 'late-but-alive' });
+      await expect(pending).resolves.toEqual({ ok: true, content: 'late-but-alive' });
     } finally {
       vi.useRealTimers();
     }
