@@ -21,9 +21,12 @@ const STYLE = `
 }
 /* Pin the dock to its full 48px basis. This selector outranks the dock's own
    "flex: 0 0 48px" rule, so an "auto" basis here would collapse the rail to its
-   ~35px icon-content width and leave a bare-shader strip down the right edge. */
+   ~35px icon-content width and leave a bare-shader strip down the right edge.
+   z-index 3 lifts the rail above the composer's full-bleed band (z-index 2,
+   extending -100vw rightward — slicc-composer.ts), which would otherwise tint
+   and blur the rail's own opaque strip. */
 .slicc-shell > slicc-dock,
-.slicc-shell > .dock { flex: 0 0 48px; }
+.slicc-shell > .dock { flex: 0 0 48px; position: relative; z-index: 3; }
 `;
 
 const STYLE_ID = 'slicc-shell-style';

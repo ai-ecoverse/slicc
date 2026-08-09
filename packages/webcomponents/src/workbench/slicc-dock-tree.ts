@@ -142,12 +142,42 @@ slicc-dock-tree .dock-tree__tile--chrome {
     rgba(10, 10, 10, 0.1) 0 14px 36px -12px,
     rgba(10, 10, 10, 0.05) 0 4px 10px -4px;
   overflow: hidden;
+  /* Float above the composer's full-bleed band (z-index 2 + a ::before that
+     extends under the pane — slicc-composer.ts): the pane is chrome ON TOP
+     of the band, not content beneath it. */
+  z-index: 3;
 }
 .dark slicc-dock-tree .dock-tree__tile--chrome,
 [data-theme="dark"] slicc-dock-tree .dock-tree__tile--chrome {
   box-shadow:
     rgba(0, 0, 0, 0.45) 0 14px 36px -12px,
     rgba(0, 0, 0, 0.3) 0 4px 10px -4px;
+}
+/* Slide-in for a NEWLY PLACED tool tile — the prototype workbench's .38s
+   cubic-bezier(.4,0,.2,1) open, re-homed as an entrance animation because the
+   dock-tree rebuilds its DOM on every render (a width transition has no
+   persistent element to ride). Applied only when the render actually ADDED
+   the surface to the placed set — divider-drag re-renders (one per
+   pointermove) keep the set unchanged and never replay it. Closing is
+   instant: an exit animation would mean keeping dead tiles in the tree past
+   their render. */
+slicc-dock-tree .dock-tree__tile--enter {
+  animation: slicc-dock-tile-in 0.38s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes slicc-dock-tile-in {
+  from {
+    transform: translateX(32px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  slicc-dock-tree .dock-tree__tile--enter {
+    animation: none;
+  }
 }
 slicc-dock-tree .dock-tree__tile-move {
   position: absolute;
@@ -724,8 +754,10 @@ function buildPreviewEl(): HTMLDivElement {
  * actually change the tree.
  *
  * **Programmatic sizing API**: `setSurfaceSize(surfaceId, size)` resizes the
- * leaf holding `surfaceId` to an exact width/height, in pixels or as a
- * percent (0–100) of the space its current sibling group renders into — the
+ * leaf holding `surfaceId` so its VISIBLE surface lands on an exact
+ * width/height, in pixels (the leaf itself grows by the tile chrome's margin
+ * + border inset) or as a percent (0–100) of the space its current sibling
+ * group renders into — the
  * agent-facing counterpart to dragging a divider by hand (see
  * `#sizeAxesFor`/`#applyAxisSize`). Only the axis(es) that leaf actually has
  * a lever for are honored (e.g. a top/bottom zone root has no width lever —
@@ -765,6 +797,13 @@ export class SliccDockTree extends HTMLElement {
 
   /** Maps a rendered `.dock-tree__tile` element back to the `DockNode` it displays (identity, current render only). */
   readonly #tileNodeMap = new WeakMap<HTMLElement, DockNode>();
+
+  /**
+   * The surfaceIds the PREVIOUS render placed — the diff base that decides
+   * which tool tiles are entrances (slide-in) vs. carry-overs. Starts empty,
+   * so a restored tree's tool panes slide in once on boot too.
+   */
+  #prevPlaced: ReadonlySet<string> = new Set();
 
   readonly #root: HTMLDivElement = buildRootEl();
 
@@ -975,17 +1014,37 @@ export class SliccDockTree extends HTMLElement {
     if (!axes) return false;
 
     const surfaceEl = this.#collectSurfacePool().get(surfaceId) ?? null;
+    // The LEAF is the flex item the weights actually size; on a chrome tile
+    // (every non-chat leaf) the surface rect is smaller than the leaf's flex
+    // allocation by the tile's 12px float margins + 1px borders. Calibrate
+    // the weight inversion off the leaf rect — still exactly proportional to
+    // currentFr / sum(groupFr) — and grow a px target by the measured inset
+    // so the VISIBLE surface (what the caller sees) converges to the asked
+    // pixels. A flat (chat) or unrendered leaf measures a zero inset and
+    // behaves as before.
     const rect = surfaceEl?.getBoundingClientRect() ?? null;
+    const leafRect = surfaceEl?.closest('.dock-tree__leaf')?.getBoundingClientRect() ?? rect;
 
     let changed = false;
     if (axes.width && (size.widthPx != null || size.widthPercent != null)) {
+      const inset = leafRect && rect ? Math.max(0, leafRect.width - rect.width) : 0;
       changed =
-        this.#applyAxisSize(axes.width, size.widthPx, size.widthPercent, rect?.width) || changed;
+        this.#applyAxisSize(
+          axes.width,
+          size.widthPx == null ? undefined : size.widthPx + inset,
+          size.widthPercent,
+          leafRect?.width
+        ) || changed;
     }
     if (axes.height && (size.heightPx != null || size.heightPercent != null)) {
+      const inset = leafRect && rect ? Math.max(0, leafRect.height - rect.height) : 0;
       changed =
-        this.#applyAxisSize(axes.height, size.heightPx, size.heightPercent, rect?.height) ||
-        changed;
+        this.#applyAxisSize(
+          axes.height,
+          size.heightPx == null ? undefined : size.heightPx + inset,
+          size.heightPercent,
+          leafRect?.height
+        ) || changed;
     }
 
     if (changed) {
@@ -1084,11 +1143,14 @@ export class SliccDockTree extends HTMLElement {
    * Resolve a `px`/`percent` target (percent wins if both given) into a
    * fraction of `axis`'s group and apply it via `weightForFraction`. A
    * `percent` target needs no measurement at all — it IS the fraction. A
-   * `px` target self-calibrates off `renderedPx` (the leaf's own current
-   * live size along this axis): `renderedPx` already reflects whatever the
-   * browser's actual flex layout (gaps, dividers, everything) produced for
+   * `px` target self-calibrates off `renderedPx` (the LEAF's own current
+   * live size along this axis — not the surface's, which a chrome tile's
+   * margins shrink): `renderedPx` already reflects whatever the browser's
+   * actual flex layout (gaps, dividers, everything) produced for
    * `axis.currentFr / sum(axis.groupFr)`, so inverting that ratio recovers
    * the group's live pixel span without re-deriving CSS geometry by hand.
+   * The caller (`setSurfaceSize`) has already folded the chrome inset into
+   * `px`, so the weight applied here lands the visible surface on target.
    */
   #applyAxisSize(
     axis: SizeAxis,
@@ -1164,6 +1226,10 @@ export class SliccDockTree extends HTMLElement {
       parkSurfaceInline(surfaceEl);
       if (surfaceEl.parentElement !== this.#parking) this.#parking.appendChild(surfaceEl);
     }
+
+    // AFTER the tiles were built against the old base (see #buildTile's
+    // entrance diff), advance it to this render's placed set.
+    this.#prevPlaced = usedIds;
 
     // Every render (setTree restore included — which deliberately does NOT
     // fire dock-tree-change, so persistence can't loop) announces what is
@@ -1275,7 +1341,12 @@ export class SliccDockTree extends HTMLElement {
     tile.className = 'dock-tree__tile';
     // Tool tiles get the floating rounded pane chrome; the reserved chat
     // column renders flat (see the .dock-tree__tile--chrome CSS above).
-    if (surfaceId !== CHAT_SURFACE_ID) tile.classList.add('dock-tree__tile--chrome');
+    // A tool tile that this render NEWLY placed slides in from the right —
+    // re-renders with an unchanged placed set (divider drags) never replay it.
+    if (surfaceId !== CHAT_SURFACE_ID) {
+      tile.classList.add('dock-tree__tile--chrome');
+      if (!this.#prevPlaced.has(surfaceId)) tile.classList.add('dock-tree__tile--enter');
+    }
     if (this.tilesMovable && !this.#isLockedNode(node, zone)) {
       const label = labelForSurface(surfaceId);
       const move = document.createElement('button');

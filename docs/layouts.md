@@ -457,7 +457,14 @@ workbench-pane chrome (`.dock-tree__tile--chrome`: `--canvas` card, 1px `--line`
 border, 14px radius, the elevated two-layer shadow, 12px float margin,
 `overflow: hidden` clipping full-bleed content to the corners) — the look the
 deleted `<slicc-workbench-pane>` → `<slicc-pane elevated>` chain gave right-rail
-slide-ins. The reserved `chat` leaf renders flat/full-bleed over the shader.
+slide-ins. A tile a render NEWLY placed slides in from the right (0.38s, the
+prototype's workbench easing, `prefers-reduced-motion` aware); re-renders with
+an unchanged placed set — one per divider-drag pointermove — never replay it,
+and closing is instant. The reserved `chat` leaf renders flat/full-bleed over
+the shader. The composer's band is full-bleed in the shell: its paint lives on
+a `::before` extending right past the column (under the floating pane, which
+sits above at z-index 3 along with the rail — `slicc-composer.ts`), so no raw
+shader strip shows between the composer and the rail.
 After **every** render — the deliberately silent `setTree` restore included —
 the tree fires `dock-tree-render` (composed + bubbling,
 `detail: { placed: string[] }`), a display-only notification that never drives

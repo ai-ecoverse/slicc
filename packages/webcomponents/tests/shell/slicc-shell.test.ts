@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SliccShell } from '../../src/shell/slicc-shell.js';
 // Composed children (by tag) — import so they are registered when tests run.
+import '../../src/composer/slicc-composer.js';
 import '../../src/dock/slicc-dock.js';
 import '../../src/shell/slicc-chatpane.js';
 import '../../src/workbench/slicc-surface.js';
@@ -93,5 +94,48 @@ describe('slicc-shell', () => {
 
     dockTree.removeSurface('term');
     expect(pane.hasAttribute('narrow')).toBe(false);
+  });
+
+  it('extends the composer band full-bleed on ::before, with the tool pane and rail floating above it', () => {
+    const shell = document.createElement('slicc-shell') as SliccShell;
+    const dockTree = document.createElement('slicc-dock-tree') as SliccDockTree;
+    const chatSurface = document.createElement('slicc-surface');
+    chatSurface.setAttribute('surface-id', 'chat');
+    const pane = document.createElement('slicc-chatpane');
+    const composer = document.createElement('slicc-composer');
+    pane.append(composer);
+    chatSurface.append(pane);
+    const term = document.createElement('slicc-surface');
+    term.setAttribute('surface-id', 'term');
+    dockTree.append(chatSurface, term);
+    const dock = document.createElement('slicc-dock');
+    shell.append(dockTree, dock);
+    document.body.appendChild(shell);
+    dockTree.setTree({
+      zones: {
+        top: null,
+        left: { type: 'leaf', surfaceId: 'chat' },
+        middle: null,
+        right: { type: 'leaf', surfaceId: 'term' },
+        bottom: null,
+      },
+      rowFr: { top: 1, center: 1, bottom: 1 },
+      colFr: { left: 1, middle: 1, right: 1 },
+    });
+
+    // The host no longer paints the band — the ::before does, extending right
+    // (-100vw resolves to a large negative used value) so the band runs under
+    // the floating pane instead of stopping at the column edge.
+    const host = getComputedStyle(composer);
+    expect(host.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    const band = getComputedStyle(composer, '::before');
+    expect(band.content).toBe('""');
+    expect(Number.parseFloat(band.right)).toBeLessThan(0);
+    expect(band.backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+    // Pane chrome and rail float ABOVE the band (composer stacks at z-index 2).
+    const termTile = term.closest('.dock-tree__tile') as HTMLElement;
+    expect(getComputedStyle(termTile).zIndex).toBe('3');
+    expect(getComputedStyle(dock).zIndex).toBe('3');
+    expect(getComputedStyle(composer).zIndex).toBe('2');
   });
 });

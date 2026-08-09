@@ -50,6 +50,37 @@ slicc-composer {
 slicc-composer[hidden] {
   display: none;
 }
+/* Full-bleed band inside the dock-tree shell: the VISUAL band extends past
+   the chat column's right edge — under the floating tool pane, up to the
+   frame clip — while the composer's content column is untouched (an open
+   pane still pushes the textarea/labels left). The paint moves host →
+   ::before so the extension is one continuous tint/blur with no seam at the
+   column edge; the pseudo's z-index:-1 keeps it under the composer's own
+   content inside the host's stacking context. The chrome tool tile
+   (z-index 3, slicc-dock-tree.ts) and the dock rail (z-index 3,
+   slicc-shell.ts) float ABOVE the band, which outranks them at the
+   composer's z-index 2 otherwise. Extends RIGHT only: leftward it would
+   paint over the freezer rail, which sits below the app column. */
+.slicc-shell slicc-composer {
+  border-top: none;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.slicc-shell slicc-composer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: -100vw;
+  z-index: -1;
+  pointer-events: none;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ctx) 12%, color-mix(in srgb, var(--bg) 68%, transparent));
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
 slicc-composer > .slicc-composer__inner {
   box-sizing: border-box;
   max-width: 680px;
@@ -916,7 +947,7 @@ export class SliccComposer extends HTMLElement {
   #cancelPendingStart(): void {
     const pending = this.#startingSession;
     this.#startingSession = null;
-    if (pending) {
+    if (pending !== null) {
       void pending.then(
         (session) => session.cancel(),
         () => {}
@@ -1023,7 +1054,7 @@ export class SliccComposer extends HTMLElement {
     this.#startingSession = null;
     if (!finalize) {
       session?.cancel();
-      if (pending)
+      if (pending !== null)
         void pending.then(
           (s) => s.cancel(),
           () => {}
@@ -1032,7 +1063,7 @@ export class SliccComposer extends HTMLElement {
       this.#teardownOverlay();
       return;
     }
-    if (!session && !pending) {
+    if (!session && pending === null) {
       // Quick click: the engine never came up — keep the caret behavior.
       this.#target = null;
       this.#teardownOverlay();
