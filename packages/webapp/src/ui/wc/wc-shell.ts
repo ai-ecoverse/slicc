@@ -59,8 +59,6 @@ export interface WcShellOptions {
   floatLabel: string;
   /** Composer input placeholder. */
   placeholder: string;
-  /** Invoked when dock/tab selection activates a workbench surface. */
-  onSurfaceActivate?: (surfaceId: string) => void;
   /**
    * Live floats opt the components into URL state sync: the thread owns
    * `ctx`/`at`, the shell owns `ws`. Each component manages its own params —
@@ -328,16 +326,13 @@ function buildWorkbench(): {
  * Overlay-launched dock items (see `WcShellRefs.overlaySurfaces`) open a
  * full-screen view instead of a dock-tree leaf; everything else (tool panels
  * and sprinkles) is owned entirely by `wireWcSprinkles`' own
- * `slicc-dock-select`/`slicc-dock-collapse` listeners, which compose leaves
- * directly into the dock-tree. This listener only has to defend the overlay
- * carve-out and drive the long-press-to-fullscreen gesture.
+ * `slicc-dock-select`/`slicc-dock-collapse`/`slicc-dock-longpress` listeners,
+ * which compose leaves directly into the dock-tree (the long-press activates
+ * a sprinkle THROUGH the manager and then fullscreens its placed surface —
+ * fullscreen on an unplaced surface rejects, the element is `display:none`
+ * in parking). This listener only defends the overlay carve-out.
  */
-function wireDockToWorkbench(
-  dock: HTMLElement,
-  dockTree: WcShellRefs['dockTree'],
-  overlaySurfaces: ReadonlySet<string>,
-  onSurfaceActivate?: (surfaceId: string) => void
-): void {
+function wireDockToWorkbench(dock: HTMLElement, overlaySurfaces: ReadonlySet<string>): void {
   dock.addEventListener('slicc-dock-select', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail?.id;
     // Nothing to do here for a non-overlay id — `wireWcSprinkles` handles
@@ -345,24 +340,6 @@ function wireDockToWorkbench(
     // wiring runs after `mountWcShell`. An overlay id never reaches the
     // dock-tree, so there's nothing to suppress beyond not acting on it.
     if (!id || !overlaySurfaces.has(id)) return;
-  });
-  // Click-and-hold on a sprinkle launcher: open its surface in BROWSER
-  // fullscreen (the real Fullscreen API — the long-press release is the user
-  // gesture that authorizes it). Esc / the UA chrome exits natively.
-  dock.addEventListener('slicc-dock-longpress', (event) => {
-    const id = (event as CustomEvent<{ id: string }>).detail?.id;
-    if (!id?.startsWith('sprinkle:')) return;
-    onSurfaceActivate?.(id);
-    // Escape for a double-quoted attribute selector (CSS.escape is for
-    // identifiers, and jsdom lacks it).
-    const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const surface = (dockTree as unknown as HTMLElement).querySelector<HTMLElement>(
-      `[surface-id="${quoted}"]`
-    );
-    surface?.requestFullscreen?.().catch(() => {
-      // Denied / unsupported (e.g. iframe without allowfullscreen) — the
-      // surface is still open in the tree, just not fullscreen.
-    });
   });
 }
 
@@ -441,7 +418,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   // dock rail — see `WcShellRefs.dockTree`.
   shell.append(dockTree, dock);
   const overlaySurfaces = new Set<string>();
-  wireDockToWorkbench(dock, dockTree, overlaySurfaces, options.onSurfaceActivate);
+  wireDockToWorkbench(dock, overlaySurfaces);
   wireDockExternalDragToTree(dock, dockTree);
 
   // The freezer rail reserves its width via `--rail-w` on the app column so

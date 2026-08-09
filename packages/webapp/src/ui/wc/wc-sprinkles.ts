@@ -486,6 +486,54 @@ export interface WcSprinklesHandle {
  * mode yet. Returns the manager + zone so the tray wiring can broadcast
  * sprinkle state to followers.
  */
+/**
+ * Frame budget for the long-press placement wait: ~3s at 60Hz — generous
+ * headroom for a cold sprinkle `open()` (VFS read) while staying inside the
+ * ~5s transient-user-activation window `requestFullscreen` needs.
+ */
+const LONGPRESS_PLACEMENT_FRAMES = 180;
+
+/**
+ * Click-and-hold on a sprinkle launcher: its surface goes into BROWSER
+ * fullscreen (the real Fullscreen API — the long-press release is the user
+ * gesture that authorizes it; Esc / the UA chrome exits natively).
+ *
+ * This handler does NOT activate the sprinkle itself: the dock's
+ * `#handleChildLongpress` calls `selectItem(id)` — emitting
+ * `slicc-dock-select` — BEFORE re-emitting the long-press, so the select
+ * listener above has already started `manager.activate`. Starting a second
+ * activation here would race two `open()` calls into competing
+ * containers/renderers. Instead, poll (bounded) until the activation's
+ * placement lands in the dock-tree, then fullscreen: a not-yet-placed
+ * surface sits parked at `display:none`, and `requestFullscreen()` on a
+ * hidden element rejects — which is exactly how the pre-dock-tree gesture
+ * broke when the workbench's open/activate step was dropped. If placement
+ * outlives the frame budget (or the element denies fullscreen), the surface
+ * stays open in the tree, just not fullscreen.
+ */
+function wireSprinkleLongPressFullscreen(refs: WcShellRefs): void {
+  refs.dock.addEventListener('slicc-dock-longpress', (event) => {
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    if (!id || sprinkleNameFromId(id) === null) return;
+    // Escape for a double-quoted attribute selector (CSS.escape is for
+    // identifiers, and jsdom lacks it).
+    const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const tryFullscreen = (framesLeft: number): void => {
+      const surface = refs.dockTree.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
+      const placed = surface && !surface.closest('.dock-tree__parking');
+      if (placed) {
+        void surface.requestFullscreen?.()?.catch(() => {
+          // Denied / unsupported / gesture expired — the surface stays open.
+        });
+        return;
+      }
+      if (framesLeft <= 0) return;
+      requestAnimationFrame(() => tryFullscreen(framesLeft - 1));
+    };
+    tryFullscreen(LONGPRESS_PLACEMENT_FRAMES);
+  });
+}
+
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
   const {
     refs,
@@ -596,6 +644,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     const name = sprinkleNameFromId(id);
     if (name) manager.minimize(name);
   });
+  wireSprinkleLongPressFullscreen(refs);
 
   let enriching = false;
   const resync = async (): Promise<void> => {
