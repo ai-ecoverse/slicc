@@ -118,6 +118,27 @@ export function defaultWhatsNew(env = process.env) {
   return lines.join('\n');
 }
 
+// Generated highlights may not crowd the onboarding footer out of the ASC
+// 4000-char field — a first-launch tester needs the join instructions more
+// than the tail of the changelog.
+const HIGHLIGHTS_MAX_CHARS = 3000;
+
+/**
+ * Full "What to Test" copy for the build. The release pipeline may provide
+ * SLICC_TF_WHATS_NEW — end-user highlights drafted from the week's iOS
+ * commits; they lead, and the static onboarding copy always follows so new
+ * testers keep the session-join instructions. Blank or absent highlights
+ * mean the static copy stands alone (the generation step is best-effort by
+ * design and must never gate a release).
+ */
+export function composeWhatsNew(env = process.env) {
+  const highlights = (env.SLICC_TF_WHATS_NEW ?? '').trim();
+  if (!highlights) return defaultWhatsNew(env);
+  // Code-point-safe cap, same rationale as the 4000-char slice in main().
+  const capped = [...highlights].slice(0, HIGHLIGHTS_MAX_CHARS).join('');
+  return `${capped}\n\n${defaultWhatsNew(env)}`;
+}
+
 // --- Minimal ES256 JWT (dependency-free) ----------------------------------
 // ASC tokens are short-lived; mint one per run, capped at the API's
 // 20-minute maximum. node:crypto signs ES256 natively when told to emit
@@ -381,7 +402,7 @@ export async function main(env = process.env, log = console) {
 
   // Code-point-safe truncation: a plain .slice counts UTF-16 units and can
   // split a surrogate pair (emoji) at the 4000-char ASC limit.
-  const whatsNew = [...(env.SLICC_TF_WHATS_NEW || defaultWhatsNew(env))].slice(0, 4000).join('');
+  const whatsNew = [...composeWhatsNew(env)].slice(0, 4000).join('');
 
   try {
     const result = await distribute({
