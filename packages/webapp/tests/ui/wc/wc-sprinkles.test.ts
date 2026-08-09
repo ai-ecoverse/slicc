@@ -624,6 +624,74 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     expect(treeSpies(refs).setSurfaceSize).toHaveBeenCalledWith('files', { widthPercent: 40 });
   });
 
+  it('a dock long-press ACTIVATES the sprinkle first, then fullscreens its placed surface', async () => {
+    // Regression: the pre-dock-tree gesture opened + activated the surface
+    // before requestFullscreen. When the workbench died, only the fullscreen
+    // call survived — against a parked (display:none) surface it rejects, so
+    // the rail long-press did nothing at all.
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    const handle = await wireWcSprinkles({ refs, client, fs, log });
+
+    // Activation is what places the surface into the tree — model that.
+    const surface = document.createElement('div');
+    surface.setAttribute('surface-id', 'sprinkle:metrics');
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    Object.assign(surface, { requestFullscreen });
+    const activate = vi.spyOn(handle.manager, 'activate').mockImplementation(async () => {
+      (refs.dockTree as unknown as HTMLElement).appendChild(surface);
+    });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { detail: { id: 'sprinkle:metrics' }, bubbles: true })
+    );
+    // activate resolves on a microtask; the handler waits one rAF before the
+    // surface lookup. Two frames is deterministic headroom.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+
+    expect(activate).toHaveBeenCalledWith('metrics');
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('a dock long-press on a non-sprinkle id is a no-op', async () => {
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    const handle = await wireWcSprinkles({ refs, client, fs, log });
+    const activate = vi.spyOn(handle.manager, 'activate');
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { detail: { id: 'term' }, bubbles: true })
+    );
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
   it("clicking an open sprinkle's active dock icon minimizes it (collapse routes to manager.minimize)", async () => {
     const refs = makeRefs();
     const fs = {

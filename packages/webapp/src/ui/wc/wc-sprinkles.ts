@@ -486,6 +486,43 @@ export interface WcSprinklesHandle {
  * mode yet. Returns the manager + zone so the tray wiring can broadcast
  * sprinkle state to followers.
  */
+/**
+ * Click-and-hold on a sprinkle launcher: open its surface and take it into
+ * BROWSER fullscreen (the real Fullscreen API — the long-press release is
+ * the user gesture that authorizes it; Esc / the UA chrome exits natively).
+ * The activation MUST run first, through the same `manager.activate` path a
+ * click takes (promotion + persistence bookkeeping stay intact): a sprinkle
+ * that is not placed sits parked in the dock-tree at `display:none`, and
+ * `requestFullscreen()` on a hidden element rejects — which is exactly how
+ * the pre-dock-tree gesture broke when the workbench's open/activate step
+ * was dropped. If the open outlives the transient-activation window (or the
+ * element denies fullscreen), the catch leaves the surface open in the
+ * tree, just not fullscreen.
+ */
+function wireSprinkleLongPressFullscreen(
+  refs: WcShellRefs,
+  manager: import('../sprinkle-manager.js').SprinkleManager
+): void {
+  refs.dock.addEventListener('slicc-dock-longpress', (event) => {
+    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    const name = sprinkleNameFromId(id);
+    if (!id || !name) return;
+    void manager
+      .activate(name)
+      .then(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))))
+      .then(() => {
+        // Escape for a double-quoted attribute selector (CSS.escape is for
+        // identifiers, and jsdom lacks it).
+        const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const surface = refs.dockTree.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
+        return surface?.requestFullscreen?.();
+      })
+      .catch(() => {
+        // Denied / unsupported / gesture expired — the surface stays open.
+      });
+  });
+}
+
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
   const {
     refs,
@@ -596,6 +633,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     const name = sprinkleNameFromId(id);
     if (name) manager.minimize(name);
   });
+  wireSprinkleLongPressFullscreen(refs, manager);
 
   let enriching = false;
   const resync = async (): Promise<void> => {

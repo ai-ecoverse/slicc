@@ -746,13 +746,11 @@ export interface WcShellBoot {
  * the extension popout connects to the offscreen engine.
  */
 export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoot {
-  let activator: WorkbenchActivator | null = null;
   const refs = mountWcShell(app, {
     messages: [],
     scoops: [],
     floatLabel,
     placeholder: 'Ask sliccy, or describe a change…',
-    onSurfaceActivate: (surfaceId) => activator?.activate(surfaceId),
     // Live floats sync UI state with the URL: the thread owns `ctx`/`at`,
     // the shell owns `ws` — each component manages its own params.
     urlState: true,
@@ -833,7 +831,6 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       controller = next;
     },
     setActivateSurface: (next) => {
-      activator = next;
       // Every tool panel already placed in the restored dock-tree (persisted
       // or default) needs its lazy mount fired retroactively — the activator
       // didn't exist yet when `wireDockTreePersistence` restored the tree.

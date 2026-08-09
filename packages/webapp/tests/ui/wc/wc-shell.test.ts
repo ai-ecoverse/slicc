@@ -369,12 +369,16 @@ describe('mountWcUiPreview', () => {
     expect(css).toContain('slicc-file-tree{width:100%;border-right:none;}');
   });
 
-  it('long-pressing a sprinkle dock item opens its surface in browser fullscreen', () => {
+  it('the shell itself does NOT fullscreen on long-press — that gesture is wireWcSprinkles business', () => {
+    // The old shell-owned handler fullscreened whatever surface was already
+    // in the tree, without activating it first — against the usual parked
+    // (display:none) surface the call rejected and the gesture did nothing.
+    // The working flow (activate through the manager, then fullscreen) lives
+    // in wc-sprinkles.ts; the shell must not double-handle the event.
     const root = mount();
     const dock = root.querySelector('slicc-dock') as HTMLElement;
     const dockTree = root.querySelector('slicc-dock-tree') as HTMLElement;
 
-    // A sprinkle surface, as the sprinkle zone would have mounted it.
     const surface = document.createElement('slicc-surface');
     surface.setAttribute('surface-id', 'sprinkle:hero');
     const requestFullscreen = vi.fn(() => Promise.resolve());
@@ -385,13 +389,7 @@ describe('mountWcUiPreview', () => {
     dock.dispatchEvent(
       new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'sprinkle:hero' } })
     );
-    expect(requestFullscreen).toHaveBeenCalledTimes(1);
-
-    // Non-sprinkle ids (tools) are not fullscreen targets.
-    dock.dispatchEvent(
-      new CustomEvent('slicc-dock-longpress', { bubbles: true, detail: { id: 'term' } })
-    );
-    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+    expect(requestFullscreen).not.toHaveBeenCalled();
   });
 
   it('applyShellContext swaps the shader program and the --ctx accent per mood', async () => {

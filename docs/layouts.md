@@ -474,6 +474,13 @@ thread/composer (tight feather, hidden ⏎/⇧⏎ hints) without sizing the colu
 the leaf owns width now, so the shell-era `calc(100% - 48px)` / `34%` widths are
 gone from `<slicc-chatpane>`.
 
+Rail gestures: a click on a dock launcher opens/collapses its leaf
+(`wireWcSprinkles`' `slicc-dock-select`/`slicc-dock-collapse` listeners); a
+click-and-hold on a SPRINKLE launcher (`slicc-dock-longpress`) activates it
+through the same `manager.activate` path and then takes its placed surface into
+browser fullscreen — activation must land first, because `requestFullscreen()`
+on a parked (`display:none`) surface rejects.
+
 Drag-drop: every unlocked leaf reveals a `.dock-tree__tile-move` button on hover
 over its top-left corner; hovering another tile computes a `DropRegion`
 (`n`/`s`/`e`/`w`/`center`) and splits accordingly.
