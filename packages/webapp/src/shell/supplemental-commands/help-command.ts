@@ -108,7 +108,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Clipboard', ['pbcopy', 'pbpaste', 'xclip', 'xsel']],
   ['Filesystem', ['mount', 'fswatch']],
   ['Scoops & agents', ['agent', 'mcp', 'webhook', 'crontask']],
-  ['Process', ['ps', 'kill']],
+  ['Process', ['ps', 'kill', 'meminfo']],
 ]);
 
 function formatHelp(
