@@ -182,7 +182,6 @@ export {
   SliccPanel,
 } from './panel/slicc-panel.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
-export { SliccCollapseBtn } from './primitives/slicc-collapse-btn.js';
 export {
   type CostOverlayModel,
   type CostOverlayScoop,
@@ -194,7 +193,6 @@ export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
 export { SliccImagePreview } from './primitives/slicc-image-preview.js';
 export { SliccPane } from './primitives/slicc-pane.js';
-export { SliccPaneTag } from './primitives/slicc-pane-tag.js';
 export { SliccPressButton } from './primitives/slicc-press-button.js';
 export { SliccSendButton } from './primitives/slicc-send-button.js';
 export { SliccSnowflake } from './primitives/slicc-snowflake.js';
@@ -238,7 +236,4 @@ export {
   SliccMonitor,
 } from './workbench/slicc-monitor.js';
 export { SliccSurface } from './workbench/slicc-surface.js';
-export { SliccTab } from './workbench/slicc-tab.js';
-export { SliccTabBar } from './workbench/slicc-tab-bar.js';
 export { SliccTerminal } from './workbench/slicc-terminal.js';
-export { SliccWorkbenchHeader } from './workbench/slicc-workbench-header.js';

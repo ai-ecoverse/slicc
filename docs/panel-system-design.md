@@ -25,7 +25,7 @@ author brand-new panel types at runtime.
 | `floatbar`                                          | inside `<slicc-nav>` (npx-live + $/h)            |
 | `files` / `term` / `memory` / `monitor` / `browser` | already dock-tree leaves                         |
 | `sprinkle:<name>`                                   | already dock-tree leaves                         |
-| `sprinkle-tabs`                                     | `<slicc-tab-overlay>` / `<slicc-tab-bar>`        |
+| `sprinkle-tabs`                                     | `<slicc-tab-overlay>`                            |
 
 `<slicc-nav>` stops being a container and becomes just the fixed avatar strip;
 the switcher and floatbar become independently placeable panels.
