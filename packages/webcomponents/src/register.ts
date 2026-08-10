@@ -41,14 +41,12 @@ import './overlay/slicc-tooltip.js';
 import './panel/slicc-layout.js';
 import './panel/slicc-panel.js';
 import './primitives/slicc-avatar.js';
-import './primitives/slicc-collapse-btn.js';
 import './primitives/slicc-cost-overlay.js';
 import './primitives/slicc-day-separator.js';
 import './primitives/slicc-floatbar.js';
 import './primitives/slicc-googly-eyes.js';
 import './primitives/slicc-icon-button.js';
 import './primitives/slicc-image-preview.js';
-import './primitives/slicc-pane-tag.js';
 import './primitives/slicc-pane.js';
 import './primitives/slicc-press-button.js';
 import './primitives/slicc-send-button.js';
@@ -65,10 +63,7 @@ import './theme/slicc-theme.js';
 import './workbench/slicc-dock-tree.js';
 import './workbench/slicc-file-tree.js';
 import './workbench/slicc-surface.js';
-import './workbench/slicc-tab-bar.js';
-import './workbench/slicc-tab.js';
 import './workbench/slicc-terminal.js';
-import './workbench/slicc-workbench-header.js';
 
 /** Import every component module for side-effect registration. */
 export function registerAllSliccComponents(): void {}
