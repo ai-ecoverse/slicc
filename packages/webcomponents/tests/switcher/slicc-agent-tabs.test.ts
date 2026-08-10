@@ -267,27 +267,84 @@ describe('slicc-agent-tabs', () => {
   });
 
   describe('status glyphs and fullness arcs', () => {
+    /** Whether a segment's circle / square centre pin is currently painted. */
+    function pins(element: SliccAgentTabs, key: string): { circle: boolean; square: boolean } {
+      const seg = segment(element, key);
+      const shown = (selector: string): boolean =>
+        getComputedStyle(seg.querySelector(selector) as SVGElement).display !== 'none';
+      return {
+        circle: shown('.slicc-agent-tabs__glyph-pin'),
+        square: shown('.slicc-agent-tabs__glyph-pin-square'),
+      };
+    }
+
     it('maps idle and working to arcs, with a centre pin only for working', () => {
       const element = mount();
       expect(
         segment(element, 'designer').querySelector('.slicc-agent-tabs__glyph-arc')
       ).toBeTruthy();
-      expect(
-        getComputedStyle(
-          segment(element, 'designer').querySelector('.slicc-agent-tabs__glyph-pin') as SVGElement
-        ).display
-      ).toBe('none');
+      expect(pins(element, 'designer')).toEqual({ circle: false, square: false });
       expect(
         segment(element, 'researcher').querySelector('.slicc-agent-tabs__glyph-arc')
       ).toBeTruthy();
       expect(
         segment(element, 'researcher').querySelector('.slicc-agent-tabs__glyph-pin')
       ).toBeTruthy();
-      expect(
-        getComputedStyle(
-          segment(element, 'researcher').querySelector('.slicc-agent-tabs__glyph-pin') as SVGElement
-        ).display
-      ).not.toBe('none');
+      // Working always paints exactly one pin — which one is the phase's job.
+      const working = pins(element, 'researcher');
+      expect(working.circle !== working.square).toBe(true);
+    });
+
+    it('shapes the working pin by phase: square for thinking, circle for a tool call', () => {
+      const element = mount([
+        { key: 'thinker', label: 'Thinker', state: 'working', phase: 'thinking' },
+        { key: 'runner', label: 'Runner', state: 'working', phase: 'tool' },
+      ]);
+      expect(pins(element, 'thinker')).toEqual({ circle: false, square: true });
+      expect(pins(element, 'runner')).toEqual({ circle: true, square: false });
+      expect(segment(element, 'thinker').dataset.phase).toBe('thinking');
+      expect(segment(element, 'runner').dataset.phase).toBe('tool');
+    });
+
+    it('defaults an unset phase to thinking (a turn opens in LLM-wait)', () => {
+      const element = mount([{ key: 'bare', label: 'Bare', state: 'working' }]);
+      expect(pins(element, 'bare')).toEqual({ circle: false, square: true });
+      expect(segment(element, 'bare').dataset.phase).toBe('thinking');
+    });
+
+    it('carries no phase attribute unless the agent is working', () => {
+      const element = mount([
+        { key: 'idle', label: 'Idle', state: 'idle', phase: 'tool' },
+        { key: 'broken', label: 'Broken', state: 'broken', phase: 'tool' },
+      ]);
+      expect(segment(element, 'idle').hasAttribute('data-phase')).toBe(false);
+      expect(segment(element, 'broken').hasAttribute('data-phase')).toBe(false);
+      expect(pins(element, 'idle')).toEqual({ circle: false, square: false });
+    });
+
+    it('repaints the pin in place when a live segment flips phase', () => {
+      const element = mount([{ key: 'busy', label: 'Busy', state: 'working', phase: 'thinking' }]);
+      const before = segment(element, 'busy');
+      element.scoops = [{ key: 'busy', label: 'Busy', state: 'working', phase: 'tool' }];
+      // Reconciled, not rebuilt — the segment identity must survive so focus
+      // and the running arc animation are not reset mid-turn.
+      expect(segment(element, 'busy')).toBe(before);
+      expect(pins(element, 'busy')).toEqual({ circle: true, square: false });
+    });
+
+    it('names the busy detail in the accessible label', () => {
+      const element = mount([
+        { key: 'thinker', label: 'Thinker', state: 'working', phase: 'thinking', fill: 10 },
+        { key: 'runner', label: 'Runner', state: 'working', phase: 'tool', fill: 10 },
+        { key: 'idle', label: 'Idle', state: 'idle', fill: 10 },
+      ]);
+      expect(segment(element, 'thinker').getAttribute('aria-label')).toContain(
+        'working (thinking)'
+      );
+      expect(segment(element, 'runner').getAttribute('aria-label')).toContain(
+        'working (running a tool)'
+      );
+      expect(segment(element, 'idle').getAttribute('aria-label')).not.toContain('(');
     });
 
     it('maps broken to an X and initializing to a dashed ring while hiding their arcs', () => {

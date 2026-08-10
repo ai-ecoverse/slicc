@@ -130,6 +130,7 @@ function makeWiring(options: {
     controller,
     statuses: new Map(),
     fills: new Map(),
+    phases: new Map(),
     lickBackpressure: new Map(),
     lastActivity: new Map(),
     pendingUrlContext: null,
@@ -167,6 +168,38 @@ describe('toSwitcherScoops runtime state', () => {
 
   it('treats a missing first status broadcast as idle', () => {
     expect(toSwitcherScoops([cone])[0]?.state).toBe('idle');
+  });
+});
+
+describe('toSwitcherScoops busy phase', () => {
+  const processing = new Map([[cone.jid, 'processing' as const]]);
+
+  it('forwards the phase of a processing scoop to its tab', () => {
+    const tabs = toSwitcherScoops(
+      [cone],
+      processing,
+      undefined,
+      new Map([[cone.jid, 'tool' as const]])
+    );
+    expect(tabs[0]?.phase).toBe('tool');
+  });
+
+  it('leaves the phase unset when no crossing has been observed yet', () => {
+    expect(toSwitcherScoops([cone], processing)[0]?.phase).toBeUndefined();
+  });
+
+  it('drops a stale phase once the scoop stops processing', () => {
+    // The tab paints no pin at all when idle, so a leftover map entry must not
+    // survive into the descriptor and shape one the next time it goes busy.
+    const phases = new Map([[cone.jid, 'tool' as const]]);
+    const tabs = toSwitcherScoops(
+      [cone],
+      new Map([[cone.jid, 'ready' as const]]),
+      undefined,
+      phases
+    );
+    expect(tabs[0]?.state).toBe('idle');
+    expect(tabs[0]?.phase).toBeUndefined();
   });
 });
 

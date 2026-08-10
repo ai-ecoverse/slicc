@@ -47,6 +47,7 @@ describe('OffscreenClient', () => {
     onMessageUpdate: vi.fn(),
     onLickBackpressure: vi.fn(),
     onScoopActivity: vi.fn(),
+    onScoopPhaseChange: vi.fn(),
   };
 
   beforeEach(() => {
@@ -206,6 +207,89 @@ describe('OffscreenClient', () => {
     });
 
     expect(callbacks.onScoopActivity).not.toHaveBeenCalled();
+  });
+
+  describe('per-scoop busy phase (onScoopPhaseChange)', () => {
+    /** Feed one agent event for `jid` (defaults to a NON-selected scoop). */
+    function agentEvent(eventType: string, jid = 'other_scoop'): void {
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid: jid,
+        eventType,
+        toolName: 't',
+        toolResult: 'ok',
+      });
+    }
+
+    /** The phases reported so far, as `jid:phase` pairs. */
+    function reported(): string[] {
+      return callbacks.onScoopPhaseChange.mock.calls.map(([jid, phase]) => `${jid}:${phase}`);
+    }
+
+    beforeEach(() => client.setSelectedScoopJid('cone_123'));
+
+    it('crosses to tool on tool_start and back to thinking on tool_end', () => {
+      agentEvent('tool_start');
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('tracks scoops the user is NOT looking at (the whole point of the tab pin)', () => {
+      agentEvent('tool_start', 'other_scoop');
+      expect(reported()).toEqual(['other_scoop:tool']);
+    });
+
+    it('reports only zero crossings, so nested tool calls do not flap the pin', () => {
+      agentEvent('tool_start');
+      agentEvent('tool_start');
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool']);
+      agentEvent('tool_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('never drops below zero on an unmatched tool_end', () => {
+      agentEvent('tool_end');
+      expect(reported()).toEqual([]);
+      agentEvent('tool_start');
+      expect(reported()).toEqual(['other_scoop:tool']);
+    });
+
+    it('resets at turn_end so a turn that died mid-tool cannot strand the pin', () => {
+      agentEvent('tool_start');
+      agentEvent('turn_end');
+      expect(reported()).toEqual(['other_scoop:tool', 'other_scoop:thinking']);
+    });
+
+    it('resets on a CHANGED scoop status, but not on a repeated one', () => {
+      /** Broadcast a lifecycle status for the non-selected scoop. */
+      function status(value: string): void {
+        simulateMessage('offscreen', {
+          type: 'scoop-status',
+          scoopJid: 'other_scoop',
+          status: value,
+        });
+      }
+      // Real ordering: the turn's `processing` edge lands before any tool.
+      status('processing');
+      agentEvent('tool_start');
+      callbacks.onScoopPhaseChange.mockClear();
+      // A repeated identical broadcast is not a turn boundary — a tool that is
+      // still running must keep its phase.
+      status('processing');
+      status('processing');
+      expect(reported()).toEqual([]);
+      // Erroring out mid-tool IS a boundary, and clears it.
+      status('error');
+      expect(reported()).toEqual(['other_scoop:thinking']);
+    });
+
+    it('keeps a separate count per scoop', () => {
+      agentEvent('tool_start', 'a');
+      agentEvent('tool_start', 'b');
+      agentEvent('tool_end', 'a');
+      expect(reported()).toEqual(['a:tool', 'b:tool', 'a:thinking']);
+    });
   });
 
   it('relays message-updated to onMessageUpdate (live lick flip)', () => {

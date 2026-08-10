@@ -1,6 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
 import { h } from '../internal/dom.js';
-import type { AgentState, ScoopDescriptor, SliccAgentTabs } from './slicc-agent-tabs.js';
+import type {
+  AgentPhase,
+  AgentState,
+  ScoopDescriptor,
+  SliccAgentTabs,
+} from './slicc-agent-tabs.js';
 import './slicc-agent-tabs.js';
 
 interface AgentTabsArgs {
@@ -111,6 +116,30 @@ function stateRoster(): ScoopDescriptor[] {
   }));
 }
 
+/** Both busy phases side by side, plus the unset default and a non-busy tab. */
+function phaseRoster(): ScoopDescriptor[] {
+  const busy = (
+    key: string,
+    label: string,
+    color: string,
+    phase?: AgentPhase
+  ): ScoopDescriptor => ({
+    key,
+    label,
+    color,
+    phase,
+    eyes: 'open',
+    fill: 48,
+    state: 'working',
+  });
+  return [
+    busy('thinking', 'thinking', '#8b5cf6', 'thinking'),
+    busy('tool', 'tool call', '#06b6d4', 'tool'),
+    busy('unset', 'phase unset', '#10b981'),
+    { key: 'idle', label: 'idle', color: '#f59e0b', eyes: 'open', fill: 30, state: 'idle' },
+  ];
+}
+
 function fullnessRoster(): ScoopDescriptor[] {
   return [0, 25, 50, 75, 100].map((fill) => ({
     key: `fill-${fill}`,
@@ -184,6 +213,21 @@ export const ScoopFocused: Story = {
 
 export const EveryStatus: Story = {
   args: { scoops: stateRoster(), active: 'working', width: 620 },
+};
+
+export const BusyPhases: Story = {
+  args: { scoops: phaseRoster(), active: 'thinking', width: 620 },
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'The centre pin carries what a working agent is busy with, borrowing the ' +
+          'composer vocabulary: rectangular for the model thinking, circular for a ' +
+          'tool call in flight. An unset phase reads as thinking, because a turn ' +
+          'always opens in LLM-wait. Non-working agents show no pin at all.',
+      },
+    },
+  },
 };
 
 export const Disconnected: Story = {

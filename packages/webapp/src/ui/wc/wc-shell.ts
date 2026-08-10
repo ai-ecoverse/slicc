@@ -48,6 +48,12 @@ export interface SwitcherScoop {
   ephemeral?: boolean;
   /** 0-100 context-window fullness forwarded to the pill (pupils dilate). */
   fill?: number;
+  /**
+   * What a `working` agent is busy with — shapes the tab's centre pin (square
+   * for the model thinking, circle for a tool call), mirroring the composer's
+   * send button. Ignored for every other state.
+   */
+  phase?: 'thinking' | 'tool';
 }
 
 export interface WcShellOptions {
