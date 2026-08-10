@@ -63,6 +63,16 @@
       ]
     },
     {
+      "name": "connection-stalled-draft",
+      "description": "A draft survives connection trouble: composer at full strength, send disabled",
+      "args": [
+        "-uiTestConnectionState",
+        "stalled",
+        "-uiTestComposerText",
+        "a draft the drop cannot take away"
+      ]
+    },
+    {
       "name": "frozen-list",
       "description": "Past Sessions sheet with fixture archives",
       "args": [
