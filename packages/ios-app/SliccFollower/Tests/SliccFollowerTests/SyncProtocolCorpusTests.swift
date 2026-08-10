@@ -322,6 +322,19 @@ final class SyncProtocolCorpusTests: XCTestCase {
         }
     }
 
+    func testFollowerHelloCorpusCapabilitiesMatchThisBuild() throws {
+        let corpus = try loadCorpus()
+        let fixture = try XCTUnwrap(corpus.followerToLeader.first { $0.type == "hello" })
+        let decoded = try JSONDecoder().decode(
+            FollowerToLeaderMessage.self, from: fixture.messageData)
+        guard case .hello(_, _, let capabilities, _) = decoded else {
+            return XCTFail("followerToLeader 'hello' fixture decoded to a different case")
+        }
+        XCTAssertEqual(
+            capabilities?.exec, trayFollowerCapabilities.exec,
+            "followerToLeader 'hello.capabilities.exec' drifted from trayFollowerCapabilities — regenerate the corpus")
+    }
+
     func testDecodedLeaderMessagesReencodeWithSameType() throws {
         let corpus = try loadCorpus()
         let decoder = JSONDecoder()
@@ -343,6 +356,22 @@ final class SyncProtocolCorpusTests: XCTestCase {
             let reencoded = try encoder.encode(decoded)
             let obj = try JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
             XCTAssertEqual(obj?["type"] as? String, type, "'\(type)' re-encoded with a different type tag")
+            guard type == "hello" else { continue }
+
+            let fixture = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: messageData) as? [String: Any])
+            XCTAssertEqual(
+                obj?["protocolVersion"] as? Int, fixture["protocolVersion"] as? Int,
+                "'hello.protocolVersion' changed during decode → encode")
+            XCTAssertEqual(
+                obj?["runtime"] as? String, fixture["runtime"] as? String,
+                "'hello.runtime' changed during decode → encode")
+            XCTAssertEqual(
+                obj?["capabilities"] as? NSDictionary, fixture["capabilities"] as? NSDictionary,
+                "'hello.capabilities' changed during decode → encode")
+            XCTAssertEqual(
+                obj?["motd"] as? String, fixture["motd"] as? String,
+                "'hello.motd' changed during decode → encode")
         }
     }
 }
