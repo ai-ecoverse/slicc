@@ -29,10 +29,16 @@ struct ServerCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Kill existing Electron app")
     var kill: Bool = false
 
-    @Flag(name: .long, help: "Lead mode")
+    // Unlike `--join` below, `--lead` is a plain flag here: it carries no value
+    // of its own, so the tray worker base URL has to arrive via
+    // `--lead-worker-base-url` or `WORKER_BASE_URL`. node-server's
+    // `runtime-flags.ts` additionally accepts `--lead <url>` / `--lead=<url>`;
+    // that parity gap is deliberate for now, so the help below names only the
+    // forms this binary actually parses.
+    @Flag(name: .long, help: "Lead mode (needs --lead-worker-base-url or WORKER_BASE_URL)")
     var lead: Bool = false
 
-    @Option(name: .long, help: "Lead worker base URL")
+    @Option(name: .long, help: "Tray worker base URL for --lead (or set WORKER_BASE_URL)")
     var leadWorkerBaseUrl: String?
 
     @Option(name: .long, help: "Chrome profile name")
@@ -766,8 +772,13 @@ extension ServerCommand {
                     config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
                 )
             else {
+                // Name only the forms THIS binary parses. `--lead` is an
+                // ArgumentParser `@Flag`, so the `--lead <url>` / `--lead=<url>`
+                // spellings that node-server accepts are rejected here — the
+                // first as a stray positional, the second as an unexpected
+                // value. Suggesting them sends the reader down a dead end.
                 throw ValidationError(
-                    "The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL."
+                    "The --lead launch flow requires a tray worker base URL via --lead-worker-base-url <url> or the WORKER_BASE_URL environment variable."
                 )
             }
             launchURL = try buildCanonicalTrayLaunchURL(locationHref: baseHref, trayValue: workerBaseURL)
