@@ -189,39 +189,19 @@ class AppState: ObservableObject {
     /// which exists to report what is actually happening.
     @Published private(set) var settledConnection = ConnectionHealth(state: .disconnected)
 
-    /// The transport as it actually is, this instant.
-    ///
-    /// The attempt counter only means something while reconnecting, so it is
-    /// dropped otherwise: a healthy reading that still carried the last
-    /// attempt number would differ from the same healthy reading a moment
-    /// later and republish for nothing.
-    var rawConnectionHealth: ConnectionHealth {
-        ConnectionHealth(
-            state: connectionState,
-            isStalled: isLeaderStalled,
-            reconnectAttempt: connectionState == .reconnecting ? reconnectAttempt : 0)
-    }
-
     /// Eager, not lazy: the first transport transition arrives through a
     /// `didSet`, and a settler built at that moment would be born already
     /// holding the value it was supposed to weigh — publishing nothing, ever.
-    private let connectionSettler = ConnectionSettler(
+    ///
+    /// Internal rather than private, like `connectionIngestSuspended`: stored
+    /// properties cannot live in an extension, but everything that reads them
+    /// does — see `AppState+Connection.swift`.
+    let connectionSettler = ConnectionSettler(
         initial: ConnectionHealth(state: .disconnected))
 
-    private func ingestConnectionHealth() {
-        connectionSettler.ingest(rawConnectionHealth)
-    }
-
-    #if DEBUG
-        /// Publish the raw state to the UI at once. The UI-test hooks pin a
-        /// connection no transport produced, so the treatment has to be on
-        /// screen when the test looks rather than a settle window later; a
-        /// staged blip (`-uiTestConnectionBlip`) deliberately does NOT call
-        /// this, since holding that transition is what it exists to exercise.
-        func settleConnectionImmediately() {
-            connectionSettler.settleImmediately(rawConnectionHealth)
-        }
-    #endif
+    /// True while `updateConnection` is composing one reading out of several
+    /// property writes.
+    var connectionIngestSuspended = false
 
     /// Buffer for chunked sprinkle.content responses.
     private struct SprinkleFetchBuffer {
@@ -405,12 +385,16 @@ class AppState: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
-        isLeaderStalled = false
         clearTrayCredentials()
         fileProviderDomainLifecycle.removeDomain()
         tearDown()
         resetCDPState()
-        connectionState = .disconnected
+        // Cleared with the state, not before it: on its own the cleared stall
+        // reads as a healthy connection (see `updateConnection`).
+        updateConnection {
+            isLeaderStalled = false
+            connectionState = .disconnected
+        }
         trayId = nil
         leaderConnected = false
         participantCount = 0
@@ -1416,15 +1400,23 @@ class AppState: ObservableObject {
 
         // A stall that ends in a real disconnect must not leave the composer
         // wedged: the stall is over, the connection is what is broken now.
-        isLeaderStalled = false
+        //
+        // Both writes land as ONE reading. Clearing the stall on its own reads
+        // as a connected, answering leader for an instant, and the settler
+        // would take that intermediate for a recovery — dropping the static
+        // eyes and then holding the disconnect for a whole window, so an
+        // outage that never ended would render as fine.
+        let willRetry = autoReconnect
+        updateConnection {
+            isLeaderStalled = false
+            connectionState = willRetry ? .reconnecting : .failed
+        }
 
-        guard autoReconnect else {
-            connectionState = .failed
+        guard willRetry else {
             lastError = reason
             return
         }
 
-        connectionState = .reconnecting
         streamingMessageId = nil
         reconnectTask?.cancel()
         reconnectTask = Task { @MainActor [weak self] in

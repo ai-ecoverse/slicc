@@ -1194,11 +1194,16 @@ struct SessionControlsCluster: View {
                     .foregroundStyle(palette.ink.opacity(0.7))
             }
         }
-        // Gated like sending: with no usable leader the request would silently
-        // vanish (requestNewSession returns when the channel cannot be
-        // written). Reads the settled health so a blip cannot flicker a
-        // toolbar button the user may be reaching for.
-        .disabled(appState.newSessionInFlight || !appState.settledConnection.isHealthy)
+        // RAW health, unlike the composer: `requestNewSession` returns without
+        // a word when the channel cannot be written, so a button left live
+        // through the settle window would answer a tap with nothing at all. A
+        // send in that window is not silent — it lands in the transcript and
+        // marks itself undelivered — which is why that one follows the settled
+        // view and this one does not.
+        .disabled(
+            appState.newSessionInFlight
+                || !appState.rawConnectionHealth.isHealthy
+        )
         .accessibilityLabel("New chat")
         .accessibilityIdentifier("new-chat-button")
         .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))

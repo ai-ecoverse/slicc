@@ -85,6 +85,74 @@ final class AppStateConnectionSettleTests: XCTestCase {
         XCTAssertEqual(state.settledConnection, ConnectionHealth(state: .connected))
     }
 
+    // MARK: - Composite transitions
+
+    /// A stalled leader that finally dies goes trouble → trouble, and the
+    /// treatment must never blink off on the way. `handleDisconnect` clears
+    /// the stall and moves the state, and either write alone reads as a
+    /// healthy connection — which would drop the static eyes and then hold the
+    /// disconnect for a whole window.
+    func testAStallThatBecomesADisconnectStaysTrouble() {
+        let state = AppState()
+        state.connectionState = .connected
+        state.isLeaderStalled = true
+        state.settleConnectionImmediately()
+        XCTAssertFalse(state.settledConnection.isHealthy, "precondition: the stall is on screen")
+
+        state.handleDisconnect(reason: "keepalive gave up")
+
+        XCTAssertEqual(state.connectionState, .reconnecting)
+        XCTAssertFalse(
+            state.settledConnection.isHealthy,
+            "A stall that became a disconnect must not read as a recovery")
+    }
+
+    /// The same for a user-initiated disconnect from a stalled session.
+    func testDisconnectingFromAStallStaysTrouble() {
+        let state = AppState()
+        state.connectionState = .connected
+        state.isLeaderStalled = true
+        state.settleConnectionImmediately()
+
+        state.disconnect()
+
+        XCTAssertEqual(state.connectionState, .disconnected)
+        XCTAssertFalse(state.settledConnection.isHealthy)
+    }
+
+    /// The general guarantee behind both: a batch is weighed once, on the
+    /// value it ends at, never on an intermediate it passed through.
+    func testUpdateConnectionIngestsOnlyTheFinalReading() {
+        let state = AppState()
+        state.connectionState = .connected
+        state.isLeaderStalled = true
+        state.settleConnectionImmediately()
+
+        state.updateConnection {
+            state.isLeaderStalled = false
+            state.connectionState = .failed
+        }
+
+        XCTAssertEqual(
+            state.settledConnection, ConnectionHealth(state: .failed),
+            "trouble → trouble publishes at once; the healthy intermediate never existed")
+    }
+
+    /// A batch that really does end healthy still publishes the recovery.
+    func testUpdateConnectionStillPublishesAGenuineRecovery() {
+        let state = AppState()
+        state.connectionState = .reconnecting
+        state.reconnectAttempt = 2
+        state.settleConnectionImmediately()
+
+        state.updateConnection {
+            state.reconnectAttempt = 0
+            state.connectionState = .connected
+        }
+
+        XCTAssertEqual(state.settledConnection, ConnectionHealth(state: .connected))
+    }
+
     /// The UI-test hook path: a pinned state is a premise, not a transition.
     func testSettleImmediatelyPublishesTheRawState() {
         let state = AppState()
