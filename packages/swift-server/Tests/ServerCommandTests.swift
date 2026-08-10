@@ -180,6 +180,81 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
+    // A `--lead` run with no worker base URL must fail with a message that
+    // names a spelling this binary can actually parse. `--lead` is a `@Flag`
+    // here (node-server's `runtime-flags.ts` also accepts `--lead <url>` /
+    // `--lead=<url>`; swift-server does not), so advertising those forms sends
+    // the reader into an "Unexpected argument" dead end. Guard both halves:
+    // the message must not name them, and whatever it DOES name must parse.
+    func testLeadWithoutWorkerBaseURLSuggestsOnlyParsableForms() throws {
+        let parsed = try ServerCommand.parseAsRoot(["--lead"])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server", "--lead"])
+
+        XCTAssertThrowsError(
+            try ServerCommand.resolveBrowserLaunchURL(
+                serveOrigin: "http://localhost:5710",
+                config: config,
+                environment: [:]
+            )
+        ) { error in
+            let message = String(describing: error)
+            XCTAssertTrue(
+                message.contains("--lead-worker-base-url"),
+                "error must name the flag that actually carries the URL, got: \(message)"
+            )
+            XCTAssertTrue(
+                message.contains("WORKER_BASE_URL"),
+                "error must keep the env-var escape hatch, got: \(message)"
+            )
+            XCTAssertFalse(
+                message.contains("--lead <url>") || message.contains("--lead=<url>"),
+                "error must not suggest forms this binary rejects, got: \(message)"
+            )
+        }
+    }
+
+    // The form the error recommends has to survive the parser — otherwise the
+    // message is just a different dead end.
+    func testLeadWorkerBaseURLFormFromTheErrorMessageParses() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--lead", "--lead-worker-base-url", "https://worker.example",
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: [
+                "slicc-server", "--lead", "--lead-worker-base-url", "https://worker.example",
+            ]
+        )
+
+        XCTAssertTrue(config.lead)
+        XCTAssertEqual(config.leadWorkerBaseURL?.absoluteString, "https://worker.example")
+        XCTAssertNoThrow(
+            try ServerCommand.resolveBrowserLaunchURL(
+                serveOrigin: "http://localhost:5710",
+                config: config,
+                environment: [:]
+            )
+        )
+    }
+
+    // The env-var escape hatch the message names must work on its own, with
+    // `--lead` and nothing else on the command line.
+    func testLeadResolvesWorkerBaseURLFromEnvironment() throws {
+        let parsed = try ServerCommand.parseAsRoot(["--lead"])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server", "--lead"])
+
+        XCTAssertNoThrow(
+            try ServerCommand.resolveBrowserLaunchURL(
+                serveOrigin: "http://localhost:5710",
+                config: config,
+                environment: ["WORKER_BASE_URL": "https://worker.example"]
+            )
+        )
+    }
+
     // MARK: - Thin-bridge launch URL parity with node-server Path A
 
     // Thin-bridge mode appends `bridge=<ws-url>&bridgeToken=<token>` to the
