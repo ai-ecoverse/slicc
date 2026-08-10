@@ -180,12 +180,92 @@ final class ServerCommandTests: XCTestCase {
         )
     }
 
-    // A `--lead` run with no worker base URL must fail with a message that
-    // names a spelling this binary can actually parse. `--lead` is a `@Flag`
-    // here (node-server's `runtime-flags.ts` also accepts `--lead <url>` /
-    // `--lead=<url>`; swift-server does not), so advertising those forms sends
-    // the reader into an "Unexpected argument" dead end. Guard both halves:
-    // the message must not name them, and whatever it DOES name must parse.
+    // MARK: - `--lead <url>` / `--lead=<url>` parity with node-server
+
+    // The two inline spellings node-server's `runtime-flags.ts` accepts must
+    // reach `--lead-worker-base-url`, so one command line starts a leader on
+    // either runtime.
+    func testNormalizeLeadArgumentsFoldsInlineSpellings() {
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--lead", "https://worker.example"]),
+            ["--lead", "--lead-worker-base-url", "https://worker.example"]
+        )
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--lead=https://worker.example"]),
+            ["--lead", "--lead-worker-base-url", "https://worker.example"]
+        )
+    }
+
+    // Restraint, mirroring node-server: only a URL-LOOKING token belongs to
+    // `--lead`. A bare `--lead` must keep falling through to WORKER_BASE_URL,
+    // and a following flag or plain word must stay where it is.
+    func testNormalizeLeadArgumentsLeavesNonURLTokensAlone() {
+        XCTAssertEqual(ServerCommand.normalizeLeadArguments(["--lead"]), ["--lead"])
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--lead", "--cdp-port", "9222"]),
+            ["--lead", "--cdp-port", "9222"]
+        )
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--lead", "notaurl"]),
+            ["--lead", "notaurl"]
+        )
+        // An empty inline value degrades to a bare flag rather than injecting
+        // an empty option value.
+        XCTAssertEqual(ServerCommand.normalizeLeadArguments(["--lead="]), ["--lead"])
+    }
+
+    // Unrelated arguments, the `--` separator, and a second pass must all be
+    // pass-throughs — the rewrite has to be safe to run over any argv.
+    func testNormalizeLeadArgumentsIsIdempotentAndScoped() {
+        let canonical = ["--lead", "--lead-worker-base-url", "https://worker.example"]
+        XCTAssertEqual(ServerCommand.normalizeLeadArguments(canonical), canonical)
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(ServerCommand.normalizeLeadArguments(canonical)),
+            canonical
+        )
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--join", "https://join.example/x"]),
+            ["--join", "https://join.example/x"]
+        )
+        // Past `--`, a literal `--lead https://…` belongs to whoever is reading
+        // the trailing arguments, not to us.
+        XCTAssertEqual(
+            ServerCommand.normalizeLeadArguments(["--", "--lead", "https://worker.example"]),
+            ["--", "--lead", "https://worker.example"]
+        )
+    }
+
+    // End to end: the normalized argv must actually parse and resolve, for
+    // both inline spellings.
+    func testInlineLeadSpellingsParseIntoConfig() throws {
+        for argv in [
+            ["--lead", "https://worker.example"],
+            ["--lead=https://worker.example"],
+        ] {
+            let normalized = ServerCommand.normalizeLeadArguments(argv)
+            let parsed = try ServerCommand.parseAsRoot(normalized)
+            let command = try XCTUnwrap(parsed as? ServerCommand)
+            let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"] + normalized)
+
+            XCTAssertTrue(config.lead, "expected lead mode for \(argv)")
+            XCTAssertEqual(
+                config.leadWorkerBaseURL?.absoluteString,
+                "https://worker.example",
+                "expected worker base URL for \(argv)"
+            )
+            XCTAssertNoThrow(
+                try ServerCommand.resolveBrowserLaunchURL(
+                    serveOrigin: "http://localhost:5710",
+                    config: config,
+                    environment: [:]
+                ),
+                "expected a resolvable launch URL for \(argv)"
+            )
+        }
+    }
+
+    // A `--lead` run with no worker base URL anywhere must still fail, and the
+    // message must name only spellings that parse — all four now do.
     func testLeadWithoutWorkerBaseURLSuggestsOnlyParsableForms() throws {
         let parsed = try ServerCommand.parseAsRoot(["--lead"])
         let command = try XCTUnwrap(parsed as? ServerCommand)
@@ -207,9 +287,13 @@ final class ServerCommandTests: XCTestCase {
                 message.contains("WORKER_BASE_URL"),
                 "error must keep the env-var escape hatch, got: \(message)"
             )
-            XCTAssertFalse(
-                message.contains("--lead <url>") || message.contains("--lead=<url>"),
-                "error must not suggest forms this binary rejects, got: \(message)"
+            // Previously these two spellings were forbidden here because the
+            // binary rejected them. `normalizeLeadArguments` makes them real,
+            // so the message is now expected to advertise them — and
+            // `testInlineLeadSpellingsParseIntoConfig` holds them to it.
+            XCTAssertTrue(
+                message.contains("--lead <url>") && message.contains("--lead=<url>"),
+                "error must name the inline spellings now that they parse, got: \(message)"
             )
         }
     }

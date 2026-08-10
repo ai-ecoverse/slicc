@@ -29,13 +29,13 @@ struct ServerCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Kill existing Electron app")
     var kill: Bool = false
 
-    // Unlike `--join` below, `--lead` is a plain flag here: it carries no value
-    // of its own, so the tray worker base URL has to arrive via
-    // `--lead-worker-base-url` or `WORKER_BASE_URL`. node-server's
-    // `runtime-flags.ts` additionally accepts `--lead <url>` / `--lead=<url>`;
-    // that parity gap is deliberate for now, so the help below names only the
-    // forms this binary actually parses.
-    @Flag(name: .long, help: "Lead mode (needs --lead-worker-base-url or WORKER_BASE_URL)")
+    // `--lead` stays a `@Flag` because the URL is optional (bare `--lead` reads
+    // `WORKER_BASE_URL`), and ArgumentParser has no "option with an optional
+    // value". The inline `--lead <url>` / `--lead=<url>` spellings that
+    // node-server's `runtime-flags.ts` accepts are folded into
+    // `--lead-worker-base-url` by `normalizeLeadArguments` before parsing —
+    // see `main()`.
+    @Flag(name: .long, help: "Lead mode (accepts --lead <url> or --lead=<url>)")
     var lead: Bool = false
 
     @Option(name: .long, help: "Tray worker base URL for --lead (or set WORKER_BASE_URL)")
@@ -66,6 +66,86 @@ struct ServerCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Path to secrets .env file")
     var envFile: String?
+
+    /// Parse a normalized argument list so `--lead <url>` / `--lead=<url>`
+    /// reach ArgumentParser as the `--lead-worker-base-url` option it can
+    /// actually model. Everything else (help, error rendering, exit codes) is
+    /// still ArgumentParser's.
+    static func main() async {
+        await main(normalizeLeadArguments(Array(CommandLine.arguments.dropFirst())))
+    }
+
+    /// A token that reads as a URL: `scheme://…`, matching the `looksLikeUrl`
+    /// test in node-server's `runtime-flags.ts`.
+    private static func looksLikeURL(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let schemeEnd = trimmed.range(of: "://")?.lowerBound, schemeEnd > trimmed.startIndex
+        else { return false }
+        let scheme = trimmed[trimmed.startIndex..<schemeEnd]
+        guard let first = scheme.first, first.isLetter else { return false }
+        return scheme.allSatisfy { $0.isLetter || $0.isNumber || $0 == "+" || $0 == "." || $0 == "-" }
+    }
+
+    /// Rewrite the inline `--lead` spellings into the canonical
+    /// `--lead --lead-worker-base-url <url>` form.
+    ///
+    /// Mirrors node-server's `runtime-flags.ts`, including its restraint: a
+    /// following token is only swallowed when it LOOKS like a URL, so
+    /// `--lead --cdp-port 9222` keeps its port and a bare `--lead` still falls
+    /// through to `WORKER_BASE_URL`. Everything after a `--` separator is
+    /// passed through untouched, and the rewrite is idempotent.
+    static func normalizeLeadArguments(_ arguments: [String]) -> [String] {
+        var normalized: [String] = []
+        normalized.reserveCapacity(arguments.count + 2)
+        var index = arguments.startIndex
+        var sawSeparator = false
+
+        while index < arguments.endIndex {
+            let argument = arguments[index]
+            if sawSeparator {
+                normalized.append(argument)
+                index += 1
+                continue
+            }
+            if argument == "--" {
+                sawSeparator = true
+                normalized.append(argument)
+                index += 1
+                continue
+            }
+
+            if argument == "--lead" {
+                normalized.append(argument)
+                index += 1
+                // `--lead <url>`: only a URL-looking token belongs to `--lead`.
+                if index < arguments.endIndex, looksLikeURL(arguments[index]) {
+                    normalized.append("--lead-worker-base-url")
+                    normalized.append(arguments[index].trimmingCharacters(in: .whitespacesAndNewlines))
+                    index += 1
+                }
+                continue
+            }
+
+            if argument.hasPrefix("--lead=") {
+                // `--lead=<url>`; an empty value degrades to a bare `--lead`
+                // rather than injecting an empty option value.
+                let value = String(argument.dropFirst("--lead=".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                normalized.append("--lead")
+                if !value.isEmpty {
+                    normalized.append("--lead-worker-base-url")
+                    normalized.append(value)
+                }
+                index += 1
+                continue
+            }
+
+            normalized.append(argument)
+            index += 1
+        }
+
+        return normalized
+    }
 
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
@@ -772,13 +852,12 @@ extension ServerCommand {
                     config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
                 )
             else {
-                // Name only the forms THIS binary parses. `--lead` is an
-                // ArgumentParser `@Flag`, so the `--lead <url>` / `--lead=<url>`
-                // spellings that node-server accepts are rejected here — the
-                // first as a stray positional, the second as an unexpected
-                // value. Suggesting them sends the reader down a dead end.
+                // Every spelling named here parses (`normalizeLeadArguments`
+                // folds the inline ones into `--lead-worker-base-url`), and
+                // the first two match node-server's `runtime-flags.ts` so one
+                // command line now starts a leader on either runtime.
                 throw ValidationError(
-                    "The --lead launch flow requires a tray worker base URL via --lead-worker-base-url <url> or the WORKER_BASE_URL environment variable."
+                    "The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, --lead-worker-base-url <url>, or WORKER_BASE_URL."
                 )
             }
             launchURL = try buildCanonicalTrayLaunchURL(locationHref: baseHref, trayValue: workerBaseURL)
