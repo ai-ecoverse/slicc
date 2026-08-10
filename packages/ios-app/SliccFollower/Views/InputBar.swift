@@ -9,6 +9,8 @@ private let logger = Logger(subsystem: "com.sliccy.follower", category: "compose
 struct InputBar: View {
     @Binding var text: String
     let isStreaming: Bool
+    /// Both of these arrive SETTLED (`AppState.settledConnection`), never raw:
+    /// a blip that heals inside the hold must not reach the composer at all.
     let isConnected: Bool
     /// Leader stopped answering pings while its channel stayed open. Sending is
     /// blocked, but this is not a disconnect and must not read as one.
@@ -59,9 +61,13 @@ struct InputBar: View {
                 || !stagedAttachments.isEmpty)
     }
 
-    /// Whether a message can be handed to the leader at all.
+    /// Whether a message can be handed to the leader at all. Gates SENDING
+    /// only — typing stays available in every connection state, so a draft
+    /// survives a drop instead of being refused while it lasts.
     private var isComposable: Bool { isConnected && !isStalled }
 
+    /// Shown while the composer is empty, so the reason sending is unavailable
+    /// is on screen before anything is typed.
     private var placeholderText: String {
         if isStalled { return "The leader is busy — hang on…" }
         return isConnected ? "Message..." : "Disconnected"
@@ -92,8 +98,13 @@ struct InputBar: View {
             .padding(.vertical, 8)
         }
         .background(palette.surface)
-        .opacity(isComposable ? 1.0 : 0.5)
-        .disabled(!isComposable)
+        // Deliberately NOT `.disabled(!isComposable)`. Disabling this band
+        // disables the `TextEditor` inside it, and a disabled editor resigns
+        // first responder — so a connection blip pulled the keyboard out from
+        // under someone mid-sentence, and re-enabling put it back, unasked.
+        // The keyboard belongs to composer focus and nothing else. What an
+        // unusable leader blocks is SENDING (`canSend` / `submit`), which the
+        // placeholder explains and the send button shows.
         .animation(.easeInOut(duration: 0.2), value: isStreaming)
         .overlay {
             // The walkie-talkie overlay while a hold is active. Covers the

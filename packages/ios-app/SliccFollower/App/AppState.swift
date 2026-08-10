@@ -58,7 +58,9 @@ class AppState: ObservableObject {
 
     // MARK: - Published UI State
 
-    @Published var connectionState: ConnectionState = .disconnected
+    @Published var connectionState: ConnectionState = .disconnected {
+        didSet { ingestConnectionHealth() }
+    }
     @Published var joinUrl: String = ""
     @Published var trayId: String?
     @Published var messages: [ChatMessage] = []
@@ -161,12 +163,45 @@ class AppState: ObservableObject {
     @Published var leaderError: String?
 
     /// The leader stopped answering pings while its channel stayed open. The
-    /// connection is intact and probing continues; the peer is just busy. The
-    /// composer disables itself so a message typed now cannot be lost.
-    @Published var isLeaderStalled: Bool = false
+    /// connection is intact and probing continues; the peer is just busy.
+    /// Sending is blocked so a message typed now cannot be lost — the composer
+    /// stays typable regardless (see `InputBar`).
+    @Published var isLeaderStalled: Bool = false {
+        didSet { ingestConnectionHealth() }
+    }
 
     /// Which reconnect attempt is in flight, 1-based. Zero when not reconnecting.
-    @Published var reconnectAttempt: Int = 0
+    @Published var reconnectAttempt: Int = 0 {
+        didSet { ingestConnectionHealth() }
+    }
+
+    // MARK: - Settled connection
+
+    /// The transport as the chat surface is allowed to describe it: the raw
+    /// state, held back across the settle window on its way into trouble so a
+    /// WebRTC blip that heals never reaches the avatar or the composer. Reads
+    /// identically to the raw state whenever the link is steady.
+    ///
+    /// Every connection-driven treatment on the chat surface reads THIS, never
+    /// the raw properties, or the parts would disagree during the hold. Gates
+    /// that are about capability rather than appearance (can this surface talk
+    /// to the leader at all) stay on the raw state, as does `MonitorView`,
+    /// which exists to report what is actually happening.
+    @Published private(set) var settledConnection = ConnectionHealth(state: .disconnected)
+
+    /// Eager, not lazy: the first transport transition arrives through a
+    /// `didSet`, and a settler built at that moment would be born already
+    /// holding the value it was supposed to weigh — publishing nothing, ever.
+    ///
+    /// Internal rather than private, like `connectionIngestSuspended`: stored
+    /// properties cannot live in an extension, but everything that reads them
+    /// does — see `AppState+Connection.swift`.
+    let connectionSettler = ConnectionSettler(
+        initial: ConnectionHealth(state: .disconnected))
+
+    /// True while `updateConnection` is composing one reading out of several
+    /// property writes.
+    var connectionIngestSuspended = false
 
     /// Buffer for chunked sprinkle.content responses.
     private struct SprinkleFetchBuffer {
@@ -197,6 +232,9 @@ class AppState: ObservableObject {
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
         self.openGrantStore = openGrantStore
         openGrants = openGrantStore.grants
+        connectionSettler.onChange = { [weak self] health in
+            self?.settledConnection = health
+        }
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
         #if DEBUG
@@ -347,12 +385,16 @@ class AppState: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
-        isLeaderStalled = false
         clearTrayCredentials()
         fileProviderDomainLifecycle.removeDomain()
         tearDown()
         resetCDPState()
-        connectionState = .disconnected
+        // Cleared with the state, not before it: on its own the cleared stall
+        // reads as a healthy connection (see `updateConnection`).
+        updateConnection {
+            isLeaderStalled = false
+            connectionState = .disconnected
+        }
         trayId = nil
         leaderConnected = false
         participantCount = 0
@@ -1358,15 +1400,23 @@ class AppState: ObservableObject {
 
         // A stall that ends in a real disconnect must not leave the composer
         // wedged: the stall is over, the connection is what is broken now.
-        isLeaderStalled = false
+        //
+        // Both writes land as ONE reading. Clearing the stall on its own reads
+        // as a connected, answering leader for an instant, and the settler
+        // would take that intermediate for a recovery — dropping the static
+        // eyes and then holding the disconnect for a whole window, so an
+        // outage that never ended would render as fine.
+        let willRetry = autoReconnect
+        updateConnection {
+            isLeaderStalled = false
+            connectionState = willRetry ? .reconnecting : .failed
+        }
 
-        guard autoReconnect else {
-            connectionState = .failed
+        guard willRetry else {
             lastError = reason
             return
         }
 
-        connectionState = .reconnecting
         streamingMessageId = nil
         reconnectTask?.cancel()
         reconnectTask = Task { @MainActor [weak self] in

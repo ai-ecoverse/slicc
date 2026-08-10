@@ -1592,6 +1592,18 @@ jobs:
             --device iPhone \
             --result-bundle .build/unit-suite.xcresult \
             --only-testing SliccFollowerTests
+      # The composer must stay typable through connection trouble, and the
+      # keyboard must follow focus and nothing else. Compact width is where
+      # that regressed, so this runs on the iPhone leg rather than the iPad
+      # ones. Its own class, not all of ComposerKeyboardUITests: those drive
+      # `typeKey` and need a hardware keyboard the runner has not got.
+      - name: Test composer under connection trouble (iPhone)
+        if: matrix.device == 'iPhone' && matrix.ios == '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPhone \
+            --result-bundle .build/composer-connection-ui.xcresult \
+            --only-testing SliccFollowerUITests/ComposerConnectionUITests
       - name: Test regular-width browser (iPad)
         if: matrix.device == 'iPad'
         run: |

@@ -26,14 +26,17 @@ final class ConnectionStateUITests: XCTestCase {
             "A stall is not a disconnect and must not read as one")
     }
 
-    /// The composer has to refuse input during a stall, or a typed message is
-    /// accepted into a channel that cannot deliver it.
-    func testTheComposerRefusesInputDuringAStall() {
+    /// A stall has to refuse the SEND, or a typed message is accepted into a
+    /// channel that cannot deliver it — while the composer itself stays
+    /// typable, because disabling it moves the keyboard around (see
+    /// `ComposerKeyboardUITests`).
+    func testAStallRefusesTheSendAndSaysWhy() {
         let app = launchApp(forcing: "stalled")
 
         let placeholder = app.staticTexts["composer-placeholder"]
         XCTAssertTrue(placeholder.waitForExistence(timeout: 60))
         XCTAssertEqual(placeholder.label, "The leader is busy — hang on…")
+        XCTAssertFalse(app.buttons["composer-send"].isEnabled)
     }
 
     /// A transient reconnect must show progress, so it does not read as a hang.
