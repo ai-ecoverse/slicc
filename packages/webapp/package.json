@@ -86,7 +86,7 @@
     "@types/semver": "7.8.0",
     "@types/w3c-web-serial": "^1.0.8",
     "fake-indexeddb": "6.2.5",
-    "jsdom": "^29.0.0",
+    "jsdom": "^30.0.0",
     "puppeteer-core": "^25.0.0"
   }
 }
