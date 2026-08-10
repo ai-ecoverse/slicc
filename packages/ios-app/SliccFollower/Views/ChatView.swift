@@ -94,6 +94,9 @@ struct ChatView: View {
                 if let inboundURL = UITestHooks.inboundOpenURL {
                     _ = inboundActions.receive(url: inboundURL, needsConfirmation: true)
                 }
+                // Armed before the early returns below: a blip is staged on
+                // top of whichever start state those apply.
+                scheduleConnectionBlip()
                 if UITestHooks.scriptCompletedTurn(into: appState) {
                     return
                 }
@@ -636,17 +639,40 @@ struct ChatView: View {
             if raw == "stalled" {
                 appState.connectionState = .connected
                 appState.isLeaderStalled = true
+                appState.settleConnectionImmediately()
                 return
             }
             if raw == "streaming" {
                 appState.connectionState = .connected
                 appState.isStreaming = true
+                appState.settleConnectionImmediately()
                 return
             }
             guard let state = ConnectionState(rawValue: raw) else { return }
             appState.connectionState = state
             if state == .reconnecting {
                 appState.reconnectAttempt = 3
+            }
+            // A pinned state is the test's premise, not a transition to be
+            // held back: publish it before the first assertion looks.
+            appState.settleConnectionImmediately()
+        }
+
+        /// Drop the pinned connection after a delay, optionally restoring it —
+        /// the transition `ConnectionSettle` holds back, staged without a peer.
+        /// The states are pinned rather than routed through `handleDisconnect`
+        /// so the reconnect loop cannot dial the empty fixture Join URL.
+        private func scheduleConnectionBlip() {
+            guard let blip = UITestHooks.connectionBlip else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(blip.dropAfter))
+                appState.isLeaderStalled = false
+                appState.reconnectAttempt = 1
+                appState.connectionState = .reconnecting
+                guard let healsAfter = blip.healsAfter else { return }
+                try? await Task.sleep(for: .seconds(healsAfter))
+                appState.reconnectAttempt = 0
+                appState.connectionState = .connected
             }
         }
     #endif
@@ -822,20 +848,23 @@ struct ConversationView: View {
         return "\(lifecycleLabel). \(connectionStatusText)"
     }
 
+    /// Both connection treatments read the SETTLED health, so a blip that heals
+    /// inside the hold never flickers the eyes or rewrites the placeholder.
     private var showsConnectionStatic: Bool {
-        appState.connectionState != .connected || appState.isLeaderStalled
+        !appState.settledConnection.isHealthy
     }
 
     private var connectionStatusText: String? {
-        if appState.connectionState == .connected, appState.isLeaderStalled {
+        let health = appState.settledConnection
+        if health.state == .connected, health.isStalled {
             return "The leader is busy — hang on…"
         }
-        switch appState.connectionState {
+        switch health.state {
         case .connected: return nil
         case .connecting: return "Connecting…"
         case .reconnecting:
-            return appState.reconnectAttempt > 0
-                ? "Reconnecting… (\(appState.reconnectAttempt)/\(ReconnectBackoff.maxAttempts))"
+            return health.reconnectAttempt > 0
+                ? "Reconnecting… (\(health.reconnectAttempt)/\(ReconnectBackoff.maxAttempts))"
                 : "Reconnecting…"
         case .disconnected: return "Disconnected"
         case .failed: return "Connection Failed"
@@ -864,11 +893,11 @@ struct ConversationView: View {
             InputBar(
                 text: $inputText,
                 isStreaming: appState.isStreaming,
-                isConnected: appState.connectionState == .connected,
+                isConnected: appState.settledConnection.state == .connected,
                 // A message typed during a stall would be accepted into the
                 // composer and lost, so block sending — but say why, rather
                 // than claiming the follower is disconnected.
-                isStalled: appState.isLeaderStalled,
+                isStalled: appState.settledConnection.isStalled,
                 steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
                 ptt: ptt,
                 onSend: { text, attachments, dictated in
@@ -1165,14 +1194,11 @@ struct SessionControlsCluster: View {
                     .foregroundStyle(palette.ink.opacity(0.7))
             }
         }
-        // Gated like the composer: with no usable leader the request would
-        // silently vanish (requestNewSession returns when the channel cannot
-        // be written).
-        .disabled(
-            appState.newSessionInFlight
-                || appState.connectionState != .connected
-                || appState.isLeaderStalled
-        )
+        // Gated like sending: with no usable leader the request would silently
+        // vanish (requestNewSession returns when the channel cannot be
+        // written). Reads the settled health so a blip cannot flicker a
+        // toolbar button the user may be reaching for.
+        .disabled(appState.newSessionInFlight || !appState.settledConnection.isHealthy)
         .accessibilityLabel("New chat")
         .accessibilityIdentifier("new-chat-button")
         .modifier(NewSessionDialog(isPresented: $showNewSessionDialog))

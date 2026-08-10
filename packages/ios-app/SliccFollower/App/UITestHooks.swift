@@ -97,6 +97,25 @@ import UIKit
             UserDefaults.standard.string(forKey: "uiTestConnectionState")
         }
 
+        /// Stage a mid-session drop: `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"`,
+        /// both in seconds. `forcedConnectionState` only pins where the app
+        /// *starts*, and the settle window exists for the TRANSITION — the
+        /// state a hermetic test can otherwise never reach, because staging it
+        /// for real needs a peer that drops and comes back on cue.
+        ///
+        /// A missing second value means the drop is permanent, which is how a
+        /// test waits for the treatment to land instead of racing the hold.
+        static var connectionBlip: (dropAfter: TimeInterval, healsAfter: TimeInterval?)? {
+            guard let raw = UserDefaults.standard.string(forKey: "uiTestConnectionBlip") else {
+                return nil
+            }
+            let parts = raw.split(separator: ",").map {
+                TimeInterval($0.trimmingCharacters(in: .whitespaces))
+            }
+            guard let first = parts.first, let dropAfter = first else { return nil }
+            return (dropAfter, parts.count > 1 ? parts[1] : nil)
+        }
+
         /// Stage a completed visible turn without a leader
         /// (`-uiTestCompletedTurn YES`). All messages enter through the real
         /// data-channel decoder; status: ready settles the turn because the
@@ -125,6 +144,9 @@ import UIKit
             if let raw = forcedConnectionState, let state = ConnectionState(rawValue: raw) {
                 appState.connectionState = state
             }
+            // Pinned, not transitioned: the fixture must be on screen when the
+            // test looks, not a settle window later (see `ConnectionSettler`).
+            appState.settleConnectionImmediately()
             return true
         }
 

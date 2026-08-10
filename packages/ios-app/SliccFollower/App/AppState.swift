@@ -58,7 +58,9 @@ class AppState: ObservableObject {
 
     // MARK: - Published UI State
 
-    @Published var connectionState: ConnectionState = .disconnected
+    @Published var connectionState: ConnectionState = .disconnected {
+        didSet { ingestConnectionHealth() }
+    }
     @Published var joinUrl: String = ""
     @Published var trayId: String?
     @Published var messages: [ChatMessage] = []
@@ -161,12 +163,65 @@ class AppState: ObservableObject {
     @Published var leaderError: String?
 
     /// The leader stopped answering pings while its channel stayed open. The
-    /// connection is intact and probing continues; the peer is just busy. The
-    /// composer disables itself so a message typed now cannot be lost.
-    @Published var isLeaderStalled: Bool = false
+    /// connection is intact and probing continues; the peer is just busy.
+    /// Sending is blocked so a message typed now cannot be lost — the composer
+    /// stays typable regardless (see `InputBar`).
+    @Published var isLeaderStalled: Bool = false {
+        didSet { ingestConnectionHealth() }
+    }
 
     /// Which reconnect attempt is in flight, 1-based. Zero when not reconnecting.
-    @Published var reconnectAttempt: Int = 0
+    @Published var reconnectAttempt: Int = 0 {
+        didSet { ingestConnectionHealth() }
+    }
+
+    // MARK: - Settled connection
+
+    /// The transport as the chat surface is allowed to describe it: the raw
+    /// state, held back across the settle window on its way into trouble so a
+    /// WebRTC blip that heals never reaches the avatar or the composer. Reads
+    /// identically to the raw state whenever the link is steady.
+    ///
+    /// Every connection-driven treatment on the chat surface reads THIS, never
+    /// the raw properties, or the parts would disagree during the hold. Gates
+    /// that are about capability rather than appearance (can this surface talk
+    /// to the leader at all) stay on the raw state, as does `MonitorView`,
+    /// which exists to report what is actually happening.
+    @Published private(set) var settledConnection = ConnectionHealth(state: .disconnected)
+
+    /// The transport as it actually is, this instant.
+    ///
+    /// The attempt counter only means something while reconnecting, so it is
+    /// dropped otherwise: a healthy reading that still carried the last
+    /// attempt number would differ from the same healthy reading a moment
+    /// later and republish for nothing.
+    var rawConnectionHealth: ConnectionHealth {
+        ConnectionHealth(
+            state: connectionState,
+            isStalled: isLeaderStalled,
+            reconnectAttempt: connectionState == .reconnecting ? reconnectAttempt : 0)
+    }
+
+    /// Eager, not lazy: the first transport transition arrives through a
+    /// `didSet`, and a settler built at that moment would be born already
+    /// holding the value it was supposed to weigh — publishing nothing, ever.
+    private let connectionSettler = ConnectionSettler(
+        initial: ConnectionHealth(state: .disconnected))
+
+    private func ingestConnectionHealth() {
+        connectionSettler.ingest(rawConnectionHealth)
+    }
+
+    #if DEBUG
+        /// Publish the raw state to the UI at once. The UI-test hooks pin a
+        /// connection no transport produced, so the treatment has to be on
+        /// screen when the test looks rather than a settle window later; a
+        /// staged blip (`-uiTestConnectionBlip`) deliberately does NOT call
+        /// this, since holding that transition is what it exists to exercise.
+        func settleConnectionImmediately() {
+            connectionSettler.settleImmediately(rawConnectionHealth)
+        }
+    #endif
 
     /// Buffer for chunked sprinkle.content responses.
     private struct SprinkleFetchBuffer {
@@ -197,6 +252,9 @@ class AppState: ObservableObject {
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
         self.openGrantStore = openGrantStore
         openGrants = openGrantStore.grants
+        connectionSettler.onChange = { [weak self] health in
+            self?.settledConnection = health
+        }
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
         #if DEBUG

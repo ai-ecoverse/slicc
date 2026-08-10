@@ -24,6 +24,20 @@ Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after
 
 No connection banner row: recoverable state stays in the avatar and composer placeholder so it cannot move message rows; terminal `.gaveUp` opens Settings.
 
+### Settle window
+
+The follower's WebRTC link blips — an ICE failure or a closed data channel drops a connection the bounded reconnect rebuilds seconds later. Every connection treatment on the chat surface therefore reads `AppState.settledConnection` (a `ConnectionHealth` of state + stall + attempt), never the raw properties, and `ConnectionSettler` decides when the raw state gets there:
+
+- **Into trouble** — held for `ConnectionSettler.holdDuration`. A blip that heals inside the window publishes _nothing_; the pending update is dropped, not replayed. The hold is sized above `ReconnectBackoff.baseDelay` on purpose: the first reconnect attempt only fires after that delay and still needs signaling plus ICE to land, so a shorter hold would expire while the blip it exists to hide is still healing.
+- **Back to health** — immediate. Nothing is gained by leaving a stale alarm over a connection that is demonstrably fine.
+- **Trouble → different trouble** — immediate, so the attempt counter keeps up instead of freezing at whatever landed first.
+
+The window is measured from the first reading that broke health. Trouble arriving while a hold is already running only updates what that hold will publish — the reconnect loop bumps its attempt counter about once a second, and restarting the clock on each bump would let it outrun any hold.
+
+Capability gates (can this surface reach the leader at all — Files, Memory, Terminal, Settings) stay on the raw state, as does `MonitorView`, which exists to report what is actually happening.
+
+The composer is **never** `.disabled` for a connection state. Disabling the band disables the `TextEditor` inside it, a disabled editor resigns first responder, and the keyboard then flaps with the connection: pulled away from someone mid-sentence on the drop, restored unasked on the re-enable. The keyboard follows composer focus and nothing else. What an unusable leader blocks is _sending_ — `canSend` / `submit`, the dimmed send button, and the placeholder that says why. This is a deliberate divergence from the browser follower (`wc-follower.ts` disables its input card), which has no first-responder coupling to lose.
+
 ## UI-test details
 
 - Put accessibility identifiers on leaves (`message-<id>`). Container ids propagate; `.accessibilityElement(children: .contain)` does not fix it.
