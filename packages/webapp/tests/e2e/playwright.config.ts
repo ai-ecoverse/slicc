@@ -85,6 +85,11 @@ export default defineConfig({
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
       // CI `e2e` job builds it before the E2E step.
       command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1`,
+      env: {
+        // Wrangler 4.118 enables local observability by default. Its extra
+        // collector can disconnect Miniflare during this long-running suite.
+        X_LOCAL_OBSERVABILITY: 'false',
+      },
       // Gate readiness on a real HTTP 200 from `/status`, NOT a bare TCP probe.
       // workerd's `dev` process binds the listen socket well before the worker
       // module + DO stubs finish loading; a `port:` probe passes during that
