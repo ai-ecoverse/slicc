@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sliccy</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -18,16 +20,10 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>CFBundleDisplayName</key>
-	<string>SLICC</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionFileProviderDocumentGroup</key>
 		<string>group.ai.sliccy.follower</string>
-		<!-- Required for Files.app Locations visibility. Apple's File Provider
-		     extension template sets this; without it iOS can register the
-		     domain (getDomains succeeds) while leaving userEnabled=false and
-		     omitting the provider from Browse → Edit. -->
 		<key>NSExtensionFileProviderSupportsEnumeration</key>
 		<true/>
 		<key>NSExtensionPointIdentifier</key>
