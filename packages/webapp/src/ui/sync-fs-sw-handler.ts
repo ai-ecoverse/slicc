@@ -65,6 +65,28 @@ import type { SyncFsAckMsg, SyncFsResMsg } from '../kernel/realm/sync-fs-wire.js
 const DEFAULT_TIMEOUT_MS = SYNC_FS_REQUEST_TIMEOUT_MS;
 /** Cold-start re-post cadence until the responder acks. */
 const DEFAULT_RETRY_INTERVAL_MS = 200;
+/**
+ * How long to keep re-posting before concluding that NO responder owns this
+ * token, and failing closed without serving out the rest of the budget.
+ *
+ * The ack is the liveness signal: a responder sends it the moment it picks the
+ * request up, before doing any work (`sync-fs-responder.ts`), and the re-post
+ * loop above retries every {@link DEFAULT_RETRY_INTERVAL_MS} until it arrives —
+ * so this window is ~50 delivery attempts, not one.
+ *
+ * Without this gate an unacked request waits the FULL budget, and the realm
+ * worker that issued it is blocked in a synchronous XHR for that entire time,
+ * unable to run its own responder. For `execSync` the budget is up to
+ * `SYNC_EXEC_MAX_TIMEOUT_MS` (10 minutes), which is how a single stalled
+ * responder took a leader down for hours: every kernel worker sat blocked on a
+ * route only a kernel worker could answer, and nothing shortened the wait
+ * because the ack — the one signal that says whether anybody is home — was
+ * recorded but never acted on.
+ *
+ * Deliberately generous: failing fast on a responder that is merely slow to
+ * ack would turn a recoverable stall into a spurious `EIO`.
+ */
+const DEFAULT_NO_RESPONDER_MS = 10_000;
 
 /** Structural subset of `BroadcastChannel` so this is testable with a fake. */
 export interface SyncFsSwChannelLike {
@@ -166,7 +188,14 @@ async function parseSyncExecRequest(request: {
     return null;
   }
   if (!payload || typeof payload !== 'object') return null;
-  const p = payload as Record<string, unknown>;
+  // The envelope is attacker-shaped until validated below, so every field is
+  // optional-unknown rather than an untyped string-keyed bag.
+  const p = payload as {
+    command?: unknown;
+    args?: unknown;
+    stdin?: unknown;
+    timeoutMs?: unknown;
+  };
   const command = p.command;
   const commandOk =
     typeof command === 'string' ||
@@ -277,10 +306,13 @@ function buildResponse(res: SyncFsResMsg): Response {
 export function handleSyncFsRequest(
   channels: SyncFsSwChannelLike[],
   req: SyncFsHandlerRequest,
-  opts: { timeoutMs?: number; retryIntervalMs?: number } = {}
+  opts: { timeoutMs?: number; retryIntervalMs?: number; noResponderMs?: number } = {}
 ): Promise<Response> {
   const timeoutMs = opts.timeoutMs ?? budgetFor(req);
   const retryIntervalMs = opts.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS;
+  // Never outlive the overall budget: for a short fs request the budget itself
+  // is already the tighter bound.
+  const noResponderMs = Math.min(opts.noResponderMs ?? DEFAULT_NO_RESPONDER_MS, timeoutMs);
   const id = crypto.randomUUID();
 
   return new Promise<Response>((resolve) => {
@@ -288,11 +320,13 @@ export function handleSyncFsRequest(
     let settled = false;
     let retryTimer: ReturnType<typeof setInterval> | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let noResponderTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = (): void => {
       for (const ch of channels) ch.removeEventListener('message', onMessage);
       if (retryTimer) clearInterval(retryTimer);
       if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (noResponderTimer) clearTimeout(noResponderTimer);
     };
     const finish = (response: Response): void => {
       if (settled) return;
@@ -307,6 +341,9 @@ export function handleSyncFsRequest(
       if (data.type === SYNC_FS_ACK_MSG) {
         acked = true;
         if (retryTimer) clearInterval(retryTimer);
+        // Somebody owns this token and is working on it — it has earned the
+        // full budget, however long that is.
+        if (noResponderTimer) clearTimeout(noResponderTimer);
         return;
       }
       if (data.type === SYNC_FS_RES_MSG) finish(buildResponse(data));
@@ -320,6 +357,19 @@ export function handleSyncFsRequest(
     retryTimer = setInterval(() => {
       if (!acked) post();
     }, retryIntervalMs);
+    noResponderTimer = setTimeout(() => {
+      if (acked) return;
+      // Nobody acked after ~50 re-posts: there is no responder for this token,
+      // so the remaining budget would be spent blocking the calling realm for
+      // nothing. Same fail-closed shape as the timeout — the errno is what the
+      // bridge reads — with a distinct body so logs tell the two apart.
+      finish(
+        new Response('sync-fs bridge: no responder', {
+          status: 503,
+          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
+        })
+      );
+    }, noResponderMs);
     timeoutTimer = setTimeout(() => {
       finish(
         new Response('sync-fs bridge timeout', {
