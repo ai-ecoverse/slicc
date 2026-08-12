@@ -854,19 +854,19 @@ describe('realm RPC: vfs.snapshot budgets', () => {
     expect(bad?.content.byteLength).toBe(0);
   });
 
-  // Ground truth wins over the recorded KIND. The metadata claims a readable
-  // file, so the walk enters the file path; the read then fails, and the
-  // re-probe reports what the tree really holds — a directory, which must be
-  // walked so its children are not lost with it.
-  it('a kind-flipped entry is walked as the directory the filesystem says it is', async () => {
+  // The re-probe reads the same metadata index that classified the path as a
+  // file, so it is not an independent view of the tree. What it CAN see is a
+  // node that changed underneath the walk: stat said file, the read failed,
+  // and by the re-probe it is a directory. Walking it keeps a real directory's
+  // children out of a silent hole in the cache.
+  it('a path that becomes a directory between stat and read is walked as one', async () => {
     const fs = makeTreeFs({ '/workspace/thing/inner.txt': 'inner' });
     let statCalls = 0;
     const realFs = {
       ...fs,
       async stat(path: string) {
-        // The first look says "file" (the poisoned metadata) — that is what
-        // gets the walk into visitSnapshotFile at all; the recovery re-probe
-        // then gets the truth.
+        // First look: a file (what the walk classified). Re-probe: the tree
+        // has changed under us.
         if (path === '/workspace/thing' && statCalls++ === 0) {
           return { isDirectory: false, isFile: true, size: 3 } as Awaited<
             ReturnType<typeof fs.stat>
@@ -891,6 +891,42 @@ describe('realm RPC: vfs.snapshot budgets', () => {
     // The child survives only because the recovery walked the real directory.
     const inner = snap.entries.find((e) => e.path === '/workspace/thing/inner.txt');
     expect(new TextDecoder().decode(inner?.content)).toBe('inner');
+  });
+
+  // The PRODUCTION case for a poisoned sidecar: the flip is persistent, so the
+  // re-probe — reading that same poisoned metadata — still says "file". This
+  // pins the honest outcome rather than pretending the directory is walked:
+  // the entry survives as a placeholder (one bad entry does not blind the
+  // realm) and readFileSync falls through to the SW bridge for the real node.
+  // Enumerating its children would need a probe of the OPFS handles, the way
+  // sidecar-repair.ts does at mount time.
+  it('a persistent kind flip degrades to a placeholder, not a lost snapshot', async () => {
+    const fs = makeTreeFs({
+      '/workspace/poisoned': 'x',
+      '/workspace/sibling.txt': 'fine',
+    });
+    const realFs = {
+      ...fs,
+      // stat NEVER tells the truth here — exactly like a poisoned sidecar.
+      async readFileBuffer(path: string) {
+        if (path === '/workspace/poisoned') {
+          throw new Error("EISDIR: illegal operation on a directory '/workspace/poisoned'");
+        }
+        return fs.readFileBuffer(path);
+      },
+    } as typeof fs;
+    const ctx = makeCtx({ fs: realFs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const bad = snap.entries.find((e) => e.path === '/workspace/poisoned');
+    expect(bad?.truncated).toBe(true);
+    expect(bad?.isDirectory).toBe(false);
+    const sibling = snap.entries.find((e) => e.path === '/workspace/sibling.txt');
+    expect(new TextDecoder().decode(sibling?.content)).toBe('fine');
   });
 
   // A path that vanishes between the walk's stat and its read must drop out

@@ -517,14 +517,22 @@ async function visitSnapshotFile(
 
 /**
  * Re-probe a path whose recorded metadata just lost an argument with the
- * filesystem, and record what is REALLY there.
+ * filesystem, and record the best answer available — never abort the walk.
  *
- * Ground truth wins: the sidecar is a cache of the tree, not the tree. If the
- * node is really a directory, walk it as one; if it is really a file, emit a
- * metadata-only placeholder carrying the size the filesystem reports (so
- * `statSync` tells the truth and `readFileSync` falls through to the bridge
- * for the bytes); if it is gone, drop it. Any of those beats aborting the walk
- * and blinding the realm's entire sync-fs cache.
+ * WHAT THIS RE-PROBE CAN AND CANNOT SEE. `ctx.fs.stat` reads the same ZenFS
+ * metadata index that classified this path as a file moments ago, so it is NOT
+ * an independent view of the tree. For a PERSISTENT sidecar kind flip it will
+ * answer "file" again, and the honest outcome is the placeholder below: the
+ * entry stays in the snapshot (the point — one bad entry must not blind the
+ * realm) and `readFileSync` falls through to the SW bridge, which reads the
+ * real node. Its children are not enumerated; that needs a probe of the
+ * underlying OPFS handles, the way `sidecar-repair.ts` does at mount time, and
+ * reaching those from the realm host is a layering change of its own.
+ *
+ * The directory branch therefore covers the case the re-probe genuinely can
+ * see: the node CHANGED between the walk's stat and the read (a path replaced
+ * by a directory mid-walk). Cheap to handle, and losing a real directory's
+ * children to a race would be a silent hole in the cache.
  */
 async function recoverPoisonedSnapshotEntry(
   ctx: CommandContext,
