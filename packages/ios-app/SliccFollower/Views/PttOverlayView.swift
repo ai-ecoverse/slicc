@@ -48,7 +48,7 @@ struct PttOverlayView: View {
                     .foregroundStyle(palette.ink)
                 Text(
                     message
-                        ?? "Enable the microphone and speech recognition for SLICC in Settings, then hold again."
+                        ?? "Enable the microphone and speech recognition for Sliccy in Settings, then hold again."
                 )
                 .font(.caption2)
                 .foregroundStyle(palette.inkSecondary)

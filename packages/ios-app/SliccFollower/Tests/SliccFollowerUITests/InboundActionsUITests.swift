@@ -22,7 +22,7 @@ final class InboundActionsUITests: XCTestCase {
     func testDeepLinkedOpenConfirmsBeforeOpening() {
         let app = launch()
 
-        let alert = app.alerts["Open in SLICC's browser?"]
+        let alert = app.alerts["Open in Sliccy's browser?"]
         XCTAssertTrue(alert.waitForExistence(timeout: 60), "the system alert renders")
         XCTAssertTrue(
             alert.staticTexts["https://example.com/docs"].exists,
@@ -40,11 +40,11 @@ final class InboundActionsUITests: XCTestCase {
     func testDismissDropsTheRequest() {
         let app = launch()
 
-        let alert = app.alerts["Open in SLICC's browser?"]
+        let alert = app.alerts["Open in Sliccy's browser?"]
         XCTAssertTrue(alert.waitForExistence(timeout: 60))
         alert.buttons["Cancel"].tap()
         XCTAssertFalse(
-            app.alerts["Open in SLICC's browser?"].exists,
+            app.alerts["Open in Sliccy's browser?"].exists,
             "cancel drops the request")
         XCTAssertTrue(
             app.buttons["dock-browser"].exists,

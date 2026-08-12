@@ -85,7 +85,7 @@ final class TerminalViewModel: ObservableObject {
         }
         guard !Task.isCancelled, !didStart else { return }
         didStart = true
-        emit(Data("SLICC leader terminal\r\n\(Self.prompt)".utf8))
+        emit(Data("Sliccy leader terminal\r\n\(Self.prompt)".utf8))
     }
 
     func setConnectionAvailable(_ available: Bool) {

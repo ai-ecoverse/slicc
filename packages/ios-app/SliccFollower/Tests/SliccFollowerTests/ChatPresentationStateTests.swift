@@ -125,7 +125,7 @@ final class ChatPresentationStateTests: XCTestCase {
         // model rather than one of its own. Without this the rest of the test
         // would just be re-checking that a memoized getter memoizes.
         let started = await settle(until: {
-            terminal.accessibilityTranscript.contains("SLICC leader terminal")
+            terminal.accessibilityTranscript.contains("Sliccy leader terminal")
         })
         XCTAssertTrue(started, "the mounted TerminalView never started the shell's model")
 

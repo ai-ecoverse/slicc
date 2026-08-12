@@ -32,7 +32,7 @@ struct ChatView: View {
     /// Opt-in unattended prompts: the user made this policy call
     /// explicitly by choosing Always on the prompt card.
     @AppStorage("inboundAlwaysAllowPrompts") private var alwaysAllowPrompts = false
-    /// Transcript links stay in SLICC's own browser by default — a tap on a
+    /// Transcript links stay in Sliccy's own browser by default — a tap on a
     /// link the agent sent should not evict the user from the session.
     /// Settings → Advanced hands them back to the system browser.
     @AppStorage("openLinksInBuiltInBrowser") private var openLinksInBuiltInBrowser = true
@@ -141,7 +141,7 @@ struct ChatView: View {
             inboundPhaseChip
         }
         .alert(
-            "Open in SLICC's browser?",
+            "Open in Sliccy's browser?",
             isPresented: inboundOpenAlertPresented,
             presenting: inboundActions.pendingOpen
         ) { action in
@@ -157,7 +157,7 @@ struct ChatView: View {
             Text(action.url.absoluteString)
         }
         .alert(
-            "Send this prompt to SLICC?",
+            "Send this prompt to Sliccy?",
             isPresented: inboundPromptAlertPresented,
             presenting: inboundActions.pendingPrompt
         ) { action in
@@ -299,11 +299,11 @@ struct ChatView: View {
             let scoopJid = appState.selectedScoopJid
         else {
             fireCallback(
-                action.xError, params: ["errorMessage": "SLICC is not connected to a leader"])
+                action.xError, params: ["errorMessage": "Sliccy is not connected to a leader"])
             inboundActions.resolve(id: action.id, with: .failure(InboundActionError.notConnected))
             return
         }
-        inboundActions.phase = .running("Waiting for SLICC's reply…")
+        inboundActions.phase = .running("Waiting for Sliccy's reply…")
         let timeoutToken = appState.inboundPrompt.arm(scoopJid: scoopJid) { outcome in
             switch outcome {
             case .reply(let text):
@@ -340,7 +340,7 @@ struct ChatView: View {
         ) {
             inboundActions.phase = nil
             let markdown = Self.transcriptMarkdown(
-                label: appState.selectedScoop?.assistantLabel ?? "SLICC",
+                label: appState.selectedScoop?.assistantLabel ?? "Sliccy",
                 messages: appState.messages)
             inboundActions.resolve(id: request.id, with: .success(markdown))
         }
@@ -383,7 +383,7 @@ struct ChatView: View {
     /// renders, nothing more. Truncated head-first when over budget so the
     /// newest turns survive.
     static func transcriptMarkdown(label: String, messages: [ChatMessage]) -> String {
-        var sections: [String] = ["# SLICC — \(label)"]
+        var sections: [String] = ["# Sliccy — \(label)"]
         for message in messages {
             let heading = message.role == .user ? "## You" : "## \(label)"
             var body = message.content
@@ -843,7 +843,7 @@ struct ConversationView: View {
     private var selectedAccessibilityLabel: String {
         let lifecycleLabel =
             (appState.selectedScoop?.status ?? ScoopStatus(state: nil, fill: nil))
-            .accessibilityPhrase(label: appState.selectedScoop?.assistantLabel ?? "SLICC")
+            .accessibilityPhrase(label: appState.selectedScoop?.assistantLabel ?? "Sliccy")
         guard let connectionStatusText else { return lifecycleLabel }
         return "\(lifecycleLabel). \(connectionStatusText)"
     }
@@ -1098,12 +1098,12 @@ struct ScoopSwitcher: View {
             } label: {
                 identityLabel
             }
-            .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "SLICC")
+            .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
             .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
         } else {
             identityLabel
-                .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "SLICC")
+                .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
                 .accessibilityIdentifier("scoop-switcher")
         }
     }
@@ -1114,7 +1114,7 @@ struct ScoopSwitcher: View {
     /// Leader-active is spoken in the menu rows, not as a dot here.
     private var identityLabel: some View {
         HStack(spacing: 5) {
-            Text(appState.selectedScoop?.assistantLabel ?? "SLICC")
+            Text(appState.selectedScoop?.assistantLabel ?? "Sliccy")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(palette.ink)
                 .lineLimit(1)

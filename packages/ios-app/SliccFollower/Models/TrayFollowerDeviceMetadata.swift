@@ -6,5 +6,5 @@ import UIKit
 /// the `motd` the Go CLI sets. Identifies the phone among several followers.
 var trayFollowerMotd: String {
     let device = UIDevice.current
-    return "SLICC iOS follower on \(device.name) (\(device.systemName) \(device.systemVersion)) — only supported command: open"
+    return "Sliccy iOS follower on \(device.name) (\(device.systemName) \(device.systemVersion)) — only supported command: open"
 }

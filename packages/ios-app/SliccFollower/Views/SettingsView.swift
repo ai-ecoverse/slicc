@@ -195,7 +195,7 @@ struct SettingsView: View {
             let unreachable = reachability.verdicts[session.id] == .unreachable
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.label.isEmpty ? "SLICC session" : session.label)
+                    Text(session.label.isEmpty ? "Sliccy session" : session.label)
                         .foregroundStyle(.primary)
                     Text(
                         "\(deviceName) · \(ICloudSessionList.age(of: session.lastSeenAt, now: now))"
@@ -272,7 +272,7 @@ struct SettingsView: View {
         } header: {
             Text("Connection")
         } footer: {
-            Text("Connect to a SLICC session with its Join URL.")
+            Text("Connect to a Sliccy session with its Join URL.")
         }
     }
 
@@ -344,14 +344,14 @@ struct SettingsView: View {
     /// Mirrors the webapp's "How do I get the sync URL?" disclosure
     /// (provider-settings.ts → renderJoinTrayForm). New users repeatedly
     /// hit the empty Join URL field with no idea where to find one;
-    /// inline guidance points them at the desktop SLICC's avatar menu
+    /// inline guidance points them at the desktop Sliccy's avatar menu
     /// or the agent prompt that returns a tray URL.
     private var joinUrlHelpDisclosure: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 10) {
                 joinUrlStep(
                     number: 1,
-                    text: "Open SLICC on your computer (Sliccstart, the Chrome extension, or the standalone CLI)."
+                    text: "Open Sliccy on your computer (Sliccstart, the Chrome extension, or the standalone CLI)."
                 )
                 joinUrlStep(
                     number: 2,
@@ -363,7 +363,7 @@ struct SettingsView: View {
                 )
                 joinUrlStep(
                     number: 4,
-                    text: "Paste the URL into the **Join URL** field above. Both sides must be on the same SLICC version."
+                    text: "Paste the URL into the **Join URL** field above. Both sides must be on the same Sliccy version."
                 )
             }
             .padding(.vertical, 4)
@@ -468,7 +468,7 @@ struct SettingsView: View {
             // reachability is a hand-dominance question, not a layout one.
             Toggle("Left-handed dock", isOn: $leftHandedDock)
 
-            Toggle("Open links in SLICC", isOn: $openLinksInBuiltInBrowser)
+            Toggle("Open links in Sliccy", isOn: $openLinksInBuiltInBrowser)
                 .accessibilityIdentifier("open-links-in-app-toggle")
 
             if !appState.joinUrlHistory.isEmpty {
@@ -494,7 +494,7 @@ struct SettingsView: View {
             Text("Advanced")
         } footer: {
             Text(
-                "Links in the conversation open as tabs in SLICC's browser. "
+                "Links in the conversation open as tabs in Sliccy's browser. "
                     + "Turn that off to hand them to your default browser instead.")
         }
     }
