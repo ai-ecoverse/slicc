@@ -167,10 +167,10 @@ struct InputBar: View {
             }
         }
         .onChange(of: pttArmed) { _, armed in
-            // The surface unmounts the moment the composer disables (leader
-            // stalled or disconnected mid-hold) — its onEnded then never
-            // fires, so cancel here or the mic stays live behind a dead
-            // composer.
+            // The surface unmounts the moment text arrives (a dictation
+            // committing into the composer, a paste) — its onEnded then never
+            // fires, so cancel here or the mic stays live behind a surface
+            // that is gone.
             if !armed {
                 ptt.pressCancelled()
             }
@@ -340,9 +340,23 @@ struct InputBar: View {
         }
     }
 
-    /// The press surface mounts (and the editor yields its touches) only on
-    /// an empty, usable composer.
-    private var pttArmed: Bool { text.isEmpty && isComposable }
+    /// The press surface mounts (and the editor yields its touches) on an
+    /// empty composer — whatever the connection is doing.
+    ///
+    /// Deliberately NOT `&& isComposable`. This flag drives
+    /// `allowsHitTesting` on the editor and mounts an overlay above it, so
+    /// tying it to the connection put a live transport event straight into the
+    /// first-responder layer: with an empty, focused composer — exactly the
+    /// state someone is in when they tap to start writing — a drop or a stall
+    /// toggled hit-testing under the keyboard and mounted an overlay on top of
+    /// it, and the keyboard flapped. That is the same coupling the composer's
+    /// `.disabled` used to have, in the one place it survived being removed.
+    ///
+    /// Dictating with no usable leader is allowed and lands somewhere useful:
+    /// `submit` refuses it and the transcript is kept in the composer as a
+    /// draft (see the `.commit` handler), which beats taking the microphone
+    /// away because a ping was late.
+    private var pttArmed: Bool { text.isEmpty }
 
     /// The recognizer behind push-to-talk: a UI test's scripted fake when
     /// the launch arguments ask for one, Apple's on-device engine otherwise.

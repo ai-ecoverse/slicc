@@ -38,7 +38,16 @@ Capability gates (can this surface reach the leader at all — Files, Memory, Te
 
 **Composite transitions must go through `AppState.updateConnection`.** Each property publishes through its own `didSet`, so a sequence that passes through a healthy-looking intermediate — `handleDisconnect` clearing the stall before moving the state is the one that bit — hands the settler a recovery that never happened: it drops the treatment already on screen, then serves the real trouble a fresh hold, so a stall that died reads as connected for the whole window. Writes inside that block are ingested once, on the value they end at.
 
-The composer is **never** `.disabled` for a connection state. Disabling the band disables the `TextEditor` inside it, a disabled editor resigns first responder, and the keyboard then flaps with the connection: pulled away from someone mid-sentence on the drop, restored unasked on the re-enable. The keyboard follows composer focus and nothing else. What an unusable leader blocks is _sending_ — `canSend` / `submit`, the dimmed send button, and the placeholder that says why. This is a deliberate divergence from the browser follower (`wc-follower.ts` disables its input card), which has no first-responder coupling to lose.
+**No connection state may reach the composer's first-responder layer.** Not `.disabled`, not `allowsHitTesting`, not the mounting of anything above the editor. The keyboard follows composer focus and nothing else. What an unusable leader blocks is _sending_ — `canSend` / `submit`, the dimmed send button, and the placeholder that says why. This is a deliberate divergence from the browser follower (`wc-follower.ts` disables its input card), which has no first-responder coupling to lose.
+
+That rule was learned twice, in two places one line apart:
+
+- `.disabled(!isComposable)` on the band disabled the `TextEditor` inside it; a disabled editor resigns first responder, so the keyboard was pulled from someone mid-sentence and restored unasked on the re-enable.
+- `pttArmed` was `text.isEmpty && isComposable`, and it drives `allowsHitTesting` on the editor plus the `PttPressSurface` overlay above it. On an **empty, focused** composer — the state someone is in the instant they tap to write — a blip flipped it twice: the drop unmounted the surface (survivable) and the **heal remounted it over the focused editor**, dismissing the keyboard. Two edges, so the keyboard visibly toggled off and on.
+
+The second one is why `ComposerConnectionUITests` stages a blip that **heals** (`-uiTestConnectionBlip "3,3"`). A permanent drop passes with the bug present — only unmounting is harmless — so a test that stages one is not a regression test at all.
+
+Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable leader is allowed and lands somewhere useful: `submit` refuses it and the transcript stays in the composer as a draft, which beats taking the microphone away because a ping was late.
 
 ## UI-test details
 
