@@ -410,6 +410,34 @@ describe('AlmostBashShell .jsh command registration', () => {
     expect(result.stdout).toContain('bare ok');
   });
 
+  // Review catch on #2084: waiting for the initial scan must not swallow a
+  // Ctrl+C. The scan walks all of `/` and takes seconds on a populated
+  // instance, so an unconditional await makes cancellation dead for that long
+  // in every freshly-built shell — the panel's and the tray's.
+  //
+  // The discovery FS here NEVER finishes walking, so the abort is the only
+  // thing that can end the wait: if the await were unconditional this test
+  // would hang rather than fail.
+  it('aborting the first command does not wait out the initial .jsh scan', async () => {
+    const neverFinishes = {
+      exists: async () => true,
+      async *walk(): AsyncGenerator<string> {
+        await new Promise<never>(() => {}); // never settles, never yields
+      },
+      readFile: async () => '',
+    } as unknown as ConstructorParameters<typeof AlmostBashShell>[0]['jshDiscoveryFs'];
+
+    const shell = new AlmostBashShell({ fs, jshDiscoveryFs: neverFinishes });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await Promise.race([
+      shell.executeCommand('echo hi', controller.signal).then(() => 'returned'),
+      new Promise((resolve) => setTimeout(() => resolve('HUNG'), 3000)),
+    ]);
+    expect(result).toBe('returned');
+  });
+
   it('makes .jsh commands visible via which and /usr/bin', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
 

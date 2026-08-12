@@ -480,8 +480,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
 
-    // Retained so the FIRST command can await it — see `runCommand`.
-    this.initialJshSync = this.syncJshCommands().catch(() => undefined);
+    this.startInitialJshSync();
   }
 
   // -------------------------------------------------------------------------
@@ -611,6 +610,53 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * Subclasses (the view layer) call this from
    * `executeCommandInTerminal` to share state.
    */
+  /**
+   * Wait for the constructor's `.jsh` registration, but never past an abort.
+   *
+   * Resolves on whichever comes first: the scan finishing, or `signal`
+   * aborting. An abort only stops US waiting — the registration promise keeps
+   * running, so the command after the cancelled one still finds a populated
+   * table. Without this, Ctrl+C during the first command of a fresh shell is
+   * swallowed for however long a full-VFS walk takes.
+   */
+  /**
+   * Begin the constructor's `.jsh` registration and retain it for the first
+   * command to await (see `runCommand`). The promise clears itself on settle
+   * rather than at the await site: a first command that ABORTS mid-wait must
+   * not leave the next one racing the scan again.
+   */
+  private startInitialJshSync(): void {
+    this.initialJshSync = this.syncJshCommands()
+      .catch(() => undefined)
+      .finally(() => {
+        this.initialJshSync = null;
+      });
+  }
+
+  private async waitForInitialJshSync(signal?: AbortSignal): Promise<void> {
+    const pending = this.initialJshSync;
+    if (pending === null) return;
+    if (!signal) {
+      await pending;
+      return;
+    }
+    if (signal.aborted) return;
+
+    let onAbort: (() => void) | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        onAbort = () => resolve();
+        signal.addEventListener('abort', onAbort, { once: true });
+        pending.then(
+          () => resolve(),
+          () => resolve()
+        );
+      });
+    } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   protected async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
@@ -630,12 +676,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // tray's `slicc … exec` constructs a fresh one for every follower
     // connection, so EVERY compound command raced the scan and lost.
     //
-    // Awaited once, then cleared — subsequent commands pay nothing.
-    if (this.initialJshSync !== null) {
-      const pending = this.initialJshSync;
-      this.initialJshSync = null;
-      await pending;
-    }
+    // Awaited once — the promise clears itself when it settles, so subsequent
+    // commands pay nothing. Abortable: the scan walks `/` and takes seconds on
+    // a populated instance, and a Ctrl+C that only lands after it finishes is
+    // not a Ctrl+C. On abort we stop WAITING but let the registration run on in
+    // the background, so the next command still benefits.
+    await this.waitForInitialJshSync(signal);
 
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
