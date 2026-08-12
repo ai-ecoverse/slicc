@@ -52,7 +52,12 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower
-        INFOPLIST_KEY_CFBundleDisplayName: SliccFollower
+        # What the user sees: home screen, Settings, permission prompts, the
+        # app switcher. Deliberately not `PRODUCT_NAME`, which names the
+        # binary, the scheme and the `.app` — the coverage gate, the simulator
+        # test scripts, the CI job names and the TestFlight script all address
+        # the target as SliccFollower.
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: 'UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: 'UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
@@ -88,18 +93,25 @@ targets:
     info:
       path: SliccFileProvider/Info.plist
       properties:
-        CFBundleDisplayName: SLICC
+        CFBundleDisplayName: Sliccy
         NSExtension:
           NSExtensionPointIdentifier: com.apple.fileprovider-nonui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
           NSExtensionFileProviderDocumentGroup: group.ai.sliccy.follower
-          # Required for Files.app Locations visibility (Apple template default).
+          # Required for Files.app Locations visibility. Apple's File Provider
+          # extension template sets this; without it iOS can register the
+          # domain (getDomains succeeds) while leaving userEnabled=false and
+          # omitting the provider from Browse → Edit.
+          #
+          # This comment lives here, not in the generated Info.plist: xcodegen
+          # rewrites that file from these properties and strips anything it
+          # did not write.
           NSExtensionFileProviderSupportsEnumeration: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.fileprovider
         PRODUCT_NAME: SliccFileProvider
-        INFOPLIST_KEY_CFBundleDisplayName: SLICC
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
         CODE_SIGN_ENTITLEMENTS: SliccFileProvider.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:
@@ -117,7 +129,7 @@ targets:
     info:
       path: SliccShareExtension/Info.plist
       properties:
-        CFBundleDisplayName: SLICC
+        CFBundleDisplayName: Sliccy
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
@@ -130,7 +142,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.share
         PRODUCT_NAME: SliccShareExtension
-        INFOPLIST_KEY_CFBundleDisplayName: SLICC
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
         CODE_SIGN_ENTITLEMENTS: SliccShareExtension.entitlements
         # The share row still reaches UIApplication.open through the
         # responder chain (the ChatGPT/Claude/Grok/Bluesky pattern) —

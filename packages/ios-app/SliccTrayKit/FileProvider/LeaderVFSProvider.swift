@@ -134,7 +134,8 @@ public final class LeaderVFSItem: NSObject, NSFileProviderItemProtocol {
         itemIdentifier = try VFSItemIdentity.identifier(for: path)
         if path == "/" {
             parentItemIdentifier = .rootContainer
-            filename = "SLICC"
+            // Display only — identity is the path, so this is safe to rename.
+            filename = "Sliccy"
         } else {
             let parent = (path as NSString).deletingLastPathComponent
             parentItemIdentifier = try VFSItemIdentity.identifier(for: parent.isEmpty ? "/" : parent)

@@ -34,8 +34,14 @@ struct SystemFileProviderDomainRegistrar: FileProviderDomainRegistering {
 }
 
 final class FileProviderDomainLifecycle {
+    /// The identifier is the domain's identity and must NOT follow the name —
+    /// changing it orphans the registered domain and the Files.app location
+    /// disappears rather than being renamed.
     static let domainIdentifier = NSFileProviderDomainIdentifier(rawValue: "slicc-vfs")
-    static let domainDisplayName = "SLICC"
+    /// What Files.app puts under Locations. A domain already registered on a
+    /// device keeps the name it was created with until it is re-registered,
+    /// so an existing install can read "SLICC" until then.
+    static let domainDisplayName = "Sliccy"
 
     static func makeDomain() -> NSFileProviderDomain {
         NSFileProviderDomain(
