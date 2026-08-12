@@ -68,6 +68,7 @@ import {
   parseFrozenArchive,
   processPendingSessions,
   readSessionsIndex,
+  SESSIONS_INDEX_PATH,
 } from '../../src/ui/session-freezer.js';
 
 /**
@@ -1450,6 +1451,43 @@ describe('freezeConeSession quick mode', () => {
     );
     expect(index[0].memoryPending).toBeUndefined();
   });
+
+  it('preserves the sessions index when its read fails with a non-ENOENT error', async () => {
+    const vfs = makeFakeVfs();
+    const durableIndex = JSON.stringify([
+      {
+        filename: 'existing.md',
+        title: 'Existing session',
+        frozenAt: '2026-08-01T00:00:00.000Z',
+        messageCount: 4,
+      },
+    ]);
+    vfs.files.set(SESSIONS_INDEX_PATH, durableIndex);
+    const originalReadFile = vfs.readFile.bind(vfs);
+    vfs.readFile = async (path: string): Promise<string> => {
+      if (path === SESSIONS_INDEX_PATH) throw new FsError('EIO', 'transient fault', path);
+      return originalReadFile(path);
+    };
+
+    const result = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 100,
+        updatedAt: 200,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    expect(result).toBeNull();
+    expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(durableIndex);
+  });
 });
 
 describe('listPendingEnrichments', () => {
@@ -2296,6 +2334,33 @@ describe('enrichPendingSession', () => {
     expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
   });
 
+  it('preserves the sessions index when replacement reads fail with a non-ENOENT error', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+    const durableIndex = vfs.files.get(SESSIONS_INDEX_PATH)!;
+    const originalReadFile = vfs.readFile.bind(vfs);
+    vfs.readFile = async (path: string): Promise<string> => {
+      if (path === SESSIONS_INDEX_PATH) throw new FsError('EACCES', 'permission denied', path);
+      return originalReadFile(path);
+    };
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Canonical title');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'heuristic',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k', skipMemory: true }
+    );
+
+    expect(updated).toBeNull();
+    expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(durableIndex);
+  });
+
   it('does not duplicate the canonical row when it already exists in the index', async () => {
     // Regression for PR #718 review: when `oldFilename` is missing from
     // the index but a row with the same `replacement.filename` is
@@ -2920,5 +2985,29 @@ describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => 
         'pending-abc.md'
       )
     ).resolves.toBeUndefined();
+  });
+
+  it('preserves the sessions index when its read fails with a non-ENOENT error', async () => {
+    const vfs = makeFakeVfs();
+    const durableIndex = JSON.stringify([
+      {
+        filename: 'existing.md',
+        title: 'Existing session',
+        frozenAt: '2026-08-01T00:00:00.000Z',
+        messageCount: 4,
+      },
+    ]);
+    vfs.files.set(SESSIONS_INDEX_PATH, durableIndex);
+    vfs.readFile = async (path: string): Promise<string> => {
+      throw new FsError('EIO', 'transient fault', path);
+    };
+
+    await expect(
+      markSnapshotUnavailable(
+        vfs as unknown as Parameters<typeof markSnapshotUnavailable>[0],
+        'existing.md'
+      )
+    ).rejects.toMatchObject({ code: 'EIO' });
+    expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(durableIndex);
   });
 });

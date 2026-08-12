@@ -780,8 +780,9 @@ async function updateSessionsIndex(
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
     const parsed = JSON.parse(text);
     if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-  } catch {
-    // No index yet, or malformed — start fresh.
+  } catch (err) {
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+    // No index yet — start fresh.
   }
   // Newest first.
   const updated = [newEntry, ...existing.filter((e) => e.filename !== newEntry.filename)];
@@ -1366,7 +1367,8 @@ async function replaceIndexEntry(
       const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-    } catch {
+    } catch (err) {
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
       // No index — nothing to replace; write the entry as the only row so
       // the rename is still visible to the panel on next reload.
     }
@@ -1419,7 +1421,8 @@ export async function markSnapshotUnavailable(
       const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
-    } catch {
+    } catch (err) {
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
       // No index yet — nothing to mark.
       return;
     }
