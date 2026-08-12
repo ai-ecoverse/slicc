@@ -467,7 +467,8 @@ async function visitSnapshotFile(
   ctx: CommandContext,
   current: string,
   size: number,
-  budget: SnapshotBudget
+  budget: SnapshotBudget,
+  stack: string[]
 ): Promise<void> {
   // A file whose content we don't read still needs a metadata entry so
   // `existsSync`/`statSync` behave correctly for it; only the content read is
@@ -492,10 +493,64 @@ async function visitSnapshotFile(
     });
     return;
   }
-  const content = await ctx.fs.readFileBuffer(current);
+  let content: Uint8Array;
+  try {
+    content = await ctx.fs.readFileBuffer(current);
+  } catch {
+    // The metadata said "file of size N" and the filesystem disagreed — a
+    // poisoned sidecar entry (kind flip / stale size, #1984) surfaces exactly
+    // here, as EISDIR or "file data size mismatch".
+    //
+    // This read used to be unguarded, so ONE bad entry rejected the whole
+    // snapshot and the realm fell back to `{ entries: [] }` — turning every
+    // subsequent `existsSync` / `statSync` / `readFileSync` in that realm into
+    // a blocking SW-bridge round trip. That is the amplifier that turned a
+    // single poisoned path into a leader-wide stall. One bad entry must cost
+    // one entry.
+    await recoverPoisonedSnapshotEntry(ctx, current, stack, budget);
+    return;
+  }
   budget.entries.push({ path: current, content, isDirectory: false });
   budget.fileCount += 1;
   budget.totalBytes += content.byteLength;
+}
+
+/**
+ * Re-probe a path whose recorded metadata just lost an argument with the
+ * filesystem, and record what is REALLY there.
+ *
+ * Ground truth wins: the sidecar is a cache of the tree, not the tree. If the
+ * node is really a directory, walk it as one; if it is really a file, emit a
+ * metadata-only placeholder carrying the size the filesystem reports (so
+ * `statSync` tells the truth and `readFileSync` falls through to the bridge
+ * for the bytes); if it is gone, drop it. Any of those beats aborting the walk
+ * and blinding the realm's entire sync-fs cache.
+ */
+async function recoverPoisonedSnapshotEntry(
+  ctx: CommandContext,
+  current: string,
+  stack: string[],
+  budget: SnapshotBudget
+): Promise<void> {
+  let st: { isDirectory: boolean; isFile: boolean; size: number };
+  try {
+    st = await ctx.fs.stat(current);
+  } catch {
+    // Not a file, not a directory, not there — the entry simply does not
+    // survive into the snapshot.
+    return;
+  }
+  if (st.isDirectory) {
+    await visitSnapshotDir(ctx, current, stack, budget);
+    return;
+  }
+  budget.entries.push({
+    path: current,
+    content: new Uint8Array(0),
+    isDirectory: false,
+    truncated: true,
+    size: st.size,
+  });
 }
 
 /**
@@ -528,7 +583,7 @@ async function walkSnapshotRoot(
     if (st.isDirectory) {
       await visitSnapshotDir(ctx, current, stack, budget);
     } else if (st.isFile) {
-      await visitSnapshotFile(ctx, current, st.size, budget);
+      await visitSnapshotFile(ctx, current, st.size, budget, stack);
     }
   }
 }
