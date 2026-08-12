@@ -31,7 +31,15 @@
 
 import type { BashExecResult, Command, CommandContext, CommandName, ExecResult } from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
-import type { BrowserAPI } from '../cdp/index.js';
+// The shell only FORWARDS a BrowserAPI (to the supplemental commands and
+// upskill); it never calls one. Sourcing the type from the sibling that owns
+// that dependency keeps this file off the layer-back-edge list — importing it
+// from ../cdp/ would be an up-the-stack edge for a type this layer does not
+// actually use.
+import type { SupplementalCommandsConfig } from './supplemental-commands/index.js';
+
+type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
+
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { FsError } from '../fs/types.js';
@@ -230,6 +238,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    */
   protected readonly allowedCommands: ReadonlySet<string> | null;
   protected readonly scriptCatalog: ScriptCatalog;
+  /**
+   * The constructor's initial `.jsh` registration, awaited once by the first
+   * command and then released. `null` after that (or when never started).
+   */
+  private initialJshSync: Promise<void> | null = null;
   protected readonly ownsScriptCatalog: boolean;
   /** Maps .jsh command names to their registered script paths. */
   protected registeredJshCommands = new Map<string, string>();
@@ -467,8 +480,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
 
-    // Kick off initial .jsh registration (async, non-blocking).
-    void this.syncJshCommands().catch(() => undefined);
+    // Retained so the FIRST command can await it — see `runCommand`.
+    this.initialJshSync = this.syncJshCommands().catch(() => undefined);
   }
 
   // -------------------------------------------------------------------------
@@ -601,6 +614,28 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
+
+    // Wait for the constructor's `.jsh` registration before the first command.
+    //
+    // WHY THIS IS NOT COVERED BY `tryJshFallback`. That fallback fires on
+    // `result.exitCode === 127`, which only surfaces when the WHOLE command is
+    // one unknown name. In a pipeline or a `;`-separated list the unknown
+    // command fails with 127 *inside* bash while the compound reports its last
+    // command's status — so the miss is invisible and the fallback never runs.
+    // `signal watches` therefore worked on a cold shell while
+    // `signal watches; echo done` did not.
+    //
+    // A long-lived shell (the agent's, the panel terminal's) finished
+    // registering long ago and never notices. A shell built per use does: the
+    // tray's `slicc … exec` constructs a fresh one for every follower
+    // connection, so EVERY compound command raced the scan and lost.
+    //
+    // Awaited once, then cleared — subsequent commands pay nothing.
+    if (this.initialJshSync !== null) {
+      const pending = this.initialJshSync;
+      this.initialJshSync = null;
+      await pending;
+    }
 
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
