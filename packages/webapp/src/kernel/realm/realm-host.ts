@@ -467,7 +467,8 @@ async function visitSnapshotFile(
   ctx: CommandContext,
   current: string,
   size: number,
-  budget: SnapshotBudget
+  budget: SnapshotBudget,
+  stack: string[]
 ): Promise<void> {
   // A file whose content we don't read still needs a metadata entry so
   // `existsSync`/`statSync` behave correctly for it; only the content read is
@@ -492,10 +493,72 @@ async function visitSnapshotFile(
     });
     return;
   }
-  const content = await ctx.fs.readFileBuffer(current);
+  let content: Uint8Array;
+  try {
+    content = await ctx.fs.readFileBuffer(current);
+  } catch {
+    // The metadata said "file of size N" and the filesystem disagreed — a
+    // poisoned sidecar entry (kind flip / stale size, #1984) surfaces exactly
+    // here, as EISDIR or "file data size mismatch".
+    //
+    // This read used to be unguarded, so ONE bad entry rejected the whole
+    // snapshot and the realm fell back to `{ entries: [] }` — turning every
+    // subsequent `existsSync` / `statSync` / `readFileSync` in that realm into
+    // a blocking SW-bridge round trip. That is the amplifier that turned a
+    // single poisoned path into a leader-wide stall. One bad entry must cost
+    // one entry.
+    await recoverPoisonedSnapshotEntry(ctx, current, stack, budget);
+    return;
+  }
   budget.entries.push({ path: current, content, isDirectory: false });
   budget.fileCount += 1;
   budget.totalBytes += content.byteLength;
+}
+
+/**
+ * Re-probe a path whose recorded metadata just lost an argument with the
+ * filesystem, and record the best answer available — never abort the walk.
+ *
+ * WHAT THIS RE-PROBE CAN AND CANNOT SEE. `ctx.fs.stat` reads the same ZenFS
+ * metadata index that classified this path as a file moments ago, so it is NOT
+ * an independent view of the tree. For a PERSISTENT sidecar kind flip it will
+ * answer "file" again, and the honest outcome is the placeholder below: the
+ * entry stays in the snapshot (the point — one bad entry must not blind the
+ * realm) and `readFileSync` falls through to the SW bridge, which reads the
+ * real node. Its children are not enumerated; that needs a probe of the
+ * underlying OPFS handles, the way `sidecar-repair.ts` does at mount time, and
+ * reaching those from the realm host is a layering change of its own.
+ *
+ * The directory branch therefore covers the case the re-probe genuinely can
+ * see: the node CHANGED between the walk's stat and the read (a path replaced
+ * by a directory mid-walk). Cheap to handle, and losing a real directory's
+ * children to a race would be a silent hole in the cache.
+ */
+async function recoverPoisonedSnapshotEntry(
+  ctx: CommandContext,
+  current: string,
+  stack: string[],
+  budget: SnapshotBudget
+): Promise<void> {
+  let st: { isDirectory: boolean; isFile: boolean; size: number };
+  try {
+    st = await ctx.fs.stat(current);
+  } catch {
+    // Not a file, not a directory, not there — the entry simply does not
+    // survive into the snapshot.
+    return;
+  }
+  if (st.isDirectory) {
+    await visitSnapshotDir(ctx, current, stack, budget);
+    return;
+  }
+  budget.entries.push({
+    path: current,
+    content: new Uint8Array(0),
+    isDirectory: false,
+    truncated: true,
+    size: st.size,
+  });
 }
 
 /**
@@ -528,7 +591,7 @@ async function walkSnapshotRoot(
     if (st.isDirectory) {
       await visitSnapshotDir(ctx, current, stack, budget);
     } else if (st.isFile) {
-      await visitSnapshotFile(ctx, current, st.size, budget);
+      await visitSnapshotFile(ctx, current, st.size, budget, stack);
     }
   }
 }

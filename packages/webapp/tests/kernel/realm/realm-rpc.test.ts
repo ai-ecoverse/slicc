@@ -811,6 +811,155 @@ describe('realm RPC: vfs.snapshot budgets', () => {
     expect(new TextDecoder().decode(smallE?.content)).toBe('hello');
   });
 
+  // #1984's poisoned sidecar, at RUNTIME rather than at mount. The recorded
+  // metadata says "file"; the filesystem disagrees when the bytes are actually
+  // read (EISDIR, or "file data size mismatch"). This read used to be
+  // unguarded, so ONE bad entry rejected the whole snapshot and the realm fell
+  // back to `{ entries: [] }` — after which every existsSync/statSync/
+  // readFileSync in that realm became a blocking SW-bridge round trip.
+  it('a file whose read disagrees with its metadata costs one entry, not the snapshot', async () => {
+    const fs = makeTreeFs({
+      '/workspace/good.txt': 'hello',
+      '/workspace/poisoned.png': 'x',
+      '/workspace/also-good.txt': 'world',
+    });
+    const realFs = {
+      ...fs,
+      async readFileBuffer(path: string) {
+        if (path === '/workspace/poisoned.png') {
+          throw new Error("EISDIR: illegal operation on a directory '/workspace/poisoned.png'");
+        }
+        return fs.readFileBuffer(path);
+      },
+    } as typeof fs;
+    const ctx = makeCtx({ fs: realFs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    // The healthy siblings survive with their real content — the whole point.
+    const good = snap.entries.find((e) => e.path === '/workspace/good.txt');
+    const alsoGood = snap.entries.find((e) => e.path === '/workspace/also-good.txt');
+    expect(new TextDecoder().decode(good?.content)).toBe('hello');
+    expect(new TextDecoder().decode(alsoGood?.content)).toBe('world');
+
+    // The poisoned path degrades to metadata-only, carrying the size the
+    // filesystem reports, so statSync stays truthful and readFileSync falls
+    // through to the bridge for bytes.
+    const bad = snap.entries.find((e) => e.path === '/workspace/poisoned.png');
+    expect(bad).toBeDefined();
+    expect(bad?.truncated).toBe(true);
+    expect(bad?.content.byteLength).toBe(0);
+  });
+
+  // The re-probe reads the same metadata index that classified the path as a
+  // file, so it is not an independent view of the tree. What it CAN see is a
+  // node that changed underneath the walk: stat said file, the read failed,
+  // and by the re-probe it is a directory. Walking it keeps a real directory's
+  // children out of a silent hole in the cache.
+  it('a path that becomes a directory between stat and read is walked as one', async () => {
+    const fs = makeTreeFs({ '/workspace/thing/inner.txt': 'inner' });
+    let statCalls = 0;
+    const realFs = {
+      ...fs,
+      async stat(path: string) {
+        // First look: a file (what the walk classified). Re-probe: the tree
+        // has changed under us.
+        if (path === '/workspace/thing' && statCalls++ === 0) {
+          return { isDirectory: false, isFile: true, size: 3 } as Awaited<
+            ReturnType<typeof fs.stat>
+          >;
+        }
+        return fs.stat(path);
+      },
+      async readFileBuffer(path: string) {
+        if (path === '/workspace/thing') {
+          throw new Error("EISDIR: illegal operation on a directory '/workspace/thing'");
+        }
+        return fs.readFileBuffer(path);
+      },
+    } as typeof fs;
+    const ctx = makeCtx({ fs: realFs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    // The child survives only because the recovery walked the real directory.
+    const inner = snap.entries.find((e) => e.path === '/workspace/thing/inner.txt');
+    expect(new TextDecoder().decode(inner?.content)).toBe('inner');
+  });
+
+  // The PRODUCTION case for a poisoned sidecar: the flip is persistent, so the
+  // re-probe — reading that same poisoned metadata — still says "file". This
+  // pins the honest outcome rather than pretending the directory is walked:
+  // the entry survives as a placeholder (one bad entry does not blind the
+  // realm) and readFileSync falls through to the SW bridge for the real node.
+  // Enumerating its children would need a probe of the OPFS handles, the way
+  // sidecar-repair.ts does at mount time.
+  it('a persistent kind flip degrades to a placeholder, not a lost snapshot', async () => {
+    const fs = makeTreeFs({
+      '/workspace/poisoned': 'x',
+      '/workspace/sibling.txt': 'fine',
+    });
+    const realFs = {
+      ...fs,
+      // stat NEVER tells the truth here — exactly like a poisoned sidecar.
+      async readFileBuffer(path: string) {
+        if (path === '/workspace/poisoned') {
+          throw new Error("EISDIR: illegal operation on a directory '/workspace/poisoned'");
+        }
+        return fs.readFileBuffer(path);
+      },
+    } as typeof fs;
+    const ctx = makeCtx({ fs: realFs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    const bad = snap.entries.find((e) => e.path === '/workspace/poisoned');
+    expect(bad?.truncated).toBe(true);
+    expect(bad?.isDirectory).toBe(false);
+    const sibling = snap.entries.find((e) => e.path === '/workspace/sibling.txt');
+    expect(new TextDecoder().decode(sibling?.content)).toBe('fine');
+  });
+
+  // A path that vanishes between the walk's stat and its read must drop out
+  // quietly. The FIRST stat has to succeed, or the walk skips the path before
+  // the recovery is even reachable; the re-probe is what discovers it is gone.
+  it('a path that disappears mid-walk drops out without killing the snapshot', async () => {
+    const fs = makeTreeFs({ '/workspace/keep.txt': 'keep', '/workspace/vanishes.txt': 'gone' });
+    let statCalls = 0;
+    const realFs = {
+      ...fs,
+      async stat(path: string) {
+        if (path === '/workspace/vanishes.txt' && statCalls++ > 0) {
+          throw new Error('ENOENT: no such file');
+        }
+        return fs.stat(path);
+      },
+      async readFileBuffer(path: string) {
+        if (path === '/workspace/vanishes.txt') throw new Error('ENOENT: no such file');
+        return fs.readFileBuffer(path);
+      },
+    } as typeof fs;
+    const ctx = makeCtx({ fs: realFs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const snap = await client.call<SyncFsSnapshot>('vfs', 'snapshot', ['/workspace']);
+    client.dispose();
+
+    expect(snap.entries.find((e) => e.path === '/workspace/vanishes.txt')).toBeUndefined();
+    const keep = snap.entries.find((e) => e.path === '/workspace/keep.txt');
+    expect(new TextDecoder().decode(keep?.content)).toBe('keep');
+  });
+
   it('walk continues PAST the file-count content budget as placeholders (Coh#3)', async () => {
     // 502 small files > the 500-file content budget. The OLD walk stopped at
     // 500 and files 501+ vanished (existsSync/statSync wrongly reported absent).
