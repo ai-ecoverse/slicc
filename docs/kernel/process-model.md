@@ -188,6 +188,23 @@ budget, and its dedupe TTL is derived from the larger of the two channel
 budgets so a late SW re-post replays the cached result instead of re-running
 the command.
 
+**Liveness deadline (no responder)**: those budgets bound how long a responder
+that TOOK the work may take; a separate, much shorter deadline bounds the case
+where no responder took it at all. The responder acks the instant it picks a
+request up — before doing any work — and the SW re-posts every 200 ms until
+that ack arrives, so the ack means "somebody is alive and owns this token". If
+no ack lands within `DEFAULT_NO_RESPONDER_MS` (10 s, ≈50 delivery attempts),
+`handleSyncFsRequest` fails closed immediately with the usual `503` +
+`x-slicc-fs-errno: EIO` rather than serving out the rest of the budget. So an
+unacked request surfaces `EIO` after ~10 s even on the exec channel, where the
+budget alone would have blocked the calling realm for up to 10 minutes.
+
+This matters because the wait is _synchronous_: the realm worker that issued
+the request runs nothing until it returns, which includes the responder it
+hosts. Without the deadline a stalled responder is self-sustaining — blocked
+workers cannot answer each other, and each call burns its full budget before
+even retrying. An **acked** request is unaffected and keeps its whole budget.
+
 **Cache coherence**: the async exec bridge does flush-before / re-snapshot-
 after; neither await exists here. Instead the sync bridge flushes pending
 `SyncFsCache` mutations over the blocking fs channel (which is why the fs route
