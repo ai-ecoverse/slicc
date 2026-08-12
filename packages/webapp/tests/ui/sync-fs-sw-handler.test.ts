@@ -515,3 +515,100 @@ test('fan-out: request is posted to every channel; only the owning responder ans
   expect(silentPosts).toBe(1); // fanned out to the non-owner too
   expect(ownerPosts).toBe(1);
 });
+
+/** A channel nobody is listening on: it records posts and never acks. */
+function deadChannel(onPost?: () => void): SyncFsSwChannelLike {
+  const listeners = new Set<(e: MessageEvent) => void>();
+  return {
+    postMessage: () => onPost?.(),
+    addEventListener: (_t: string, l: (e: MessageEvent) => void) => listeners.add(l),
+    removeEventListener: (_t: string, l: (e: MessageEvent) => void) => listeners.delete(l),
+  } as unknown as SyncFsSwChannelLike;
+}
+
+// THE PRODUCTION FAILURE. Every kernel worker sat blocked in a synchronous XHR
+// on a route only a kernel worker could answer, so nothing ever acked — and
+// because an exec budget can be 10 minutes, each blocked worker stayed blocked
+// for minutes at a time, taking a leader out for hours. The ack is the liveness
+// signal; an unacked request must not serve out the rest of the budget.
+test('an unacked request fails closed on the no-responder window, not the full exec budget', async () => {
+  vi.useFakeTimers();
+  try {
+    const ch = deadChannel();
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'build',
+      timeoutMs: 600_000, // the 10-minute ceiling
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(settled).toBe(false); // still trying — the re-posts are cheap
+
+    await vi.advanceTimersByTimeAsync(2_000); // past the 10s no-responder window
+    const res = await pending;
+    expect(res.status).toBe(503);
+    expect(res.headers.get('x-slicc-fs-errno')).toBe('EIO');
+    expect(await res.text()).toBe('sync-fs bridge: no responder');
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// The gate keys on the ACK, not on the response: a responder that picked the
+// work up keeps its full budget, however long the command legitimately runs.
+test('an acked-but-slow responder still gets the whole budget', async () => {
+  vi.useFakeTimers();
+  try {
+    const ch = respondingChannel(() => null); // acks, never answers
+    const pending = handleSyncFsRequest([ch], {
+      token: 't',
+      channel: 'exec',
+      command: 'build',
+      timeoutMs: 300_000,
+    });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+
+    // Well past the no-responder window — the ack must have disarmed it.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(250_000);
+    const res = await pending;
+    expect(res.status).toBe(503);
+    expect(await res.text()).toBe('sync-fs bridge timeout'); // budget, not the gate
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A short fs budget is already tighter than the window; the gate must not
+// extend it.
+test('the no-responder window never outlives a shorter overall budget', async () => {
+  vi.useFakeTimers();
+  try {
+    const pending = handleSyncFsRequest(
+      [deadChannel()],
+      { token: 't', op: 'read', path: '/tmp/x' },
+      { timeoutMs: 3_000 }
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const res = await pending;
+    expect(res.status).toBe(503);
+  } finally {
+    vi.useRealTimers();
+  }
+});
