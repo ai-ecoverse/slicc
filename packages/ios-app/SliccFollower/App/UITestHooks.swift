@@ -293,7 +293,7 @@ import UIKit
             return [
                 TrayTargetEntry(
                     targetId: "leader:tab-docs", localTargetId: "tab-docs",
-                    runtimeId: "leader", title: "SLICC docs — architecture",
+                    runtimeId: "leader", title: "Sliccy docs — architecture",
                     url: "https://www.sliccy.ai/docs/architecture", isLocal: false),
                 TrayTargetEntry(
                     targetId: "cli:tab-ci", localTargetId: "tab-ci",

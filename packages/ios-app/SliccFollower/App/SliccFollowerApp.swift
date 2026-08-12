@@ -30,7 +30,7 @@ struct SliccFollowerApp: App {
         .onChange(of: scenePhase) { _, phase in
             // The Share extension cannot foreground the app; whatever it
             // parked in the App Group inbox surfaces as confirmation
-            // cards the next time the user opens SLICC (#1918).
+            // cards the next time the user opens Sliccy (#1918).
             if phase == .active {
                 inboundActions.drainShareInbox()
             }

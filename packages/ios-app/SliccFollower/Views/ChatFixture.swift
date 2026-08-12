@@ -97,11 +97,11 @@ enum ChatFixture {
                     ```shtml
                     <div class="sprinkle-action-card">
                       <div class="sprinkle-action-card__header">
-                        SLICC upgraded
+                        Sliccy upgraded
                         <span class="sprinkle-badge sprinkle-badge--notice">2.29.0 → 2.29.1</span>
                       </div>
                       <div class="sprinkle-action-card__body">
-                        <p>SLICC was upgraded. You can review what changed and optionally pull the new bundled workspace files into your VFS.</p>
+                        <p>Sliccy was upgraded. You can review what changed and optionally pull the new bundled workspace files into your VFS.</p>
                       </div>
                       <div class="sprinkle-action-card__actions">
                         <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action:'dismiss'})">Dismiss</button>

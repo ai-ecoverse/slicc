@@ -8,7 +8,7 @@ extension AppState {
     func handleExecMessage(_ message: LeaderToFollowerMessage) {
         handleApprovalGatedExecMessage(
             message,
-            requesterIdentity: activeDisplayName ?? "Connected SLICC leader",
+            requesterIdentity: activeDisplayName ?? "Connected Sliccy leader",
             sessionIdentity: trayId ?? "Current tray")
     }
 

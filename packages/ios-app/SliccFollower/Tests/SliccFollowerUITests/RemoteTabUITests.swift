@@ -19,7 +19,7 @@ final class RemoteTabUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.staticTexts["SLICC docs — architecture"].waitForExistence(timeout: 60),
+            app.staticTexts["Sliccy docs — architecture"].waitForExistence(timeout: 60),
             "remote registry entries render as cards")
         XCTAssertTrue(
             app.images["remote-preview-leader:tab-docs"].waitForExistence(timeout: 10),
@@ -40,7 +40,7 @@ final class RemoteTabUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.staticTexts["SLICC docs — architecture"].waitForExistence(timeout: 60),
+            app.staticTexts["Sliccy docs — architecture"].waitForExistence(timeout: 60),
             "the remote-only overview renders before any local tab exists")
 
         let openNewTab = app.buttons["browser-open-new-tab"].firstMatch
@@ -77,7 +77,7 @@ final class RemoteTabUITests: XCTestCase {
             app.staticTexts["browser-local-tab-title"].firstMatch.waitForExistence(timeout: 10),
             "the overview lists the local tab as a card")
         XCTAssertTrue(
-            app.staticTexts["SLICC docs — architecture"].waitForExistence(timeout: 10),
+            app.staticTexts["Sliccy docs — architecture"].waitForExistence(timeout: 10),
             "remote previews share the overview grid with local tabs")
         XCTAssertTrue(
             app.buttons["dock-browser"].waitForExistence(timeout: 10),
@@ -96,7 +96,7 @@ final class RemoteTabUITests: XCTestCase {
         ]
         app.launch()
 
-        let card = app.staticTexts["SLICC docs — architecture"].firstMatch
+        let card = app.staticTexts["Sliccy docs — architecture"].firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 60), "the overview lists the remote card")
         card.tap()
 
@@ -124,7 +124,7 @@ final class RemoteTabUITests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .pad, window.frame.width > 560 else {
             throw XCTSkip("Requires a regular-width iPad simulator destination")
         }
-        let remoteCard = app.staticTexts["SLICC docs — architecture"].firstMatch
+        let remoteCard = app.staticTexts["Sliccy docs — architecture"].firstMatch
         XCTAssertTrue(remoteCard.waitForExistence(timeout: 60))
         XCTAssertTrue(app.buttons["settings-button"].exists, "the split starts with chat visible")
         XCTAssertTrue(app.buttons["dock-browser"].exists, "the split starts with its rail visible")

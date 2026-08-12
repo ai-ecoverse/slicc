@@ -278,8 +278,8 @@ enum InboundActionError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPrompt: return "The prompt is empty or too long."
-        case .busy: return "SLICC is already waiting on another automation request."
-        case .notConnected: return "SLICC is not connected to a leader."
+        case .busy: return "Sliccy is already waiting on another automation request."
+        case .notConnected: return "Sliccy is not connected to a leader."
         case .timedOut: return "Timed out waiting for the reply."
         case .cancelled: return "The request was dismissed."
         case .agent(let message): return message

@@ -19,7 +19,7 @@ final class ConnectionStateUITests: XCTestCase {
 
         let avatar = avatar(
             in: app,
-            labeled: "SLICC: unknown, context fill unknown. The leader is busy — hang on…")
+            labeled: "Sliccy: unknown, context fill unknown. The leader is busy — hang on…")
         XCTAssertTrue(avatar.waitForExistence(timeout: 60), "A stall should remain in the avatar")
         XCTAssertFalse(
             avatar.label.contains("Disconnected"),
@@ -45,7 +45,7 @@ final class ConnectionStateUITests: XCTestCase {
 
         let avatar = avatar(
             in: app,
-            labeled: "SLICC: unknown, context fill unknown. Reconnecting… (3/10)")
+            labeled: "Sliccy: unknown, context fill unknown. Reconnecting… (3/10)")
         XCTAssertTrue(avatar.waitForExistence(timeout: 60))
         XCTAssertEqual(app.staticTexts["composer-placeholder"].label, "Disconnected")
     }
