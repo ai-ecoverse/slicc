@@ -1,7 +1,7 @@
 import UIKit
 import UniformTypeIdentifiers
 
-/// Safari's "SLICC" share row (#1918): ChatGPT-style instant handoff. The
+/// Safari's "Sliccy" share row (#1918): ChatGPT-style instant handoff. The
 /// panel appears just long enough to validate the URL, park it in the App
 /// Group inbox, and open the containing app through the responder chain's
 /// `UIApplication` — the pattern ChatGPT, Claude, Grok, and Bluesky
@@ -24,7 +24,7 @@ final class ShareViewController: UIViewController {
         statusLabel.font = .preferredFont(forTextStyle: .callout)
         statusLabel.textAlignment = .center
         statusLabel.numberOfLines = 0
-        statusLabel.text = "Opening SLICC…"
+        statusLabel.text = "Opening Sliccy…"
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
@@ -49,14 +49,14 @@ final class ShareViewController: UIViewController {
                 $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
             })
         else {
-            finish(message: "Nothing SLICC can open here.")
+            finish(message: "Nothing Sliccy can open here.")
             return
         }
         provider.loadItem(forTypeIdentifier: UTType.url.identifier) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard let url = item as? URL, Self.isWebURL(url) else {
-                    self.finish(message: "Nothing SLICC can open here.")
+                    self.finish(message: "Nothing Sliccy can open here.")
                     return
                 }
                 self.handOff(url: url)
@@ -73,7 +73,7 @@ final class ShareViewController: UIViewController {
             let bounce = URL(string: "slicc://open?url=\(encoded)"),
             openViaResponderChain(bounce)
         else {
-            finish(message: "Sent to SLICC — open the app to continue.")
+            finish(message: "Sent to Sliccy — open the app to continue.")
             return
         }
         extensionContext?.completeRequest(returningItems: nil)
