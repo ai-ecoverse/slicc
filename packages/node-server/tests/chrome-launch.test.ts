@@ -162,7 +162,10 @@ describe('chrome-launch', () => {
       '--disable-crash-reporter',
       '--disable-background-tracing',
       '--disable-blink-features=AutomationControlled',
-      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets',
+      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
       '--user-data-dir=/repo/.qa/chrome/extension',
       '--disable-extensions-except=/repo/dist/extension',
       '--load-extension=/repo/dist/extension',
@@ -197,13 +200,13 @@ describe('chrome-launch', () => {
       // without hosted: true.
       const args = buildChromeLaunchArgs(baseOpts);
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable'
       );
     });
 
     it('does not duplicate the Local Network Access flag in hosted mode', () => {
       const lnaFlag =
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets';
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable';
       const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
       expect(args.filter((a) => a === lnaFlag)).toHaveLength(1);
     });
@@ -216,7 +219,7 @@ describe('chrome-launch', () => {
       expect(args).toContain('--headless=new');
       expect(args).toContain('--font-render-hinting=none');
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable'
       );
     });
 

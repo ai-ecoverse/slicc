@@ -111,8 +111,16 @@ final class ChromeLauncherTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            args.contains("--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets")
+            args.contains(
+                "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable"
+            )
         )
+        // The leader must never be frozen or backgrounded by Chrome: a
+        // lifecycle-frozen leader is unreachable over the tray with the UI
+        // stuck mid-turn. Mirrors node-server's buildChromeLaunchArgs.
+        XCTAssertTrue(args.contains("--disable-background-timer-throttling"))
+        XCTAssertTrue(args.contains("--disable-backgrounding-occluded-windows"))
+        XCTAssertTrue(args.contains("--disable-renderer-backgrounding"))
     }
 
     func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {

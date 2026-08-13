@@ -556,8 +556,17 @@ gate it. That is why this only reproduces with a **production** float
 **The Fix**
 
 Every Slicc-launched Chrome passes
-`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets`
-**unconditionally** (not just in hosted mode). This is our dedicated, launched
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable`
+**unconditionally** (not just in hosted mode), plus
+`--disable-background-timer-throttling`,
+`--disable-backgrounding-occluded-windows` and
+`--disable-renderer-backgrounding`. The lifecycle flags exist because Memory
+Saver freezing a backgrounded leader suspends its event loop entirely — the
+tray becomes unreachable and a running turn sticks on "working" for hours
+(reproduced on demand via CDP `Page.setWebLifecycleState('frozen')`; WebRTC
+exempts the tab from timer throttling but NOT from freezing). The launched
+Chrome therefore opts out of background power savings — a deliberate battery
+trade on portables, acceptable because this is a dedicated agent-host profile. This is our dedicated, launched
 browser profile talking to its own local server, so disabling the check is safe
 — it is not the user's daily browsing profile.
 
