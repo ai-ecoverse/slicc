@@ -243,6 +243,22 @@
         "-uiTestOpenFrozenRail",
         "YES"
       ]
+    },
+    {
+      "name": "avatar-expression-light",
+      "description": "Agent-avatar expression kit in light mode: the four activities (idle wander, thinking brows, working square, awaiting eye contact) plus the glower, scrutiny and drowse lids, a high-fill square, and a frozen static square. Every scalar is driven on a frozen clock so the capture is identical run to run.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "light-expression"
+      ]
+    },
+    {
+      "name": "avatar-expression-dark",
+      "description": "The same expression-kit state matrix in dark mode.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "dark-expression"
+      ]
     }
   ]
 }

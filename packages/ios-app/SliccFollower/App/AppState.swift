@@ -70,7 +70,36 @@ class AppState: ObservableObject {
     @Published var toolUICards: [ToolUIPlaceholder] = []
     @Published var openApprovals: [OpenApprovalRequest] = []
     @Published var openGrants: [OpenGrant] = []
-    @Published var isStreaming: Bool = false
+    @Published var isStreaming: Bool = false {
+        didSet { trackTurnSettle(wasStreaming: oldValue) }
+    }
+
+    // MARK: - Agent avatar expression
+    //
+    // The tray wire carries only `working | broken | initializing | idle`, so
+    // the two finer signals the avatar's expression kit wants are derived HERE,
+    // from events the follower already mirrors. No protocol change.
+
+    /// Tool calls in flight for the VISIBLE scoop — `tool_use_start` opens one,
+    /// `tool_result` closes it. A working agent with one open is running a tool
+    /// (square eyes); otherwise it is thinking (brows + saccades).
+    @Published private(set) var runningToolCalls: Int = 0
+    /// When the turn settled and the composer became yours. Drives the avatar's
+    /// `awaiting` eye contact and, after 90s, its drowse.
+    @Published private(set) var awaitingUserSince: Date?
+    /// Shared with the chat header's avatar so hosts can fire transients
+    /// (`scrutinize` per keystroke, `glower` on a failed tool call).
+    let avatarExpression = AvatarExpressionEngine()
+
+    /// A turn's streaming edge: starting one clears the wait, ending one starts
+    /// it. Every `isStreaming` writer (turn_end, `status: ready`, the error
+    /// path, snapshot ingest) funnels through the property observer, so no
+    /// single call site can forget.
+    private func trackTurnSettle(wasStreaming: Bool) {
+        guard wasStreaming != isStreaming else { return }
+        runningToolCalls = 0
+        awaitingUserSince = isStreaming ? nil : Date()
+    }
 
     // Multi-scoop awareness
     /// All scoops the leader has registered (cone first), updated via `scoops.list`.
@@ -1196,6 +1225,7 @@ class AppState: ObservableObject {
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
             logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
+            if isVisible { runningToolCalls += 1 }
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 let tc = ToolCall(id: UUID().uuidString, name: toolName, input: toolInput)
                 if buffer[idx].toolCalls == nil {
@@ -1211,6 +1241,12 @@ class AppState: ObservableObject {
             }
 
         case .toolResult(let messageId, let toolName, let result, let isError):
+            if isVisible {
+                runningToolCalls = max(0, runningToolCalls - 1)
+                // The failure flag is already mirrored on the wire, so the
+                // glower needs no protocol change.
+                if isError == true { avatarExpression.glower() }
+            }
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 if let tcIdx = buffer[idx].toolCalls?.lastIndex(where: { $0.name == toolName }) {
                     buffer[idx].toolCalls?[tcIdx].result = result
