@@ -1,11 +1,64 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
+import {
+  type AgentActivity,
+  ANCHOR_EASE,
+  approach,
+  BASE_BROWS,
+  BLINK_APEX_MS,
+  BLINK_IN_MS,
+  BLINK_OUT_MS,
+  BLINK_PERIOD_LEFT_MS,
+  BLINK_PERIOD_RIGHT_MS,
+  BLINK_SQUISH,
+  BROW_HALF_WIDTH,
+  BROW_STROKE,
+  BROW_TRANSITION_MS,
+  BROW_Y,
+  type BrowPair,
+  bottomLidY,
+  chordHalfWidth,
+  DROWSE_RAMP_S,
+  drowseLid,
+  EYE_CY,
+  EYE_R,
+  fillToPupilScale,
+  type GazePoint,
+  GLOWER_LID,
+  GLOWER_MS,
+  LEFT_CX,
+  LID_EASE,
+  LID_LINE_EPSILON,
+  LID_OVERSHOOT,
+  MAX_OFFSET,
+  nextGazeIndex,
+  POP_MS,
+  PUPIL_R,
+  parseActivity,
+  parseDrowseDelay,
+  popScale,
+  pupilRx,
+  REST_GAZE,
+  RIGHT_CX,
+  recockBrows,
+  SACCADE_EASE,
+  SACCADE_INTERVAL_MS,
+  SACCADE_TARGETS,
+  SCRUTINY_LID,
+  SCRUTINY_MS,
+  SHAPE_EASE,
+  shapeTargetFor,
+  socketRx,
+  topLidY,
+  travelClamp,
+  WANDER_EASE,
+  WANDER_INTERVAL_MS,
+  WANDER_TARGETS,
+} from './avatar-expression.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const PUPIL_R = 18;
-const MAX_OFFSET = 16;
-const LEFT_EYE = { cx: 55, cy: 50, r: 38 } as const;
-const RIGHT_EYE = { cx: 145, cy: 50, r: 38 } as const;
+const LEFT_EYE = { cx: LEFT_CX, cy: EYE_CY, r: EYE_R } as const;
+const RIGHT_EYE = { cx: RIGHT_CX, cy: EYE_CY, r: EYE_R } as const;
 const NOISE_CELL_SIZE = 1;
 const NOISE_FPS = 12;
 const NOISE_OPACITY = 0.72;
@@ -14,6 +67,8 @@ const FROZEN_NOISE_SEED = 0x51cc_a11e;
 const NOISE_FRAME_SALT = 0x9e37_79b9;
 const NOISE_EYE_SALT = 0x85eb_ca6b;
 const IOS_REFERENCE_DATE_MS = Date.UTC(2001, 0, 1);
+/** Layout of the `gaze-target` element is re-read at most this often, never per frame. */
+const ANCHOR_REFRESH_MS = 500;
 
 interface TypeConfig {
   vb: string;
@@ -46,10 +101,14 @@ const STYLE = `
 .glyph{position:absolute;left:50%;top:50%;display:block;width:var(--g);height:var(--g);overflow:visible;transform:translate(-50%,-50%);}
 .eyes{position:absolute;pointer-events:none;}
 .eyes-svg{display:block;overflow:visible;}
-@keyframes slicc-agent-avatar-blink{0%,92%,100%{transform:scaleY(1);}96%{transform:scaleY(.08);}}
-:host([blink]) .eye-blink{transform-box:fill-box;transform-origin:center;animation:slicc-agent-avatar-blink 3.4s ease-in-out infinite;}
+.eye-blink,.eye-frozen{transform-box:view-box;}
+@keyframes slicc-agent-avatar-blink{0%,92%,100%{transform:scaleY(1);}96%{transform:scaleY(${BLINK_SQUISH});}}
+:host([blink]) .eye-blink{animation:slicc-agent-avatar-blink 3.4s ease-in-out infinite;}
 :host([blink]) .eye-r{animation-duration:4.6s;}
-@media (prefers-reduced-motion:reduce){:host([blink]) .eye-blink{animation:none;}}
+/* The engine drives blinks itself so it can commit shape changes at the apex. */
+.avatar[data-expressive] .eye-blink{animation:none;}
+.brow{transition:opacity ${BROW_TRANSITION_MS}ms ease,transform ${BROW_TRANSITION_MS}ms ease;}
+@media (prefers-reduced-motion:reduce){:host([blink]) .eye-blink{animation:none;}.brow{transition:none;}}
 `;
 
 const SHEET = sheet(STYLE);
@@ -63,6 +122,16 @@ function svgEl<K extends keyof SVGElementTagNameMap>(
   for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, String(value));
   element.append(...children);
   return element;
+}
+
+/** Set an attribute only when it actually changes — attribute reads force no layout. */
+function setAttr(element: Element | null, name: string, value: string): void {
+  if (!element) return;
+  if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
+
+function setNumber(element: Element | null, name: string, value: number): void {
+  setAttr(element, name, value.toFixed(2));
 }
 
 function shade(hex: string, amount: number): string {
@@ -192,52 +261,93 @@ function scoopInner(fill: string, outline: string): SVGElement[] {
   ];
 }
 
-function fillToPupilScale(fill: number): number {
-  if (fill <= 50) return 1;
-  if (fill >= 85) return 2.2;
-  return 1 + ((fill - 50) / 35) * 1.2;
+/** A socket/pupil is always a rect: `rx = half the side` IS a circle, so the
+ * whole shape channel is one animated attribute on both platforms. */
+function squircle(
+  cx: number,
+  radius: number,
+  rx: number,
+  attrs: Record<string, string | number>
+): SVGRectElement {
+  return svgEl('rect', {
+    x: cx - radius,
+    y: EYE_CY - radius,
+    width: radius * 2,
+    height: radius * 2,
+    rx,
+    ...attrs,
+  });
 }
 
-function pupil(cx: number, side: 'l' | 'r', pupilRadius: number): SVGGElement {
+function pupil(cx: number, side: 'l' | 'r', pupilRadius: number, shape: number): SVGGElement {
   return svgEl(
     'g',
     { class: `pupil pupil-${side}` },
-    svgEl('circle', { cx, cy: 50, r: pupilRadius, fill: '#000' }),
+    squircle(cx, pupilRadius, pupilRx(pupilRadius, shape), { fill: '#000' }),
     svgEl('circle', {
       cx: cx - pupilRadius * 0.3,
-      cy: 50 - pupilRadius * 0.35,
+      cy: EYE_CY - pupilRadius * 0.35,
       r: pupilRadius * 0.4,
       fill: '#fff',
     })
   );
 }
 
-function eyeOpen(cx: number, side: 'l' | 'r', pupilRadius: number): SVGGElement {
-  return svgEl(
-    'g',
-    { class: `eye-blink eye-${side}` },
-    svgEl('circle', { cx, cy: 50, r: 38, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
-    pupil(cx, side, pupilRadius)
-  );
+function lidLine(cx: number, edge: 'top' | 'bottom'): SVGLineElement {
+  return svgEl('line', {
+    class: `lid-line lid-${edge}`,
+    x1: cx - EYE_R,
+    y1: EYE_CY,
+    x2: cx + EYE_R,
+    y2: EYE_CY,
+    stroke: '#000',
+    'stroke-width': 4,
+    'stroke-linecap': 'round',
+    display: 'none',
+  });
 }
 
-function eyeStatic(cx: number, side: 'l' | 'r'): SVGGElement {
+function brow(cx: number, side: 'l' | 'r'): SVGLineElement {
+  const line = svgEl('line', {
+    class: `brow brow-${side}`,
+    x1: cx - BROW_HALF_WIDTH,
+    y1: BROW_Y,
+    x2: cx + BROW_HALF_WIDTH,
+    y2: BROW_Y,
+    stroke: '#000',
+    'stroke-width': BROW_STROKE,
+    'stroke-linecap': 'round',
+    opacity: 0,
+  });
+  line.style.transformBox = 'fill-box';
+  line.style.transformOrigin = 'center';
+  return line;
+}
+
+function eyeGroup(cx: number, side: 'l' | 'r', className: string): SVGGElement {
+  const group = svgEl('g', { class: `${className} eye-${side}` });
+  group.style.transformOrigin = `${cx}px ${EYE_CY}px`;
+  return group;
+}
+
+function eyeStatic(cx: number, side: 'l' | 'r', rx: number): SVGGElement {
   const clipId = `slicc-agent-avatar-noise-${side}`;
   return svgEl(
     'g',
-    { class: `eye-static eye-${side}` },
-    svgEl('defs', {}, svgEl('clipPath', { id: clipId }, svgEl('circle', { cx, cy: 50, r: 38 }))),
-    svgEl('circle', { cx, cy: 50, r: 38, fill: '#fff' }),
+    { class: `eye-static eye-body-${side}` },
+    svgEl(
+      'defs',
+      {},
+      svgEl('clipPath', { id: clipId }, squircle(cx, EYE_R, rx, { class: 'noise-clip' }))
+    ),
+    squircle(cx, EYE_R, rx, { class: 'socket', fill: '#fff' }),
     svgEl('g', {
       class: `noise noise-${side}`,
       'clip-path': `url(#${clipId})`,
       'data-cell-size': NOISE_CELL_SIZE,
     }),
-    svgEl('circle', {
+    squircle(cx, EYE_R, rx, {
       class: 'eye-outline',
-      cx,
-      cy: 50,
-      r: 38,
       fill: 'none',
       stroke: '#000',
       'stroke-width': 4,
@@ -266,7 +376,7 @@ function currentNoiseFrame(): number {
 
 function eyeDead(cx: number): SVGElement[] {
   return [
-    svgEl('circle', { cx, cy: 50, r: 38, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
+    svgEl('circle', { cx, cy: EYE_CY, r: EYE_R, fill: '#fff', stroke: '#000', 'stroke-width': 4 }),
     svgEl('line', {
       x1: cx - 15,
       y1: 35,
@@ -290,21 +400,53 @@ function eyeDead(cx: number): SVGElement[] {
 
 function place(pupil: Element, cx: number, mx: number, my: number, maxOffset: number): void {
   const dx = mx - cx;
-  const dy = my - 50;
+  const dy = my - EYE_CY;
   const distance = Math.hypot(dx, dy);
   const clamped = Math.min(distance, maxOffset);
   const tx = distance > 0 ? (dx / distance) * clamped : 0;
   const ty = distance > 0 ? (dy / distance) * clamped : 0;
-  pupil.setAttribute('transform', `translate(${tx},${ty})`);
+  pupil.setAttribute('transform', `translate(${tx.toFixed(2)},${ty.toFixed(2)})`);
 }
 
+/** A read-only snapshot of every expression scalar — the shape a SwiftUI mirror binds to. */
+export interface AvatarExpressionState {
+  readonly activity: AgentActivity | null;
+  /** 0 = circle, 1 = rounded square. */
+  readonly shape: number;
+  readonly lidTop: number;
+  readonly lidBottom: number;
+  readonly pupilRadius: number;
+  readonly gaze: GazePoint;
+  readonly brows: BrowPair;
+  readonly browsVisible: boolean;
+}
+
+/**
+ * The agent's face: gaze, context fill (pupil size), liveness (blink),
+ * connection (TV static) and — via the `activity` attribute — the full
+ * expression kit: shape morph, brows, lids and gaze behaviours.
+ *
+ * Without an `activity` attribute the element behaves exactly as it always has
+ * (pointer-tracked pupils, CSS blink). Channels, precedence and constants:
+ * `docs/webcomponents-details.md#agent-avatar-expression-kit`.
+ */
 export class SliccAgentAvatar extends HTMLElement {
-  static readonly observedAttributes = ['type', 'color', 'eyes', 'fill', 'connection'];
+  static readonly observedAttributes = [
+    'type',
+    'color',
+    'eyes',
+    'fill',
+    'connection',
+    'activity',
+    'gaze-target',
+    'drowse-delay',
+  ];
 
   readonly #root: ShadowRoot;
   readonly #onPointerMove = (event: PointerEvent): void => this.#track(event);
   readonly #onMotionChange = (): void => {
     this.#syncTracking();
+    this.#syncEngine();
     if (this.#eyeState() === 'static') this.#startNoise();
   };
   #motionQuery: MediaQueryList | null = null;
@@ -315,6 +457,33 @@ export class SliccAgentAvatar extends HTMLElement {
   #noiseInterval: number | null = null;
   #maxOffset = MAX_OFFSET;
   #tracking = false;
+
+  // ── expression engine ────────────────────────────────────────────────────
+  #activity: AgentActivity | null = null;
+  /** True once an expression method forced the engine on without an attribute. */
+  #forced = false;
+  #primed = false;
+  #shape = 0;
+  #shapeCommitted = 0;
+  #committing = false;
+  #lidTop = 0;
+  #lidBottom = 0;
+  #brows: BrowPair = BASE_BROWS;
+  #gaze: GazePoint = { x: 100, y: EYE_CY };
+  #gazeIndex = 0;
+  #gazeChangedAt = 0;
+  #pupilRadius = PUPIL_R;
+  #awaitingSince = 0;
+  #glowerUntil = 0;
+  #scrutinyUntil = 0;
+  #popUntil = 0;
+  #frame: number | null = null;
+  #lastStep = 0;
+  #blinkTimers: number[] = [];
+  #settleTimer: number | null = null;
+  #blinkIntervals: number[] = [];
+  #anchor: GazePoint = REST_GAZE;
+  #anchorAt = 0;
 
   constructor() {
     super();
@@ -327,19 +496,101 @@ export class SliccAgentAvatar extends HTMLElement {
     this.#motionQuery.addEventListener('change', this.#onMotionChange);
     this.#render();
     this.#syncTracking();
+    this.#syncEngine();
   }
 
   disconnectedCallback(): void {
     this.#stopTracking();
     this.#stopNoise();
+    this.#stopEngine();
     this.#motionQuery?.removeEventListener('change', this.#onMotionChange);
     this.#motionQuery = null;
+    this.#primed = false;
   }
 
-  attributeChangedCallback(): void {
+  attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
+    if (name === 'activity' || name === 'gaze-target' || name === 'drowse-delay') {
+      this.#syncActivity();
+      return;
+    }
     this.#render();
     this.#syncTracking();
+    this.#syncEngine();
+  }
+
+  /** `idle | thinking | working | awaiting`, or `null` for the legacy behaviour. */
+  get activity(): AgentActivity | null {
+    return parseActivity(this.getAttribute('activity'));
+  }
+
+  set activity(value: AgentActivity | null) {
+    if (value === null) this.removeAttribute('activity');
+    else this.setAttribute('activity', value);
+  }
+
+  /** CSS selector (resolved in the owner document) the `awaiting` gaze anchors to. */
+  get gazeTarget(): string | null {
+    return this.getAttribute('gaze-target');
+  }
+
+  set gazeTarget(value: string | null) {
+    if (value === null) this.removeAttribute('gaze-target');
+    else this.setAttribute('gaze-target', value);
+  }
+
+  /** Seconds of `awaiting` before the drowse lid starts descending. */
+  get drowseDelay(): number {
+    return parseDrowseDelay(this.getAttribute('drowse-delay'));
+  }
+
+  set drowseDelay(value: number) {
+    this.setAttribute('drowse-delay', String(value));
+  }
+
+  /** Read-only snapshot of every expression scalar. */
+  get expression(): AvatarExpressionState {
+    return Object.freeze({
+      activity: this.#activity,
+      shape: this.#shape,
+      lidTop: this.#lidTop,
+      lidBottom: this.#lidBottom,
+      pupilRadius: this.#pupilRadius,
+      gaze: { ...this.#gaze },
+      brows: this.#brows,
+      browsVisible: this.#browsVisible(),
+    });
+  }
+
+  /**
+   * "I saw that" — lifts the drowse lid, restarts the drowse clock, blinks once
+   * and fires a 350 ms pupil pop. The pop is a transient so the fill channel
+   * (pupil size = context fill) stays honest.
+   */
+  wake(): void {
+    const now = performance.now();
+    this.#awaitingSince = now;
+    if (!this.#instant()) {
+      this.#popUntil = now + POP_MS;
+      this.#blinkBoth();
+    }
+    this.#refresh();
+  }
+
+  /** Focused attention on what is being typed — one second of raised bottom lid. */
+  scrutinize(): void {
+    this.#scrutinyUntil = performance.now() + SCRUTINY_MS;
+    this.#refresh();
+  }
+
+  /** The 2.6 s reaction to a failed tool call. Reads angry; that is intended. */
+  glower(): void {
+    this.#glowerUntil = performance.now() + GLOWER_MS;
+    this.#refresh();
+  }
+
+  #expressive(): boolean {
+    return this.hasAttribute('activity') || this.#forced;
   }
 
   #render(): void {
@@ -348,19 +599,17 @@ export class SliccAgentAvatar extends HTMLElement {
     const type = this.getAttribute('type') === 'cone' ? 'cone' : 'scoop';
     const config = TYPE[type];
     const color = this.getAttribute('color') ?? DEFAULT_COLOR[type];
-    const eyes = this.#eyeState();
-    const fill = Math.max(
-      0,
-      Math.min(100, Number.parseFloat(this.getAttribute('fill') ?? '0') || 0)
-    );
-    const pupilRadius = PUPIL_R * fillToPupilScale(fill);
-    this.#maxOffset = Math.max(2, Math.min(MAX_OFFSET, LEFT_EYE.r - pupilRadius - 4));
-    const eyeX = (config.eyes.left + config.eyes.width / 2) / 100;
-    const eyeY = (config.eyes.top + config.eyes.height / 2) / 100;
-    const glyphInner =
-      type === 'cone'
-        ? coneInner(color, shade(color, -0.38), shade(color, 0.3))
-        : scoopInner(color, shade(color, -0.32));
+    const expressive = this.#expressive();
+    this.#activity = parseActivity(this.getAttribute('activity'));
+    // An avatar that MOUNTS in `awaiting` starts its waiting clock here; a later
+    // transition into `awaiting` starts it in #syncActivity.
+    if (this.#activity === 'awaiting' && this.#awaitingSince === 0) {
+      this.#awaitingSince = performance.now();
+    }
+    if (!this.#primed) {
+      this.#shape = this.#shapeCommitted = shapeTargetFor(this.#activity);
+      this.#primed = true;
+    }
     const glyph = svgEl(
       'svg',
       {
@@ -369,16 +618,10 @@ export class SliccAgentAvatar extends HTMLElement {
         preserveAspectRatio: 'xMidYMid meet',
         style: `--g:${config.glyph}%`,
       },
-      ...glyphInner
+      ...(type === 'cone'
+        ? coneInner(color, shade(color, -0.38), shade(color, 0.3))
+        : scoopInner(color, shade(color, -0.32)))
     );
-    const eyeBody =
-      eyes === 'dead'
-        ? [...eyeDead(LEFT_EYE.cx), ...eyeDead(RIGHT_EYE.cx)]
-        : eyes === 'none'
-          ? []
-          : eyes === 'static'
-            ? [eyeStatic(LEFT_EYE.cx, 'l'), eyeStatic(RIGHT_EYE.cx, 'r')]
-            : [eyeOpen(LEFT_EYE.cx, 'l', pupilRadius), eyeOpen(RIGHT_EYE.cx, 'r', pupilRadius)];
     this.#eyesSvg = svgEl(
       'svg',
       {
@@ -388,7 +631,7 @@ export class SliccAgentAvatar extends HTMLElement {
         height: '100%',
         preserveAspectRatio: 'xMidYMid meet',
       },
-      ...eyeBody
+      ...this.#buildEyes(expressive)
     );
     const eyeBand = h('span', {
       class: 'eyes',
@@ -399,25 +642,98 @@ export class SliccAgentAvatar extends HTMLElement {
       'span',
       {
         class: 'icon-inner',
-        style: `--tx:${((0.5 - config.zoom * eyeX) * 100).toFixed(2)}%;--ty:${((0.5 - config.zoom * eyeY) * 100).toFixed(2)}%;--zoom:${config.zoom}`,
+        style: `--tx:${((0.5 - config.zoom * ((config.eyes.left + config.eyes.width / 2) / 100)) * 100).toFixed(2)}%;--ty:${((0.5 - config.zoom * ((config.eyes.top + config.eyes.height / 2) / 100)) * 100).toFixed(2)}%;--zoom:${config.zoom}`,
       },
       glyph,
       eyeBand
     );
-    this.#root.replaceChildren(h('span', { class: 'avatar', 'aria-hidden': 'true' }, inner));
+    this.#root.replaceChildren(
+      h(
+        'span',
+        { class: 'avatar', 'aria-hidden': 'true', 'data-expressive': expressive || null },
+        inner
+      )
+    );
     this.#pupilL = this.#root.querySelector('.pupil-l');
     this.#pupilR = this.#root.querySelector('.pupil-r');
-    if (eyes === 'static') this.#startNoise();
+    if (this.#eyeState() === 'static') this.#startNoise();
+    if (expressive) this.#apply();
+  }
+
+  #buildEyes(expressive: boolean): SVGElement[] {
+    const eyes = this.#eyeState();
+    if (eyes === 'none') return [];
+    if (eyes === 'dead') return [...eyeDead(LEFT_EYE.cx), ...eyeDead(RIGHT_EYE.cx)];
+    this.#pupilRadius = this.#restingPupilRadius();
+    this.#maxOffset = travelClamp(this.#pupilRadius);
+    const rx = socketRx(this.#shape);
+    return [LEFT_EYE.cx, RIGHT_EYE.cx].map((cx, index) => {
+      const side = index === 0 ? 'l' : 'r';
+      const frozen = eyes === 'static';
+      const group = eyeGroup(cx, side, frozen ? 'eye-frozen' : 'eye-blink');
+      const body = frozen
+        ? eyeStatic(cx, side, rx)
+        : svgEl(
+            'g',
+            { class: `eye-body eye-body-${side}` },
+            squircle(cx, EYE_R, rx, {
+              class: 'socket',
+              fill: '#fff',
+              stroke: '#000',
+              'stroke-width': 4,
+            }),
+            pupil(cx, side, this.#pupilRadius, this.#shape)
+          );
+      group.append(body);
+      if (!expressive) return group;
+      // Lids clip the eye body only: the chord lines that close the outline at
+      // the cut, and the brows, must stay outside the clip.
+      const clipId = `slicc-agent-avatar-lid-${side}`;
+      group.append(
+        svgEl(
+          'defs',
+          {},
+          svgEl(
+            'clipPath',
+            { id: clipId },
+            svgEl('rect', {
+              class: 'lid-clip',
+              x: cx - EYE_R - LID_OVERSHOOT,
+              y: EYE_CY - EYE_R - LID_OVERSHOOT,
+              width: EYE_R * 2 + LID_OVERSHOOT * 2,
+              height: EYE_R * 2 + LID_OVERSHOOT * 2,
+            })
+          )
+        ),
+        lidLine(cx, 'top'),
+        lidLine(cx, 'bottom'),
+        brow(cx, side)
+      );
+      body.setAttribute('clip-path', `url(#${clipId})`);
+      return group;
+    });
+  }
+
+  #restingPupilRadius(): number {
+    const fill = Math.max(
+      0,
+      Math.min(100, Number.parseFloat(this.getAttribute('fill') ?? '0') || 0)
+    );
+    return PUPIL_R * fillToPupilScale(fill);
   }
 
   #syncTracking(): void {
-    const shouldTrack = this.#eyeState() === 'open' && !this.#motionQuery?.matches;
+    const shouldTrack =
+      this.#eyeState() === 'open' &&
+      !this.#motionQuery?.matches &&
+      (this.#activity === null || this.#activity === 'working');
     if (shouldTrack && !this.#tracking) {
       this.ownerDocument.addEventListener('pointermove', this.#onPointerMove);
       this.#tracking = true;
     } else if (!shouldTrack) {
       this.#stopTracking();
-      this.#centerPupils();
+      // Only the pointer-driven modes recentre; the auto-gaze modes own the pupils.
+      if (this.#activity === null || this.#activity === 'working') this.#centerPupils();
     }
   }
 
@@ -434,6 +750,363 @@ export class SliccAgentAvatar extends HTMLElement {
     if (eyes === 'dead' || eyes === 'none' || eyes === 'static') return eyes;
     return 'open';
   }
+
+  // ── expression engine ────────────────────────────────────────────────────
+
+  /** Reduced motion, TV static and dead/absent eyes all mean "no animation". */
+  #instant(): boolean {
+    return (
+      this.#motionQuery?.matches === true ||
+      this.#eyeState() !== 'open' ||
+      !this.isConnected ||
+      !this.#primed
+    );
+  }
+
+  /** Static outranks everything: motion here would fake liveness the agent lacks. */
+  #frozen(): boolean {
+    return this.#eyeState() !== 'open';
+  }
+
+  #syncActivity(): void {
+    const next = parseActivity(this.getAttribute('activity'));
+    const wasExpressive = this.#root.querySelector('.avatar[data-expressive]') !== null;
+    // Entering `awaiting` starts the drowse clock; leaving it stops the clock.
+    if (next === 'awaiting' && this.#activity !== 'awaiting')
+      this.#awaitingSince = performance.now();
+    else if (next !== 'awaiting') this.#awaitingSince = 0;
+    this.#anchorAt = 0;
+    this.#activity = next;
+    if (this.#expressive() !== wasExpressive) this.#render();
+    this.#syncTracking();
+    this.#syncEngine();
+  }
+
+  #syncEngine(): void {
+    if (!this.#expressive() || !this.isConnected) {
+      this.#stopEngine();
+      return;
+    }
+    if (this.#frozen() || this.#motionQuery?.matches) {
+      this.#stopFrames();
+      this.#stopIdleBlinks();
+      this.#settle();
+      return;
+    }
+    this.#scheduleIdleBlinks();
+    this.#startFrames();
+  }
+
+  #stopIdleBlinks(): void {
+    for (const interval of this.#blinkIntervals) window.clearInterval(interval);
+    this.#blinkIntervals = [];
+  }
+
+  #refresh(): void {
+    if (!this.#expressive()) {
+      this.#forced = true;
+      if (this.isConnected) this.#render();
+    }
+    this.#syncEngine();
+  }
+
+  #startFrames(): void {
+    if (this.#frame !== null) return;
+    this.#lastStep = performance.now();
+    this.#frame = window.requestAnimationFrame(this.#step);
+  }
+
+  #stopFrames(): void {
+    if (this.#frame === null) return;
+    window.cancelAnimationFrame(this.#frame);
+    this.#frame = null;
+  }
+
+  #stopEngine(): void {
+    this.#stopFrames();
+    for (const timer of this.#blinkTimers) window.clearTimeout(timer);
+    this.#blinkTimers = [];
+    if (this.#settleTimer !== null) window.clearTimeout(this.#settleTimer);
+    this.#settleTimer = null;
+    for (const interval of this.#blinkIntervals) window.clearInterval(interval);
+    this.#blinkIntervals = [];
+  }
+
+  readonly #step = (now: number): void => {
+    this.#frame = window.requestAnimationFrame(this.#step);
+    const dt = Math.min(0.05, Math.max(0, (now - this.#lastStep) / 1000));
+    this.#lastStep = now;
+    this.#integrate(now, dt);
+    this.#apply();
+  };
+
+  #integrate(now: number, dt: number): void {
+    const target = shapeTargetFor(this.#activity);
+    if (target !== this.#shapeCommitted && !this.#committing) this.#commitShape(target);
+    this.#shape = approach(this.#shape, this.#shapeCommitted, SHAPE_EASE, dt);
+    this.#lidTop = approach(this.#lidTop, this.#lidTopTarget(now, false), LID_EASE, dt);
+    this.#lidBottom = approach(this.#lidBottom, this.#lidBottomTarget(now), LID_EASE, dt);
+    this.#advanceGaze(now, dt);
+  }
+
+  /** Reduced motion / static: jump every scalar to its target, no integrator. */
+  #settle(): void {
+    const now = performance.now();
+    if (!this.#frozen()) {
+      this.#shapeCommitted = this.#shape = shapeTargetFor(this.#activity);
+      this.#lidTop = this.#lidTopTarget(now, true);
+      this.#lidBottom = this.#lidBottomTarget(now);
+      this.#settleGaze();
+    }
+    this.#apply();
+    this.#scheduleSettle(now);
+  }
+
+  /** Under reduced motion the transient lids still need an expiry to land on. */
+  #scheduleSettle(now: number): void {
+    if (this.#settleTimer !== null) window.clearTimeout(this.#settleTimer);
+    this.#settleTimer = null;
+    if (this.#frozen()) return;
+    const drowseAt =
+      this.#activity === 'awaiting' && this.#awaitingSince > 0
+        ? this.#awaitingSince + this.drowseDelay * 1000
+        : Number.POSITIVE_INFINITY;
+    const next = Math.min(
+      this.#glowerUntil > now ? this.#glowerUntil : Number.POSITIVE_INFINITY,
+      this.#scrutinyUntil > now ? this.#scrutinyUntil : Number.POSITIVE_INFINITY,
+      drowseAt > now ? drowseAt : Number.POSITIVE_INFINITY
+    );
+    if (!Number.isFinite(next)) return;
+    this.#settleTimer = window.setTimeout(() => this.#settle(), Math.max(0, next - now) + 1);
+  }
+
+  #lidTopTarget(now: number, settled: boolean): number {
+    const glower = this.#glowerUntil > now ? GLOWER_LID : 0;
+    if (this.#activity !== 'awaiting') return glower;
+    const elapsed = this.#awaitingSince > 0 ? (now - this.#awaitingSince) / 1000 : 0;
+    const delay = this.drowseDelay;
+    // Settled mode jumps straight past the 12 s ramp — the descent IS the motion.
+    return Math.max(
+      glower,
+      drowseLid(settled && elapsed > delay ? delay + DROWSE_RAMP_S : elapsed, delay)
+    );
+  }
+
+  #lidBottomTarget(now: number): number {
+    return this.#scrutinyUntil > now ? SCRUTINY_LID : 0;
+  }
+
+  #commitShape(target: number): void {
+    if (this.#instant()) {
+      this.#shapeCommitted = this.#shape = target;
+      return;
+    }
+    // The blink-gate: creatures don't reshape in front of you — they blink, and
+    // they're different. The swap lands at the apex, behind a closed lid.
+    this.#committing = true;
+    this.#blinkBoth(() => {
+      this.#shapeCommitted = this.#shape = target;
+      this.#committing = false;
+    });
+  }
+
+  #eyeGroups(): SVGGElement[] {
+    return [...this.#root.querySelectorAll<SVGGElement>('.eye-blink')];
+  }
+
+  #blinkBoth(apex?: () => void): void {
+    const groups = this.#eyeGroups();
+    if (groups.length === 0) {
+      apex?.();
+      return;
+    }
+    groups.forEach((group, index) => {
+      this.#blinkGroup(group, index === 0 ? apex : undefined);
+    });
+  }
+
+  #blinkGroup(group: SVGGElement, apex?: () => void): void {
+    group.style.transition = `transform ${BLINK_IN_MS}ms ease-in`;
+    group.style.transform = `scaleY(${BLINK_SQUISH})`;
+    this.#blinkTimers.push(
+      window.setTimeout(() => {
+        apex?.();
+        if (this.#activity === 'thinking' && !this.#frozen())
+          this.#brows = recockBrows(this.#brows);
+        group.style.transition = `transform ${BLINK_OUT_MS}ms ease-out`;
+        group.style.transform = 'scaleY(1)';
+      }, BLINK_APEX_MS)
+    );
+  }
+
+  /**
+   * The engine drives its own idle blinks so a commit can land at the apex.
+   * `blink` is deliberately NOT an observed attribute, so the gate is re-read
+   * when each interval fires rather than when the interval is scheduled.
+   */
+  #scheduleIdleBlinks(): void {
+    if (this.#blinkIntervals.length > 0 || this.#instant() || this.#frozen()) return;
+    const periods = [BLINK_PERIOD_LEFT_MS, BLINK_PERIOD_RIGHT_MS];
+    periods.forEach((period, index) => {
+      this.#blinkIntervals.push(
+        window.setInterval(() => {
+          const group = this.#eyeGroups()[index];
+          if (group && this.hasAttribute('blink') && !this.#frozen()) this.#blinkGroup(group);
+        }, period)
+      );
+    });
+  }
+
+  // ── gaze ─────────────────────────────────────────────────────────────────
+
+  #autoGaze(now: number): { target: GazePoint; rate: number } | null {
+    if (this.#activity === 'thinking') {
+      return { target: this.#hop(now, SACCADE_TARGETS, SACCADE_INTERVAL_MS), rate: SACCADE_EASE };
+    }
+    if (this.#activity === 'idle') {
+      return { target: this.#hop(now, WANDER_TARGETS, WANDER_INTERVAL_MS), rate: WANDER_EASE };
+    }
+    if (this.#activity === 'awaiting') {
+      return { target: this.#resolveAnchor(now), rate: ANCHOR_EASE };
+    }
+    return null;
+  }
+
+  #hop(now: number, targets: readonly GazePoint[], interval: number): GazePoint {
+    if (now - this.#gazeChangedAt > interval) {
+      this.#gazeChangedAt = now;
+      this.#gazeIndex = nextGazeIndex(this.#gazeIndex, targets.length, Math.random);
+    }
+    return targets[this.#gazeIndex] ?? REST_GAZE;
+  }
+
+  #advanceGaze(now: number, dt: number): void {
+    const auto = this.#autoGaze(now);
+    if (!auto) return;
+    this.#gaze = {
+      x: approach(this.#gaze.x, auto.target.x, auto.rate, dt),
+      y: approach(this.#gaze.y, auto.target.y, auto.rate, dt),
+    };
+    this.#placePupils();
+  }
+
+  #settleGaze(): void {
+    // Reduced motion keeps eye contact (a point, not motion) but drops the
+    // saccades and the lazy wander entirely — those eyes just look straight out.
+    if (this.#activity === 'awaiting') {
+      this.#gaze = this.#resolveAnchor(performance.now());
+      this.#placePupils();
+    } else if (this.#activity === 'thinking' || this.#activity === 'idle') {
+      this.#centerPupils();
+    }
+  }
+
+  #placePupils(): void {
+    if (this.#pupilL) place(this.#pupilL, LEFT_EYE.cx, this.#gaze.x, this.#gaze.y, this.#maxOffset);
+    if (this.#pupilR)
+      place(this.#pupilR, RIGHT_EYE.cx, this.#gaze.x, this.#gaze.y, this.#maxOffset);
+  }
+
+  /**
+   * Resolve the `gaze-target` selector to a band-space point. Reading the
+   * target's box is a layout read, so it is throttled — never a per-frame cost.
+   */
+  #resolveAnchor(now: number): GazePoint {
+    if (now - this.#anchorAt < ANCHOR_REFRESH_MS) return this.#anchor;
+    this.#anchorAt = now;
+    const selector = this.getAttribute('gaze-target');
+    const target = selector ? this.ownerDocument.querySelector(selector) : null;
+    const bounds = this.#eyesSvg?.getBoundingClientRect();
+    if (!target || !bounds?.width || !bounds.height) {
+      this.#anchor = REST_GAZE;
+      return this.#anchor;
+    }
+    const box = target.getBoundingClientRect();
+    this.#anchor = {
+      x: (box.left + box.width / 2 - bounds.left) * (200 / bounds.width),
+      y: (box.top + box.height / 2 - bounds.top) * (100 / bounds.height),
+    };
+    return this.#anchor;
+  }
+
+  // ── paint ────────────────────────────────────────────────────────────────
+
+  #browsVisible(): boolean {
+    return this.#activity === 'thinking';
+  }
+
+  #apply(): void {
+    const now = performance.now();
+    const shape = this.#shape;
+    const rx = socketRx(shape);
+    const radius = this.#restingPupilRadius() * popScale(this.#popUntil - now);
+    this.#pupilRadius = radius;
+    this.#maxOffset = travelClamp(radius);
+    for (const [index, side] of (['l', 'r'] as const).entries()) {
+      const cx = index === 0 ? LEFT_EYE.cx : RIGHT_EYE.cx;
+      this.#applySockets(side, rx);
+      this.#applyPupil(side, cx, radius, shape);
+      this.#applyLids(side, cx, shape);
+      this.#applyBrow(side);
+    }
+  }
+
+  #applySockets(side: 'l' | 'r', rx: number): void {
+    for (const shapeEl of this.#root.querySelectorAll(
+      `.eye-body-${side} .socket, .eye-body-${side} .eye-outline, .eye-body-${side} .noise-clip`
+    )) {
+      setNumber(shapeEl, 'rx', rx);
+    }
+  }
+
+  #applyPupil(side: 'l' | 'r', cx: number, radius: number, shape: number): void {
+    const rect = this.#root.querySelector(`.pupil-${side} rect`);
+    if (!rect) return;
+    setNumber(rect, 'x', cx - radius);
+    setNumber(rect, 'y', EYE_CY - radius);
+    setNumber(rect, 'width', radius * 2);
+    setNumber(rect, 'height', radius * 2);
+    setNumber(rect, 'rx', pupilRx(radius, shape));
+    const highlight = this.#root.querySelector(`.pupil-${side} circle`);
+    setNumber(highlight, 'cx', cx - radius * 0.3);
+    setNumber(highlight, 'cy', EYE_CY - radius * 0.35);
+    setNumber(highlight, 'r', radius * 0.4);
+  }
+
+  #applyLids(side: 'l' | 'r', cx: number, shape: number): void {
+    const clip = this.#root.querySelector(`.eye-${side} .lid-clip`);
+    if (!clip) return;
+    const top = topLidY(this.#lidTop);
+    const bottom = bottomLidY(this.#lidBottom);
+    setNumber(clip, 'y', top);
+    setNumber(clip, 'height', Math.max(0, bottom - top));
+    this.#applyChord(`.eye-${side} .lid-top`, cx, top, shape, this.#lidTop);
+    this.#applyChord(`.eye-${side} .lid-bottom`, cx, bottom, shape, this.#lidBottom);
+  }
+
+  #applyChord(selector: string, cx: number, y: number, shape: number, fraction: number): void {
+    const line = this.#root.querySelector(selector);
+    if (!line) return;
+    const half = chordHalfWidth(y, shape);
+    setNumber(line, 'x1', cx - half);
+    setNumber(line, 'x2', cx + half);
+    setNumber(line, 'y1', y);
+    setNumber(line, 'y2', y);
+    setAttr(line, 'display', fraction > LID_LINE_EPSILON ? 'inline' : 'none');
+  }
+
+  #applyBrow(side: 'l' | 'r'): void {
+    const line = this.#root.querySelector<SVGLineElement>(`.brow-${side}`);
+    if (!line) return;
+    const visible = this.#browsVisible();
+    const pose = side === 'l' ? this.#brows.left : this.#brows.right;
+    setAttr(line, 'opacity', visible ? '1' : '0');
+    line.style.transform = visible
+      ? `translateY(${pose.raise.toFixed(2)}px) rotate(${pose.tilt.toFixed(2)}deg)`
+      : 'translateY(6px)';
+  }
+
+  // ── static noise (connection channel) ────────────────────────────────────
 
   #startNoise(): void {
     this.#stopNoise();
@@ -458,8 +1131,8 @@ export class SliccAgentAvatar extends HTMLElement {
         const cells: SVGRectElement[] = [];
         const minX = cx - LEFT_EYE.r;
         const maxX = cx + LEFT_EYE.r;
-        const minY = 50 - LEFT_EYE.r;
-        const maxY = 50 + LEFT_EYE.r;
+        const minY = EYE_CY - LEFT_EYE.r;
+        const maxY = EYE_CY + LEFT_EYE.r;
         for (let y = minY; y < maxY; y += cellSize) {
           for (let x = minX; x < maxX; x += cellSize) {
             const cell = svgEl('rect', {
@@ -508,10 +1181,11 @@ export class SliccAgentAvatar extends HTMLElement {
     if (!this.#eyesSvg || !this.#pupilL || !this.#pupilR) return;
     const bounds = this.#eyesSvg.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
-    const mx = (event.clientX - bounds.left) * (200 / bounds.width);
-    const my = (event.clientY - bounds.top) * (100 / bounds.height);
-    place(this.#pupilL, LEFT_EYE.cx, mx, my, this.#maxOffset);
-    place(this.#pupilR, RIGHT_EYE.cx, mx, my, this.#maxOffset);
+    this.#gaze = {
+      x: (event.clientX - bounds.left) * (200 / bounds.width),
+      y: (event.clientY - bounds.top) * (100 / bounds.height),
+    };
+    this.#placePupils();
   }
 }
 

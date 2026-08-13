@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // registers every element it composes (agent tabs included).
 import { Collapsed, FreezerPreview, ScoopPreview } from '../../src/showcase/app.stories.js';
 import type { SliccAgentAvatar } from '../../src/switcher/slicc-agent-avatar.js';
+import type { SliccAgentTabs } from '../../src/switcher/slicc-agent-tabs.js';
 import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 
 /** Render the showcase `Collapsed` story into the document and return its frame. */
@@ -87,10 +88,22 @@ describe('showcase full-app agent tabs', () => {
     expect(getComputedStyle(agentTab(frame, 'Sliccy')).color).not.toBe('rgb(255, 255, 255)');
   });
 
-  it('keeps the cone eye-tracking intact (cone, eyes open, pupils follow the cursor)', () => {
+  it('keeps the cone eyes alive: it moves its own gaze, and a tool call follows the cursor', async () => {
     frame = renderShowcase();
     const cone = focusedAvatar(frame);
     expect(cone.getAttribute('eyes')).toBe('open');
+    // Off a tool call the avatar owns its gaze — saccades while thinking, a lazy
+    // wander while idle — and ignores the pointer entirely.
+    expect(['idle', 'thinking']).toContain(cone.getAttribute('activity'));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    expect(cone.shadowRoot?.querySelector('.pupil-l')?.getAttribute('transform')).toMatch(
+      /^translate\(/
+    );
+
+    const tabs = frame.querySelector('slicc-agent-tabs') as SliccAgentTabs;
+    tabs.scoops = tabs.scoops.map((scoop) => ({ ...scoop, state: 'working', phase: 'tool' }));
     const svg = cone.shadowRoot?.querySelector('.eyes-svg') as SVGElement;
     expect(svg).toBeTruthy();
     const r = svg.getBoundingClientRect();

@@ -1,5 +1,7 @@
 import { define } from '../internal/define.js';
 import { h } from '../internal/dom.js';
+import type { AgentActivity } from './avatar-expression.js';
+import type { SliccAgentAvatar } from './slicc-agent-avatar.js';
 import './slicc-agent-avatar.js';
 import './slicc-scoop-overflow.js';
 import type {
@@ -36,6 +38,13 @@ export interface ScoopDescriptor {
    * than as "unknown".
    */
   phase?: AgentPhase;
+  /**
+   * An `idle` agent whose turn has just ended and whose composer is ready for
+   * you. It makes eye contact with the `gaze-target` instead of wandering, and
+   * drowses if you keep it waiting. Purely a UI derivation — the tray wire's
+   * {@link AgentState} stays `working | broken | initializing | idle`.
+   */
+  awaiting?: boolean;
 }
 
 export interface ScoopSelectDetail extends SliccScoopSelectDetail {
@@ -159,6 +168,19 @@ function phaseFor(scoop: ScoopDescriptor, state: AgentState): AgentPhase | null 
   return scoop.phase === 'tool' ? 'tool' : 'thinking';
 }
 
+/**
+ * The avatar's expression channel, derived from the same lifecycle the segment
+ * pin uses: a tool call squares the eyes up, model-wait gets the quizzical
+ * thinking face, and a finished turn switches idle's lazy wander for eye
+ * contact. `broken` and `initializing` keep their own eye treatments (dead /
+ * none), so they carry no activity at all.
+ */
+function activityFor(scoop: ScoopDescriptor, state: AgentState): AgentActivity | null {
+  if (state === 'working') return phaseFor(scoop, state) === 'tool' ? 'working' : 'thinking';
+  if (state === 'idle') return scoop.awaiting ? 'awaiting' : 'idle';
+  return null;
+}
+
 function stateFor(scoop: ScoopDescriptor, attention: string | null): AgentState {
   if (scoop.state) return scoop.state;
   if (scoop.eyes === 'dead') return 'broken';
@@ -258,10 +280,16 @@ function statusGlyph(scoop: ScoopDescriptor): SVGSVGElement {
 }
 
 export class SliccAgentTabs extends HTMLElement {
-  static readonly observedAttributes = ['active', 'attention', 'connection'];
+  static readonly observedAttributes = [
+    'active',
+    'attention',
+    'connection',
+    'gaze-target',
+    'drowse-delay',
+  ];
 
   #scoops: ScoopDescriptor[] = [];
-  #avatarElement: HTMLElement | null = null;
+  #avatarElement: SliccAgentAvatar | null = null;
   #track: HTMLDivElement | null = null;
   #trackFrame: HTMLDivElement | null = null;
   #overflow: SliccScoopOverflow | null = null;
@@ -342,6 +370,34 @@ export class SliccAgentTabs extends HTMLElement {
 
   set connection(value: 'connected' | 'disconnected') {
     this.setAttribute('connection', value);
+  }
+
+  /**
+   * CSS selector the focused avatar makes eye contact with while `awaiting` —
+   * the composer, in the shell. Forwarded verbatim to `<slicc-agent-avatar>`.
+   */
+  get gazeTarget(): string | null {
+    return this.getAttribute('gaze-target');
+  }
+
+  set gazeTarget(value: string | null) {
+    if (value == null) this.removeAttribute('gaze-target');
+    else this.setAttribute('gaze-target', value);
+  }
+
+  /** Focused attention on what the user is typing — one call per keystroke. */
+  scrutinize(): void {
+    this.#avatarElement?.scrutinize();
+  }
+
+  /** The reaction to a failed tool call. */
+  glower(): void {
+    this.#avatarElement?.glower();
+  }
+
+  /** "I saw that" — lifts the drowse lid and restarts the waiting clock. */
+  wake(): void {
+    this.#avatarElement?.wake();
   }
 
   select(key: string): void {
@@ -453,12 +509,12 @@ export class SliccAgentTabs extends HTMLElement {
     this.replaceChildren(this.#trackFrame);
   }
 
-  #avatar(scoop: ScoopDescriptor): HTMLElement {
+  #avatar(scoop: ScoopDescriptor): SliccAgentAvatar {
     const avatar = h('slicc-agent-avatar', {
       class: `${PREFIX}__focus-avatar`,
       part: 'avatar',
       role: 'img',
-    });
+    }) as SliccAgentAvatar;
     this.#updateAvatar(avatar, scoop);
     return avatar;
   }
@@ -471,6 +527,9 @@ export class SliccAgentTabs extends HTMLElement {
     this.#setAttribute(avatar, 'connection', this.getAttribute('connection'));
     this.#setAttribute(avatar, 'fill', String(Math.round(boundedFill(scoop.fill))));
     this.#setAttribute(avatar, 'blink', state === 'working');
+    this.#setAttribute(avatar, 'activity', activityFor(scoop, state));
+    this.#setAttribute(avatar, 'gaze-target', this.getAttribute('gaze-target'));
+    this.#setAttribute(avatar, 'drowse-delay', this.getAttribute('drowse-delay'));
     this.#setAttribute(avatar, 'aria-label', `${scoop.label ?? scoop.key} focused agent`);
     avatar.style.setProperty('--slicc-agent-tabs-hue', hueFor(scoop));
   }

@@ -1,4 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  BLINK_APEX_MS,
+  DROWSE_START_LID,
+  EYE_R,
+  GLOWER_LID,
+  GLOWER_MS,
+  PUPIL_MIN_FRACTION,
+  SCRUTINY_MS,
+  SOCKET_MIN_RX,
+} from '../../src/switcher/avatar-expression.js';
 import { SliccAgentAvatar } from '../../src/switcher/slicc-agent-avatar.js';
 
 function mount(attributes: Record<string, string> = {}): SliccAgentAvatar {
@@ -8,9 +18,10 @@ function mount(attributes: Record<string, string> = {}): SliccAgentAvatar {
   return element;
 }
 
+/** Pupils are rects whose `rx` carries the shape channel; `width / 2` is the radius. */
 function pupilRadius(element: SliccAgentAvatar): number {
-  const pupil = element.shadowRoot?.querySelector('.pupil-l circle');
-  return Number(pupil?.getAttribute('r'));
+  const pupil = element.shadowRoot?.querySelector('.pupil-l rect');
+  return Number(pupil?.getAttribute('width')) / 2;
 }
 
 function translateXY(element: SliccAgentAvatar, side: 'l' | 'r'): [number, number] {
@@ -41,6 +52,9 @@ describe('slicc-agent-avatar', () => {
       'eyes',
       'fill',
       'connection',
+      'activity',
+      'gaze-target',
+      'drowse-delay',
     ]);
     const element = mount({ type: 'scoop', color: '#123456', eyes: 'open', fill: '0' });
 
@@ -229,6 +243,20 @@ describe('slicc-agent-avatar', () => {
     }
   });
 
+  it('keeps the legacy face when no activity is set: no lids, no brows, no loop', () => {
+    const animationFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const element = mount({ eyes: 'open', fill: '20' });
+
+    expect(element.shadowRoot?.querySelector('.brow-l')).toBeNull();
+    expect(element.shadowRoot?.querySelector('.lid-clip')).toBeNull();
+    expect(element.shadowRoot?.querySelector('.avatar[data-expressive]')).toBeNull();
+    expect(element.activity).toBeNull();
+    expect(animationFrame).not.toHaveBeenCalled();
+
+    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1000, clientY: 1000 }));
+    expect(travelMagnitude(element)).toBeGreaterThan(0);
+  });
+
   it('toggles blink only as a host attribute without re-rendering', () => {
     const element = mount({ eyes: 'open' });
     const rendered = element.shadowRoot?.firstElementChild;
@@ -241,5 +269,315 @@ describe('slicc-agent-avatar', () => {
     element.toggleAttribute('blink', false);
     expect(element.hasAttribute('blink')).toBe(false);
     expect(element.shadowRoot?.firstElementChild).toBe(rendered);
+  });
+});
+
+const nextFrame = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => resolve()));
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function socketRadius(element: SliccAgentAvatar, side: 'l' | 'r' = 'l'): number {
+  return Number(element.shadowRoot?.querySelector(`.eye-body-${side} .socket`)?.getAttribute('rx'));
+}
+
+function pupilCorner(element: SliccAgentAvatar): number {
+  return Number(element.shadowRoot?.querySelector('.pupil-l rect')?.getAttribute('rx'));
+}
+
+function lidClip(element: SliccAgentAvatar, side: 'l' | 'r' = 'l'): SVGRectElement {
+  return element.shadowRoot?.querySelector(`.eye-${side} .lid-clip`) as SVGRectElement;
+}
+
+function chord(element: SliccAgentAvatar, edge: 'top' | 'bottom'): SVGLineElement {
+  return element.shadowRoot?.querySelector(`.eye-l .lid-${edge}`) as SVGLineElement;
+}
+
+function reducedMotion(): void {
+  vi.spyOn(window, 'matchMedia').mockReturnValue({
+    matches: true,
+    media: '(prefers-reduced-motion: reduce)',
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  } as unknown as MediaQueryList);
+}
+
+describe('slicc-agent-avatar expression kit', () => {
+  beforeEach(() => document.body.replaceChildren());
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  it('reflects the expression attributes to properties and back', () => {
+    const element = mount({ activity: 'thinking' });
+    expect(element.activity).toBe('thinking');
+    expect(element.drowseDelay).toBe(90);
+    expect(element.gazeTarget).toBeNull();
+
+    element.activity = 'working';
+    expect(element.getAttribute('activity')).toBe('working');
+    element.gazeTarget = '#composer';
+    expect(element.getAttribute('gaze-target')).toBe('#composer');
+    element.drowseDelay = 5;
+    expect(element.getAttribute('drowse-delay')).toBe('5');
+    expect(element.drowseDelay).toBe(5);
+
+    element.activity = null;
+    expect(element.hasAttribute('activity')).toBe(false);
+    element.gazeTarget = null;
+    expect(element.hasAttribute('gaze-target')).toBe(false);
+  });
+
+  it('builds the eye as a rect whose rx carries the shape channel', () => {
+    const element = mount({ activity: 'idle' });
+    // A rect with rx = half its side IS a circle — one attribute, both platforms.
+    expect(socketRadius(element)).toBeCloseTo(EYE_R, 1);
+    expect(element.shadowRoot?.querySelector('.eye-body-l .socket')?.tagName).toBe('rect');
+    expect(element.shadowRoot?.querySelector('.avatar[data-expressive]')).not.toBeNull();
+    expect(element.expression.shape).toBe(0);
+  });
+
+  it('commits the working square under a blink instead of sliding it in', async () => {
+    const element = mount({ activity: 'thinking', fill: '0' });
+    expect(socketRadius(element)).toBeCloseTo(EYE_R, 1);
+
+    element.setAttribute('activity', 'working');
+    await nextFrame();
+    // Mid-blink the lid is down and the shape has NOT changed yet.
+    const group = element.shadowRoot?.querySelector('.eye-blink') as SVGGElement;
+    expect(group.style.transform).toBe('scaleY(0.08)');
+    expect(socketRadius(element)).toBeCloseTo(EYE_R, 1);
+
+    await wait(BLINK_APEX_MS + 80);
+    expect(socketRadius(element)).toBeCloseTo(SOCKET_MIN_RX, 1);
+    expect(socketRadius(element, 'r')).toBeCloseTo(SOCKET_MIN_RX, 1);
+    expect(pupilCorner(element)).toBeCloseTo(18 * PUPIL_MIN_FRACTION, 1);
+    expect(element.expression.shape).toBe(1);
+    expect(group.style.transform).toBe('scaleY(1)');
+  });
+
+  it('returns to the circle when the tool call ends', async () => {
+    const element = mount({ activity: 'working', fill: '0' });
+    // The first paint is instant — no shape ever slides in front of the user.
+    expect(socketRadius(element)).toBeCloseTo(SOCKET_MIN_RX, 1);
+
+    element.setAttribute('activity', 'thinking');
+    await wait(BLINK_APEX_MS + 80);
+    expect(socketRadius(element)).toBeCloseTo(EYE_R, 1);
+  });
+
+  it('shows the quizzical brows only while thinking', async () => {
+    const element = mount({ activity: 'idle' });
+    const brow = element.shadowRoot?.querySelector('.brow-l') as SVGLineElement;
+    expect(brow).not.toBeNull();
+    expect(brow.getAttribute('opacity')).toBe('0');
+    expect(element.expression.browsVisible).toBe(false);
+
+    element.setAttribute('activity', 'thinking');
+    await nextFrame();
+    expect(brow.getAttribute('opacity')).toBe('1');
+    expect(element.expression.browsVisible).toBe(true);
+    // One brow cocked, the other settled — never a symmetric pair.
+    const { left, right } = element.expression.brows;
+    expect(Math.sign(left.raise)).not.toBe(Math.sign(right.raise));
+
+    element.setAttribute('activity', 'awaiting');
+    await nextFrame();
+    expect(brow.getAttribute('opacity')).toBe('0');
+  });
+
+  it('re-cocks the brows at a blink apex while thinking', async () => {
+    const element = mount({ activity: 'thinking', blink: '' });
+    await nextFrame();
+    const before = element.expression.brows;
+
+    element.wake(); // any blink re-cocks; wake() fires one on demand
+    await wait(BLINK_APEX_MS + 60);
+    expect(element.expression.brows).not.toEqual(before);
+  });
+
+  it('cuts a top lid across the eye for the glower and releases it', async () => {
+    const element = mount({ activity: 'thinking' });
+    const openY = Number(lidClip(element).getAttribute('y'));
+    expect(chord(element, 'top').getAttribute('display')).toBe('none');
+
+    element.glower();
+    await wait(600);
+    expect(element.expression.lidTop).toBeGreaterThan(0.2);
+    expect(Number(lidClip(element).getAttribute('y'))).toBeGreaterThan(openY + 20);
+    expect(chord(element, 'top').getAttribute('display')).toBe('inline');
+    // The chord closes the outline exactly at the cut.
+    expect(Number(chord(element, 'top').getAttribute('y1'))).toBeCloseTo(
+      Number(lidClip(element).getAttribute('y')),
+      1
+    );
+
+    await wait(GLOWER_MS - 300);
+    expect(element.expression.lidTop).toBeLessThan(GLOWER_LID / 2);
+  });
+
+  it('raises a bottom lid for exactly one second per scrutinize() call', async () => {
+    const element = mount({ activity: 'awaiting', 'drowse-delay': '600' });
+    element.scrutinize();
+    await wait(400);
+    expect(element.expression.lidBottom).toBeGreaterThan(0.1);
+    expect(chord(element, 'bottom').getAttribute('display')).toBe('inline');
+
+    // Each keystroke re-arms the full second from the last call.
+    element.scrutinize();
+    await wait(700);
+    expect(element.expression.lidBottom).toBeGreaterThan(0.1);
+
+    await wait(SCRUTINY_MS);
+    expect(element.expression.lidBottom).toBeLessThan(0.05);
+  });
+
+  it('drowses under a descending top lid while awaiting, and wakes back up', async () => {
+    const element = mount({ activity: 'awaiting', 'drowse-delay': '0' });
+    await wait(1500);
+    const drowsing = element.expression.lidTop;
+    // Past the soft arrival lid: the cut is descending.
+    expect(drowsing).toBeGreaterThan(DROWSE_START_LID);
+
+    element.wake();
+    await nextFrame();
+    // The pop is a transient on the pupil, so context fill stays honest.
+    expect(element.expression.pupilRadius).toBeGreaterThan(18);
+
+    await wait(500);
+    expect(element.expression.lidTop).toBeLessThan(drowsing);
+    expect(element.expression.pupilRadius).toBeCloseTo(18, 0);
+  });
+
+  it('anchors the awaiting gaze at the gaze-target and falls back to down-centre', async () => {
+    const target = document.createElement('div');
+    target.id = 'gaze-probe';
+    target.style.cssText = 'position:fixed;right:0;bottom:0;width:60px;height:30px';
+    document.body.append(target);
+
+    const anchored = mount({ activity: 'awaiting', 'gaze-target': '#gaze-probe' });
+    await wait(300);
+    expect(anchored.expression.gaze.x).toBeGreaterThan(100);
+    expect(anchored.expression.gaze.y).toBeGreaterThan(50);
+
+    const unanchored = mount({ activity: 'awaiting' });
+    await wait(300);
+    expect(unanchored.expression.gaze.x).toBeCloseTo(100, 0);
+    expect(unanchored.expression.gaze.y).toBeGreaterThan(55);
+  });
+
+  it('moves its own gaze while thinking and idle, ignoring the pointer', async () => {
+    const add = vi.spyOn(document, 'addEventListener');
+    const element = mount({ activity: 'thinking' });
+    expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
+
+    await nextFrame();
+    const first = translateXY(element, 'l');
+    await wait(250);
+    const second = translateXY(element, 'l');
+    expect(second).not.toEqual(first);
+
+    element.setAttribute('activity', 'idle');
+    await wait(250);
+    expect(translateXY(element, 'l')).not.toEqual(second);
+  });
+
+  it('keeps tracking the pointer while a tool call runs', () => {
+    const element = mount({ activity: 'working' });
+    document.dispatchEvent(new PointerEvent('pointermove', { clientX: -1000, clientY: -1000 }));
+    const [x] = translateXY(element, 'l');
+    document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1000, clientY: 1000 }));
+    expect(translateXY(element, 'l')[0]).toBeGreaterThan(x);
+  });
+
+  it('freezes shape, lids and brows while the connection is in trouble', async () => {
+    const element = mount({ activity: 'working', connection: 'connected' });
+    expect(element.expression.shape).toBe(1);
+
+    element.setAttribute('connection', 'disconnected');
+    const frame = vi.spyOn(window, 'requestAnimationFrame');
+    element.setAttribute('activity', 'thinking');
+    element.glower();
+    await wait(300);
+
+    // Static outranks everything: the square stays, no morph, no new frames.
+    expect(element.expression.shape).toBe(1);
+    expect(Number(element.shadowRoot?.querySelector('.socket')?.getAttribute('rx'))).toBeCloseTo(
+      SOCKET_MIN_RX,
+      1
+    );
+    expect(element.expression.lidTop).toBe(0);
+    expect(frame).not.toHaveBeenCalled();
+
+    element.setAttribute('connection', 'connected');
+    await wait(BLINK_APEX_MS + 120);
+    expect(socketRadius(element)).toBeCloseTo(EYE_R, 1);
+  });
+
+  it('applies activity changes instantly and skips every motion under reduced motion', () => {
+    reducedMotion();
+    const frame = vi.spyOn(window, 'requestAnimationFrame');
+    const element = mount({ activity: 'thinking', blink: '' });
+
+    element.setAttribute('activity', 'working');
+    expect(socketRadius(element)).toBeCloseTo(SOCKET_MIN_RX, 1);
+    expect(element.expression.shape).toBe(1);
+
+    element.glower();
+    expect(element.expression.lidTop).toBe(GLOWER_LID);
+
+    element.wake();
+    // No pop, no blink, no loop.
+    expect(element.expression.pupilRadius).toBeCloseTo(18, 5);
+    expect((element.shadowRoot?.querySelector('.eye-blink') as SVGGElement).style.transform).toBe(
+      ''
+    );
+    expect(frame).not.toHaveBeenCalled();
+
+    element.setAttribute('activity', 'idle');
+    expect(translateXY(element, 'l')).toEqual([0, 0]);
+  });
+
+  it('parks the brows at the base pose under reduced motion', () => {
+    reducedMotion();
+    const element = mount({ activity: 'thinking' });
+    const brow = element.shadowRoot?.querySelector('.brow-l') as SVGLineElement;
+    expect(brow.getAttribute('opacity')).toBe('1');
+    expect(element.expression.brows.left.raise).toBe(-9);
+    expect(element.expression.brows.right.raise).toBe(2);
+  });
+
+  it('turns the engine on for a transient even without an activity attribute', async () => {
+    const element = mount({ eyes: 'open' });
+    expect(element.shadowRoot?.querySelector('.lid-clip')).toBeNull();
+
+    element.glower();
+    await wait(500);
+    expect(element.shadowRoot?.querySelector('.lid-clip')).not.toBeNull();
+    expect(element.expression.lidTop).toBeGreaterThan(0.2);
+  });
+
+  it('stops every timer and frame when disconnected', async () => {
+    const element = mount({ activity: 'thinking', blink: '' });
+    await nextFrame();
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame');
+    const clear = vi.spyOn(window, 'clearInterval');
+
+    element.remove();
+
+    expect(cancel).toHaveBeenCalled();
+    expect(clear).toHaveBeenCalled();
+  });
+
+  it('leaves dead eyes untouched by the expression kit', () => {
+    const element = mount({ activity: 'working', eyes: 'dead' });
+    expect(element.shadowRoot?.querySelectorAll('.eyes-svg line')).toHaveLength(4);
+    expect(element.shadowRoot?.querySelector('.brow-l')).toBeNull();
+    expect(element.shadowRoot?.querySelector('.lid-clip')).toBeNull();
   });
 });
