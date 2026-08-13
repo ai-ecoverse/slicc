@@ -244,7 +244,8 @@ export function toSwitcherScoops(
   scoops: readonly RegisteredScoop[],
   statuses?: ReadonlyMap<string, ScoopStatus>,
   fills?: ReadonlyMap<string, number>,
-  phases?: ReadonlyMap<string, ScoopBusyPhase>
+  phases?: ReadonlyMap<string, ScoopBusyPhase>,
+  awaitingJid?: string | null
 ): SwitcherScoop[] {
   return [...scoops]
     .sort((a, b) => Number(b.isCone) - Number(a.isCone))
@@ -263,6 +264,8 @@ export function toSwitcherScoops(
         // Only a processing scoop has a busy phase; a stale entry for one that
         // has since gone idle must not shape a pin that is no longer painted.
         phase: status === 'processing' ? phases?.get(scoop.jid) : undefined,
+        // The scoop that just finished a turn is waiting on YOU, not idling.
+        awaiting: awaitingJid === scoop.jid || undefined,
       };
     });
 }
@@ -294,12 +297,25 @@ export interface WcLiveWiring {
    * summaries and the `attention` (blinking eyes) bookkeeping.
    */
   lastActivity: Map<string, string>;
+  /**
+   * The scoop whose turn just ended and which is now waiting on the user —
+   * its avatar makes eye contact with the composer and eventually drowses.
+   * Set by the turn-finished hook, cleared the moment it works again.
+   */
+  awaitingInput?: string | null;
   getController(): WcChatController | null;
   getClient(): OffscreenClient | null;
   getSelected(): RegisteredScoop | null;
   selectScoop(scoop: RegisteredScoop): void;
   /** Notify the tray leader after the rendered lifecycle transition gate fires. */
   notifyScoopStateChanged?(): void;
+  /**
+   * Rebuild the switcher row from live state. Assigned BY
+   * `createWcLiveCallbacks` (the other direction from the hooks above) so
+   * wiring outside the callbacks — the turn-finished hook, the submit
+   * listener — can refresh without duplicating the descriptor mapping.
+   */
+  refreshScoops?(): void;
   /** Fired once the kernel reports ready (late wiring re-runs boot reads). */
   notifyReady?(): void;
 }
@@ -316,10 +332,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         client.getScoops(),
         wiring.statuses,
         wiring.fills,
-        wiring.phases
+        wiring.phases,
+        wiring.awaitingInput
       );
     }
   };
+  wiring.refreshScoops = refreshScoops;
   /** Read-only frozen-session view — selection is intentionally empty there. */
   const viewingFrozen = (): boolean =>
     (wiring.refs.thread.getAttribute('context') ?? '').startsWith('freezer:');
@@ -358,6 +376,8 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       const previous = wiring.statuses.get(jid);
       const next = status as ScoopStatus;
       wiring.statuses.set(jid, next);
+      // Back at work (or broken): it is no longer waiting on the user.
+      if (next !== 'ready' && wiring.awaitingInput === jid) wiring.awaitingInput = null;
       // The tabs setter rebuilds the Light DOM row and reflows it. Meaningful
       // rendered transitions are worth that cost for the small runtime roster;
       // suppress duplicate churn that would needlessly interrupt hover or focus.
@@ -962,6 +982,9 @@ function createWcController(
   // typed turns stay silent, the wiring just feeds events through.
   agentHandle.onEvent((event) => {
     if (event.type !== 'tool_use_start' && event.type !== 'tool_result') return;
+    // A failed tool call earns a 2.6s glower from the focused avatar. This is
+    // the selected scoop's stream, which is exactly whose face is on screen.
+    if (event.type === 'tool_result' && event.isError) refs.switcher.glower();
     void import('../../speech/soundscape.js')
       .then(({ playCue }) =>
         playCue(event.type === 'tool_use_start' ? 'tool-start' : 'tool-finish')
@@ -1196,9 +1219,25 @@ function wireWcComposer(deps: {
     })
     .catch((err) => log.error('WC add-menu wiring failed', err));
 
+  // The avatar's expression channels that key off the composer: it makes eye
+  // contact with the input card while it waits on you, attends to each
+  // keystroke with a raised lower lid, and any keystroke wakes it from a drowse.
+  refs.switcher.setAttribute('gaze-target', 'slicc-input-card');
+  refs.inputCard.addEventListener('input', () => {
+    refs.switcher.scrutinize();
+    refs.switcher.wake();
+  });
+
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
     if (!text) return;
+    // The ball is back in the agent's court — stop waiting on the user, and
+    // rebuild the row NOW. Waiting for the `processing` broadcast (or worse,
+    // the 15s stats poll) leaves the face making eye contact through the whole
+    // send latency, and leaves it stuck there if the send fails before any
+    // status transition lands.
+    boot.wiring.awaitingInput = null;
+    boot.wiring.refreshScoops?.();
     // Dictated turns (push-to-talk) get their reply spoken back — mark
     // BEFORE sending so the turn-complete hook sees the flag. The same
     // flag drives the dictation markers the controller appends to the
@@ -1291,7 +1330,8 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
         client.getScoops(),
         wiring.statuses,
         wiring.fills,
-        wiring.phases
+        wiring.phases,
+        wiring.awaitingInput
       );
     });
   };
@@ -1345,8 +1385,14 @@ function makeTurnFinishedHook(deps: {
 }): () => void {
   return () => {
     deps.triggerPlaceholder();
-    deps.refreshStats();
     const jid = deps.boot.getSelected()?.jid;
+    // The turn is over and the composer is ready: that scoop's avatar switches
+    // from idle's lazy wander to eye contact with the composer (and, if it is
+    // kept waiting, the drowse). Set BEFORE the stats refresh so the rebuilt
+    // descriptors carry it.
+    deps.boot.wiring.awaitingInput = jid ?? null;
+    deps.boot.wiring.refreshScoops?.();
+    deps.refreshStats();
     if (!jid) return;
     deps.boot.refs.switcher.setAttribute('attention', jid);
     const last = deps.boot

@@ -154,6 +154,70 @@ The composer owns the hold-to-dictate GESTURE but never the audio stack:
 'dictation'` (via the input card's `submit(source?)`) so hosts can speak
   the reply back to spoken input.
 
+## Agent-avatar expression kit
+
+Extended reference for `<slicc-agent-avatar>`. The grammar lives DOM-free in
+`src/switcher/avatar-expression.ts`; the element only paints it.
+
+**Every channel is a point, a scalar or an event** — never a bespoke drawing. A
+future SwiftUI mirror binds the same scalars (`RoundedRectangle(cornerRadius:)`,
+a `Rectangle` mask offset, `Capsule` + `rotationEffect`), so the arithmetic in
+`avatar-expression.ts` ports verbatim.
+
+| Channel      | Type         | Trigger                   | Treatment                                                                                                                                      |
+| ------------ | ------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gaze         | point        | pointer / activity        | Pointer while `working` or with no `activity`; saccades while `thinking`; lazy wander while `idle`; `gaze-target` eye contact while `awaiting` |
+| Fill         | scalar       | `fill` attr               | Pupil radius, `PUPIL_R × fillToPupilScale(fill)`                                                                                               |
+| Shape        | scalar       | `activity`                | Socket `rx` 38 → 10 and pupil `rx` → 0.22 × r for `working` (a tool call); circle otherwise                                                    |
+| Lid (top)    | scalar       | `glower()` / drowse       | 38% for 2.6 s on a failed tool call; 10% → 55% over 12 s after `drowse-delay`                                                                  |
+| Lid (bottom) | scalar       | `scrutinize()`            | 22% for 1 s from the last call (hosts call it per keystroke)                                                                                   |
+| Brows        | 2 scalars ×2 | `activity="thinking"`     | Capsules at ±22 from each eye centre; one raised, one settled; re-cocked at each blink apex                                                    |
+| Blink        | event        | timer / commit / `wake()` | 110 ms in, 130 ms out; apex at 120 ms                                                                                                          |
+| Pop          | event        | `wake()`                  | ×1.16 decaying over 350 ms — a transient, so fill stays honest                                                                                 |
+| Static       | override     | `connection`              | TV static; freezes every channel above                                                                                                         |
+
+**Attributes** — `activity` (`idle | thinking | working | awaiting`),
+`gaze-target` (CSS selector resolved in the owner document), `drowse-delay`
+(seconds, default 90). **Methods** — `wake()`, `scrutinize()`, `glower()`,
+`resetExpression()`. **Read-only** — `expression` returns a frozen snapshot of
+every scalar (what the tests assert against).
+
+Non-obvious rules:
+
+- **No `activity` attribute = the legacy face.** No lids, no brows, no rAF loop,
+  pointer tracking exactly as before. `<slicc-agent-tabs>` sets `activity` for
+  every lifecycle, so in the app the pointer channel now applies only while a
+  tool call runs — `idle` looks around on its own instead.
+- **A circle IS a rect with `rx` = half its side.** Sockets and pupils are always
+  rects so the shape channel is one animated attribute on both platforms.
+- **The blink-gate.** A shape change never slides in front of the user: the
+  commit is deferred to a blink apex and snaps there. Only the initial render
+  applies a shape instantly.
+- **Static outranks everything.** While the connection is in trouble the shape,
+  lids and brows freeze at their last committed values and the rAF loop stops —
+  motion there would read as liveness the agent does not have. `eyes="dead"`
+  ignores the kit entirely.
+- **Reduced motion** takes the settle path: activity changes apply instantly, no
+  blinks, saccades, wander or pops, brows parked at the base pose, and the drowse
+  jumps straight to its settled cut. Transient expiries run on a single timeout.
+- **The lid is a clip plus a chord line.** The clip rect covers the eye body only;
+  the chord line closes the outline at the cut and tracks the socket's current
+  `rx` (true chord on a circle, widening to the flat edge as it squares up).
+- **Layout reads stay off the frame path.** The rAF loop only writes attributes;
+  `gaze-target` boxes are re-read at most every 500 ms.
+- **A reused avatar MUST be reset.** `<slicc-agent-tabs>` keeps ONE focus avatar
+  and re-points it as focus moves, so it calls `resetExpression()` whenever the
+  scoop key changes: transients (glower, scrutiny, pop), the drowse clock and
+  the brow pose are dropped and the shape is re-primed instantly rather than
+  blink-gated — the new agent is a different creature, not a state change of the
+  old one. Any host that reuses one element across agents owes the same call.
+- **The engine's clock is injectable** (`clock`, defaulting to
+  `REAL_AVATAR_CLOCK`). The integrator advances per FRAME with a clamped `dt`,
+  so under a throttled rAF (headless CI, backgrounded tab) the eased scalars lag
+  wall-clock time by design — tests step `ManualClock`
+  (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
+  use `null`, never `0`, for "not started": a clock may legitimately read 0.
+
 ## Storybook PR screenshots
 
 Extended reference for the workflow summary in the package guide.

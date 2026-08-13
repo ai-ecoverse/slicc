@@ -68,6 +68,12 @@ struct ChatView: View {
             ThemePalette.resolve(theme: appState.leaderTheme, systemScheme: systemScheme)
         )
         .environment(\.sprinkleThemeCSS, appState.leaderTheme?.sprinkleCSSOverrides ?? "")
+        // Typing is the scrutiny channel: one raised lower lid per keystroke,
+        // and any keystroke also wakes an avatar that has drowsed off waiting.
+        .onChange(of: presentation.composerDraft) { _, _ in
+            appState.avatarExpression.scrutinize()
+            appState.avatarExpression.wake()
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(appState)
@@ -822,7 +828,8 @@ struct ConversationView: View {
     private var rawAvatarView: some View {
         ScoopStatusAvatar(
             avatar: selectedAvatar,
-            accessibilityLabel: selectedAccessibilityLabel
+            accessibilityLabel: selectedAccessibilityLabel,
+            expression: appState.avatarExpression
         )
     }
 
@@ -831,13 +838,25 @@ struct ConversationView: View {
             showsConnectionStatic ? .static : nil
         return appState.selectedScoop?.avatarGeometry(
             sideLength: 30,
-            eyesOverride: eyesOverride
+            eyesOverride: eyesOverride,
+            activity: selectedActivity
         )
             ?? .init(
                 type: .cone,
                 color: "#D2691E",
                 eyes: eyesOverride ?? .open,
-                sideLength: 30)
+                sideLength: 30,
+                activity: selectedActivity)
+    }
+
+    /// The expression channel, derived from the mirrored lifecycle plus the two
+    /// locally-observed signals the wire does not carry: whether a tool call is
+    /// in flight, and whether the finished turn left the composer to you.
+    private var selectedActivity: AvatarExpression.Activity? {
+        appState.selectedScoop?.avatarActivity(
+            toolRunning: appState.runningToolCalls > 0,
+            awaitingUser: appState.awaitingUserSince != nil)
+            ?? (appState.awaitingUserSince != nil ? .awaiting : .idle)
     }
 
     private var selectedAccessibilityLabel: String {
@@ -1237,10 +1256,11 @@ struct SessionControlsCluster: View {
 private struct ScoopStatusAvatar: View {
     let avatar: SliccAgentAvatarGeometry
     let accessibilityLabel: String
+    var expression: AvatarExpressionEngine?
 
     var body: some View {
         ZStack {
-            SliccAgentAvatarView(avatar: avatar)
+            SliccAgentAvatarView(avatar: avatar, expression: expression)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)

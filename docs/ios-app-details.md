@@ -24,6 +24,18 @@ Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after
 
 No connection banner row: recoverable state stays in the avatar and composer placeholder so it cannot move message rows; terminal `.gaveUp` opens Settings.
 
+### Expression kit
+
+The fifth channel and its companions, mirroring [`webcomponents-details.md`](webcomponents-details.md#agent-avatar-expression-kit). Two files carry it: `Models/AvatarExpression.swift` (the UI-free grammar — same constants, same arithmetic, in the web's 200×100 band units) and `Models/AvatarExpressionEngine.swift` (the integrator, the mirror of the web's rAF loop). `SliccAgentAvatarView` paints the scalars: `RoundedRectangle(cornerRadius:)` for the socket/pupil morph, a `Rectangle` mask plus a `Capsule` chord line for the lids, a `Capsule` with `rotationEffect` for the brows.
+
+- **`SliccAgentAvatarGeometry.activity` is the switch.** `nil` keeps the legacy face — no lids, no brows, no engine — so any surface that has not opted in renders exactly as before. The tile's own ratios are hand-rounded for the crop, so `expressionScale` (`eyeRadius / 38`) is the single bridge from band units to points; nothing else converts.
+- **Time is a parameter, never an ambient read.** `TimelineView` hands the view a date and the view hands it to `advance(to:)`. The integrator advances per FRAME with a clamped `dt`, so a real-clock assertion would be a race; tests step it instead.
+- **Locally derived signals, no protocol change.** The wire still carries only `working | broken | initializing | idle`. `AppState.runningToolCalls` brackets `tool_use_start` → `tool_result` for the visible scoop (thinking vs the working square); `AppState.awaitingUserSince` is set by the `isStreaming` false-edge via a property observer, so every writer (turn_end, `status: ready`, the error path, snapshot ingest) funnels through one place; `tool_result`'s already-mirrored `isError` fires the glower; the composer's `onChange` fires scrutiny + wake.
+- **iOS `awaiting` is centred, not anchored.** There is no pointer and no composer element to aim at, so the agent holds eye contact through the screen. CoreMotion tilt owns the gaze only while `working` — the pointer channel's analogue.
+- **Precedence is unchanged**: static freezes shape, lids and brows (the socket keeps the corner radius it froze at); reduce motion settles instantly with no blinks, saccades or pops and parks the brows at the base pose, and the drowse jumps to its settled cut rather than animating the 12s descent.
+- **Parity is gated, not trusted.** `Fixtures/expression-vectors.json` is generated from the TS grammar by `packages/dev-tools/tools/gen-expression-vectors.mjs` and asserted by BOTH `AvatarExpressionVectorTests.swift` and `packages/webcomponents/tests/switcher/expression-vectors.test.ts`. A scalar that drifts on one platform fails on both; without it, each renderer would keep drawing a plausible face that is no longer the same face.
+- **Screenshots**: `-uiTestAvatarFixture light-expression|dark-expression` renders the state matrix on a frozen clock (registered in `screenshot-screens.json` as `avatar-expression-light|dark`).
+
 ### Settle window
 
 The follower's WebRTC link blips — an ICE failure or a closed data channel drops a connection the bounded reconnect rebuilds seconds later. Every connection treatment on the chat surface therefore reads `AppState.settledConnection` (a `ConnectionHealth` of state + stall + attempt), never the raw properties, and `ConnectionSettler` decides when the raw state gets there:

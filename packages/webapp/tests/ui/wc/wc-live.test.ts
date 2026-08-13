@@ -98,6 +98,14 @@ describe('scoopColor / toSwitcherScoops', () => {
     expect(chips[0]).toMatchObject({ key: 'cone-1', type: 'cone', label: 'sliccy' });
     expect(chips[1]).toMatchObject({ key: 'scoop-1', type: 'scoop', label: 'researcher' });
   });
+
+  it('marks only the scoop that is waiting on the user as awaiting', () => {
+    const chips = toSwitcherScoops([cone, scoop({})], undefined, undefined, undefined, cone.jid);
+    expect(chips.find((c) => c.key === cone.jid)?.awaiting).toBe(true);
+    expect(chips.find((c) => c.key === 'scoop-1')?.awaiting).toBeUndefined();
+    // No one waiting is the common case and must stay absent, not `false`.
+    expect(toSwitcherScoops([cone])[0]?.awaiting).toBeUndefined();
+  });
 });
 
 interface FakeWiring extends WcLiveWiring {
@@ -227,6 +235,26 @@ describe('createWcLiveCallbacks', () => {
     callbacks.onStatusChange(cone.jid, 'ready' as never);
     callbacks.onStatusChange('other-jid', 'processing' as never);
     expect(wiring.controller.setProcessing.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('stops awaiting the user as soon as the scoop works again, and exposes a refresh', () => {
+    const wiring = makeWiring({ selected: cone, scoops: [cone] });
+    const callbacks = createWcLiveCallbacks(wiring);
+    // The factory hands the rest of the wiring a way to rebuild the row.
+    expect(typeof wiring.refreshScoops).toBe('function');
+
+    wiring.awaitingInput = cone.jid;
+    wiring.refreshScoops?.();
+    expect(wiring.refs.switcher.scoops[0]?.awaiting).toBe(true);
+
+    callbacks.onStatusChange(cone.jid, 'processing' as never);
+    expect(wiring.awaitingInput).toBeNull();
+    expect(wiring.refs.switcher.scoops[0]?.awaiting).toBeUndefined();
+
+    // A `ready` broadcast must NOT clear it — that is the state it waits in.
+    wiring.awaitingInput = cone.jid;
+    callbacks.onStatusChange(cone.jid, 'ready' as never);
+    expect(wiring.awaitingInput).toBe(cone.jid);
   });
 
   it('records statuses and re-chips the switcher on eye-state transitions', () => {

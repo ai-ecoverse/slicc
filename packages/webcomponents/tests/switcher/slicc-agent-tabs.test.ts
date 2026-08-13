@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import type { SliccAgentAvatar } from '../../src/switcher/slicc-agent-avatar.js';
 import {
   arcDash,
   type ScoopDescriptor,
@@ -8,6 +9,7 @@ import {
 } from '../../src/switcher/slicc-agent-tabs.js';
 import type { SliccScoopOverflow } from '../../src/switcher/slicc-scoop-overflow.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+import { ManualClock } from './manual-clock.js';
 
 const ROSTER: ScoopDescriptor[] = [
   { key: 'cone', type: 'cone', color: '#b07823', label: 'Sliccy', eyes: 'open', fill: 38 },
@@ -412,7 +414,13 @@ describe('slicc-agent-tabs', () => {
       expect(glow(element, 'cone')).toBe(coneGlow);
       expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
       expect(getComputedStyle(coneGlow).opacity).toBe('0');
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      // Sample the cross-fade on the transitions' OWN timeline. Sleeping 80ms
+      // and hoping to land inside a 320ms transition is a race: under load the
+      // transition may not have started at all by the time the sleep returns.
+      const fades = [...pausedGlow.getAnimations(), ...coneGlow.getAnimations()];
+      expect(fades).toHaveLength(2);
+      await Promise.all(fades.map((fade) => fade.ready));
+      for (const fade of fades) fade.currentTime = 160;
       expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeGreaterThan(0);
       expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeLessThan(0.72);
       expect(Number.parseFloat(getComputedStyle(coneGlow).opacity)).toBeGreaterThan(0);
@@ -678,20 +686,131 @@ describe('slicc-agent-tabs', () => {
       expect(focused.getAttribute('eyes')).toBe('open');
     });
 
+    /** Only a running tool call keeps the pointer channel; the other activities own the gaze. */
+    function toolRoster(): ScoopDescriptor[] {
+      return ROSTER.map((scoop) =>
+        scoop.key === 'researcher' ? { ...scoop, state: 'working', phase: 'tool' } : scoop
+      );
+    }
+
     it('tracks the focused scoop with one listener and fill-derived pupils', () => {
       const add = vi.spyOn(document, 'addEventListener');
-      const element = mountFocused('researcher');
+      const element = mountFocused('researcher', toolRoster());
       const focused = avatar(element) as HTMLElement;
       const pupil = focused.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
-      const pupilCircle = pupil.querySelector('circle') as SVGCircleElement;
+      const pupilRect = pupil.querySelector('rect') as SVGRectElement;
 
       expect(focused.getAttribute('type')).toBe('scoop');
-      expect(pupilCircle.getAttribute('r')).toBe(String(18 * (1 + (12 / 35) * 1.2)));
+      expect(Number(pupilRect.getAttribute('width')) / 2).toBeCloseTo(
+        18 * (1 + (12 / 35) * 1.2),
+        2
+      );
       expect(add.mock.calls.filter(([type]) => type === 'pointermove')).toHaveLength(1);
 
       document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1200, clientY: 40 }));
       expect(pupil.getAttribute('transform')).not.toBe('translate(0,0)');
       add.mockRestore();
+    });
+
+    it('leaves the pointer alone for the self-directed activities', () => {
+      const add = vi.spyOn(document, 'addEventListener');
+      // researcher is `working` with no phase → thinking → saccades, not the pointer.
+      const element = mountFocused('researcher');
+      expect(avatar(element)?.getAttribute('activity')).toBe('thinking');
+      expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
+
+      element.active = 'designer';
+      expect(avatar(element)?.getAttribute('activity')).toBe('idle');
+      expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
+      add.mockRestore();
+    });
+
+    it('maps every lifecycle onto the avatar activity channel', () => {
+      const element = mountFocused('researcher', toolRoster());
+      expect(avatar(element)?.getAttribute('activity')).toBe('working');
+
+      element.active = 'triage';
+      expect(avatar(element)?.hasAttribute('activity')).toBe(false);
+
+      element.active = 'tester';
+      expect(avatar(element)?.getAttribute('eyes')).toBe('dead');
+      expect(avatar(element)?.hasAttribute('activity')).toBe(false);
+    });
+
+    it('promotes an awaiting scoop out of idle and forwards the gaze target', () => {
+      const element = mountFocused('designer');
+      element.gazeTarget = '#composer';
+      expect(avatar(element)?.getAttribute('activity')).toBe('idle');
+      expect(avatar(element)?.getAttribute('gaze-target')).toBe('#composer');
+
+      element.scoops = ROSTER.map((scoop) =>
+        scoop.key === 'designer' ? { ...scoop, awaiting: true } : scoop
+      );
+      expect(avatar(element)?.getAttribute('activity')).toBe('awaiting');
+    });
+
+    it('drops the previous agent expression when focus moves to another scoop', () => {
+      const element = mountFocused('designer');
+      const focused = avatar(element) as SliccAgentAvatar;
+      const clock = new ManualClock();
+      focused.clock = clock;
+
+      focused.glower();
+      focused.scrutinize();
+      clock.advance(400);
+      expect(focused.expression.lidTop).toBeGreaterThan(0.2);
+      expect(focused.expression.lidBottom).toBeGreaterThan(0.1);
+
+      // ONE avatar element is reused as focus moves; the next agent must not
+      // inherit this one's glower, scrutiny window or drowse clock.
+      element.active = 'cone';
+      expect(avatar(element)).toBe(focused);
+      expect(focused.expression.lidTop).toBe(0);
+      expect(focused.expression.lidBottom).toBe(0);
+
+      // And it must STAY released — the deadlines are gone, not merely masked.
+      clock.advance(600);
+      expect(focused.expression.lidTop).toBeLessThan(0.01);
+      expect(focused.expression.lidBottom).toBeLessThan(0.01);
+    });
+
+    it('re-primes the shape on a focus swap instead of morphing between agents', () => {
+      const element = mountFocused('researcher', toolRoster());
+      const focused = avatar(element) as SliccAgentAvatar;
+      expect(focused.expression.shape).toBe(1);
+
+      // A different creature, not a state change of the same one: no blink-gate.
+      element.active = 'designer';
+      expect(focused.expression.shape).toBe(0);
+      expect(focused.getAttribute('activity')).toBe('idle');
+    });
+
+    it('reflects drowse-delay as a property and forwards it to the avatar', () => {
+      const element = mountFocused('designer');
+      expect(element.drowseDelay).toBeNull();
+
+      element.drowseDelay = 12;
+      expect(element.getAttribute('drowse-delay')).toBe('12');
+      expect(element.drowseDelay).toBe(12);
+      expect(avatar(element)?.getAttribute('drowse-delay')).toBe('12');
+
+      element.drowseDelay = null;
+      expect(element.hasAttribute('drowse-delay')).toBe(false);
+      expect(avatar(element)?.hasAttribute('drowse-delay')).toBe(false);
+    });
+
+    it('forwards the expression transients to the focused avatar', () => {
+      const element = mountFocused('designer');
+      const focused = avatar(element) as SliccAgentAvatar;
+
+      element.scrutinize();
+      expect(focused.expression.lidBottom).toBeGreaterThanOrEqual(0);
+      element.glower();
+      element.wake();
+      // The forwarding contract: the tabs never reach past the avatar's public API.
+      expect(typeof focused.scrutinize).toBe('function');
+      expect(typeof focused.glower).toBe('function');
+      expect(typeof focused.wake).toBe('function');
     });
 
     it('never binds pointer tracking for dead eyes', () => {
@@ -705,7 +824,7 @@ describe('slicc-agent-tabs', () => {
     it('removes the pointer listener when disconnected', () => {
       const add = vi.spyOn(document, 'addEventListener');
       const remove = vi.spyOn(document, 'removeEventListener');
-      const element = mountFocused('researcher');
+      const element = mountFocused('researcher', toolRoster());
       const listener = add.mock.calls.find(([type]) => type === 'pointermove')?.[1];
 
       element.remove();
@@ -730,7 +849,7 @@ describe('slicc-agent-tabs', () => {
         dispatchEvent: vi.fn(),
       }) as typeof window.matchMedia;
       try {
-        mountFocused('researcher');
+        mountFocused('researcher', toolRoster());
         expect(add.mock.calls.some(([type]) => type === 'pointermove')).toBe(false);
       } finally {
         window.matchMedia = realMatchMedia;
@@ -751,7 +870,7 @@ describe('slicc-agent-tabs', () => {
       };
       window.matchMedia = vi.fn().mockReturnValue(query) as typeof window.matchMedia;
       try {
-        const element = mountFocused('researcher');
+        const element = mountFocused('researcher', toolRoster());
         const pupil = avatar(element)?.shadowRoot?.querySelector('.pupil-l') as SVGGElement;
         document.dispatchEvent(new PointerEvent('pointermove', { clientX: 1200, clientY: 40 }));
         expect(pupil.getAttribute('transform')).not.toBe('translate(0,0)');

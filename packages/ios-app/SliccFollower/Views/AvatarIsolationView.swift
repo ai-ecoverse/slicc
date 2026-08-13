@@ -17,7 +17,74 @@ import SwiftUI
         private var isDark: Bool { variant.hasPrefix("dark") }
         private var isOffset: Bool { variant.hasSuffix("offset") }
         private var isStatic: Bool { variant.hasSuffix("static") }
+        private var isExpression: Bool { variant.hasSuffix("expression") }
         private var scheme: ColorScheme { isDark ? .dark : .light }
+
+        /// One expression-kit tile: an activity plus an optional transient,
+        /// driven on a FROZEN clock so the capture is identical every run.
+        private struct ExpressionState {
+            let name: String
+            let activity: AvatarExpression.Activity
+            let fill: Double
+            var eyes: SliccAgentAvatarGeometry.EyeState = .open
+            var transient: Transient = .none
+
+            enum Transient {
+                case none
+                case glower
+                case scrutiny
+                case drowse
+            }
+        }
+
+        private var expressionStates: [ExpressionState] {
+            [
+                ExpressionState(name: "idle · wander", activity: .idle, fill: 32),
+                ExpressionState(name: "thinking · brows", activity: .thinking, fill: 48),
+                ExpressionState(name: "working · tool", activity: .working, fill: 48),
+                ExpressionState(name: "awaiting · eye contact", activity: .awaiting, fill: 38),
+                ExpressionState(
+                    name: "glower · tool failed", activity: .thinking, fill: 48,
+                    transient: .glower),
+                ExpressionState(
+                    name: "scrutiny · typing", activity: .awaiting, fill: 38,
+                    transient: .scrutiny),
+                ExpressionState(
+                    name: "drowse · kept waiting", activity: .awaiting, fill: 38,
+                    transient: .drowse),
+                ExpressionState(
+                    name: "working · 95 fill", activity: .working, fill: 95),
+                ExpressionState(
+                    name: "static · frozen square", activity: .working, fill: 48,
+                    eyes: .static),
+            ]
+        }
+
+        /// Build and drive an engine to the exact frame this tile should show.
+        /// The clock never advances past the pose, so no deadline can expire
+        /// between launch and capture.
+        private func engine(for state: ExpressionState) -> AvatarExpressionEngine {
+            let time = FrozenClock()
+            let engine = AvatarExpressionEngine(clock: { time.now }, random: { 0.5 })
+            let frozen = state.eyes != .open
+            engine.configure(
+                activity: state.activity, frozen: frozen, reduceMotion: true, blink: false,
+                drowseDelay: 1)
+            switch state.transient {
+            case .none: break
+            case .glower: engine.glower()
+            case .scrutiny: engine.scrutinize()
+            case .drowse:
+                // Past the delay, so the settled cut stands in for the ramp.
+                time.now = 100
+                engine.advance(to: time.now)
+            }
+            return engine
+        }
+
+        private final class FrozenClock {
+            var now: TimeInterval = 0
+        }
 
         private var states: [AvatarState] {
             if isStatic {
@@ -44,6 +111,58 @@ import SwiftUI
         }
 
         var body: some View {
+            if isExpression {
+                expressionBody
+            } else {
+                poseBody
+            }
+        }
+
+        /// The expression-kit state matrix — the iOS twin of the Storybook
+        /// captures the web side puts on the PR.
+        private var expressionBody: some View {
+            VStack(spacing: 10) {
+                Text("Expression · \(isDark ? "dark" : "light")")
+                    .font(.headline)
+                    .accessibilityIdentifier("avatar-fixture-expression")
+                LazyVGrid(
+                    columns: [GridItem(.fixed(104)), GridItem(.fixed(104)), GridItem(.fixed(104))],
+                    spacing: 8
+                ) {
+                    ForEach(Array(expressionStates.enumerated()), id: \.offset) { _, state in
+                        VStack(spacing: 3) {
+                            SliccAgentAvatarView(
+                                avatar: SliccAgentAvatarGeometry(
+                                    type: .scoop, color: "#8B5CF6", eyes: state.eyes,
+                                    fill: state.fill, blink: false, sideLength: 96,
+                                    activity: state.activity),
+                                expression: engine(for: state))
+                            Text(state.name)
+                                .font(.system(size: 9))
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                }
+                HStack(spacing: 10) {
+                    Text("26pt").font(.caption)
+                    ForEach(Array(expressionStates.prefix(4).enumerated()), id: \.offset) {
+                        _, state in
+                        SliccAgentAvatarView(
+                            avatar: SliccAgentAvatarGeometry(
+                                type: .scoop, color: "#8B5CF6", eyes: state.eyes,
+                                fill: state.fill, blink: false, sideLength: 26,
+                                activity: state.activity),
+                            expression: engine(for: state))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(isDark ? Color.black : Color.white)
+            .foregroundStyle(isDark ? Color.white : Color.black)
+            .environment(\.colorScheme, scheme)
+        }
+
+        private var poseBody: some View {
             VStack(spacing: 10) {
                 Text("Avatar · \(isDark ? "dark" : "light") · \(poseLabel)")
                     .font(.headline)

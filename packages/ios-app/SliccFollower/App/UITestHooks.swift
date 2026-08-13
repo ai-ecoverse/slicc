@@ -73,9 +73,13 @@ import UIKit
 
         /// Deterministically expose the system Reduce Motion environment to UI
         /// tests without changing a shared simulator's persistent settings.
+        /// The `-static` and `-expression` avatar fixtures both need a frozen
+        /// frame: one pins the noise seed, the other pins every expression
+        /// scalar, so each screenshot is byte-comparable run to run.
         static var reducesMotion: Bool {
             UserDefaults.standard.bool(forKey: "uiTestReduceMotion")
                 || avatarFixtureVariant?.hasSuffix("-static") == true
+                || avatarFixtureVariant?.hasSuffix("-expression") == true
         }
 
         private static func scoop(

@@ -1,0 +1,709 @@
+{
+  "$comment": "Cross-implementation parity vectors for the agent-avatar expression kit. Generated from the canonical TS grammar by gen-expression-vectors.mjs and asserted by BOTH the vitest suite and AvatarExpressionVectorTests.swift, so neither renderer can drift. Times are seconds. Do not hand-edit.",
+  "constants": {
+    "eyeRadius": 38,
+    "eyeCenterY": 50,
+    "leftEyeX": 55,
+    "rightEyeX": 145,
+    "pupilRadius": 18,
+    "maxOffset": 16,
+    "socketMinRx": 10,
+    "pupilMinFraction": 0.22,
+    "shapeEase": 6,
+    "lidEase": 5,
+    "glowerLid": 0.38,
+    "glowerSeconds": 2.6,
+    "scrutinyLid": 0.22,
+    "scrutinySeconds": 1,
+    "drowseStartLid": 0.1,
+    "drowseEndLid": 0.55,
+    "drowseRampSeconds": 12,
+    "defaultDrowseDelaySeconds": 90,
+    "popSeconds": 0.35,
+    "popGain": 0.16,
+    "blinkApexSeconds": 0.12,
+    "blinkSquish": 0.08,
+    "browHalfWidth": 22,
+    "browY": 2,
+    "browStroke": 8,
+    "recockFlipChance": 0.65,
+    "saccadeIntervalSeconds": 1.3,
+    "saccadeEase": 9,
+    "wanderIntervalSeconds": 4.1,
+    "wanderEase": 2.2,
+    "anchorEase": 6,
+    "lidOvershoot": 3,
+    "lidLineEpsilon": 0.02
+  },
+  "saccadeTargets": [
+    {
+      "x": 45,
+      "y": -15
+    },
+    {
+      "x": 150,
+      "y": -10
+    },
+    {
+      "x": 95,
+      "y": -25
+    },
+    {
+      "x": 160,
+      "y": -30
+    },
+    {
+      "x": 40,
+      "y": -28
+    }
+  ],
+  "wanderTargets": [
+    {
+      "x": 70,
+      "y": 60
+    },
+    {
+      "x": 130,
+      "y": 40
+    },
+    {
+      "x": 100,
+      "y": 72
+    },
+    {
+      "x": 55,
+      "y": 30
+    },
+    {
+      "x": 148,
+      "y": 62
+    }
+  ],
+  "restGaze": {
+    "x": 100,
+    "y": 66
+  },
+  "baseBrows": {
+    "left": {
+      "raise": -9,
+      "tilt": -10
+    },
+    "right": {
+      "raise": 2,
+      "tilt": 6
+    }
+  },
+  "socketRx": [
+    {
+      "shape": 0,
+      "expected": 38
+    },
+    {
+      "shape": 0.25,
+      "expected": 31
+    },
+    {
+      "shape": 0.5,
+      "expected": 24
+    },
+    {
+      "shape": 0.75,
+      "expected": 17
+    },
+    {
+      "shape": 1,
+      "expected": 10
+    }
+  ],
+  "pupilRx": [
+    {
+      "radius": 18,
+      "shape": 0,
+      "expected": 18
+    },
+    {
+      "radius": 18,
+      "shape": 0.5,
+      "expected": 10.98
+    },
+    {
+      "radius": 18,
+      "shape": 1,
+      "expected": 3.960000000000001
+    },
+    {
+      "radius": 39.6,
+      "shape": 1,
+      "expected": 8.712
+    }
+  ],
+  "fillToPupilScale": [
+    {
+      "fill": 0,
+      "expected": 1
+    },
+    {
+      "fill": 50,
+      "expected": 1
+    },
+    {
+      "fill": 60,
+      "expected": 1.3428571428571427
+    },
+    {
+      "fill": 67.5,
+      "expected": 1.6
+    },
+    {
+      "fill": 85,
+      "expected": 2.2
+    },
+    {
+      "fill": 100,
+      "expected": 2.2
+    }
+  ],
+  "travelClamp": [
+    {
+      "pupilRadius": 0,
+      "expected": 16
+    },
+    {
+      "pupilRadius": 18,
+      "expected": 16
+    },
+    {
+      "pupilRadius": 22,
+      "expected": 12
+    },
+    {
+      "pupilRadius": 30,
+      "expected": 4
+    },
+    {
+      "pupilRadius": 36,
+      "expected": 2
+    },
+    {
+      "pupilRadius": 40,
+      "expected": 2
+    }
+  ],
+  "lidY": [
+    {
+      "fraction": 0,
+      "top": 9,
+      "bottom": 91
+    },
+    {
+      "fraction": 0.1,
+      "top": 19.6,
+      "bottom": 80.4
+    },
+    {
+      "fraction": 0.22,
+      "top": 28.72,
+      "bottom": 71.28
+    },
+    {
+      "fraction": 0.38,
+      "top": 40.879999999999995,
+      "bottom": 59.120000000000005
+    },
+    {
+      "fraction": 0.5,
+      "top": 50,
+      "bottom": 50
+    },
+    {
+      "fraction": 0.55,
+      "top": 53.800000000000004,
+      "bottom": 46.199999999999996
+    },
+    {
+      "fraction": 1,
+      "top": 88,
+      "bottom": 12
+    }
+  ],
+  "chordHalfWidth": [
+    {
+      "fraction": 0.1,
+      "shape": 0,
+      "edge": "top",
+      "expected": 22.8
+    },
+    {
+      "fraction": 0.1,
+      "shape": 0,
+      "edge": "bottom",
+      "expected": 22.799999999999994
+    },
+    {
+      "fraction": 0.1,
+      "shape": 0.5,
+      "edge": "top",
+      "expected": 29.4
+    },
+    {
+      "fraction": 0.1,
+      "shape": 0.5,
+      "edge": "bottom",
+      "expected": 29.4
+    },
+    {
+      "fraction": 0.1,
+      "shape": 1,
+      "edge": "top",
+      "expected": 36
+    },
+    {
+      "fraction": 0.1,
+      "shape": 1,
+      "edge": "bottom",
+      "expected": 36
+    },
+    {
+      "fraction": 0.22,
+      "shape": 0,
+      "edge": "top",
+      "expected": 31.482719069356126
+    },
+    {
+      "fraction": 0.22,
+      "shape": 0,
+      "edge": "bottom",
+      "expected": 31.482719069356126
+    },
+    {
+      "fraction": 0.22,
+      "shape": 0.5,
+      "edge": "top",
+      "expected": 33.74135953467806
+    },
+    {
+      "fraction": 0.22,
+      "shape": 0.5,
+      "edge": "bottom",
+      "expected": 33.74135953467806
+    },
+    {
+      "fraction": 0.22,
+      "shape": 1,
+      "edge": "top",
+      "expected": 36
+    },
+    {
+      "fraction": 0.22,
+      "shape": 1,
+      "edge": "bottom",
+      "expected": 36
+    },
+    {
+      "fraction": 0.38,
+      "shape": 0,
+      "edge": "top",
+      "expected": 36.88936974251526
+    },
+    {
+      "fraction": 0.38,
+      "shape": 0,
+      "edge": "bottom",
+      "expected": 36.88936974251526
+    },
+    {
+      "fraction": 0.38,
+      "shape": 0.5,
+      "edge": "top",
+      "expected": 36.44468487125763
+    },
+    {
+      "fraction": 0.38,
+      "shape": 0.5,
+      "edge": "bottom",
+      "expected": 36.44468487125763
+    },
+    {
+      "fraction": 0.38,
+      "shape": 1,
+      "edge": "top",
+      "expected": 36
+    },
+    {
+      "fraction": 0.38,
+      "shape": 1,
+      "edge": "bottom",
+      "expected": 36
+    },
+    {
+      "fraction": 0.5,
+      "shape": 0,
+      "edge": "top",
+      "expected": 38
+    },
+    {
+      "fraction": 0.5,
+      "shape": 0,
+      "edge": "bottom",
+      "expected": 38
+    },
+    {
+      "fraction": 0.5,
+      "shape": 0.5,
+      "edge": "top",
+      "expected": 37
+    },
+    {
+      "fraction": 0.5,
+      "shape": 0.5,
+      "edge": "bottom",
+      "expected": 37
+    },
+    {
+      "fraction": 0.5,
+      "shape": 1,
+      "edge": "top",
+      "expected": 36
+    },
+    {
+      "fraction": 0.5,
+      "shape": 1,
+      "edge": "bottom",
+      "expected": 36
+    },
+    {
+      "fraction": 0.55,
+      "shape": 0,
+      "edge": "top",
+      "expected": 37.80952261005156
+    },
+    {
+      "fraction": 0.55,
+      "shape": 0,
+      "edge": "bottom",
+      "expected": 37.80952261005156
+    },
+    {
+      "fraction": 0.55,
+      "shape": 0.5,
+      "edge": "top",
+      "expected": 36.90476130502578
+    },
+    {
+      "fraction": 0.55,
+      "shape": 0.5,
+      "edge": "bottom",
+      "expected": 36.90476130502578
+    },
+    {
+      "fraction": 0.55,
+      "shape": 1,
+      "edge": "top",
+      "expected": 36
+    },
+    {
+      "fraction": 0.55,
+      "shape": 1,
+      "edge": "bottom",
+      "expected": 36
+    }
+  ],
+  "drowseLid": [
+    {
+      "awaitingSeconds": 0,
+      "delaySeconds": 90,
+      "expected": 0.1
+    },
+    {
+      "awaitingSeconds": 89.9,
+      "delaySeconds": 90,
+      "expected": 0.1
+    },
+    {
+      "awaitingSeconds": 90,
+      "delaySeconds": 90,
+      "expected": 0.1
+    },
+    {
+      "awaitingSeconds": 96,
+      "delaySeconds": 90,
+      "expected": 0.32500000000000007
+    },
+    {
+      "awaitingSeconds": 102,
+      "delaySeconds": 90,
+      "expected": 0.55
+    },
+    {
+      "awaitingSeconds": 900,
+      "delaySeconds": 90,
+      "expected": 0.55
+    },
+    {
+      "awaitingSeconds": 6,
+      "delaySeconds": 0,
+      "expected": 0.32500000000000007
+    }
+  ],
+  "popScale": [
+    {
+      "remainingSeconds": -1,
+      "expected": 1
+    },
+    {
+      "remainingSeconds": 0,
+      "expected": 1
+    },
+    {
+      "remainingSeconds": 0.175,
+      "expected": 1.08
+    },
+    {
+      "remainingSeconds": 0.35,
+      "expected": 1.16
+    },
+    {
+      "remainingSeconds": 1,
+      "expected": 1.16
+    }
+  ],
+  "approach": [
+    {
+      "current": 0,
+      "target": 1,
+      "rate": 6,
+      "dt": 0.016666666666666666,
+      "expected": 0.1
+    },
+    {
+      "current": 0,
+      "target": 1,
+      "rate": 5,
+      "dt": 0.05,
+      "expected": 0.25
+    },
+    {
+      "current": 0.38,
+      "target": 0,
+      "rate": 5,
+      "dt": 0.1,
+      "expected": 0.19
+    },
+    {
+      "current": 0,
+      "target": 1,
+      "rate": 6,
+      "dt": 10,
+      "expected": 1
+    },
+    {
+      "current": 0.5,
+      "target": 0.5,
+      "rate": 9,
+      "dt": 0.016,
+      "expected": 0.5
+    }
+  ],
+  "shapeTarget": [
+    {
+      "activity": "idle",
+      "expected": 0
+    },
+    {
+      "activity": "thinking",
+      "expected": 0
+    },
+    {
+      "activity": "working",
+      "expected": 1
+    },
+    {
+      "activity": "awaiting",
+      "expected": 0
+    },
+    {
+      "activity": null,
+      "expected": 0
+    }
+  ],
+  "parseActivity": [
+    {
+      "raw": "idle",
+      "expected": "idle"
+    },
+    {
+      "raw": "thinking",
+      "expected": "thinking"
+    },
+    {
+      "raw": "working",
+      "expected": "working"
+    },
+    {
+      "raw": "awaiting",
+      "expected": "awaiting"
+    },
+    {
+      "raw": "nonsense",
+      "expected": "idle"
+    },
+    {
+      "raw": "",
+      "expected": "idle"
+    }
+  ],
+  "recockBrows": [
+    {
+      "name": "flip-to-right",
+      "randoms": [
+        0.1,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "previous": {
+        "left": {
+          "raise": -9,
+          "tilt": -10
+        },
+        "right": {
+          "raise": 2,
+          "tilt": 6
+        }
+      },
+      "expected": {
+        "left": {
+          "raise": 2,
+          "tilt": -5.5
+        },
+        "right": {
+          "raise": -9.5,
+          "tilt": 9.5
+        }
+      }
+    },
+    {
+      "name": "hold-left",
+      "randoms": [
+        0.9,
+        0.2,
+        0.8,
+        0.4,
+        0.6
+      ],
+      "previous": {
+        "left": {
+          "raise": -9,
+          "tilt": -10
+        },
+        "right": {
+          "raise": 2,
+          "tilt": 6
+        }
+      },
+      "expected": {
+        "left": {
+          "raise": -8,
+          "tilt": -11
+        },
+        "right": {
+          "raise": 1.8,
+          "tilt": 5.8
+        }
+      }
+    },
+    {
+      "name": "flip-low-jitter",
+      "randoms": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "previous": {
+        "left": {
+          "raise": -9,
+          "tilt": -10
+        },
+        "right": {
+          "raise": 2,
+          "tilt": 6
+        }
+      },
+      "expected": {
+        "left": {
+          "raise": 1,
+          "tilt": -4
+        },
+        "right": {
+          "raise": -7,
+          "tilt": 7
+        }
+      }
+    },
+    {
+      "name": "hold-high-jitter",
+      "randoms": [
+        0.99,
+        0.999,
+        0.999,
+        0.999,
+        0.999
+      ],
+      "previous": {
+        "left": {
+          "raise": -9,
+          "tilt": -10
+        },
+        "right": {
+          "raise": 2,
+          "tilt": 6
+        }
+      },
+      "expected": {
+        "left": {
+          "raise": -11.995000000000001,
+          "tilt": -11.995000000000001
+        },
+        "right": {
+          "raise": 2.998,
+          "tilt": 6.997
+        }
+      }
+    }
+  ],
+  "nextGazeIndex": [
+    {
+      "current": 0,
+      "count": 5,
+      "random": 0,
+      "expected": 1
+    },
+    {
+      "current": 0,
+      "count": 5,
+      "random": 0.5,
+      "expected": 3
+    },
+    {
+      "current": 0,
+      "count": 5,
+      "random": 0.99,
+      "expected": 4
+    },
+    {
+      "current": 4,
+      "count": 5,
+      "random": 0.5,
+      "expected": 2
+    },
+    {
+      "current": 0,
+      "count": 1,
+      "random": 0.5,
+      "expected": 0
+    }
+  ]
+}
