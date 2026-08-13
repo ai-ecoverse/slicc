@@ -636,6 +636,11 @@ describe('BrowserAPI', () => {
     });
 
     it('retries with bringToFront when capture fails on background tab', async () => {
+      // No focused page found -> wake, capture, no restore leg.
+      vi.spyOn(
+        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        'findFocusedLocalPage'
+      ).mockResolvedValue(null);
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt fails
         .mockResolvedValueOnce({}) // Page.bringToFront
@@ -644,6 +649,58 @@ describe('BrowserAPI', () => {
       const data = await api.screenshot();
       expect(data).toBe('woken-shot');
       expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
+    });
+
+    it('the wake-up fallback gives focus back to whichever page held it', async () => {
+      // A capture-every-tab loop used to leave the LAST captured tab in
+      // front, backgrounding SLICC — which Chrome may then freeze.
+      vi.spyOn(
+        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        'findFocusedLocalPage'
+      ).mockResolvedValue('front-1');
+      const attachSpy = vi
+        .spyOn(api, 'attachToPage')
+        .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Unable to capture screenshot'))
+        .mockResolvedValueOnce({}) // Page.bringToFront (captured tab)
+        .mockResolvedValueOnce({ data: 'woken-shot' }) // retry capture
+        .mockResolvedValueOnce({}); // Page.bringToFront (restore)
+
+      const data = await api.screenshot();
+      expect(data).toBe('woken-shot');
+      // The probe leaves the attachment on a candidate page, so the captured
+      // tab must be re-attached BEFORE the first bringToFront — otherwise the
+      // capture returns the wrong tab's pixels (review catch on #2100).
+      expect(attachSpy.mock.calls[0]).toEqual(['target-1']);
+      // Restore leg: attach the old front, re-front it, re-attach the captured tab.
+      expect(attachSpy).toHaveBeenCalledWith('front-1');
+      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      const fronts = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === 'Page.bringToFront'
+      );
+      expect(fronts.length).toBe(2);
+    });
+
+    it('restores focus even when the retry capture throws', async () => {
+      // A failed screenshot must not leave the captured tab in front — the
+      // restoration lives in a finally (review catch on #2100).
+      vi.spyOn(
+        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        'findFocusedLocalPage'
+      ).mockResolvedValue('front-1');
+      const attachSpy = vi
+        .spyOn(api, 'attachToPage')
+        .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt
+        .mockResolvedValueOnce({}) // Page.bringToFront (captured tab)
+        .mockRejectedValueOnce(new Error('target crashed')) // retry capture THROWS
+        .mockResolvedValueOnce({}); // Page.bringToFront (restore)
+
+      await expect(api.screenshot()).rejects.toThrow('target crashed');
+      expect(attachSpy).toHaveBeenCalledWith('front-1');
+      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
     });
 
     it('foregroundFallback:false fails fast instead of stealing window focus', async () => {
