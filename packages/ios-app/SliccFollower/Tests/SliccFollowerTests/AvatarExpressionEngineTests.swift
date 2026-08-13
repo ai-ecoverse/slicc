@@ -287,21 +287,60 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
     // MARK: - Lifecycle mapping
 
-    func testScoopLifecycleMapsOntoTheActivityChannel() {
-        func summary(_ state: String?) -> ScoopSummary {
-            .init(
-                jid: "s", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
-                assistantLabel: "Reviewer", trigger: nil, state: state, fill: 40)
-        }
+    private func summary(_ state: String?) -> ScoopSummary {
+        .init(
+            jid: "s", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
+            assistantLabel: "Reviewer", trigger: nil, state: state, fill: 40)
+    }
 
-        XCTAssertEqual(summary("working").avatarActivity(toolRunning: true), .working)
-        XCTAssertEqual(summary("working").avatarActivity(toolRunning: false), .thinking)
+    func testWireStateAloneDrivesUnwatchedScoops() {
+        // No local signals: the tabs and tiles this follower is not streaming
+        // read the wire and nothing else.
+        XCTAssertEqual(summary("thinking").avatarActivity(), .thinking)
+        XCTAssertEqual(summary("working").avatarActivity(), .working)
+        XCTAssertEqual(summary("awaiting").avatarActivity(), .awaiting)
         XCTAssertEqual(summary("idle").avatarActivity(), .idle)
-        XCTAssertEqual(summary("idle").avatarActivity(awaitingUser: true), .awaiting)
         XCTAssertEqual(summary(nil).avatarActivity(), .idle)
+        XCTAssertEqual(summary("future-state").avatarActivity(), .idle)
         // Broken and initializing keep their own eye treatments instead.
         XCTAssertNil(summary("broken").avatarActivity())
         XCTAssertNil(summary("initializing").avatarActivity())
+    }
+
+    func testLocalSignalsOutrankTheWireForTheFocusedScoop() {
+        let toolRunning = ScoopSummary.LocalExpressionSignals(toolRunning: true)
+        let quiet = ScoopSummary.LocalExpressionSignals()
+
+        // A locally observed tool bracket wins over a wire that still says
+        // thinking — the follower sees it a broadcast earlier.
+        XCTAssertEqual(summary("thinking").avatarActivity(local: toolRunning), .working)
+        // And its absence wins the other way, which is what keeps a leader that
+        // predates the finer states rendering correctly: it says `working`, no
+        // local tool is running, so the face thinks.
+        XCTAssertEqual(summary("working").avatarActivity(local: quiet), .thinking)
+
+        // The turn settle is local too.
+        XCTAssertEqual(
+            summary("idle").avatarActivity(
+                local: .init(awaitingUser: true)), .awaiting)
+        XCTAssertEqual(summary("idle").avatarActivity(local: quiet), .idle)
+        // …but the leader's own `awaiting` still stands when local has nothing.
+        XCTAssertEqual(summary("awaiting").avatarActivity(local: quiet), .awaiting)
+    }
+
+    func testBusyStatesKeepBlinkingAndOpenEyes() {
+        for state in ["working", "thinking"] {
+            let geometry = summary(state).avatarGeometry()
+            XCTAssertTrue(geometry.blink, "\(state) is mid-turn and should blink")
+            XCTAssertEqual(geometry.eyes, .open)
+        }
+        for state in ["awaiting", "idle"] {
+            let geometry = summary(state).avatarGeometry()
+            XCTAssertFalse(geometry.blink, "\(state) is not mid-turn")
+            XCTAssertEqual(geometry.eyes, .open)
+        }
+        XCTAssertEqual(summary("broken").avatarGeometry().eyes, .dead)
+        XCTAssertEqual(summary("initializing").avatarGeometry().eyes, .none)
     }
 
     func testGeometryCarriesTheActivityAndScalesTheGrammarIntoPoints() {

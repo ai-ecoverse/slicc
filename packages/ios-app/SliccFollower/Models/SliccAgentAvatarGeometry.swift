@@ -156,33 +156,61 @@ extension ScoopSummary {
             switch scoopStatus.lifecycle {
             case .broken: .dead
             case .initializing: .none
-            case .working, .idle, .unknown: .open
+            case .working, .thinking, .awaiting, .idle, .unknown: .open
             }
         return .init(
             type: type, color: avatarColor, eyes: eyesOverride ?? lifecycleEyes,
             fill: scoopStatus.fullness,
-            blink: scoopStatus.lifecycle == .working,
+            // Both halves of a turn blink: thinking and working are one agent
+            // mid-turn, not two states.
+            blink: scoopStatus.lifecycle.isBusy,
             sideLength: sideLength,
             activity: activity)
     }
 
-    /// The expression channel for this scoop, derived from the lifecycle the
-    /// wire already carries plus two locally-observed signals. The tray
-    /// protocol is deliberately untouched: `state` stays
-    /// `working | broken | initializing | idle`.
+    /// Signals the follower observed for itself, from streams it is already
+    /// mirroring. Only available for the scoop whose transcript is on screen.
+    struct LocalExpressionSignals: Equatable, Sendable {
+        /// A tool call is in flight (`tool_use_start` seen, no `tool_result` yet).
+        var toolRunning: Bool
+        /// The turn settled and the composer is the user's.
+        var awaitingUser: Bool
+
+        init(toolRunning: Bool = false, awaitingUser: Bool = false) {
+            self.toolRunning = toolRunning
+            self.awaitingUser = awaitingUser
+        }
+    }
+
+    /// The expression channel for this scoop.
     ///
-    /// - `toolRunning`: a mirrored tool call is in flight (`tool_ui` open), so
-    ///   a working agent is squaring up rather than thinking.
-    /// - `awaitingUser`: the turn settled and the composer is ready for you.
-    func avatarActivity(
-        toolRunning: Bool = false, awaitingUser: Bool = false
-    ) -> AvatarExpression.Activity? {
+    /// **Precedence: local derivation > wire state > unknown.** Pass `local`
+    /// for the focused scoop — the follower brackets `tool_use_start` /
+    /// `tool_result` and the turn settle itself, which is both richer and a
+    /// broadcast earlier than the leader's next `scoops.list`. Omit it for the
+    /// tabs and tiles whose streams this follower is not watching: the wire's
+    /// `thinking` / `awaiting` then supply what local observation cannot.
+    ///
+    /// The wire still decides busy-vs-idle in BOTH modes, which is what keeps
+    /// a leader that predates the finer states working: it says `working`, the
+    /// absence of a local tool bracket makes that `thinking`, exactly as this
+    /// follower behaved before the states existed.
+    func avatarActivity(local: LocalExpressionSignals? = nil) -> AvatarExpression.Activity? {
         switch status.lifecycle {
-        case .working: toolRunning ? .working : .thinking
-        case .idle, .unknown: awaitingUser ? .awaiting : .idle
         // Broken and initializing keep their own eye treatments (dead / none),
         // so they carry no activity at all.
-        case .broken, .initializing: nil
+        case .broken, .initializing:
+            nil
+        case .working, .thinking:
+            if let local {
+                local.toolRunning ? .working : .thinking
+            } else {
+                status.lifecycle == .thinking ? .thinking : .working
+            }
+        case .awaiting:
+            .awaiting
+        case .idle, .unknown:
+            (local?.awaitingUser ?? false) ? .awaiting : .idle
         }
     }
 

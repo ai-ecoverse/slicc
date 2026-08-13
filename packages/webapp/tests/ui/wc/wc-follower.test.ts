@@ -255,6 +255,48 @@ describe('mountWcUiFollower', () => {
     });
   });
 
+  it('glowers at a failed tool result and scrutinizes what the user types', async () => {
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+
+    const switcher = app.querySelector('slicc-agent-tabs') as HTMLElement & {
+      glower(): void;
+      scrutinize(): void;
+      wake(): void;
+    };
+    const glower = vi.spyOn(switcher, 'glower');
+    const scrutinize = vi.spyOn(switcher, 'scrutinize');
+
+    // The awaiting gaze needs something to make eye contact with.
+    expect(switcher.getAttribute('gaze-target')).toBe('slicc-input-card');
+
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const subscribers: ((event: unknown) => void)[] = [];
+    opts.setChatAgent?.({
+      sendMessage: () => {},
+      onEvent: (cb) => {
+        subscribers.push(cb as (event: unknown) => void);
+        return () => {};
+      },
+      stop: () => {},
+    });
+    const emit = (event: unknown): void => {
+      for (const subscriber of [...subscribers]) subscriber(event);
+    };
+
+    // A tool that SUCCEEDS is not a reason to glower.
+    emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'ok' });
+    expect(glower).not.toHaveBeenCalled();
+
+    emit({ type: 'tool_result', messageId: 'm2', toolName: 'bash', result: 'boom', isError: true });
+    expect(glower).toHaveBeenCalledTimes(1);
+
+    // Typing is local to whoever types — it never rides the wire.
+    app.querySelector('slicc-input-card')?.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(scrutinize).toHaveBeenCalled();
+  });
+
   it('renders a leader-broadcast tool_ui approval card as a static "waiting on the leader" placeholder, not live buttons', async () => {
     const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
     const app = document.getElementById('app')!;
@@ -264,17 +306,24 @@ describe('mountWcUiFollower', () => {
     // follower-sync agent, which relays the leader's `agent_event` (including
     // `tool_ui`) via onEvent.
     const opts = startFollowerSpy.mock.calls[0]![0];
-    let emit: ((event: unknown) => void) | undefined;
+    // The real follower-sync agent FANS OUT to every subscriber; the shell now
+    // takes one of its own (the avatar's glower on a failed tool result)
+    // alongside the chat controller's, so a fake that keeps only the last
+    // callback would silently starve whichever registered first.
+    const subscribers: ((event: unknown) => void)[] = [];
+    const emit = (event: unknown): void => {
+      for (const subscriber of [...subscribers]) subscriber(event);
+    };
     opts.setChatAgent?.({
       sendMessage: () => {},
       onEvent: (cb) => {
-        emit = cb as (event: unknown) => void;
+        subscribers.push(cb as (event: unknown) => void);
         return () => {};
       },
       stop: () => {},
     });
 
-    emit?.({
+    emit({
       type: 'tool_ui',
       messageId: 'm1',
       toolName: 'bash',

@@ -616,6 +616,15 @@ export async function mountWcUiFollower(
     log,
   });
 
+  // The avatar's two LOCAL expression channels. Neither belongs on the wire:
+  // scrutiny answers whoever is typing on THIS device, and the glower rides an
+  // agent event the follower already receives.
+  boot.refs.switcher.setAttribute('gaze-target', 'slicc-input-card');
+  boot.refs.inputCard.addEventListener('input', () => {
+    boot.refs.switcher.scrutinize();
+    boot.refs.switcher.wake();
+  });
+
   // Composer submit → forward text + any staged attachments to the
   // (follower-sync) agent the controller holds.
   boot.refs.inputCard.addEventListener('submit', (event) => {
@@ -703,7 +712,16 @@ export async function mountWcUiFollower(
         controller.setProcessing(status === 'processing');
       }
     },
-    setChatAgent: (agent) => controller.setAgent(agent),
+    setChatAgent: (agent) => {
+      controller.setAgent(agent);
+      // A failed tool call on the mirrored stream earns the same 2.6s glower
+      // the leader shows. The envelope drops `scoopJid` on the way in, so this
+      // is the selected scoop's stream — which is exactly whose face is on
+      // screen. Per-scoop attribution would need the envelope to keep it.
+      agent.onEvent((event) => {
+        if (event.type === 'tool_result' && event.isError) boot.refs.switcher.glower();
+      });
+    },
     // A headless (hosted / cloud) leader has no human to show the export
     // approval dialog to, so it delegates the prompt here — this follower's
     // user is the only person in the session. Same dialog, same one-time
