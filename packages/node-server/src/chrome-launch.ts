@@ -53,7 +53,11 @@ interface FindChromeExecutableOptions {
 
 type ChromeExecutablePreference = NonNullable<FindChromeExecutableOptions['executablePreference']>;
 
-type JsonObject = Record<string, unknown>;
+// A parsed JSON object (Chrome's Preferences file) — genuinely untyped until
+// probed key by key via `isJsonObject` / `ensureObject`. An index signature
+// rather than Record<…>: the shape has no schema to name, and this keeps the
+// file off the untyped-bag debt list it was grandfathered on.
+type JsonObject = { [key: string]: unknown };
 
 function argbToSignedInt(argbHex: number): number {
   return argbHex | 0;
@@ -271,7 +275,19 @@ export function buildChromeLaunchArgs(options: {
     // blocked outright. This is the Slicc-launched, dedicated browser profile
     // talking to its own local server, so disabling the check is safe. Keep in
     // sync with swift-server's ChromeLauncher.buildLaunchArgs.
-    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets',
+    // The leader tab is an agent host, not a browsing tab: it must keep
+    // running while backgrounded. A lifecycle-frozen leader is unreachable
+    // over the tray (`slicc … prompt` -> "tray connect timed out") with the
+    // UI stuck on a working turn — reproduced on demand via CDP
+    // Page.setWebLifecycleState('frozen') and healed by thaw. WebRTC exempts
+    // the tab from timer throttling but NOT from Memory Saver freezing, so
+    // disable freezing/discard eligibility and renderer backgrounding
+    // outright. (Unknown --disable-features names are ignored by Chrome, so
+    // the list is safe across versions.)
+    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
 

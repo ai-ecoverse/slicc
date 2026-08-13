@@ -215,7 +215,17 @@ struct ChromeLauncher: Sendable {
             // launched browser profile talking to its own local server, so
             // disabling the check is safe. Keep in sync with node-server's
             // buildChromeLaunchArgs (packages/node-server/src/chrome-launch.ts).
-            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets",
+            // The leader tab is an agent host, not a browsing tab: it must keep
+            // running while backgrounded. A lifecycle-frozen leader is unreachable
+            // over the tray with the UI stuck on a working turn (reproduced via CDP
+            // Page.setWebLifecycleState). WebRTC exempts the tab from timer
+            // throttling but NOT from Memory Saver freezing; disable freezing and
+            // renderer backgrounding outright. Unknown feature names are ignored,
+            // so the list is version-safe. Mirrors node-server's chrome-launch.ts.
+            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
             "--user-data-dir=\(userDataDir)",
         ]
 

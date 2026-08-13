@@ -18,7 +18,6 @@
   "packages/dev-tools/e2b-template/template.ts": 1,
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/cdp-proxy/session-url-tracker.ts": 3,
-  "packages/node-server/src/chrome-launch.ts": 1,
   "packages/node-server/src/cloud-status.ts": 1,
   "packages/node-server/src/cloud/registry-file.ts": 1,
   "packages/node-server/src/electron-controller.ts": 13,
