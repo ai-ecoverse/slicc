@@ -91,6 +91,15 @@ export const SYNC_FS_ERRNO_HEADER = 'x-slicc-fs-errno';
 export const SYNC_FS_MARKER_HEADER = 'x-slicc-fs';
 
 /**
+ * Set on the fail-closed response when NOBODY acked — as opposed to a
+ * responder that acked and then ran out of budget. Both are `503` + `EIO` to
+ * the realm (which must not care), but the SW does: an unacked warm-path
+ * request is the one signal that its channel set may be stale, and the cue to
+ * ask the page(s) to re-publish. See `llm-proxy-sw.ts`.
+ */
+export const SYNC_FS_NO_RESPONDER_HEADER = 'x-slicc-fs-no-responder';
+
+/**
  * Channel-message discriminants. Constants (not inline literals) so the type
  * and every `postMessage` / comparison in the responder + SW handler reference
  * the SAME symbol — a rename/typo becomes a compile error rather than a silent

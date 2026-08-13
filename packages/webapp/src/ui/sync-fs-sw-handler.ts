@@ -31,6 +31,7 @@ import {
   SYNC_FS_ACK_MSG,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
+  SYNC_FS_NO_RESPONDER_HEADER,
   SYNC_FS_REQ_MSG,
   SYNC_FS_REQUEST_TIMEOUT_MS,
   SYNC_FS_RES_MSG,
@@ -42,6 +43,7 @@ export {
   SYNC_EXEC_ROUTE,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
+  SYNC_FS_NO_RESPONDER_HEADER,
   SYNC_FS_ROUTE_PREFIX,
   SYNC_FS_TOKEN_HEADER,
 };
@@ -366,7 +368,13 @@ export function handleSyncFsRequest(
       finish(
         new Response('sync-fs bridge: no responder', {
           status: 503,
-          headers: { [SYNC_FS_ERRNO_HEADER]: 'EIO', [SYNC_FS_MARKER_HEADER]: '1' },
+          headers: {
+            [SYNC_FS_ERRNO_HEADER]: 'EIO',
+            [SYNC_FS_MARKER_HEADER]: '1',
+            // Distinguishes "nobody answered" from "answered late". The realm
+            // treats both as EIO; the SW uses this one to re-arm its channels.
+            [SYNC_FS_NO_RESPONDER_HEADER]: '1',
+          },
         })
       );
     }, noResponderMs);
