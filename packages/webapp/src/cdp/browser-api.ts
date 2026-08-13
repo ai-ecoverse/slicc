@@ -562,20 +562,29 @@ export class BrowserAPI {
   private async wakeCaptureAndRestoreFocus(params: CdpPayload): Promise<CdpPayload> {
     const captured = this.getAttachedTargetId();
     const previousFront = await this.findFocusedLocalPage(captured).catch(() => null);
-    await this.client.send('Page.bringToFront', {}, this.sessionId!);
-    const result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
-    if (previousFront && captured) {
-      try {
-        await this.attachToPage(previousFront);
-        await this.client.send('Page.bringToFront', {}, this.sessionId!);
-        // Leave the attachment where the caller expects it.
-        await this.attachToPage(captured);
-      } catch {
-        // The focus donor may have closed mid-capture; the screenshot still
-        // succeeded, so swallow.
+    // The probe attaches to candidate pages; put the attachment back on the
+    // tab being captured BEFORE fronting it, or the capture below runs on the
+    // last-probed page's session and returns the wrong tab's pixels.
+    if (captured) await this.attachToPage(captured);
+    try {
+      await this.client.send('Page.bringToFront', {}, this.sessionId!);
+      return await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+    } finally {
+      // In a finally: a retry capture that THROWS must still give focus back,
+      // or a failed screenshot leaves the captured tab in front and SLICC
+      // backgrounded — the exact state this helper exists to prevent.
+      if (previousFront && captured) {
+        try {
+          await this.attachToPage(previousFront);
+          await this.client.send('Page.bringToFront', {}, this.sessionId!);
+          // Leave the attachment where the caller expects it.
+          await this.attachToPage(captured);
+        } catch {
+          // The focus donor may have closed mid-capture; the capture outcome
+          // is unaffected, so swallow.
+        }
       }
     }
-    return result;
   }
 
   /**
