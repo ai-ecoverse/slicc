@@ -290,6 +290,8 @@ export class SliccAgentTabs extends HTMLElement {
 
   #scoops: ScoopDescriptor[] = [];
   #avatarElement: SliccAgentAvatar | null = null;
+  /** Which agent the reused focus avatar is currently wearing. */
+  #avatarKey: string | null = null;
   #track: HTMLDivElement | null = null;
   #trackFrame: HTMLDivElement | null = null;
   #overflow: SliccScoopOverflow | null = null;
@@ -383,6 +385,22 @@ export class SliccAgentTabs extends HTMLElement {
   set gazeTarget(value: string | null) {
     if (value == null) this.removeAttribute('gaze-target');
     else this.setAttribute('gaze-target', value);
+  }
+
+  /**
+   * Seconds of `awaiting` before the focused avatar's drowse lid starts to
+   * descend. Forwarded verbatim; `null` leaves the avatar's own 90 s default.
+   */
+  get drowseDelay(): number | null {
+    const value = this.getAttribute('drowse-delay');
+    if (value === null) return null;
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  set drowseDelay(value: number | null) {
+    if (value == null) this.removeAttribute('drowse-delay');
+    else this.setAttribute('drowse-delay', String(value));
   }
 
   /** Focused attention on what the user is typing — one call per keystroke. */
@@ -538,11 +556,20 @@ export class SliccAgentTabs extends HTMLElement {
     if (!focused) {
       this.#avatarElement?.remove();
       this.#avatarElement = null;
+      this.#avatarKey = null;
       return;
     }
     const avatar = this.#avatarElement ?? this.#avatar(focused);
     this.#avatarElement = avatar;
+    // ONE avatar element is reused as focus moves between agents. Without this
+    // reset the next agent inherits its predecessor's in-flight glower,
+    // scrutiny window, drowse clock and brow pose — a different creature
+    // wearing the last one's face. Attributes first, so the reset re-primes
+    // the shape to the NEW agent's activity.
+    const swapped = this.#avatarKey !== null && this.#avatarKey !== focused.key;
+    this.#avatarKey = focused.key;
     this.#updateAvatar(avatar, focused);
+    if (swapped) avatar.resetExpression();
     if (avatar.parentElement !== this || avatar.nextElementSibling !== this.#trackFrame) {
       this.insertBefore(avatar, this.#trackFrame);
     }

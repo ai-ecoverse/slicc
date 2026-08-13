@@ -9,6 +9,7 @@ import {
 } from '../../src/switcher/slicc-agent-tabs.js';
 import type { SliccScoopOverflow } from '../../src/switcher/slicc-scoop-overflow.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
+import { ManualClock } from './manual-clock.js';
 
 const ROSTER: ScoopDescriptor[] = [
   { key: 'cone', type: 'cone', color: '#b07823', label: 'Sliccy', eyes: 'open', fill: 38 },
@@ -413,7 +414,13 @@ describe('slicc-agent-tabs', () => {
       expect(glow(element, 'cone')).toBe(coneGlow);
       expect(getComputedStyle(pausedGlow).opacity).toBe('0.72');
       expect(getComputedStyle(coneGlow).opacity).toBe('0');
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      // Sample the cross-fade on the transitions' OWN timeline. Sleeping 80ms
+      // and hoping to land inside a 320ms transition is a race: under load the
+      // transition may not have started at all by the time the sleep returns.
+      const fades = [...pausedGlow.getAnimations(), ...coneGlow.getAnimations()];
+      expect(fades).toHaveLength(2);
+      await Promise.all(fades.map((fade) => fade.ready));
+      for (const fade of fades) fade.currentTime = 160;
       expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeGreaterThan(0);
       expect(Number.parseFloat(getComputedStyle(pausedGlow).opacity)).toBeLessThan(0.72);
       expect(Number.parseFloat(getComputedStyle(coneGlow).opacity)).toBeGreaterThan(0);
@@ -740,6 +747,56 @@ describe('slicc-agent-tabs', () => {
         scoop.key === 'designer' ? { ...scoop, awaiting: true } : scoop
       );
       expect(avatar(element)?.getAttribute('activity')).toBe('awaiting');
+    });
+
+    it('drops the previous agent expression when focus moves to another scoop', () => {
+      const element = mountFocused('designer');
+      const focused = avatar(element) as SliccAgentAvatar;
+      const clock = new ManualClock();
+      focused.clock = clock;
+
+      focused.glower();
+      focused.scrutinize();
+      clock.advance(400);
+      expect(focused.expression.lidTop).toBeGreaterThan(0.2);
+      expect(focused.expression.lidBottom).toBeGreaterThan(0.1);
+
+      // ONE avatar element is reused as focus moves; the next agent must not
+      // inherit this one's glower, scrutiny window or drowse clock.
+      element.active = 'cone';
+      expect(avatar(element)).toBe(focused);
+      expect(focused.expression.lidTop).toBe(0);
+      expect(focused.expression.lidBottom).toBe(0);
+
+      // And it must STAY released — the deadlines are gone, not merely masked.
+      clock.advance(600);
+      expect(focused.expression.lidTop).toBeLessThan(0.01);
+      expect(focused.expression.lidBottom).toBeLessThan(0.01);
+    });
+
+    it('re-primes the shape on a focus swap instead of morphing between agents', () => {
+      const element = mountFocused('researcher', toolRoster());
+      const focused = avatar(element) as SliccAgentAvatar;
+      expect(focused.expression.shape).toBe(1);
+
+      // A different creature, not a state change of the same one: no blink-gate.
+      element.active = 'designer';
+      expect(focused.expression.shape).toBe(0);
+      expect(focused.getAttribute('activity')).toBe('idle');
+    });
+
+    it('reflects drowse-delay as a property and forwards it to the avatar', () => {
+      const element = mountFocused('designer');
+      expect(element.drowseDelay).toBeNull();
+
+      element.drowseDelay = 12;
+      expect(element.getAttribute('drowse-delay')).toBe('12');
+      expect(element.drowseDelay).toBe(12);
+      expect(avatar(element)?.getAttribute('drowse-delay')).toBe('12');
+
+      element.drowseDelay = null;
+      expect(element.hasAttribute('drowse-delay')).toBe(false);
+      expect(avatar(element)?.hasAttribute('drowse-delay')).toBe(false);
     });
 
     it('forwards the expression transients to the focused avatar', () => {
