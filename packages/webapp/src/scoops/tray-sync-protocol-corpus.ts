@@ -246,12 +246,70 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     message: {
       type: 'scoops.list',
       scoops: [
+        // The cone deliberately keeps `state` ABSENT: that is what a leader
+        // older than the lifecycle fields sends, and it must stay decodable.
         {
           jid: 'cone',
           name: 'sliccy',
           folder: '/workspace',
           isCone: true,
           assistantLabel: 'Sliccy',
+        },
+        // One scoop per state the wire can carry, so a follower that drops one
+        // fails here instead of rendering a quietly wrong face. `thinking` and
+        // `awaiting` are the expression grammar's additions.
+        {
+          jid: 'thinker',
+          name: 'thinker',
+          folder: '/scoops/thinker',
+          isCone: false,
+          assistantLabel: 'Thinker',
+          state: 'thinking',
+          fill: 48,
+        },
+        {
+          jid: 'tooler',
+          name: 'tooler',
+          folder: '/scoops/tooler',
+          isCone: false,
+          assistantLabel: 'Tooler',
+          state: 'working',
+          fill: 61,
+        },
+        {
+          jid: 'waiter',
+          name: 'waiter',
+          folder: '/scoops/waiter',
+          isCone: false,
+          assistantLabel: 'Waiter',
+          state: 'awaiting',
+          fill: 12,
+        },
+        {
+          jid: 'resting',
+          name: 'resting',
+          folder: '/scoops/resting',
+          isCone: false,
+          assistantLabel: 'Resting',
+          state: 'idle',
+          fill: 5,
+        },
+        {
+          jid: 'tester',
+          name: 'tester',
+          folder: '/scoops/tester',
+          isCone: false,
+          assistantLabel: 'Tester',
+          state: 'broken',
+          fill: 84,
+        },
+        {
+          jid: 'booting',
+          name: 'booting',
+          folder: '/scoops/booting',
+          isCone: false,
+          assistantLabel: 'Booting',
+          state: 'initializing',
         },
       ],
       activeScoopJid: 'cone',
@@ -939,7 +997,9 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: false,
     assistantLabel: 'Reviewer',
     trigger: 'on-push',
-    state: 'broken',
+    // One of the expression grammar's added states, so the round trip proves
+    // the wire carries a value older builds never sent.
+    state: 'awaiting',
     fill: 82,
   },
 };

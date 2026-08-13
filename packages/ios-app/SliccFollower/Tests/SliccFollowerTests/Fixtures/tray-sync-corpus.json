@@ -225,6 +225,59 @@
             "folder": "/workspace",
             "isCone": true,
             "assistantLabel": "Sliccy"
+          },
+          {
+            "jid": "thinker",
+            "name": "thinker",
+            "folder": "/scoops/thinker",
+            "isCone": false,
+            "assistantLabel": "Thinker",
+            "state": "thinking",
+            "fill": 48
+          },
+          {
+            "jid": "tooler",
+            "name": "tooler",
+            "folder": "/scoops/tooler",
+            "isCone": false,
+            "assistantLabel": "Tooler",
+            "state": "working",
+            "fill": 61
+          },
+          {
+            "jid": "waiter",
+            "name": "waiter",
+            "folder": "/scoops/waiter",
+            "isCone": false,
+            "assistantLabel": "Waiter",
+            "state": "awaiting",
+            "fill": 12
+          },
+          {
+            "jid": "resting",
+            "name": "resting",
+            "folder": "/scoops/resting",
+            "isCone": false,
+            "assistantLabel": "Resting",
+            "state": "idle",
+            "fill": 5
+          },
+          {
+            "jid": "tester",
+            "name": "tester",
+            "folder": "/scoops/tester",
+            "isCone": false,
+            "assistantLabel": "Tester",
+            "state": "broken",
+            "fill": 84
+          },
+          {
+            "jid": "booting",
+            "name": "booting",
+            "folder": "/scoops/booting",
+            "isCone": false,
+            "assistantLabel": "Booting",
+            "state": "initializing"
           }
         ],
         "activeScoopJid": "cone"
@@ -1153,7 +1206,7 @@
         "isCone": false,
         "assistantLabel": "Reviewer",
         "trigger": "on-push",
-        "state": "broken",
+        "state": "awaiting",
         "fill": 82
       }
     },

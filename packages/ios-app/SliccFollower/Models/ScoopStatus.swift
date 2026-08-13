@@ -3,13 +3,26 @@ import SliccTrayKit
 
 enum ScoopLifecycle: String, CaseIterable, Equatable, Sendable {
     case working
+    /// Waiting on or streaming from the model, as opposed to running a tool.
+    case thinking
+    /// The turn ended and the composer is the user's.
+    case awaiting
     case broken
     case initializing
     case idle
     case unknown
 
+    /// Unknown strings fall to `.unknown` rather than failing to decode, which
+    /// is what lets a leader add states (as `thinking` and `awaiting` were)
+    /// without stranding followers that predate them.
     init(state: String?) {
         self = state.flatMap(Self.init(rawValue:)) ?? .unknown
+    }
+
+    /// Whether the agent is mid-turn. `thinking` and `working` are one turn's
+    /// two halves, so anything keyed on "busy" must count both.
+    var isBusy: Bool {
+        self == .working || self == .thinking
     }
 }
 

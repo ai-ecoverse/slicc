@@ -6,11 +6,31 @@ import XCTest
 final class ScoopStatusTests: XCTestCase {
     func testLifecycleMapsEveryWireValueAndUnknowns() {
         XCTAssertEqual(ScoopLifecycle(state: "working"), .working)
+        XCTAssertEqual(ScoopLifecycle(state: "thinking"), .thinking)
+        XCTAssertEqual(ScoopLifecycle(state: "awaiting"), .awaiting)
         XCTAssertEqual(ScoopLifecycle(state: "broken"), .broken)
         XCTAssertEqual(ScoopLifecycle(state: "initializing"), .initializing)
         XCTAssertEqual(ScoopLifecycle(state: "idle"), .idle)
+        // Absent (a leader older than the lifecycle fields) and unrecognised (a
+        // leader newer than this build) both degrade to the same quiet floor.
         XCTAssertEqual(ScoopLifecycle(state: nil), .unknown)
         XCTAssertEqual(ScoopLifecycle(state: "future-state"), .unknown)
+    }
+
+    func testBusyCoversBothHalvesOfATurn() {
+        XCTAssertTrue(ScoopLifecycle.working.isBusy)
+        XCTAssertTrue(ScoopLifecycle.thinking.isBusy)
+        for lifecycle in [ScoopLifecycle.awaiting, .idle, .broken, .initializing, .unknown] {
+            XCTAssertFalse(lifecycle.isBusy, "\(lifecycle.rawValue) is not mid-turn")
+        }
+    }
+
+    func testEveryLifecycleRawValueRoundTrips() {
+        // CaseIterable + rawValue is what `ScoopLifecycle(state:)` decodes, so a
+        // case added without a wire string would strand itself here.
+        for lifecycle in ScoopLifecycle.allCases where lifecycle != .unknown {
+            XCTAssertEqual(ScoopLifecycle(state: lifecycle.rawValue), lifecycle)
+        }
     }
 
     func testFullnessPreservesAbsenceAndClampsPresentValues() {
