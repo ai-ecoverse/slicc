@@ -612,3 +612,34 @@ test('the no-responder window never outlives a shorter overall budget', async ()
     vi.useRealTimers();
   }
 });
+
+// The warm-path self-heal. A channel left over from a previous page session
+// keeps `channels.length > 0`, which permanently suppresses the SW's
+// cold-path `requestSyncFsNonce` — so every request fails closed and nothing
+// ever asks the live page to re-publish. The no-responder outcome is the cue
+// the SW re-arms on; an acked-but-slow responder must NOT trigger it, because
+// that responder is alive and re-arming would be noise.
+test('the no-responder response is tagged for SW re-arm; a plain timeout is not', async () => {
+  vi.useFakeTimers();
+  try {
+    const unacked = handleSyncFsRequest([deadChannel()], { token: 't', op: 'read', path: '/x' });
+    await vi.advanceTimersByTimeAsync(11_000);
+    const noResponder = await unacked;
+    expect(noResponder.headers.get('x-slicc-fs-no-responder')).toBe('1');
+    expect(await noResponder.text()).toBe('sync-fs bridge: no responder');
+
+    // Acked but never answered: alive, just slow — must not carry the tag.
+    const acked = handleSyncFsRequest([respondingChannel(() => null)], {
+      token: 't',
+      channel: 'exec',
+      command: 'build',
+      timeoutMs: 30_000,
+    });
+    await vi.advanceTimersByTimeAsync(40_000);
+    const timedOut = await acked;
+    expect(timedOut.headers.get('x-slicc-fs-no-responder')).toBeNull();
+    expect(await timedOut.text()).toBe('sync-fs bridge timeout');
+  } finally {
+    vi.useRealTimers();
+  }
+});

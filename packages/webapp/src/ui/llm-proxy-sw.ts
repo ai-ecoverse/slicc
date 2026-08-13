@@ -72,6 +72,7 @@ import {
   SYNC_EXEC_ROUTE,
   SYNC_FS_ERRNO_HEADER,
   SYNC_FS_MARKER_HEADER,
+  SYNC_FS_NO_RESPONDER_HEADER,
   SYNC_FS_ROUTE_PREFIX,
 } from './sync-fs-sw-handler.js';
 
@@ -275,7 +276,28 @@ self.addEventListener('fetch', (event: FetchEvent) => {
           });
         }
       }
-      return handleSyncFsRequest(channels, req);
+      const response = await handleSyncFsRequest(channels, req);
+      // Warm-path self-heal. `requestSyncFsNonce` above only runs when the
+      // channel set is EMPTY, so a channel left over from a previous page
+      // session permanently suppresses it: the SW keeps posting into a channel
+      // whose responder is gone, every request fails closed, and nothing ever
+      // asks the live page to re-publish. One unacked request is the cue.
+      //
+      // Deliberately narrow:
+      //   - only on the no-responder outcome, never on an acked-then-timed-out
+      //     one (that responder is alive, just slow);
+      //   - fire-and-forget AFTER the response, so the blocked realm still
+      //     unblocks at the deadline rather than waiting on a postMessage;
+      //   - it re-REQUESTS the existing nonce, never mints one — the responder
+      //     is bound to the session nonce for its lifetime (`sync-fs-wire.ts`);
+      //   - it never prunes a channel. A silent responder is indistinguishable
+      //     from the deliberate silence for a forged token
+      //     (`sync-fs-responder.ts`), so pruning would orphan another live
+      //     tab's channel. Re-publishing is additive and dedup-ed.
+      if (response.headers.get(SYNC_FS_NO_RESPONDER_HEADER) === '1') {
+        void requestSyncFsNonce();
+      }
+      return response;
     })()
   );
 });
