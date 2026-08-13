@@ -408,6 +408,34 @@ function place(pupil: Element, cx: number, mx: number, my: number, maxOffset: nu
   pupil.setAttribute('transform', `translate(${tx.toFixed(2)},${ty.toFixed(2)})`);
 }
 
+/**
+ * The clock the expression engine schedules on. Hosts never set this — it
+ * exists so tests can step time explicitly. The integrator advances per FRAME
+ * with a clamped `dt`, so under a throttled `requestAnimationFrame` (headless
+ * CI, a backgrounded tab) the eased scalars deliberately lag wall-clock time;
+ * asserting them against real timers is therefore a race by construction.
+ */
+export interface AvatarClock {
+  now(): number;
+  requestFrame(callback: (now: number) => void): number;
+  cancelFrame(handle: number): void;
+  delay(callback: () => void, ms: number): number;
+  cancelDelay(handle: number): void;
+  repeat(callback: () => void, ms: number): number;
+  cancelRepeat(handle: number): void;
+}
+
+/** The real clock: rAF for frames, `performance.now()` for deadlines. */
+export const REAL_AVATAR_CLOCK: AvatarClock = {
+  now: () => performance.now(),
+  requestFrame: (callback) => window.requestAnimationFrame(callback),
+  cancelFrame: (handle) => window.cancelAnimationFrame(handle),
+  delay: (callback, ms) => window.setTimeout(callback, ms),
+  cancelDelay: (handle) => window.clearTimeout(handle),
+  repeat: (callback, ms) => window.setInterval(callback, ms),
+  cancelRepeat: (handle) => window.clearInterval(handle),
+};
+
 /** A read-only snapshot of every expression scalar — the shape a SwiftUI mirror binds to. */
 export interface AvatarExpressionState {
   readonly activity: AgentActivity | null;
@@ -473,7 +501,10 @@ export class SliccAgentAvatar extends HTMLElement {
   #gazeIndex = 0;
   #gazeChangedAt = 0;
   #pupilRadius = PUPIL_R;
-  #awaitingSince = 0;
+  /** When the current `awaiting` stretch began; `null` means not waiting.
+   * NOT zero — a clock may legitimately read 0, and a sentinel that collides
+   * with a real timestamp silently disables the drowse. */
+  #awaitingSince: number | null = null;
   #glowerUntil = 0;
   #scrutinyUntil = 0;
   #popUntil = 0;
@@ -483,7 +514,9 @@ export class SliccAgentAvatar extends HTMLElement {
   #settleTimer: number | null = null;
   #blinkIntervals: number[] = [];
   #anchor: GazePoint = REST_GAZE;
-  #anchorAt = 0;
+  /** When the gaze-target box was last read; `null` forces a fresh read. */
+  #anchorAt: number | null = null;
+  #clock: AvatarClock = REAL_AVATAR_CLOCK;
 
   constructor() {
     super();
@@ -548,6 +581,29 @@ export class SliccAgentAvatar extends HTMLElement {
     this.setAttribute('drowse-delay', String(value));
   }
 
+  /**
+   * The engine's clock. Swap it (before connecting, ideally) to drive the
+   * expression engine deterministically; deadlines recorded on the previous
+   * clock are dropped because they mean nothing on the new one.
+   */
+  get clock(): AvatarClock {
+    return this.#clock;
+  }
+
+  set clock(value: AvatarClock) {
+    if (value === this.#clock) return;
+    this.#stopEngine();
+    this.#clock = value;
+    const now = value.now();
+    this.#lastStep = now;
+    if (this.#awaitingSince !== null) this.#awaitingSince = now;
+    this.#glowerUntil = 0;
+    this.#scrutinyUntil = 0;
+    this.#popUntil = 0;
+    this.#anchorAt = null;
+    if (this.isConnected) this.#syncEngine();
+  }
+
   /** Read-only snapshot of every expression scalar. */
   get expression(): AvatarExpressionState {
     return Object.freeze({
@@ -568,7 +624,7 @@ export class SliccAgentAvatar extends HTMLElement {
    * (pupil size = context fill) stays honest.
    */
   wake(): void {
-    const now = performance.now();
+    const now = this.#clock.now();
     this.#awaitingSince = now;
     if (!this.#instant()) {
       this.#popUntil = now + POP_MS;
@@ -579,14 +635,47 @@ export class SliccAgentAvatar extends HTMLElement {
 
   /** Focused attention on what is being typed — one second of raised bottom lid. */
   scrutinize(): void {
-    this.#scrutinyUntil = performance.now() + SCRUTINY_MS;
+    this.#scrutinyUntil = this.#clock.now() + SCRUTINY_MS;
     this.#refresh();
   }
 
   /** The 2.6 s reaction to a failed tool call. Reads angry; that is intended. */
   glower(): void {
-    this.#glowerUntil = performance.now() + GLOWER_MS;
+    this.#glowerUntil = this.#clock.now() + GLOWER_MS;
     this.#refresh();
+  }
+
+  /**
+   * Drop every transient and adopt the current activity instantly.
+   *
+   * Hosts that REUSE one avatar element for different agents — the tabs' focus
+   * avatar does exactly that — must call this when the identity changes, or the
+   * newly focused agent inherits its predecessor's glower, scrutiny, drowse
+   * clock, pupil pop and brow pose. The shape is re-primed rather than
+   * blink-gated: this is a different creature, not a state change of the same
+   * one, so there is nothing to hide under a blink.
+   */
+  resetExpression(): void {
+    this.#cancelBlinks();
+    const now = this.#clock.now();
+    this.#glowerUntil = 0;
+    this.#scrutinyUntil = 0;
+    this.#popUntil = 0;
+    this.#lidTop = 0;
+    this.#lidBottom = 0;
+    this.#brows = BASE_BROWS;
+    this.#anchor = REST_GAZE;
+    this.#anchorAt = null;
+    this.#gazeChangedAt = 0;
+    this.#awaitingSince = this.#activity === 'awaiting' ? now : null;
+    this.#committing = false;
+    this.#shapeCommitted = shapeTargetFor(this.#activity);
+    this.#shape = this.#shapeCommitted;
+    this.#lastStep = now;
+    if (this.#expressive() && this.isConnected) {
+      this.#apply();
+      this.#syncEngine();
+    }
   }
 
   #expressive(): boolean {
@@ -603,8 +692,8 @@ export class SliccAgentAvatar extends HTMLElement {
     this.#activity = parseActivity(this.getAttribute('activity'));
     // An avatar that MOUNTS in `awaiting` starts its waiting clock here; a later
     // transition into `awaiting` starts it in #syncActivity.
-    if (this.#activity === 'awaiting' && this.#awaitingSince === 0) {
-      this.#awaitingSince = performance.now();
+    if (this.#activity === 'awaiting' && this.#awaitingSince === null) {
+      this.#awaitingSince = this.#clock.now();
     }
     if (!this.#primed) {
       this.#shape = this.#shapeCommitted = shapeTargetFor(this.#activity);
@@ -773,9 +862,9 @@ export class SliccAgentAvatar extends HTMLElement {
     const wasExpressive = this.#root.querySelector('.avatar[data-expressive]') !== null;
     // Entering `awaiting` starts the drowse clock; leaving it stops the clock.
     if (next === 'awaiting' && this.#activity !== 'awaiting')
-      this.#awaitingSince = performance.now();
-    else if (next !== 'awaiting') this.#awaitingSince = 0;
-    this.#anchorAt = 0;
+      this.#awaitingSince = this.#clock.now();
+    else if (next !== 'awaiting') this.#awaitingSince = null;
+    this.#anchorAt = null;
     this.#activity = next;
     if (this.#expressive() !== wasExpressive) this.#render();
     this.#syncTracking();
@@ -798,7 +887,7 @@ export class SliccAgentAvatar extends HTMLElement {
   }
 
   #stopIdleBlinks(): void {
-    for (const interval of this.#blinkIntervals) window.clearInterval(interval);
+    for (const interval of this.#blinkIntervals) this.#clock.cancelRepeat(interval);
     this.#blinkIntervals = [];
   }
 
@@ -812,28 +901,28 @@ export class SliccAgentAvatar extends HTMLElement {
 
   #startFrames(): void {
     if (this.#frame !== null) return;
-    this.#lastStep = performance.now();
-    this.#frame = window.requestAnimationFrame(this.#step);
+    this.#lastStep = this.#clock.now();
+    this.#frame = this.#clock.requestFrame(this.#step);
   }
 
   #stopFrames(): void {
     if (this.#frame === null) return;
-    window.cancelAnimationFrame(this.#frame);
+    this.#clock.cancelFrame(this.#frame);
     this.#frame = null;
   }
 
   #stopEngine(): void {
     this.#stopFrames();
-    for (const timer of this.#blinkTimers) window.clearTimeout(timer);
+    for (const timer of this.#blinkTimers) this.#clock.cancelDelay(timer);
     this.#blinkTimers = [];
-    if (this.#settleTimer !== null) window.clearTimeout(this.#settleTimer);
+    if (this.#settleTimer !== null) this.#clock.cancelDelay(this.#settleTimer);
     this.#settleTimer = null;
-    for (const interval of this.#blinkIntervals) window.clearInterval(interval);
+    for (const interval of this.#blinkIntervals) this.#clock.cancelRepeat(interval);
     this.#blinkIntervals = [];
   }
 
   readonly #step = (now: number): void => {
-    this.#frame = window.requestAnimationFrame(this.#step);
+    this.#frame = this.#clock.requestFrame(this.#step);
     const dt = Math.min(0.05, Math.max(0, (now - this.#lastStep) / 1000));
     this.#lastStep = now;
     this.#integrate(now, dt);
@@ -851,7 +940,7 @@ export class SliccAgentAvatar extends HTMLElement {
 
   /** Reduced motion / static: jump every scalar to its target, no integrator. */
   #settle(): void {
-    const now = performance.now();
+    const now = this.#clock.now();
     if (!this.#frozen()) {
       this.#shapeCommitted = this.#shape = shapeTargetFor(this.#activity);
       this.#lidTop = this.#lidTopTarget(now, true);
@@ -864,11 +953,11 @@ export class SliccAgentAvatar extends HTMLElement {
 
   /** Under reduced motion the transient lids still need an expiry to land on. */
   #scheduleSettle(now: number): void {
-    if (this.#settleTimer !== null) window.clearTimeout(this.#settleTimer);
+    if (this.#settleTimer !== null) this.#clock.cancelDelay(this.#settleTimer);
     this.#settleTimer = null;
     if (this.#frozen()) return;
     const drowseAt =
-      this.#activity === 'awaiting' && this.#awaitingSince > 0
+      this.#activity === 'awaiting' && this.#awaitingSince !== null
         ? this.#awaitingSince + this.drowseDelay * 1000
         : Number.POSITIVE_INFINITY;
     const next = Math.min(
@@ -877,13 +966,13 @@ export class SliccAgentAvatar extends HTMLElement {
       drowseAt > now ? drowseAt : Number.POSITIVE_INFINITY
     );
     if (!Number.isFinite(next)) return;
-    this.#settleTimer = window.setTimeout(() => this.#settle(), Math.max(0, next - now) + 1);
+    this.#settleTimer = this.#clock.delay(() => this.#settle(), Math.max(0, next - now) + 1);
   }
 
   #lidTopTarget(now: number, settled: boolean): number {
     const glower = this.#glowerUntil > now ? GLOWER_LID : 0;
     if (this.#activity !== 'awaiting') return glower;
-    const elapsed = this.#awaitingSince > 0 ? (now - this.#awaitingSince) / 1000 : 0;
+    const elapsed = this.#awaitingSince !== null ? (now - this.#awaitingSince) / 1000 : 0;
     const delay = this.drowseDelay;
     // Settled mode jumps straight past the 12 s ramp — the descent IS the motion.
     return Math.max(
@@ -914,6 +1003,16 @@ export class SliccAgentAvatar extends HTMLElement {
     return [...this.#root.querySelectorAll<SVGGElement>('.eye-blink')];
   }
 
+  /** Drop pending blink apexes — a stale one would commit a superseded shape. */
+  #cancelBlinks(): void {
+    for (const timer of this.#blinkTimers) this.#clock.cancelDelay(timer);
+    this.#blinkTimers = [];
+    for (const group of this.#eyeGroups()) {
+      group.style.transition = 'none';
+      group.style.transform = 'scaleY(1)';
+    }
+  }
+
   #blinkBoth(apex?: () => void): void {
     const groups = this.#eyeGroups();
     if (groups.length === 0) {
@@ -929,7 +1028,7 @@ export class SliccAgentAvatar extends HTMLElement {
     group.style.transition = `transform ${BLINK_IN_MS}ms ease-in`;
     group.style.transform = `scaleY(${BLINK_SQUISH})`;
     this.#blinkTimers.push(
-      window.setTimeout(() => {
+      this.#clock.delay(() => {
         apex?.();
         if (this.#activity === 'thinking' && !this.#frozen())
           this.#brows = recockBrows(this.#brows);
@@ -949,7 +1048,7 @@ export class SliccAgentAvatar extends HTMLElement {
     const periods = [BLINK_PERIOD_LEFT_MS, BLINK_PERIOD_RIGHT_MS];
     periods.forEach((period, index) => {
       this.#blinkIntervals.push(
-        window.setInterval(() => {
+        this.#clock.repeat(() => {
           const group = this.#eyeGroups()[index];
           if (group && this.hasAttribute('blink') && !this.#frozen()) this.#blinkGroup(group);
         }, period)
@@ -994,7 +1093,7 @@ export class SliccAgentAvatar extends HTMLElement {
     // Reduced motion keeps eye contact (a point, not motion) but drops the
     // saccades and the lazy wander entirely — those eyes just look straight out.
     if (this.#activity === 'awaiting') {
-      this.#gaze = this.#resolveAnchor(performance.now());
+      this.#gaze = this.#resolveAnchor(this.#clock.now());
       this.#placePupils();
     } else if (this.#activity === 'thinking' || this.#activity === 'idle') {
       this.#centerPupils();
@@ -1012,7 +1111,7 @@ export class SliccAgentAvatar extends HTMLElement {
    * target's box is a layout read, so it is throttled — never a per-frame cost.
    */
   #resolveAnchor(now: number): GazePoint {
-    if (now - this.#anchorAt < ANCHOR_REFRESH_MS) return this.#anchor;
+    if (this.#anchorAt !== null && now - this.#anchorAt < ANCHOR_REFRESH_MS) return this.#anchor;
     this.#anchorAt = now;
     const selector = this.getAttribute('gaze-target');
     const target = selector ? this.ownerDocument.querySelector(selector) : null;
@@ -1036,7 +1135,7 @@ export class SliccAgentAvatar extends HTMLElement {
   }
 
   #apply(): void {
-    const now = performance.now();
+    const now = this.#clock.now();
     const shape = this.#shape;
     const rx = socketRx(shape);
     const radius = this.#restingPupilRadius() * popScale(this.#popUntil - now);

@@ -178,9 +178,9 @@ a `Rectangle` mask offset, `Capsule` + `rotationEffect`), so the arithmetic in
 
 **Attributes** — `activity` (`idle | thinking | working | awaiting`),
 `gaze-target` (CSS selector resolved in the owner document), `drowse-delay`
-(seconds, default 90). **Methods** — `wake()`, `scrutinize()`, `glower()`.
-**Read-only** — `expression` returns a frozen snapshot of every scalar (what the
-tests assert against).
+(seconds, default 90). **Methods** — `wake()`, `scrutinize()`, `glower()`,
+`resetExpression()`. **Read-only** — `expression` returns a frozen snapshot of
+every scalar (what the tests assert against).
 
 Non-obvious rules:
 
@@ -205,6 +205,18 @@ Non-obvious rules:
   `rx` (true chord on a circle, widening to the flat edge as it squares up).
 - **Layout reads stay off the frame path.** The rAF loop only writes attributes;
   `gaze-target` boxes are re-read at most every 500 ms.
+- **A reused avatar MUST be reset.** `<slicc-agent-tabs>` keeps ONE focus avatar
+  and re-points it as focus moves, so it calls `resetExpression()` whenever the
+  scoop key changes: transients (glower, scrutiny, pop), the drowse clock and
+  the brow pose are dropped and the shape is re-primed instantly rather than
+  blink-gated — the new agent is a different creature, not a state change of the
+  old one. Any host that reuses one element across agents owes the same call.
+- **The engine's clock is injectable** (`clock`, defaulting to
+  `REAL_AVATAR_CLOCK`). The integrator advances per FRAME with a clamped `dt`,
+  so under a throttled rAF (headless CI, backgrounded tab) the eased scalars lag
+  wall-clock time by design — tests step `ManualClock`
+  (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
+  use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
 ## Storybook PR screenshots
 
