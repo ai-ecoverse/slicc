@@ -123,6 +123,12 @@ never-rules below flag what a reviewer must recognise.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and
   extension. The thin extension runs no dynamic code itself — realms, WASM, and
   sprinkles/dips run in the hosted leader tab / kernel worker.
+- **Agent-avatar expressions** (`ui/wc/wc-live.ts`): the face's activity comes
+  from the descriptors (`toSwitcherScoops` → `awaiting` for the scoop whose turn
+  just ended, cleared on submit or any non-`ready` status). Transients are host
+  calls on `refs.switcher`: `scrutinize()` + `wake()` per composer `input`,
+  `glower()` on a `tool_result` with `isError`. Channels:
+  `docs/webcomponents-details.md`.
 - **Model IDs**: pi-ai aliases such as `claude-opus-4-6`, not dated snapshots.
 - **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` +
   `providers/`; merge order pi-ai → `modelOverrides` → `getModelIds()`. Build

@@ -54,6 +54,12 @@ export interface SwitcherScoop {
    * send button. Ignored for every other state.
    */
   phase?: 'thinking' | 'tool';
+  /**
+   * An idle scoop whose turn just ended and whose composer is ready for you:
+   * its avatar makes eye contact with the composer instead of wandering, and
+   * drowses if it is kept waiting. UI-derived — never on the tray wire.
+   */
+  awaiting?: boolean;
 }
 
 export interface WcShellOptions {
