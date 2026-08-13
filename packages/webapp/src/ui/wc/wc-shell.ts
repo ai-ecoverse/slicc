@@ -57,7 +57,11 @@ export interface SwitcherScoop {
   /**
    * An idle scoop whose turn just ended and whose composer is ready for you:
    * its avatar makes eye contact with the composer instead of wandering, and
-   * drowses if it is kept waiting. UI-derived — never on the tray wire.
+   * drowses if it is kept waiting.
+   *
+   * Collapsed onto the wire as `ScoopSummary.state: 'awaiting'` by
+   * `wc-tray-scoops.ts` and expanded back here on the follower, so both sides
+   * render the same face from a single derivation.
    */
   awaiting?: boolean;
 }

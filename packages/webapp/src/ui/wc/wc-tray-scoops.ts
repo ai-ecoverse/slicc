@@ -7,7 +7,37 @@ type SummarySource = Pick<
   RegisteredScoop,
   'jid' | 'name' | 'folder' | 'isCone' | 'assistantLabel' | 'trigger'
 >;
-type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill'>;
+type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
+type WireState = NonNullable<ScoopSummary['state']>;
+
+/**
+ * This module is the ONLY place the UI's three-field expression model
+ * (`state` + `phase` + `awaiting`) and the wire's single `state` convert into
+ * each other — collapsing on the way out, expanding on the way in. Keeping
+ * both halves in one file is what makes them auditable as a pair: the leader
+ * never re-derives what its own toolbar already computed, and the follower
+ * reconstructs exactly the descriptor the leader was rendering.
+ */
+const WIRE_STATES: ReadonlySet<string> = new Set<WireState>([
+  'working',
+  'thinking',
+  'awaiting',
+  'broken',
+  'initializing',
+  'idle',
+]);
+
+/**
+ * Collapse a rendered descriptor into the wire's single state. An unset phase
+ * reads as `thinking`, matching the tabs' own `phaseFor`: a turn always opens
+ * in LLM-wait, so "busy with no phase yet" is thinking, not a tool call.
+ */
+function toWireState(descriptor: RenderedState | undefined): WireState {
+  const state = descriptor?.state ?? 'idle';
+  if (state === 'working') return descriptor?.phase === 'tool' ? 'working' : 'thinking';
+  if (state === 'idle' && descriptor?.awaiting) return 'awaiting';
+  return state;
+}
 
 /** Join registered scoop metadata with the leader toolbar's rendered state. */
 export function toScoopSummaries(
@@ -24,24 +54,52 @@ export function toScoopSummaries(
       isCone: scoop.isCone,
       assistantLabel: scoop.assistantLabel,
       trigger: scoop.trigger,
-      state: descriptor?.state ?? 'idle',
+      state: toWireState(descriptor),
       fill: typeof descriptor?.fill === 'number' ? descriptor.fill : 0,
     };
   });
 }
 
+/**
+ * Expand the wire's state back into the descriptor fields the tabs render
+ * from, so `AgentState` stays a closed four-value union and the avatar's
+ * activity derivation is character-for-character the same on leader and
+ * follower.
+ *
+ * A state this build does not know — a leader from the future — normalizes to
+ * `idle` rather than reaching the DOM as an unmatched `data-state`. That is
+ * the browser's equivalent of iOS's `ScoopLifecycle` → `.unknown`, and the
+ * reason neither side needed a protocol version bump.
+ */
+function fromWireState(
+  raw: string | undefined
+): Pick<SwitcherScoop, 'state' | 'phase' | 'awaiting'> {
+  const wire: WireState = WIRE_STATES.has(raw ?? '') ? (raw as WireState) : 'idle';
+  switch (wire) {
+    case 'thinking':
+      return { state: 'working', phase: 'thinking' };
+    case 'working':
+      return { state: 'working', phase: 'tool' };
+    case 'awaiting':
+      return { state: 'idle', awaiting: true };
+    default:
+      return { state: wire };
+  }
+}
+
 /** Map tray summaries onto the descriptors shared by follower and Cherry tabs. */
 export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): SwitcherScoop[] {
   return scoops.map((scoop) => {
-    const state = scoop.state ?? 'idle';
+    const expanded = fromWireState(scoop.state);
     return {
       key: scoop.jid,
       type: scoop.isCone ? 'cone' : 'scoop',
       color: scoopColor(scoop),
       label: scoop.isCone ? 'sliccy' : scoop.name,
-      eyes: state === 'broken' ? 'dead' : state === 'initializing' ? 'none' : 'open',
-      state,
+      eyes:
+        expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',
       fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
+      ...expanded,
     };
   });
 }

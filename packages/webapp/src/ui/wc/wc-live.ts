@@ -416,6 +416,10 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       // only repaints on an actual crossing.
       wiring.phases.set(jid, phase);
       refreshScoops();
+      // Followers render the same distinction from `ScoopSummary.state`, so a
+      // phase crossing is a wire-visible change — without this it would only
+      // reach them on the 5s list poll.
+      wiring.notifyScoopStateChanged?.();
     },
     onIncomingMessage: (jid, message) => {
       // Most-recent-activity tracking: the scoop that just received a message
@@ -1238,6 +1242,7 @@ function wireWcComposer(deps: {
     // status transition lands.
     boot.wiring.awaitingInput = null;
     boot.wiring.refreshScoops?.();
+    boot.wiring.notifyScoopStateChanged?.();
     // Dictated turns (push-to-talk) get their reply spoken back — mark
     // BEFORE sending so the turn-complete hook sees the flag. The same
     // flag drives the dictation markers the controller appends to the
@@ -1392,6 +1397,7 @@ function makeTurnFinishedHook(deps: {
     // descriptors carry it.
     deps.boot.wiring.awaitingInput = jid ?? null;
     deps.boot.wiring.refreshScoops?.();
+    deps.boot.wiring.notifyScoopStateChanged?.();
     deps.refreshStats();
     if (!jid) return;
     deps.boot.refs.switcher.setAttribute('attention', jid);

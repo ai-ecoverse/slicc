@@ -41,8 +41,12 @@ export interface ScoopDescriptor {
   /**
    * An `idle` agent whose turn has just ended and whose composer is ready for
    * you. It makes eye contact with the `gaze-target` instead of wandering, and
-   * drowses if you keep it waiting. Purely a UI derivation — the tray wire's
-   * {@link AgentState} stays `working | broken | initializing | idle`.
+   * drowses if you keep it waiting.
+   *
+   * Derived by the leader and, since the expression grammar reached the tray
+   * protocol, carried to followers as `ScoopSummary.state: 'awaiting'` — which
+   * the follower expands back into this field. {@link AgentState} stays the
+   * four-value union either way; the wire collapses, the follower expands.
    */
   awaiting?: boolean;
 }
