@@ -31,7 +31,6 @@
   "packages/node-server/src/sudo/endpoint.ts": 1,
   "packages/shared-ts/src/transcript-export.ts": 18,
   "packages/shared-ts/src/tray-signaling.ts": 2,
-  "packages/shared-ts/src/tray-sync-protocol.ts": 9,
   "packages/webapp/providers/adobe.ts": 1,
   "packages/webapp/providers/github-copilot.ts": 2,
   "packages/webapp/providers/github.ts": 2,

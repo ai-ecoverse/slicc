@@ -13,6 +13,28 @@ enum ScoopLifecycle: String, CaseIterable, Equatable, Sendable {
     }
 }
 
+/// The optional REFINEMENT of `ScoopLifecycle`, carrying the agent avatar's
+/// expression grammar (`ScoopSummary.activity`).
+///
+/// It is a separate field on the wire, not a widening of `state`, precisely so
+/// that a follower which predates it — including this one, before it learned
+/// these values — keeps rendering `state` exactly as it always did. An
+/// unrecognised value decodes to `nil` and the lifecycle alone decides, which
+/// is the escape hatch that makes the NEXT refinement free as well.
+enum ScoopActivity: String, CaseIterable, Equatable, Sendable {
+    /// Busy waiting on or streaming from the model.
+    case thinking
+    /// Busy running a tool call.
+    case tool
+    /// Idle because the turn ended; the composer is the user's.
+    case awaiting
+
+    init?(activity: String?) {
+        guard let activity, let parsed = Self(rawValue: activity) else { return nil }
+        self = parsed
+    }
+}
+
 struct ScoopStatus: Equatable, Sendable {
     static let nearLimitThreshold = 75.0
 

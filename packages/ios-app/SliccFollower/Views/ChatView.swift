@@ -852,10 +852,11 @@ struct ConversationView: View {
     /// The expression channel, derived from the mirrored lifecycle plus the two
     /// locally-observed signals the wire does not carry: whether a tool call is
     /// in flight, and whether the finished turn left the composer to you.
+    /// The focused scoop gets the LOCAL derivation: this follower is already
+    /// mirroring its tool bracket and its turn settle, which beats waiting for
+    /// the leader's next `scoops.list`. Non-focused scoops read the wire.
     private var selectedActivity: AvatarExpression.Activity? {
-        appState.selectedScoop?.avatarActivity(
-            toolRunning: appState.runningToolCalls > 0,
-            awaitingUser: appState.awaitingUserSince != nil)
+        appState.selectedScoop?.avatarActivity(local: appState.localExpressionSignals)
             ?? (appState.awaitingUserSince != nil ? .awaiting : .idle)
     }
 

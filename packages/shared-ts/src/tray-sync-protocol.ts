@@ -13,7 +13,7 @@
  *   CDP (request + response + event), federated tab.open and its reply pair,
  *   federated FS (request + response), ping/pong.
  *
- * The iOS follower (`packages/ios-app/SliccTrayKit/Models/SyncProtocol.swift`)
+ * The iOS follower (`packages/swift-trayfollower/Sources/SliccTrayFollower/Models/SyncProtocol.swift`)
  * mirrors a **subset** of this file: federated `fs.*` in both directions is
  * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
  * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
@@ -58,6 +58,18 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * missing features. Bump when the wire format changes incompatibly.
  */
 export const TRAY_SYNC_PROTOCOL_VERSION = 6;
+
+/**
+ * An opaque Chrome DevTools Protocol payload — a `params` or `result` bag.
+ *
+ * This is the one shape in this file that genuinely has none: CDP defines a
+ * different object per method across hundreds of methods, and the tray relays
+ * them verbatim without ever inspecting a field. Naming it beats repeating the
+ * open bag at seven call sites, and it marks the boundary where narrowing is
+ * the consumer's job — the CDP client that issued the method knows the shape.
+ */
+// biome-ignore lint/plugin: CDP params/result are per-method and open-ended; the tray relays them without inspecting fields.
+export type CDPPayload = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
 // Transcript export selector
@@ -316,19 +328,19 @@ export type LeaderToFollowerMessage =
       requestId: string;
       localTargetId: string;
       method: string;
-      params?: Record<string, unknown>;
+      params?: CDPPayload;
       sessionId?: string;
     }
   | {
       type: 'cdp.response';
       requestId: string;
-      result?: Record<string, unknown>;
+      result?: CDPPayload;
       error?: string;
       chunkData?: string;
       chunkIndex?: number;
       totalChunks?: number;
     }
-  | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
+  | { type: 'cdp.event'; method: string; params: CDPPayload; sessionId?: string }
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
@@ -408,19 +420,19 @@ export type FollowerToLeaderMessage =
       targetRuntimeId: string;
       localTargetId: string;
       method: string;
-      params?: Record<string, unknown>;
+      params?: CDPPayload;
       sessionId?: string;
     }
   | {
       type: 'cdp.response';
       requestId: string;
-      result?: Record<string, unknown>;
+      result?: CDPPayload;
       error?: string;
       chunkData?: string;
       chunkIndex?: number;
       totalChunks?: number;
     }
-  | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
+  | { type: 'cdp.event'; method: string; params: CDPPayload; sessionId?: string }
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
@@ -629,8 +641,34 @@ export interface ScoopSummary {
   isCone: boolean;
   assistantLabel: string;
   trigger?: string;
-  /** Rendered lifecycle state for follower agent tabs. Absent from older leaders. */
+  /**
+   * Rendered lifecycle state for follower agent tabs. Absent from older
+   * leaders.
+   *
+   * This union is CLOSED and stays closed. Every shipped follower switches on
+   * these four values, and the ones already in the wild do not normalize what
+   * they do not recognise — a fifth value would reach an old browser
+   * follower's `data-state` unmatched and quietly cost a busy agent its
+   * animation. Refinements go in {@link ScoopSummary.activity} instead, where
+   * an old follower simply never looks.
+   */
   state?: 'working' | 'broken' | 'initializing' | 'idle';
+  /**
+   * Optional REFINEMENT of `state`, carrying the agent avatar's expression
+   * grammar. Absent from older leaders, ignored by older followers — which is
+   * the whole point: adding detail here cannot change how any shipped build
+   * renders `state`.
+   *
+   * - `thinking` — busy waiting on or streaming from the model.
+   * - `tool` — busy running a tool call (the avatar squares up).
+   * - `awaiting` — idle because the turn ended; the composer is the user's.
+   *
+   * Only meaningful alongside the `state` it refines (`thinking`/`tool` while
+   * `working`, `awaiting` while `idle`). A consumer that does not recognise a
+   * value MUST ignore it and fall back to `state` alone — the escape hatch
+   * this field exists to provide, so the next refinement is free too.
+   */
+  activity?: 'thinking' | 'tool' | 'awaiting';
   /** Context-window fullness on the same 0-100 scale as the agent tabs. Absent from older leaders. */
   fill?: number;
 }
@@ -786,7 +824,7 @@ type CDPResponseMessage = Extract<TraySyncMessage, { type: 'cdp.response' }>;
 export function sendCDPResponse(
   channel: { send(message: TraySyncMessage): boolean },
   requestId: string,
-  result?: Record<string, unknown>,
+  result?: CDPPayload,
   error?: string
 ): boolean {
   // Error responses are always small — send directly
@@ -838,7 +876,7 @@ export function sendCDPResponse(
 export function reassembleCDPResponse(
   buffers: Map<string, { chunks: string[]; received: number; totalChunks: number }>,
   message: CDPResponseMessage
-): { result?: Record<string, unknown>; error?: string } | null {
+): { result?: CDPPayload; error?: string } | null {
   // Non-chunked response — return directly
   if (message.chunkIndex === undefined || message.totalChunks === undefined) {
     return { result: message.result, error: message.error };
@@ -870,7 +908,7 @@ export function reassembleCDPResponse(
   if (buffer.received >= buffer.totalChunks) {
     buffers.delete(requestId);
     try {
-      const result = JSON.parse(buffer.chunks.join('')) as Record<string, unknown>;
+      const result = JSON.parse(buffer.chunks.join('')) as CDPPayload;
       return { result };
     } catch (err) {
       return {

@@ -7,7 +7,62 @@ type SummarySource = Pick<
   RegisteredScoop,
   'jid' | 'name' | 'folder' | 'isCone' | 'assistantLabel' | 'trigger'
 >;
-type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill'>;
+type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
+type WireActivity = NonNullable<ScoopSummary['activity']>;
+type ExpandedState = Pick<SwitcherScoop, 'state' | 'phase' | 'awaiting'>;
+
+/**
+ * This module is the ONLY place the UI's expression model (`state` + `phase` +
+ * `awaiting`) and the wire's (`state` + the optional `activity` refinement)
+ * convert into each other. Keeping both halves in one file is what makes them
+ * auditable as a pair: the leader never re-derives what its own toolbar already
+ * computed, and the follower reconstructs exactly the descriptor the leader was
+ * rendering.
+ *
+ * The invariant that governs both: **`state` carries only the four values every
+ * shipped follower already switches on.** Detail rides `activity`, which older
+ * followers never read, so enriching the face cannot change how a build in the
+ * wild renders the tab.
+ */
+const WIRE_ACTIVITIES: ReadonlySet<string> = new Set<WireActivity>([
+  'thinking',
+  'tool',
+  'awaiting',
+]);
+
+/**
+ * Collapse a rendered descriptor into the wire's `state` + `activity` pair.
+ *
+ * `state` is exactly what this leader sent before the expression grammar
+ * existed — busy is `working`, waiting is `idle` — so an older follower sees no
+ * change at all. Everything finer goes in `activity`.
+ */
+function toWire(descriptor: RenderedState | undefined): Pick<ScoopSummary, 'state' | 'activity'> {
+  const state = descriptor?.state ?? 'idle';
+  if (state === 'working') {
+    return { state, activity: descriptor?.phase === 'tool' ? 'tool' : 'thinking' };
+  }
+  if (state === 'idle' && descriptor?.awaiting) return { state, activity: 'awaiting' };
+  return { state };
+}
+
+/**
+ * Expand the wire back into the descriptor fields the tabs render from.
+ *
+ * An `activity` this build does not recognise is IGNORED and the state alone
+ * decides — the escape hatch the refinement field exists to provide, so the
+ * next value added costs older followers nothing either. A busy scoop with no
+ * refinement reads as thinking, which is both the tabs' own rule (a turn opens
+ * in LLM-wait) and precisely what an older leader's bare `working` used to
+ * render as.
+ */
+function fromWire(scoop: ScoopSummary): ExpandedState {
+  const state = scoop.state ?? 'idle';
+  const activity = WIRE_ACTIVITIES.has(scoop.activity ?? '') ? scoop.activity : undefined;
+  if (state === 'working') return { state, phase: activity === 'tool' ? 'tool' : 'thinking' };
+  if (state === 'idle' && activity === 'awaiting') return { state, awaiting: true };
+  return { state };
+}
 
 /** Join registered scoop metadata with the leader toolbar's rendered state. */
 export function toScoopSummaries(
@@ -24,7 +79,7 @@ export function toScoopSummaries(
       isCone: scoop.isCone,
       assistantLabel: scoop.assistantLabel,
       trigger: scoop.trigger,
-      state: descriptor?.state ?? 'idle',
+      ...toWire(descriptor),
       fill: typeof descriptor?.fill === 'number' ? descriptor.fill : 0,
     };
   });
@@ -33,15 +88,16 @@ export function toScoopSummaries(
 /** Map tray summaries onto the descriptors shared by follower and Cherry tabs. */
 export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): SwitcherScoop[] {
   return scoops.map((scoop) => {
-    const state = scoop.state ?? 'idle';
+    const expanded = fromWire(scoop);
     return {
       key: scoop.jid,
       type: scoop.isCone ? 'cone' : 'scoop',
       color: scoopColor(scoop),
       label: scoop.isCone ? 'sliccy' : scoop.name,
-      eyes: state === 'broken' ? 'dead' : state === 'initializing' ? 'none' : 'open',
-      state,
+      eyes:
+        expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',
       fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
+      ...expanded,
     };
   });
 }

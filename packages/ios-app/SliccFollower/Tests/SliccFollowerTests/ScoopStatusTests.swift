@@ -9,8 +9,34 @@ final class ScoopStatusTests: XCTestCase {
         XCTAssertEqual(ScoopLifecycle(state: "broken"), .broken)
         XCTAssertEqual(ScoopLifecycle(state: "initializing"), .initializing)
         XCTAssertEqual(ScoopLifecycle(state: "idle"), .idle)
+        // Absent (a leader older than the lifecycle fields) and unrecognised (a
+        // leader newer than this build) both degrade to the same quiet floor.
         XCTAssertEqual(ScoopLifecycle(state: nil), .unknown)
         XCTAssertEqual(ScoopLifecycle(state: "future-state"), .unknown)
+    }
+
+    func testLifecycleVocabularyStaysClosed() {
+        // The compatibility invariant, pinned: `state` carries these four
+        // values and nothing else. A refinement that leaked in here would reach
+        // older followers — which do NOT normalize what they cannot parse — and
+        // silently cost a busy agent its treatment. Detail belongs in
+        // `ScoopActivity`, which those builds never read.
+        XCTAssertEqual(
+            Set(ScoopLifecycle.allCases.map(\.rawValue)),
+            ["working", "broken", "initializing", "idle", "unknown"])
+    }
+
+    func testActivityRefinementParsesAndIgnoresTheUnknown() {
+        XCTAssertEqual(ScoopActivity(activity: "thinking"), .thinking)
+        XCTAssertEqual(ScoopActivity(activity: "tool"), .tool)
+        XCTAssertEqual(ScoopActivity(activity: "awaiting"), .awaiting)
+        // The escape hatch: absent (older leader) and unrecognised (newer
+        // leader) both fall back to the lifecycle alone.
+        XCTAssertNil(ScoopActivity(activity: nil))
+        XCTAssertNil(ScoopActivity(activity: "daydreaming"))
+        for activity in ScoopActivity.allCases {
+            XCTAssertEqual(ScoopActivity(activity: activity.rawValue), activity)
+        }
     }
 
     func testFullnessPreservesAbsenceAndClampsPresentValues() {

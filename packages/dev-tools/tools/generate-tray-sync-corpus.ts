@@ -15,7 +15,13 @@ import { fileURLToPath } from 'node:url';
 import { buildCorpusDocument } from '../../webapp/src/scoops/tray-sync-protocol-corpus.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const swiftMirror = resolve(here, '../../ios-app/SliccTrayKit/Models/SyncProtocol.swift');
+// The Swift mirror moved out of ios-app when SliccTrayFollower became its own
+// gated package (a34ccaa74); this path went stale and the generator has been
+// throwing ENOENT ever since, which is only visible when someone regenerates.
+const swiftMirror = resolve(
+  here,
+  '../../swift-trayfollower/Sources/SliccTrayFollower/Models/SyncProtocol.swift'
+);
 const out = resolve(
   here,
   '../../ios-app/SliccFollower/Tests/SliccFollowerTests/Fixtures/tray-sync-corpus.json'

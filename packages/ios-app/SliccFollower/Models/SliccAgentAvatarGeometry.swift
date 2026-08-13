@@ -166,23 +166,50 @@ extension ScoopSummary {
             activity: activity)
     }
 
-    /// The expression channel for this scoop, derived from the lifecycle the
-    /// wire already carries plus two locally-observed signals. The tray
-    /// protocol is deliberately untouched: `state` stays
-    /// `working | broken | initializing | idle`.
+    /// Signals the follower observed for itself, from streams it is already
+    /// mirroring. Only available for the scoop whose transcript is on screen.
+    struct LocalExpressionSignals: Equatable, Sendable {
+        /// A tool call is in flight (`tool_use_start` seen, no `tool_result` yet).
+        var toolRunning: Bool
+        /// The turn settled and the composer is the user's.
+        var awaitingUser: Bool
+
+        init(toolRunning: Bool = false, awaitingUser: Bool = false) {
+            self.toolRunning = toolRunning
+            self.awaitingUser = awaitingUser
+        }
+    }
+
+    /// The expression channel for this scoop.
     ///
-    /// - `toolRunning`: a mirrored tool call is in flight (`tool_ui` open), so
-    ///   a working agent is squaring up rather than thinking.
-    /// - `awaitingUser`: the turn settled and the composer is ready for you.
-    func avatarActivity(
-        toolRunning: Bool = false, awaitingUser: Bool = false
-    ) -> AvatarExpression.Activity? {
+    /// **Precedence: local derivation > wire state > unknown.** Pass `local`
+    /// for the focused scoop — the follower brackets `tool_use_start` /
+    /// `tool_result` and the turn settle itself, which is both richer and a
+    /// broadcast earlier than the leader's next `scoops.list`. Omit it for the
+    /// tabs and tiles whose streams this follower is not watching: the wire's
+    /// `activity` refinement then supplies what local observation cannot.
+    ///
+    /// `state` still decides busy-vs-idle in BOTH modes, which is what keeps a
+    /// leader that predates the refinement working: it says `working` with no
+    /// `activity`, and the absence of a local tool bracket makes that
+    /// `thinking` — exactly as this follower behaved before.
+    func avatarActivity(local: LocalExpressionSignals? = nil) -> AvatarExpression.Activity? {
+        // An unrecognised refinement decodes to nil and the lifecycle alone
+        // decides — the same escape hatch the browser follower applies.
+        let refinement = ScoopActivity(activity: activity)
         switch status.lifecycle {
-        case .working: toolRunning ? .working : .thinking
-        case .idle, .unknown: awaitingUser ? .awaiting : .idle
         // Broken and initializing keep their own eye treatments (dead / none),
         // so they carry no activity at all.
-        case .broken, .initializing: nil
+        case .broken, .initializing:
+            return nil
+        case .working:
+            if let local { return local.toolRunning ? .working : .thinking }
+            // No refinement (an older leader's bare `working`) reads as
+            // thinking, exactly as this follower rendered it before.
+            return refinement == .tool ? .working : .thinking
+        case .idle, .unknown:
+            if local?.awaitingUser == true { return .awaiting }
+            return refinement == .awaiting ? .awaiting : .idle
         }
     }
 

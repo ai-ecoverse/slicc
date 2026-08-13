@@ -246,12 +246,74 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     message: {
       type: 'scoops.list',
       scoops: [
+        // The cone deliberately keeps `state` ABSENT: that is what a leader
+        // older than the lifecycle fields sends, and it must stay decodable.
         {
           jid: 'cone',
           name: 'sliccy',
           folder: '/workspace',
           isCone: true,
           assistantLabel: 'Sliccy',
+        },
+        // One scoop per state/activity pair the wire can carry, so a follower
+        // that drops one fails here instead of rendering a quietly wrong face.
+        // `state` stays the four legacy values every shipped follower already
+        // switches on; `activity` is the refinement they ignore.
+        {
+          jid: 'thinker',
+          name: 'thinker',
+          folder: '/scoops/thinker',
+          isCone: false,
+          assistantLabel: 'Thinker',
+          state: 'working',
+          activity: 'thinking',
+          fill: 48,
+        },
+        {
+          jid: 'tooler',
+          name: 'tooler',
+          folder: '/scoops/tooler',
+          isCone: false,
+          assistantLabel: 'Tooler',
+          state: 'working',
+          activity: 'tool',
+          fill: 61,
+        },
+        {
+          jid: 'waiter',
+          name: 'waiter',
+          folder: '/scoops/waiter',
+          isCone: false,
+          assistantLabel: 'Waiter',
+          state: 'idle',
+          activity: 'awaiting',
+          fill: 12,
+        },
+        {
+          jid: 'resting',
+          name: 'resting',
+          folder: '/scoops/resting',
+          isCone: false,
+          assistantLabel: 'Resting',
+          state: 'idle',
+          fill: 5,
+        },
+        {
+          jid: 'tester',
+          name: 'tester',
+          folder: '/scoops/tester',
+          isCone: false,
+          assistantLabel: 'Tester',
+          state: 'broken',
+          fill: 84,
+        },
+        {
+          jid: 'booting',
+          name: 'booting',
+          folder: '/scoops/booting',
+          isCone: false,
+          assistantLabel: 'Booting',
+          state: 'initializing',
         },
       ],
       activeScoopJid: 'cone',
@@ -930,6 +992,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     assistantLabel: 'mirrored',
     trigger: 'mirrored',
     state: 'mirrored',
+    activity: 'mirrored',
     fill: 'mirrored',
   },
   sample: {
@@ -939,7 +1002,10 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: false,
     assistantLabel: 'Reviewer',
     trigger: 'on-push',
-    state: 'broken',
+    // A legacy state plus the refinement older builds never sent, so the
+    // round trip proves both survive.
+    state: 'idle',
+    activity: 'awaiting',
     fill: 82,
   },
 };

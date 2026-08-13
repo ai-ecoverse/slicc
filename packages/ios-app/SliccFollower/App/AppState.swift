@@ -71,14 +71,23 @@ class AppState: ObservableObject {
     @Published var openApprovals: [OpenApprovalRequest] = []
     @Published var openGrants: [OpenGrant] = []
     @Published var isStreaming: Bool = false {
-        didSet { trackTurnSettle(wasStreaming: oldValue) }
+        // A turn's streaming edge: starting one clears the wait, ending one
+        // starts it. Every writer (turn_end, `status: ready`, the error path,
+        // snapshot ingest) funnels through this observer, so no single call
+        // site can forget. Kept here because both stores are `private(set)`.
+        didSet {
+            guard oldValue != isStreaming else { return }
+            runningToolCalls = 0
+            awaitingUserSince = isStreaming ? nil : Date()
+        }
     }
 
     // MARK: - Agent avatar expression
     //
-    // The tray wire carries only `working | broken | initializing | idle`, so
-    // the two finer signals the avatar's expression kit wants are derived HERE,
-    // from events the follower already mirrors. No protocol change.
+    // Locally observed signals for the FOCUSED scoop, from streams this
+    // follower already mirrors. They outrank the wire's `state` (which now
+    // carries `thinking` and `awaiting` too) because they land a broadcast
+    // earlier — see `AppState+AvatarExpression.swift` for the derivation.
 
     /// Tool calls in flight for the VISIBLE scoop — `tool_use_start` opens one,
     /// `tool_result` closes it. A working agent with one open is running a tool
@@ -90,16 +99,6 @@ class AppState: ObservableObject {
     /// Shared with the chat header's avatar so hosts can fire transients
     /// (`scrutinize` per keystroke, `glower` on a failed tool call).
     let avatarExpression = AvatarExpressionEngine()
-
-    /// A turn's streaming edge: starting one clears the wait, ending one starts
-    /// it. Every `isStreaming` writer (turn_end, `status: ready`, the error
-    /// path, snapshot ingest) funnels through the property observer, so no
-    /// single call site can forget.
-    private func trackTurnSettle(wasStreaming: Bool) {
-        guard wasStreaming != isStreaming else { return }
-        runningToolCalls = 0
-        awaitingUserSince = isStreaming ? nil : Date()
-    }
 
     // Multi-scoop awareness
     /// All scoops the leader has registered (cone first), updated via `scoops.list`.
