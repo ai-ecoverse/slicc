@@ -244,13 +244,42 @@ private struct ExpressiveAvatarEye: View {
             .opacity(fraction > AvatarExpression.lidLineEpsilon ? 1 : 0)
     }
 
+    // MARK: - Brow placement
+    //
+    // The pose SCALARS are the grammar's (and the shared vectors'); only their
+    // mapping into the tile is adapted here, exactly as the eye centres already
+    // are. The web draws the whole 200x100 band with `overflow: visible`, so a
+    // brow may sit centred over its eye and lift clean off the top. The tile is
+    // a TIGHT CROP — eye centres at 8%/92%, roughly 14pt of headroom above the
+    // eye — so a band-space brow hangs off two edges at once and reads as a
+    // stray mark rather than a brow.
+
+    /// Headroom between the tile's top edge and the top of the eye.
+    private var browHeadroom: Double {
+        max(0, avatar.eyeCenters[0].y - avatar.eyeRadius)
+    }
+
+    /// Pulled inward, over the half of the eye the crop actually shows.
+    private var browCenterX: Double {
+        let inward = AvatarExpression.browHalfWidth * avatar.expressionScale * 0.9
+        return avatar.eyeDiameter / 2 + (eyeIndex == 0 ? inward : -inward)
+    }
+
+    /// Rest height and lift, both budgeted out of the headroom so the most
+    /// raised pose the grammar can produce (12 band units) still clears the
+    /// tile's top edge with its stroke intact.
+    private var browRestY: Double {
+        -0.35 * browHeadroom
+    }
+
+    private var browRaiseScale: Double {
+        browHeadroom / 60
+    }
+
     /// Two scalars, one capsule: raise lifts it off the eye, tilt cocks it.
     private var brow: some View {
         let pose = eyeIndex == 0 ? snapshot.brows.left : snapshot.brows.right
         let scale = avatar.expressionScale
-        let restY =
-            avatar.eyeDiameter / 2
-            - (AvatarExpression.eyeCenterY - AvatarExpression.browY) * scale
         return Capsule()
             .fill(.black)
             .frame(
@@ -258,7 +287,7 @@ private struct ExpressiveAvatarEye: View {
                 height: AvatarExpression.browStroke * scale
             )
             .rotationEffect(.degrees(pose.tilt))
-            .position(x: avatar.eyeDiameter / 2, y: restY + pose.raise * scale)
+            .position(x: browCenterX, y: browRestY + pose.raise * browRaiseScale)
             .opacity(snapshot.browsVisible ? 1 : 0)
             .animation(
                 .easeInOut(duration: AvatarExpression.browTransitionSeconds),
