@@ -1231,8 +1231,13 @@ function wireWcComposer(deps: {
   refs.inputCard.addEventListener('submit', (event) => {
     const text = submittedText(event);
     if (!text) return;
-    // The ball is back in the agent's court — stop waiting on the user.
+    // The ball is back in the agent's court — stop waiting on the user, and
+    // rebuild the row NOW. Waiting for the `processing` broadcast (or worse,
+    // the 15s stats poll) leaves the face making eye contact through the whole
+    // send latency, and leaves it stuck there if the send fails before any
+    // status transition lands.
     boot.wiring.awaitingInput = null;
+    boot.wiring.refreshScoops?.();
     // Dictated turns (push-to-talk) get their reply spoken back — mark
     // BEFORE sending so the turn-complete hook sees the flag. The same
     // flag drives the dictation markers the controller appends to the
