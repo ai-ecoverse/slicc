@@ -10,62 +10,140 @@ const cone = {
   assistantLabel: 'sliccy',
 };
 
-/** The six states the wire can carry, in the order a turn walks them. */
-const WIRE_STATES: NonNullable<ScoopSummary['state']>[] = [
-  'thinking',
-  'working',
-  'awaiting',
-  'idle',
-  'broken',
-  'initializing',
+/** Every state/activity pair the wire can carry. */
+const WIRE_PAIRS: Pick<ScoopSummary, 'state' | 'activity'>[] = [
+  { state: 'working', activity: 'thinking' },
+  { state: 'working', activity: 'tool' },
+  { state: 'idle', activity: 'awaiting' },
+  { state: 'idle' },
+  { state: 'broken' },
+  { state: 'initializing' },
 ];
 
 describe('tray scoop tab adapters', () => {
-  it('collapses the leader toolbar three-field model onto the wire state', () => {
-    const collapse = (rendered: Record<string, unknown>): string | undefined =>
-      toScoopSummaries([cone], [{ key: 'cone', fill: 64, ...rendered } as never])[0]?.state;
+  it('keeps `state` to the four values every shipped follower switches on', () => {
+    // THE compatibility invariant. An older follower reads `state` and nothing
+    // else; if a refinement ever leaked into this field it would reach that
+    // build's `data-state` unmatched and silently cost a busy agent its
+    // animation. Detail belongs in `activity`, which older builds never read.
+    const legacy = ['working', 'broken', 'initializing', 'idle'];
+    const rendered = [
+      { key: 'cone', state: 'working', phase: 'thinking' },
+      { key: 'cone', state: 'working', phase: 'tool' },
+      { key: 'cone', state: 'idle', awaiting: true },
+      { key: 'cone', state: 'idle' },
+      { key: 'cone', state: 'broken' },
+      { key: 'cone', state: 'initializing' },
+    ] as const;
 
-    // A tool call in flight is the only thing that squares the eyes up.
-    expect(collapse({ state: 'working', phase: 'tool' })).toBe('working');
-    expect(collapse({ state: 'working', phase: 'thinking' })).toBe('thinking');
-    // An unset phase reads as thinking: a turn always opens in LLM-wait, which
-    // is what the leader's own tabs render too.
-    expect(collapse({ state: 'working' })).toBe('thinking');
-    expect(collapse({ state: 'idle', awaiting: true })).toBe('awaiting');
-    expect(collapse({ state: 'idle' })).toBe('idle');
-    expect(collapse({ state: 'broken' })).toBe('broken');
-    expect(collapse({ state: 'initializing' })).toBe('initializing');
+    for (const descriptor of rendered) {
+      const [summary] = toScoopSummaries([cone], [descriptor as never]);
+      expect(legacy, `state leaked a refinement for ${JSON.stringify(descriptor)}`).toContain(
+        summary?.state
+      );
+    }
+  });
+
+  it('collapses the toolbar model onto a legacy state plus an activity refinement', () => {
+    const collapse = (rendered: Record<string, unknown>): Record<string, unknown> => {
+      const [summary] = toScoopSummaries([cone], [{ key: 'cone', fill: 64, ...rendered } as never]);
+      return { state: summary?.state, activity: summary?.activity };
+    };
+
+    // Busy stays `working` on the legacy field either way — only the
+    // refinement distinguishes a tool call from model wait.
+    expect(collapse({ state: 'working', phase: 'tool' })).toEqual({
+      state: 'working',
+      activity: 'tool',
+    });
+    expect(collapse({ state: 'working', phase: 'thinking' })).toEqual({
+      state: 'working',
+      activity: 'thinking',
+    });
+    // An unset phase reads as thinking: a turn always opens in LLM-wait.
+    expect(collapse({ state: 'working' })).toEqual({ state: 'working', activity: 'thinking' });
+    // Waiting on the user stays `idle` on the legacy field.
+    expect(collapse({ state: 'idle', awaiting: true })).toEqual({
+      state: 'idle',
+      activity: 'awaiting',
+    });
+    expect(collapse({ state: 'idle' })).toEqual({ state: 'idle', activity: undefined });
+    expect(collapse({ state: 'broken' })).toEqual({ state: 'broken', activity: undefined });
+    expect(collapse({ state: 'initializing' })).toEqual({
+      state: 'initializing',
+      activity: undefined,
+    });
   });
 
   it('broadcasts the leader toolbar lifecycle state and context fill', () => {
     expect(
       toScoopSummaries([cone], [{ key: 'cone', state: 'working', phase: 'tool', fill: 64 }])
-    ).toEqual([expect.objectContaining({ jid: 'cone', state: 'working', fill: 64 })]);
+    ).toEqual([
+      expect.objectContaining({ jid: 'cone', state: 'working', activity: 'tool', fill: 64 }),
+    ]);
     expect(toScoopSummaries([cone], [])).toEqual([
       expect.objectContaining({ jid: 'cone', state: 'idle', fill: 0 }),
     ]);
   });
 
-  it('expands every wire state back into follower descriptor fields', () => {
-    const expand = (state: ScoopSummary['state']): Record<string, unknown> => {
-      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, state, fill: 40 }]);
+  it('expands every wire pair back into follower descriptor fields', () => {
+    const expand = (pair: Pick<ScoopSummary, 'state' | 'activity'>): Record<string, unknown> => {
+      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, ...pair, fill: 40 }]);
       return { state: descriptor?.state, phase: descriptor?.phase, awaiting: descriptor?.awaiting };
     };
 
-    expect(expand('thinking')).toMatchObject({ state: 'working', phase: 'thinking' });
-    expect(expand('working')).toMatchObject({ state: 'working', phase: 'tool' });
-    expect(expand('awaiting')).toMatchObject({ state: 'idle', awaiting: true });
-    expect(expand('idle')).toMatchObject({ state: 'idle' });
-    expect(expand('broken')).toMatchObject({ state: 'broken' });
-    expect(expand('initializing')).toMatchObject({ state: 'initializing' });
+    expect(expand({ state: 'working', activity: 'thinking' })).toMatchObject({
+      state: 'working',
+      phase: 'thinking',
+    });
+    expect(expand({ state: 'working', activity: 'tool' })).toMatchObject({
+      state: 'working',
+      phase: 'tool',
+    });
+    expect(expand({ state: 'idle', activity: 'awaiting' })).toMatchObject({
+      state: 'idle',
+      awaiting: true,
+    });
+    expect(expand({ state: 'idle' })).toMatchObject({ state: 'idle' });
+    expect(expand({ state: 'broken' })).toMatchObject({ state: 'broken' });
+    expect(expand({ state: 'initializing' })).toMatchObject({ state: 'initializing' });
   });
 
-  it('round-trips every state, so leader and follower render the same face', () => {
-    for (const state of WIRE_STATES) {
-      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, state, fill: 40 }]);
+  it('round-trips every pair, so leader and follower render the same face', () => {
+    for (const pair of WIRE_PAIRS) {
+      const [descriptor] = toFollowerSwitcherScoops([{ ...cone, ...pair, fill: 40 }]);
       const [summary] = toScoopSummaries([cone], [descriptor as never]);
-      expect(summary?.state, `round trip broke for ${state}`).toBe(state);
+      const label = JSON.stringify(pair);
+      expect(summary?.state, `state round trip broke for ${label}`).toBe(pair.state);
+      // A busy scoop always comes back with an explicit refinement, so the
+      // absent-activity case below is only ever an OLDER leader.
+      if (pair.activity) {
+        expect(summary?.activity, `activity round trip broke for ${label}`).toBe(pair.activity);
+      }
     }
+  });
+
+  it('treats an older leader’s bare `working` exactly as it did before', () => {
+    // No `activity` at all — the pre-refinement wire. A busy scoop must still
+    // read as thinking, which is what this follower already rendered.
+    const [descriptor] = toFollowerSwitcherScoops([{ ...cone, state: 'working', fill: 30 }]);
+    expect(descriptor).toMatchObject({ state: 'working', phase: 'thinking', eyes: 'open' });
+    expect(descriptor?.awaiting).toBeUndefined();
+  });
+
+  it('ignores an activity from a newer leader and falls back to the state', () => {
+    // The escape hatch the refinement field exists to provide: an unrecognised
+    // value costs this build nothing, so the NEXT value added is free too.
+    const [busy] = toFollowerSwitcherScoops([
+      { ...cone, state: 'working', activity: 'daydreaming' as never, fill: 10 },
+    ]);
+    expect(busy).toMatchObject({ state: 'working', phase: 'thinking' });
+
+    const [resting] = toFollowerSwitcherScoops([
+      { ...cone, state: 'idle', activity: 'daydreaming' as never, fill: 10 },
+    ]);
+    expect(resting).toMatchObject({ state: 'idle' });
+    expect(resting?.awaiting).toBeUndefined();
   });
 
   it('preserves lifecycle state and fill for follower and Cherry descriptors', () => {
@@ -87,10 +165,10 @@ describe('tray scoop tab adapters', () => {
     ]);
   });
 
-  it('keeps the new states open-eyed rather than dead or eyeless', () => {
+  it('keeps a refined scoop open-eyed rather than dead or eyeless', () => {
     const descriptors = toFollowerSwitcherScoops([
-      { ...cone, state: 'thinking' },
-      { ...cone, jid: 'b', state: 'awaiting' },
+      { ...cone, state: 'working', activity: 'thinking' },
+      { ...cone, jid: 'b', state: 'idle', activity: 'awaiting' },
     ]);
     expect(descriptors.map((descriptor) => descriptor.eyes)).toEqual(['open', 'open']);
   });
@@ -98,17 +176,5 @@ describe('tray scoop tab adapters', () => {
   it('defaults lifecycle state and fill from an older leader payload', () => {
     const [descriptor] = toFollowerSwitcherScoops([cone]);
     expect(descriptor).toMatchObject({ state: 'idle', fill: 0, eyes: 'open' });
-  });
-
-  it('normalizes a state from a newer leader instead of leaking it to the DOM', () => {
-    // The browser's equivalent of iOS's `ScoopLifecycle` → `.unknown`: a state
-    // this build does not know reads as idle, never as an unmatched
-    // `data-state` attribute.
-    const [descriptor] = toFollowerSwitcherScoops([
-      { ...cone, state: 'daydreaming' as never, fill: 10 },
-    ]);
-    expect(descriptor).toMatchObject({ state: 'idle', eyes: 'open', fill: 10 });
-    expect(descriptor?.phase).toBeUndefined();
-    expect(descriptor?.awaiting).toBeUndefined();
   });
 });

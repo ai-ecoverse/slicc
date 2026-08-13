@@ -44,9 +44,10 @@ export interface ScoopDescriptor {
    * drowses if you keep it waiting.
    *
    * Derived by the leader and, since the expression grammar reached the tray
-   * protocol, carried to followers as `ScoopSummary.state: 'awaiting'` — which
-   * the follower expands back into this field. {@link AgentState} stays the
-   * four-value union either way; the wire collapses, the follower expands.
+   * protocol, carried to followers as the `ScoopSummary.activity: 'awaiting'`
+   * refinement — which the follower expands back into this field. The wire's
+   * own `state`, like {@link AgentState}, stays a four-value union: detail
+   * rides the optional field that older followers never read.
    */
   awaiting?: boolean;
 }

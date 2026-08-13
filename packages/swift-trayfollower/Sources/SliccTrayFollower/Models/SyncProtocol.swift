@@ -150,7 +150,14 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let assistantLabel: String
     public let trigger: String?
     /// Agent-tab lifecycle state. Optional for compatibility with older leaders.
+    /// Deliberately a CLOSED four-value vocabulary — refinements ride
+    /// `activity`, so adding detail never changes how an older follower renders
+    /// this field.
     public let state: String?
+    /// Optional refinement of `state` (`thinking` / `tool` / `awaiting`) —
+    /// absent from older leaders, ignored by older followers. A value this
+    /// build does not recognise must fall back to `state` alone.
+    public let activity: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
     public let fill: Double?
 
@@ -166,6 +173,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         assistantLabel: String,
         trigger: String? = nil,
         state: String? = nil,
+        activity: String? = nil,
         fill: Double? = nil
     ) {
         self.jid = jid
@@ -175,6 +183,7 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         self.assistantLabel = assistantLabel
         self.trigger = trigger
         self.state = state
+        self.activity = activity
         self.fill = fill
     }
 }

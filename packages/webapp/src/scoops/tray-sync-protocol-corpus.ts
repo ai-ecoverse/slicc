@@ -255,16 +255,18 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           isCone: true,
           assistantLabel: 'Sliccy',
         },
-        // One scoop per state the wire can carry, so a follower that drops one
-        // fails here instead of rendering a quietly wrong face. `thinking` and
-        // `awaiting` are the expression grammar's additions.
+        // One scoop per state/activity pair the wire can carry, so a follower
+        // that drops one fails here instead of rendering a quietly wrong face.
+        // `state` stays the four legacy values every shipped follower already
+        // switches on; `activity` is the refinement they ignore.
         {
           jid: 'thinker',
           name: 'thinker',
           folder: '/scoops/thinker',
           isCone: false,
           assistantLabel: 'Thinker',
-          state: 'thinking',
+          state: 'working',
+          activity: 'thinking',
           fill: 48,
         },
         {
@@ -274,6 +276,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           isCone: false,
           assistantLabel: 'Tooler',
           state: 'working',
+          activity: 'tool',
           fill: 61,
         },
         {
@@ -282,7 +285,8 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
           folder: '/scoops/waiter',
           isCone: false,
           assistantLabel: 'Waiter',
-          state: 'awaiting',
+          state: 'idle',
+          activity: 'awaiting',
           fill: 12,
         },
         {
@@ -988,6 +992,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     assistantLabel: 'mirrored',
     trigger: 'mirrored',
     state: 'mirrored',
+    activity: 'mirrored',
     fill: 'mirrored',
   },
   sample: {
@@ -997,9 +1002,10 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: false,
     assistantLabel: 'Reviewer',
     trigger: 'on-push',
-    // One of the expression grammar's added states, so the round trip proves
-    // the wire carries a value older builds never sent.
-    state: 'awaiting',
+    // A legacy state plus the refinement older builds never sent, so the
+    // round trip proves both survive.
+    state: 'idle',
+    activity: 'awaiting',
     fill: 82,
   },
 };

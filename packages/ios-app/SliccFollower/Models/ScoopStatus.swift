@@ -3,26 +3,35 @@ import SliccTrayKit
 
 enum ScoopLifecycle: String, CaseIterable, Equatable, Sendable {
     case working
-    /// Waiting on or streaming from the model, as opposed to running a tool.
-    case thinking
-    /// The turn ended and the composer is the user's.
-    case awaiting
     case broken
     case initializing
     case idle
     case unknown
 
-    /// Unknown strings fall to `.unknown` rather than failing to decode, which
-    /// is what lets a leader add states (as `thinking` and `awaiting` were)
-    /// without stranding followers that predate them.
     init(state: String?) {
         self = state.flatMap(Self.init(rawValue:)) ?? .unknown
     }
+}
 
-    /// Whether the agent is mid-turn. `thinking` and `working` are one turn's
-    /// two halves, so anything keyed on "busy" must count both.
-    var isBusy: Bool {
-        self == .working || self == .thinking
+/// The optional REFINEMENT of `ScoopLifecycle`, carrying the agent avatar's
+/// expression grammar (`ScoopSummary.activity`).
+///
+/// It is a separate field on the wire, not a widening of `state`, precisely so
+/// that a follower which predates it — including this one, before it learned
+/// these values — keeps rendering `state` exactly as it always did. An
+/// unrecognised value decodes to `nil` and the lifecycle alone decides, which
+/// is the escape hatch that makes the NEXT refinement free as well.
+enum ScoopActivity: String, CaseIterable, Equatable, Sendable {
+    /// Busy waiting on or streaming from the model.
+    case thinking
+    /// Busy running a tool call.
+    case tool
+    /// Idle because the turn ended; the composer is the user's.
+    case awaiting
+
+    init?(activity: String?) {
+        guard let activity, let parsed = Self(rawValue: activity) else { return nil }
+        self = parsed
     }
 }
 

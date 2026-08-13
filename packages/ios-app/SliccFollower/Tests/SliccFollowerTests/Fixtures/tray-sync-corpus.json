@@ -232,7 +232,8 @@
             "folder": "/scoops/thinker",
             "isCone": false,
             "assistantLabel": "Thinker",
-            "state": "thinking",
+            "state": "working",
+            "activity": "thinking",
             "fill": 48
           },
           {
@@ -242,6 +243,7 @@
             "isCone": false,
             "assistantLabel": "Tooler",
             "state": "working",
+            "activity": "tool",
             "fill": 61
           },
           {
@@ -250,7 +252,8 @@
             "folder": "/scoops/waiter",
             "isCone": false,
             "assistantLabel": "Waiter",
-            "state": "awaiting",
+            "state": "idle",
+            "activity": "awaiting",
             "fill": 12
           },
           {
@@ -1189,6 +1192,7 @@
       "name": "ScoopSummary",
       "ios": "mirrored",
       "mirrored": [
+        "activity",
         "assistantLabel",
         "fill",
         "folder",
@@ -1206,7 +1210,8 @@
         "isCone": false,
         "assistantLabel": "Reviewer",
         "trigger": "on-push",
-        "state": "awaiting",
+        "state": "idle",
+        "activity": "awaiting",
         "fill": 82
       }
     },

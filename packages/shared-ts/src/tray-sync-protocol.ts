@@ -642,22 +642,33 @@ export interface ScoopSummary {
   assistantLabel: string;
   trigger?: string;
   /**
-   * Rendered lifecycle state for follower agent tabs, and the input to the
-   * avatar's expression channel. Absent from older leaders.
+   * Rendered lifecycle state for follower agent tabs. Absent from older
+   * leaders.
    *
-   * `thinking` and `awaiting` are the expression grammar's two finer states,
-   * added additively: a leader that predates them simply never sends them, and
-   * a follower that predates them decodes them the way it decodes any unknown
-   * string (iOS `ScoopLifecycle` → `.unknown`; the browser follower falls back
-   * to its idle treatment). Both directions degrade to a quieter face, never a
-   * broken one, which is why this needed no protocol version bump — see
-   * `TRAY_SYNC_PROTOCOL_VERSION`, bumped only for INCOMPATIBLE changes.
-   *
-   * - `working` — a tool call is in flight (the avatar squares up).
-   * - `thinking` — waiting on or streaming from the model.
-   * - `awaiting` — the turn ended; the composer is the user's.
+   * This union is CLOSED and stays closed. Every shipped follower switches on
+   * these four values, and the ones already in the wild do not normalize what
+   * they do not recognise — a fifth value would reach an old browser
+   * follower's `data-state` unmatched and quietly cost a busy agent its
+   * animation. Refinements go in {@link ScoopSummary.activity} instead, where
+   * an old follower simply never looks.
    */
-  state?: 'working' | 'thinking' | 'awaiting' | 'broken' | 'initializing' | 'idle';
+  state?: 'working' | 'broken' | 'initializing' | 'idle';
+  /**
+   * Optional REFINEMENT of `state`, carrying the agent avatar's expression
+   * grammar. Absent from older leaders, ignored by older followers — which is
+   * the whole point: adding detail here cannot change how any shipped build
+   * renders `state`.
+   *
+   * - `thinking` — busy waiting on or streaming from the model.
+   * - `tool` — busy running a tool call (the avatar squares up).
+   * - `awaiting` — idle because the turn ended; the composer is the user's.
+   *
+   * Only meaningful alongside the `state` it refines (`thinking`/`tool` while
+   * `working`, `awaiting` while `idle`). A consumer that does not recognise a
+   * value MUST ignore it and fall back to `state` alone — the escape hatch
+   * this field exists to provide, so the next refinement is free too.
+   */
+  activity?: 'thinking' | 'tool' | 'awaiting';
   /** Context-window fullness on the same 0-100 scale as the agent tabs. Absent from older leaders. */
   fill?: number;
 }

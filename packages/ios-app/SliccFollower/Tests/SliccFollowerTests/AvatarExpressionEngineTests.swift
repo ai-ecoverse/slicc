@@ -287,24 +287,34 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
     // MARK: - Lifecycle mapping
 
-    private func summary(_ state: String?) -> ScoopSummary {
+    private func summary(_ state: String?, activity: String? = nil) -> ScoopSummary {
         .init(
             jid: "s", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
-            assistantLabel: "Reviewer", trigger: nil, state: state, fill: 40)
+            assistantLabel: "Reviewer", trigger: nil, state: state, activity: activity,
+            fill: 40)
     }
 
-    func testWireStateAloneDrivesUnwatchedScoops() {
+    func testWireAloneDrivesUnwatchedScoops() {
         // No local signals: the tabs and tiles this follower is not streaming
         // read the wire and nothing else.
-        XCTAssertEqual(summary("thinking").avatarActivity(), .thinking)
-        XCTAssertEqual(summary("working").avatarActivity(), .working)
-        XCTAssertEqual(summary("awaiting").avatarActivity(), .awaiting)
+        XCTAssertEqual(summary("working", activity: "thinking").avatarActivity(), .thinking)
+        XCTAssertEqual(summary("working", activity: "tool").avatarActivity(), .working)
+        XCTAssertEqual(summary("idle", activity: "awaiting").avatarActivity(), .awaiting)
         XCTAssertEqual(summary("idle").avatarActivity(), .idle)
         XCTAssertEqual(summary(nil).avatarActivity(), .idle)
-        XCTAssertEqual(summary("future-state").avatarActivity(), .idle)
         // Broken and initializing keep their own eye treatments instead.
         XCTAssertNil(summary("broken").avatarActivity())
         XCTAssertNil(summary("initializing").avatarActivity())
+    }
+
+    func testOlderLeaderAndUnknownRefinementFallBackToTheState() {
+        // A bare `working` is the pre-refinement wire: it must still read as
+        // thinking, exactly as this follower rendered it before.
+        XCTAssertEqual(summary("working").avatarActivity(), .thinking)
+        // And a refinement from a NEWER leader is ignored rather than guessed.
+        XCTAssertEqual(summary("working", activity: "daydreaming").avatarActivity(), .thinking)
+        XCTAssertEqual(summary("idle", activity: "daydreaming").avatarActivity(), .idle)
+        XCTAssertEqual(summary("future-state").avatarActivity(), .idle)
     }
 
     func testLocalSignalsOutrankTheWireForTheFocusedScoop() {
@@ -313,31 +323,31 @@ final class AvatarExpressionEngineTests: XCTestCase {
 
         // A locally observed tool bracket wins over a wire that still says
         // thinking — the follower sees it a broadcast earlier.
-        XCTAssertEqual(summary("thinking").avatarActivity(local: toolRunning), .working)
+        XCTAssertEqual(
+            summary("working", activity: "thinking").avatarActivity(local: toolRunning), .working)
         // And its absence wins the other way, which is what keeps a leader that
-        // predates the finer states rendering correctly: it says `working`, no
-        // local tool is running, so the face thinks.
-        XCTAssertEqual(summary("working").avatarActivity(local: quiet), .thinking)
+        // predates the refinement rendering correctly.
+        XCTAssertEqual(
+            summary("working", activity: "tool").avatarActivity(local: quiet), .thinking)
 
         // The turn settle is local too.
-        XCTAssertEqual(
-            summary("idle").avatarActivity(
-                local: .init(awaitingUser: true)), .awaiting)
+        XCTAssertEqual(summary("idle").avatarActivity(local: .init(awaitingUser: true)), .awaiting)
         XCTAssertEqual(summary("idle").avatarActivity(local: quiet), .idle)
         // …but the leader's own `awaiting` still stands when local has nothing.
-        XCTAssertEqual(summary("awaiting").avatarActivity(local: quiet), .awaiting)
+        XCTAssertEqual(summary("idle", activity: "awaiting").avatarActivity(local: quiet), .awaiting)
     }
 
-    func testBusyStatesKeepBlinkingAndOpenEyes() {
-        for state in ["working", "thinking"] {
-            let geometry = summary(state).avatarGeometry()
-            XCTAssertTrue(geometry.blink, "\(state) is mid-turn and should blink")
-            XCTAssertEqual(geometry.eyes, .open)
-        }
-        for state in ["awaiting", "idle"] {
-            let geometry = summary(state).avatarGeometry()
-            XCTAssertFalse(geometry.blink, "\(state) is not mid-turn")
-            XCTAssertEqual(geometry.eyes, .open)
+    func testRefinementNeverChangesTheLegacyEyeTreatments() {
+        // Whatever the refinement says, `state` alone decides eyes and blink —
+        // which is why an older follower is untouched by this field.
+        for activity in [nil, "thinking", "tool", "awaiting", "daydreaming"] {
+            let busy = summary("working", activity: activity).avatarGeometry()
+            XCTAssertTrue(busy.blink)
+            XCTAssertEqual(busy.eyes, .open)
+
+            let resting = summary("idle", activity: activity).avatarGeometry()
+            XCTAssertFalse(resting.blink)
+            XCTAssertEqual(resting.eyes, .open)
         }
         XCTAssertEqual(summary("broken").avatarGeometry().eyes, .dead)
         XCTAssertEqual(summary("initializing").avatarGeometry().eyes, .none)

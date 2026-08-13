@@ -156,14 +156,12 @@ extension ScoopSummary {
             switch scoopStatus.lifecycle {
             case .broken: .dead
             case .initializing: .none
-            case .working, .thinking, .awaiting, .idle, .unknown: .open
+            case .working, .idle, .unknown: .open
             }
         return .init(
             type: type, color: avatarColor, eyes: eyesOverride ?? lifecycleEyes,
             fill: scoopStatus.fullness,
-            // Both halves of a turn blink: thinking and working are one agent
-            // mid-turn, not two states.
-            blink: scoopStatus.lifecycle.isBusy,
+            blink: scoopStatus.lifecycle == .working,
             sideLength: sideLength,
             activity: activity)
     }
@@ -189,28 +187,29 @@ extension ScoopSummary {
     /// `tool_result` and the turn settle itself, which is both richer and a
     /// broadcast earlier than the leader's next `scoops.list`. Omit it for the
     /// tabs and tiles whose streams this follower is not watching: the wire's
-    /// `thinking` / `awaiting` then supply what local observation cannot.
+    /// `activity` refinement then supplies what local observation cannot.
     ///
-    /// The wire still decides busy-vs-idle in BOTH modes, which is what keeps
-    /// a leader that predates the finer states working: it says `working`, the
-    /// absence of a local tool bracket makes that `thinking`, exactly as this
-    /// follower behaved before the states existed.
+    /// `state` still decides busy-vs-idle in BOTH modes, which is what keeps a
+    /// leader that predates the refinement working: it says `working` with no
+    /// `activity`, and the absence of a local tool bracket makes that
+    /// `thinking` — exactly as this follower behaved before.
     func avatarActivity(local: LocalExpressionSignals? = nil) -> AvatarExpression.Activity? {
+        // An unrecognised refinement decodes to nil and the lifecycle alone
+        // decides — the same escape hatch the browser follower applies.
+        let refinement = ScoopActivity(activity: activity)
         switch status.lifecycle {
         // Broken and initializing keep their own eye treatments (dead / none),
         // so they carry no activity at all.
         case .broken, .initializing:
-            nil
-        case .working, .thinking:
-            if let local {
-                local.toolRunning ? .working : .thinking
-            } else {
-                status.lifecycle == .thinking ? .thinking : .working
-            }
-        case .awaiting:
-            .awaiting
+            return nil
+        case .working:
+            if let local { return local.toolRunning ? .working : .thinking }
+            // No refinement (an older leader's bare `working`) reads as
+            // thinking, exactly as this follower rendered it before.
+            return refinement == .tool ? .working : .thinking
         case .idle, .unknown:
-            (local?.awaitingUser ?? false) ? .awaiting : .idle
+            if local?.awaitingUser == true { return .awaiting }
+            return refinement == .awaiting ? .awaiting : .idle
         }
     }
 
