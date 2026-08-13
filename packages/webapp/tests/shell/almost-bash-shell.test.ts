@@ -376,6 +376,68 @@ describe('AlmostBashShell .jsh command registration', () => {
     expect(piped.stdout).toContain('hello from jsh');
   });
 
+  // A shell that has NOT been warmed by an explicit `syncJshCommands()` — i.e.
+  // every shell the tray's `slicc … exec` builds, one per follower connection.
+  //
+  // The bare form always worked: an unknown single command exits 127 and
+  // `tryJshFallback` catches it. A compound does NOT — the unknown name fails
+  // with 127 *inside* bash while the compound reports its last command's
+  // status, so the fallback never sees a miss. Every compound sent over the
+  // tray therefore raced the constructor's async registration and lost.
+  it('resolves .jsh in a compound command on a cold shell (no explicit sync)', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/cold.jsh', 'console.log("cold ok");');
+
+    const shell = new AlmostBashShell({ fs });
+    // Deliberately NO `await shell.syncJshCommands()` — that is the warm path
+    // the other tests exercise, and it is what hid this bug.
+    const compound = await shell.executeCommand('cold; echo done');
+    expect(compound.stdout).toContain('cold ok');
+    expect(compound.stdout).toContain('done');
+
+    const piped = await shell.executeCommand('cold | cat');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toContain('cold ok');
+  });
+
+  // The bare case must keep working too — it went through `tryJshFallback`
+  // before and now resolves as a registered command; either way, exit 0.
+  it('still resolves a bare .jsh command on a cold shell', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/bare.jsh', 'console.log("bare ok");');
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('bare');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('bare ok');
+  });
+
+  // Review catch on #2084: waiting for the initial scan must not swallow a
+  // Ctrl+C. The scan walks all of `/` and takes seconds on a populated
+  // instance, so an unconditional await makes cancellation dead for that long
+  // in every freshly-built shell — the panel's and the tray's.
+  //
+  // The discovery FS here NEVER finishes walking, so the abort is the only
+  // thing that can end the wait: if the await were unconditional this test
+  // would hang rather than fail.
+  it('aborting the first command does not wait out the initial .jsh scan', async () => {
+    const neverFinishes = {
+      exists: async () => true,
+      async *walk(): AsyncGenerator<string> {
+        await new Promise<never>(() => {}); // never settles, never yields
+      },
+      readFile: async () => '',
+    } as unknown as ConstructorParameters<typeof AlmostBashShell>[0]['jshDiscoveryFs'];
+
+    const shell = new AlmostBashShell({ fs, jshDiscoveryFs: neverFinishes });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await Promise.race([
+      shell.executeCommand('echo hi', controller.signal).then(() => 'returned'),
+      new Promise((resolve) => setTimeout(() => resolve('HUNG'), 3000)),
+    ]);
+    expect(result).toBe('returned');
+  });
+
   it('makes .jsh commands visible via which and /usr/bin', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
 
