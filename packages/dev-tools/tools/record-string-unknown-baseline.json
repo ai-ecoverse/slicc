@@ -36,7 +36,6 @@
   "packages/webapp/providers/github-copilot.ts": 2,
   "packages/webapp/providers/github.ts": 2,
   "packages/webapp/providers/openai-codex.ts": 2,
-  "packages/webapp/src/cdp/browser-api.ts": 19,
   "packages/webapp/src/cdp/cdp-client.ts": 4,
   "packages/webapp/src/cdp/cdp-ws-page-bridge.ts": 2,
   "packages/webapp/src/cdp/cherry-host-protocol.ts": 5,

@@ -636,6 +636,11 @@ describe('BrowserAPI', () => {
     });
 
     it('retries with bringToFront when capture fails on background tab', async () => {
+      // No focused page found -> wake, capture, no restore leg.
+      vi.spyOn(
+        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        'findFocusedLocalPage'
+      ).mockResolvedValue(null);
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt fails
         .mockResolvedValueOnce({}) // Page.bringToFront
@@ -644,6 +649,33 @@ describe('BrowserAPI', () => {
       const data = await api.screenshot();
       expect(data).toBe('woken-shot');
       expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
+    });
+
+    it('the wake-up fallback gives focus back to whichever page held it', async () => {
+      // A capture-every-tab loop used to leave the LAST captured tab in
+      // front, backgrounding SLICC — which Chrome may then freeze.
+      vi.spyOn(
+        api as unknown as { findFocusedLocalPage: (x: string | null) => Promise<string | null> },
+        'findFocusedLocalPage'
+      ).mockResolvedValue('front-1');
+      const attachSpy = vi
+        .spyOn(api, 'attachToPage')
+        .mockImplementation(async (id: string) => (id === 'front-1' ? 'sess-front' : 'sess-1'));
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Unable to capture screenshot'))
+        .mockResolvedValueOnce({}) // Page.bringToFront (captured tab)
+        .mockResolvedValueOnce({ data: 'woken-shot' }) // retry capture
+        .mockResolvedValueOnce({}); // Page.bringToFront (restore)
+
+      const data = await api.screenshot();
+      expect(data).toBe('woken-shot');
+      // Restore leg: attach the old front, re-front it, re-attach the captured tab.
+      expect(attachSpy).toHaveBeenCalledWith('front-1');
+      expect(attachSpy).toHaveBeenLastCalledWith('target-1');
+      const fronts = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[0] === 'Page.bringToFront'
+      );
+      expect(fronts.length).toBe(2);
     });
 
     it('foregroundFallback:false fails fast instead of stealing window focus', async () => {

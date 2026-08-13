@@ -64,6 +64,13 @@ export function getDefaultCdpUrl(
   return `${protocol}//${locationLike.host}/cdp`;
 }
 
+/**
+ * A CDP message payload (params or result) — a protocol-defined JSON object
+ * probed key by key at each use site. Named so the shape is stated once
+ * instead of an untyped string-keyed bag per site.
+ */
+type CdpPayload = { [key: string]: unknown };
+
 export class BrowserAPI {
   private client: CDPTransport;
   private localClient: CDPTransport; // preserved original when using remote transport
@@ -92,10 +99,10 @@ export class BrowserAPI {
    */
   private supersededHandler: (() => void) | null = null;
   private supersededNotified = false;
-  private readonly handleJavaScriptDialogOpening = (params: Record<string, unknown>): void => {
+  private readonly handleJavaScriptDialogOpening = (params: CdpPayload): void => {
     void this.dismissJavaScriptDialog(params);
   };
-  private async dismissJavaScriptDialog(params: Record<string, unknown>): Promise<void> {
+  private async dismissJavaScriptDialog(params: CdpPayload): Promise<void> {
     const sessionId =
       typeof params['sessionId'] === 'string' ? (params['sessionId'] as string) : this.sessionId;
     if (!sessionId) return;
@@ -115,7 +122,7 @@ export class BrowserAPI {
       });
     }
   }
-  private readonly handleExecutionContextCreated = (params: Record<string, unknown>): void => {
+  private readonly handleExecutionContextCreated = (params: CdpPayload): void => {
     const eventSessionId = params['sessionId'];
     if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
     const context = params['context'] as
@@ -126,7 +133,7 @@ export class BrowserAPI {
       this._mainWorldContextCache.set(frameId, context.id);
     }
   };
-  private readonly handleExecutionContextDestroyed = (params: Record<string, unknown>): void => {
+  private readonly handleExecutionContextDestroyed = (params: CdpPayload): void => {
     const eventSessionId = params['sessionId'];
     if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
     const contextId = params['executionContextId'];
@@ -135,7 +142,7 @@ export class BrowserAPI {
       if (cachedId === contextId) this._mainWorldContextCache.delete(frameId);
     }
   };
-  private readonly handleExecutionContextsCleared = (params: Record<string, unknown>): void => {
+  private readonly handleExecutionContextsCleared = (params: CdpPayload): void => {
     const eventSessionId = params['sessionId'];
     if (typeof eventSessionId === 'string' && eventSessionId !== this.sessionId) return;
     this._mainWorldContextCache.clear();
@@ -544,6 +551,57 @@ export class BrowserAPI {
     await this.client.send('Page.bringToFront', {}, this.sessionId ?? undefined);
   }
 
+  /**
+   * Foreground-fallback capture. Waking the renderer via `Page.bringToFront`
+   * steals window focus — and in a capture-every-tab loop each fallback used
+   * to leave the LAST captured tab in front, backgrounding SLICC (which
+   * Chrome may then freeze; see docs/pitfalls.md). So: remember who held
+   * focus, capture, give focus back. Restoration is best-effort and must
+   * never fail the capture.
+   */
+  private async wakeCaptureAndRestoreFocus(params: CdpPayload): Promise<CdpPayload> {
+    const captured = this.getAttachedTargetId();
+    const previousFront = await this.findFocusedLocalPage(captured).catch(() => null);
+    await this.client.send('Page.bringToFront', {}, this.sessionId!);
+    const result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+    if (previousFront && captured) {
+      try {
+        await this.attachToPage(previousFront);
+        await this.client.send('Page.bringToFront', {}, this.sessionId!);
+        // Leave the attachment where the caller expects it.
+        await this.attachToPage(captured);
+      } catch {
+        // The focus donor may have closed mid-capture; the screenshot still
+        // succeeded, so swallow.
+      }
+    }
+    return result;
+  }
+
+  /**
+   * The local page that currently holds window focus, or `null`. Probed by
+   * evaluating `document.hasFocus()` per candidate — CDP exposes no focus
+   * flag on targets. Uses raw `attachToPage` (never `withTab`) so a caller
+   * already holding the tab lock cannot deadlock; only the rare
+   * foreground-fallback path pays this cost. Remote (tray) targets are
+   * skipped: their focus lives on another machine.
+   */
+  private async findFocusedLocalPage(excludeTargetId: string | null): Promise<string | null> {
+    const pages = await this.listPages();
+    for (const page of pages) {
+      if (!page.targetId || page.targetId === excludeTargetId) continue;
+      if (page.targetId.includes(':')) continue; // composite = remote tray target
+      try {
+        await this.attachToPage(page.targetId);
+        const focused = await this.evaluate('document.hasFocus()');
+        if (focused === true) return page.targetId;
+      } catch {
+        // Unattachable candidates simply are not the focused page.
+      }
+    }
+    return null;
+  }
+
   async screenshot(options?: {
     format?: 'png' | 'jpeg' | 'webp';
     quality?: number;
@@ -561,7 +619,7 @@ export class BrowserAPI {
     this.ensureAttached();
 
     try {
-      const params: Record<string, unknown> = {
+      const params: CdpPayload = {
         format: options?.format ?? 'png',
         // Only capture beyond viewport when fullPage or a clip is requested.
         // Default viewport screenshots should respect the viewport boundary.
@@ -606,7 +664,7 @@ export class BrowserAPI {
       }
       // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
-      let result: Record<string, unknown>;
+      let result: CdpPayload;
       try {
         result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
       } catch (err: unknown) {
@@ -614,8 +672,7 @@ export class BrowserAPI {
         // retry once. Foregrounding steals window focus, so callers that
         // capture in the background opt out and accept the failure instead.
         if (options?.foregroundFallback === false) throw err;
-        await this.client.send('Page.bringToFront', {}, this.sessionId!);
-        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+        result = await this.wakeCaptureAndRestoreFocus(params);
       }
       let base64 = result['data'] as string;
 
@@ -635,7 +692,7 @@ export class BrowserAPI {
   private async _applyMaxWidth(
     base64: string,
     maxWidth: number,
-    params: Record<string, unknown>
+    params: CdpPayload
   ): Promise<string> {
     const peekWidth = pngWidth(base64);
     if (!peekWidth || peekWidth <= maxWidth) return base64;
@@ -822,14 +879,14 @@ export class BrowserAPI {
 
     // The injected script returns a tree already in AccessibilityNode format.
     // Normalize it to ensure all string fields are proper strings.
-    const tree = normalizeInjectedTree(rawResult as Record<string, unknown>);
+    const tree = normalizeInjectedTree(rawResult as CdpPayload);
 
     // Annotate the tree with backendNodeId values from the CDP Accessibility domain.
     // The injected script runs in page context and cannot access CDP backendNodeIds,
     // so we fetch them separately and match by role+name.
     try {
       const axResult = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
-      const nodes = axResult['nodes'] as Array<Record<string, unknown>> | undefined;
+      const nodes = axResult['nodes'] as Array<CdpPayload> | undefined;
       if (Array.isArray(nodes)) {
         annotateTreeWithBackendNodeIds(tree, buildAxNodeIndex(nodes));
       }
@@ -1169,7 +1226,7 @@ export class BrowserAPI {
       returnByValue: options?.returnByValue ?? true,
     };
 
-    let result: Record<string, unknown>;
+    let result: CdpPayload;
     try {
       result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
     } catch (err) {
@@ -1248,17 +1305,14 @@ export class BrowserAPI {
       return { role: 'RootWebArea', name: '' };
     }
 
-    return normalizeInjectedTree(rawResult as Record<string, unknown>);
+    return normalizeInjectedTree(rawResult as CdpPayload);
   }
 
   /**
    * Send a raw CDP command on the current session.
    * Used by playwright-cli for cookie operations via the Network domain.
    */
-  async sendCDP(
-    method: string,
-    params: Record<string, unknown> = {}
-  ): Promise<Record<string, unknown>> {
+  async sendCDP(method: string, params: CdpPayload = {}): Promise<CdpPayload> {
     await this.ensureConnected();
     this.ensureAttached();
     return await this.client.send(method, params, this.sessionId!);
@@ -1459,13 +1513,13 @@ export class BrowserAPI {
  * ambiguity the CSS selector fallback faces, so consistency matters more than
  * perfect accuracy.
  */
-function buildAxNodeIndex(nodes: Array<Record<string, unknown>>): Map<string, number> {
+function buildAxNodeIndex(nodes: Array<CdpPayload>): Map<string, number> {
   const index = new Map<string, number>();
   for (const n of nodes) {
     const backendNodeId = typeof n['backendDOMNodeId'] === 'number' ? n['backendDOMNodeId'] : null;
     if (backendNodeId === null) continue;
-    const roleObj = n['role'] as Record<string, unknown> | undefined;
-    const nameObj = n['name'] as Record<string, unknown> | undefined;
+    const roleObj = n['role'] as CdpPayload | undefined;
+    const nameObj = n['name'] as CdpPayload | undefined;
     const role = typeof roleObj?.['value'] === 'string' ? roleObj['value'].toLowerCase() : '';
     const name = typeof nameObj?.['value'] === 'string' ? nameObj['value'] : '';
     if (!role) continue;
@@ -1492,7 +1546,7 @@ function annotateTreeWithBackendNodeIds(node: AccessibilityNode, index: Map<stri
  * Normalize the raw tree returned by the injected aria snapshot script
  * into the AccessibilityNode format expected by SLICC consumers.
  */
-function normalizeInjectedTree(raw: Record<string, unknown>): AccessibilityNode {
+function normalizeInjectedTree(raw: CdpPayload): AccessibilityNode {
   const role = normalizeAccessibilityText(raw.role, 'unknown');
   const name = normalizeAccessibilityText(raw.name);
 
@@ -1505,7 +1559,7 @@ function normalizeInjectedTree(raw: Record<string, unknown>): AccessibilityNode 
   if (description !== '') node.description = description;
 
   if (Array.isArray(raw.children) && raw.children.length > 0) {
-    node.children = (raw.children as Record<string, unknown>[])
+    node.children = (raw.children as CdpPayload[])
       .map((child) => normalizeInjectedTree(child))
       .filter((c) => c.role !== 'unknown');
   }
